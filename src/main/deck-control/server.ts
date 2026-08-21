@@ -172,9 +172,43 @@ function isLoopback(address: string | undefined): boolean {
   return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1'
 }
 
-export function hostIsLocal(host: string | undefined, port: number): boolean {
+/**
+ * Refuse a `Host` header that names anything but this machine's own loopback.
+ *
+ * ## What this actually guards, now that the port is not matched
+ *
+ * The **literal** is the whole of the DNS-rebinding defence, and it is
+ * untouched: a page told that `evil.example.com` resolves to `127.0.0.1` still
+ * sends `Host: evil.example.com` and is still refused here, before the token is
+ * read — and before that, any `Origin` header at all is refused, which no
+ * command-line client sends and every browser does.
+ *
+ * The **port** used to be matched too, and it never bought anything: a caller
+ * that can reach this socket already knows which port it reached, so it can
+ * spell it correctly, and a browser reaching `127.0.0.1:<port>` sends exactly
+ * that. What it did do was refuse one honest caller.
+ *
+ * ## The honest caller it refused
+ *
+ * A session on a **server**. `servers/window-reach.ts` asks that machine to
+ * listen on *its own* `127.0.0.1`, on a port that machine chooses, and hands
+ * every connection back down the SSH link to this socket. The CLI over there
+ * addresses `http://127.0.0.1:<its port>/mcp`, so the `Host` it sends carries
+ * the far end's port number — a loopback literal, on a machine where that is as
+ * true as it is here, arriving on a socket only a process on that server could
+ * have reached. Pinning the number turned that into a 403 and would have made
+ * the whole feature answer nothing while looking wired.
+ *
+ * ## And why this is the shape `hook-server.ts` already has
+ *
+ * The header of this file says it follows that one's security posture line for
+ * line, and `hostIsLocal` there strips the port for the same reason: *"both are
+ * the same claim."* The port-pinned copy here was the outlier, not the rule.
+ */
+export function hostIsLocal(host: string | undefined): boolean {
   if (!host) return false
-  return new Set([`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`]).has(host.toLowerCase())
+  const name = host.toLowerCase().replace(/:\d+$/, '')
+  return name === 'localhost' || name === '127.0.0.1' || name === '[::1]' || name === '::1'
 }
 
 class PayloadTooLarge extends Error {}
@@ -462,7 +496,7 @@ async function handle(
   control: DeckControl,
 ): Promise<void> {
   if (!isLoopback(req.socket.remoteAddress)) return deny(res, 403)
-  if (!hostIsLocal(req.headers.host, live.port)) return deny(res, 403)
+  if (!hostIsLocal(req.headers.host)) return deny(res, 403)
   /*
    * Any Origin at all is a browser.
    *

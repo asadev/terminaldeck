@@ -10,7 +10,7 @@ import { browserNetworkTool } from './browser-network-tool'
 import { browserTools } from './browser-tools'
 import { ConsentBroker, WINDOW_SURFACE } from './consent'
 import { DeckControl } from './control'
-import { createSessionTools, SESSION_TOOLS, type SessionTools } from './session-tools'
+import { createSessionTools, ELSEWHERE_TOOLS, SESSION_TOOLS, type SessionTools } from './session-tools'
 import { startDeckControlServer, stopDeckControlServer, type DeckControlEndpoint } from './server'
 import type { DeckSurface } from './surface'
 import type { BrowserDrive } from '../browser-driver'
@@ -95,6 +95,39 @@ async function dial(configPath: string): Promise<Client> {
   const client = new Client({ name: 'test-session', version: '0.0.0' }, { capabilities: {} })
   await client.connect(
     new StreamableHTTPClientTransport(new URL(server.url), {
+      requestInit: { headers: { Authorization: server.headers.Authorization } },
+    }),
+  )
+  return client
+}
+
+/**
+ * The same dial, from the config **text** rather than from a file on this
+ * computer.
+ *
+ * A shell on a server has its config file on somebody else's machine, so there
+ * is nothing here to read — what this side holds is the text it composed and
+ * handed to a script over the connection. Dialling with it proves the token in
+ * that text is the one the endpoint honours, which is the whole of what crosses.
+ */
+async function dialText(configText: string): Promise<Client> {
+  const config = JSON.parse(configText) as {
+    mcpServers: Record<string, { url: string; headers: Record<string, string> }>
+  }
+  const server = config.mcpServers['deck-control']
+  const client = new Client({ name: 'test-server-shell', version: '0.0.0' }, { capabilities: {} })
+  await client.connect(
+    /*
+     * The token out of the far end's file, against the endpoint's own address.
+     *
+     * The URL in that file names a port on the **server's** loopback, and what
+     * makes that port this socket is `servers/window-reach.ts` — a listener over
+     * there whose every connection is handed back down the SSH link and dialled
+     * here. That transport has its own tests; what this file is proving is that
+     * the token which travels with it is one this endpoint honours, and that
+     * what it can reach through it is exactly the six verbs.
+     */
+    new StreamableHTTPClientTransport(new URL(endpoint.url), {
       requestInit: { headers: { Authorization: server.headers.Authorization } },
     }),
   )
@@ -332,6 +365,193 @@ describe('what that token may reach', () => {
     // The token is off the table, so the socket refuses before a tool name is
     // even read — which is a transport error, not a tool error.
     await expect(dial(file)).rejects.toThrow()
+  })
+})
+
+describe('a session on a server, which this process never spawned', () => {
+  /**
+   * The cell of *"from any session from any device to any device's browser in
+   * one app"* that was left over.
+   *
+   * A shell on a server is an SSH pty. Nothing hands it tools, `startSession`
+   * never runs there, and the browser window attached to it is a
+   * `WebContentsView` in **this** app. What closes it is the rule the local
+   * build already uses — let the session reach the `deck-control` of the machine
+   * that owns the window — with SSH instead of a spawn. Everything below is this
+   * file's half of that: a token, a caller carrying the *server* where a machine
+   * id goes, and a grant that is asked on every call.
+   */
+  /** The address the far end sees: its own loopback, on a port it chose. */
+  const OVER_THERE = 'http://127.0.0.1:40404/mcp'
+
+  it('composes the file for an address only the far end can name', () => {
+    const prepared = tools.prepareElsewhere({ allowed: () => true })
+    const written = prepared?.configFor(OVER_THERE) ?? ''
+    expect(written).toContain(OVER_THERE)
+    // Not this endpoint's own URL, which names a port on this Mac and would be
+    // an address nothing on that server can reach.
+    expect(written).not.toContain(endpoint.url)
+    expect(written).toContain('Bearer ')
+  })
+
+  it('reaches the windows attached to that shell, under the server’s own key', async () => {
+    // The binding map keys a window `<machineId>\0<sessionId>`, with the server
+    // standing in for the machine — `browser-binding.ts`, and `serverOfShell` in
+    // `servers/ipc.ts`. A caller that wrote the empty string here would be
+    // asking about a window on this computer.
+    attach({
+      sessionId: 'srv-1 shell-9',
+      machineId: 'srv-1',
+      browserTabId: 'browser:7',
+      viewId: 'view-7',
+    })
+    const prepared = tools.prepareElsewhere({ allowed: () => true })
+    prepared?.started('srv-1 shell-9', 'srv-1')
+    const client = await dialText(prepared?.configFor(OVER_THERE) ?? '')
+
+    const read = await client.callTool({ name: 'browser_read', arguments: {} })
+
+    expect(read.isError).toBeFalsy()
+    await client.close()
+  })
+
+  it('holds exactly the same six verbs and no more', async () => {
+    const prepared = tools.prepareElsewhere({ allowed: () => true })
+    prepared?.started('srv-1 shell-9', 'srv-1')
+    const client = await dialText(prepared?.configFor(OVER_THERE) ?? '')
+
+    const names = (await client.listTools()).tools.map((tool) => tool.name).sort()
+
+    expect(names).toEqual([
+      'browser_close',
+      'browser_handover',
+      'browser_open',
+      'browser_read',
+      'browser_screenshot',
+      'browser_step',
+    ])
+    // The one that must not travel with them. A session on somebody's server
+    // that could name `sessions_send` would be *"driving other sessions"*, which
+    // is the copilot's alone.
+    expect(names).not.toContain('sessions_send')
+    await client.close()
+  })
+
+  it('cannot find the tools whose answers would be files on this computer', async () => {
+    const prepared = tools.prepareElsewhere({ allowed: () => true })
+    prepared?.started('srv-1 shell-9', 'srv-1')
+    const client = await dialText(prepared?.configFor(OVER_THERE) ?? '')
+
+    const refused = await client.callTool({ name: 'browser_network', arguments: { window: 'B1' } })
+
+    /*
+     * Not refused with an explanation — **unknown**, in the words an invented
+     * name gets. `browser.network` arms a page to write background responses
+     * into a folder on this Mac and `assets.*` are how those files are read back
+     * out; every one of them answers a path an agent on somebody's Linux box
+     * cannot open. A tool it can see and cannot use is a tool it will spend a
+     * turn working around.
+     */
+    expect(refused.isError).toBe(true)
+    expect(JSON.stringify(refused.content)).toContain('no tool called')
+    await client.close()
+  })
+
+  it('is the session grant minus exactly that family, and nothing else', () => {
+    for (const name of ['browser_network', 'assets_fetch', 'assets_ledger', 'assets_coverage']) {
+      expect(SESSION_TOOLS.has(name)).toBe(true)
+      expect(ELSEWHERE_TOOLS.has(name)).toBe(false)
+    }
+    // The six, the workers, the store's door and the index all stay: what makes
+    // the family above different is that its answers are files, not that it is
+    // less trusted.
+    for (const name of ['browser_open', 'browser_read', 'browser_step', 'browser_workers', 'browser_extract', 'tools_describe']) {
+      expect(ELSEWHERE_TOOLS.has(name)).toBe(true)
+    }
+    // And nothing was let in that a session in this window does not hold.
+    for (const name of ELSEWHERE_TOOLS) expect(SESSION_TOOLS.has(name)).toBe(true)
+  })
+
+  it('refuses the one verb whose answer would be a file on the wrong computer', async () => {
+    attach({
+      sessionId: 'srv-1 shell-9',
+      machineId: 'srv-1',
+      browserTabId: 'browser:7',
+      viewId: 'view-7',
+    })
+    const prepared = tools.prepareElsewhere({ allowed: () => true })
+    prepared?.started('srv-1 shell-9', 'srv-1')
+    const client = await dialText(prepared?.configFor(OVER_THERE) ?? '')
+
+    const shot = await client.callTool({ name: 'browser_screenshot', arguments: {} })
+
+    /*
+     * The PNG is written into this Mac's copilot folder and the path names a
+     * file on the wrong computer. An agent handed it goes looking, does not find
+     * it, and reports it missing to somebody looking straight at it on their own
+     * screen — a tool reporting success while handing back nothing usable, which
+     * is the dead control this round is about wearing a green tick.
+     *
+     * `remote/machines/window-serve.ts` refuses the identical call at the other
+     * end of the relay, and the sentence is the same one.
+     */
+    expect(shot.isError).toBe(true)
+    expect(JSON.stringify(shot.content)).toContain('browser.read')
+    await client.close()
+  })
+
+  it('refuses on the very next call when the switch goes off, without reconnecting', async () => {
+    attach({
+      sessionId: 'srv-1 shell-9',
+      machineId: 'srv-1',
+      browserTabId: 'browser:7',
+      viewId: 'view-7',
+    })
+    let allowed = true
+    const prepared = tools.prepareElsewhere({ allowed: () => allowed })
+    prepared?.started('srv-1 shell-9', 'srv-1')
+    const client = await dialText(prepared?.configFor(OVER_THERE) ?? '')
+    expect((await client.callTool({ name: 'browser_read', arguments: {} })).isError).toBeFalsy()
+
+    allowed = false
+
+    // Asked per call, never captured: a person unticking this must land on the
+    // next tool call rather than on the next terminal they open.
+    const refused = await client.callTool({ name: 'browser_read', arguments: {} })
+    expect(refused.isError).toBe(true)
+    await client.close()
+  })
+
+  it('stops working entirely once the token is given back', async () => {
+    const prepared = tools.prepareElsewhere({ allowed: () => true })
+    prepared?.started('srv-1 shell-9', 'srv-1')
+    const text = prepared?.configFor(OVER_THERE) ?? ''
+    await (await dialText(text)).close()
+
+    prepared?.drop()
+
+    // Off the table, so the socket refuses before a tool name is read — which is
+    // a transport error rather than a tool error. This is what unticking the
+    // switch does to a terminal that is already open.
+    await expect(dialText(text)).rejects.toThrow()
+  })
+
+  it('answers null when there is no endpoint to point at', () => {
+    const none = createSessionTools({ ...endpoint, url: '' }, { dir: join(dir, 'nowhere') })
+    // A terminal must open whether or not this app can give it the verbs. It is
+    // told so instead — see `WHY_NOT.endpoint` in `servers/window-drive.ts`.
+    expect(none.prepareElsewhere({ allowed: () => true })).toBeNull()
+  })
+
+  it('is released by the same session id every other session is', async () => {
+    const prepared = tools.prepareElsewhere({ allowed: () => true })
+    prepared?.started('srv-1 shell-9', 'srv-1')
+    const text = prepared?.configFor(OVER_THERE) ?? ''
+    await (await dialText(text)).close()
+
+    tools.release('srv-1 shell-9')
+
+    await expect(dialText(text)).rejects.toThrow()
   })
 })
 

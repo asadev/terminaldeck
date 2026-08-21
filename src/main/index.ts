@@ -493,6 +493,23 @@ const bindingDeps = {
   endDrive: (browserTabId: string): void => {
     browserDrive()?.releaseWindow(browserTabId)
   },
+  /*
+   * Why a row in the connect menu would attach and then be unable to do
+   * anything, or null.
+   *
+   * Only the servers registry can answer it: it is the thing that decides, per
+   * terminal, whether the agent in that shell was given a way to reach this
+   * app's browser at all, and it holds the sentence saying why not. Read through
+   * `servers` rather than captured for the reason `endDrive` is — this object is
+   * built at module scope and the registry is created inside `registerIpc`, so
+   * null is the honest answer before then.
+   *
+   * Every other kind of session answers null and the row is exactly as it was:
+   * a session in this window has its windows here, and a session on a paired
+   * machine reaches them over `window.call`.
+   */
+  whyNotDrive: (session: { sessionId: string }): string | null =>
+    servers?.whyNotDrive(session.sessionId) ?? null,
 }
 
 /**
@@ -2543,6 +2560,11 @@ function registerIpc(): void {
         username: row.username,
         credential: row.credential,
         ...(row.hostKey === null ? {} : { hostKey: row.hostKey }),
+        // Whether sessions on it may act on browser windows here. Chosen to
+        // cross, like the two above it: the page draws a tick for it, and a
+        // permission the screen cannot see the state of is a control that
+        // cannot be trusted.
+        drivesWindows: row.drivesWindows,
       })),
     store: serverStore,
     credentials: serverCredentials,
@@ -2613,6 +2635,19 @@ function registerIpc(): void {
       })
       return canceled || filePaths[0] === undefined ? null : filePaths[0]
     },
+    /*
+     * The last two: how a session on a server reaches the browser window
+     * attached to it.
+     *
+     * Both are read at the moment they are needed rather than captured, because
+     * neither exists yet. `deckControl` is assigned a few hundred milliseconds
+     * after this line, when the control server has bound, and `sessionTools` a
+     * line after that — so a terminal opened inside that window is opened
+     * without the verbs and told so, exactly as a local session started in the
+     * same moment is (`session-verbs.ts`'s `early`).
+     */
+    controlPort: () => deckControl?.endpoint.port ?? 0,
+    mintSessionTools: (grant) => sessionTools?.prepareElsewhere(grant) ?? null,
   })
   /*
    * A server's own `localhost`, in the same one browser window.

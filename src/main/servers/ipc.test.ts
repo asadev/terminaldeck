@@ -238,6 +238,178 @@ describe('the channels the window calls', () => {
   })
 })
 
+describe('a terminal that can drive the browser window attached to it', () => {
+  /**
+   * The last cell of *"from any session from any device to any device's browser
+   * in one app"*, wired end to end at this seam.
+   *
+   * A shell on a server is an SSH pty. Nothing hands it tools and nothing here
+   * composes its command line — a person types `claude` into it — so the whole
+   * arrangement is a port that reaches back (`window-reach.ts`), a wrapper on
+   * that shell's `PATH` (`window-drive.ts`), and one line typed into the
+   * terminal. What this file pins is that the three are actually wired together
+   * by `servers:shell:open`, and that a server nobody ticked pays for none of it.
+   */
+  const HELP = 'Usage: claude\n\nOptions:\n  --mcp-config <configs...>  Load MCP servers\n'
+
+  function withClaude(): ServerFacts {
+    return {
+      ...serverFacts(),
+      agents: factYes(
+        [{ id: 'claude' as const, path: '/root/.local/bin/claude', version: '2.0.0', signedIn: 'yes' as const, account: null }],
+        AT,
+        'looked for a coding assistant',
+      ),
+    }
+  }
+
+  /** Just enough of a connection to be asked for a port on the far end. */
+  function reverseConnection(): unknown {
+    return {
+      on: () => undefined,
+      removeListener: () => undefined,
+      forwardIn: (_addr: string, _port: number, cb: (e: undefined, p: number) => void) => cb(undefined, 40404),
+      unforwardIn: (_addr: string, _port: number, cb: () => void) => cb(),
+      forwardOut: () => undefined,
+    }
+  }
+
+  function drivingHarness(allowed: boolean, over: Partial<ServersIpcDeps> = {}) {
+    const written: string[] = []
+    const scripts: string[] = []
+    let drives = allowed
+    const shell: ServerShell = {
+      onData: () => () => undefined,
+      onClose: () => () => undefined,
+      write: (data) => void written.push(data),
+      resize: () => undefined,
+      close: () => undefined,
+    }
+    const rig = harness({
+      facts: async () => withClaude(),
+      run: async () => cmd({ stdout: HELP }),
+      runScript: async (_serverId, script) => {
+        scripts.push(script)
+        if (script.includes('command -v ss')) return cmd({ stdout: 'loopback\n' })
+        if (script.includes('mktemp -d')) return cmd({ stdout: '/tmp/td-drive-abc123\n/bin/bash' })
+        return cmd({ stdout: '##compose-available\nno\n' })
+      },
+      openShell: async () => shell,
+      withConnection: async (_serverId, fn) => fn(reverseConnection() as never),
+      controlPort: () => 5599,
+      mintSessionTools: () => ({
+        configFor: (url: string) => JSON.stringify({ url }),
+        started: () => undefined,
+        drop: () => undefined,
+      }),
+      store: {
+        add: () => ({ id: 'new-1' }),
+        setCredentialKind: () => true,
+        rename: () => true,
+        forget: () => true,
+        get: () => null,
+        setStartIn: () => false,
+        drivesWindows: () => drives,
+        setDrivesWindows: (_id, next) => {
+          drives = next
+          return next
+        },
+      },
+      ...over,
+    })
+    return { ...rig, written, scripts }
+  }
+
+  it('types one line into the terminal, and says what it is', async () => {
+    const { call, written, ipc } = drivingHarness(true)
+
+    const opened = (await call('servers:shell:open', 's1', 100, 40)) as { ok: true; shellId: string }
+
+    expect(opened.ok).toBe(true)
+    const line = written.find((text) => text.startsWith('export PATH='))
+    expect(line).toBeDefined()
+    // Echoed by the far end and left in the scrollback, with a comment saying
+    // what it is: nothing this app does to somebody's terminal should be
+    // invisible in that terminal.
+    expect(line).toContain('/tmp/td-drive-abc123/bin')
+    expect(line).toContain('#')
+    expect(ipc.whyNotDrive(opened.shellId)).toBeNull()
+  })
+
+  it('asks the server where the port it opened actually landed', async () => {
+    const { call, scripts } = drivingHarness(true)
+    await call('servers:shell:open', 's1', 100, 40)
+    // `GatewayPorts yes` ignores the loopback address that was asked for and
+    // binds the wildcard, which would put a way in to this Mac's browser on a
+    // port that server's whole network can dial. It is measured, not assumed.
+    expect(scripts.some((script) => script.includes('command -v ss'))).toBe(true)
+  })
+
+  it('costs a server nobody ticked nothing at all', async () => {
+    const { call, written, scripts, ran, ipc } = drivingHarness(false)
+
+    const opened = (await call('servers:shell:open', 's1', 100, 40)) as { ok: true; shellId: string }
+
+    expect(opened.ok).toBe(true)
+    expect(written).toEqual([])
+    // Not one round trip: no `claude --help`, no script, no port.
+    expect(ran).toEqual([])
+    expect(scripts).toEqual([])
+    // And the row in the browser's connect menu says so rather than attaching
+    // and quietly doing nothing.
+    expect(ipc.whyNotDrive(opened.shellId)).toContain('not allowed')
+  })
+
+  it('opens the terminal anyway when the verbs cannot be given', async () => {
+    // A person asked for a shell. Every reason this app cannot add its browser
+    // verbs is a reason to say so, never a reason to refuse the shell.
+    const { call, written, ipc } = drivingHarness(true, {
+      run: async () => cmd({ stdout: 'Usage: claude\n' }),
+    })
+
+    const opened = (await call('servers:shell:open', 's1', 100, 40)) as { ok: true; shellId: string }
+
+    expect(opened.ok).toBe(true)
+    expect(written).toEqual([])
+    expect(ipc.whyNotDrive(opened.shellId)).toContain('--mcp-config')
+  })
+
+  it('answers the switch with what is now true, not with what was pressed', async () => {
+    const { call } = drivingHarness(false, {
+      store: {
+        add: () => ({ id: 'new-1' }),
+        setCredentialKind: () => true,
+        rename: () => true,
+        forget: () => true,
+        get: () => null,
+        setStartIn: () => false,
+        // A store that will not record it — an id it has never heard of.
+        drivesWindows: () => false,
+        setDrivesWindows: () => false,
+      },
+    })
+    expect(await call('servers:drive-windows', 's1', true)).toEqual({ drivesWindows: false })
+  })
+
+  it('takes it away from a terminal that is already open when it goes off', async () => {
+    const { call, ipc } = drivingHarness(true)
+    const opened = (await call('servers:shell:open', 's1', 100, 40)) as { ok: true; shellId: string }
+    expect(ipc.whyNotDrive(opened.shellId)).toBeNull()
+
+    expect(await call('servers:drive-windows', 's1', false)).toEqual({ drivesWindows: false })
+
+    // The token is off the table now, not merely refused on the next call —
+    // `ServerGrants` argues for both, and this is the half that reaches a
+    // terminal somebody is in the middle of using.
+    expect(ipc.whyNotDrive(opened.shellId)).toContain('not allowed')
+  })
+
+  it('says nothing about a shell it has never heard of', async () => {
+    const { ipc } = drivingHarness(true)
+    expect(ipc.whyNotDrive('a shell nobody opened')).toBeNull()
+  })
+})
+
 describe('when it lets go', () => {
   it('closes the connection and every terminal when the page closes', async () => {
     const closed = vi.fn()
@@ -256,6 +428,16 @@ describe('when it lets go', () => {
     await call('servers:close', 's1')
 
     expect(closed).toHaveBeenCalledTimes(1)
+    /*
+     * Once, and this harness is exactly the case that proves the pairing.
+     *
+     * Opening a terminal holds the connection across the whole sequence — the
+     * `claude --help` that decides whether that shell can be given the browser
+     * verbs, the script that puts them there, and the shell itself — so that the
+     * three share one socket. These deps supply `release` and **no** `acquire`,
+     * so that hold is never taken, and a `release` here would be decrementing a
+     * reference somebody else is holding. The only one is the page letting go.
+     */
     expect(released).toEqual(['s1'])
     // The shell id is dead afterwards, rather than writing into a channel that
     // is gone.

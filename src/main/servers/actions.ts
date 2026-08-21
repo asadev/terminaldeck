@@ -1302,6 +1302,15 @@ export interface ServerSummary {
   username: string
   credential?: 'password' | 'key' | 'none'
   hostKey?: { algorithm: string; fingerprint: string }
+  /**
+   * May sessions on this server act on browser windows in this app?
+   *
+   * Optional because it is one of the fields a host can decline to answer —
+   * absent reads as `false`, which is the closed state and the only safe
+   * default. See `StoredServer.drivesWindows` for the argument, and
+   * `servers/window-drive.ts` for what turning it on actually does.
+   */
+  drivesWindows?: boolean
 }
 
 /**

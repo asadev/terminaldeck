@@ -36,13 +36,20 @@
  *     reach, has not thereby been handed the browser on this screen — see
  *     `MachineStore.drivesWindows` for why windows are their own axis and why
  *     that axis defaults closed.
- *  2. **Is that verb one of the six?** {@link SESSION_TOOLS}, the same positive
- *     list a session on this machine holds on its own token. Checked here as
- *     well as by `server.ts`'s `allowed` predicate, because this path does not
- *     go through `server.ts` at all: it reaches `DeckControl.call` directly, so
- *     the allow-list has to be applied by whoever is doing the reaching. A
- *     forwarded caller that could name `sessions.start` would be the one hole
- *     that makes *"driving other sessions is only for the copilot"* untrue.
+ *  2. **Is that verb one this caller may name?** `ELSEWHERE_TOOLS`, which is the
+ *     positive list a session on this machine holds on its own token minus the
+ *     family whose answers are files *here* — see `session-tools.ts`, which
+ *     argues the narrowing. Checked here as well as by `server.ts`'s `allowed`
+ *     predicate, because this path does not go through `server.ts` at all: it
+ *     reaches `DeckControl.call` directly, so the allow-list has to be applied
+ *     by whoever is doing the reaching. A forwarded caller that could name
+ *     `sessions.start` would be the one hole that makes *"driving other sessions
+ *     is only for the copilot"* untrue.
+ *
+ *     The same set decides for both transports on purpose. A session on a paired
+ *     machine and a session on a server are the same fact — the agent is not on
+ *     the computer the window is on — and two lists would be two answers to one
+ *     question, drifting apart the first time either was edited.
  *
  * Everything after that is `deck-control`'s: the tool's own `precheck` resolves
  * the window inside that session's binding and finds nothing for a window
@@ -70,7 +77,7 @@
  * connection*. Reading a page must never be a way to lose the machine.
  */
 
-import { SESSION_TOOLS, SESSION_TIERS } from '../../deck-control/session-tools'
+import { ELSEWHERE_TOOLS, SESSION_TIERS } from '../../deck-control/session-tools'
 import type { CallResult } from '../../deck-control/control'
 import { MAX_MESSAGE_BYTES, MAX_WINDOW_RESULT_BYTES } from '../protocol'
 
@@ -196,7 +203,7 @@ export async function serveWindowCall(
   const wall = NOT_ACROSS_THE_WIRE.get(call.tool)
   if (wall !== undefined) return refuse(wall)
 
-  if (!SESSION_TOOLS.has(call.tool)) {
+  if (!ELSEWHERE_TOOLS.has(call.tool)) {
     /*
      * Deliberately the same words a browser verb gets for naming a window that
      * is not its own. A sentence saying *"that tool exists but not for you"*

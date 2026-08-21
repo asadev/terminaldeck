@@ -51,6 +51,12 @@ interface Props {
   onForget(): void
   onGrant(forMs: number): void
   onRevoke(): void
+  /**
+   * Turn on, or off, whether sessions on this server may act on browser windows
+   * here. Absent when the preload does not carry the channel, and then the
+   * section is not drawn at all.
+   */
+  onDrivesWindows?(allowed: boolean): void
 }
 
 /**
@@ -98,7 +104,91 @@ function FactLine<T>({
   )
 }
 
-export function ServerAdvanced({ server, state, bridge, now, onRename, onForget, onGrant, onRevoke }: Props) {
+/**
+ * Whether an agent in a terminal on this server may act on the browser windows
+ * somebody attached to that terminal.
+ *
+ * ## Why it is here and not beside the copilot grant above it
+ *
+ * They point in opposite directions and reading them as one permission is the
+ * mistake this separation exists to stop. The grant above lets *this* machine's
+ * copilot act on **that** server. This lets an agent on **that** server act on
+ * the browser **here** — the one holding this person's logged-in mail, bank and
+ * GitHub. Somebody who allowed the first has said nothing at all about the
+ * second, and `remote/machines/store.ts` makes the identical split one machine
+ * over for exactly this reason.
+ *
+ * ## Why it does not expire and the grant above it does
+ *
+ * Because the thing using it is a conversation. An agent in that terminal reads
+ * a page, clicks something, reads it again — turn after turn — and a permission
+ * that quietly ran out an hour in would stop it mid-sentence with a refusal
+ * nobody asked for. The grant above hands out control of somebody's production
+ * machine and is right to run out; this is bounded by what the person attached,
+ * window by window, with their own hands.
+ *
+ * ## Why it is a component of its own
+ *
+ * So it can be rendered by a test. Everything else on this screen is inside a
+ * section that starts collapsed, and a control nobody has proved draws unticked
+ * is a control whose closed default is a comment rather than a fact.
+ */
+export function ServerDrivesWindows({
+  server,
+  disabled,
+  onChange,
+}: {
+  server: Server
+  disabled: boolean
+  /** Absent when the preload has no channel for it. Then nothing is drawn. */
+  onChange?(allowed: boolean): void
+}) {
+  // Not drawn rather than drawn dead: a switch whose press lands nowhere would
+  // show a state nothing behind it holds, which is the defect this round is
+  // about. `MachineRow` makes the same call for the same reason.
+  if (onChange === undefined) return null
+  return (
+    <>
+      <h4 className="settings-group-title">Let its terminals act on browser windows here</h4>
+      <p className="settings-prose">
+        {/*
+          What this actually hands out, in the terms the person will recognise: a
+          window they attached, and only that. Deliberately not "let this server
+          control your browser" — the reach is bounded by the attaching, window
+          by window, and overstating it would make the honest answer sound like
+          the reckless one.
+        */}
+        Off unless you turn it on. With it on, an agent in a terminal on this server can read and act
+        on the browser windows <em>you</em> attach to that terminal — nothing else in the browser,
+        and nothing you did not hand it. It works with Claude Code; Codex and Gemini have no setting
+        this app can add to a command you type yourself.
+      </p>
+      <div className="servers-drive">
+        <label className="servers-drive-row">
+          <input
+            type="checkbox"
+            checked={server.drivesWindows === true}
+            disabled={disabled}
+            onChange={(event) => onChange(event.currentTarget.checked)}
+          />
+          <span>Sessions on {server.name} may act on browser windows here</span>
+        </label>
+      </div>
+    </>
+  )
+}
+
+export function ServerAdvanced({
+  server,
+  state,
+  bridge,
+  now,
+  onRename,
+  onForget,
+  onGrant,
+  onRevoke,
+  onDrivesWindows,
+}: Props) {
   const [open, setOpen] = useState(false)
   const [confirmForget, setConfirmForget] = useState(false)
   const [name, setName] = useState(server.name)
@@ -240,6 +330,12 @@ export function ServerAdvanced({ server, state, bridge, now, onRename, onForget,
           </Button>
         )}
       </div>
+
+      <ServerDrivesWindows
+        server={server}
+        disabled={bridge === null}
+        {...(onDrivesWindows === undefined ? {} : { onChange: onDrivesWindows })}
+      />
 
       <h4 className="settings-group-title">What to call it here</h4>
       <div className="servers-card-actions">

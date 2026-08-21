@@ -195,6 +195,11 @@ describe('the shape the window is given', () => {
           // person look at every field that joins the shape, which is what
           // happened.
           'startIn',
+          // Whether sessions on this server may act on browser windows here.
+          // A yes-or-no about a permission, listed for the same reason
+          // `startIn` is: this assertion exists so that a field joining the
+          // shape makes somebody look at it.
+          'drivesWindows',
           'username',
         ].sort(),
       )

@@ -124,6 +124,40 @@ export interface StoredServer {
    * preference about a folder.
    */
   startIn: string | null
+  /**
+   * May sessions on this server act on browser windows **in this app**?
+   *
+   * ## Why this is not the grant next door
+   *
+   * `grants.ts` answers a different question in the opposite direction: whether
+   * the copilot on this machine may act on that server. This one is whether an
+   * agent on that server may act on the browser here — the one holding this
+   * person's logged-in mail, bank and GitHub. Neither implies the other, and a
+   * person granting the copilot an hour on a web server has not thereby handed
+   * that web server's shells the browser on their own screen.
+   *
+   * ## Why it is stored, and does not expire
+   *
+   * Because the machine axis it is the twin of is stored and does not expire —
+   * `MachineStore.drivesWindows` — and the two must behave the same way for the
+   * same act. A grant that ran out would stop a conversation in the middle of
+   * itself: the agent in that terminal is *using* this, turn after turn, and a
+   * capability that quietly dies an hour in is the dead control this whole round
+   * is about. `ServerGrants` expires for a reason that does not apply here: what
+   * it hands out is control of somebody's production machine, and what this
+   * hands out is bounded by what the person attached, window by window, with
+   * their own hands.
+   *
+   * ## And why it defaults closed
+   *
+   * The same argument `MachineStore.drivesWindows` makes and it is worth
+   * repeating rather than referring to: the other things a server can be told
+   * fail open because they were added to a feature that already worked without
+   * them. Nothing has ever driven a browser window from a server, so there is no
+   * working behaviour to preserve — `false` is what every server already does,
+   * and the first thing a person does after ticking it is watch it work.
+   */
+  drivesWindows: boolean
 }
 
 /** What is needed to add one. Everything else is filled in here. */
@@ -237,6 +271,10 @@ export function readServers(raw: unknown): StoredServer[] {
       // same as an empty string: no default, so a session lands wherever the
       // sign-in does.
       startIn: folderPath(record.startIn),
+      // `=== true` rather than truthiness: absent is the ordinary case — every
+      // server stored before this existed — and the answer for absent has to be
+      // the closed one. See {@link StoredServer.drivesWindows}.
+      drivesWindows: record.drivesWindows === true,
     })
     if (out.length >= MAX_SERVERS) break
   }
@@ -320,6 +358,9 @@ export class ServerStore {
       addedAt: Date.now(),
       lastConnectedAt: null,
       startIn: null,
+      // A server nobody has said anything about drives nothing. See
+      // {@link StoredServer.drivesWindows} for why the answer is no.
+      drivesWindows: false,
     }
     this.persist([...list, server])
     return { ...server }
@@ -349,6 +390,33 @@ export class ServerStore {
   setStartIn(id: string, path: string | null): boolean {
     const folder = path === null ? null : folderPath(path)
     return this.update(id, (server) => ({ ...server, startIn: folder }))
+  }
+
+  /**
+   * May sessions on this server drive browser windows here?
+   *
+   * Read on **every** tool call rather than captured when the terminal opened,
+   * for the reason `MachineStore.drivesWindows` gives about its own read and
+   * `callers.ts` gives about `TokenGrant.caller`: a person unticking this would
+   * otherwise be editing a record the live session no longer consults, and the
+   * untick would not land until the next terminal — a permission control that
+   * changes nothing.
+   */
+  drivesWindows(id: string): boolean {
+    return this.load().find((server) => server.id === id)?.drivesWindows === true
+  }
+
+  /**
+   * Say whether it may, and hand back what is now true.
+   *
+   * Returns the value that was stored rather than a success flag, so a caller
+   * that asked about a server this store has never heard of draws `false`
+   * instead of drawing the tick it just pressed. A control that shows a state
+   * nothing behind it holds is the defect this round is about.
+   */
+  setDrivesWindows(id: string, allowed: boolean): boolean {
+    if (!this.update(id, (server) => ({ ...server, drivesWindows: allowed }))) return false
+    return allowed
   }
 
   /** Record which kind of sign-in is stored, after `credentials.ts` stored it. */

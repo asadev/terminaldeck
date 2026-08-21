@@ -668,6 +668,45 @@ export function mayDrive(context: ToolContext, tool: string): void {
   }
 }
 
+/**
+ * Refuse a verb whose only answer is a path, to a session that cannot open it.
+ *
+ * ## The caller this is about
+ *
+ * A shell on a **server**. Since `servers/window-drive.ts`, the agent in one can
+ * reach these tools — over a port that server opened back to this Mac — and its
+ * verbs are served **here**, because the window is here. That is right for five
+ * of the six. It is wrong for the one whose answer is a file: the PNG is written
+ * into this Mac's copilot folder and the path handed back names a file on the
+ * wrong computer, which the agent will then read, fail to find, and report as
+ * missing to a person looking straight at it on their own screen.
+ *
+ * `remote/machines/window-serve.ts` refuses the identical call for the identical
+ * reason at the other end of the relay, and its sentence is reused rather than
+ * rewritten — an agent must not be able to tell "refused because my machine is
+ * over there" from "refused because my machine is over there", spelled twice.
+ *
+ * ## Why the test is `machineId`, and why that is exact rather than approximate
+ *
+ * A session token minted by `prepare()` always carries `''`: that seam only
+ * reaches a session **this process spawned**, so the pty is on this computer
+ * whoever asked for it. The only thing that mints a session caller with a
+ * machine on it is `prepareElsewhere()`, and the only caller of that is a shell
+ * on a server. A session on a *paired* machine never arrives here at all — its
+ * verbs come in through `window-serve.ts`, which applies its own copy of this
+ * rule before `DeckControl` is reached.
+ */
+export function refuseAPathOnTheWrongComputer(context: ToolContext, tool: string): void {
+  const owner = callingSession(context)
+  if (owner === null || owner.machineId === '') return
+  throw new Refused(
+    'not-permitted',
+    `${tool} writes the picture on the computer the browser window is on, so the path it answers with ` +
+      'is not a file you can open. Use browser.read: the outline is what tells you what to click, and ' +
+      'a picture is not.',
+  )
+}
+
 function forwarding(spec: ToolSpec, forward: VerbForwarder): ToolSpec {
   const away = (context: ToolContext): { sessionId: string; machineId: string } | null => {
     const owner = callingSession(context)
@@ -1092,6 +1131,7 @@ export function browserTools(drive: BrowserDrive, forward?: VerbForwarder): Tool
     inputSchema: SHOT_SCHEMA,
     precheck: (args, context) => {
       mayDrive(context, 'browser.screenshot')
+      refuseAPathOnTheWrongComputer(context, 'browser.screenshot')
       boundOf(args, context)
     },
     summary: (args, context) => `Photograph ${whereOf(args, context)}`,

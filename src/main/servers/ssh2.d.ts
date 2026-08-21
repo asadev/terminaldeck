@@ -149,6 +149,41 @@ declare module 'ssh2' {
       callback: (err: (Error & { reason?: number }) | undefined, channel: Channel) => void,
     ): this
     /**
+     * Ask the **server** to listen on one of its own ports and hand every
+     * connection back down this link.
+     *
+     * This is what `ssh -R` is built out of, and it is the whole transport
+     * behind a session on a server reaching the `deck-control` endpoint of the
+     * computer whose browser window it is driving. `forwardOut` above is its
+     * mirror and the two are not interchangeable: that one carries a socket the
+     * *server* holds to a caller here, this one carries a socket a caller
+     * *there* holds to a socket here.
+     *
+     * `bindPort` of `0` asks the far end to choose, and the number it chose
+     * arrives as the callback's second argument — read out of the reply at
+     * `lib/client.js:1355` at 1.17.0. Nothing may assume it, because a server
+     * that answers no port at all leaves the request bound to zero.
+     *
+     * The same failure trap `forwardOut` documents applies unchanged: it
+     * **throws** rather than calling back when the socket has already gone, so
+     * every call sits inside a `try`. `AllowTcpForwarding no` and a
+     * `PermitListen` that does not cover the port both arrive through the
+     * callback instead, as an ordinary error, which is a real configuration on
+     * somebody's machine rather than a fault of this app.
+     */
+    forwardIn(
+      bindAddr: string,
+      bindPort: number,
+      callback: (err: Error | undefined, port: number) => void,
+    ): this
+    /**
+     * Stop listening. The address and port must be the pair `forwardIn` was
+     * *asked* for, not the port it answered with — the library keys its own
+     * table on the request (`lib/client.js:1358`), and a zero asked for is a
+     * zero to cancel.
+     */
+    unforwardIn(bindAddr: string, bindPort: number, callback: (err?: Error) => void): this
+    /**
      * Open the SFTP subsystem on this connection.
      *
      * **Throws synchronously when the socket has already gone**, the same trap
@@ -165,6 +200,27 @@ declare module 'ssh2' {
     on(event: 'close', listener: () => void): this
     on(event: 'end', listener: () => void): this
     on(event: 'banner', listener: (message: string) => void): this
+    /**
+     * A connection the server accepted on a port {@link Client.forwardIn} bound.
+     *
+     * `accept()` answers the channel carrying it and `reject()` refuses it
+     * without one, which is the only way to say no to a connection this app has
+     * decided not to serve. The library has already matched the destination
+     * against its own forwarding table before emitting
+     * (`lib/client.js:1980`), so nothing arrives here for a port this client did
+     * not bind — but the listener is on the *connection*, so a second forward on
+     * the same connection would see the first one's traffic. Every listener
+     * therefore checks `destPort` itself.
+     */
+    on(
+      event: 'tcp connection',
+      listener: (
+        info: { destIP: string; destPort: number; srcIP: string; srcPort: number },
+        accept: () => Channel,
+        reject: () => void,
+      ) => void,
+    ): this
+    removeListener(event: string, listener: (...args: never[]) => void): this
     on(
       event: 'keyboard-interactive',
       listener: (
