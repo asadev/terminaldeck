@@ -91,6 +91,7 @@ import {
 import { registerMachinesIpc, type MachinesIpc } from './remote/machines/ipc'
 import { registerServersIpc, type ServersIpc } from './servers/ipc'
 import { registerServerReachIpc, type ServerReachIpc } from './servers/reach'
+import { registerBrowserReachIpc, type ReachLedger } from './browser-reach'
 import { ServerStore } from './servers/store'
 import { ServerCredentials } from './servers/credentials'
 import { ServerConnections } from './servers/connection'
@@ -566,6 +567,17 @@ let machinesIpc: MachinesIpc | null = null
  * browser that answers and then hangs.
  */
 let serverReach: ServerReachIpc | null = null
+
+/**
+ * Which browser windows are reading which of those listeners.
+ *
+ * At module scope so that the two registrations above can tell it when a link
+ * or a connection took its tunnels down without anybody in a browser asking.
+ * The list itself is the browser's only source for the machine chip in the
+ * address bar - it used to be a `useState` inside a component that is mounted
+ * once per browser window, which is the whole story in `browser-reach.ts`.
+ */
+let browserReach: ReachLedger | null = null
 
 /**
  * Held so the wake lock and the battery watch can be let go of on quit.
@@ -2124,6 +2136,11 @@ function registerIpc(): void {
     desk: remote.desk,
     status: () => remote.server.status(),
     broadcast: (channel, payload) => send(channel, payload),
+    // A link that went took its loopback listeners with it. The browser's rows
+    // are the only place those listeners were ever named, so they go too - a
+    // chip naming a machine whose pages have stopped answering is worse than no
+    // chip at all.
+    tunnelsDropped: (machineId) => browserReach?.forget(machineId),
   })
   /*
    * The other half of Machines: computers nobody sits at. §5.5.
@@ -2240,6 +2257,37 @@ function registerIpc(): void {
     servers: () => serverStore.list().map((row) => ({ id: row.id, name: row.name })),
     withConnection: (serverId, fn) => serverConnections.withConnection(serverId, fn),
     facts: (serverId) => serverConnections.probe(serverId),
+    tunnelsDropped: (serverId) => browserReach?.forget(serverId),
+  })
+  /*
+   * And the one list of those listeners, with a reader count on each.
+   *
+   * Registered after both bridges because it is the thing above them: it does
+   * not open a tunnel, it decides which bridge to ask and remembers which
+   * browser windows are still reading the answer. Before this, every browser
+   * window kept its own list in React state while the listeners were single
+   * and shared, so a second window drew no machine chip over a page it was
+   * reading through a tunnel, and one window moving its page home closed the
+   * listener under another. See `browser-reach.ts` for the whole of it.
+   */
+  browserReach = registerBrowserReachIpc(ipcMain, {
+    open: (kind, machineId, port) =>
+      kind === 'server'
+        ? (serverReach?.reach(machineId, port) ??
+          Promise.resolve({ ok: false as const, message: 'This build cannot reach a server.' }))
+        : (machinesIpc?.reach(machineId, port) ??
+          Promise.resolve({
+            ok: false as const,
+            message: 'This build cannot reach another machine.',
+          })),
+    // False when there is no bridge to ask, which is the honest answer: this
+    // process cannot say the address is free, so the row stays and the badge
+    // keeps naming the machine that may still be answering there.
+    close: (kind, machineId, port) =>
+      kind === 'server'
+        ? (serverReach?.closeReach(machineId, port) ?? false)
+        : (machinesIpc?.closeReach(machineId, port) ?? false),
+    broadcast: (channel, payload) => send(channel, payload),
   })
 
   powerMonitor.on('resume', () => {

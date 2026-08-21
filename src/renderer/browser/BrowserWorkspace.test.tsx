@@ -478,7 +478,8 @@ describe('a page is hidden before it is closed', () => {
 })
 
 /**
- * The picker moving a page home, which 0.9.0 could not do.
+ * The picker moving a page home, which 0.9.0 could not do — and the list it
+ * reads, which this window no longer owns.
  *
  * `localhost-reach.ts` keeps the far machine's own port *number* on this
  * computer whenever it was free, so while the tunnel is up `localhost:3100`
@@ -491,59 +492,62 @@ describe('a page is hidden before it is closed', () => {
  *   > instead of staying on previous one and showing its running there then what
  *   > is the purpose of us if we change from dropdown"*
  *
- * The rule itself is pure and held in `machines-bridge.test.ts` — `moveFor`
- * names the tunnel that has to go back. What can only be checked here is that
- * the panel acts on it, because there is no DOM in this project's test run and
- * a plan nobody reads is the same defect with a passing unit test over it.
+ * ## Where these tests went
+ *
+ * There used to be four here, and all four read this file's **source** for
+ * strings like `void handBack(displaced)`. That is the worst shape of test: it
+ * breaks when correct code moves, and goes on passing when the behaviour
+ * underneath the string is wrong. It also could not see the actual defect,
+ * which was not in any of those lines: the list they were about was
+ * `useState` in a component mounted once per **browser window**, while the
+ * listener behind a row is one thing in the main process.
+ *
+ * The list is `src/main/browser-reach.ts` now, with a count of the windows
+ * holding each tunnel, and the decisions are functions that get run:
+ *
+ *  - `src/main/browser-reach.test.ts` — two windows on one tunnel, the last one
+ *    out closing it, the displaced listener, and the row that is kept because
+ *    its listener would not close.
+ *  - `src/renderer/browser/reach-ledger.test.ts` — `afterHandBack`, which is
+ *    the branch the picker turns on; the narrowing; and `canHoldTunnels`.
+ *  - `src/renderer/browser/machines-bridge.test.ts` — `moveFor` and `inTheWay`,
+ *    unchanged, because they were always pure and always took the list as an
+ *    argument.
+ *
+ * What is left below is the one thing only a scan of this file can say, and it
+ * is about the defect rather than about spelling: this component must not grow
+ * a tunnel list of its own again.
  */
-describe('moving a page home gives the port back first', () => {
+describe('the browser window keeps no tunnel list of its own', () => {
   const source = readFileSync(join(__dirname, 'BrowserWorkspace.tsx'), 'utf8')
-  const move = source.slice(source.indexOf('const moveToMachine'), source.indexOf('const serverSource'))
 
-  it('reads the function it is about', () => {
-    // Both anchors, or every assertion below passes against an empty string.
-    expect(source.indexOf('const moveToMachine')).toBeGreaterThan(0)
-    expect(source.indexOf('const serverSource')).toBeGreaterThan(source.indexOf('const moveToMachine'))
-    expect(move).toContain('moveFor(next, current, opened)')
+  it('reads a file that really does mount the shared list', () => {
+    // Both anchors, or every assertion below passes against nothing at all.
+    expect(source).toContain("from './reach-ledger'")
+    expect(source).toContain('const [opened, setOpened]')
   })
 
-  it('never navigates home while a tunnel of this window’s holds that number', () => {
-    const here = move.slice(move.indexOf("plan.kind === 'here'"), move.indexOf('const target ='))
-    expect(here).toContain('plan.give === null')
-    expect(here).toContain('handBack(held)')
-    // Two navigations: the one for "nothing is in the way", which is guarded by
-    // the check above it, and the one that runs only after the port came back.
-    expect(here.match(/browserNavigate/g)).toHaveLength(2)
-    expect(here.indexOf('plan.give === null')).toBeLessThan(here.indexOf('browserNavigate'))
-    expect(here.indexOf('handBack(held)')).toBeLessThan(here.lastIndexOf('browserNavigate'))
+  it('only ever writes the list with what the main process sent', () => {
+    const writes = [...source.matchAll(/setOpened\(([^\n]*)/g)].map((match) => match[1])
+    expect(writes.length).toBeGreaterThan(0)
+    for (const write of writes) {
+      // A `setOpened((prev) => …)` anywhere in this file is a window editing a
+      // shared object behind the other windows' backs, which is the whole of
+      // what he saw: one bar naming a machine the bar beside it did not.
+      expect(write, `a local edit of the tunnel list: setOpened(${write}`).toContain('readHolds(')
+    }
   })
 
-  it('puts the picker back on the machine still serving the page when it could not', () => {
-    const here = move.slice(move.indexOf("plan.kind === 'here'"), move.indexOf('const target ='))
-    // The untruth this whole change is about is a picker naming a machine the
-    // page is not on. A hand-back that did not happen is one more way to get it.
-    expect(here).toContain('setMachineId(held.machineId)')
-    expect(here).toContain('setNotice(')
-  })
-
-  it('gives back a tunnel another machine has just taken the number from', () => {
-    const reach = source.slice(source.indexOf('const reachPort'), source.indexOf('const openThere'))
-    // The same rule the move uses, asked from the other side: after the new
-    // listener took the number, whose was standing on it? A row dropped from
-    // `opened` without its tunnel being closed is a listener no control can see
-    // and the next move home walks straight into.
-    expect(reach).toContain('inTheWay(answer.localPort, machine.id, openedRef.current)')
-    expect(reach).toContain('void handBack(displaced)')
-  })
-
-  it('drops the badge’s entry only once the listener is really gone', () => {
-    const back = source.slice(source.indexOf('const handBack'), source.indexOf('const reachPort'))
-    expect(back.indexOf('if (answer !== true) return false')).toBeLessThan(back.indexOf('setOpened'))
-    // The badge is read off `opened`. Dropping the entry on a release that did
-    // not happen would leave the field silent about a page still coming from
-    // the PC, which is the same untruth with the labels swapped.
-    expect(back).toContain('releaseOnServer')
-    expect(back).toContain('releaseOnMachine')
+  it('asks for and gives back a port through the ledger, not through a bridge of its own', () => {
+    // `reachOnMachine` and `releaseOnMachine` still exist and still work; what
+    // must not come back is this window calling them directly, because those
+    // verbs cannot say who else is reading the tunnel and this window would
+    // have to remember it again.
+    for (const verb of ['reachOnMachine', 'releaseOnMachine', 'reachOnServer', 'releaseOnServer']) {
+      expect(source, `${verb} is called from the window again`).not.toContain(verb)
+    }
+    expect(source).toContain('holdReach(')
+    expect(source).toContain('releaseReach(')
   })
 })
 

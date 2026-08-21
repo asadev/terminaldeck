@@ -112,7 +112,6 @@ import {
   readMachines,
   moveFor,
   reachedAddress,
-  readReach,
   resolveMachinesApi,
   servedBy,
   THIS_MACHINE,
@@ -120,6 +119,17 @@ import {
   type ReachedPort,
   type ReachOpened,
 } from './machines-bridge'
+import {
+  afterHandBack,
+  canHoldTunnels,
+  readHeld,
+  readHolds,
+  readReleased,
+  resolveReachApi,
+  strandedNote,
+  type ReachHold,
+  type ReachReleased,
+} from './reach-ledger'
 import {
   portSourceFor,
   readServerPorts,
@@ -726,31 +736,42 @@ export function BrowserWorkspace({
    */
   const [serverPorts, setServerPorts] = useState<Record<string, ServerPortsState>>({})
   /**
-   * Every tunnel this window has opened, so a loopback page can name its source.
+   * Every tunnel this desktop is serving, so a loopback page can name its source.
    *
-   * Kept for the life of the panel because the tunnel is: `machines/ipc.ts` holds
-   * a listener open until the link drops, so a page opened ten minutes ago still
-   * loads. Entries for a machine that has gone are dropped below, in the same
-   * effect that gives the picker back — a badge naming a machine whose pages have
-   * stopped answering is the one thing worse than no badge.
+   * **Not this window's own list, and that is the whole change.** It used to be
+   * `useState<ReachedPort[]>` here, and one of these components is mounted per
+   * browser window while the listener behind a row is one thing in the main
+   * process. A second window reading a page through a tunnel had no row for it,
+   * so `servedBy` answered null and the address bar drew no machine chip beside
+   * a picker that named a machine — *"I don't know what to trust"* — and one
+   * window moving its page home closed the listener under the other.
    *
-   * A row leaves this list three ways, and a real close goes with each of them:
-   * its machine went, `handBack` gave the port up, or another machine took that
-   * number here — and `reachPort` hands the displaced one back in the same
-   * breath. A row deleted while its tunnel is still answering would be a
-   * listener nobody can see and nobody can name, standing on a number the bar
-   * has stopped explaining.
+   * So this is a mirror of `src/main/browser-reach.ts`'s list, pushed on every
+   * change, and nothing in this file writes it except the subscription below.
+   * A row leaves it when the tunnel is really closed and not before; the main
+   * process refuses to drop one whose listener outlived the attempt.
    */
-  const [opened, setOpened] = useState<ReachedPort[]>([])
-  /**
-   * The same list, readable from a callback that must not be rebuilt for it.
-   *
-   * `reachPort` runs inside a promise that started before the state it has to
-   * consult; the same arrangement `tabsRef` and `activeRef` already use further
-   * down, for the same reason.
-   */
-  const openedRef = useRef<ReachedPort[]>([])
-  openedRef.current = opened
+  const reachApi = useMemo(() => resolveReachApi(), [])
+  const [opened, setOpened] = useState<ReachHold[]>([])
+  useEffect(() => {
+    if (!reachApi) return
+    let alive = true
+    // Read once as well as subscribed, for the reason the machines list is:
+    // a window opened after a tunnel already existed would otherwise draw no
+    // chip over a page that is plainly coming from another computer, until
+    // something unrelated changed.
+    void reachApi
+      .listReach()
+      .then((raw) => {
+        if (alive) setOpened(readHolds(raw))
+      })
+      .catch(() => undefined)
+    const stop = reachApi.onReachState((raw) => setOpened(readHolds(raw)))
+    return () => {
+      alive = false
+      stop()
+    }
+  }, [reachApi])
   /**
    * The caveat about a port number that could not be kept, when there is one.
    *
@@ -1401,8 +1422,22 @@ export function BrowserWorkspace({
    * array every render would re-run that effect forever.
    */
   const machines = useMemo(
-    () => [...machineView, ...serverChoices(serverList, serverPorts)],
-    [machineView, serverList, serverPorts],
+    /*
+     * Empty when this window cannot hold a tunnel at all, which draws no picker
+     * rather than a picker that cannot do its job. `machinePart` below is null
+     * for an empty list, and the standing rule is that a control which cannot
+     * act must not be on screen: a dropdown naming Office PC that then refuses
+     * every port is the exact shape of the thing this round is fixing.
+     *
+     * Two ways to be unable: a preload with no ledger, and no `tabId` — the
+     * shell tab id is what a hold is filed under, and a hold nobody can be
+     * charged with is a listener nothing would ever close.
+     */
+    () =>
+      canHoldTunnels(reachApi, tabId)
+        ? [...machineView, ...serverChoices(serverList, serverPorts)]
+        : [],
+    [reachApi, tabId, machineView, serverList, serverPorts],
   )
 
   /**
@@ -1422,7 +1457,16 @@ export function BrowserWorkspace({
     const lost = lostMachine(machines, machineId)
     if (lost === null) return
     setMachineId(THIS_MACHINE)
-    setOpened((prev) => prev.filter((entry) => entry.machineId !== machineId))
+    /*
+     * The rows are *not* dropped here any more, and nothing is missing.
+     *
+     * Every window used to filter its own copy, which meant each of them
+     * decided separately when a machine's pages had stopped answering. The main
+     * process closes those listeners itself the moment a link leaves `online`
+     * (`machines/ipc.ts`) or a server's connection dies (`servers/reach.ts`),
+     * and tells the ledger in the same breath — so the rows leave every window
+     * at once, off the push, which is the only way two windows can agree.
+     */
     // And the caveat about one of its ports, which is a true sentence about a
     // page that has just stopped answering. Watched on a real pair of machines:
     // revoking over there left "port 8090 is being served here on 64830" on
@@ -1491,7 +1535,7 @@ export function BrowserWorkspace({
   }, [askServer, machineId, machines, serverPorts])
 
   /**
-   * Hand a port back to this computer, and say whether it really went.
+   * Let this window's hold on a port go, and say whether the port really went.
    *
    * The counterpart of `reachPort` below, and the thing 0.9.0 was missing. The
    * tunnel keeps the far machine's own port *number* here whenever it was free,
@@ -1499,36 +1543,24 @@ export function BrowserWorkspace({
    * moving the page home by navigating to that address fetched it from the PC
    * again, under a picker that had already taken this machine's name.
    *
-   * False is a real answer and the caller must act on it: a preload that
-   * predates the verb, or a request main would not take. The entry is dropped
-   * from `opened` **only** when the listener is actually gone, because the
-   * badge in the address field is read off that list and a badge that stopped
-   * naming the PC over a page still coming from the PC is the same untruth with
-   * the labels swapped.
+   * It is now a *release*, not a close, and the difference is another window.
+   * The main process counts the windows holding each tunnel and only the last
+   * one out closes it, so `gone: false` has two meanings and both are sentences
+   * somebody reads: another window is still on that page, or the listener would
+   * not close. Either way the port is still that machine's, and the caller must
+   * act on it — `afterHandBack` is that decision, and it is tested by running
+   * it rather than by reading this file.
    */
   const handBack = useCallback(
-    async (held: ReachedPort): Promise<boolean> => {
-      const owner = machines.find((one) => one.id === held.machineId)
-      // A machine with no row is one this window cannot name, and it cannot
-      // know which of the two bridges holds the listener either. Refusing is
-      // the only answer here that is not a guess about somebody's page.
-      if (!owner) return false
-      const release =
-        owner.kind === 'server' ? serversApi?.releaseOnServer : machinesApi?.releaseOnMachine
-      if (!release) return false
-      const answer = await release(held.machineId, held.port).catch(() => false)
-      if (answer !== true) return false
-      // Both halves of the key. Another machine may already have taken that
-      // number here — see `reachPort` — and filtering on the number alone would
-      // delete the entry describing the page that is on screen right now.
-      setOpened((prev) =>
-        prev.filter(
-          (entry) => entry.machineId !== held.machineId || entry.localPort !== held.localPort,
-        ),
+    async (held: ReachedPort): Promise<ReachReleased> => {
+      if (!reachApi || !tabId) {
+        return { gone: false, holders: 0, message: 'This build cannot give that port back.' }
+      }
+      return readReleased(
+        await reachApi.releaseReach(tabId, held.machineId, held.port).catch(() => null),
       )
-      return true
     },
-    [machines, machinesApi, serversApi],
+    [reachApi, tabId],
   )
 
   /**
@@ -1542,64 +1574,49 @@ export function BrowserWorkspace({
    */
   const reachPort = useCallback(
     async (machine: MachineChoice, port: number): Promise<ReachOpened | null> => {
-      /*
-       * The one place the two kinds of machine part company, and it is one
-       * line: which bridge is asked. Everything after it — the narrowing, the
-       * badge, the caveat about a port number that had to change, the tab the
-       * page opens in — is the same code for both, because the answer shapes
-       * were deliberately made identical in the main process rather than
-       * translated here. Two shapes would have been two of everything below.
-       */
-      const bridge =
-        machine.kind === 'server'
-          ? serversApi && ((port: number) => serversApi.reachOnServer(machine.id, port))
-          : machinesApi && ((port: number) => machinesApi.reachOnMachine(machine.id, port))
-      if (!bridge) {
+      if (!reachApi || !tabId) {
         setNotice('This build cannot reach another machine’s ports.')
         return null
       }
-      const answer = readReach(
-        await bridge(port).catch((cause: unknown) => ({
-          ok: false,
-          message: humanError(cause),
-        })),
+      /*
+       * One call, and which bridge is asked is decided over there.
+       *
+       * `machine.kind` rides along and `src/main/browser-reach.ts` picks the
+       * bridge from it, which is the same one line the two kinds of machine
+       * ever differed by. What could not be done here at all is the rest of
+       * what this call now does: record that *this* window is reading the
+       * tunnel, and hand back whichever listener was standing on the local
+       * number it landed on — asked of every window's holds instead of this
+       * one's, which is why the displaced listener used to survive unnamed.
+       */
+      const held = readHeld(
+        await reachApi
+          .holdReach(tabId, { id: machine.id, name: machine.name, kind: machine.kind }, port)
+          .catch((cause: unknown) => ({ answer: { ok: false, message: humanError(cause) } })),
       )
+      const answer = held.answer
       if (!answer.ok) {
         setNotice(answer.message)
         return null
       }
-      /*
-       * A listener of this window's that was standing on the same number here
-       * is given back, not merely forgotten.
-       *
-       * Two machines cannot both own `localhost:3100` on this computer, and the
-       * ladder in `localhost-reach.ts` will hand the second one the *other*
-       * loopback family with the same number rather than refuse. Dropping the
-       * displaced row from this list without closing its tunnel leaves a
-       * listener no control can see and no badge can name — and the next move
-       * home would navigate straight into it, which is the 0.9.0 defect back
-       * again by a longer route.
-       */
-      const displaced = inTheWay(answer.localPort, machine.id, openedRef.current)
-      setOpened((prev) => [
-        ...prev.filter((entry) => entry.localPort !== answer.localPort),
-        {
-          machineId: machine.id,
-          machineName: machine.name,
-          port: answer.port,
-          localPort: answer.localPort,
-          sameNumber: answer.sameNumber,
-        },
-      ])
-      if (displaced) void handBack(displaced)
       // Said once, when it happens, rather than left to be discovered by a link
       // inside the site going somewhere strange. Set to '' on the ordinary case
       // as well, so a caveat about the last port does not sit above a page it is
       // not true of.
       setPortNote(differentPortNote(answer, machine.name))
+      /*
+       * A displaced listener that would not close is said out loud.
+       *
+       * It used to be dropped from this window's array and handed back with a
+       * bare `void`, so a hand-back that failed left a listener no control
+       * could see, on a number the bar had stopped explaining. The row survives
+       * now, so the badge keeps naming it — and this is the sentence that says
+       * the page which just loaded is sharing its number with that machine.
+       */
+      if (held.stranded) setNotice(strandedNote(held.stranded))
       return answer
     },
-    [handBack, machinesApi, serversApi],
+    [reachApi, tabId],
   )
 
   /**
@@ -1707,7 +1724,16 @@ export function BrowserWorkspace({
        */
       const held = inTheWay(loopbackPort(target.url), machineId, opened)
       if (held !== null) {
-        void handBack(held).then(() => act((a, id) => a.browserNavigate(id, target.url)))
+        void handBack(held).then((released) => {
+          // The navigation happens either way. If the port did not come back the
+          // address still means that machine — which the badge in the field will
+          // say, because the row stays — and the reason goes on screen beside
+          // it, because "I typed localhost and got the PC" was the confusion,
+          // and a page that quietly comes from somewhere else explains nothing.
+          const outcome = afterHandBack(released, held)
+          if (!outcome.go) setNotice(outcome.notice)
+          act((a, id) => a.browserNavigate(id, target.url))
+        })
         return
       }
       act((a, id) => a.browserNavigate(id, target.url))
@@ -2357,12 +2383,16 @@ export function BrowserWorkspace({
         return
       }
       const held = plan.give
-      void handBack(held).then((gone) => {
-        if (!gone) {
+      void handBack(held).then((released) => {
+        const next = afterHandBack(released, held)
+        if (!next.go) {
           // Nothing moved, so the picker must not say it did. The port is still
-          // that machine's, which is the one fact the sentence has to carry.
-          setMachineId(held.machineId)
-          setNotice(`${held.machineName} is still serving port ${held.localPort} here.`)
+          // that machine's, which is the one fact the sentence has to carry —
+          // and when it is another window still reading it, the sentence says
+          // so, because "still serving" over a page nobody could find would be
+          // a true statement that explains nothing.
+          setMachineId(next.machineId)
+          setNotice(next.notice)
           return
         }
         act((a, id) => a.browserNavigate(id, plan.url))
