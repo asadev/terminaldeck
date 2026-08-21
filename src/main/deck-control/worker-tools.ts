@@ -1,5 +1,6 @@
 import { slotName, windowsOf } from '../browser-binding'
 import type { JsonSchema, ToolContext, ToolOutput, ToolSpec } from './catalogue'
+import { emptySummary, withEmptiness } from './empty-result'
 import { Refused } from './surface'
 
 /**
@@ -35,6 +36,31 @@ import { Refused } from './surface'
  * person is looking, and it is the thing they answer by signing in and pressing
  * Lift. Adding a `browser.lift` beside it would replace a gesture with a
  * request an agent can make in a retry loop.
+ *
+ * ## Neither of them can answer nothing quietly
+ *
+ * Both carry `empty` and `emptyReason` from `empty-result.ts` — the same shape
+ * `browser.network` carries, not a second one — and the reason is that an agent
+ * asking a pool of eight for a worker and an agent asking an empty pool get
+ * results that differ only in the length of an array nobody has to read.
+ *
+ * `browser.workers` is empty when there is no worker profile at all: the answer
+ * is then a fact about the app's configuration, and it is answered with the
+ * place a person adds one rather than with a shrug.
+ *
+ * `browser.worker` **has no empty case, and says so on every result anyway.**
+ * Take either produces a hold or refuses; release and renew either happen or
+ * refuse. `empty: false` is written out rather than left off because a caller
+ * that has to know which tools carry the field is a caller that will read the
+ * field on none of them — *"always present, never inferred from the absence of a
+ * field"* is `empty-result.ts`'s own rule, and it is worth more here than the
+ * bytes it costs.
+ *
+ * A `take` that hands back a worker with no window of yours is **not** empty:
+ * the hold is real, it is yours, `renew` and `release` act on it, and the thing
+ * to do about it is to ask the person for a window rather than to conclude
+ * nothing happened. That distinction is carried by `note`, which says which of
+ * the two it is.
  *
  * ## What the list discloses, and why that is the right line
  *
@@ -285,25 +311,47 @@ export function workerTools(deps: WorkerToolDeps): ToolSpec[] {
       }))
       const drivable = workers.filter((worker) => worker.window !== null).length
       return {
-        value: {
-          workers,
-          maxConcurrent: pace.maxConcurrent,
-          minDelayMs: pace.minDelayMs,
-          jitterMs: pace.jitterMs,
-          /*
-           * Said in a sentence as well as in the fields, because the state that
-           * matters most here — "there are eight workers and you can drive
-           * none of them" — is one an agent reads straight past when it is a
-           * `window: null` on every row.
-           */
-          note:
-            workers.length === 0
-              ? 'There are no worker profiles yet. The person adds them in the browser’s profile menu, under Workers.'
-              : drivable === 0
-                ? noWindowLine(context, false)
-                : `${drivable} of ${workers.length} can be driven from your windows.`,
-        },
-        summary: { workers: workers.length, drivable },
+        value: withEmptiness(
+          {
+            workers,
+            /*
+             * A number and not only prose, for the same reason `empty` is a
+             * field: "eight workers and you can drive none of them" has to be
+             * readable without parsing an English sentence or counting nulls.
+             */
+            drivable,
+            maxConcurrent: pace.maxConcurrent,
+            minDelayMs: pace.minDelayMs,
+            jitterMs: pace.jitterMs,
+            /*
+             * Said in a sentence as well as in the fields, because the state that
+             * matters most here — "there are eight workers and you can drive
+             * none of them" — is one an agent reads straight past when it is a
+             * `window: null` on every row.
+             */
+            note:
+              workers.length === 0
+                ? 'There are no worker profiles yet. The person adds them in the browser’s profile menu, under Workers.'
+                : drivable === 0
+                  ? noWindowLine(context, false)
+                  : `${drivable} of ${workers.length} can be driven from your windows.`,
+          },
+          {
+            /*
+             * The rows are what this call is for, so they are what it counts —
+             * the same reading `browser.network`'s `status` makes of its own
+             * counters. `drivable: 0` alongside eight workers is a real answer
+             * about eight real profiles and calling it empty would be crying
+             * wolf; it is loud in `drivable` and in `note` instead.
+             */
+            produced: workers.length,
+            whenNone:
+              'there is no worker profile to list. A worker is a browser profile with its own cookie ' +
+              'jar and a person makes them, in the browser’s profile menu, under Workers — nothing on ' +
+              'this surface can create one.',
+          },
+        ),
+        summary: { workers: workers.length, drivable, ...emptySummary(workers.length) },
       }
     },
   }
@@ -361,26 +409,40 @@ export function workerTools(deps: WorkerToolDeps): ToolSpec[] {
         const slots = windowsByWorker(deps, context)
         const window = slots.get(answer.profileId) ?? null
         return {
-          value: {
+          value: withEmptiness(
+            {
+              worker: answer.name,
+              /*
+               * The window as it is **now**. A window shows one page at a time
+               * and the person can switch it, so this is a fact about this
+               * moment rather than a binding. Re-read browser.workers if a page
+               * does not look like the one you expected.
+               */
+              window,
+              pacedMs: answer.pacedMs,
+              expiresAt: answer.expiresAt,
+              signedInFor: deps
+                .injectionsFor(deps.list().find((one) => one.profileId === answer.profileId)?.partition ?? '')
+                .map((entry) => entry.host),
+              note:
+                window === null
+                  ? noWindowLine(context, true)
+                  : `Drive ${window}. Release the worker when the page is done.`,
+            },
+            {
+              // A hold, and a hold is a thing: it stops every other agent on
+              // this machine taking the same cookie jar, whether or not a
+              // window of yours is showing a page in it yet. See the header.
+              produced: 1,
+              whenNone: '',
+            },
+          ),
+          summary: {
             worker: answer.name,
-            /*
-             * The window as it is **now**. A window shows one page at a time
-             * and the person can switch it, so this is a fact about this
-             * moment rather than a binding. Re-read browser.workers if a page
-             * does not look like the one you expected.
-             */
-            window,
             pacedMs: answer.pacedMs,
-            expiresAt: answer.expiresAt,
-            signedInFor: deps
-              .injectionsFor(deps.list().find((one) => one.profileId === answer.profileId)?.partition ?? '')
-              .map((entry) => entry.host),
-            note:
-              window === null
-                ? noWindowLine(context, true)
-                : `Drive ${window}. Release the worker when the page is done.`,
+            ...(window === null ? {} : { window }),
+            ...emptySummary(1),
           },
-          summary: { worker: answer.name, pacedMs: answer.pacedMs, ...(window === null ? {} : { window }) },
         }
       }
 
@@ -405,8 +467,12 @@ export function workerTools(deps: WorkerToolDeps): ToolSpec[] {
         )
       }
       return {
-        value: { worker: found.name, [action === 'release' ? 'released' : 'renewed']: true },
-        summary: { worker: found.name },
+        value: withEmptiness(
+          { worker: found.name, [action === 'release' ? 'released' : 'renewed']: true },
+          // It happened, or `ok` was false and this line was never reached.
+          { produced: 1, whenNone: '' },
+        ),
+        summary: { worker: found.name, ...emptySummary(1) },
       }
     },
   }

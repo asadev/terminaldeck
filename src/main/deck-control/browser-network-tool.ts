@@ -304,6 +304,14 @@ export function browserNetworkTool(drive: BrowserDrive): ToolSpec {
                 ...(where === null ? {} : { window: where }),
                 rules: describeRules(read.rules),
                 capturing: capture,
+                /*
+                 * `false`, every time, while the precheck above stands — and
+                 * written out rather than left off, because a log where only
+                 * some rows carry the field is a log that has to be read one
+                 * row at a time to find out which. The other two actions here
+                 * already say it; this one was the odd one out.
+                 */
+                ...emptySummary(kinds.length + (capture ? 1 : 0)),
               },
             }
           }

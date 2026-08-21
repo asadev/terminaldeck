@@ -21,6 +21,7 @@ import {
 import { readBlocks } from '../browser-block-watch'
 import { blockShotDir, coveragePath, ledgerPath, runDir } from '../browser-scrape-paths'
 import type { JsonSchema, ToolContext, ToolOutput, ToolSpec } from './catalogue'
+import { emptySummary, withEmptiness } from './empty-result'
 import { Refused, type Tier } from './surface'
 
 /**
@@ -51,6 +52,28 @@ import { Refused, type Tier } from './surface'
  *    didn't capture"* that a tool can offer. The capturing is not a tool and
  *    must not be: by the time an agent has decided it was blocked, the challenge
  *    has rotated. See `browser-block-watch.ts`.
+ *
+ * ## None of the four can answer nothing quietly
+ *
+ * Every result here carries `empty` and `emptyReason` from `empty-result.ts` —
+ * the shape `browser.network` already uses, not a second one — because three of
+ * the four have an answer that is indistinguishable from success while meaning
+ * the opposite:
+ *
+ *  - `assets.ledger` with `op: verify` over a ledger nobody wrote to answers
+ *    `{ total: 0, ok: 0, missing: [], corrupt: [] }`. That is the literal shape
+ *    of a clean run, and it is what *"did this run work?"* returns after a run
+ *    that recorded nothing at all.
+ *  - `assets.coverage` answers `unknown` when no total could be read off the
+ *    page. Its own description already says *"`unknown` is not success"*; now
+ *    the result says it in a field rather than only in prose a caller may not
+ *    have been shown.
+ *  - `assets.rendition` with nothing reachable hands back the original URL
+ *    unverified, by design — but a caller that reads `url` and fetches it must
+ *    be able to tell that from a probed, confirmed upgrade.
+ *  - `assets.blocks` with an empty folder means either that nothing has been
+ *    blocked or that nothing was watching. Those are opposite conclusions and
+ *    an empty array is the same in both.
  *
  * ## Why they come through `extraTools`
  *
@@ -369,13 +392,32 @@ export function assetTools(deps: AssetToolsDeps): ToolSpec[] {
         },
       })
       return {
-        value: choice,
+        value: withEmptiness(choice, {
+          /*
+           * Reachability, not the URL, is what this call produced.
+           *
+           * `chooseRendition` never answers "nothing" — the worst case is the
+           * original URL with `reachable: false`, which is deliberate and is
+           * still the right thing to hand back, because a `HEAD` that failed is
+           * not proof the asset is missing. But a caller cannot be left to
+           * notice the difference between *that* URL and one that was probed and
+           * confirmed by reading a boolean four fields down, so it is `empty`
+           * too: nothing here was verified.
+           */
+          produced: choice.reachable ? 1 : 0,
+          whenNone:
+            'no candidate answered — not the rewrites and not the original, so nothing about this URL ' +
+            'has been confirmed. It is still returned and still worth fetching. The host may refuse ' +
+            'HEAD requests, or the asset may be behind a login, in which case pass profileId so the ' +
+            'probe uses that jar. See attempts for what each candidate said.',
+        }),
         summary: {
           upgraded: choice.upgraded,
           fellBack: choice.fellBack,
           reachable: choice.reachable,
           ruleId: choice.ruleId,
           tried: choice.attempts.length,
+          ...emptySummary(choice.reachable ? 1 : 0),
         },
       }
     },
@@ -447,11 +489,18 @@ export function assetTools(deps: AssetToolsDeps): ToolSpec[] {
           expectDigest === null ? {} : { expectDigest },
         )
         return {
-          value: { ...decision, mode, ledger: store.path },
+          value: withEmptiness(
+            { ...decision, mode, ledger: store.path },
+            // A decision is always produced, and both of its values are a
+            // finding: `skip` is the answer that cost him 48,473 assets, so it
+            // is emphatically not "nothing happened". It carries its own reason.
+            { produced: 1, whenNone: '' },
+          ),
           summary: {
             action: decision.action,
             reason: decision.reason,
             ledgerWasWrong: decision.ledgerWasWrong,
+            ...emptySummary(1),
           },
         }
       }
@@ -497,28 +546,75 @@ export function assetTools(deps: AssetToolsDeps): ToolSpec[] {
           path,
         })
         return {
-          value: { entry, ledger: store.path, guarantee: NO_TRANSFORM_GUARANTEE },
-          summary: { url: scrubUrl(url), bytes, digest },
+          value: withEmptiness(
+            { entry, ledger: store.path, guarantee: NO_TRANSFORM_GUARANTEE },
+            // The file was stat'd and hashed above or this line was not reached.
+            { produced: 1, whenNone: '' },
+          ),
+          summary: { url: scrubUrl(url), bytes, digest, ...emptySummary(1) },
         }
       }
 
       if (op === 'verify') {
         const verdict = await store.verify()
         return {
-          value: { ...verdict, ledger: store.path },
+          value: withEmptiness(
+            { ...verdict, ledger: store.path },
+            {
+              /*
+               * The one that matters most in this file.
+               *
+               * `verify` is what *"did this run work?"* means, and over a ledger
+               * with no entries it answers `total: 0, ok: 0, missing: [],
+               * corrupt: []` — which is byte-for-byte the shape of a run where
+               * everything was fine. Three scripts reported success while doing
+               * nothing this week; this is where the fourth would have.
+               */
+              produced: verdict.total,
+              whenNone:
+                'this ledger has no entries, so nothing was checked and this is not a statement about ' +
+                `any file. If assets have been downloaded for run ${runId}, they were never recorded — ` +
+                'call this tool with op record after each fetch, or the resume will re-download ' +
+                'everything and the verify will go on saying nothing.',
+            },
+          ),
           summary: {
             total: verdict.total,
             ok: verdict.ok,
             missing: verdict.missing.length,
             corrupt: verdict.corrupt.length,
+            ...emptySummary(verdict.total),
           },
         }
       }
 
       const tally = store.tally()
+      /*
+       * Everything the ledger knows about, read or written. `known` is what was
+       * on disk at open and `recorded` is what this process has added since, so
+       * a ledger that has just written its first entry is not empty even though
+       * it was when it was opened.
+       */
+      const holds = tally.known + tally.recorded
       return {
-        value: { ...tally, mode, line: store.summary(), ledger: store.path, folder: runDir(deps.userData(), runId) },
-        summary: { ...tally, mode },
+        value: withEmptiness(
+          {
+            ...tally,
+            mode,
+            line: store.summary(),
+            ledger: store.path,
+            folder: runDir(deps.userData(), runId),
+          },
+          {
+            produced: holds,
+            whenNone:
+              `nothing has ever been recorded into the ${runId} ledger, so these counts are not a ` +
+              'picture of a run — they are the picture of a ledger nobody wrote to. A run that is ' +
+              'fetching assets and not calling op record gets exactly this, and will re-download all ' +
+              'of them next time.',
+          },
+        ),
+        summary: { ...tally, mode, ...emptySummary(holds) },
       }
     },
   }
@@ -571,13 +667,30 @@ export function assetTools(deps: AssetToolsDeps): ToolSpec[] {
         const checks = readCoverage(path)
         const summary = coverageSummary(checks)
         return {
-          value: { ...summary, checks, log: path },
+          value: withEmptiness(
+            { ...summary, checks, log: path },
+            {
+              produced: checks.length,
+              /*
+               * `coverageSummary` already answers `ok: false` with this sentence
+               * for an empty run, which is the right verdict and the wrong place
+               * to leave it alone: `ok` is one boolean among five counters that
+               * are all zero, and zero shorts reads like good news.
+               */
+              whenNone:
+                `no coverage check was made in run ${runId}, so nothing here says it captured ` +
+                'everything it should have. Call this tool with op check, the page text and how many ' +
+                'items you got, once per page — a run with no checks is how 7% of a dataset shipped ' +
+                'as a complete one.',
+            },
+          ),
           summary: {
             ok: summary.ok,
             short: summary.short,
             unknown: summary.unknown,
             over: summary.over,
             complete: summary.complete,
+            ...emptySummary(checks.length),
           },
         }
       }
@@ -614,20 +727,37 @@ export function assetTools(deps: AssetToolsDeps): ToolSpec[] {
         now: now(),
       })
       const written = recordCoverage(path, check)
+      /*
+       * The comparison is the product, and there is no comparison without a
+       * stated total. `captured` came from the caller; on its own it is a number
+       * this tool was told, not a number it checked.
+       */
+      const compared = check.stated === null ? 0 : 1
       return {
-        value: {
-          ...check,
-          statedFrom: given !== null ? 'given' : read === null ? 'nothing' : 'text',
-          reading: read,
-          recorded: written,
-          log: path,
-        },
+        value: withEmptiness(
+          {
+            ...check,
+            statedFrom: given !== null ? 'given' : read === null ? 'nothing' : 'text',
+            reading: read,
+            recorded: written,
+            log: path,
+          },
+          {
+            produced: compared,
+            whenNone:
+              'nothing on this page stated a total, so there was nothing to compare against and this ' +
+              'page cannot be called complete — the verdict is unknown, which is not a pass. Give ' +
+              'pattern, a regular expression whose first group is the total, or stated when you ' +
+              'already know it from somewhere the page does not print.',
+          },
+        ),
         summary: {
           verdict: check.verdict,
           stated: check.stated,
           captured: check.captured,
           missing: check.missing,
           recorded: written,
+          ...emptySummary(compared),
         },
       }
     },
@@ -651,26 +781,50 @@ export function assetTools(deps: AssetToolsDeps): ToolSpec[] {
       const since = optNum(args, 'since')
       const limitRaw = optNum(args, 'limit')
       const limit = limitRaw === null ? 20 : Math.min(200, Math.max(1, Math.trunc(limitRaw)))
-      const all = readBlocks(dir)
+      const caught = readBlocks(dir)
+      const all = caught
         .filter((shot) => since === null || shot.at >= since)
         .sort((left, right) => right.at - left.at)
       const shots = all.slice(0, limit)
+      /*
+       * Two opposite readings of the same empty array, and the caller has to be
+       * handed both. "Nothing has blocked us" is the good one. "Nothing was
+       * watching" is the one that ends with a run whose failures were never
+       * photographed — and by then the challenge that caused them has rotated
+       * and cannot be photographed at all.
+       *
+       * Composed here, not inside the call below, so `since` narrowing an
+       * otherwise-full folder to nothing says so. `caught` is the read that
+       * already happened; this branch adds no second walk of the directory.
+       */
+      const foundNothing =
+        since === null
+          ? 'no page has been photographed refusing us. Either nothing has been blocked, or nothing ' +
+            'has been driven through this browser since the app started — an empty folder does not ' +
+            'tell the two apart.'
+          : `no page has been photographed refusing us since ${new Date(since).toISOString()}. ` +
+            (caught.length > 0
+              ? `There are ${caught.length} older ones: drop since to see them.`
+              : 'There are none at all in this folder.')
       return {
-        value: {
-          folder: dir,
-          total: all.length,
-          shots: shots.map((shot) => ({
-            at: shot.at,
-            url: scrubUrl(shot.evidence.finalUrl || shot.evidence.requestedUrl),
-            httpStatus: shot.evidence.httpStatus,
-            title: shot.evidence.title,
-            signals: shot.verdict.signals,
-            screenshot: shot.path,
-            evidence: shot.sidecar,
-            note: shot.note,
-          })),
-        },
-        summary: { total: all.length, listed: shots.length },
+        value: withEmptiness(
+          {
+            folder: dir,
+            total: all.length,
+            shots: shots.map((shot) => ({
+              at: shot.at,
+              url: scrubUrl(shot.evidence.finalUrl || shot.evidence.requestedUrl),
+              httpStatus: shot.evidence.httpStatus,
+              title: shot.evidence.title,
+              signals: shot.verdict.signals,
+              screenshot: shot.path,
+              evidence: shot.sidecar,
+              note: shot.note,
+            })),
+          },
+          { produced: all.length, whenNone: foundNothing },
+        ),
+        summary: { total: all.length, listed: shots.length, ...emptySummary(all.length) },
       }
     },
   }

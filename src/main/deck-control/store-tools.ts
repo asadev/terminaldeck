@@ -8,6 +8,7 @@ import { originWords, recipeAllowsUrl } from '../browser-store-recipe'
 import type { InstalledTool } from '../browser-store'
 import { boundOf } from './browser-tools'
 import type { JsonSchema, ToolContext, ToolOutput, ToolSpec } from './catalogue'
+import { emptySummary, withEmptiness } from './empty-result'
 import { Refused } from './surface'
 
 /**
@@ -50,6 +51,20 @@ import { Refused } from './surface'
  *     read the same way `browser-tools.ts` reads it for its escalation, and for
  *     the same stated reason: it is *"a main-process fact needing nobody's
  *     cooperation"*, so the bound lapses the moment a redirect moves the page.
+ *
+ * ## The door is not allowed to look open when nothing came through it
+ *
+ * Both halves of this tool have an answer that is shaped exactly like a good
+ * one. A listing call with nothing installed returns `tools: []`; a run whose
+ * selectors matched nothing returns `rows: []` with every count at zero and no
+ * error anywhere. The second is the dangerous one: an agent that asked a page
+ * for its listings and got an empty array will write down that the page had no
+ * listings, and a recipe that has gone stale against a site's markup produces
+ * exactly that, page after page, at full speed.
+ *
+ * So both carry `empty` and `emptyReason` from `empty-result.ts` — the same
+ * shape `browser.network` uses, not a second one. An empty read is a warning
+ * about this call, never a fact about the page.
  *
  * ## The number it always reports
  *
@@ -250,19 +265,28 @@ export function storeTools(deps: StoreToolDeps): ToolSpec[] {
         if (wanted === null) {
           const tools = listInstalled(installed)
           return {
-            value: {
-              tools,
-              /*
-               * An empty store is a real state, and it is answered with the
-               * place rather than with a shrug — a model told "nothing is
-               * installed" and nothing else will invent a way to install one.
-               */
-              note:
-                tools.length === 0
-                  ? `No browser tools are installed. They are installed by a person, from ${STORE_PLACE}.`
-                  : '',
-            },
-            summary: { tools: tools.length },
+            value: withEmptiness(
+              {
+                tools,
+                /*
+                 * An empty store is a real state, and it is answered with the
+                 * place rather than with a shrug — a model told "nothing is
+                 * installed" and nothing else will invent a way to install one.
+                 */
+                note:
+                  tools.length === 0
+                    ? `No browser tools are installed. They are installed by a person, from ${STORE_PLACE}.`
+                    : '',
+              },
+              {
+                produced: tools.length,
+                whenNone:
+                  'no browser tool is installed, so there is nothing here to run. A person installs ' +
+                  `them from ${STORE_PLACE}; nothing on this surface can install one. Say what you ` +
+                  'would have used and let them turn it on.',
+              },
+            ),
+            summary: { tools: tools.length, ...emptySummary(tools.length) },
           }
         }
 
@@ -306,25 +330,42 @@ export function storeTools(deps: StoreToolDeps): ToolSpec[] {
         const counted = collectedBy(found.recipe, result)
         const note = completenessNote({ stated: result.stated, ...counted })
         return {
-          value: {
-            tool: found.recipe.id,
-            url: result.url,
-            title: result.title,
-            fields: result.fields,
-            rows: result.rows,
-            rowsOnPage: result.rowsOnPage,
-            rowsReturned: result.rowsReturned,
-            /* Per list field: how many the page had against how many came back.
-               A caller writing files needs the first number to know when it is
-               done, and only the second one was ever being reported. */
-            counts: result.counts,
-            onPage: counted.onPage,
-            returned: counted.returned,
-            stated: result.stated,
-            complete: isComplete(result.stated, counted.returned),
-            next: result.next,
-            note,
-          },
+          value: withEmptiness(
+            {
+              tool: found.recipe.id,
+              url: result.url,
+              title: result.title,
+              fields: result.fields,
+              rows: result.rows,
+              rowsOnPage: result.rowsOnPage,
+              rowsReturned: result.rowsReturned,
+              /* Per list field: how many the page had against how many came back.
+                 A caller writing files needs the first number to know when it is
+                 done, and only the second one was ever being reported. */
+              counts: result.counts,
+              onPage: counted.onPage,
+              returned: counted.returned,
+              stated: result.stated,
+              complete: isComplete(result.stated, counted.returned),
+              next: result.next,
+              note,
+            },
+            {
+              /*
+               * What the recipe collects, counted the way the recipe declares
+               * it — `collectedBy` reads the shape off the recipe and never off
+               * the answer, so a page that happens to have no rows today cannot
+               * change how its own total is read.
+               */
+              produced: counted.returned,
+              whenNone:
+                `${found.recipe.name} ran on ${result.url || 'this page'} and matched nothing. That ` +
+                'is a fact about this call, not about the page: the selectors may no longer fit the ' +
+                'site, the page may not have finished loading what it fetches in the background, or ' +
+                'this may be the wrong page. Look at it with browser.read before recording that there ' +
+                'was nothing here. Single fields that did match are still in fields.',
+            },
+          ),
           // Numbers, never the payload. `ToolOutput.summary`: *"Never the
           // payload … the log is an audit trail and not a second copy of the
           // app's data."*
@@ -334,6 +375,7 @@ export function storeTools(deps: StoreToolDeps): ToolSpec[] {
             onPage: counted.onPage,
             stated: result.stated,
             short: note !== '',
+            ...emptySummary(counted.returned),
           },
         }
       },
