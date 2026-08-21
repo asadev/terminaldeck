@@ -10,8 +10,9 @@
  *  - **the way back on disk** — the record a `kept` action writes before it
  *    changes anything, kept on *this* computer because a record on the server
  *    is gone in exactly the situation it exists for;
- *  - **the terminal** — one interactive shell per server page, opened on
- *    request and closed with the page;
+ *  - **the terminal** — an interactive shell per press, opened on request and
+ *    closed by the surface that opened it, never by a different page letting go
+ *    of the same server (see `servers:close`);
  *  - **the grant** — the copilot's per-server permission, which is asked for
  *    here and nowhere else.
  *
@@ -27,6 +28,12 @@
  *
  * The one long-lived thing is the terminal, and only while it is on screen. A
  * pty is inherently a stream; that is not polling.
+ *
+ * Two surfaces can be looking at one server at once — its page in Machines and
+ * the Servers settings pane — so *closing* is reference-counted and *only* the
+ * connection is. A terminal is owned by the surface that opened it and outlives
+ * every page: `servers:close` carries the whole argument, and it is the bug that
+ * paragraph exists to record.
  *
  * ## Why the transport arrives as a dependency
  *
@@ -1396,19 +1403,71 @@ export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDep
   )
 
   /**
-   * The page has been closed. Drop the connection and everything hanging off it.
+   * The page has been closed. Let go of *this page's* connection — and nothing
+   * else.
    *
    * This is the other half of §5.4 and it is the half that is easy to forget.
    * Opening a connection when a page opens is obvious; closing it when the page
    * closes is what stops a person who visited six servers this morning from
    * holding six sockets open all afternoon.
+   *
+   * ## What this used to do, and the terminals it killed
+   *
+   * It also swept every shell whose id began with this server's, unconditionally
+   * — while the release beside it was a *reference count*. Two surfaces now ask
+   * to look at one server: the server's own page in Machines, and the Servers
+   * settings pane, which auto-dials `servers[0]` the moment it opens. So merely
+   * opening Settings → Servers and then moving off it ran this handler, the
+   * connection survived on the other holder's reference, and every live terminal
+   * on that machine was closed under it — an install script, an agent session,
+   * whatever was running. Moving the pill from one server to another did the same
+   * to the `ServerSetup` / `ServerHost` terminal on the server being left.
+   *
+   * The connection was never the part at risk. The terminal was.
+   *
+   * ## Why the fix is not "drop them once the reference count reaches zero"
+   *
+   * Because that condition can never be observed here, and would be the wrong
+   * question if it could:
+   *
+   *  - **A shell is itself a holder.** `ServerConnections.shell` acquires and
+   *    only `ServerShell.close` releases (its own comment says so: *"a terminal
+   *    is the one long-lived thing this feature has"*). So while there is a shell
+   *    to drop, the count is at least one, and a gate on zero is a gate that
+   *    never opens — dead code pretending to be a rule.
+   *  - **The page-side count is not a count of surfaces.** `look()` acquires on
+   *    every call, and `ServerPage` calls it again on Refresh, after every action
+   *    that changes the machine, and after granting or revoking the copilot;
+   *    `preview`, `act` and `logs` call it again on a cache miss. One `close`
+   *    answers all of them. A number that drifts up and never comes back down
+   *    would gate the sweep off permanently, which is a leak wearing a rule's
+   *    clothes.
+   *  - **The terminal's owner never holds a page reference at all.** A shell
+   *    opened from a server's page becomes a workspace tab
+   *    (`ServerSessionPane`, *"mounted for as long as the tab exists"*), and that
+   *    tab calls neither `servers:look` nor `servers:close`. So the page count
+   *    reaching zero is exactly the state in which somebody's terminal is still
+   *    running — pressing **Back to machines** would end it.
+   *
+   * ## So the drop is scoped to the shells this surface opened, which is none
+   *
+   * `useServerRoom` is the only caller of this channel and it opens no shells;
+   * the surfaces that do open one — `ServerSessionPane`, `ServerSetup`,
+   * `ServerHost` — close their own on unmount through `servers:shell:close`,
+   * which is the press this feature already treats as *"I am finished with
+   * this"*. A shell is therefore ended by exactly one of four things, all of them
+   * the shell's own: its terminal going away, the far end hanging up
+   * (`shell.onClose`), the server being forgotten, and the app stopping. Not by
+   * a different screen closing.
+   *
+   * The cached measurements *are* dropped, and that is not the same kind of act:
+   * losing them costs the other surface one round trip on its next press
+   * (§5.4's *"a refresh is a press"*), where losing a shell costs somebody the
+   * work that was running in it.
    */
   ipcMain.handle('servers:close', (_event, serverId: unknown): { closed: boolean } => {
     if (typeof serverId !== 'string') return { closed: false }
     forgetMeasurements(serverId)
-    for (const id of [...shells.keys()]) {
-      if (id.startsWith(`${serverId} `)) dropShell(id, true)
-    }
     deps.release?.(serverId)
     return { closed: true }
   })
@@ -1554,6 +1613,21 @@ export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDep
    * The ways back go with it deliberately. A rollback record naming a server
    * this app no longer knows is a row that can never be acted on and that
    * carries an image digest from somebody's machine indefinitely.
+   *
+   * ## Why the sweep below is right here and wrong in `servers:close`
+   *
+   * The two handlers look alike — a loop over this server's shells, then a
+   * `release` — and they are not the same act. `servers:close` means *this page
+   * has stopped looking*, which is one surface's opinion about a machine other
+   * surfaces may still be working on. This means *the server is going*: the row,
+   * the saved sign-in and the recorded host key all go with it, so a terminal on
+   * it has nothing left to be a terminal on, and every surface loses it at once
+   * whether it asked or not.
+   *
+   * The `release` is the same decrement in both, and here it is deliberately not
+   * paired with an `acquire` of this handler's own: the pool is keyed by server
+   * id and drops the entry at zero, so a decrement against a server that is
+   * being forgotten either ends a connection nobody can use again or is a no-op.
    */
   ipcMain.handle('servers:forget', async (_event, serverId: unknown): Promise<{ forgotten: boolean }> => {
     if (typeof serverId !== 'string' || deps.store === undefined) return { forgotten: false }

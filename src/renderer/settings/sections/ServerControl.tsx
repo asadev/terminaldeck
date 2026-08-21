@@ -75,6 +75,19 @@ import '../../machines/servers/servers.css'
  * computer's record — the two permissions, the default folder, the name,
  * forgetting it — do not wait for it, because none of them asks the server
  * anything.
+ *
+ * ## And it hangs up on a connection, never on a terminal
+ *
+ * Worth stating on this pane specifically, because this pane is where it went
+ * wrong. This is the *second* surface that can be looking at one server — the
+ * machine's own page in Machines is the first, and `ServerAccounts` inside
+ * Coding AI is a third — and the pill dials `servers[0]` the moment the pane is
+ * opened, whether or not anybody chose it. `servers:close` used to end every
+ * shell on the server it named, so opening this pane and then moving off it, or
+ * simply moving the pill from one server to the next, closed live terminals on a
+ * machine nobody had pressed anything about. The handler's own comment in
+ * `src/main/servers/ipc.ts` carries the argument; the property this pane relies
+ * on is that letting go here costs a socket reference and nothing else.
  */
 export function ServerControlSection({ supplied }: { supplied?: ServersBridge } = {}) {
   const { wired, missing, servers, bridge, reading, problem, reread } = useServers(supplied)
@@ -294,9 +307,23 @@ export function ServerControlView({
       {problem !== null && <Notice tone="error">{problem}</Notice>}
 
       {/*
-        The pill, naming the machines themselves — and no *This machine* button,
+        The pill, naming the machines themselves — and no seat for this computer,
         because every control below it is a property of one server and there is
-        nothing on this pane that a local machine could be asked.
+        nothing on this pane a local machine could be asked.
+
+        That is `scopesFor`'s rule in `AgentsSection` rather than a departure from
+        it: a seat that is one machine carries that machine's name, a seat that is
+        a group carries the group's word, and a pane with nothing to say about a
+        machine offers no seat for it. Coding AI and Scraping each open with this
+        computer's own name because they have something to say about it; this pane
+        opens straight into the list of servers because it does not — and the
+        group-word seat (**Servers**, meaning all of them at once) is absent here
+        for the same reason, since "all of them" is not a thing this pane can
+        answer either.
+
+        The label is what keeps it from reading as the same *question* as the
+        other two. Theirs ask where something runs; this one asks which server is
+        being configured, and says so.
       */}
       <ScopeSwitch
         scope={scope}

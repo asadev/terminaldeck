@@ -11,6 +11,7 @@ import { SERVER_CONTROLS, controlsIn, controlsWith } from './server-scope'
 import { credentialLine, identityLine } from '../../machines/servers/ServerAdvanced'
 import { serverAgentRuns } from './ServerAccounts'
 import { serverScope } from './AgentsSection'
+import { ThisMachine } from '../../platform'
 import type {
   AgentOnServer,
   Server,
@@ -92,9 +93,27 @@ describe('the pill names which server', () => {
     expect(html).toContain('>Office box<')
     expect(html).toContain('>Web host<')
     expect([...html.matchAll(/aria-pressed="true"/g)]).toHaveLength(1)
-    // And no *This machine* button: nothing on this pane is a question a local
-    // machine could be asked.
-    expect(html).not.toContain('This machine')
+    /*
+     * And no seat for this computer at all — not one under a different word.
+     *
+     * `scopesFor` in `AgentsSection` states the rule the other two panes follow:
+     * a seat that is one machine carries that machine's name, a seat that is a
+     * group carries the group's word, and a pane with nothing to say about a
+     * machine offers no seat for it. Nothing on this pane is a question a local
+     * machine could be asked, so both head seats are absent — this computer's
+     * *and* the group word **Servers**, since "all of them at once" is not
+     * something this pane can answer either. Every button here is one server.
+     */
+    // Read off the switch itself rather than the pane: the pane's own heading is
+    // the word "Servers", and half its groups have buttons in them.
+    const pill = /<div class="settings-scope"[^>]*>(.*?)<\/div>/s.exec(html)?.[1] ?? ''
+    expect(pill).not.toBe('')
+    expect(pill).not.toContain('This machine')
+    expect(pill).not.toContain(`>${ThisMachine()}<`)
+    expect(pill).not.toContain('>Servers<')
+    // Every seat is one server, and there are exactly as many as there are
+    // servers — no head seats at all.
+    expect([...pill.matchAll(/<button/g)]).toHaveLength(2)
   })
 
   it('names the group for a screen reader as the choice it is', () => {

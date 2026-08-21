@@ -420,6 +420,14 @@ export function ToolRow({ tool, disabled, onCall }: ToolRowProps) {
  *
  * ## This computer is named, not deixis
  *
+ * The same rule the settings panes follow, and it is written out once on
+ * `scopesFor` in `settings/sections/AgentsSection.tsx`: a seat that is one
+ * machine carries that machine's name, a seat that is a group of machines
+ * carries the group's word, and a pane with nothing to say about a machine
+ * offers no seat for it. This page got there first and the two settings panes
+ * were still saying "This machine" until 2026-08-22, which is how one window
+ * came to carry three vocabularies for one computer.
+ *
  * `hereName` rather than `thisMachine()`, which is what this row used to call
  * it. *"So I'm confused now what is the truth, because this machine is Office
  * PC, this machine is this machine where I am… So I don't know what to

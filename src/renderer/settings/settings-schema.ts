@@ -56,10 +56,24 @@ import type { UiPlatform } from '../platform'
  * every old name pointing at wherever its contents actually went.
  *
  * Help went the other way in this pass — it was the link in that footer and is a
- * pane again, on his instruction, and it cost the rail nothing because About
- * moved into it. The count was unchanged by that pass: ten on a Mac, eleven on
- * Windows. Scraping has since been added, so it is eleven and twelve — see the
- * argument on that entry for why it is a rail seat rather than a group.
+ * pane again, on his instruction, and it cost the rail nothing: About folded into
+ * it as its masthead, so that pass added a pane and no seat.
+ *
+ * ## How long the rail is, and why that number is not written here
+ *
+ * It was written here, four times, in words — and then two entries were added on
+ * one day, each raised the length by one, and each wrote itself down as *"the
+ * eleventh"*. One of them was the twelfth. Nothing failed, because a number in a
+ * comment is a claim that nothing checks, and prose beside a test is prose that
+ * drifts from it.
+ *
+ * So the length lives in the one place where being wrong about it fails
+ * something: the ceiling in `nothing-dropped.test.tsx`, which asserts
+ * {@link sectionsFor} per platform and carries, beside the assertion, the ledger
+ * of what every entry that raised it paid for. The list itself is `SECTIONS`
+ * below and the way to count it is `sectionsFor`; anything that needs the number
+ * should name one of those rather than spell a word that will be wrong by
+ * Thursday.
  */
 export const SECTIONS = [
   {
@@ -361,10 +375,12 @@ export const SECTIONS = [
    *
    * ## What it costs, stated rather than glossed
    *
-   * The rail was capped at ten on a Mac and eleven on Windows, and this is the
-   * eleventh and twelfth. `nothing-dropped.test.tsx` carries the argument for
-   * raising it, beside the ceiling itself, because that is what that ceiling
-   * asks of anything that raises it.
+   * It raised the rail's ceiling by one, and it is the **second** entry to do
+   * that on 2026-08-22 — Scraping went in the same day, further down this list.
+   * Both first claimed to be the eleventh, which is the reason no length is
+   * spelled in this file any more. `nothing-dropped.test.tsx` carries the
+   * argument for raising it, beside the ceiling itself and beside the number,
+   * because that is what that ceiling asks of anything that raises it.
    */
   {
     id: 'servers',
@@ -444,10 +460,12 @@ export const SECTIONS = [
    * failure mode this window already names: *"when you reorganize you mostly
    * miss the things and you drop some stuff."*
    *
-   * The rail is eleven on a Mac and twelve on Windows now, and the paragraphs
-   * further up that say ten and eleven are the record of the pass before this
-   * one; both are corrected in place rather than left to rot, because a number
-   * in a comment is a claim like any other.
+   * It raised the rail's ceiling by one, and Servers — above, added the same day
+   * — raised it again. Neither length is spelled here: both entries once said
+   * "the eleventh" and only one of them could be, which is exactly how a number
+   * in a comment rots. The ceiling, the ledger entry for this section and the
+   * count itself are in `nothing-dropped.test.tsx`, which is the one place being
+   * wrong about it fails something.
    */
   {
     id: 'scraping',
@@ -563,11 +581,11 @@ export const SECTIONS = [
    * ("Versions, and what to include in a bug report"), which is a duplication
    * this window has removed everywhere else.
    *
-   * So the count did not move for this: ten on a Mac, eleven on Windows,
-   * exactly as before. A help page is not worth a rail that grows back towards
-   * the thirteen entries this reorganisation was asked for. (Scraping was added
-   * later and took it to eleven and twelve; it is the only entry since, and the
-   * one it earned by having no home at all.)
+   * So the rail did not grow for this, which was the condition of having it back
+   * at all: a help page is not worth a rail creeping towards the thirteen entries
+   * this reorganisation was asked to cut. (Two entries have been added since —
+   * Scraping and Servers — and what each paid for its seat is written in
+   * `nothing-dropped.test.tsx`, beside the ceiling it raised.)
    *
    * Nothing was retyped to move it. `AboutSection` is rendered *in place* at the
    * top of the pane — the same assembled-not-rewritten trick `AgentsSection`
@@ -643,8 +661,9 @@ export type Section = (typeof SECTIONS)[number]
  * Sections that only exist on one platform, and the platforms they exist on.
  *
  * A separate table rather than a field on every entry, because the exception is
- * one row and adding `platforms: ['windows', 'mac', 'other']` to twelve sections
- * that have no such constraint is twelve places to get it wrong later.
+ * one row: `platforms: ['windows', 'mac', 'other']` on every section that has no
+ * such constraint is a line of noise per entry and one more place per entry to
+ * get it wrong later.
  *
  * The rule for putting something here is narrow: the section must have *nothing*
  * to say elsewhere. Power is on both platforms and says different things on

@@ -141,12 +141,23 @@ describe('every section id still resolves to a pane', () => {
     }
   })
 
-  it('keeps the rail shorter than the one that was complained about', () => {
+  it('holds the rail to the length its ledger accounts for', () => {
     /*
      * Thirteen entries, against Vibeyard's eight, is the comparison that
-     * started this. The number is a ceiling rather than a target — the point is
-     * that sections cannot quietly accumulate again, not that a tenth may never
-     * be added with a reason.
+     * started this. The point is that sections cannot quietly accumulate again,
+     * not that a tenth may never be added with a reason — so every entry that
+     * raised the ceiling has a paragraph below, and this is the only place in
+     * the repository where the rail's length is written down at all.
+     *
+     * ## The numbering rule, because two entries got it wrong at once
+     *
+     * **An entry's ordinal is the length of the *Mac* rail once it had arrived.**
+     * Windows is always that plus one, and the plus one is Linux. Two sections
+     * were added on 2026-08-22 by two lanes at once, each raised the ceiling by
+     * one, and each wrote itself into this ledger as "the eleventh" — which is
+     * what happens when a count lives in prose in three files. Scraping is the
+     * eleventh; Servers is the twelfth; `settings-schema.ts` no longer spells
+     * either.
      *
      * The tenth is **Copilot**, and this is the reason, recorded here because
      * that is what this ceiling asks of anything that raises it. It is the one
@@ -175,7 +186,7 @@ describe('every section id still resolves to a pane', () => {
      * left for the same reason.
      *
      * **The eleventh is Scraping**, and this is its entry in the same ledger.
-     * It is the only one of the eleven that was not a reorganisation of screens
+     * It is the only entry on this rail that was not a reorganisation of screens
      * that already existed: the fleet, the request rules, passive capture, the
      * asset renditions with their resume ledger and the coverage check had
      * **no pane at all**. All of it sat in a modal behind the browser tab's
@@ -193,7 +204,12 @@ describe('every section id still resolves to a pane', () => {
      * second copy of it — see `ScrapingSection.tsx`.
      */
     /*
-     * ## The eleventh is **Servers**, 2026-08-22, and this is what it paid
+     * ## The twelfth is **Servers**, 2026-08-22, and this is what it paid
+     *
+     * The twelfth and not the eleventh: Scraping went in the same day, from
+     * another lane, and both paragraphs were written claiming the same seat. The
+     * merge kept both sections and both raises; this is the one that landed
+     * second.
      *
      * Raised rather than squeezed, and the reason is the one this ceiling asks
      * for. Everything on that pane existed already and none of it was in this
@@ -218,8 +234,29 @@ describe('every section id still resolves to a pane', () => {
      * the three panes it replaced. Nothing was re-typed, so nothing could be
      * dropped in the typing.
      */
-    expect(sectionsFor('mac').length).toBeLessThanOrEqual(12)
-    expect(sectionsFor('windows').length).toBeLessThanOrEqual(13)
+    /*
+     * An equality rather than a ceiling, and that is the change this ledger was
+     * missing. A `<=` is satisfied by a rail that grew from ten to twelve without
+     * anybody writing the two paragraphs above, which is precisely what happened:
+     * two lanes raised the number, both tests passed, and the only symptom was
+     * two entries calling themselves the eleventh. `12` fails the day a
+     * thirteenth section is declared, and the failure is the prompt to write down
+     * what it paid for.
+     */
+    expect(sectionsFor('mac').length).toBe(12)
+    /*
+     * Windows derived rather than restated, so the two platforms cannot be raised
+     * apart — and so this file holds one number instead of two. Linux is the only
+     * per-platform row (`SECTION_PLATFORMS`), so the difference is exactly one.
+     *
+     * It also makes the uncomfortable fact checkable rather than deniable:
+     * Windows now sits at thirteen, which is the length that started the
+     * complaint. It got there by adding two subjects that had no screen at all,
+     * not by letting nine grow back into thirteen — but the next entry is the one
+     * that would make that sentence a lie, and this line is what stops it being
+     * added quietly.
+     */
+    expect(sectionsFor('windows').length).toBe(sectionsFor('mac').length + 1)
   })
 })
 

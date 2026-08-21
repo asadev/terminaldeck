@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { SectionHead } from '../controls'
+import { ThisMachine } from '../../platform'
 import { sectionMeta } from '../settings-schema'
 import { useMachines } from '../../machines/useMachines'
+import { hereName } from '../../machines/types'
 /*
  * The browser's own scraping panel, rendered here rather than re-typed here.
  * Three leaf modules across a folder boundary, for the reason `BrowserSection`
@@ -122,15 +124,19 @@ export function ScrapingSection() {
     <>
       <SectionHead title={meta.label} blurb={meta.blurb} />
 
+      {/* Named, not pointed at: `scopesFor` in `AgentsSection` carries the one
+          rule every `.settings-scope` switch follows, and `machines` is already
+          read above for the device buttons. */}
       <ScopeSwitch
         scope={scope}
+        here={machines.here}
         devices={devices}
         label="Where scraping runs"
         onScope={setScope}
       />
 
       {scope === 'servers' ? (
-        <ServerScraping />
+        <ServerScraping here={hereName(machines)} />
       ) : device !== null ? (
         <DeviceScraping name={device.machine.name} />
       ) : (
@@ -233,12 +239,20 @@ function ThisMachineScraping({ live }: { live: boolean }) {
  * that session's list at all. Either alone would be an argument for a control
  * that writes somewhere; together they are the reason there is none.
  */
-export function ServerScraping() {
+export function ServerScraping({ here = ThisMachine() }: { here?: string }) {
   return (
     <>
       <p className="settings-prose">
+        {/*
+          The button is named after this computer, so the sentence pointing at it
+          has to use the same name — a paragraph reading "the settings under
+          **This machine**" beside a button reading the hostname is the same
+          confusion this rename was for, one layer down. Defaulted rather than
+          required so this stays renderable on its own, which is the whole reason
+          it is exported.
+        */}
         A server has no browser. A session on one drives a window in this app, on this machine, so
-        the settings under <strong>This machine</strong> are the ones it scrapes with.
+        the settings under <strong>{here}</strong> are the ones it scrapes with.
       </p>
       <p className="settings-prose">
         It cannot start a scrape either: capture, the asset tools and the ledger are refused to

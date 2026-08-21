@@ -12,6 +12,7 @@ import {
 } from './AgentsSection'
 import type { Prerequisites, SettingsBridge, ToolStatus } from '../settings-bridge'
 import { SETTINGS, type SettingValues } from '../settings-schema'
+import { ThisMachine } from '../../platform'
 import { FeaturesProvider } from '../../features/FeaturesProvider'
 
 /**
@@ -417,25 +418,54 @@ describe('the Add-accounts menu', () => {
 
 describe('this machine, or a server', () => {
   /**
+   * What the *this machine* seat says when nothing has told this window the
+   * hostname, which is every render below: `useMachines` needs a bridge and
+   * these render the component directly.
+   *
+   * Computed rather than spelled. `ThisMachine` reads the platform, so a literal
+   * here would be a test that passes on his Mac and fails on the Windows runner.
+   */
+  const HERE = ThisMachine()
+
+  /**
    *   > "Two buttons at the top to switch between this machine and server
    *   > machines."
    *
    * The words are `SERVERS-DESIGN.md`'s: a *server* is a computer nobody sits
    * at, which is the discriminator that document settles so that two panels are
    * never argued about three ways.
+   *
+   * What the first of those two buttons is *called* is a separate question and
+   * has one answer, on `scopesFor`: a seat that is one machine carries that
+   * machine's name, and this computer is a machine. It used to read "This
+   * machine" here while the MCP servers page said the hostname — one window,
+   * two vocabularies, and a third pane with no such button at all.
    */
-  it('draws both buttons, with this machine on', () => {
-    const html = renderToStaticMarkup(<ScopeSwitch scope="this-machine" onScope={() => {}} />)
-    expect(html).toContain('>This machine</button>')
+  it('draws both buttons, with this machine on and named', () => {
+    const html = renderToStaticMarkup(
+      <ScopeSwitch scope="this-machine" here="DESKTOP-DDGMNCV" onScope={() => {}} />,
+    )
+    expect(html).toContain('>DESKTOP-DDGMNCV</button>')
     expect(html).toContain('>Servers</button>')
-    expect(html).toMatch(/aria-pressed="true"[^>]*>This machine/)
+    expect(html).toMatch(/aria-pressed="true"[^>]*>DESKTOP-DDGMNCV/)
     expect(html).toMatch(/aria-pressed="false"[^>]*>Servers/)
+    // Never the deictic, whatever the window knows.
+    expect(html).not.toContain('This machine')
+  })
+
+  it('falls back to the app’s own phrase when the window was told no name', () => {
+    // `MachinesView.here` is `''` on a build whose preload predates the field.
+    // `hereName`'s fallback is what every other surface calls this computer, so
+    // this switch does not get a wording of its own.
+    const html = renderToStaticMarkup(<ScopeSwitch scope="this-machine" onScope={() => {}} />)
+    expect(html).toContain(`>${HERE}</button>`)
+    expect(html).not.toContain('>This machine</button>')
   })
 
   it('moves the on state with the choice', () => {
     const html = renderToStaticMarkup(<ScopeSwitch scope="servers" onScope={() => {}} />)
     expect(html).toMatch(/aria-pressed="true"[^>]*>Servers/)
-    expect(html).toMatch(/aria-pressed="false"[^>]*>This machine/)
+    expect(html).toMatch(new RegExp(`aria-pressed="false"[^>]*>${HERE}`))
   })
 
   /**
@@ -457,9 +487,9 @@ describe('this machine, or a server', () => {
     )
     expect(html).toContain('>DESKTOP-DDGMNCV</button>')
     expect(html).toContain('>Studio</button>')
-    // This machine is still the one that is on, and the devices come after the
+    // This computer is still the one that is on, and the devices come after the
     // two that are always there.
-    expect(html.indexOf('This machine')).toBeLessThan(html.indexOf('DESKTOP-DDGMNCV'))
+    expect(html.indexOf(HERE)).toBeLessThan(html.indexOf('DESKTOP-DDGMNCV'))
     expect(html.indexOf('Servers')).toBeLessThan(html.indexOf('DESKTOP-DDGMNCV'))
   })
 
@@ -472,7 +502,7 @@ describe('this machine, or a server', () => {
       />,
     )
     expect(html).toMatch(/aria-pressed="true"[^>]*>DESKTOP-DDGMNCV/)
-    expect(html).toMatch(/aria-pressed="false"[^>]*>This machine/)
+    expect(html).toMatch(new RegExp(`aria-pressed="false"[^>]*>${HERE}`))
   })
 
   /**
@@ -493,7 +523,7 @@ describe('this machine, or a server', () => {
     const first = html.indexOf('settings-group')
     expect(scope).toBeGreaterThan(-1)
     expect(first).toBeGreaterThan(scope)
-    expect(html).toContain('>This machine</button>')
+    expect(html).toContain(`>${HERE}</button>`)
   })
 })
 

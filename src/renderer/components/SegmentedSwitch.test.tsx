@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { SegmentedSwitch } from './SegmentedSwitch'
-import { ScopeSwitch } from '../settings/sections/AgentsSection'
+import { ScopeSwitch, scopesFor } from '../settings/sections/AgentsSection'
 
 /**
  * The one segmented switch, and the two ways a second one gets built by accident.
@@ -197,13 +197,20 @@ describe('nobody builds a second one', () => {
    * produce the same element with the same attributes.
    */
   it('is what the Coding AI scope switch renders', () => {
-    const scope = renderToStaticMarkup(<ScopeSwitch scope="servers" onScope={() => {}} />)
+    /*
+     * The seats are read from `scopesFor` rather than typed here, because what
+     * they are *called* is a rule that lives on that function — one machine gets
+     * that machine's name, a group gets the group's word — and re-typing "This
+     * machine" on this side would make this a comparison of markup that quietly
+     * pinned a label the product no longer uses.
+     */
+    const seats = scopesFor('DESKTOP-DDGMNCV')
+    const scope = renderToStaticMarkup(
+      <ScopeSwitch scope="servers" here="DESKTOP-DDGMNCV" onScope={() => {}} />,
+    )
     const shared = renderToStaticMarkup(
       <SegmentedSwitch
-        options={[
-          { id: 'this-machine', label: 'This machine' },
-          { id: 'servers', label: 'Servers' },
-        ]}
+        options={seats.map((seat) => ({ id: seat.id, label: seat.label }))}
         value="servers"
         onChange={() => {}}
         label="Where these agents run"

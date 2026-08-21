@@ -10,6 +10,7 @@ import {
   useKnownSignIns,
 } from '../../accounts'
 import { useMachines } from '../../machines/useMachines'
+import { hereName } from '../../machines/types'
 import { SegmentedSwitch } from '../../components/SegmentedSwitch'
 import { HoverNote } from '../../components/HoverNote'
 import {
@@ -166,16 +167,57 @@ export type AgentScope =
    * the right scope for a question about accounts. The Servers pane asks a
    * different question — what is this **one** machine set to do — and every
    * answer it draws is per server: its identity, its sign-in, the folder its
-   * sessions start in, the two permissions it holds. A switch whose buttons were
-   * "This machine" and "Servers" could not name which.
+   * sessions start in, the two permissions it holds. A switch whose only buttons
+   * were this computer and *Servers* could not name which.
    */
   | `server:${string}`
 
-/** The two that are always there. Linked devices are appended to them. */
-export const SCOPES: readonly { id: AgentScope; label: string }[] = [
-  { id: 'this-machine', label: 'This machine' },
-  { id: 'servers', label: 'Servers' },
-]
+/**
+ * The two seats at the head of the switch — and the one rule for what a seat on
+ * a `.settings-scope` switch is called, anywhere in this window.
+ *
+ * ## The rule
+ *
+ * **A seat that is one machine carries that machine's name. A seat that is a
+ * group of machines carries the group's word. A pane with nothing to say about
+ * a machine offers no seat for it at all.**
+ *
+ * So `Servers` — every server at once, which is the scope this pane's account
+ * list answers — stays a word, and every other seat is a name: a paired device
+ * is named as the rail names it, one server is named as the list names it, and
+ * *this* computer is named by {@link hereName}, which is its hostname with
+ * *This Mac* / *This PC* as the fallback for a build whose preload predates the
+ * field.
+ *
+ * ## Why this computer is named rather than pointed at
+ *
+ * Because the deictic is the complaint. This seat said "This machine" while the
+ * MCP servers page — the same control, the same class — said the hostname, and
+ * the Servers pane offered no such seat, so one window carried three vocabularies
+ * for one computer. Asad, on exactly that confusion, 2026-08-21:
+ *
+ *   > *"So I'm confused now what is the truth, because this machine is Office
+ *   > PC, this machine is this machine where I am, and Office PC is the server.
+ *   > So it is showing both, selected one and this one. So I don't know what to
+ *   > trust."*
+ *
+ * A phrase meaning *wherever you are* cannot be resolved by reading it, on a bar
+ * where every other button carries a hostname; a name can. `hereName` in
+ * `machines/types.ts` is where that argument is written down in full, and it is
+ * the same answer the browser's machine picker, the copilot's machine switch and
+ * the downloads list already give — so this is one vocabulary joining the rest
+ * rather than a fourth being invented.
+ *
+ * A function rather than a constant because the name is read at render time from
+ * `useMachines`, and a module-level constant would have frozen whatever the
+ * first read said.
+ */
+export function scopesFor(here: string): readonly { id: AgentScope; label: string }[] {
+  return [
+    { id: 'this-machine', label: here },
+    { id: 'servers', label: 'Servers' },
+  ]
+}
 
 /** The scope for one linked device, and the device it names. One spelling. */
 export function deviceScope(id: string): AgentScope {
@@ -245,13 +287,27 @@ export function serverOfScope(scope: AgentScope): string | null {
  */
 export function ScopeSwitch({
   scope,
+  here,
   devices = [],
   servers = [],
-  fixed = SCOPES,
+  fixed,
   label = 'Where these agents run',
   onScope,
 }: {
   scope: AgentScope
+  /**
+   * What this computer calls itself — `MachinesView.here` straight off
+   * `useMachines`, which every pane that draws this switch is already reading
+   * for its device buttons.
+   *
+   * Passed raw rather than resolved, so {@link hereName} is applied in one place
+   * and a pane cannot accidentally supply a fourth wording: absent, empty, or a
+   * build whose preload predates the field all come out as *This Mac* / *This
+   * PC*, which is what every other surface in the app calls this computer. See
+   * {@link scopesFor} for the rule this is half of. Ignored when a caller passes
+   * its own `fixed`, because then there is no *this machine* seat to name.
+   */
+  here?: string
   /** The linked machines, in the order the rail lists them. */
   devices?: readonly { id: string; name: string }[]
   /**
@@ -267,10 +323,15 @@ export function ScopeSwitch({
    * The scopes at the head of the switch, before the machines.
    *
    * Defaulted rather than always drawn, so this stays one component instead of
-   * two. Coding AI takes the default — *"two buttons at the top to switch
-   * between this machine and server machines"* — and the Servers pane passes
-   * none, because on a pane whose every control is a property of one server,
-   * *This machine* is a button with nothing behind it.
+   * two. Coding AI and Scraping take the default — *"two buttons at the top to
+   * switch between this machine and server machines"* — and the Servers pane
+   * passes `[]`, because on a pane whose every control is a property of one
+   * server there is nothing a local machine could be asked.
+   *
+   * That is the third clause of {@link scopesFor}'s rule rather than an exception
+   * to it: a pane offers a seat for this computer when it has something to say
+   * about this computer, and names it when it does. What it must not do is offer
+   * one under a different word.
    */
   fixed?: readonly { id: AgentScope; label: string }[]
   /**
@@ -287,7 +348,7 @@ export function ScopeSwitch({
   onScope(next: AgentScope): void
 }) {
   const entries = [
-    ...fixed,
+    ...(fixed ?? scopesFor(hereName({ here: here ?? '' }))),
     ...devices.map((device) => ({ id: deviceScope(device.id), label: device.name })),
     ...servers.map((server) => ({ id: serverScope(server.id), label: server.name })),
   ]
@@ -854,7 +915,10 @@ export function AgentsSection(props: SectionProps) {
     <>
       <SectionHead title={meta.label} blurb={meta.blurb} />
 
-      <ScopeSwitch scope={scope} devices={devices} onScope={setScope} />
+      {/* Named, not pointed at — `scopesFor` carries the rule and `hereName` the
+          complaint that produced it. `machines` is already read above for the
+          device buttons, so this costs the pane nothing. */}
+      <ScopeSwitch scope={scope} here={machines.here} devices={devices} onScope={setScope} />
 
       {scope === 'servers' ? (
         <ServerAccounts />

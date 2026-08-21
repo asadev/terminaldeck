@@ -510,15 +510,23 @@ describe('a terminal that can drive the browser window attached to it', () => {
 })
 
 describe('when it lets go', () => {
-  it('closes the connection and every terminal when the page closes', async () => {
+  /** A shell whose `close` can be counted, and nothing else. */
+  function countedShell(): { shell: ServerShell; closed: ReturnType<typeof vi.fn> } {
     const closed = vi.fn()
-    const shell: ServerShell = {
-      onData: () => () => undefined,
-      onClose: () => () => undefined,
-      write: () => undefined,
-      resize: () => undefined,
-      close: closed,
+    return {
+      closed,
+      shell: {
+        onData: () => () => undefined,
+        onClose: () => () => undefined,
+        write: () => undefined,
+        resize: () => undefined,
+        close: closed,
+      },
     }
+  }
+
+  it('lets go of the connection and leaves the terminals alone', async () => {
+    const { shell, closed } = countedShell()
     const { call, released } = harness({ openShell: async () => shell })
     await call('servers:look', 's1')
     const opened = (await call('servers:shell:open', 's1', 100, 40)) as { ok: true; shellId: string }
@@ -526,7 +534,6 @@ describe('when it lets go', () => {
 
     await call('servers:close', 's1')
 
-    expect(closed).toHaveBeenCalledTimes(1)
     /*
      * Once, and this harness is exactly the case that proves the pairing.
      *
@@ -538,9 +545,119 @@ describe('when it lets go', () => {
      * reference somebody else is holding. The only one is the page letting go.
      */
     expect(released).toEqual(['s1'])
-    // The shell id is dead afterwards, rather than writing into a channel that
-    // is gone.
+    /*
+     * And the terminal is still there — which is the half this test used to
+     * assert the other way round.
+     *
+     * A shell opened from a server's page becomes a workspace tab, and that tab
+     * neither looks nor closes: it is `ServerSessionPane`, *"mounted for as long
+     * as the tab exists"*. So a page letting go of a server is not evidence that
+     * anybody is finished with a terminal on it, and closing one here ended
+     * whatever was running — an install, an agent session — for somebody who had
+     * pressed nothing but **Back to machines**.
+     */
+    expect(closed).not.toHaveBeenCalled()
+    expect(await call('servers:shell:write', opened.shellId, 'ls\n')).toEqual({ written: true })
+  })
+
+  it('keeps one surface’s terminal alive when the other surface closes', async () => {
+    /*
+     * The probe that found this, driven the same way: two holders, one shell,
+     * one close.
+     *
+     * Two surfaces really do look at one server at once. The Servers settings
+     * pane auto-dials `servers[0]` the moment it is opened (`ServerControl`'s
+     * `chosenServer` falls back to the first row) while the server's own page in
+     * Machines is already holding one. Opening Settings → Servers and moving off
+     * it again therefore ran `servers:close` on a server somebody else was still
+     * looking at — and the connection was never the part at risk, because the
+     * other holder's reference kept it. The terminal was.
+     */
+    const { shell, closed } = countedShell()
+    const { call, released } = harness({ openShell: async () => shell })
+    await call('servers:look', 's1')
+    await call('servers:look', 's1')
+    const opened = (await call('servers:shell:open', 's1', 100, 40)) as { ok: true; shellId: string }
+
+    await call('servers:close', 's1')
+
+    expect(released).toEqual(['s1'])
+    expect(closed).not.toHaveBeenCalled()
+    expect(await call('servers:shell:write', opened.shellId, 'echo hi\n')).toEqual({ written: true })
+  })
+
+  it('closes the terminal when the terminal’s own holder leaves, and not twice', async () => {
+    /*
+     * The other half, so the fix above is not a leak.
+     *
+     * A shell is ended by exactly one of four things, and all four are the
+     * shell's own rather than some other screen's: the terminal that opened it
+     * going away (this channel — `ServerTerminal` calls it on unmount), the far
+     * end hanging up, the server being forgotten, and the app stopping. Two of
+     * those are asserted here; `servers:forget` and `stop` have their own tests
+     * below and in the shutdown block.
+     */
+    const { shell, closed } = countedShell()
+    const { call } = harness({ openShell: async () => shell })
+    await call('servers:look', 's1')
+    await call('servers:look', 's1')
+    const opened = (await call('servers:shell:open', 's1', 100, 40)) as { ok: true; shellId: string }
+
+    // Both pages go first, to prove neither of them is what ends it.
+    await call('servers:close', 's1')
+    await call('servers:close', 's1')
+    expect(closed).not.toHaveBeenCalled()
+
+    expect(await call('servers:shell:close', opened.shellId)).toEqual({ closed: true })
+    expect(closed).toHaveBeenCalledTimes(1)
+    // Dead afterwards, rather than writing into a channel that is gone — and a
+    // second close is not a second `close()` on the far end.
     expect(await call('servers:shell:write', opened.shellId, 'ls\n')).toEqual({ written: false })
+    expect(await call('servers:shell:close', opened.shellId)).toEqual({ closed: false })
+    expect(closed).toHaveBeenCalledTimes(1)
+  })
+
+  it('closes a terminal nobody closed when the app stops', async () => {
+    // The backstop, and the reason `servers:close` does not need to be one: a
+    // window that went away without unmounting anything leaves shells here, and
+    // `stop` is what ends them.
+    const { shell, closed } = countedShell()
+    const { call, ipc } = harness({ openShell: async () => shell })
+    await call('servers:look', 's1')
+    await call('servers:shell:open', 's1', 100, 40)
+    await call('servers:close', 's1')
+    expect(closed).not.toHaveBeenCalled()
+
+    ipc.stop()
+    expect(closed).toHaveBeenCalledTimes(1)
+  })
+
+  it('closes every terminal on a server that is being forgotten', async () => {
+    /*
+     * The one place an unconditional sweep is still right, stated so the two are
+     * not confused again. `servers:close` means *this page is finished with that
+     * server*; this means *the server is going* — its row, its saved sign-in and
+     * its recorded host key — so a terminal on it has nothing left to be a
+     * terminal on, and leaving one open would leave a live pty on somebody's
+     * machine with no way back to it.
+     */
+    const { shell, closed } = countedShell()
+    const { call } = harness({
+      openShell: async () => shell,
+      store: {
+        add: () => ({ id: 'new-1' }),
+        setCredentialKind: () => true,
+        rename: () => true,
+        forget: () => true,
+        get: () => null,
+        setStartIn: () => false,
+      },
+    })
+    await call('servers:look', 's1')
+    await call('servers:shell:open', 's1', 100, 40)
+
+    expect(await call('servers:forget', 's1')).toEqual({ forgotten: true })
+    expect(closed).toHaveBeenCalledTimes(1)
   })
 
   it('says which server a shell is on, so a browser window can be bound to it', async () => {

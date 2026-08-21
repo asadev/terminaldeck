@@ -4,6 +4,7 @@ import { SettingsPanel } from '../SettingsWindow'
 import { SECTIONS, sectionsFor } from '../settings-schema'
 import { featureOwningSection } from '../../features/registry'
 import { ScopeSwitch, scopeAfterDevices, deviceScope } from './AgentsSection'
+import { ThisMachine } from '../../platform'
 import { DeviceScraping, ServerScraping } from './ScrapingSection'
 import { ScrapingBody } from '../../browser/ScrapingPanel'
 import type { ScrapingApi } from '../../browser/scraping-bridge'
@@ -25,6 +26,18 @@ import type { ScrapingApi } from '../../browser/scraping-bridge'
  * is a fair state to compare two surfaces in, and it is the only one available
  * in a suite with no DOM.
  */
+
+/**
+ * What the *this machine* seat says when nothing has told this window the
+ * hostname — which is every render in this file, because `useMachines` needs a
+ * bridge and there is none here.
+ *
+ * Computed rather than spelled, and that is not fussiness: `ThisMachine` reads
+ * the platform, so the literal is "This Mac" on his laptop and "This PC" on the
+ * Windows runner. A hard-coded phrase here is a test that passes on macOS and
+ * fails in CI on the platform most of this app's users are on.
+ */
+const HERE = ThisMachine()
 
 /** The pane, with no `window.deck` at all: every seam absent, nothing guessed. */
 function pane(): string {
@@ -110,7 +123,15 @@ describe('what the pane draws', () => {
   it('opens on this machine, with the switch above it', () => {
     const html = pane()
     expect(html).toContain('aria-label="Where scraping runs"')
-    expect(html).toContain('aria-pressed="true">This machine</button>')
+    /*
+     * Named, not pointed at. The seat used to read "This machine" here while the
+     * MCP servers page said the hostname and the Servers pane offered no such
+     * button at all — three vocabularies for one computer, in one window. The
+     * rule is on `scopesFor` in `AgentsSection`: a seat that is one machine
+     * carries that machine's name, and this computer is a machine.
+     */
+    expect(html).toContain(`aria-pressed="true">${HERE}</button>`)
+    expect(html).not.toContain('>This machine</button>')
     expect(html).toContain('>Servers</button>')
   })
 
@@ -181,7 +202,10 @@ describe('the two scopes that cannot carry these settings', () => {
     // The two measured facts: the window is here, and the tools are not on that
     // session's list. Either alone would argue for a control somewhere.
     expect(html).toContain('A server has no browser')
-    expect(html).toContain('This machine')
+    // And it points at the button by the button's own name. A paragraph saying
+    // "the settings under **This machine**" beside a button reading a hostname
+    // is the same confusion one layer down.
+    expect(html).toContain(`<strong>${HERE}</strong>`)
     expect(html).toMatch(/refused to\s+every session that is not on the computer the window is on/)
   })
 
@@ -272,6 +296,32 @@ describe('a device forgotten while its scope was on screen', () => {
         onScope={() => {}}
       />,
     )
-    expect(guarded).toContain('aria-pressed="true">This machine</button>')
+    expect(guarded).toContain(`aria-pressed="true">${HERE}</button>`)
+  })
+})
+
+describe('what this computer is called on the switch', () => {
+  it('says the hostname when the window knows it', () => {
+    /*
+     * *"this machine is Office PC, this machine is this machine where I am… I
+     * don't know what to trust."* A deictic cannot be resolved by reading it on
+     * a bar where every other button carries a hostname; a name can. `here` is
+     * `MachinesView.here` straight off `useMachines`, and this is the state that
+     * matters — the one where there is an answer.
+     */
+    const html = renderToStaticMarkup(
+      <ScopeSwitch scope="this-machine" here="DESKTOP-DDGMNCV" onScope={() => {}} />,
+    )
+    expect(html).toContain('aria-pressed="true">DESKTOP-DDGMNCV</button>')
+    expect(html).not.toContain('This machine')
+  })
+
+  it('falls back to the app’s own phrase, not to a fourth one', () => {
+    // A build whose preload predates `MachinesView.here` sends `''`. The fallback
+    // is `hereName`'s — the same words the browser's machine picker and the
+    // downloads list use — rather than the "This machine" this switch used to
+    // invent for itself.
+    const html = renderToStaticMarkup(<ScopeSwitch scope="this-machine" here="" onScope={() => {}} />)
+    expect(html).toContain(`aria-pressed="true">${HERE}</button>`)
   })
 })
