@@ -583,6 +583,29 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
   })
 
   /**
+   * Hand that port back, so the number means this computer again.
+   *
+   * The other half of the verb above, and it exists because of what makes the
+   * verb worth having: the listener keeps the far machine's port *number*
+   * whenever this machine had it free, so while a tunnel is up
+   * `localhost:3100` here **is** that machine's 3100. The browser's machine
+   * picker moving a page back onto this computer therefore had nowhere to send
+   * it — 0.9.0 navigated to the same address, the tunnel answered, and the bar
+   * was left with the picker naming this Mac over a page from the PC.
+   *
+   * A boolean rather than a sentence, unlike its neighbour, because there is no
+   * failure a person could act on: either this desktop is no longer serving
+   * that port on a local address, or the request was not a machine and a port.
+   * A machine that has gone took its tunnels with it on the way out, so an
+   * unknown id is `true` — the address is free, which is the whole question.
+   */
+  ipcMain.handle('machines:reach:close', (_event, id: unknown, port: unknown): boolean => {
+    if (typeof id !== 'string' || typeof port !== 'number') return false
+    const reach = reaches.get(id)
+    return reach ? reach.close(port) : true
+  })
+
+  /**
    * Open a page in the browser **on that machine**.
    *
    * The URL is typed here and checked over there, which is the same split every

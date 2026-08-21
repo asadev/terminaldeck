@@ -84,6 +84,8 @@ function app(overrides: Partial<ServerReachDeps> = {}) {
     ports: (id: unknown) => handlers.get('servers:ports')?.(null, id) as Promise<ServerPortsAnswer>,
     reach: (id: unknown, port: unknown) =>
       handlers.get('servers:reach')?.(null, id, port) as Promise<ReachAnswer>,
+    release: (id: unknown, port: unknown) =>
+      handlers.get('servers:reach:close')?.(null, id, port) as boolean,
   }
 }
 
@@ -222,6 +224,37 @@ describe('reaching a port on a server', () => {
   it('says why rather than throwing when the server will not forward', async () => {
     const deck = app({ withConnection: async (_id, fn) => fn(connection('prohibited')) })
     expect(await deck.reach('s1', 8000)).toEqual({ ok: false, message: WILL_NOT_FORWARD })
+    deck.ipc.stop()
+  })
+
+  /**
+   * Giving the port back, which is the half the picker could not do without.
+   *
+   * The listener keeps the server's own port number on this computer whenever
+   * it was free, so `localhost:8000` here is the server's 8000 until it is
+   * closed — and the browser's machine picker moving a page back onto this
+   * computer has nowhere to send it until that happens.
+   */
+  it('gives a port back and stops holding it here', async () => {
+    const deck = app({ withConnection: async (_id, fn) => fn(connection('opens')) })
+    const answer = await deck.reach('s1', 8000)
+    if (!answer.ok) throw new Error(answer.message)
+    expect(deck.ipc.openPorts('s1')).toContain(8000)
+
+    expect(deck.release('s1', 8000)).toBe(true)
+    expect(deck.ipc.openPorts('s1')).not.toContain(8000)
+    deck.ipc.stop()
+  })
+
+  it('answers true for a port this desktop was never serving', () => {
+    const deck = app()
+    // The question is whether that address is free of this desktop's listeners.
+    // A server nobody has dialled has none, and saying so is not a failure.
+    expect(deck.release('s1', 8000)).toBe(true)
+    expect(deck.release('nobody', 8000)).toBe(true)
+    // A malformed request is the one thing that is not an answer about a port.
+    expect(deck.release(7, 8000)).toBe(false)
+    expect(deck.release('s1', '8000')).toBe(false)
     deck.ipc.stop()
   })
 

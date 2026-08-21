@@ -413,6 +413,30 @@ export function registerServerReachIpc(
     },
   )
 
+  /**
+   * Hand one of its ports back, so that number means this computer again.
+   *
+   * The same channel the relay path grew for the same reason, and byte-for-byte
+   * the same answer — a boolean. `localhost-reach.ts` keeps the far port's own
+   * *number* on this machine whenever it was free, so while a tunnel is up
+   * `localhost:8000` here is the server's 8000; the browser's machine picker
+   * moving a page back onto this computer has to give the number up before it
+   * can send the page anywhere.
+   *
+   * A server nobody has dialled is `true` for the same reason an unknown
+   * machine is on the other channel: nothing of this desktop's is standing on
+   * that number, which is the entire question being asked.
+   *
+   * The connection itself is **not** let go here. A server holds one for as
+   * long as any page of its is open, and this closes one listener rather than
+   * saying that nobody is reading anything of that server's any more.
+   */
+  ipcMain.handle('servers:reach:close', (_event, id: unknown, port: unknown): boolean => {
+    if (typeof id !== 'string' || typeof port !== 'number') return false
+    const connection = live.get(id)
+    return connection ? connection.reach.close(port) : true
+  })
+
   return {
     stop(): void {
       for (const connection of [...live.values()]) {

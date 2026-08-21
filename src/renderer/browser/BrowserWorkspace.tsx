@@ -105,6 +105,8 @@ import { forgetWindowMachine, setWindowMachine } from './window-machine'
 import {
   destinationFor,
   differentPortNote,
+  inTheWay,
+  loopbackPort,
   lostMachine,
   machineChoices,
   readMachines,
@@ -731,8 +733,24 @@ export function BrowserWorkspace({
    * loads. Entries for a machine that has gone are dropped below, in the same
    * effect that gives the picker back — a badge naming a machine whose pages have
    * stopped answering is the one thing worse than no badge.
+   *
+   * A row leaves this list three ways, and a real close goes with each of them:
+   * its machine went, `handBack` gave the port up, or another machine took that
+   * number here — and `reachPort` hands the displaced one back in the same
+   * breath. A row deleted while its tunnel is still answering would be a
+   * listener nobody can see and nobody can name, standing on a number the bar
+   * has stopped explaining.
    */
   const [opened, setOpened] = useState<ReachedPort[]>([])
+  /**
+   * The same list, readable from a callback that must not be rebuilt for it.
+   *
+   * `reachPort` runs inside a promise that started before the state it has to
+   * consult; the same arrangement `tabsRef` and `activeRef` already use further
+   * down, for the same reason.
+   */
+  const openedRef = useRef<ReachedPort[]>([])
+  openedRef.current = opened
   /**
    * The caveat about a port number that could not be kept, when there is one.
    *
@@ -1473,6 +1491,47 @@ export function BrowserWorkspace({
   }, [askServer, machineId, machines, serverPorts])
 
   /**
+   * Hand a port back to this computer, and say whether it really went.
+   *
+   * The counterpart of `reachPort` below, and the thing 0.9.0 was missing. The
+   * tunnel keeps the far machine's own port *number* here whenever it was free,
+   * so while it is up `localhost:3100` on this Mac **is** the PC's 3100 — and
+   * moving the page home by navigating to that address fetched it from the PC
+   * again, under a picker that had already taken this machine's name.
+   *
+   * False is a real answer and the caller must act on it: a preload that
+   * predates the verb, or a request main would not take. The entry is dropped
+   * from `opened` **only** when the listener is actually gone, because the
+   * badge in the address field is read off that list and a badge that stopped
+   * naming the PC over a page still coming from the PC is the same untruth with
+   * the labels swapped.
+   */
+  const handBack = useCallback(
+    async (held: ReachedPort): Promise<boolean> => {
+      const owner = machines.find((one) => one.id === held.machineId)
+      // A machine with no row is one this window cannot name, and it cannot
+      // know which of the two bridges holds the listener either. Refusing is
+      // the only answer here that is not a guess about somebody's page.
+      if (!owner) return false
+      const release =
+        owner.kind === 'server' ? serversApi?.releaseOnServer : machinesApi?.releaseOnMachine
+      if (!release) return false
+      const answer = await release(held.machineId, held.port).catch(() => false)
+      if (answer !== true) return false
+      // Both halves of the key. Another machine may already have taken that
+      // number here — see `reachPort` — and filtering on the number alone would
+      // delete the entry describing the page that is on screen right now.
+      setOpened((prev) =>
+        prev.filter(
+          (entry) => entry.machineId !== held.machineId || entry.localPort !== held.localPort,
+        ),
+      )
+      return true
+    },
+    [machines, machinesApi, serversApi],
+  )
+
+  /**
    * Ask the main process for an address on this machine that serves that port.
    *
    * Null on refusal, **after** putting the refusal on screen. Every one of the
@@ -1509,6 +1568,19 @@ export function BrowserWorkspace({
         setNotice(answer.message)
         return null
       }
+      /*
+       * A listener of this window's that was standing on the same number here
+       * is given back, not merely forgotten.
+       *
+       * Two machines cannot both own `localhost:3100` on this computer, and the
+       * ladder in `localhost-reach.ts` will hand the second one the *other*
+       * loopback family with the same number rather than refuse. Dropping the
+       * displaced row from this list without closing its tunnel leaves a
+       * listener no control can see and no badge can name — and the next move
+       * home would navigate straight into it, which is the 0.9.0 defect back
+       * again by a longer route.
+       */
+      const displaced = inTheWay(answer.localPort, machine.id, openedRef.current)
       setOpened((prev) => [
         ...prev.filter((entry) => entry.localPort !== answer.localPort),
         {
@@ -1519,6 +1591,7 @@ export function BrowserWorkspace({
           sameNumber: answer.sameNumber,
         },
       ])
+      if (displaced) void handBack(displaced)
       // Said once, when it happens, rather than left to be discovered by a link
       // inside the site going somewhere strange. Set to '' on the ordinary case
       // as well, so a caveat about the last port does not sit above a page it is
@@ -1526,7 +1599,7 @@ export function BrowserWorkspace({
       setPortNote(differentPortNote(answer, machine.name))
       return answer
     },
-    [machinesApi, serversApi],
+    [handBack, machinesApi, serversApi],
   )
 
   /**
@@ -1619,9 +1692,27 @@ export function BrowserWorkspace({
           return
         }
       }
+      /*
+       * With this computer chosen, `localhost:3100` has to mean this computer.
+       *
+       * The same fact `moveToMachine` runs into from the other direction: a
+       * tunnel of this window's that took the same port number owns that address
+       * until it is closed, so typing it would open the far machine's page under
+       * a picker naming this one. Only a tunnel this window opened is ever given
+       * back, and only the one standing on the number being asked for.
+       *
+       * The navigation happens either way. If the port could not be handed back
+       * the address still means that machine — which is what the badge in the
+       * field will then say, because the entry stays in `opened`.
+       */
+      const held = inTheWay(loopbackPort(target.url), machineId, opened)
+      if (held !== null) {
+        void handBack(held).then(() => act((a, id) => a.browserNavigate(id, target.url)))
+        return
+      }
       act((a, id) => a.browserNavigate(id, target.url))
     },
-    [act, machineId, machines, openThere],
+    [act, handBack, machineId, machines, opened, openThere],
   )
 
   const closeTab = useCallback(
@@ -2212,12 +2303,21 @@ export function BrowserWorkspace({
    * whenever the tunnel had to pick a different one. Path, query and fragment
    * ride along through `reachedAddress`.
    *
-   * Two things can make it impossible, and both put the picker back rather than
-   * leaving it naming a machine the page is not on:
+   * Moving it **home** is not a navigation on its own, and that is what shipped
+   * broken in 0.9.0. The tunnel keeps the far port's own number on this machine
+   * whenever it was free, so the address this would navigate to — `localhost:`
+   * and that number — was the tunnel itself: the page came back from the PC, the
+   * picker kept this Mac's name, and the address field printed `Office PC:3100`
+   * beside it. So the port is handed back first, and only then is the address
+   * used. See `handBack` and `inTheWay`.
+   *
+   * Three things can make it impossible, and all three put the picker back
+   * rather than leaving it naming a machine the page is not on:
    *
    *  - the page is not a machine's page at all (`https://stripe.com` belongs to
-   *    Stripe, not to a computer in this room), and
-   *  - the far machine refused, which `reachPort` has already said out loud.
+   *    Stripe, not to a computer in this room),
+   *  - the far machine refused, which `reachPort` has already said out loud, and
+   *  - the port could not be given back, so the address still means that machine.
    */
   const moveToMachine = (next: string): void => {
     if (next === machineId) return
@@ -2240,7 +2340,33 @@ export function BrowserWorkspace({
       return
     }
     if (plan.kind === 'here') {
-      act((a, id) => a.browserNavigate(id, plan.url))
+      /*
+       * The tunnel is handed back before the address is used, and this is the
+       * whole of the 0.9.0 defect.
+       *
+       * `plan.url` is `localhost:<the port over there>`, and on the ordinary
+       * rung that number is exactly what the tunnel took on this machine — so
+       * navigating to it fetched the page from the PC again while the picker
+       * said this Mac. Once the listener is gone the number means this computer,
+       * and the page either loads from it or Chromium says it was refused, which
+       * is the answer he asked for: *"it should be unsuccessful here also,
+       * because we always need a truth."*
+       */
+      if (plan.give === null) {
+        act((a, id) => a.browserNavigate(id, plan.url))
+        return
+      }
+      const held = plan.give
+      void handBack(held).then((gone) => {
+        if (!gone) {
+          // Nothing moved, so the picker must not say it did. The port is still
+          // that machine's, which is the one fact the sentence has to carry.
+          setMachineId(held.machineId)
+          setNotice(`${held.machineName} is still serving port ${held.localPort} here.`)
+          return
+        }
+        act((a, id) => a.browserNavigate(id, plan.url))
+      })
       return
     }
     const target = machines.find((one) => one.id === plan.machineId)

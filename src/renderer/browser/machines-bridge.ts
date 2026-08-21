@@ -71,6 +71,17 @@ export interface BrowserMachinesBridge {
   refreshMachinePorts(id: string): Promise<unknown>
   /** Give one of its ports an address on this machine, or say why not. */
   reachOnMachine(id: string, port: number): Promise<unknown>
+  /**
+   * Take that address back, so the number means this computer again.
+   *
+   * **Optional, and deliberately not in {@link MACHINE_METHODS}.** The rule this
+   * file was written around is that a preload missing one method must not cost
+   * the browser its port list: a build whose preload predates this can still
+   * choose a machine, list its ports and open them. What it cannot do is move a
+   * page *home* off a tunnel that kept the port number — so that one gesture
+   * says it could not, and nothing else changes.
+   */
+  releaseOnMachine?(id: string, port: number): Promise<unknown>
 }
 
 const MACHINE_METHODS = [
@@ -449,6 +460,48 @@ export function servedBy(url: string, opened: readonly ReachedPort[]): ReachedPo
 }
 
 /**
+ * The tunnel standing on the local address a page is about to be opened at.
+ *
+ * ## Why this exists, and it is not bookkeeping
+ *
+ * `localhost-reach.ts` keeps the far machine's own port *number* on this
+ * computer whenever it was free — rung 1 of its ladder, the ordinary case, and
+ * the whole reason a dev server's own redirects survive the trip. The
+ * consequence is that while that tunnel is up, `localhost:3100` **here** is the
+ * PC's 3100 and there is no address left that means this computer's own.
+ *
+ * That shipped in 0.9.0 as a control that looked like it worked. Asad moved a
+ * page from `Office PC` back to his Mac, the picker took the new name, the page
+ * was re-opened at the same `localhost:3100` — which was the tunnel — and
+ * Paperclip came back from the PC under a bar reading `Asads-MacBook` in the
+ * picker and `Office PC:3100` in the address field:
+ *
+ *   > *"when i change the machine it should attempt to browse with that machine
+ *   > instead of staying on previous one and showing its running there then what
+ *   > is the purpose of us if we change from dropdown"*
+ *
+ * So the port is handed back before the address is used, and this is the rule
+ * for which one. A tunnel belonging to the machine being moved *to* is never in
+ * the way — asking that machine for the port again gets the same tunnel back,
+ * and closing it first would only take the page down and rebuild it.
+ *
+ * Asked from both sides, which is why it is a rule and not an `if`. Before an
+ * address is opened here it answers *whose listener owns that number*; after a
+ * far machine has just been given that number it answers *whose did we take it
+ * from*, and that one is handed back rather than quietly dropped — a row deleted
+ * from the window's list while its tunnel is still answering is a listener no
+ * control can see and no badge can name.
+ */
+export function inTheWay(
+  port: number | null,
+  next: string,
+  opened: readonly ReachedPort[],
+): ReachedPort | null {
+  if (port === null) return null
+  return opened.find((entry) => entry.localPort === port && entry.machineId !== next) ?? null
+}
+
+/**
  * What choosing a different machine should do to the page already open.
  *
  * ## Why this is a decision and not a setter
@@ -474,6 +527,15 @@ export function servedBy(url: string, opened: readonly ReachedPort[]): ReachedPo
  * `localhost:3000` on the PC, so re-opening the number in the address bar would
  * quietly ask the far machine for a different service.
  *
+ * ## Moving *home* is not a navigation on its own
+ *
+ * Every other branch here is answered by opening an address. `here` is not, and
+ * that is what 0.9.0 got wrong: the address it opens is `localhost:<origin
+ * port>`, and on the ordinary rung that number **is** the tunnel. So this branch
+ * carries `give` — the tunnel the caller has to hand back first — and the caller
+ * that ignores it is the caller that navigates to the machine it is leaving. See
+ * {@link inTheWay}.
+ *
  * ## `refused` is a real outcome and has to stay one
  *
  * `https://stripe.com` belongs to Stripe, not to a computer in this room. There
@@ -496,9 +558,28 @@ export type MachineMove =
    * a blank tab, could never be reached.
    */
   | { kind: 'choose' }
-  /** Open this address on this computer. */
-  | { kind: 'here'; url: string }
-  /** Open this port on that machine, carrying the path. */
+  /**
+   * Open this address on this computer.
+   *
+   * `give` is the tunnel that has to be handed back first, or null. See
+   * {@link inTheWay}: this branch is the one that could not be honoured at all
+   * while a tunnel held the number, because the address it opens *was* the
+   * tunnel.
+   */
+  | { kind: 'here'; url: string; give: ReachedPort | null }
+  /**
+   * Open this port on that machine, carrying the path.
+   *
+   * No `give`, because nothing has to go back *first*. Asking the new machine
+   * for the port opens its own listener, and if the old tunnel is standing on
+   * the number the ladder in `localhost-reach.ts` takes the next rung and says
+   * so through `sameNumber`. Closing the old one before knowing whether the new
+   * machine will answer at all would buy a nicer port number at the price of the
+   * page that is still on screen.
+   *
+   * The displaced listener is given back **afterwards**, once the new one has
+   * answered — `reachPort` in `BrowserWorkspace.tsx`, through {@link inTheWay}.
+   */
   | { kind: 'there'; machineId: string; port: number; url: string }
   /** Nothing to move. `at` is the machine the page is really on, for putting the picker back. */
   | { kind: 'refused'; at: string }
@@ -518,7 +599,11 @@ export function moveFor(
   const port = here ? here.port : loopbackPort(url)
   if (port === null) return { kind: 'refused', at }
   if (next === THIS_MACHINE) {
-    return { kind: 'here', url: reachedAddress(url, `http://localhost:${port}/`) }
+    return {
+      kind: 'here',
+      url: reachedAddress(url, `http://localhost:${port}/`),
+      give: inTheWay(port, next, opened),
+    }
   }
   return { kind: 'there', machineId: next, port, url }
 }

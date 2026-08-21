@@ -67,6 +67,15 @@ export interface BrowserServersBridge {
   serverPorts(id: string): Promise<unknown>
   /** Give one of its ports an address on this machine, or say why not. */
   reachOnServer(id: string, port: number): Promise<unknown>
+  /**
+   * Take that address back, so the number means this computer again.
+   *
+   * Optional and out of {@link SERVER_METHODS} for the same reason its twin in
+   * `machines-bridge.ts` is: a preload that predates it must still get servers
+   * in the picker and their ports on the start page. Only moving a page home
+   * off a tunnel that kept the port number is lost, and that gesture says so.
+   */
+  releaseOnServer?(id: string, port: number): Promise<unknown>
 }
 
 const SERVER_METHODS = ['listServers', 'serverPorts', 'reachOnServer'] as const

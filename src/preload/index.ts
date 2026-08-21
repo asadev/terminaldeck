@@ -545,6 +545,19 @@ const api = {
   reachOnMachine: (id: string, port: number): Promise<unknown> =>
     ipcRenderer.invoke('machines:reach', id, port),
   /*
+   * And the other half of it: give the port back.
+   *
+   * The listener the verb above opens keeps the far machine's own port *number*
+   * whenever this machine had it free — which is the point of it, because a dev
+   * server writes its own number into its own redirects — and the cost is that
+   * `localhost:3100` here means that machine for as long as the tunnel is up.
+   * So the browser's machine picker cannot move a page back onto this computer
+   * by navigating: the address it would navigate to is the tunnel. It hands the
+   * port back first, and this is that.
+   */
+  releaseOnMachine: (id: string, port: number): Promise<unknown> =>
+    ipcRenderer.invoke('machines:reach:close', id, port),
+  /*
    * The model, the effort and fast mode of a session on one of his own machines.
    *
    * The same pair as `readAgentControls`/`applyAgentControl` further down, with a
@@ -825,6 +838,9 @@ const api = {
   serverPorts: (id: string): Promise<unknown> => ipcRenderer.invoke('servers:ports', id),
   reachOnServer: (id: string, port: number): Promise<unknown> =>
     ipcRenderer.invoke('servers:reach', id, port),
+  /** Give a server's port back, exactly as `releaseOnMachine` gives a machine's. */
+  releaseOnServer: (id: string, port: number): Promise<unknown> =>
+    ipcRenderer.invoke('servers:reach:close', id, port),
   /*
    * The terminal in zone three. It is keyed on a *shell* id rather than on the
    * server id, because the id the far end answers is the only thing that

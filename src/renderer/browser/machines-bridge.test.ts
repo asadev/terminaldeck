@@ -3,6 +3,7 @@ import {
   asDevPorts,
   destinationFor,
   differentPortNote,
+  inTheWay,
   loopbackPort,
   lostMachine,
   machineChoices,
@@ -457,6 +458,33 @@ describe('when the chosen machine goes', () => {
  * untruth this function exists to prevent, and it is the failure that would
  * survive every render test.
  */
+describe('inTheWay — which tunnel owns the address the next page needs', () => {
+  const opened = [
+    { machineId: 'm-office', machineName: 'Office PC', port: 3100, localPort: 3100, sameNumber: true },
+    { machineId: 'm-office', machineName: 'Office PC', port: 3000, localPort: 53412, sameNumber: false },
+  ]
+
+  it('finds the tunnel standing on that number here, whatever it serves over there', () => {
+    expect(inTheWay(3100, THIS_MACHINE, opened)).toBe(opened[0])
+    // 3000 is the *far* port of the second tunnel; the number this machine has
+    // is 53412, and that is the only one that can be in anybody's way.
+    expect(inTheWay(3000, THIS_MACHINE, opened)).toBeNull()
+    expect(inTheWay(53412, THIS_MACHINE, opened)).toBe(opened[1])
+  })
+
+  it('says nothing for an address with no port in it', () => {
+    expect(inTheWay(null, THIS_MACHINE, opened)).toBeNull()
+    expect(inTheWay(3100, THIS_MACHINE, [])).toBeNull()
+  })
+
+  it('never asks a machine to give back the tunnel it is about to be asked for', () => {
+    // Re-opening 3100 on the machine already serving it gets the same tunnel
+    // back — `open` is idempotent per port — so closing it first would take the
+    // page down and rebuild it for nothing.
+    expect(inTheWay(3100, 'm-office', opened)).toBeNull()
+  })
+})
+
 describe('moveFor — the page follows the picker, or the picker goes back', () => {
   /** One tunnel: the PC's 3000 is reachable on this machine's 3001. */
   const opened = [
@@ -476,6 +504,67 @@ describe('moveFor — the page follows the picker, or the picker goes back', () 
       // different local number because this Mac was already using 3000 — asking
       // this machine for 3001 would open a different service entirely.
       url: 'http://localhost:3000/orders?page=2',
+      // Nothing of this window's is standing on 3000: the tunnel is on 3001,
+      // which is why it had to take a different number in the first place.
+      give: null,
+    })
+  })
+
+  /**
+   * The case every test above this line missed, and the one that shipped.
+   *
+   * The fixture at the top of this block is a tunnel whose local port *differs*
+   * from the origin port — `sameNumber: false`, rung 3, the case where this
+   * machine was already busy on that number. That is the arrangement in which
+   * moving a page home works by navigating, and it was the only one exercised.
+   *
+   * The ordinary arrangement is the opposite one: nothing here was using 3100,
+   * so the tunnel took 3100, and `localhost:3100` on this Mac became the PC's
+   * 3100. Moving home then navigated to the tunnel. From the 0.9.0 screenshot —
+   * picker `Asads-MacBoo…`, address field `Office PC:3100`, and Paperclip, which
+   * runs on the PC, on the page:
+   *
+   *   > *"when i change the machine it should attempt to browse with that
+   *   > machine instead of staying on previous one and showing its running
+   *   > there then what is the purpose of us if we change from dropdown"*
+   */
+  it('names the tunnel that has to be given back before home means home', () => {
+    const kept = [
+      {
+        machineId: 'm-office',
+        machineName: 'Office PC',
+        port: 3100,
+        localPort: 3100,
+        sameNumber: true,
+      },
+    ]
+    expect(moveFor(THIS_MACHINE, 'http://localhost:3100/auth?next=%2F', kept)).toEqual({
+      kind: 'here',
+      url: 'http://localhost:3100/auth?next=%2F',
+      // The address is unchanged, which is precisely why the tunnel cannot be:
+      // navigating there without closing it is a reload of the same far page.
+      give: kept[0],
+    })
+  })
+
+  it('asks for nothing back when moving to another machine, which needs nothing back', () => {
+    const kept = [
+      {
+        machineId: 'm-office',
+        machineName: 'Office PC',
+        port: 3100,
+        localPort: 3100,
+        sameNumber: true,
+      },
+    ]
+    // The new machine opens its own listener and the ladder takes the next rung
+    // if this number is busy. Closing the old one first would only take the page
+    // down before knowing whether the new machine will answer at all.
+    expect(moveFor('m-desktop', 'http://localhost:3100/', kept)).toEqual({
+      kind: 'there',
+      machineId: 'm-desktop',
+      port: 3100,
+      url: 'http://localhost:3100/',
     })
   })
 
