@@ -371,6 +371,18 @@ const api = {
   setAccountGrants: (deviceId: string, mode: string, accounts: string[]): Promise<unknown> =>
     ipcRenderer.invoke('remote:accounts:set', deviceId, mode, accounts),
   /**
+   * Which devices may act on the browser windows in this app.
+   *
+   * The fourth axis, and the only one that is a yes or a no rather than a
+   * narrowing — there is no set to cut down, because the subject is the browser
+   * on this screen. Both channels answer with the whole allowed list, for the
+   * reason every channel on this screen does: the panel renders what the main
+   * process says rather than what it just asked for.
+   */
+  listWindowGrants: (): Promise<unknown> => ipcRenderer.invoke('remote:windows'),
+  setWindowGrant: (deviceId: string, allowed: boolean): Promise<unknown> =>
+    ipcRenderer.invoke('remote:windows:set', deviceId, allowed),
+  /**
    * Which devices are yours and which are guests.
    *
    * Read-only, and there is no companion write. A device's kind is decided when

@@ -519,6 +519,23 @@ describe('what a public host offers', () => {
        * list were wrong.
        */
       CAPABILITY.windows,
+      /*
+       * And `hostwindows`, which is the same conversation with the ends swapped
+       * and is withheld for a sharper version of the same reason.
+       *
+       * `windows` above is this box asking a visitor's app to act on a browser
+       * *the visitor is looking at*. This one is a **visitor's session asking
+       * this box to act on a browser here** — and on a demo machine "here" is the
+       * owner's own screen, carrying the owner's logins. It is the direction
+       * where the browser being reached belongs to the person who did not ask.
+       *
+       * Twice over, like `windows`: the demo assembly wires no window server, and
+       * `server.ts` reads this capability off that function rather than off a
+       * constant, so a demo host could not advertise it even if this list were
+       * wrong. Three times, really — `WindowGrants` defaults closed and no demo
+       * visitor has ever been ticked — but the offer list is the decision.
+       */
+      CAPABILITY.hostWindows,
     ])
   })
 })

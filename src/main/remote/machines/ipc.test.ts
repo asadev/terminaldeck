@@ -19,6 +19,7 @@ import {
   MACHINES_STATE_CHANNEL,
   registerMachinesIpc,
   type InvokeRegistrar,
+  type MachinesIpc,
   type MachinesIpcDeps,
   type MachinesView,
 } from './ipc'
@@ -74,6 +75,8 @@ function offlineStatus(): RemoteStatus {
 
 interface Rig {
   invoke(channel: string, ...args: unknown[]): Promise<unknown>
+  /** What the registration handed back, for the halves nothing invokes. */
+  ipc: MachinesIpc
   channels: string[]
   broadcasts: Array<{ channel: string; payload: unknown }>
   links: Array<{
@@ -100,6 +103,12 @@ function rig(
     slotClaimed?: boolean
     /** The app's browser-window server, when a case is about one. */
     serveWindows?: MachinesIpcDeps['serveWindows']
+    /** Where a far machine's holdings land, when a case is about the mirror. */
+    windowsHeldThere?: MachinesIpcDeps['windowsHeldThere']
+    /** And where its answers do. */
+    windowAnswered?: MachinesIpcDeps['windowAnswered']
+    /** And the settling of everything outstanding when a link goes. */
+    windowsUnreachable?: MachinesIpcDeps['windowsUnreachable']
   } = {},
 ): Rig {
   const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>()
@@ -134,12 +143,17 @@ function rig(
     }
   })
 
-  registerMachinesIpc(ipcMain, {
+  const ipc = registerMachinesIpc(ipcMain, {
     storageDir: dir,
     desk,
     status: options.status ?? connectedStatus,
     broadcast: (channel, payload) => broadcasts.push({ channel, payload }),
     ...(options.serveWindows === undefined ? {} : { serveWindows: options.serveWindows }),
+    ...(options.windowsHeldThere === undefined ? {} : { windowsHeldThere: options.windowsHeldThere }),
+    ...(options.windowAnswered === undefined ? {} : { windowAnswered: options.windowAnswered }),
+    ...(options.windowsUnreachable === undefined
+      ? {}
+      : { windowsUnreachable: options.windowsUnreachable }),
     createLink: (linkOptions): MachineLink => {
       const record = {
         options: linkOptions,
@@ -171,6 +185,8 @@ function rig(
           record.connected += 1
         },
         announceWindows: () => true,
+        askWindow: () => true,
+        servesWindows: () => true,
         disconnect: () => {
           record.disconnected += 1
         },
@@ -254,6 +270,7 @@ function rig(
   return {
     channels: [...handlers.keys()],
     broadcasts,
+    ipc,
     links,
     beacons,
     dir,
@@ -768,6 +785,8 @@ describe('waking', () => {
             connect: () => {},
             disconnect: () => {},
             announceWindows: () => true,
+            askWindow: () => true,
+            servesWindows: () => true,
             wake: () => {
               record.woken += 1
             },
@@ -889,5 +908,98 @@ describe('letting a machine act on browser windows here', () => {
     const dir = tempDir()
     paired(dir)
     expect(rig({ dir }).links[0].options.onWindowCall).toBeUndefined()
+  })
+})
+
+describe('acting on a browser window that machine holds', () => {
+  /**
+   * The mirror, wired the same way and with the same absences.
+   *
+   * A session running *here* whose window is in the app over there. What this
+   * file owns of it is only the plumbing — which machine a frame belongs to, and
+   * whether a link exists to carry it — because the desk holds the questions and
+   * `window-serve.ts` holds every decision.
+   */
+  it('routes that machine’s holdings to the desk, with the machine on them', () => {
+    const dir = tempDir()
+    const hostId = paired(dir)
+    const held: { machineId: string; sessions: string[] }[] = []
+    const app = rig({ dir, windowsHeldThere: (machineId, sessions) => held.push({ machineId, sessions: [...sessions] }) })
+
+    app.links[0].options.onWindowHolds?.(['sess-1', 'sess-2'])
+    expect(held).toEqual([{ machineId: hostId, sessions: ['sess-1', 'sess-2'] }])
+  })
+
+  it('hands an answer straight through, keyed by nothing but its own id', () => {
+    /*
+     * No machine id on this one, deliberately: the id was minted here and handed
+     * to exactly one link, so the desk already knows which question it belongs
+     * to. A second key would be one that has to agree with the first.
+     */
+    const dir = tempDir()
+    paired(dir)
+    const answers: unknown[] = []
+    const app = rig({ dir, windowAnswered: (result) => answers.push(result) })
+
+    app.links[0].options.onWindowResult?.({ id: 'w-1', ok: true, body: '{}' })
+    expect(answers).toEqual([{ id: 'w-1', ok: true, body: '{}' }])
+  })
+
+  it('gives the link no holdings handler when the app wired none', () => {
+    // Absent is what the link reads to decide whether to advertise
+    // `hostwindows`. A build that claimed it with nowhere to put the answer
+    // would receive the frame and drop it.
+    const dir = tempDir()
+    paired(dir)
+    expect(rig({ dir }).links[0].options.onWindowHolds).toBeUndefined()
+  })
+
+  it('puts the ask on that machine’s link, and nowhere at all for one it does not know', () => {
+    /*
+     * A count rather than a boolean, because that is the shape the desk's wire
+     * takes on both directions — and on this one it is only ever nought or one:
+     * a machine is one link, unlike a device, which can be attached from two
+     * windows at once.
+     */
+    const dir = tempDir()
+    const hostId = paired(dir)
+    const app = rig({ dir })
+    const call = { t: 'window.call', id: 'w-1', session: 'sess-1', tool: 'browser.read', args: '{}' } as const
+
+    expect(app.ipc.askWindow(hostId, { ...call })).toBe(1)
+    expect(app.ipc.servesWindows(hostId)).toBe(true)
+    // Nought rather than a throw: an id this desktop has never paired is what a
+    // stale table looks like, and the desk turns nought into a sentence.
+    expect(app.ipc.askWindow('nobody', { ...call })).toBe(0)
+    expect(app.ipc.servesWindows('nobody')).toBe(false)
+  })
+
+  it('settles everything outstanding when a link stops being online', () => {
+    /*
+     * A tool call that can be answered in milliseconds must not spend fifty-five
+     * seconds finding out the machine hung up. What is deliberately *not*
+     * dropped is the table of what that machine said it holds: a laptop that
+     * closed its lid still has the window, and "that computer is not connected
+     * right now" is true and actionable where "no browser window is attached to
+     * this session" is false.
+     */
+    const dir = tempDir()
+    const hostId = paired(dir)
+    const gone: string[] = []
+    const app = rig({ dir, windowsUnreachable: (machineId) => gone.push(machineId) })
+
+    app.links[0].options.onState({
+      id: hostId,
+      state: 'offline',
+      reason: null,
+      sessions: [],
+      folders: null,
+      capabilities: [],
+      ports: [],
+      copilot: null,
+      hostPlatform: '',
+      retryAt: null,
+    })
+    expect(gone).toEqual([hostId])
   })
 })

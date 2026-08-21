@@ -674,6 +674,25 @@ export const WSL_DISTRO_KEY = 'wsl.distro'
  */
 const windowAsks = createWindowAsks()
 
+/**
+ * And the same questions to a paired **machine** — the desk for the other
+ * direction of the same conversation.
+ *
+ * Two desks rather than one, and it is the id space that forces it. `windowAsks`
+ * above is keyed by *device* id and its wire is a connection in `server.ts`;
+ * this one is keyed by *machine* id and its wire is a link in `machines/ipc.ts`.
+ * The ids are minted by different stores and are meaningless to each other, so a
+ * single table would be one lookup away from putting a browser verb on the wrong
+ * computer's socket — see `WindowHolder` in `window-owner.ts`, which is the type
+ * that keeps the two apart everywhere in between.
+ *
+ * What is *not* duplicated is anything else. Both are `createWindowAsks()`: the
+ * deadline, the sentence for a computer that never answered, the sentence for
+ * one that is not connected, and the rule that a question nobody can hear is
+ * refused in milliseconds rather than waited out — one file, two instances.
+ */
+const machineWindowAsks = createWindowAsks()
+
 const core = createHostCore({
   storageDir: remoteStorageDir(),
   userData: app.getPath('userData'),
@@ -1671,19 +1690,32 @@ const forwardBrowserVerb: VerbForwarder = {
     if (where.kind === 'ambiguous') {
       /*
        * Named as a count rather than as machine names, because the names are the
-       * far machines' and this end holds ids. The action is the same either way
+       * far computers' and this end holds ids. The action is the same either way
        * and it is one a person takes, which is why the sentence is addressed to
        * them through the agent rather than to the agent.
+       *
+       * The count spans both kinds of holder. A device that dialled in and a
+       * machine this app dialled out to can each have a window attached to one
+       * session here, and neither of them is wrong — so the sentence is the same
+       * one and the remedy is the same one.
        */
       throw new Error(
-        `${where.deviceIds.length} computers have a browser window attached to this session, so there ` +
+        `${where.holders.length} computers have a browser window attached to this session, so there ` +
           'is no single one to act on. Ask the person to detach it everywhere except the computer they ' +
           'want you to drive.',
       )
     }
-    const deviceId = where.deviceId
-    const answer = await windowAsks.call({
-      deviceId,
+    /*
+     * One id, two possible desks, and the holder's `kind` is what picks.
+     *
+     * The two desks are the same code with different wires — see
+     * `machineWindowAsks` at the top of this file — so everything below this
+     * line is identical whichever answered: the same deadline, the same
+     * sentences, the same handling of a body that will not parse.
+     */
+    const holder = where.holder
+    const answer = await (holder.kind === 'device' ? windowAsks : machineWindowAsks).call({
+      deviceId: holder.id,
       sessionId: session.sessionId,
       tool,
       args: JSON.stringify(args),
@@ -1719,7 +1751,7 @@ const forwardBrowserVerb: VerbForwarder = {
        * whole page outline. What is worth recording is that this app drove a
        * browser it does not own, on which computer, with which verb.
        */
-      summary: { forwardedTo: deviceId, tool },
+      summary: { forwardedTo: holder.id, on: holder.kind, tool },
     }
   },
 }
@@ -1739,6 +1771,7 @@ function whereWindowIs(session: { sessionId: string; machineId: string }): Windo
   return routeWindowVerb(session, {
     attachedHere: (sessionId, machineId) => windowsOf(sessionId, machineId).length > 0,
     holders: (sessionId) => windowAsks.holdersOf(sessionId),
+    machineHolders: (sessionId) => machineWindowAsks.holdersOf(sessionId),
   })
 }
 
@@ -2326,6 +2359,71 @@ function registerIpc(): void {
      * socket and the answer is matched against a table nobody sent from.
      */
     windows: windowAsks,
+    /*
+     * And the serving half: a browser verb arriving **from** a device, for a
+     * window in this app.
+     *
+     * `serveWindowCall` is the same function the machine links serve their asks
+     * through — one decider, or the two come to allow what each other refuses.
+     * What differs is only which store answers `allowed`: a device's grant is
+     * `WindowGrants` here, a machine's is `MachineStore.drivesWindows` there, and
+     * neither store may ever be asked about the other's ids.
+     *
+     * `machineId` in the caller below is this device's id. That is not a
+     * category error: `deck-control`'s caller key is `<machineId>\0<sessionId>`
+     * where the first half names *the computer the session is on*, whichever
+     * store minted the id, and the far end supplied the second half. Neither end
+     * holds the whole key and neither has to.
+     */
+    serveWindows: (deviceId, call) =>
+      serveWindowCall(
+        {
+          allowed: (id) => core.windowGrants.drives(id),
+          // A device has no card in Machines — it has a row in the remote
+          // roster, and the switch is in the panel under it. Naming the wrong
+          // one of the two would send somebody looking at a screen that does not
+          // have the tick on it.
+          grantSwitch: 'for this device in Settings → Remote, under “Devices that may act on browser windows here”',
+          control: () => deckControl?.control ?? null,
+          // The same question the machine side asks, and it has to be asked
+          // rather than asserted for the same reason: the one thing `attended`
+          // decides is whether a confirmation can be raised and waited on, and
+          // on macOS an app with every window closed is still running.
+          attended: () =>
+            !quitting && rendererAlive && mainWindow !== null && !mainWindow.isDestroyed(),
+        },
+        deviceId,
+        call,
+      ),
+    /*
+     * And which of that device's sessions this app is holding a window for.
+     *
+     * The same read the machine side makes, against the same map, keyed on the
+     * same field. `SessionBinding.machineId` is *the computer the session runs
+     * on* as this app knows it — an id from whichever store named that computer
+     * — so one filter answers for both directions and there is no second copy of
+     * the binding map to keep in step.
+     *
+     * ## What this answers today, said plainly
+     *
+     * **Empty, for every device**, and that is a gap upstream of here rather
+     * than a bug in this line. The only ids that have ever been written into
+     * `SessionBinding.machineId` are machine ids and the empty string: the
+     * session picker in `renderer/browser/agent-target.ts` is built from this
+     * machine's own sessions and from the sessions of machines this desktop
+     * *dialled out to*, so there is no way in the app to attach a window here to
+     * a session that runs on a device which dialled *in*. Until there is, the
+     * wire below carries a true empty set and the session over there is told,
+     * correctly, that nothing here is holding a window for it.
+     *
+     * Written as the filter rather than as `[]` because the filter is the rule —
+     * the day a window can be attached to a device's session, this is already
+     * the right answer and there is nothing here to remember to change.
+     */
+    windowsHeldFor: (deviceId) =>
+      bindingView()
+        .sessions.filter((binding) => binding.machineId === deviceId && binding.windows.length > 0)
+        .map((binding) => binding.sessionId),
     // The same tracker the window uses, so a dev server started from the phone
     // and one started from the desktop are one thing rather than two views that
     // can disagree. `server.ts` only advertises the `devserver` capability when
@@ -2358,6 +2456,11 @@ function registerIpc(): void {
     // the machine over there keeps a login its owner just unticked until the
     // next launch.
     accountGrants: core.accountGrants,
+    // And the fourth axis, on the same argument once more: the settings panel
+    // writes what every forwarded browser verb is checked against. This is the
+    // store whose empty state means *nobody*, so a second copy would not merely
+    // drift — it would be a permission that exists in one file and not the other.
+    windowGrants: core.windowGrants,
     // And the same kind store the reach rule closes over, for the same reason
     // one line up: the approval screen decides what a device is, and every
     // connection is checked against it, so two copies would agree until the
@@ -2483,6 +2586,8 @@ function registerIpc(): void {
       serveWindowCall(
         {
           allowed: (id) => machinesIpc?.drivesWindows(id) ?? false,
+          // That machine has a card in Machines, and the switch is on it.
+          grantSwitch: 'for this computer in Machines, beside its name',
           control: () => deckControl?.control ?? null,
           /*
            * Whether a confirmation raised by this call could reach anybody.
@@ -2502,6 +2607,37 @@ function registerIpc(): void {
         machineId,
         call,
       ),
+    /*
+     * And the mirror, in three lines because the machinery is already there.
+     *
+     * `windowsHeldThere` is what that machine says it is holding for *this* one;
+     * it lands on `machineWindowAsks`, the second `WindowAskDesk`, which is the
+     * table `routeWindowVerb` reads through `machineHolders`. `windowAnswered`
+     * settles a question this app asked. `windowsUnreachable` settles every
+     * question outstanding to a link that has gone, in milliseconds rather than
+     * at a fifty-five second deadline.
+     *
+     * Nothing here decides anything, and nothing here is a second copy of
+     * anything: the desk is the same file the device side uses, and the only
+     * difference between the two instances is the wire below.
+     */
+    windowsHeldThere: (machineId, sessions) => machineWindowAsks.held(machineId, sessions),
+    windowAnswered: (result) =>
+      machineWindowAsks.answer(result.id, { ok: result.ok, body: result.body }),
+    windowsUnreachable: (machineId) => machineWindowAsks.gone(machineId),
+  })
+  /*
+   * And the wire that desk sends on, given to it once the links exist.
+   *
+   * The same shape `server.ts` gives the device-side desk, one layer over: `ask`
+   * puts the frame on that machine's link and says whether it was heard, and
+   * `reaches` asks the same question without writing to anybody's network. Both
+   * read through `machinesIpc` rather than closing over a link, because links
+   * come and go and the desk outlives all of them.
+   */
+  machineWindowAsks.serve({
+    ask: (machineId, message) => machinesIpc?.askWindow(machineId, message) ?? 0,
+    reaches: (machineId) => machinesIpc?.servesWindows(machineId) ?? false,
   })
   /*
    * The other half of Machines: computers nobody sits at. §5.5.
@@ -2957,6 +3093,17 @@ function registerIpc(): void {
     if (now === announcedWindows) return
     announcedWindows = now
     machinesIpc?.announceWindows()
+    /*
+     * And the same fact down the other kind of link.
+     *
+     * A device connected *to* this app is told the same set for the same reason
+     * a machine this app dialled out to is: the window is in this process and
+     * the pty is on that computer, so nothing over there can derive it. One
+     * subscription and one change test for both, because they are one fact —
+     * `SessionBinding.machineId` names the computer the session runs on and the
+     * two announcements differ only in which wire carries it.
+     */
+    remote.server.windowsHeldChanged()
   })
   /*
    * The sidebar row's ⋯ menu, on the same dependencies.
@@ -4515,6 +4662,10 @@ app.on('before-quit', (event) => {
   // a sentence, rather than left for a deadline this process will not live to
   // see. See `window-asks.ts`.
   windowAsks.stop()
+  // And the other desk. Two instances, two shutdowns: a question left pending on
+  // either one is a tool call somebody's turn is blocked on, waiting out a
+  // deadline for an app that is already gone.
+  machineWindowAsks.stop()
   void deckControl?.stop()
   /*
    * Every server connection and every server terminal, closed.

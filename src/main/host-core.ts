@@ -97,6 +97,7 @@ import { createCredentialProxy, deviceKey, type CredentialProxy } from './remote
 import { FolderGrants } from './remote/folder-grants'
 import { SessionGrants } from './remote/session-grants'
 import { AccountGrants } from './remote/account-grants'
+import { WindowGrants } from './remote/window-grants'
 import { DeviceKinds } from './remote/device-kind'
 import { reachFor, type DeviceReach } from './remote/device-reach'
 import { guestGitDir, HELPER_FILE, type GuestGitEnv } from './remote/git-guest'
@@ -485,6 +486,20 @@ export interface HostCore {
    */
   accountGrants: AccountGrants
   /**
+   * And which paired devices may act on the browser windows in this app.
+   *
+   * The fourth axis, on the core beside the other three and for the reason they
+   * are here: one instance, because two would be two in-memory copies of one
+   * file — the settings panel writing to one while every forwarded browser verb
+   * is checked against the other. Built at assembly rather than by the Electron
+   * shell so the headless daemon cannot be the build where the rule is missing.
+   *
+   * It is the mirror of `MachineStore.drivesWindows`, which answers the same
+   * question about a machine this desktop dialled *out* to. Two stores, because
+   * the two id spaces are different and so are the two decisions.
+   */
+  windowGrants: WindowGrants
+  /**
    * Whether each paired device is one of the owner's own or a guest.
    *
    * On the core beside `grants` and for the same reason: the shell that draws
@@ -634,6 +649,17 @@ export function createHostCore(options: HostCoreOptions): HostCore {
    * fanout, cannot be the build where the rule is missing.
    */
   const accountGrants = new AccountGrants(options.storageDir)
+
+  /**
+   * And which devices may move the browser on this screen.
+   *
+   * The fourth axis, built here for the same reason as the third: one instance
+   * of the file, and a rule the Electron shell cannot be the only build to
+   * install. Unlike the three above it, this one **defaults closed** — see
+   * `WindowGrants` for why the argument that makes the others fail open does not
+   * apply to a capability nothing has ever had.
+   */
+  const windowGrants = new WindowGrants(options.storageDir)
 
   /**
    * Whether each paired device is one of the owner's own or a guest.
@@ -2146,6 +2172,7 @@ export function createHostCore(options: HostCoreOptions): HostCore {
     grants,
     sessionGrants,
     accountGrants,
+    windowGrants,
     kinds,
     agents,
     credentials,
