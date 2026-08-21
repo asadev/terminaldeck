@@ -173,9 +173,27 @@ describe('every section id still resolves to a pane', () => {
      * applied to its last exception, since a version number and a licence are
      * something you *read*, exactly like the Shortcuts and Help entries that
      * left for the same reason.
+     *
+     * **The eleventh is Scraping**, and this is its entry in the same ledger.
+     * It is the only one of the eleven that was not a reorganisation of screens
+     * that already existed: the fleet, the request rules, passive capture, the
+     * asset renditions with their resume ledger and the coverage check had
+     * **no pane at all**. All of it sat in a modal behind the browser tab's
+     * three-dot menu, so the configuration of a whole subsystem was two clicks
+     * about something else away from anybody who had not already opened a tab.
+     * A ceiling on rail entries is a ceiling on *duplication*, and this is the
+     * opposite of that — it is the first screen the subject has had.
+     *
+     * Folding it into Browser was considered and loses on this table's own rule
+     * that a section is a subject: Browser answers "the tab I open pages in,
+     * what it starts on, what it remembers about me", and its settings are per
+     * tab; these are per browser profile and are what the harvesting tools read
+     * before a run. It also costs the rail nothing in duplication, because the
+     * pane renders the *same component* the three-dot panel does rather than a
+     * second copy of it — see `ScrapingSection.tsx`.
      */
-    expect(sectionsFor('mac').length).toBeLessThanOrEqual(10)
-    expect(sectionsFor('windows').length).toBeLessThanOrEqual(11)
+    expect(sectionsFor('mac').length).toBeLessThanOrEqual(11)
+    expect(sectionsFor('windows').length).toBeLessThanOrEqual(12)
   })
 })
 

@@ -243,9 +243,26 @@ export const FEATURES: readonly Feature[] = [
      * registry can name.
      */
     controls: ['sidebar.browser'],
-    sections: ['browser'],
+    /*
+     * Two panes, and Scraping is the second for the same reason the first is
+     * here: it configures **this browser**. The worker fleet is a set of its
+     * profiles, the request rules and the capture bounds are armed on its tabs,
+     * and the ledger is of assets its windows fetched. With the browser pane
+     * uninstalled every control on that page writes to something that is not
+     * there — which is the rail entry describing nothing that this table exists
+     * to prevent.
+     *
+     * Uninstalling does **not** delete what those settings say, and that is
+     * deliberate rather than an omission: `browser-scraping.json` is a page of
+     * typed configuration — rewrite rules, coverage patterns, byte budgets —
+     * and reinstalling the pane should not cost somebody an afternoon of it.
+     * The `keeps` line below says so where a person can read it, because a
+     * surprise about what survived is the same size as one about what went.
+     */
+    sections: ['browser', 'scraping'],
     settings: ['browser.startUrl', 'browser.persistSession'],
     data: [{ label: 'Cookies and logins the built-in browser has saved', kind: 'browser-data' }],
+    keeps: 'the scraping settings — worker pace, request rules, rewrite rules and coverage patterns — and everything already captured or fetched',
   },
   {
     id: 'split',

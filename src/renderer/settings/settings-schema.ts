@@ -57,7 +57,9 @@ import type { UiPlatform } from '../platform'
  *
  * Help went the other way in this pass — it was the link in that footer and is a
  * pane again, on his instruction, and it cost the rail nothing because About
- * moved into it. The count is unchanged: ten on a Mac, eleven on Windows.
+ * moved into it. The count was unchanged by that pass: ten on a Mac, eleven on
+ * Windows. Scraping has since been added, so it is eleven and twelve — see the
+ * argument on that entry for why it is a rail seat rather than a group.
  */
 export const SECTIONS = [
   {
@@ -368,6 +370,48 @@ export const SECTIONS = [
     blurb: 'The built-in browser tab and what it remembers.',
   },
   /*
+   * Taking a website apart, which had no pane at all until this entry.
+   *
+   * ## Where it was
+   *
+   * Behind the browser tab's three-dot menu, and nowhere else. Every knob for
+   * the worker fleet, the request rules, passive capture, the asset renditions
+   * and their resume ledger, and the coverage self-check lived in one modal a
+   * person could only reach by opening a browser tab first and then finding a
+   * menu on it. A whole subsystem's configuration behind two clicks that have
+   * nothing to do with the subject is the shape of *"install and do some clicks
+   * and everything works fine"* failing at the first click.
+   *
+   * ## Why it is not a group inside Browser
+   *
+   * The rule this table is built on — a section is a *subject* — and this is a
+   * different subject from the one Browser answers. Browser is "the tab I open
+   * pages in, what it starts on and what it remembers about me". Scraping is
+   * "the fleet, the rules, the ledger and the checks that take a site apart",
+   * it is what the harvesting tools read before a run, and its settings are per
+   * *profile* where Browser's are per tab. Folding sixty controls under a pane
+   * about a start page would bury them exactly as thoroughly as the three-dot
+   * menu did.
+   *
+   * ## It is the same pane in both places, not a second one
+   *
+   * `ScrapingSection` renders `ScrapingBody` — the identical component the
+   * browser's own panel renders — so the two cannot drift apart into a settings
+   * screen and a menu screen that disagree about what a switch does. The
+   * failure mode this window already names: *"when you reorganize you mostly
+   * miss the things and you drop some stuff."*
+   *
+   * The rail is eleven on a Mac and twelve on Windows now, and the paragraphs
+   * further up that say ten and eleven are the record of the pass before this
+   * one; both are corrected in place rather than left to rot, because a number
+   * in a comment is a claim like any other.
+   */
+  {
+    id: 'scraping',
+    label: 'Scraping',
+    blurb: 'Workers, request rules, capture and the checks on what came back.',
+  },
+  /*
    * The one section in this rail that declares no settings at all, and it is
    * not an oversight — it is the point.
    *
@@ -476,9 +520,11 @@ export const SECTIONS = [
    * ("Versions, and what to include in a bug report"), which is a duplication
    * this window has removed everywhere else.
    *
-   * So the count does not move: ten on a Mac, eleven on Windows, exactly as
-   * before. A help page is not worth a rail that grows back towards the
-   * thirteen entries this reorganisation was asked for.
+   * So the count did not move for this: ten on a Mac, eleven on Windows,
+   * exactly as before. A help page is not worth a rail that grows back towards
+   * the thirteen entries this reorganisation was asked for. (Scraping was added
+   * later and took it to eleven and twelve; it is the only entry since, and the
+   * one it earned by having no home at all.)
    *
    * Nothing was retyped to move it. `AboutSection` is rendered *in place* at the
    * top of the pane — the same assembled-not-rewritten trick `AgentsSection`

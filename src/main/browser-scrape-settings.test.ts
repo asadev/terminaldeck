@@ -4,6 +4,16 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { applyRule, readRenditionRules } from './browser-asset-rendition'
 import {
+  MAX_PACE_MS as POOL_MAX_PACE_MS,
+  MAX_WORKERS as POOL_MAX_WORKERS,
+  cleanPace,
+} from './browser-worker-pool'
+import {
+  MAX_KEEP_MB as SHARED_MAX_KEEP_MB,
+  MAX_PACE_MS as SHARED_MAX_PACE_MS,
+  MAX_WORKERS as SHARED_MAX_WORKERS,
+} from '../shared/scrape-limits'
+import {
   MAX_KEEP_MB,
   captureBoundsOf,
   captureFolderFor,
@@ -257,5 +267,41 @@ describe('what a browser.network call actually arms', () => {
         { rules: null, capture: null, bounds: null, blockShots: null },
       ),
     ).toEqual({ rules: { font: 'block' }, capture: true, bounds })
+  })
+})
+
+/**
+ * The three numbers a person can type, and the ceilings behind them.
+ *
+ * The panel's fields are in the renderer, which cannot import this file, so
+ * they read their maxima from `shared/scrape-limits.ts`. That is a copy of what
+ * is enforced here and in the pool, and a copy is a second answer to one
+ * question — so these assert the two answers agree. Before they did, "Keep at
+ * most" accepted 1,000,000 MB against a store that keeps 4,096, "Between
+ * requests" accepted ten minutes against a pool that keeps thirty seconds, and
+ * "At once" accepted 64 workers against a pool of 16. Each was a field that
+ * took a number it could not keep and only looked corrected because the engine
+ * answers with what it stored.
+ */
+describe('the ceilings the panel draws are the ceilings this store enforces', () => {
+  it('offers the same megabyte cap the capture store will accept', () => {
+    expect(SHARED_MAX_KEEP_MB).toBe(MAX_KEEP_MB)
+  })
+
+  it('clamps a number above it rather than keeping what was typed', () => {
+    const after = setScrapeSettings(dir, 'work', { capture: { keepMB: SHARED_MAX_KEEP_MB + 1 } })
+    expect(after.capture.keepMB).toBe(MAX_KEEP_MB)
+  })
+
+  it('offers the same fleet and pace ceilings the pool enforces', () => {
+    // Re-exported by the pool rather than copied into it, so these are the same
+    // binding; the assertion is that the re-export has not been unpicked.
+    expect(SHARED_MAX_WORKERS).toBe(POOL_MAX_WORKERS)
+    expect(SHARED_MAX_PACE_MS).toBe(POOL_MAX_PACE_MS)
+    expect(cleanPace({ maxConcurrent: 64, minDelayMs: 600_000, jitterMs: 0 })).toEqual({
+      maxConcurrent: SHARED_MAX_WORKERS,
+      minDelayMs: SHARED_MAX_PACE_MS,
+      jitterMs: 0,
+    })
   })
 })
