@@ -2650,6 +2650,22 @@
   display: none;
 }
 
+/* One pane of a split is holding it, rather than the whole window.
+
+   `inset: 0` above is "fill the pane area", which is the unsplit window. A pane
+   is a rectangle inside that area, and the renderer writes it as inline
+   top/left/width/height — so the four sides have to be released first or the
+   box would be pinned to the far edges and stretched rather than moved. The
+   measuring is in `layout/pane-slots.ts`, and the reason the terminal is
+   positioned over the pane instead of being rendered inside it is there too:
+   moving it in the tree remounts it, and for a session on a paired machine that
+   is another full replay while for a shell on a server it is the SSH session
+   closed. */
+.remote-pane[data-boxed='true'],
+.server-pane[data-boxed='true'] {
+  inset: auto;
+}
+
 /* A shell on a server, filling the pane the same way.
 
    Same box as `.remote-pane` above and deliberately not the same rule: this one
@@ -2672,6 +2688,34 @@
 
 .server-pane[data-visible='false'] {
   display: none;
+}
+
+/* The hole a pane leaves for a terminal that is drawn over it.
+
+   It has no background of its own on purpose: for the frame between a layout
+   change and the re-measure the terminal has not moved yet, and a coloured
+   rectangle would flash where it is about to be. The pane area behind it is the
+   window's own ground, which is what a pane briefly showing nothing should look
+   like. */
+.pane-remote-slot {
+  flex: 1;
+  min-height: 0;
+}
+
+/* Which computer a guest pane's session is on.
+
+   The same muted weight the folder and the account are drawn at on a local
+   pane's bar, because it is the same kind of statement — a fact about where the
+   session lives, beside its name — and it truncates rather than pushing the
+   controls off the end of a narrow pane. */
+.pane-cell-where {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--t-caption);
+  color: var(--text-muted);
 }
 
 /* The terminal inside it was written for a fixed-height rectangle on a page and

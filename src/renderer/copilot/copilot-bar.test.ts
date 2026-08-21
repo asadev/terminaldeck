@@ -89,11 +89,19 @@ describe('the bar over the copilot page', () => {
   })
 
   it('does not hand the control cluster the local copilot’s session', () => {
-    // `headingSession` is what the model, effort and fast-mode chips read *and
-    // write*. Left resolving the copilot's tab, those chips would have been
-    // setting the model of a session on this Mac from a bar drawn over a PC.
-    const heading = /const headingSession =[\s\S]*?\n {6}: null/.exec(APP)?.[0] ?? ''
-    expect(heading, 'headingSession has changed shape').not.toBe('')
-    expect(heading).toContain('headingTab.isCopilot && copilotMachine !== null')
+    /*
+     * `barControls` is what the model, effort and fast-mode chips read *and
+     * write*. Left resolving the copilot's tab, those chips would have been
+     * setting the model of a session on this Mac from a bar drawn over a PC.
+     *
+     * The guard used to live on `const headingSession`, which was the bar's own
+     * lookup. That lookup became `controlsFor` on 2026-08-21 — one function that
+     * answers for a local session, a session on a paired machine and a terminal
+     * on a server, so that a *pane* can have the same answer — and this guard
+     * came with it, to the one line that was still reading it.
+     */
+    const controls = /const barControls =[\s\S]*?controlsFor\(barTabId\)/.exec(APP)?.[0] ?? ''
+    expect(controls, 'barControls has changed shape').not.toBe('')
+    expect(controls).toContain('headingTab?.isCopilot === true && copilotMachine !== null')
   })
 })

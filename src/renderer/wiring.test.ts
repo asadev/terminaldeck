@@ -371,20 +371,31 @@ describe('the session control cluster is told what is dead', () => {
      * disagree about whether the session is alive. A shell on a server has no
      * exit code on any channel, and the fact this window genuinely observes
      * about one is that `servers:shell:closed` fired.
+     *
+     * The three branches were spelled out inside `const barControls` until
+     * 2026-08-21, and this read them there. They are `controlsFor` now, one
+     * function above `mainView`, because a *pane* needs the same answer and
+     * could not have it: the only expression that knew how to reach a session on
+     * another computer lived in the window's bar, so a pane holding one drew
+     * "Nothing in this pane yet" over a live terminal. The check follows the
+     * branches rather than being relaxed — a literal anywhere in them still
+     * fails, which is the defect the original wording was written against.
      */
-    const table = /const barControls: \{[\s\S]*?\n {12}: null\n/.exec(app)?.[0] ?? ''
-    expect(table, 'barControls has changed shape').not.toBe('')
+    const table = /const controlsFor = \([\s\S]*?\n {2}\}\n/.exec(app)?.[0] ?? ''
+    expect(table, 'controlsFor has changed shape').not.toBe('')
     // Deeply indented, which is what tells a branch's answer apart from the
-    // `exited: boolean` on the type annotation above them.
-    const answers = [...table.matchAll(/^ {12,}exited: (.+)$/gm)].map((match) => match[1].replace(/,$/, ''))
-    expect(answers.length, 'a branch of barControls has appeared or gone').toBe(3)
+    // `exited: boolean` on the return type above them.
+    const answers = [...table.matchAll(/^ {6,}exited: (.+)$/gm)].map((match) => match[1].replace(/,$/, ''))
+    expect(answers.length, 'a branch of controlsFor has appeared or gone').toBe(3)
     for (const answer of answers) {
-      expect(answer, 'a branch of barControls fabricates its answer').not.toMatch(/^(true|false)$/)
+      expect(answer, 'a branch of controlsFor fabricates its answer').not.toMatch(/^(true|false)$/)
       expect(
         answer,
-        'a branch of barControls answers from something other than the session’s own state',
+        'a branch of controlsFor answers from something other than the session’s own state',
       ).toMatch(/exitCode|status === 'exited'/)
     }
+    // And the bar is that answer rather than a fourth reading of its own.
+    expect(app).toContain('controlsFor(barTabId)')
   })
 })
 
@@ -592,13 +603,17 @@ describe('the copilot is a window, not a view', () => {
 
   it('feeds the bar’s controls from a list the copilot is in', () => {
     /*
-     * `headingSession` is what `SessionControls` acts on — model, effort, fast
-     * mode, connectors, usage — and it used to be resolved against `sessions`,
-     * which is the one list the copilot is deliberately not in. That single
-     * lookup is why the copilot had no cluster: the component was mounted, the
-     * bar was drawn, and the session was never found.
+     * `controlsFor` is what `SessionControls` acts on — model, effort, fast
+     * mode, connectors, usage — and its local branch used to be resolved against
+     * `sessions`, which is the one list the copilot is deliberately not in. That
+     * single lookup is why the copilot had no cluster: the component was
+     * mounted, the bar was drawn, and the session was never found.
+     *
+     * It read `const headingSession =` until 2026-08-21, when the three branches
+     * moved into `controlsFor` so a pane could reach a session on another
+     * computer. Same lookup, same list, one caller more.
      */
-    expect(app).toMatch(/const headingSession =[\s\S]{0,200}windowSessions\.find/)
+    expect(app).toMatch(/const local = windowSessions\.find/)
   })
 
   it('keeps its pinned row, and points it at the window', () => {
