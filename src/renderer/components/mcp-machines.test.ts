@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { reportableMachines } from './mcp-machines'
+import { pickSurvives, reportableMachines } from './mcp-machines'
 import type { MachineWithLink } from '../machines/useMachines'
 import type { MachineLinkState, RemoteSession } from '../machines/types'
 
@@ -107,5 +107,55 @@ describe('reportableMachines', () => {
       'DESKTOP-DDGMNCV',
       'Office PC',
     ])
+  })
+})
+
+/**
+ * The guard the Coding AI pane has had since a device could be forgotten while
+ * its scope was on screen, and this page had not.
+ *
+ * Worth its own tests rather than trusted to the effect that calls it, because
+ * the interesting states are the ones no static render produces: a machine that
+ * disconnects, and — the one that actually bites — a machine that comes back.
+ */
+describe('the pick a machine leaving takes with it', () => {
+  const target = {
+    machineId: 'm1',
+    name: 'DESKTOP-DDGMNCV',
+    sessionId: 's1',
+    sessionTitle: 'AAAA',
+    cwd: '/home/imza/AAAA',
+  }
+
+  it('keeps a pick that is still on the switch', () => {
+    expect(pickSurvives('m1', [target])).toBe(true)
+  })
+
+  it('drops a pick whose machine went offline', () => {
+    expect(pickSurvives('m1', [])).toBe(false)
+  })
+
+  /**
+   * The case the derived `target` alone does not cover. With the pick left in
+   * state, the page drew this machine while the PC was away and then moved
+   * itself back to the PC the moment it reconnected — a page changing what it
+   * reports on with nobody having pressed anything.
+   */
+  it('drops it while it is gone, so a reconnect cannot move the page on its own', () => {
+    expect(pickSurvives('m1', [])).toBe(false)
+    expect(pickSurvives(null, [target])).toBe(true)
+  })
+
+  /**
+   * Still paired, still online, last session closed. `reportableMachines` drops
+   * it from the switch, so the pick has to go with it or the page is pointed at
+   * a button that is not drawn.
+   */
+  it('drops a pick whose machine lost the session the reading goes through', () => {
+    expect(pickSurvives('m1', [{ ...target, machineId: 'm2' }])).toBe(false)
+  })
+
+  it('never drops this computer, which is the one row that cannot go away', () => {
+    expect(pickSurvives(null, [])).toBe(true)
   })
 })

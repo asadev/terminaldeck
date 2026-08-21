@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Group } from '../settings/controls'
+import { SegmentedSwitch } from '../components/SegmentedSwitch'
+import { SHARE_MODES } from './share-mode'
 import { errorText } from '../settings/settings-bridge'
 import './DeviceSessions.css'
 
@@ -230,24 +232,19 @@ export function DeviceSessionsView({
             <li className="ds-device" key={device.id}>
               <div className="ds-head">
                 <span className="ds-name">{device.name}</span>
-                <div
-                  className="settings-scope ds-scope"
-                  role="group"
-                  aria-label={`Sessions ${device.name} may open`}
-                >
-                  {(['all', 'selected'] as const).map((mode) => (
-                    <button
-                      key={mode}
-                      type="button"
-                      data-on={choice.mode === mode ? '' : undefined}
-                      aria-pressed={choice.mode === mode}
-                      disabled={busy !== null}
-                      onClick={() => onMode(device.id, mode)}
-                    >
-                      {mode === 'all' ? 'All' : 'Selected'}
-                    </button>
-                  ))}
-                </div>
+                {/* The Coding AI switch, imported rather than re-typed. This
+                    file, `DeviceLogins` and `DeviceApproval` each held their own
+                    copy of these eleven lines until 2026-08-22, and the third
+                    copy had drifted — `.da-scope` names no rule. */}
+                <SegmentedSwitch
+                  options={SHARE_MODES}
+                  value={choice.mode}
+                  onChange={(mode) => onMode(device.id, mode)}
+                  label={`Sessions ${device.name} may open`}
+                  disabled={busy !== null}
+                  inline
+                  className="ds-scope"
+                />
               </div>
 
               {/* The ticks, only under Selected, and silently absent when this

@@ -1358,6 +1358,21 @@
   margin: 0 0 var(--sp-6);
 }
 
+/* The same run, inside a row rather than at the top of a pane.
+
+   The margin above is sized for the gap between the switch on Coding AI and the
+   first group under it. Beside a device name in `.ds-head`, or inside the
+   approval step's own flex column, it is somebody else's spacing — and it was
+   wrong there for a while: `DeviceApproval` wrote `class="settings-scope
+   da-scope"` and no stylesheet in this repo ever defined `.da-scope`, so that
+   pill row carried a `--sp-6` gap under it in a column whose every other gap is
+   `--sp-2`. One rule here rather than one bespoke class per caller, because a
+   bespoke class per caller is exactly what produced a class name with nothing
+   behind it. `SegmentedSwitch` sets the attribute; nothing else may. */
+.settings-scope[data-inline] {
+  margin: 0;
+}
+
 .settings-scope button {
   height: var(--control-h);
   padding: 0 var(--sp-3);

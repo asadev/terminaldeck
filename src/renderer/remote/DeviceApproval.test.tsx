@@ -242,6 +242,28 @@ describe('choosing logins', () => {
     expect(said).not.toContain('work@example.com')
   })
 
+  /**
+   * The All / Selected switch is the Coding AI switch, and it is the *component*
+   * rather than a copy of its markup.
+   *
+   * This file held one of three hand-rolled copies until 2026-08-22, and it was
+   * the copy that had already gone wrong: `class="settings-scope da-scope"`,
+   * where `.da-scope` is defined in no stylesheet in this repo. So the pane-top
+   * bottom margin `.settings-scope` carries was still on it, inside a `.da-body`
+   * whose own gap is `--sp-2` — the ticks under it sat three times further away
+   * than anything else on the step, and nobody chose that.
+   *
+   * `data-inline` is the attribute that cancels it, and it has a rule behind it;
+   * `components/SegmentedSwitch.test.tsx` is where that pairing is pinned.
+   */
+  it('uses the shared switch, sitting in this step’s own spacing', () => {
+    const html = view({ step: 'accounts', kind: 'guest' as DeviceKind, accountMode: 'selected' })
+    expect(html).toContain('data-inline=""')
+    expect(html).not.toContain('da-scope')
+    expect(html).toMatch(/aria-pressed="true"[^>]*>Selected/)
+    expect(html).toMatch(/aria-pressed="false"[^>]*>All/)
+  })
+
   it('says what nothing ticked means, on the step where it is being chosen', () => {
     const said = text(
       view({ step: 'accounts', kind: 'guest' as DeviceKind, accountMode: 'selected', accounts: [] }),

@@ -212,6 +212,62 @@
   white-space: nowrap;
 }
 
+/* --------------------------------------------------------------- logins -- */
+
+/* The tick list under All / Selected, which had no rules at all until
+   2026-08-22.
+
+   `.da-logins`, `.da-login` and `.da-login-name` were in the markup and in no
+   stylesheet, so this step drew a browser-default `<ul>` — disc bullets, 40px of
+   left padding, and a checkbox with no hit target beyond itself — one card away
+   from `.da-folders`, which is the same list of the same shape, styled. A class
+   that styles nothing renders perfectly, which is why 293 lines of tests on this
+   file never saw it; `components/SegmentedSwitch.test.tsx` is the check that
+   does.
+
+   The geometry is `.da-folders`' and the row is `.ds-session`'s, deliberately:
+   this is the *same question* `DeviceLogins` asks about the same logins, one
+   screen earlier, and the two lists reading differently is what the review keeps
+   catching. */
+.da-logins {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+/* The whole row is the label, so the name is a hit target for the tick — a
+   checkbox alone is a 14px target beside 200px of text that does nothing when
+   pressed, which is the shape people click at and miss. `.ds-session` makes the
+   same argument for the same control. */
+.da-login {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  cursor: pointer;
+  min-width: 0;
+}
+
+.da-login input {
+  flex: none;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.da-login-name {
+  font-size: var(--t-callout);
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .da-summary li {
   font-size: var(--t-callout);
   color: var(--text-secondary);

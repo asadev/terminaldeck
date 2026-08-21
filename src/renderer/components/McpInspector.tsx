@@ -11,13 +11,13 @@ import { readFailure, withDeadline } from '../deadline'
 import { recall, remember } from '../panel-cache'
 import { rowDetail } from '../chat/attach/McpServers'
 import { useMachines } from '../machines/useMachines'
-import { thisMachine } from '../platform'
+import { hereName } from '../machines/types'
+import { SegmentedSwitch } from './SegmentedSwitch'
 import { panelSpec } from '../shell/panels'
 import { PageEmpty, PageNote } from './PageEmpty'
 import { PageScope } from './PageScope'
-import { Pill, PillRow } from './Pill'
 import { HoverNote } from './HoverNote'
-import { reportableMachines, useMachineServers, type MachineTarget } from './mcp-machines'
+import { pickSurvives, reportableMachines, useMachineServers, type MachineTarget } from './mcp-machines'
 import './McpInspector.css'
 
 /* ------------------------------------------------------------------ types -- */
@@ -396,34 +396,74 @@ export function ToolRow({ tool, disabled, onCall }: ToolRowProps) {
  * Its own component because both halves of this page draw it, and because a row
  * of pills nobody can click in a static render is a thing worth having a test
  * of.
+ *
+ * ## Why it is the settings control and not `Pill`
+ *
+ * It was `PillRow` + `Pill` — `.page-pill`, the row Artifacts and the readiness
+ * page use — until 2026-08-22. Asad, on the round that changed it:
+ *
+ *   > *"build a proper version for scrapping and server control with switching
+ *   > pill just like in coding ai page in settings… and all other applicable
+ *   > places too."*
+ *
+ * This is one of those other places: a run of buttons naming machines, of which
+ * one is on, which is exactly what the Coding AI pane's scope switch is. Two
+ * looks for that on two screens is what he keeps finding.
+ *
+ * `.page-pill` does not go away and this is not the beginning of its removal —
+ * the two now answer two different questions, and the rule is worth stating so
+ * the next page does not have to guess. **`.settings-scope` says which machine
+ * or scope a page is reporting on; `.page-pill` filters a page's own contents**
+ * — which agent the readiness page grades for, which artifacts to list. This
+ * page asks the first question and had been drawing the second question's
+ * control.
+ *
+ * ## This computer is named, not deixis
+ *
+ * `hereName` rather than `thisMachine()`, which is what this row used to call
+ * it. *"So I'm confused now what is the truth, because this machine is Office
+ * PC, this machine is this machine where I am… So I don't know what to
+ * trust."* — a phrase meaning "wherever you are" cannot be resolved by reading
+ * it, on a bar where every other button carries a hostname. The name comes from
+ * `MachinesView.here`; `hereName` falls back to *this Mac* / *this PC* when a
+ * build's preload predates that field, which is the same fallback the browser's
+ * machine picker uses.
  */
 export function MachinePills({
   targets,
+  here,
   pick,
   onPick,
 }: {
   targets: readonly MachineTarget[]
+  /** What this computer is called — `hereName(view)`, from the caller. */
+  here: string
   pick: string | null
   onPick(machineId: string | null): void
 }) {
   if (targets.length === 0) return null
-  const here = thisMachine()
+  /*
+   * `''` is this computer, and it is a real id rather than a sentinel smuggled
+   * through a string: no machine id is empty, `MachineTarget.machineId` comes
+   * from the pairing store, and `CopilotMachine.id` on the copilot page's own
+   * switch already spells "here" the same way. The caller turns it back into the
+   * `string | null` its state is keyed on, once, below.
+   */
+  const options = [
+    { id: '', label: here, title: `The configuration on ${here}` },
+    ...targets.map((entry) => ({
+      id: entry.machineId,
+      label: entry.name,
+      title: `Read the configuration on ${entry.name}, for the folder ${entry.sessionTitle} runs in`,
+    })),
+  ]
   return (
-    <PillRow label="Which machine’s servers to show" lead="Report on">
-      <Pill on={pick === null} title={`The configuration on ${here}`} onClick={() => onPick(null)}>
-        {here}
-      </Pill>
-      {targets.map((entry) => (
-        <Pill
-          key={entry.machineId}
-          on={pick === entry.machineId}
-          title={`Read the configuration on ${entry.name}, for the folder ${entry.sessionTitle} runs in`}
-          onClick={() => onPick(entry.machineId)}
-        >
-          {entry.name}
-        </Pill>
-      ))}
-    </PillRow>
+    <SegmentedSwitch
+      options={options}
+      value={pick ?? ''}
+      onChange={(id) => onPick(id === '' ? null : id)}
+      label="Which machine’s servers to show"
+    />
   )
 }
 
@@ -781,8 +821,37 @@ export function McpInspector({ projectPath = null, bridge }: McpInspectorProps) 
   const estate = useMachines()
   const targets = useMemo(() => reportableMachines(estate.machines), [estate.machines])
   const target = targets.find((entry) => entry.machineId === machinePick) ?? null
-  /** What to call this computer on a pill and on a row. */
-  const here = thisMachine()
+  /**
+   * What to call this computer on a button and on a row.
+   *
+   * Its own name whenever the view carried one, and only then the platform
+   * phrase — see `hereName`. It was `thisMachine()` outright, which put *this
+   * Mac* on a bar next to two hostnames, and that phrasing is the one he could
+   * not resolve: *"this machine is Office PC, this machine is this machine where
+   * I am… I don't know what to trust."*
+   */
+  const here = hereName(estate)
+
+  /*
+   * A machine that stopped being reportable while the page was pointed at it.
+   *
+   * The same guard `AgentsSection` keeps for a device forgotten while its scope
+   * is on screen, and it was missing here. `target` is derived, so the page
+   * already *draws* this machine's half the moment a PC goes offline — but
+   * `machinePick` went on holding that PC's id, so the page silently jumped back
+   * to it the moment the machine reconnected, with nobody having pressed
+   * anything. A page moving on its own is a page that cannot be trusted about
+   * where it is; the switch is the only thing that may move it.
+   *
+   * `targets` rather than the machine list, because that is the set the buttons
+   * are built from: a machine that is still paired but has lost its last session
+   * has no button here either, and leaving the pick on it would strand the page
+   * in exactly the same way.
+   */
+  useEffect(() => {
+    if (pickSurvives(machinePick, targets)) return
+    setMachinePick(null)
+  }, [machinePick, targets])
 
   /*
    * A machine's page instead of this one's, and an early return rather than a
@@ -795,7 +864,7 @@ export function McpInspector({ projectPath = null, bridge }: McpInspectorProps) 
   if (target !== null) {
     return (
       <div className="mcp">
-        <MachinePills targets={targets} pick={target.machineId} onPick={setMachinePick} />
+        <MachinePills targets={targets} here={here} pick={target.machineId} onPick={setMachinePick} />
         <MachineServerList target={target} />
       </div>
     )
@@ -806,7 +875,7 @@ export function McpInspector({ projectPath = null, bridge }: McpInspectorProps) 
   return (
     <div className="mcp">
       {/* Null, always: past the return above, the page is this machine's. */}
-      <MachinePills targets={targets} pick={null} onPick={setMachinePick} />
+      <MachinePills targets={targets} here={here} pick={null} onPick={setMachinePick} />
       {/* What this list is: the configuration on this machine, for this folder.
           The page has named the folder since *"On MCP servers did nothing"* —
           it was reading a different one from the rail's — and it names the

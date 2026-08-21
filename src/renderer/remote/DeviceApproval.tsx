@@ -1,5 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Button, Notice } from '../settings/controls'
+import { SegmentedSwitch } from '../components/SegmentedSwitch'
+import { SHARE_MODES } from './share-mode'
 import { thisMachine, type UiPlatform } from '../platform'
 import { profileLoginLabel, useAccounts } from '../accounts'
 import { folderName } from './DeviceFolders'
@@ -314,20 +316,25 @@ export function DeviceApproval({
       {step === 'accounts' && (
         <div className="da-body">
           <p className="da-lede">Which of your logins can it use?</p>
-          <div className="settings-scope da-scope" role="group" aria-label="Logins it can use">
-            {(['all', 'selected'] as const).map((mode) => (
-              <button
-                key={mode}
-                type="button"
-                data-on={accountMode === mode ? '' : undefined}
-                aria-pressed={accountMode === mode}
-                disabled={busy}
-                onClick={() => onAccountMode(mode)}
-              >
-                {mode === 'all' ? 'All' : 'Selected'}
-              </button>
-            ))}
-          </div>
+          {/*
+            The Coding AI switch, and the copy of it that had already drifted.
+
+            This read `class="settings-scope da-scope"`, and `.da-scope` is
+            defined in no stylesheet in this repo — so the bottom margin
+            `.settings-scope` carries for its use at the top of a settings pane
+            was still on it here, inside a `.da-body` whose own gap is `--sp-2`.
+            The ticks under this row sat three times further away than anything
+            else on the step, and nobody chose that. `inline` is the rule that
+            cancels it, in one place, for every caller.
+          */}
+          <SegmentedSwitch
+            options={SHARE_MODES}
+            value={accountMode}
+            onChange={onAccountMode}
+            label="Logins it can use"
+            disabled={busy}
+            inline
+          />
           {/* The ticks, only under Selected — the same shape the sessions panel
               uses, because it is the same choice about a different list and two
               looks for one idea is what the review keeps catching. Nothing under
