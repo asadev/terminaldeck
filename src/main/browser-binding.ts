@@ -942,6 +942,20 @@ export interface HookContextInput {
    * builder exists to avoid.
    */
   opensInApp?: boolean
+  /**
+   * The app's map of itself, when this knock is one of the few that carries it.
+   *
+   * Composed by `app-context.ts`, which also owns *which* events get it — this
+   * module is handed the text or nothing, exactly as it is handed `known` and
+   * `opensInApp`, and never decides for itself. That is what keeps the budget
+   * argument below true: the map rides once per context, everything else here
+   * still rides every prompt.
+   *
+   * Inserted directly under the first line rather than appended, so that "you
+   * are inside this app" and "here is where to read more about it" are one
+   * thought, and so {@link DISCRETION} stays last.
+   */
+  map?: string | null
 }
 
 /**
@@ -981,6 +995,14 @@ export interface HookContextInput {
  *     terminal, because that is what makes "open it" the right answer instead of
  *     printing a link for him to click.
  *
+ * ## The one thing here that is not paid for every turn
+ *
+ * {@link HookContextInput.map} — the app's own map of itself, from
+ * `app-context.ts`. It is longer than anything above, and it is affordable for
+ * exactly one reason: it arrives only on the knocks that build a context rather
+ * than on every prompt. This function does not decide that and must not; it is
+ * handed the text or it is handed nothing.
+ *
  * ## Null is still the common case and still free
  *
  * A session this app did not start gets null, which is the byte-identical
@@ -1007,6 +1029,11 @@ export function hookContext(
   const lines = [
     `You are running inside ${BRAND.name}, a terminal app with browser windows of its own.`,
   ]
+
+  // Second, and only on the knocks `app-context.ts` chose. See {@link
+  // HookContextInput.map}: this is where "and here is the rest of it" belongs,
+  // beside the sentence that says where "here" is.
+  if (input.map) lines.push(input.map)
 
   if (windows.length > 0) {
     lines.push('Browser windows attached to this session:')

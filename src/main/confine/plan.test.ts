@@ -156,6 +156,26 @@ describe('sessionPlan', () => {
     const plan = sessionPlan({ ...base, files: ['/usr/bin/git'] })
     expect(plan.readableFiles).toEqual([])
   })
+
+  it('lets the app-context documents through as files, without opening userData', () => {
+    /*
+     * The boot map names a directory inside `<userData>`, and a confined session
+     * is the one Asad filmed asking what app it was in. Without a rule it could
+     * be handed a path it cannot open — a map to a locked door.
+     *
+     * As *files*, deliberately, and the second assertion is the whole reason:
+     * `<userData>` also holds every session's transcript, the pairing
+     * credentials and `state.json`, and granting the context folder would be one
+     * step towards granting its parent. `host-core.ts` passes exactly the list
+     * `writeAppContext` returned.
+     */
+    const docs = ['/app-storage/context/INDEX.md', '/app-storage/context/browser-windows.md']
+    const plan = sessionPlan({ ...base, files: [...docs] })
+
+    expect(plan.readableFiles).toEqual(docs)
+    expect(plan.readable).not.toContain('/app-storage/context')
+    expect(plan.readable).not.toContain('/app-storage')
+  })
 })
 
 describe('read-only project grants', () => {

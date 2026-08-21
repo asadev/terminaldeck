@@ -262,4 +262,26 @@ describe('what this page says about itself', () => {
     expect(endpointLine({ address: null, running: false })).toContain('nowhere to report to')
     expect(endpointLine(null)).toContain('nowhere to report to')
   })
+
+  it('says why, when the main process knows why', () => {
+    // The failure this was written for: a data directory long enough to overrun
+    // a unix socket path made the endpoint throw at launch, one line went to a
+    // console nobody has open, and every hook on the machine silently stopped
+    // reporting. This page could say "not running" and nothing else, because
+    // nothing kept the sentence. `hook-server.ts` keeps it now.
+    expect(
+      endpointLine({ address: null, running: false, error: 'EACCES: permission denied' }),
+    ).toContain('EACCES: permission denied')
+  })
+
+  it('prints no reason at all rather than the word "undefined"', () => {
+    // A host that has not been restarted since the field was added answers
+    // without it, and `error` is optional for exactly that reason.
+    expect(endpointLine({ address: null, running: false })).not.toMatch(/undefined|null/)
+    // A reason must never appear beside a live endpoint either; the main process
+    // clears it on a start that worked, and this reads both fields together.
+    expect(endpointLine({ address: '/s.sock', running: true, error: 'stale' })).toBe(
+      'Listening on /s.sock.',
+    )
+  })
 })

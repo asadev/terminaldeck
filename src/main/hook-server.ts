@@ -112,7 +112,8 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, unlinkSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { connect } from 'node:net'
-import { posix, win32 } from 'node:path'
+import { homedir } from 'node:os'
+import { dirname, posix, win32 } from 'node:path'
 import { BRAND } from '../shared/brand'
 import { currentPlatform, isWindows, type Platform } from './platform/host'
 import { writeSecretFile } from './remote/secret-file'
@@ -229,6 +230,15 @@ export interface HookServerOptions {
    * still binds on the machine it is running on.
    */
   platform?: Platform
+  /**
+   * The account home {@link hookAddress} falls back into when `dir` makes the
+   * socket path too long. Defaults to this account's.
+   *
+   * Injected for the same reason `platform` is, and for one more that is
+   * specific to it: a test that drives the too-long path must not put a socket
+   * in the developer's real home directory.
+   */
+  home?: string
 }
 
 /* -------------------------------------------------------------- constants -- */
@@ -258,14 +268,22 @@ export const WINDOWS_CLIENT_FILE = 'hook-post.ps1'
  *
  * `sun_path` is 104 bytes on macOS and 108 on Linux, and going over it does not
  * produce a helpful error — `bind` fails with ENAMETOOLONG or, worse, silently
- * truncates on some platforms. The real path is about 70 bytes
- * (`~/Library/Application Support/terminaldeck/hook/hook.sock`), so this is a
- * guard against a future data directory nobody measured, and it fails with a
- * sentence rather than with an errno.
+ * truncates on some platforms. The usual path is about 70 bytes
+ * (`~/Library/Application Support/terminaldeck/hook/hook.sock`), which is why
+ * this was written as a guard against a data directory nobody had measured.
  *
- * Windows is not subject to it: a pipe name is not a path, it is bounded by
- * this module rather than by the caller's directory, and it is 256 characters
- * long at the outside.
+ * One was measured, on 2026-08-21: **122 bytes**. It is not exotic — a longer
+ * account name, a `--user-data-dir` under a project, a build with a suffix on
+ * its folder — and what it produced was the worst possible shape of failure.
+ * The bind threw, `index.ts` caught it, logged one line and carried on, and the
+ * whole context channel was dead for the life of that install with nothing on
+ * screen saying so. {@link hookAddress} no longer lets the length of somebody's
+ * data directory decide whether the feature exists; see it for what happens
+ * instead.
+ *
+ * Windows is not subject to any of it: a pipe name is not a path, it is bounded
+ * by this module rather than by the caller's directory, and it is 256
+ * characters long at the outside.
  */
 const MAX_SOCKET_PATH_BYTES = 100
 
@@ -335,11 +353,87 @@ export function endpointDir(dir: string, platform: Platform = currentPlatform())
  * `c:\users\a` are the same directory and must not produce two names — which
  * they would, on a machine started once from a shortcut and once from a
  * command line spelling `--user-data-dir` differently.
+ *
+ * ## POSIX gets the same treatment when, and only when, the path is too long
+ *
+ * The natural path is kept whenever it fits, because it is the one that has
+ * been in every installed hook command since March and the one every existing
+ * test names. When it does not fit — see {@link MAX_SOCKET_PATH_BYTES} for the
+ * 122-byte directory that made this real — the address becomes the same shape
+ * Windows has always had: a **digest of the data directory**, in a short
+ * directory this module chooses, so that the length of somebody's data
+ * directory can no longer decide whether the feature exists at all.
+ *
+ * Nothing outside this module has to follow, and that is what makes the switch
+ * cheap: the socket path reaches a hook only through the config file
+ * ({@link hookConfigPath}), which `curl -K` and the Windows client both read at
+ * call time. No installed command carries it.
+ *
+ * The fallbacks, in order, and each is picked only if it fits:
+ *
+ *  1. `<home>/.terminaldeck/<digest>.sock` — private, because the directory is
+ *     created `0700` and is already this app's own; `hooks.ts` keeps its config
+ *     backups in the same place. Stable, because it is a digest of the data
+ *     directory and of nothing minted per run.
+ *  2. `/tmp/<brand>-<digest>.sock` — 39 bytes on every POSIX machine there is,
+ *     so this is the one that cannot itself be too long. Reached only when the
+ *     account's home directory is over about sixty bytes, which is why it is
+ *     second and not first.
+ *
+ * `headless/control.ts` refuses to put *its* socket in `/tmp` and says why —
+ * *"a control socket that a stranger can pre-create is a control socket a
+ * stranger can answer."* That reasoning does not transfer, and the difference is
+ * worth stating rather than looking like an inconsistency. A hook never learns
+ * this path by construction: it reads it out of {@link hookConfigPath}, which is
+ * written only after `listen` has succeeded, from the path that actually bound.
+ * So a stranger squatting the name does not intercept anything — a live socket
+ * there makes `clearStaleSocket` throw `occupied`, and a plain file there makes
+ * the `unlink` fail against `/tmp`'s sticky bit and throw too. Both refuse
+ * loudly, which is the outcome the whole of this change is about. What is left
+ * is that another account can see the file exists; it cannot open it, because
+ * the socket is `chmod 0600` a line after it binds.
+ *
+ * `home` is a parameter for the reason `platform` above it is one: CI for this
+ * project runs under one account, so a branch that depends on how long *that*
+ * account's home directory happens to be is a branch whose behaviour nothing in
+ * this suite can pin.
  */
-export function hookAddress(dir: string, platform: Platform = currentPlatform()): string {
-  if (!isWindows(platform)) return posix.join(endpointDir(dir, platform), SOCKET_FILE)
-  const digest = createHash('sha256').update(dir.toLowerCase()).digest('hex').slice(0, 16)
-  return `\\\\.\\pipe\\${BRAND.id}-hook-${digest}`
+export function hookAddress(
+  dir: string,
+  platform: Platform = currentPlatform(),
+  home: string = homedir(),
+): string {
+  // Case-folded on Windows only. The paragraph above says why it must be there;
+  // doing it on POSIX would be the opposite mistake, because `/Users/A/x` and
+  // `/Users/a/x` really are two directories on a case-sensitive filesystem and
+  // must not be given one address.
+  if (isWindows(platform)) return `\\\\.\\pipe\\${BRAND.id}-hook-${digestOf(dir.toLowerCase())}`
+
+  const natural = posix.join(endpointDir(dir, platform), SOCKET_FILE)
+  if (fits(natural)) return natural
+
+  const digest = digestOf(dir)
+  const ours = posix.join(home, `.${BRAND.id}`, `${digest}.sock`)
+  if (fits(ours)) return ours
+
+  return posix.join(SHORTEST_SOCKET_ROOT, `${BRAND.id}-${digest}.sock`)
+}
+
+/** Enough of a data directory to name one install, and never anything per run. */
+function digestOf(dir: string): string {
+  return createHash('sha256').update(dir).digest('hex').slice(0, 16)
+}
+
+/**
+ * The last resort, and the reason it is spelled out rather than read from the
+ * environment: `TMPDIR` is a path somebody else chose, and this is the one
+ * candidate whose whole job is to be short enough that nothing can refuse it.
+ */
+const SHORTEST_SOCKET_ROOT = '/tmp'
+
+/** Inside `sun_path`, measured in bytes rather than in characters. */
+function fits(socketPath: string): boolean {
+  return Buffer.byteLength(socketPath) <= MAX_SOCKET_PATH_BYTES
 }
 
 /** The file the token is written into, in this platform's spelling. */
@@ -387,9 +481,31 @@ let endpoint: HookEndpoint | null = null
 let starting: Promise<HookEndpoint> | null = null
 const listeners = new Set<HookEventListener>()
 
+/**
+ * Why the last start did not work, or null.
+ *
+ * It exists because of what happened when it did not. A data directory long
+ * enough to overrun `sun_path` made `openServer` throw; `index.ts` caught it,
+ * wrote `[hook-server] failed to start, hook callbacks disabled:` to a console
+ * nobody has open, and the app came up looking entirely normal with every
+ * lifecycle event, every status dot and the whole context channel dead. The
+ * Setup panel could say *"the local endpoint is not running"* and could not say
+ * why, because the reason was never kept anywhere.
+ *
+ * Kept here, next to the thing that failed, and served on `hooks:server` beside
+ * `running` — so the one screen that already tells a person this feature is off
+ * can also tell them what to do about it.
+ */
+let failure: string | null = null
+
 /** The live endpoint, or null when the server is not running. */
 export function currentHookEndpoint(): HookEndpoint | null {
   return endpoint
+}
+
+/** The sentence behind a `running: false`, or null when there is none. */
+export function hookServerFailure(): string | null {
+  return failure
 }
 
 /** Subscribe to hook events. Returns an unsubscribe function. */
@@ -900,6 +1016,9 @@ export async function registerHookServer(
   ipcMain.handle('hooks:server', () => ({
     address: endpoint?.socketPath ?? null,
     running: endpoint !== null,
+    // Never a stale reason beside a live endpoint: a start that succeeded after
+    // one that failed clears it, and the panel reads both fields together.
+    error: endpoint === null ? failure : null,
   }))
 
   if (endpoint) return endpoint
@@ -919,7 +1038,15 @@ export async function startHookServer(options: HookServerOptions): Promise<HookE
 
   starting = openServer(options)
   try {
-    return await starting
+    const live = await starting
+    failure = null
+    return live
+  } catch (error) {
+    // Recorded here rather than at the call site, because there are two call
+    // sites — the window and the headless host — and a reason only one of them
+    // remembered would be a reason the Setup panel shows on some machines.
+    failure = error instanceof Error ? error.message : String(error)
+    throw error
   } finally {
     starting = null
   }
@@ -1096,12 +1223,7 @@ exit 0
 async function openServer(options: HookServerOptions): Promise<HookEndpoint> {
   const platform = options.platform ?? currentPlatform()
   const home = endpointDir(options.dir, platform)
-  const socketPath = hookAddress(options.dir, platform)
-  if (!isWindows(platform) && Buffer.byteLength(socketPath) > MAX_SOCKET_PATH_BYTES) {
-    throw new Error(
-      `hook server: ${socketPath} is too long for a unix socket (${Buffer.byteLength(socketPath)} bytes, the limit is ${MAX_SOCKET_PATH_BYTES})`,
-    )
-  }
+  const socketPath = hookAddress(options.dir, platform, options.home)
 
   const token = randomBytes(24).toString('hex')
   const live: HookEndpoint = {
@@ -1112,6 +1234,17 @@ async function openServer(options: HookServerOptions): Promise<HookEndpoint> {
   }
 
   mkdirSync(home, { recursive: true })
+  /*
+   * And the socket's own directory, which is not always `home` any more.
+   *
+   * {@link hookAddress} moves the socket out of the endpoint directory when the
+   * data directory makes the path too long for `sun_path`, and the directory it
+   * moves into may not exist. `0700` because one of the two candidates is
+   * `~/.terminaldeck`, and a directory this app creates in somebody's home is
+   * one it should create closed; `mkdir` leaves an existing directory's mode
+   * alone, and `/tmp` is never created here because it is always already there.
+   */
+  if (!isWindows(platform)) mkdirSync(dirname(socketPath), { recursive: true, mode: 0o700 })
   await clearStaleSocket(socketPath, platform)
 
   const next = createServer((req, res) => {
@@ -1199,6 +1332,9 @@ export async function stopHookServer(): Promise<void> {
   const dead = endpoint
   server = null
   endpoint = null
+  // A deliberate shutdown is not a failure, and a reason left standing after
+  // one would be shown to the next person who opened the panel.
+  failure = null
   listeners.clear()
 
   /*

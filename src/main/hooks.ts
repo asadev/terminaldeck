@@ -1264,6 +1264,61 @@ export function syncInstalledHooks(context: HookContext): HookProviderStatus[] {
   return out
 }
 
+/**
+ * Install our hooks into every CLI on this machine that is already set up.
+ *
+ * The desktop does not need this: the Setup pane lists each provider and a
+ * person presses Install, which is the consent step for writing into a file
+ * they may well have edited by hand. A headless host has no Setup pane, no
+ * person in front of it and no other way to get there — so until this existed,
+ * a session on a server fired hooks that were never installed, and the endpoint
+ * that host starts sat listening to silence for the life of the install.
+ *
+ * That is the whole of Asad's *"even if it is starting from the server"*: the
+ * boot context cannot arrive down a channel nothing is calling.
+ *
+ * Three narrowings keep this from being a startup pass that helps itself to a
+ * machine, and each one is the difference between installing and taking:
+ *
+ *  - **Only where the CLI's own settings file already exists.** Its absence is
+ *    the ordinary state of a machine that does not have that agent, and writing
+ *    `~/.gemini/settings.json` onto a server with no Gemini installed would be
+ *    this app leaving a config behind for a tool nobody has.
+ *  - **Never hooks another copy of this app wrote.** The same rule
+ *    {@link syncInstalledHooks} follows and for the same reason — a desktop and
+ *    a daemon on one machine must not take the events off each other — through
+ *    the same {@link staleHooksBelongToAnotherCopy}.
+ *  - **Never a file we could not parse.** `error` means the JSON did not read as
+ *    strict JSON, and a config we do not understand is a config we must not
+ *    rewrite. `installHooks` refuses it anyway; skipping it here means the log
+ *    says "left alone" rather than "failed".
+ *
+ * Best-effort like its neighbour: a provider that throws is reported in the
+ * returned status and does not stop the host coming up.
+ */
+export function installHooksWhereConfigured(context: HookContext): HookProviderStatus[] {
+  const out: HookProviderStatus[] = []
+  for (const id of HOOK_PROVIDER_IDS) {
+    const status = readStatus(context, id)
+    const skip =
+      !status.fileExists ||
+      status.state === 'complete' ||
+      status.state === 'error' ||
+      (status.state === 'stale' && staleHooksBelongToAnotherCopy(context, id))
+    if (skip) {
+      out.push(status)
+      continue
+    }
+    try {
+      out.push(installHooks(context, id).status)
+    } catch (error) {
+      console.error(`[hooks] could not install ${id}:`, error)
+      out.push(status)
+    }
+  }
+  return out
+}
+
 /* -------------------------------------------------------------------- ipc -- */
 
 /** Default context: the real home directory and a backup folder beside it. */

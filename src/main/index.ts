@@ -187,6 +187,8 @@ import {
   takeAnnouncement,
 } from './browser-binding'
 import { currentOpenShim, removeOpenShim, writeOpenShim } from './open-shim'
+import { bootMapFor, writeAppContext } from './app-context'
+import { describeThisMachine } from './remote/machines/guest'
 import { browserDrive, registerBrowserDriveIpc } from './browser-drive-ipc'
 import { browserTools } from './deck-control/browser-tools'
 import { registerChromeImportIpc } from './chrome-import'
@@ -3217,6 +3219,22 @@ app.whenReady().then(() => {
     hookConfigPath(app.getPath('userData')),
     currentPlatform(),
   )
+  /*
+   * The app's map of itself, written before anything can start a session, for
+   * the same reason and in the same breath as the shim above it.
+   *
+   * After the shim rather than before, because `opensInApp` is a claim about
+   * what that call just did: a document telling an agent that `open <url>`
+   * lands in this app, written on a platform where nothing was shimmed, would
+   * be a confident falsehood in a file it goes and reads on purpose.
+   */
+  writeAppContext({
+    dir: app.getPath('userData'),
+    version: app.getVersion(),
+    machineName: describeThisMachine().name,
+    opensInApp: currentOpenShim() !== null,
+    platform: currentPlatform(),
+  })
   void registerHookServer(ipcMain, {
     dir: app.getPath('userData'),
     /*
@@ -3263,6 +3281,13 @@ app.whenReady().then(() => {
      * `takeAnnouncement` drains, so it is said once and then the standing answer
      * carries it from there; a session with nothing new gets `null`, which is
      * the empty 204 this endpoint has always answered.
+     *
+     * And one more thing rides the first of those, on the knocks that *build* a
+     * context rather than continue one: the app's own map of itself, from
+     * `app-context.ts`. `bootMapFor` owns which events those are and answers
+     * null for every other one, so it stays an argument here rather than a
+     * third branch. A session this app did not start still gets null out of
+     * `hookContext` and so is still told nothing at all.
      */
     contextFor: ({ event, sessionId }) =>
       // Two spellings of the same moment: Claude's `PostToolUse` and Gemini's
@@ -3274,12 +3299,27 @@ app.whenReady().then(() => {
         : hookContext(sessionId, '', {
             known: sessionId !== null && bindingDeps.knowsSession(sessionId),
             opensInApp: currentOpenShim() !== null,
+            map: bootMapFor(event, sessionId),
           }),
   })
     .then(() => syncInstalledHooks(defaultContext()))
-    .catch((err) =>
-      console.error('[hook-server] failed to start, hook callbacks disabled:', err),
-    )
+    .catch((err) => {
+      /*
+       * A visible failure, not a console line.
+       *
+       * This used to be `console.error` alone, which on a packaged app is a
+       * stream nobody has open — and the one failure it actually caught (a data
+       * directory too long for `sun_path`) took the whole context channel and
+       * every status dot with it while the app looked entirely normal.
+       * `hook-server.ts` keeps the reason and serves it on `hooks:server`, so
+       * the Setup panel's "the local endpoint is not running" now carries the
+       * sentence; this puts the same sentence in the app's own log, which is a
+       * surface a person can open without a terminal.
+       */
+      logger.error('hooks', 'the hook endpoint did not start, so hook callbacks are off', {
+        error: err instanceof Error ? err.message : String(err),
+      })
+    })
   /*
    * `deck-control`: the copilot's view of this app, and the gate in front of it.
    *

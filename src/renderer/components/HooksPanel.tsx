@@ -39,6 +39,14 @@ export interface HookServerInfo {
   /** The socket path, or null when it is not listening. Never the token. */
   address: string | null
   running: boolean
+  /**
+   * Why it is not running, when the main process knows. Null when it is.
+   *
+   * Optional because a host that has not been restarted since this field was
+   * added answers without it, and a panel that read `undefined` as a reason
+   * would print the word "undefined" at somebody.
+   */
+  error?: string | null
 }
 
 /** The slice of the preload bridge this panel needs. */
@@ -193,12 +201,21 @@ export function foreignNote(status: HookProviderStatus): string | null {
  * The *not* running half keeps its consequence, because "hooks have nowhere to
  * report to" is why the page underneath will look inert.
  *
- * Pure and exported so both halves can be pinned; `server` arrives from an
+ * And, since 2026-08-21, the reason — when the main process has one. That half
+ * exists because of the failure it was written for: a data directory long enough
+ * to overrun a unix socket path made the endpoint throw at launch, the app
+ * logged one line to a console nobody has open, and every hook on the machine
+ * silently stopped reporting. This page said "not running" and could not say
+ * why, because nothing kept the sentence. `hook-server.ts` keeps it now.
+ *
+ * Pure and exported so all three halves can be pinned; `server` arrives from an
  * effect, which a static render never runs.
  */
 export function endpointLine(server: HookServerInfo | null): string {
-  return server?.running
-    ? `Listening on ${server.address}.`
+  if (server?.running) return `Listening on ${server.address}.`
+  const why = server?.error
+  return why
+    ? `The local endpoint is not running, so hooks have nowhere to report to: ${why}`
     : 'The local endpoint is not running, so hooks have nowhere to report to.'
 }
 

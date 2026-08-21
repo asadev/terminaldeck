@@ -41,10 +41,13 @@ import type { SessionMeta } from '../shared/types'
 import { createHostCore, type HostCore } from '../main/host-core'
 import { IdleController, type IdleReport } from '../main/idle'
 import { logger } from '../main/app-log'
+import { bootMapFor, writeAppContext } from '../main/app-context'
+import { hookContext, MID_TURN_EVENTS, takeAnnouncement } from '../main/browser-binding'
+import { installHooksWhereConfigured } from '../main/hooks'
 import { resetDevPortsCache } from '../main/dev-ports'
-import { startHookServer, stopHookServer } from '../main/hook-server'
+import { currentHookEndpoint, startHookServer, stopHookServer } from '../main/hook-server'
 import { currentPlatform, type Platform } from '../main/platform/host'
-import { downloadsDir, userDataDir } from '../main/platform/paths'
+import { downloadsDir, homeDir, userDataDir } from '../main/platform/paths'
 import {
   describeReachability,
   readHostFacts,
@@ -54,6 +57,7 @@ import {
 import type { Device } from '../main/remote/device-auth'
 import type { DeviceKindRecord } from '../main/remote/device-kind'
 import type { DeviceFolderGrant } from '../main/remote/folder-grants'
+import { describeThisMachine } from '../main/remote/machines/guest'
 import { registerMachinesIpc } from '../main/remote/machines/ipc'
 import {
   registerRemoteIpc,
@@ -563,6 +567,33 @@ export async function createHeadlessHost(
   })
 
   /*
+   * The app's map of itself, before the endpoint that hands it out.
+   *
+   * This is the half of Asad's *"even from the office PC … or even if it is
+   * starting from the server"* that was missing, and it was missing here rather
+   * than anywhere near the feature. A session on his Office PC, asked what app
+   * it was running inside, answered from `CLAUDE_CODE_ENTRYPOINT` and a `which
+   * claude` and never named this one — because the endpoint below was started
+   * with no `contextFor` at all, so every knock from every session on this host
+   * was answered `204 No Content`. The window has had the channel since
+   * 2026-08-19; this host had the socket and nothing to say down it.
+   *
+   * `opensInApp` is false and honestly so: `writeOpenShim` is a window call and
+   * nothing here writes one, so a session on this host has the machine's own
+   * `open` on its PATH. The documents say that rather than claiming otherwise.
+   */
+  const context = writeAppContext({
+    dir: stateDir,
+    version: hostVersion(),
+    machineName: describeThisMachine().name,
+    opensInApp: false,
+    platform,
+  })
+  logger.info('headless', 'the app context for sessions on this host is written', {
+    dir: context.dir,
+  })
+
+  /*
    * The hook endpoint, started the way the tests start it.
    *
    * `registerHookServer` wants an `ipcMain` so it can answer `hooks:server` for
@@ -570,13 +601,68 @@ export async function createHeadlessHost(
    * the seam that module already documents for exactly this. Failure is not
    * fatal — everything except hook callbacks works without it — which is the
    * same decision `index.ts` makes.
+   *
+   * `contextFor` is the same composition `index.ts` performs, and it is written
+   * out a second time rather than shared, for the reason this whole file exists:
+   * the two hosts answer the same question from different objects. `known` is
+   * `core.ptys.list()` here and the window's pty manager there; there is no
+   * renderer here to ask about a browser window. What must not differ is the
+   * *answer*, which is why every piece of it comes out of the same two modules.
    */
-  await startHookServer({ dir: stateDir }).catch((error: unknown) => {
-    logger.warn('headless', 'the hook endpoint did not start; hook callbacks are off', {
-      error: error instanceof Error ? error.message : String(error),
-    })
-    return null
+  await startHookServer({
+    dir: stateDir,
+    contextFor: ({ event, sessionId }) =>
+      MID_TURN_EVENTS.has(event)
+        ? sessionId === null
+          ? null
+          : takeAnnouncement(sessionId)
+        : hookContext(sessionId, '', {
+            // A session this host started, exited ones included — the same test
+            // `index.ts` applies, so a `claude` somebody ran in an ssh session
+            // on this box, whose hook fires anyway, is still told nothing.
+            known: sessionId !== null && core.ptys.list().some((meta) => meta.id === sessionId),
+            opensInApp: false,
+            map: bootMapFor(event, sessionId),
+          }),
   })
+    .then(() => {
+      /*
+       * And the entries that make anything call it.
+       *
+       * The endpoint above has always started here; nothing on this machine has
+       * ever been pointed at it. Installing hooks is a button in the desktop's
+       * Setup pane and there is no pane here, so a server ran the socket and the
+       * agents on it never knocked — no status, and, once there was one, no boot
+       * context either. `installHooksWhereConfigured` says what it will and will
+       * not touch; the log line is this host's substitute for the pane.
+       *
+       * The context is built here rather than taken from `hooks.ts`'s
+       * `defaultContext`, and the difference is the one field: that one reads
+       * `os.homedir()`, which is the account's real home and is right for a
+       * desktop. This shell's authority on where anything lives is the paths
+       * provider the daemon installed — `XDG_DATA_HOME` and a `--state-dir`
+       * both move it — and a startup pass that wrote to a home the rest of this
+       * process is not using would be writing into somebody else's account.
+       */
+      const home = homeDir()
+      for (const status of installHooksWhereConfigured({
+        home,
+        backupDir: join(home, BRAND.projectConfigDir, 'hook-backups'),
+        endpoint: currentHookEndpoint(),
+      })) {
+        logger.info('headless', 'session hooks', {
+          provider: status.id,
+          state: status.state,
+          message: status.message,
+        })
+      }
+    })
+    .catch((error: unknown) => {
+      logger.error('headless', 'the hook endpoint did not start; hook callbacks are off', {
+        error: error instanceof Error ? error.message : String(error),
+      })
+      return null
+    })
 
   /*
    * Read the installed WSL distributions at launch, not when something asks.
