@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Group } from '../settings/controls'
+import { SegmentedSwitch } from '../components/SegmentedSwitch'
+import { SHARE_MODES } from './share-mode'
 import { errorText } from '../settings/settings-bridge'
 import { profileLoginLabel, useAccounts } from '../accounts'
 import './DeviceSessions.css'
@@ -189,24 +191,18 @@ export function DeviceLoginsView({
             <li className="ds-device" key={device.id}>
               <div className="ds-head">
                 <span className="ds-name">{device.name}</span>
-                <div
-                  className="settings-scope ds-scope"
-                  role="group"
-                  aria-label={`Logins ${device.name} may use`}
-                >
-                  {(['all', 'selected'] as const).map((mode) => (
-                    <button
-                      key={mode}
-                      type="button"
-                      data-on={choice.mode === mode ? '' : undefined}
-                      aria-pressed={choice.mode === mode}
-                      disabled={busy !== null}
-                      onClick={() => onMode(device.id, mode)}
-                    >
-                      {mode === 'all' ? 'All' : 'Selected'}
-                    </button>
-                  ))}
-                </div>
+                {/* The Coding AI switch. See the note on the same control in
+                    `DeviceSessions` — this file held the second of three copies
+                    of it. */}
+                <SegmentedSwitch
+                  options={SHARE_MODES}
+                  value={choice.mode}
+                  onChange={(mode) => onMode(device.id, mode)}
+                  label={`Logins ${device.name} may use`}
+                  disabled={busy !== null}
+                  inline
+                  className="ds-scope"
+                />
               </div>
 
               {/* The ticks, only under Selected. Nothing under All, and nothing

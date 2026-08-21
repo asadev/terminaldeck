@@ -265,9 +265,18 @@
   color: var(--text-secondary);
 }
 
-/* The machine pills, above everything this page draws. `.page-pill` in
-   shell.css is the pill itself — one pill in this app, per `Pill.tsx`. */
-.mcp > .page-pills {
+/* The machine switch, above everything this page draws.
+
+   `.settings-scope` in `SettingsWindow.css` is the control itself — the same one
+   the Coding AI pane's scope switch is, per `components/SegmentedSwitch.tsx`. It
+   was `.page-pills` until 2026-08-22; the two are now split by the question they
+   answer, and this page asks *which machine*.
+
+   Only the gap under it is this page's business. `.settings-scope`'s own bottom
+   margin is sized for the top of a settings pane, and what sits under this one
+   is the scope caption — a `--sp-4` line, at the same `--sp-4` remove the rest
+   of this column keeps. */
+.mcp > .settings-scope {
   margin-bottom: var(--sp-4);
 }
 

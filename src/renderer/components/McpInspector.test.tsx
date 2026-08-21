@@ -192,7 +192,7 @@ describe('<McpInspector>', () => {
    */
   it('draws no machine pills when there is no other machine to show', () => {
     const html = renderToStaticMarkup(<McpInspector bridge={bridge} projectPath="/work/app" />)
-    expect(html).not.toContain('page-pills')
+    expect(html).not.toContain('settings-scope')
     // And the Add button does not start naming machines at somebody who has one.
     expect(html).toContain('>Add server<')
   })
@@ -208,20 +208,49 @@ describe('<McpInspector>', () => {
     const targets = [
       { machineId: 'm1', name: 'DESKTOP-DDGMNCV', sessionId: 's1', sessionTitle: 'AAAA', cwd: '/home/imza/AAAA' },
     ]
-    const html = renderToStaticMarkup(<MachinePills targets={targets} pick={null} onPick={() => {}} />)
-    expect(html).toContain('DESKTOP-DDGMNCV')
-    expect(html).toContain(thisMachine())
+    const html = renderToStaticMarkup(
+      <MachinePills targets={targets} here="Studio" pick={null} onPick={() => {}} />,
+    )
+    expect(html).toContain('>DESKTOP-DDGMNCV</button>')
+    // This computer by its name, not by a deictic. See `hereName`.
+    expect(html).toContain('>Studio</button>')
     // This machine is the one in force until somebody presses another.
-    expect(html.match(/data-on="true"/g)).toHaveLength(1)
+    expect(html).toMatch(/aria-pressed="true"[^>]*>Studio/)
+    expect(html.match(/aria-pressed="true"/g)).toHaveLength(1)
+  })
+
+  /**
+   * And it is the Coding AI control, not a second look for one idea.
+   *
+   *   > *"switching pill just like in coding ai page in settings… and all other
+   *   > applicable places too."*
+   *
+   * `.settings-scope` is that control's class — `ScopeSwitch` and this row are
+   * the same component now — so this is the assertion that catches the page
+   * drifting back to `.page-pill`, which is the *filter* control and answers a
+   * different question. The reason is written on `MachinePills`.
+   */
+  it('draws the machine switch as the settings scope switch, not as page pills', () => {
+    const targets = [
+      { machineId: 'm1', name: 'DESKTOP-DDGMNCV', sessionId: 's1', sessionTitle: 'AAAA', cwd: '/x' },
+    ]
+    const html = renderToStaticMarkup(
+      <MachinePills targets={targets} here="Studio" pick="m1" onPick={() => {}} />,
+    )
+    expect(html).toContain('settings-scope')
+    expect(html).not.toContain('page-pill')
   })
 
   it('marks the machine being reported on, so the page cannot lie about whose list it is', () => {
     const targets = [
       { machineId: 'm1', name: 'DESKTOP-DDGMNCV', sessionId: 's1', sessionTitle: 'AAAA', cwd: '/x' },
     ]
-    const html = renderToStaticMarkup(<MachinePills targets={targets} pick="m1" onPick={() => {}} />)
-    expect(html).toMatch(/data-on="true"[^>]*>DESKTOP-DDGMNCV|DESKTOP-DDGMNCV/)
-    expect(html.match(/data-on="true"/g)).toHaveLength(1)
+    const html = renderToStaticMarkup(
+      <MachinePills targets={targets} here="Studio" pick="m1" onPick={() => {}} />,
+    )
+    expect(html).toMatch(/aria-pressed="true"[^>]*>DESKTOP-DDGMNCV/)
+    expect(html).toMatch(/aria-pressed="false"[^>]*>Studio/)
+    expect(html.match(/aria-pressed="true"/g)).toHaveLength(1)
   })
 
   it('renders its frame when a bridge is supplied', () => {

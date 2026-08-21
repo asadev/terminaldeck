@@ -97,6 +97,30 @@ export function reportableMachines(machines: readonly MachineWithLink[]): Machin
   return targets
 }
 
+/**
+ * Whether the machine this page is pointed at is still one it can report on.
+ *
+ * The rule `AgentsSection` keeps for a device forgotten while its scope is the
+ * one on screen, stated for this page and stated as a function so it can be
+ * pinned without a bridge, a DOM or a timer.
+ *
+ * The page derives what it *draws* from `reportableMachines`, so a PC going
+ * offline already puts this machine's half back on screen. What it did not do
+ * until 2026-08-22 is forget the pick: the id stayed in state behind a switch
+ * that no longer offered it, and the page therefore jumped back to that PC the
+ * moment it reconnected, with nobody having pressed anything. A page that moves
+ * on its own is a page that cannot be trusted about where it is.
+ *
+ * Keyed on the **targets** rather than on the machine list, because that is what
+ * the switch is built from: a machine still paired but with no session left has
+ * no button here either, and a pick left on it strands the page just as badly.
+ * `null` — this computer — always survives; it is the one row that cannot go
+ * away.
+ */
+export function pickSurvives(pick: string | null, targets: readonly MachineTarget[]): boolean {
+  return pick === null || targets.some((entry) => entry.machineId === pick)
+}
+
 export type MachineServersStatus = 'loading' | 'ready' | 'unanswered'
 
 export interface MachineServers {

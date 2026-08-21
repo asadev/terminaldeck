@@ -8,9 +8,11 @@
    different look between them would suggest a difference that is not there.
 
    Everything that is already a settings control is one. The All / Selected pair
-   reuses `.settings-scope` from `SettingsWindow.css` unchanged, so it stays the
-   same segmented control as the one on the Agents pane rather than a second idea
-   of what that looks like.
+   is `SegmentedSwitch` — literally the component the Coding AI pane's own scope
+   switch is built from — so it stays the same segmented control rather than a
+   second idea of what that looks like. It was a hand-rolled copy of that
+   control's markup until 2026-08-22; the third copy of it, in `DeviceApproval`,
+   had drifted by then.
    ============================================================================ */
 
 .ds-list {
@@ -58,10 +60,14 @@
   white-space: nowrap;
 }
 
-/* `.settings-scope` carries a bottom margin for its use at the top of a pane,
-   which is wrong inside a row. Nothing else about it changes. */
+/* The switch beside a device's name refuses to shrink, so a long name is what
+   gets ellipsised rather than the two words a person has to press.
+
+   The bottom margin `.settings-scope` carries for its use at the top of a pane
+   is cancelled by `[data-inline]` in `SettingsWindow.css` now, not here.
+   Cancelling it per caller is what left `DeviceApproval` on `.da-scope`, a class
+   name with no rule behind it — see `components/SegmentedSwitch.tsx`. */
 .ds-scope {
-  margin: 0;
   flex: none;
 }
 

@@ -10,6 +10,7 @@ import {
   useKnownSignIns,
 } from '../../accounts'
 import { useMachines } from '../../machines/useMachines'
+import { SegmentedSwitch } from '../../components/SegmentedSwitch'
 import { HoverNote } from '../../components/HoverNote'
 import {
   closeMenu,
@@ -204,20 +205,24 @@ export function ScopeSwitch({
     ...SCOPES,
     ...devices.map((device) => ({ id: deviceScope(device.id), label: device.name })),
   ]
+  /*
+   * The markup is `SegmentedSwitch`'s rather than this function's, and moving it
+   * there changed nothing about what this draws — same class, same `data-on`,
+   * same `aria-pressed`, same order.
+   *
+   * It moved because three other files were hand-rolling the identical eleven
+   * lines against the same class, and one of them had already drifted: see the
+   * note on `.da-scope` in `components/SegmentedSwitch.tsx`. This is still the
+   * control the rest of the app is asked to copy — *"switching pill just like in
+   * coding ai page in settings"* — so copying it now means importing it.
+   */
   return (
-    <div className="settings-scope" role="group" aria-label="Where these agents run">
-      {entries.map((entry) => (
-        <button
-          key={entry.id}
-          type="button"
-          data-on={scope === entry.id ? '' : undefined}
-          aria-pressed={scope === entry.id}
-          onClick={() => onScope(entry.id)}
-        >
-          {entry.label}
-        </button>
-      ))}
-    </div>
+    <SegmentedSwitch
+      options={entries}
+      value={scope}
+      onChange={onScope}
+      label="Where these agents run"
+    />
   )
 }
 
