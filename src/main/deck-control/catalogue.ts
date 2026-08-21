@@ -159,14 +159,30 @@ export const MAX_SCREEN_CHARS = 8000
  * The count cap stays as well, because it answers a different question: past
  * twenty tools the problem is not the tokens, it is that a model choosing
  * between twenty things chooses worse. Whichever binds first is the one that
- * should.
+ * should. It was the count that bound, both times: 26 tools at 8,261
+ * tokens, then 33 at 10,670.
  *
- * ## Past this point, disclose progressively
+ * ## Past this point, disclose progressively — and this is now what happens
  *
- * The instruction for whoever hits this: do not raise the number. Add a
+ * The instruction that stood here was: *do not raise the number; add a
  * `tools.describe` meta-tool and move the rarely-used definitions behind it, so
  * the standing cost is a short index and the full schema is fetched by the one
- * turn that needs it.
+ * turn that needs it.* It was hit on 2026-08-21, when four lanes in one night
+ * took the assembled list to 33 tools and 10,670 estimated tokens — over both
+ * ceilings — and it was followed rather than argued with. Neither number moved.
+ *
+ * `describe-tool.ts` is that tool, and it holds the decision about which
+ * fifteen tools are held behind it and the argument for each. What that means
+ * for this file: a {@link ToolSpec} may carry an {@link ToolSpec.index}, and a
+ * tool that carries one costs the catalogue that single line rather than its
+ * description and its schema.
+ *
+ * **So the instruction for whoever hits the ceiling next is not to build this
+ * again — it is to use it.** Give the new tool an `index` and let it cost one
+ * line, unless a turn will genuinely reach for it before it has reached for
+ * anything else. Still do not raise either number, and do not trim an existing
+ * tool's prose to make room: that prose is mostly there because a model got
+ * something wrong without it.
  */
 export const MAX_CATALOGUE_TOOLS = 20
 export const MAX_CATALOGUE_TOKENS = 8_000
@@ -421,6 +437,24 @@ export interface ToolContext {
    * whose *effect* depends on who is there narrows itself.
    */
   attended: boolean
+  /**
+   * The tool names this caller may see and call, or `undefined` for all of them.
+   *
+   * Exactly the set `server.ts` gates `tools/list` and `tools/call` on — handed
+   * down rather than re-derived, because there is one tool that has to ask the
+   * same question the transport asks and a second copy of the answer is a
+   * second answer. `tools.describe` is that tool: it hands back a schema, so a
+   * describe that did not check this would be a way to learn that a tool exists
+   * by asking about it, which is the half of `SESSION_TOOLS` that `tools/call`
+   * being gated is already there to close.
+   *
+   * Nothing else reads it, and nothing else should. **Tier checking stays in
+   * `control.ts` and the allow-list stays in `server.ts`** — this is not a gate,
+   * it is the same gate's answer, borrowed by the one tool whose *output* is the
+   * catalogue itself. A tool that used it to decide whether to act would be a
+   * second boundary to keep in step with the first.
+   */
+  granted?: ReadonlySet<string>
   /** Did this run's copilot start that session? Drives the tier escalation. */
   startedByCopilot(sessionId: string): boolean
   /** Remember a session the copilot started, so later calls on it stay `act`. */
@@ -445,6 +479,24 @@ export interface ToolSpec {
   tier: Tier
   title: string
   description: string
+  /**
+   * One line, and this tool's schema is fetched rather than advertised.
+   *
+   * Presence is the whole declaration: a tool with an `index` is held behind
+   * `tools.describe` and costs the catalogue this sentence instead of its
+   * description and its schema; a tool without one is advertised in full on
+   * every turn. One field rather than a boolean and a string, because the two
+   * can then never disagree — there is no way to hide a tool and forget to say
+   * what it is for, which is the failure that makes progressive disclosure cost
+   * *more* than it saves. See `describe-tool.ts` for which tools carry one and
+   * the argument for each.
+   *
+   * It has to be enough to choose by on its own. A model that cannot tell from
+   * this line whether it wants the tool will describe everything, and the index
+   * plus fourteen schemas is dearer than the fourteen schemas were. So: what it
+   * is for and when to reach for it, not what its arguments are called.
+   */
+  index?: string
   inputSchema: JsonSchema
   /**
    * Raise the tier for these particular arguments.
@@ -1098,6 +1150,8 @@ export function buildCatalogue(): ToolSpec[] {
       description:
         'One session in detail, including whether it has a readable transcript and how large that transcript is. ' +
         'Use sessions.transcript to read it.',
+      index:
+        'One session in detail, including whether it has a readable transcript and how big it is. Follows sessions.list.',
       inputSchema: {
         type: 'object',
         properties: { sessionId: { type: 'string' } },
@@ -1663,6 +1717,8 @@ export function buildCatalogue(): ToolSpec[] {
       description:
         'Working-tree status for an open project: branch, ahead/behind, and the staged, unstaged, untracked ' +
         'and conflicted files. Answers "is there uncommitted work in there" without shelling out.',
+      index:
+        'Branch, ahead/behind, and the staged, unstaged, untracked and conflicted files in one open project.',
       inputSchema: {
         type: 'object',
         properties: { cwd: { type: 'string' } },
@@ -1752,6 +1808,8 @@ export function buildCatalogue(): ToolSpec[] {
         'copilot., security. or confine., plus browser.persistSession and advanced.debugMode. Those decide who ' +
         'can reach this machine and what gets recorded, and they are not an assistant\'s to change. Call ' +
         'settings.read for the current list.',
+      index:
+        'Change an app setting or preference. Read settings.read first — some keys are refused outright and are never offered.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1862,6 +1920,8 @@ export function buildCatalogue(): ToolSpec[] {
         `it to one line of ${MAX_NOTE_CHARS} characters or fewer. Everything else you do is already logged ` +
         'without you asking — every call, including the refused ones — so do not narrate your own tool calls ' +
         'here.',
+      index:
+        'Put one line in the action log the person reads: something you noticed or decided that is worth finding later.',
       inputSchema: {
         type: 'object',
         properties: {

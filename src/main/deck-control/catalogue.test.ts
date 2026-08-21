@@ -183,14 +183,29 @@ describe('what the catalogue costs on every turn', () => {
   it('fits inside its token budget with room to grow', () => {
     const cost = catalogueCost(tools)
 
-    // Measured, so a failure reads as a number rather than as a boolean. It was
-    // 12 tools, 9,034 characters and ~2,582 estimated tokens when this
-    // assertion was written; the two fleet capabilities took it to **14 tools,
-    // 11,786 characters, ~3,368 estimated tokens — 42% of the ceiling**, with
-    // `sessions.result` the largest single tool at ~423 and `settings.write`
-    // behind it at ~401. Six tools of head-room left, and the instruction on
-    // `MAX_CATALOGUE_TOKENS` for whoever runs out of it: disclose
-    // progressively, do not raise the number.
+    /*
+     * Measured, so a failure reads as a number rather than as a boolean. It was
+     * 12 tools, 9,034 characters and ~2,582 estimated tokens when this
+     * assertion was written; the two fleet capabilities took it to 14 tools and
+     * ~3,368; prose edited since has taken it to **14 tools, 13,275 characters,
+     * ~3,793 estimated tokens — 47% of the ceiling**, with `sessions.result`
+     * the largest single tool.
+     *
+     * ## This is the built-ins, and the built-ins are no longer the catalogue
+     *
+     * The instruction that used to be quoted here — *disclose progressively, do
+     * not raise the number* — was carried out on 2026-08-21, when four lanes
+     * took the **assembled** list to 33 tools and 10,670 tokens. Neither number
+     * was raised. Fifteen tools moved behind `tools.describe`, and four of them
+     * are in this very list: `sessions.get`, `git.status`, `settings.write` and
+     * `log.note` each carry an `index` now and are not advertised.
+     *
+     * So this figure is no longer what a turn pays. It is the size of one
+     * source, held down because a source that doubles is worth a failing test
+     * either way. **`catalogue-cost.test.ts` measures the bill** — every source
+     * the app assembles, reduced to what is actually advertised — and that is
+     * the file to read before adding a tool.
+     */
     expect(cost.tools).toBeLessThanOrEqual(MAX_CATALOGUE_TOOLS)
     expect(cost.tokens, `catalogue is ${cost.tokens} estimated tokens over ${cost.tools} tools`).toBeLessThanOrEqual(
       MAX_CATALOGUE_TOKENS,

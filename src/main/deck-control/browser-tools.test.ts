@@ -424,14 +424,18 @@ describe('what these six cost the copilot on every turn', () => {
    * What stood here measured `buildCatalogue()` plus these six, called the
    * result "the assembled catalogue", asserted it was inside both ceilings, and
    * concluded that the tool count was "now exactly `MAX_CATALOGUE_TOOLS`". The
-   * app assembles five sources: `tour.play`, `app.where` and the three
-   * `servers.*` verbs were outside the measurement, and with them the shipped
-   * list is 25 tools against a cap of 20 — over the ceiling before tonight, and
-   * green here the whole time.
+   * app assembles nine sources: `tour.play`, `app.where`, the worker verbs, the
+   * asset checks, `browser.extract` and the three `servers.*` verbs were all
+   * outside the measurement, and with them the shipped list reached 33 tools
+   * against a cap of 20 — over the ceiling, and green here the whole time.
    *
    * The whole list is measured in `catalogue-cost.test.ts`, which is the file
-   * to change when a tool is added. What is left here is the one figure this
-   * file is the right place for: what these six add on their own.
+   * to change when a tool is added, and which since 2026-08-21 measures what is
+   * *advertised* rather than what exists — fifteen tools are held behind
+   * `tools.describe`. These six are not among them: they are the first reach on
+   * every browser turn, which is the rule `describe-tool.ts` states. What is
+   * left here is the one figure this file is the right place for: what these
+   * six add on their own.
    */
   it('records what the six actually add, so a rewrite that doubles it is visible', () => {
     // Measured, not asserted at a round number: the point of writing it down is

@@ -218,6 +218,8 @@ export function browserNetworkTool(drive: BrowserDrive): ToolSpec {
       'block or cheap — answers a request cheaply rather than blocking it, so lazy-loading still fires ' +
       'and the real URLs still appear. `capture` (default true) writes background XHR/fetch responses to ' +
       'disk; the data is rarely in the HTML. `limits` caps what is kept.',
+    index:
+      'Arm an attached page to harvest: block or cheapen request types so lazy-loading still fires, and write background XHR/fetch responses to disk.',
     inputSchema: NETWORK_SCHEMA,
     precheck: (args, context) => {
       mayDrive(context, 'browser.network')

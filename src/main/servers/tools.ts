@@ -294,6 +294,8 @@ export function serverTools({ room, grants }: ServerToolsDeps): ToolSpec[] {
     description:
       'The last lines one site, app or database on a server has printed, newest last. Fetched once — there is ' +
       'no follow mode, so ask for more lines rather than calling this repeatedly.',
+    index:
+      'The last lines one site, app or database on a server printed. Call servers.look first.',
     inputSchema: LOGS_SCHEMA,
     precheck: (args) => {
       known(str(args, 'serverId'))
@@ -319,6 +321,8 @@ export function serverTools({ room, grants }: ServerToolsDeps): ToolSpec[] {
       'one either changes nothing or can be put back. Unless the person has given you control of that ' +
       'particular server, every call asks them first, in the app, with the exact consequence written out. Call ' +
       'servers.look first.',
+    index:
+      'Do one named thing to one site, app or database on a server: start, restart, stop, update, go-back or backup. Call servers.look first.',
     inputSchema: CONTROL_SCHEMA,
     /**
      * The tier cannot be static, because the answer depends on *which* server.

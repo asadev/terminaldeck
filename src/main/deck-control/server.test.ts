@@ -285,17 +285,22 @@ describe('who may reach the endpoint', () => {
 /* ------------------------------------------------------------------ tools -- */
 
 describe('the tool surface as a client sees it', () => {
-  it('lists every tool with a schema and a read-only hint', async () => {
+  it('lists every advertised tool with a schema and a read-only hint', async () => {
     const client = await connect()
     const { tools } = await client.listTools()
 
+    /*
+     * Four of the fourteen built-ins are no longer here, and that is the
+     * feature. `sessions.get`, `git.status`, `settings.write` and `log.note`
+     * carry an `index`, so what crosses to the model is one line each inside
+     * `tools_describe`'s description rather than four schemas — see
+     * `describe-tool.ts` for the argument about each of them. They are still
+     * callable; the test below calls one.
+     */
     expect(tools.map((tool) => tool.name).sort()).toEqual([
       'alerts_list',
       'git_diff',
-      'git_status',
-      'log_note',
       'projects_list',
-      'sessions_get',
       'sessions_list',
       'sessions_result',
       'sessions_send',
@@ -303,13 +308,41 @@ describe('the tool surface as a client sees it', () => {
       'sessions_stop',
       'sessions_transcript',
       'settings_read',
-      'settings_write',
+      'tools_describe',
     ])
 
-    const write = tools.find((tool) => tool.name === 'settings_write')
-    expect(write?.annotations?.readOnlyHint).toBe(false)
-    expect(write?.annotations?.destructiveHint).toBe(true)
+    const describe = tools.find((tool) => tool.name === 'tools_describe')
+    // The index, in the one place a model will actually read it.
+    expect(describe?.description).toContain('settings_write —')
+    expect(describe?.description).toContain('log_note —')
+    expect(describe?.annotations?.readOnlyHint).toBe(true)
     expect(tools.find((tool) => tool.name === 'sessions_list')?.annotations?.readOnlyHint).toBe(true)
+    expect(tools.find((tool) => tool.name === 'sessions_start')?.annotations?.readOnlyHint).toBe(
+      false,
+    )
+
+    await client.close()
+  })
+
+  it('hands over the schema of a tool it did not advertise, and that tool still runs', async () => {
+    const client = await connect()
+    const described = await client.callTool({
+      name: 'tools_describe',
+      arguments: { tools: ['settings_write'] },
+    })
+    const answer = described.structuredContent as {
+      tools: { name: string; inputSchema: unknown; annotations: { destructiveHint: boolean } }[]
+    }
+    expect(answer.tools[0]?.name).toBe('settings_write')
+    // The same shape `tools/list` would have advertised, annotations and all,
+    // so a model that fetches late is not told less than one that was told early.
+    expect(answer.tools[0]?.inputSchema).toMatchObject({ type: 'object' })
+    expect(answer.tools[0]?.annotations.destructiveHint).toBe(true)
+
+    // Disclosure is not a gate: the tool a listing did not mention is callable
+    // by exactly the caller who could have called it before.
+    const called = await client.callTool({ name: 'settings_read', arguments: {} })
+    expect(called.isError).toBeFalsy()
 
     await client.close()
   })

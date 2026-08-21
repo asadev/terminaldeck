@@ -71,6 +71,7 @@ import { BRAND } from '../../shared/brand'
 import { claimOwnPort, releaseOwnPort } from '../own-ports'
 import { CallerTable, type TokenGrant } from './callers'
 import { advertiseTool } from './catalogue'
+import { advertisedCatalogue, visibleTo } from './describe-tool'
 import type { DeckControl } from './control'
 import { LOCAL_CALLER } from './surface'
 
@@ -319,11 +320,22 @@ export function createMcpServer(control: DeckControl, grant: TokenGrant = LOCAL_
    * Both spellings are checked because the wire name and the dotted id are two
    * spellings of one tool and a caller chooses which to send.
    */
-  const allowed = (spec: { id: string; wire: string }): boolean =>
-    grant.tools === undefined || grant.tools.has(spec.id) || grant.tools.has(spec.wire)
+  const allowed = (spec: { id: string; wire: string }): boolean => visibleTo(grant.tools, spec)
 
+  /*
+   * Filtered by the grant, then reduced to what is actually advertised.
+   *
+   * Two steps in that order and not the other way round: `advertisedCatalogue`
+   * builds `tools.describe`'s index out of the list it is handed, so handing it
+   * the whole catalogue would print a line about a tool this caller may not
+   * call — which is the same leak as listing one, spelled differently. Filter
+   * first and the index is this caller's index by construction.
+   *
+   * `catalogue-cost.test.ts` measures the output of this same pair, because
+   * this is the payload the budget is about.
+   */
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: control.tools().filter(allowed).map(advertiseTool),
+    tools: advertisedCatalogue(control.tools().filter(allowed)).map(advertiseTool),
   }))
 
   server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
@@ -379,6 +391,15 @@ export function createMcpServer(control: DeckControl, grant: TokenGrant = LOCAL_
       signal: anySignal(extra.signal, grant.signal),
       attended: grant.attended,
       caller: grant.caller(),
+      /*
+       * The same set the two gates above use, handed down for `tools.describe`.
+       *
+       * Not a third gate — the check a line above has already refused any name
+       * outside it. This is so that the one tool whose output *is* the catalogue
+       * answers about a tool outside the grant exactly as it answers about a
+       * tool that does not exist.
+       */
+      ...(grant.tools === undefined ? {} : { granted: grant.tools }),
     })
     return toolResult(result.value, result.ok ? null : (result.error ?? 'the call failed'))
   })

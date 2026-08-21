@@ -238,6 +238,8 @@ export function storeTools(deps: StoreToolDeps): ToolSpec[] {
         'and return what it collects. Call with no tool to list what is installed. Every answer ' +
         'says how many the page has and how many came back, so a partial read is never mistaken ' +
         'for a complete one.',
+      index:
+        'Read an attached page with a tool installed from the browser tools store. Call it naming no tool to list what is installed.',
       inputSchema: SCHEMA,
       summary(args: Record<string, unknown>): string {
         const tool = optStr(args, 'tool')

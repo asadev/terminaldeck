@@ -268,6 +268,8 @@ export function workerTools(deps: WorkerToolDeps): ToolSpec[] {
       'windows is showing a page in each one right now, which sites each has been signed into this run, ' +
       'and how many may run at once. A worker with no window of yours cannot be driven — the person opens ' +
       'a page in it and attaches the window. Nothing here reads a cookie or a value.',
+    index:
+      'The browser\'s worker profiles — separate cookie jars — which are free, and which sites each has signed into this run.',
     inputSchema: LIST_SCHEMA,
     summary: () => 'List the browser’s worker profiles',
     run: async (_args, context): Promise<ToolOutput> => {
@@ -326,6 +328,8 @@ export function workerTools(deps: WorkerToolDeps): ToolSpec[] {
       'requests is real rather than something you have to remember. release hands it back. renew keeps a ' +
       'long piece of work from lapsing. A hold lapses on its own if you stop renewing it, so a worker is ' +
       'never stuck because an agent went away.',
+    index:
+      'Take, renew or release one worker profile, so two agents never drive one cookie jar and the wait between requests is actually served.',
     inputSchema: WORKER_SCHEMA,
     precheck: (args, context) => {
       mayUseWorkers(context, 'browser.worker')
