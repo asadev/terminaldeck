@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { DriveState } from './browser-cdp'
 
@@ -62,6 +62,13 @@ import type { DriveState } from './browser-cdp'
  * The evidence is still written down when the picture cannot be taken — see
  * {@link BlockShot.note} — so the block is recorded, with the reason there is no
  * image beside it, rather than the whole event disappearing.
+ *
+ * ## The switch
+ *
+ * {@link BlockWatchDeps.enabled} is the Scraping panel's *"Screenshot the page
+ * when a request is blocked"*, and it is the only way to stop this. Absent means
+ * on, which is what every install has had; `browser-block-capture.ts` holds the
+ * answer per profile and says why the default cannot be the other one.
  */
 
 /* --------------------------------------------------------------- evidence -- */
@@ -298,7 +305,7 @@ export async function captureBlock(input: {
   return shot
 }
 
-/** Every block written down in a folder, oldest first. */
+/** Every block written down in one folder, oldest first. */
 export function readBlocks(dir: string): BlockShot[] {
   const path = blockLogPath(dir)
   if (!existsSync(path)) return []
@@ -324,6 +331,42 @@ export function readBlocks(dir: string): BlockShot[] {
   return shots
 }
 
+/**
+ * Every block written down anywhere under a root, oldest first.
+ *
+ * The root itself **and** one level of folders beneath it, because the evidence
+ * is filed per profile (`blockShotDirFor`) and `assets.blocks` is asked one
+ * question about one browser: *what refused us?* A reader that only looked in
+ * the folder it was handed would answer that question with an empty list on
+ * every install, which is the failure this whole path exists to prevent — and it
+ * would do it silently, because an empty list is what "nothing was blocked"
+ * looks like too.
+ *
+ * The root is read as well as the children, and not for symmetry: installs that
+ * photographed blocks before the folder was split by profile wrote their rows
+ * there, and dropping them would delete evidence by reorganising a directory.
+ *
+ * One level, not a walk. Nothing this app writes puts a `blocks.jsonl` deeper
+ * than that, and a recursive scan of a folder full of PNGs is a cost paid on
+ * every call to find files that are never there.
+ */
+export function readBlocksUnder(root: string): BlockShot[] {
+  const shots = readBlocks(root)
+  let entries: { name: string; isDirectory(): boolean }[] = []
+  try {
+    entries = readdirSync(root, { withFileTypes: true })
+  } catch {
+    // No root at all is the ordinary state of an install that has never been
+    // refused by anything.
+    return shots
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    shots.push(...readBlocks(join(root, entry.name)))
+  }
+  return shots.sort((left, right) => left.at - right.at)
+}
+
 /* ----------------------------------------------------------- the watcher -- */
 
 /**
@@ -347,6 +390,16 @@ export interface BlockWatchDeps {
   state(): DriveState
   /** Where the pictures and the sidecars go. */
   dir(): string
+  /**
+   * Is the camera on for this page?
+   *
+   * Asked on every settled navigation rather than read once at attach time,
+   * because the switch is per profile and a page outlives the moment somebody
+   * clicked it. Absent means on: a caller that has no opinion gets the behaviour
+   * this had before there was a switch. See `browser-block-capture.ts` for why
+   * the default cannot be off.
+   */
+  enabled?(): boolean
   /** A bounded sample of the document's text, or `null` when it cannot be read. */
   text(): Promise<string | null>
   /** A masked PNG of the page, or `null`. */
@@ -449,6 +502,16 @@ export function attachBlockWatch(wc: BlockWatchTarget, deps: BlockWatchDeps): vo
     // person can take the page between the navigation starting and it settling,
     // and this is the last moment before anything is read.
     if (deps.state() !== 'agent') return
+
+    /*
+     * The switch, checked before anything is read.
+     *
+     * Here rather than beside the verdict so that "off" costs nothing at all —
+     * no text read, no URL, no classification. A switch that still ran the whole
+     * machine and threw the answer away would be off in name and on in every
+     * measurable way, and the first person to profile a page load would find it.
+     */
+    if (deps.enabled?.() === false) return
 
     let finalUrl = ''
     let title = ''

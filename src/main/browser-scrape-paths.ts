@@ -25,16 +25,50 @@ export function scrapeRoot(userData: string): string {
 }
 
 /**
- * Screenshots of pages that refused us, and the evidence beside each one.
+ * The root of the block evidence: one folder per profile beneath it.
  *
  * Not per-run, deliberately. A block is caught by the browser as it happens —
  * `browser-block-watch.ts` is on the page's own navigation events — and at that
  * moment there may be no run at all: the person could be clicking around by
- * hand, working out why the site is unhappy. One folder means the pictures are
- * always in the same place, whoever provoked them.
+ * hand, working out why the site is unhappy. So the pictures are not filed
+ * under whatever run happened to be going; they are filed under whose browser
+ * took them, which is the one thing that is always true of them.
  */
 export function blockShotDir(userData: string): string {
   return join(scrapeRoot(userData), 'blocks')
+}
+
+/**
+ * One profile's block screenshots.
+ *
+ * Per profile rather than one shared folder, and this is a privacy boundary
+ * rather than tidiness. A picture of the page that refused us is a picture of
+ * *whatever was on the screen* — a signed-in dashboard behind the challenge, an
+ * email address in a header, a half-filled form. Two profiles exist precisely
+ * so that one's session is not the other's; a folder that mixed their evidence
+ * would undo that at the one moment nobody asked for a picture to be taken.
+ *
+ * `isolated` is the id `browser-drive-ipc.ts` files a throwaway tab under, for
+ * the same reason it files that tab's captured traffic there: the partition
+ * dies with the process, but the evidence must not.
+ */
+export function blockShotDirFor(userData: string, profileId: string): string {
+  return join(blockShotDir(userData), safeProfileSegment(profileId))
+}
+
+/**
+ * What a profile may be called on disk.
+ *
+ * The id arrives from `browser-tab.ts`, not from a tool call, so this is a belt
+ * rather than the brace — but it is the same rule {@link safeRunId} states and
+ * for the same reason: everything outside the allowed set becomes `-` rather
+ * than being dropped, so two ids cannot collapse onto one folder and file one
+ * profile's screenshots under another's name.
+ */
+export function safeProfileSegment(profileId: string): string {
+  const flat = profileId.replace(/[^A-Za-z0-9._-]/g, '-').replace(/^[.-]+/, '')
+  if (flat === '') return 'unfiled'
+  return flat.length > 80 ? flat.slice(0, 80) : flat
 }
 
 /**

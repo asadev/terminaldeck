@@ -128,9 +128,24 @@ export interface ChecksConfig {
    * a run can be compared against what the page said it had.
    */
   coverage: { on: boolean | null; pattern: string }
-  /** Take a screenshot the moment a request is blocked, so a block is visible. */
-  screenshotOnBlock: boolean | null
 }
+
+/*
+ * `screenshotOnBlock` used to be the second field of {@link ChecksConfig} and
+ * is not one any more, which is the whole of this lane.
+ *
+ * It was declared here, drawn in the panel, and written into a patch that no
+ * engine had ever read — while `browser-block-watch.ts` had been photographing
+ * blocked pages all along, attached by `BrowserDrive.watch`, with no way to
+ * stop it. Two halves of one feature that had never been introduced.
+ *
+ * It is not in the configuration group because there is no engine behind that
+ * group: nothing in `src/main` stores a per-profile scraping configuration, and
+ * a field riding along inside an object the panel cannot save would be the same
+ * defect wearing this fix as a disguise. It has its own seam instead —
+ * {@link ScrapingApi.browserBlockCapture} — which is two `ipcMain` handlers
+ * that exist, so the switch is available exactly when it works.
+ */
 
 /**
  * A change to part of a configuration.
@@ -151,7 +166,6 @@ export interface ScrapingConfigPatch {
   }
   checks?: {
     coverage?: Partial<ChecksConfig['coverage']>
-    screenshotOnBlock?: boolean
   }
 }
 
@@ -375,6 +389,20 @@ export interface ScrapingApi {
    */
   browserScrapingToolInstall?(toolId: string): Promise<unknown>
   browserScrapingToolRemove?(toolId: string): Promise<unknown>
+
+  /* -- the block camera (browser-block-watch) ---------------------------- */
+
+  /**
+   * Is this profile's browser photographing the pages that refuse it?
+   *
+   * Its own pair rather than a field of the configuration, and the note above
+   * {@link ChecksConfig} says why: this one has an engine and that object does
+   * not, so binding them together would make an available control out of an
+   * unavailable one.
+   */
+  browserBlockCapture?(profileId: string): Promise<unknown>
+  /** Turn it off, or back on. Answers with what is now stored, not with `true`. */
+  browserBlockCaptureSet?(profileId: string, on: boolean): Promise<unknown>
 }
 
 const METHODS = [
@@ -394,6 +422,8 @@ const METHODS = [
   'browserScrapingTools',
   'browserScrapingToolInstall',
   'browserScrapingToolRemove',
+  'browserBlockCapture',
+  'browserBlockCaptureSet',
 ] as const satisfies readonly (keyof ScrapingApi)[]
 
 /**
@@ -443,6 +473,23 @@ export function scrapingConfigAvailable(api: ScrapingApi): boolean {
  * opened, and a stale measured count is worse than none — it is the same lie
  * with a timestamp.
  */
+/**
+ * Can this build turn the block camera off, and say what it is doing now?
+ *
+ * Both, and neither alone, for the reason `scrapingConfigAvailable` gives about
+ * its two — with an edge this one does not share. What is being switched
+ * produces nothing visible when it is on: no window, no progress, no count. A
+ * switch that could be written and not read back would show whichever position
+ * it was last clicked into, on a feature whose real state nobody can see, which
+ * is worse than no switch at all.
+ */
+export function blockCaptureAvailable(api: ScrapingApi): boolean {
+  return (
+    typeof api.browserBlockCapture === 'function' &&
+    typeof api.browserBlockCaptureSet === 'function'
+  )
+}
+
 export function scrapingStatusAvailable(api: ScrapingApi): boolean {
   return (
     typeof api.browserScrapingStatus === 'function' &&
@@ -514,7 +561,7 @@ export function readCount(raw: unknown): number | null {
 }
 
 /** A stored boolean, or `null` for "this build did not say". */
-function readFlag(raw: unknown): boolean | null {
+export function readFlag(raw: unknown): boolean | null {
   return typeof raw === 'boolean' ? raw : null
 }
 
@@ -577,7 +624,6 @@ function readChecks(raw: unknown): ChecksConfig | null {
   const coverage = group(value, 'coverage')
   return {
     coverage: { on: readFlag(coverage?.on), pattern: text(coverage?.pattern) },
-    screenshotOnBlock: readFlag(value.screenshotOnBlock),
   }
 }
 

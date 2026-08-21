@@ -7,9 +7,11 @@ import { profileInitial } from './profile-badge'
 import { formatBytes } from './SessionModal'
 import {
   RESOURCE_TYPES,
+  blockCaptureAvailable,
   liftAvailable,
   liftRequestsAvailable,
   readLiftRequests,
+  readFlag,
   readOutcome,
   readScrapingConfig,
   readScrapingStatus,
@@ -126,6 +128,17 @@ export function ScrapingPanel({ open, api, accounts, downloads, profileId, onClo
    */
   const [editing, setEditing] = useState(profileId)
   const [config, setConfig] = useState<ScrapingConfig | null>(null)
+  /**
+   * Whether this profile's browser photographs the pages that refuse it.
+   *
+   * Its own state rather than a field of `config`, because it has its own seam:
+   * the camera is real and the configuration store is not, and holding them in
+   * one object would mean the switch went unavailable with the four sections
+   * that have no engine. `null` is *this build did not say* and draws as unset,
+   * never as off — the whole panel's rule, and here the difference between
+   * "nothing is being photographed" and "nobody asked".
+   */
+  const [camera, setCamera] = useState<boolean | null>(null)
   const [status, setStatus] = useState<ScrapingStatus | null>(null)
   const [asks, setAsks] = useState<LiftRequest[]>([])
   const [tools, setTools] = useState<ToolListing[]>([])
@@ -161,6 +174,11 @@ export function ScrapingPanel({ open, api, accounts, downloads, profileId, onClo
     setConfig(readScrapingConfig(await api.browserScrapingConfig(editing)))
   }, [api, editing])
 
+  const loadCamera = useCallback(async () => {
+    if (!api.browserBlockCapture || editing === '') return
+    setCamera(readFlag(await api.browserBlockCapture(editing)))
+  }, [api, editing])
+
   const loadStatus = useCallback(async () => {
     if (!api.browserScrapingStatus || editing === '') return
     setStatus(readScrapingStatus(await api.browserScrapingStatus(editing)))
@@ -185,6 +203,7 @@ export function ScrapingPanel({ open, api, accounts, downloads, profileId, onClo
   useEffect(() => {
     setConfig(null)
     setStatus(null)
+    setCamera(null)
     setNote('')
     setLiftArming(false)
     setLedgerArming(false)
@@ -205,7 +224,8 @@ export function ScrapingPanel({ open, api, accounts, downloads, profileId, onClo
     if (!open) return
     void loadConfig()
     void loadStatus()
-  }, [open, loadConfig, loadStatus])
+    void loadCamera()
+  }, [open, loadConfig, loadStatus, loadCamera])
 
   /* The pushes, held only while the panel is up: a closed panel that keeps a
      subscription is a listener nobody can see and nobody unsubscribes. */
@@ -255,6 +275,29 @@ export function ScrapingPanel({ open, api, accounts, downloads, profileId, onClo
       setConfig(stored)
     },
     [api, editing, loadConfig],
+  )
+
+  /**
+   * Turn the block camera off, or back on.
+   *
+   * The stored answer is what lands in state, not the value that was clicked.
+   * That matters more here than anywhere else on this screen: what is being
+   * switched has no output when it is working, so a switch that moved on its own
+   * say-so would be the only evidence of a setting that had not been saved.
+   */
+  const setCameraOn = useCallback(
+    async (on: boolean): Promise<void> => {
+      if (!api.browserBlockCaptureSet || editing === '') return
+      const stored = readFlag(await api.browserBlockCaptureSet(editing, on))
+      if (stored === null) {
+        setNote('That change was not confirmed, so nothing here claims it was stored.')
+        await loadCamera()
+        return
+      }
+      setNote('')
+      setCamera(stored)
+    },
+    [api, editing, loadCamera],
   )
 
   const lift = async (): Promise<void> => {
@@ -385,10 +428,18 @@ export function ScrapingPanel({ open, api, accounts, downloads, profileId, onClo
           </p>
         )}
 
+        {/* The exception is named rather than glossed over. "Nothing on this
+            screen can be set" was true until the block camera got a seam of its
+            own, and a banner that had gone one control out of date would be the
+            panel telling somebody their switch does nothing while it works. */}
         {!canConfigure && (
           <p className="bw-scrape-unwired">
-            This build has no scraping engine behind it, so nothing on this screen can be set. What
-            is listed below is what the panel will show once one is wired.
+            This build has no scraping configuration behind it, so most of this screen cannot be
+            set
+            {blockCaptureAvailable(api)
+              ? ' — the exception is the block camera under Checks, which is wired and does what it says.'
+              : '.'}{' '}
+            What is listed below is what the panel will show once an engine is.
           </p>
         )}
 
@@ -856,11 +907,28 @@ export function ScrapingPanel({ open, api, accounts, downloads, profileId, onClo
               {verdict.line}
               {status?.lastCheck && ` — ${timeLabel(status.lastCheck.at)}`}
             </p>
+          </>
+        )}
+
+        {/* The camera has its own availability because it has its own engine.
+            Inside the coverage branch it would have gone dark on every build
+            whose configuration store does not exist — which is all of them —
+            while the photographing carried on underneath. */}
+        {!blockCaptureAvailable(api) ? (
+          <Unavailable what="this build cannot say whether it photographs the pages that refuse it" />
+        ) : (
+          <>
             <OnOff
               label="Screenshot the page when a request is blocked"
-              value={checks.screenshotOnBlock}
-              onPick={(next) => void patch({ checks: { screenshotOnBlock: next } })}
+              value={camera}
+              onPick={(next) => void setCameraOn(next)}
             />
+            <p className="bw-scrape-hint">
+              A 403, a 429, a challenge or a navigation that ended somewhere it was not sent is
+              photographed as it happens — by then it is too late to ask for the picture. The image and
+              the evidence beside it stay in this app’s own folder, under this profile, and no paired
+              device can read them.
+            </p>
           </>
         )}
 

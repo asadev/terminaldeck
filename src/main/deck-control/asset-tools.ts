@@ -23,7 +23,8 @@ import {
   readRenditionRules,
   type RenditionProbe,
 } from '../browser-asset-rendition'
-import { readBlocks } from '../browser-block-watch'
+import { blockCaptureOff } from '../browser-block-capture'
+import { readBlocksUnder } from '../browser-block-watch'
 import type { AssetOpen } from '../browser-asset-session'
 import { blockShotDir, coveragePath, ledgerPath, runDir } from '../browser-scrape-paths'
 import type { JsonSchema, ToolContext, ToolOutput, ToolSpec } from './catalogue'
@@ -84,9 +85,12 @@ import { Refused, type Tier } from './surface'
  *  - `assets.rendition` with nothing reachable hands back the original URL
  *    unverified, by design — but a caller that reads `url` and fetches it must
  *    be able to tell that from a probed, confirmed upgrade.
- *  - `assets.blocks` with an empty folder means either that nothing has been
- *    blocked or that nothing was watching. Those are opposite conclusions and
- *    an empty array is the same in both.
+ *  - `assets.blocks` with an empty folder means that nothing has been blocked,
+ *    or that nothing was watching, or that somebody switched the camera off for
+ *    the profile a run was in. Three conclusions, two of them the opposite of
+ *    the first, and an empty array is the same in all three. The switch is the
+ *    one the caller cannot work out alone, so the answer names it when it is
+ *    true — `browser-block-capture.ts`.
  *
  * ## Why they come through `extraTools`
  *
@@ -1091,7 +1095,10 @@ export function assetTools(deps: AssetToolsDeps): ToolSpec[] {
       const since = optNum(args, 'since')
       const limitRaw = optNum(args, 'limit')
       const limit = limitRaw === null ? 20 : Math.min(200, Math.max(1, Math.trunc(limitRaw)))
-      const caught = readBlocks(dir)
+      // The root and every profile's folder beneath it. One browser, one
+      // question — see `readBlocksUnder`, and `blockShotDirFor` for why the
+      // pictures are filed apart in the first place.
+      const caught = readBlocksUnder(dir)
       const all = caught
         .filter((shot) => since === null || shot.at >= since)
         .sort((left, right) => right.at - left.at)
@@ -1107,15 +1114,27 @@ export function assetTools(deps: AssetToolsDeps): ToolSpec[] {
        * otherwise-full folder to nothing says so. `caught` is the read that
        * already happened; this branch adds no second walk of the directory.
        */
+      /*
+       * The third reading of the same empty folder, and the only one the caller
+       * cannot work out for themselves: somebody switched the camera off. Named
+       * only when it is actually true — a sentence about a switch nobody has
+       * touched would be noise on every install that has never opened the panel.
+       */
+      const off = blockCaptureOff(deps.userData())
+      const switchedOff =
+        off.length === 0
+          ? ''
+          : ` The block camera is switched off for ${off.join(', ')}, so pages driven in ` +
+            `${off.length === 1 ? 'that profile' : 'those profiles'} are not photographed at all.`
       const foundNothing =
-        since === null
+        (since === null
           ? 'no page has been photographed refusing us. Either nothing has been blocked, or nothing ' +
             'has been driven through this browser since the app started — an empty folder does not ' +
             'tell the two apart.'
           : `no page has been photographed refusing us since ${new Date(since).toISOString()}. ` +
             (caught.length > 0
               ? `There are ${caught.length} older ones: drop since to see them.`
-              : 'There are none at all in this folder.')
+              : 'There are none at all in this folder.')) + switchedOff
       return {
         value: withEmptiness(
           {
