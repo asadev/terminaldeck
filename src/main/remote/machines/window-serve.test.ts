@@ -22,6 +22,7 @@ function deck(answer: Partial<CallResult> = {}): {
   const calls: { name: string; args: unknown; caller: unknown; attended: boolean }[] = []
   const deps: WindowServeDeps = {
     allowed: () => true,
+    grantSwitch: 'for this computer in Machines, beside its name',
     attended: () => true,
     control: () => ({
       call: async (name, args, options) => {
@@ -58,6 +59,25 @@ describe('who may drive a window here from another machine', () => {
     // And nothing reached the dispatcher: the grant is checked before the app's
     // browser is asked anything at all.
     expect(calls).toHaveLength(0)
+  })
+
+  it('names the caller’s own switch, not the nearest one', async () => {
+    /*
+     * The same function now answers two doors — a machine this desktop dialled
+     * out to, and a device that dialled in — and their switches are on two
+     * different screens. A refusal that named Machines to somebody whose tick is
+     * in Settings → Remote would send them looking at a panel that does not have
+     * it, which is worse than a bare "no": it is a wrong instruction delivered
+     * confidently.
+     */
+    const { deps } = deck()
+    const answer = await serveWindowCall(
+      { ...deps, allowed: () => false, grantSwitch: 'for this device in Settings → Remote' },
+      'device-1',
+      READ,
+    )
+    expect(said(answer.body)).toContain('Settings → Remote')
+    expect(said(answer.body)).not.toContain('Machines')
   })
 
   it('asks the store on every call rather than once when the link came up', async () => {

@@ -922,3 +922,144 @@ describe('saying which windows are held here', () => {
     link.disconnect()
   })
 })
+/**
+ * And the same conversation with the ends swapped.
+ *
+ * Until 2026-08-21 this link could only ever *serve* a browser verb: the far
+ * machine had the pty, this app had the window, and the frames only ran that
+ * way. Which of the two a desktop is depends entirely on who dialled whom, so
+ * the other arrangement is just as ordinary — a session running **here** whose
+ * window is in the app over there — and it had no wire at all.
+ *
+ * It is the same three frames, read the other way round, gated on a second
+ * capability so that a build from before tonight is never sent one it would
+ * answer by closing the channel.
+ */
+describe('asking that machine about a window it holds', () => {
+  function linkAsking(options: {
+    onWindowHolds?: (sessions: readonly string[]) => void
+    onWindowResult?: (result: { id: string; ok: boolean; body: string }) => void
+  }) {
+    const rig = harness()
+    const link = createMachineLink({
+      id: 'machine-1',
+      secrets: secrets(),
+      onState: () => undefined,
+      onOutput: () => undefined,
+      onWelcome: () => undefined,
+      dial: rig.dial,
+      baseBackoffMs: 5,
+      maxBackoffMs: 10,
+      ...options,
+    })
+    return { link, rig }
+  }
+
+  function frames(fake: Fake): unknown[] {
+    return fake.sent.map((text) => JSON.parse(text) as unknown)
+  }
+
+  const CALL = { t: 'window.call', id: 'w-9', session: 's1', tool: 'browser.read', args: '{}' } as const
+
+  it('claims the asking half only when there is somewhere for the answer to land', async () => {
+    /*
+     * The mirror of the rule above it, and the same failure it prevents pointed
+     * the other way: a build that advertised `hostwindows` without a place to put
+     * the far machine's holdings would receive the frame and drop it, and a
+     * capability that produces a dropped frame is a lie told on a socket.
+     */
+    const bare = linkAsking({})
+    bare.link.connect()
+    await settle()
+    expect(JSON.parse(bare.rig.fakes[0].sent[0])).not.toHaveProperty('capabilities')
+
+    const wired = linkAsking({ onWindowHolds: () => undefined })
+    wired.link.connect()
+    await settle()
+    expect(JSON.parse(wired.rig.fakes[0].sent[0])).toMatchObject({ capabilities: ['hostwindows'] })
+    wired.link.disconnect()
+  })
+
+  it('will not put an ask on a machine that never advertised the direction', async () => {
+    /*
+     * `windows` and `hostwindows` are not interchangeable and this is the test
+     * that says so. A machine that advertised `windows` said it may *ask* about
+     * windows this app holds — which is silence on whether it holds any of its
+     * own. Sending on the wrong word puts a `window.call` from a client on a host
+     * that has never parsed one, and that host answers an unknown frame by
+     * closing the channel: the link, its terminals and its transfers, lost to a
+     * page read.
+     */
+    const { link, rig } = linkAsking({ onWindowHolds: () => undefined })
+    link.connect()
+    await settle()
+    rig.fakes[0].say(welcome({ capabilities: ['windows'] }))
+    await settle()
+
+    expect(link.servesWindows()).toBe(false)
+    expect(link.askWindow({ ...CALL })).toBe(false)
+    expect(frames(rig.fakes[0]).some((m) => (m as { t?: string }).t === 'window.call')).toBe(false)
+    link.disconnect()
+  })
+
+  it('sends the ask once that machine says it serves them', async () => {
+    const { link, rig } = linkAsking({ onWindowHolds: () => undefined })
+    link.connect()
+    await settle()
+    rig.fakes[0].say(welcome({ capabilities: ['hostwindows'] }))
+    await settle()
+
+    expect(link.servesWindows()).toBe(true)
+    expect(link.askWindow({ ...CALL })).toBe(true)
+    expect(frames(rig.fakes[0]).at(-1)).toEqual(CALL)
+    link.disconnect()
+  })
+
+  it('refuses to ask over a link that is not up, rather than queueing it', async () => {
+    // A frame held for a socket that may never come back is a tool call held
+    // with it. The desk turns `false` into a sentence in milliseconds.
+    const { link } = linkAsking({ onWindowHolds: () => undefined })
+    expect(link.servesWindows()).toBe(false)
+    expect(link.askWindow({ ...CALL })).toBe(false)
+  })
+
+  it('hands the far machine’s holdings and answers straight out', async () => {
+    const seenHolds: string[][] = []
+    const answers: { id: string; ok: boolean; body: string }[] = []
+    const { link, rig } = linkAsking({
+      onWindowHolds: (sessions) => seenHolds.push([...sessions]),
+      onWindowResult: (result) => answers.push(result),
+    })
+    link.connect()
+    await settle()
+    rig.fakes[0].say(welcome({ capabilities: ['hostwindows'] }))
+
+    // The whole set, empty included — that is how a detach travels.
+    rig.fakes[0].say({ t: 'window.holds', sessions: ['s1', 's2'] })
+    rig.fakes[0].say({ t: 'window.holds', sessions: [] })
+    rig.fakes[0].say({ t: 'window.result', id: 'w-9', ok: true, body: '{"title":"Example"}' })
+    await settle()
+
+    expect(seenHolds).toEqual([['s1', 's2'], []])
+    expect(answers).toEqual([{ id: 'w-9', ok: true, body: '{"title":"Example"}' }])
+    link.disconnect()
+  })
+
+  it('drops those frames rather than the link when this build cannot use them', async () => {
+    /*
+     * This app advertises `hostwindows` only when it can ask, so a machine
+     * sending these anyway is one that ignored the negotiation. Closing a working
+     * link over that would cost more than the frame does.
+     */
+    const { link, rig } = linkAsking({})
+    link.connect()
+    await settle()
+    rig.fakes[0].say(welcome())
+    rig.fakes[0].say({ t: 'window.holds', sessions: ['s1'] })
+    rig.fakes[0].say({ t: 'window.result', id: 'w-9', ok: true, body: '{}' })
+    await settle()
+
+    expect(link.state().state).toBe('online')
+    link.disconnect()
+  })
+})

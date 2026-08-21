@@ -1,8 +1,32 @@
 /**
- * This machine's sessions asking a paired device to act on a browser window it
+ * This machine's sessions asking a paired computer to act on a browser window it
  * holds, and the desk that keeps those questions straight.
  *
- * ## Why a session here asks a device there
+ * ## One desk, both directions
+ *
+ * Nothing in this file knows which end of a link it is on. It takes a peer id, a
+ * session id and a verb; it starts a clock; it hands back whatever came. So the
+ * app builds **two** of these and they differ only in the wire they are handed:
+ *
+ *  - one for the devices connected *to* this app's host, whose ids are device
+ *    ids and whose wire is a connection in `server.ts`;
+ *  - one for the machines this app dials *out* to, whose ids are machine ids and
+ *    whose wire is a link in `machines/ipc.ts`.
+ *
+ * The second exists because the arrangement is not always the one the first
+ * assumes. A desktop that dialled out watches the far machine's sessions and
+ * attaches its own windows to them — that is the first desk's case, read from
+ * the far machine — and the mirror is a session *here* whose window is in the
+ * app over there. Same conversation, ends swapped; see `CAPABILITY.hostWindows`.
+ *
+ * The parameter below is still called `deviceId`, and that is deliberate rather
+ * than left over: renaming it would be a rename in four files for a word that
+ * means the same thing in both — *the peer that holds the window* — and the ids
+ * are opaque to everything here. What must never happen is one desk being handed
+ * the other's ids, which is why each is constructed beside the wire that mints
+ * them.
+ *
+ * ## Why a session here asks a computer there
  *
  * A browser window is a `WebContentsView` in the renderer of the app somebody is
  * looking at. When Asad starts a session on his PC *from his Mac* and attaches a
@@ -41,7 +65,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { MAX_WINDOW_HOLDS, type ServerMessage } from './protocol'
+import { MAX_WINDOW_HOLDS, type WindowCallFrame } from './protocol'
 
 /**
  * How long a forwarded verb waits for the machine holding the window.
@@ -64,15 +88,21 @@ export interface WindowAnswer {
 /** How this desk reaches the devices. Injected by `server.ts`. */
 export interface WindowWire {
   /**
-   * Put the frame to that device on every channel it is on, and say how many
-   * heard it.
+   * Put the frame to that peer on every channel it is on, and say how many heard
+   * it.
    *
    * Zero is the answer this file turns into a sentence rather than a wait. A
-   * device that is asleep, gone, or running a build that has never heard of
+   * peer that is asleep, gone, or running a build that has never heard of
    * `window.call` is not reachable, and the check for the last of those is what
-   * keeps an old client from becoming a fifty-five second stall.
+   * keeps an old build from becoming a fifty-five second stall.
+   *
+   * Typed to the one frame this desk ever sends rather than to a direction's
+   * whole union, which is what lets the same desk serve both directions:
+   * `server.ts` puts it on a connection as a `ServerMessage` and `ipc.ts` puts
+   * it on a machine link as a `ClientMessage`, and neither of those is this
+   * file's business.
    */
-  ask(deviceId: string, message: ServerMessage): number
+  ask(deviceId: string, message: WindowCallFrame): number
   /**
    * Could {@link ask} reach that device right now, without sending anything?
    *

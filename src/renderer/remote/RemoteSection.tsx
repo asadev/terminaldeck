@@ -13,6 +13,7 @@ import { asView, resolveBridge, type MachinesBridge, type MachinesView } from '.
 import { DeviceFolders, type FolderDevice } from './DeviceFolders'
 import { DeviceSessions, type SessionDevice } from './DeviceSessions'
 import { DeviceLogins } from './DeviceLogins'
+import { DeviceWindows } from './DeviceWindows'
 import {
   DeviceApproval,
   nextStep,
@@ -2978,6 +2979,25 @@ export function RemoteSection({ bridge: provided, machines: providedMachines }: 
               card, and `AccountGrants.shares` never asks what kind a device is.
             */}
             <DeviceLogins devices={sessionDevices(state.devices)} />
+            {/*
+              And the fourth axis, under the other three.
+
+              Not a narrowing like the three above it — a yes or a no, over the
+              browser on this screen. It is here because the window conversation
+              runs both ways since 2026-08-21: this app can be the end holding
+              the window on a link it did not start, and the device on the other
+              end can be the one with the session. `MachineLinks`'s
+              `DriveWindows` is the same sentence about a machine this desktop
+              dialled *out* to, and the two are deliberately two switches — two
+              id spaces, two stores, two decisions.
+
+              Every approved device, like the session and login panels: both of
+              the desktops in his rail are paired as his own, and a panel that
+              listed guests alone is a panel he would never see. This one starts
+              **off** for everybody, which is the one place it differs from its
+              neighbours and the reason is on `WindowGrants`.
+            */}
+            <DeviceWindows devices={sessionDevices(state.devices)} />
           </>
         ) : null
       }

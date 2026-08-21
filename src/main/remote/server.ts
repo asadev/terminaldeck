@@ -70,6 +70,7 @@ import type { DeviceSessionGrant, SessionGrants } from './session-grants'
 // owns the one instance, because the endpoint's own filter closes over it before
 // this function is ever called.
 import type { AccountGrants, DeviceAccountGrant } from './account-grants'
+import type { WindowGrants } from './window-grants'
 import type { WindowAskDesk } from './window-asks'
 // `asDeviceKind` is a value because the approve handler has to narrow whatever
 // came across the bridge, and it is three comparisons over a string literal
@@ -780,6 +781,47 @@ export interface RemoteEndpointOptions {
    */
   windows?: WindowAskDesk
   /**
+   * Serving a browser verb that arrived **from** a device, against a window in
+   * this app.
+   *
+   * The mirror of {@link windows} above, and the two are not the same feature
+   * read twice: `windows` is this machine asking a device to move a browser it
+   * holds, this is a device asking this machine to move one *here*. Which of the
+   * two a given link needs depends only on which end the person is sitting at,
+   * and a desktop that dialled another desktop can need both at once.
+   *
+   * **Absent is the switch**, as everywhere else here: with no server the
+   * `hostWindows` capability is not advertised, so a device never sends the
+   * frame and never waits on an answer that is not coming.
+   *
+   * Nothing about the decision is here. The grant is read per call in
+   * `window-grants.ts`, the allow-list is `SESSION_TOOLS`, the window is resolved
+   * inside that session's own binding, and the answer is cut to fit by
+   * `fitAnswer` — all of it in `machines/window-serve.ts`, which is the same
+   * function the machine links serve their asks through. One decider, or the two
+   * come to allow what each other refuses.
+   */
+  serveWindows?(
+    deviceId: string,
+    call: { sessionId: string; tool: string; args: string },
+  ): Promise<{ ok: boolean; body: string }>
+  /**
+   * Which of **that device's** sessions this app is holding a browser window
+   * for, asked whenever the answer has to be sent.
+   *
+   * The other half of {@link serveWindows}, and the half without which it would
+   * never fire: a session over there cannot address a window here unless it has
+   * been told there is one. A window attached in this app is a relation in *this*
+   * process — `browser-binding.ts` — and the machine the pty is on has no way to
+   * derive it.
+   *
+   * A function rather than a list, read at the moment of sending, because the
+   * answer changes every time somebody attaches or detaches a window; and per
+   * device, because a link may only be told about its own — the sessions of one
+   * paired computer are not facts the next one gets to hear.
+   */
+  windowsHeldFor?(deviceId: string): readonly string[]
+  /**
    * Starting a project's dev server. **Absent is the switch**, as everywhere else.
    *
    * A host with no dev-server module does not advertise the `devserver`
@@ -995,6 +1037,17 @@ export interface RemoteEndpoint {
    */
   sessionsChanged(): number
   /**
+   * A browser window in this app was attached to, or detached from, a session on
+   * a device. Re-send the holdings to every connection that can hear them.
+   *
+   * The mirror of `MachinesIpc.announceWindows`, and the same shape of answer:
+   * how many were told, which is zero when nobody is connected or when no
+   * connected build knows the frame. Nothing is lost by that zero — the set is
+   * re-stated on every welcome, which is the moment the far end's table is empty
+   * anyway.
+   */
+  windowsHeldChanged(): number
+  /**
    * One device's copilot grant changed on the desktop. Take away what it no
    * longer holds, and tell it.
    *
@@ -1080,6 +1133,17 @@ export interface RemoteServer {
    * Push the new list to every connected device. Zero when none are connected.
    */
   sessionsChanged(): number
+  /**
+   * A browser window in this app was attached to, or detached from, a session on
+   * a device. Re-send the holdings to every connection that can hear them.
+   *
+   * The mirror of `MachinesIpc.announceWindows`, and the same shape of answer:
+   * how many were told, which is zero when nobody is connected or when no
+   * connected build knows the frame. Nothing is lost by that zero — the set is
+   * re-stated on every welcome, which is the moment the far end's table is empty
+   * anyway.
+   */
+  windowsHeldChanged(): number
   /**
    * One device's copilot grant changed. Take away what it no longer holds, and
    * tell it. Zero when it is not connected.
@@ -1746,6 +1810,23 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
      * is the fifty-five second stall `window-asks.ts` exists to not have.
      */
     if (name === CAPABILITY.windows) return options.windows !== undefined
+    /*
+     * And the mirror, gated on the thing that answers rather than on the thing
+     * that asks. `windows` above is advertised when this machine has a *desk* —
+     * somewhere to hold a question it is about to put to a device; this one is
+     * advertised when it has a *server* — something that can act on a window
+     * here when a device puts the question the other way.
+     *
+     * Not gated on the grant, deliberately, and the copilot's note two branches
+     * down makes the argument in full: a capability says what this machine can
+     * do and a grant says who may use it. Folding them together would leave a
+     * device unable to tell "that build is too old" from "you have not been
+     * allowed", which are two sentences with two different remedies — and would
+     * make a tick applied mid-session unable to reach a connected device, since
+     * the only frame carrying the capability is a `welcome`. The grant is read
+     * per call instead, and refuses with a sentence naming the switch.
+     */
+    if (name === CAPABILITY.hostWindows) return options.serveWindows !== undefined
     /*
      * Three conditions, and all three are load-bearing.
      *
@@ -2580,6 +2661,20 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
       // `LiveConnection.copilotOpen`.
       ...copilotFrame(outcome.deviceId, false),
     })
+    /*
+     * And which of that device's sessions has a browser window here.
+     *
+     * On the welcome, for the reason the guest link announces its own holds
+     * there: this socket is new after every reconnect and the far end's table
+     * went with the old one. Nothing over there can be relied on to notice a
+     * reconnection, so the fact is re-stated by the end that holds it, every
+     * time, before anybody can ask.
+     *
+     * After the welcome rather than folded into it, because it is gated on
+     * something the welcome itself carries: the capability list this connection
+     * sent, which decides whether the frame may be sent at all.
+     */
+    tellWindowHolds(connection)
     announce()
   }
 
@@ -3104,6 +3199,52 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     for (const connection of live.values()) {
       if (!connection.deviceId) continue
       send(connection, { t: 'sessions', sessions: sessionsFor(connection.deviceId) })
+      told += 1
+    }
+    return told
+  }
+
+  /**
+   * Tell one connection which of its own sessions this app is holding a browser
+   * window for.
+   *
+   * The mirror of the `window.holds` a *client* sends, and it is a frame this end
+   * sends **hopefully to nobody**: it goes only to a connection that named
+   * `hostWindows` in its hello, because a client from before this direction
+   * existed answers a frame it has never parsed by closing the channel — the
+   * failure `MachineLink.announceWindows` guards the other way round, and the one
+   * that turns a new fact into a machine falling off the network.
+   *
+   * The whole set every time, empty included. That is how a *detach* travels, and
+   * it is why nothing here has to remember what it last said: a link that dropped
+   * and came back is correct by arriving. See `WindowHoldsFrame`.
+   */
+  function tellWindowHolds(connection: LiveConnection): void {
+    const held = options.windowsHeldFor
+    if (held === undefined) return
+    if (!connection.deviceId) return
+    if (!connection.capabilities.includes(CAPABILITY.hostWindows)) return
+    send(connection, { t: 'window.holds', sessions: [...held(connection.deviceId)] })
+  }
+
+  /**
+   * A browser window here was attached to, or detached from, a session on some
+   * device. Say so to every connection that can hear it.
+   *
+   * Every connection rather than the one that changed, and it costs one small
+   * frame each: the caller is a subscription to the whole binding map, which
+   * reports *that* the relation moved rather than which device it moved for.
+   * Working this out here would mean the server keeping a second copy of a map
+   * it does not own — which is the thing `machines/ipc.ts` refuses to do for
+   * exactly the same frame going the other way.
+   */
+  function tellWindowsHeld(): number {
+    if (options.windowsHeldFor === undefined) return 0
+    let told = 0
+    for (const connection of live.values()) {
+      if (!connection.deviceId) continue
+      if (!connection.capabilities.includes(CAPABILITY.hostWindows)) continue
+      tellWindowHolds(connection)
       told += 1
     }
     return told
@@ -4314,6 +4455,65 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
         options.windows?.answer(message.id, { ok: message.ok, body: message.body })
         return
       }
+      case 'window.call': {
+        /*
+         * The mirror: a session on that device asking this machine to act on a
+         * browser window **here**.
+         *
+         * Answered on this socket whatever happens, including when there is no
+         * server wired and when the server throws. The far end is inside an MCP
+         * tool call with a model waiting on it, so silence costs a whole turn and
+         * produces the thing `session-verbs.ts` was written to stop: an agent
+         * that concludes it has not found the way in yet and goes looking for
+         * another.
+         *
+         * Refused outright when this host never advertised `hostWindows`, and
+         * that refusal is not a formality. A device that sends a frame nobody
+         * offered is either a build talking to an older desktop or something that
+         * is not this app, and the honest answer to both is the same sentence:
+         * there is nothing here to drive.
+         *
+         * Everything else — the grant, the allow-list, the binding lookup, the
+         * tier, the confirmation, the log — is `window-serve.ts`'s, reached
+         * through `options.serveWindows`. None of it is re-implemented here and
+         * none of it may be; a second dispatcher is how one of them comes to
+         * allow what the other refuses.
+         */
+        const serve = options.serveWindows
+        if (serve === undefined) {
+          send(connection, {
+            t: 'window.result',
+            id: message.id,
+            ok: false,
+            body: JSON.stringify({
+              message:
+                'that computer is not set up to be driven from here. Say what you would have done on ' +
+                'the page and let the person do it.',
+            }),
+          })
+          return
+        }
+        const deviceId = connection.deviceId
+        void serve(deviceId, {
+          sessionId: message.session,
+          tool: message.tool,
+          args: message.args,
+        })
+          .then((result) => {
+            send(connection, { t: 'window.result', id: message.id, ok: result.ok, body: result.body })
+          })
+          .catch((error: unknown) => {
+            send(connection, {
+              t: 'window.result',
+              id: message.id,
+              ok: false,
+              body: JSON.stringify({
+                message: error instanceof Error ? error.message : 'that could not be done here',
+              }),
+            })
+          })
+        return
+      }
       case 'credential.ack':
       case 'credential.answer':
       case 'credential.deny': {
@@ -4681,6 +4881,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     },
     foldersChanged: tellFolders,
     sessionsChanged: tellSessions,
+    windowsHeldChanged: tellWindowsHeld,
     copilotGrantChanged: tellCopilotGrant,
     dropConnection(connectionId: string): boolean {
       const connection = live.get(connectionId)
@@ -5332,6 +5533,9 @@ export function createRemoteServer(options: RemoteServerOptions): RemoteServer {
     // Nothing to tell with the server down: no device is connected, and each
     // one reads the list it missed in its `welcome` the next time it is.
     sessionsChanged: () => endpoint?.sessionsChanged() ?? 0,
+    // Same rule, same reason: with the server down there is no socket to say
+    // it on, and every device reads the set it missed in its next `welcome`.
+    windowsHeldChanged: () => endpoint?.windowsHeldChanged() ?? 0,
     copilotGrantChanged: (deviceId) => endpoint?.copilotGrantChanged(deviceId) ?? 0,
     dropConnection: (connectionId) => endpoint?.dropConnection(connectionId) ?? false,
     stopTunnel: (connectionId, tunnelId) => endpoint?.stopTunnel(connectionId, tunnelId) ?? false,
@@ -5432,6 +5636,20 @@ export interface RemoteIpcDeps {
    */
   accountGrants?: AccountGrants
   /**
+   * Which devices may act on the browser windows in this app — the fourth axis.
+   *
+   * Passed in for exactly the reason the three above are: the check every
+   * forwarded browser verb goes through closes over this store, and it is built
+   * at assembly. A second one here would answer the settings panel from one copy
+   * of the file and every `window.call` from another.
+   *
+   * **Optional, and its absence is the switch** — but read which way it fails.
+   * The three above widen when they are absent, because they narrow a thing that
+   * already worked. This one is the permission itself: a host with no store
+   * allows **nobody**, which is what every host written before it already does.
+   */
+  windowGrants?: WindowGrants
+  /**
    * Whether each device is one of the owner's own or a guest.
    *
    * Passed in for exactly the reason `folders` beside it is: `index.ts` needs
@@ -5488,6 +5706,47 @@ export interface RemoteIpcDeps {
    * nobody sent from.
    */
   windows?: WindowAskDesk
+  /**
+   * Serving a browser verb that arrived **from** a device, against a window in
+   * this app.
+   *
+   * The mirror of {@link windows} above, and the two are not the same feature
+   * read twice: `windows` is this machine asking a device to move a browser it
+   * holds, this is a device asking this machine to move one *here*. Which of the
+   * two a given link needs depends only on which end the person is sitting at,
+   * and a desktop that dialled another desktop can need both at once.
+   *
+   * **Absent is the switch**, as everywhere else here: with no server the
+   * `hostWindows` capability is not advertised, so a device never sends the
+   * frame and never waits on an answer that is not coming.
+   *
+   * Nothing about the decision is here. The grant is read per call in
+   * `window-grants.ts`, the allow-list is `SESSION_TOOLS`, the window is resolved
+   * inside that session's own binding, and the answer is cut to fit by
+   * `fitAnswer` — all of it in `machines/window-serve.ts`, which is the same
+   * function the machine links serve their asks through. One decider, or the two
+   * come to allow what each other refuses.
+   */
+  serveWindows?(
+    deviceId: string,
+    call: { sessionId: string; tool: string; args: string },
+  ): Promise<{ ok: boolean; body: string }>
+  /**
+   * Which of **that device's** sessions this app is holding a browser window
+   * for, asked whenever the answer has to be sent.
+   *
+   * The other half of {@link serveWindows}, and the half without which it would
+   * never fire: a session over there cannot address a window here unless it has
+   * been told there is one. A window attached in this app is a relation in *this*
+   * process — `browser-binding.ts` — and the machine the pty is on has no way to
+   * derive it.
+   *
+   * A function rather than a list, read at the moment of sending, because the
+   * answer changes every time somebody attaches or detaches a window; and per
+   * device, because a link may only be told about its own — the sessions of one
+   * paired computer are not facts the next one gets to hear.
+   */
+  windowsHeldFor?(deviceId: string): readonly string[]
   /**
    * The dev-server module, when this build has one.
    *
@@ -5801,6 +6060,13 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
      * launches a device's session with no browser verbs and tells it why.
      */
     ...(deps.windows ? { windows: deps.windows } : {}),
+    /*
+     * And the two halves of the mirror, spread on the same rule: absent means
+     * this host does not advertise `hostWindows`, so no device ever sends a
+     * `window.call` here and none waits on an answer that is not coming.
+     */
+    ...(deps.serveWindows ? { serveWindows: deps.serveWindows } : {}),
+    ...(deps.windowsHeldFor ? { windowsHeldFor: deps.windowsHeldFor } : {}),
     // Spread rather than passed as possibly-undefined, like everything else that
     // is a switch: absent means this host does not advertise `devserver` at all.
     ...(deps.devServers ? { devServers: deps.devServers } : {}),
@@ -6084,6 +6350,10 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
       deps.sessionGrants?.forget(id)
       // And its login ticks, on the same argument once more.
       deps.accountGrants?.forget(id)
+      // And its window grant. The same garbage-collection argument, and the one
+      // where a row left behind matters most: an id still in that set is a
+      // permission to move this person's browser with nobody attached to it.
+      deps.windowGrants?.forget(id)
       /*
        * Nothing to forget for the copilot any more, and that is worth a line
        * rather than a silence.
@@ -6207,6 +6477,33 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
       return store.list()
     },
   )
+
+  /**
+   * The fourth axis: which devices may act on the browser windows in this app.
+   *
+   * One boolean per device rather than a mode and a list, because there is
+   * nothing to narrow — a window is not a folder or a login, it is *the browser
+   * on this screen*, and the only two answers are yes and no. The channel
+   * therefore answers the set of ids that are allowed, and everything not in it
+   * is not.
+   *
+   * ## What a change does to a device that is already connected
+   *
+   * It lands on the very next call, both ways. Unlike the three axes above it,
+   * nothing about this grant is baked into the capability list a device was told
+   * at `hello`: `hostWindows` says only that this machine speaks the frames, and
+   * `window-serve.ts` reads the grant per call. So ticking this reaches a device
+   * that is already connected, and unticking it stops the next verb rather than
+   * the next connection. That is the property `TokenGrant.caller` argues for and
+   * it is the one that makes a switch over somebody's browser worth having.
+   */
+  ipcMain.handle('remote:windows', (): string[] => deps.windowGrants?.list() ?? [])
+  ipcMain.handle('remote:windows:set', (_event, id: unknown, allowed: unknown): string[] => {
+    const store = deps.windowGrants
+    if (!store) return []
+    store.set(id, allowed === true)
+    return store.list()
+  })
 
   ipcMain.handle('remote:sessions', (): DeviceSessionGrant[] => deps.sessionGrants?.list() ?? [])
   ipcMain.handle('remote:sessions:running', (): RemoteSession[] => deps.sessions.list())

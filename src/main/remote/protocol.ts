@@ -501,6 +501,40 @@ export const CAPABILITY = {
    * browser is: the PC forwards the verb, the Mac decides and acts.
    */
   windows: 'windows',
+  /**
+   * The same conversation with the two ends swapped: a session on **that**
+   * machine driving a browser window in the app of the machine it is talking to.
+   *
+   * `windows` above covers exactly one arrangement — the host has the pty, the
+   * client has the window — because that is the arrangement a paired desktop
+   * falls into: it dials out, it watches the far machine's sessions, and the
+   * windows it attaches to them are its own. The other arrangement is the same
+   * three frames read the other way round, and until this string existed there
+   * was no way to say so without a build that had never heard of the direction
+   * closing the channel on the first frame of it.
+   *
+   * So it is a second capability rather than a wider reading of the first. A
+   * build shipped before tonight advertises `windows` and means only the old
+   * half; a frame sent to it on the strength of that word is a machine falling
+   * off the network, which is the failure `MachineLink.announceWindows` already
+   * guards the other direction against.
+   *
+   * Both ends list it and it means the mirror of what `windows` means:
+   *
+   *  - a **host**, in `welcome.capabilities`: *"I hold browser windows, and I
+   *    will serve asks about them."* It sends `window.holds` down to say which
+   *    of that client's sessions it is holding one for, and answers a
+   *    `window.call` with a `window.result`.
+   *  - a **client**, in `hello.capabilities`: *"I have sessions and I may ask."*
+   *
+   * ## What it is not
+   *
+   * Not a grant. A host that advertises this is saying it speaks the frames, not
+   * that this device may move its browser — that decision is per device, read
+   * per call on the serving end, and it defaults closed. See `window-grants.ts`,
+   * and `MachineStore.drivesWindows` for the same axis pointing the other way.
+   */
+  hostWindows: 'hostwindows',
 } as const
 
 /**
@@ -529,6 +563,7 @@ export const CAPABILITIES: string[] = [
   CAPABILITY.logins,
   CAPABILITY.chat,
   CAPABILITY.windows,
+  CAPABILITY.hostWindows,
 ]
 
 /**
@@ -829,6 +864,104 @@ export const MAX_WINDOW_RESULT_BYTES = 48 * 1024
  * twenty-ninth would take down a working machine over a fact nobody can act on.
  */
 export const MAX_WINDOW_HOLDS = 128
+
+/* ------------------------------------------------ the three window frames -- */
+
+/**
+ * The `windows` conversation is three frames, and each of them travels in both
+ * directions.
+ *
+ * ## Why one shape rather than two
+ *
+ * The conversation is symmetrical by construction: one end has the pty and one
+ * end has the `WebContentsView`, and which end that is depends only on who
+ * dialled whom. Written as two families — a `window.call` and a `window.ask`, a
+ * `window.result` and a `window.answer` — the two would be identical on the day
+ * they were written and would drift on the first day somebody fixed one of them.
+ * `fitAnswer`'s history is the argument: the answer cap was wrong in one place
+ * for one evening and cost the link between two machines, and a second copy of
+ * that cap is a second place for it to be wrong.
+ *
+ * So there is one shape per frame, declared once here, and both `ClientMessage`
+ * and `ServerMessage` name it. The two parsers below read them through the same
+ * three validators for the same reason.
+ *
+ * ## What tells the directions apart, then
+ *
+ * The capability. `CAPABILITY.windows` is the arrangement where the **host**
+ * asks and the **client** holds the window; `CAPABILITY.hostWindows` is the
+ * mirror. An end sends a frame only after the other end has named the capability
+ * for the direction it is about to send in — never on the strength of the frame
+ * being in the union, because the union is this build's and the peer's build may
+ * be older.
+ */
+
+/**
+ * Which of *your* sessions I am holding a browser window for, right now.
+ *
+ * The whole set every time, and idempotent because of it: a link that dropped
+ * and came back is correct by arriving, and a detach is the same set with one
+ * fewer id in it. Trimmed to {@link MAX_WINDOW_HOLDS} rather than refused — the
+ * frame is a peer describing its own screen, and closing a working link over the
+ * hundred and twenty-ninth entry would cost a machine over a fact nobody can act
+ * on.
+ *
+ * Not a permission and not a claim. The end that receives it does nothing with
+ * it but *address* a verb it was going to send anyway, and that verb is resolved
+ * over there inside the named session's own binding — so a peer that names a
+ * session it holds no window for has arranged for its own asks to come back
+ * refused.
+ */
+export type WindowHoldsFrame = { t: 'window.holds'; sessions: string[] }
+
+/**
+ * A browser verb, on its way to the end that holds the window.
+ *
+ * ## What travels, and what deliberately does not
+ *
+ * `tool` is one of the six browser verbs and `args` is its arguments as JSON
+ * text. No window id, no tab id, no view id and no page: the *only* thing the
+ * asking end may name is one of its own sessions, and which windows that session
+ * holds is a fact the answering end looks up in its own binding map. So neither
+ * end can enumerate the windows on the other, probe for one, or reach a window
+ * that was never attached to the session it is asking about.
+ *
+ * `session` is the asking end's own id for the session. The answering end pairs
+ * it with the id it knows the asking end by, which is exactly the
+ * `<machineId>\0<sessionId>` key the binding was written under when the person
+ * attached the window. Neither end has to be told the key; each holds half.
+ *
+ * ## Why JSON text rather than a typed argument object
+ *
+ * The six verbs have five schemas between them and they change. A typed union
+ * here would be a copy of those schemas that has to be kept in step with
+ * `browser-tools.ts`, `catalogue.ts` and both ends of this wire, and the day one
+ * of them drifts is the day an argument is silently dropped. The arguments are
+ * validated where they are acted on, by the tool's own `precheck`, which is the
+ * only place that can validate them correctly.
+ */
+export type WindowCallFrame = {
+  t: 'window.call'
+  id: string
+  session: string
+  tool: string
+  args: string
+}
+
+/**
+ * What that browser verb did, or why it did nothing.
+ *
+ * One frame for both outcomes rather than an answer and a refusal, because the
+ * caller does the same thing with either: it is inside an MCP tool call, and a
+ * tool error and a tool result are both results as far as the model on the other
+ * end is concerned. `ok` is what separates them and `body` is JSON text in both
+ * cases — the tool's value, or `{ "message": "…" }` for a refusal.
+ *
+ * There is no third shape for "the peer is not there". Silence is that, and it
+ * is answered by the asking end's own deadline with a sentence composed there,
+ * because a machine that has gone cannot send a frame saying so.
+ */
+export type WindowResultFrame = { t: 'window.result'; id: string; ok: boolean; body: string }
 
 /** Largest `input` payload. A paste, not a file upload. */
 export const MAX_INPUT_BYTES = 16 * 1024
@@ -1973,58 +2106,52 @@ export type ClientMessage =
    * `denied`, so a client that only ever refuses can send the bare frame.
    */
   | { t: 'credential.deny'; id: string; reason?: CredentialDenial }
-  /* ---- capability `windows`. Refused outright when it is not advertised. --- */
+  /* ---- capabilities `windows` and `hostWindows`. ------------------------- */
   /**
-   * What that browser verb did, or why it did nothing.
+   * All three window frames travel both ways; see {@link WindowHoldsFrame} for
+   * why there is one shape per frame rather than one per direction.
    *
-   * One frame for both outcomes rather than an answer and a refusal, because the
-   * caller does the same thing with either: it is inside an MCP tool call, and a
-   * tool error and a tool result are both results as far as the model on the
-   * other end is concerned. `ok` is what separates them and `body` is JSON text
-   * in both cases — the tool's value, or `{ "message": "…" }` for a refusal.
+   * Which of the two capabilities a given frame belongs to is decided by which
+   * end sent it, not by the frame:
    *
-   * There is no third shape for "the device is not there". Silence is that, and
-   * it is answered by the host's own deadline with a sentence composed there,
-   * because a device that has gone cannot send a frame saying so.
+   *  - `window.holds` and `window.result` **from a client** are the `windows`
+   *    arrangement — the client holds the window, this host asked.
+   *  - `window.call` **from a client** is the `hostWindows` arrangement — the
+   *    client has the pty, this host holds the window. It is refused outright
+   *    unless this host advertised `hostWindows` to that device, for the reason
+   *    every capability here is: a frame nobody agreed to speak is a frame
+   *    somebody put on a socket hopefully.
    */
-  | { t: 'window.result'; id: string; ok: boolean; body: string }
+  | WindowResultFrame
   /**
-   * Which of **your** sessions this app is holding a browser window for.
+   * A session on that device wants to act on a browser window in **this** app.
    *
-   * ## The fact that was missing, and why only this end has it
+   * Capability `hostWindows`. Everything it carries and everything it
+   * deliberately does not are on {@link WindowCallFrame}; what belongs here is
+   * that it is the only *question* a client may ask this host on this subject,
+   * and that the answer to it is not in this file: the grant is read per call in
+   * `window-grants.ts`, the allow-list is `SESSION_TOOLS`, and the window is
+   * resolved inside that session's own binding by `deck-control`.
+   */
+  | WindowCallFrame
+  /**
+   * Which of **this host's** sessions that device is holding a browser window
+   * for. Capability `windows`.
    *
+   * The fact that makes the feature work for a session nobody started remotely.
    * A browser window is a `WebContentsView` in the renderer of the app somebody
    * is looking at, and the session it is attached to can be running on another
-   * computer entirely. `browser-binding.ts` writes that relation here, keyed
-   * `<machineId>\0<sessionId>`, where the machine id is the host this client is
-   * talking to. The host has no copy of it and no way to derive one: it has a
-   * pty, and nothing on a pty says that somebody two rooms away has put a page
-   * beside it.
+   * computer entirely; `browser-binding.ts` writes that relation *there*, keyed
+   * `<machineId>\0<sessionId>`, and this host has no copy of it and no way to
+   * derive one. Asad's first test was a session already running on his PC with a
+   * window attached from his Mac, and every verb it had answered *"no browser
+   * window is attached to this session"* about a page on his screen.
    *
-   * Without this frame the host could only reach the windows of sessions a
-   * device had *started* — recorded at the spawn, which is the one moment both
-   * ids are in hand. Asad's first test was a session already running on his PC
-   * with a window attached from his Mac, and every verb it had answered *"no
-   * browser window is attached to this session"* about a page on his screen.
-   *
-   * ## Why the whole set, and why it is sent again on every welcome
-   *
-   * It is idempotent. A delta would need both ends to have seen every frame ever
-   * sent, and this link's normal state is *reconnecting* — a lid closes, a
-   * network changes, the relay redeploys. Sending the set means a link that came
-   * back is correct by arriving, and a detach is simply a set with one fewer id
-   * in it. Trimmed to {@link MAX_WINDOW_HOLDS} rather than refused.
-   *
-   * ## What it is not
-   *
-   * Not a permission and not a claim on anything. The host does not act on this
-   * beyond *addressing* a verb it was going to send anyway, and every verb it
-   * sends is resolved over there inside that session's own binding — so a device
-   * that named a session it holds no window for gains exactly one thing: its own
-   * `window.call` frames come back refused. See `window-asks.ts` for the table
-   * this lands in and for what the host does when two devices name one session.
+   * The whole set, on every welcome and every attach; see
+   * {@link WindowHoldsFrame} for why, and `window-asks.ts` for the table it
+   * lands in and for what this host does when two devices name one session.
    */
-  | { t: 'window.holds'; sessions: string[] }
+  | WindowHoldsFrame
   /* ---- capability `copilot`. Refused per-tier, per device. ---------------- */
   /**
    * ## The rule that makes this whole surface safe: **no tool name is on the wire**
@@ -2615,41 +2742,41 @@ export type ServerMessage =
       operation: CredentialOperation
       prompt: boolean
     }
-  /* ---- capability `windows` ---------------------------------------------- */
+  /* ---- capabilities `windows` and `hostWindows`. ------------------------- */
   /**
-   * A session on this machine wants to act on a browser window in **your** app.
+   * A session on this host wants to act on a browser window in **your** app.
    *
-   * The second frame in this protocol the host sends as a *question* — see
-   * `credential.request` for the first, and for why a question needs both ends
-   * to have advertised the capability before it may be asked.
+   * Capability `windows`. The second frame in this protocol the host sends as a
+   * *question* — see `credential.request` for the first, and for why a question
+   * needs both ends to have advertised the capability before it may be asked.
    *
-   * ## What travels, and what deliberately does not
-   *
-   * `tool` is one of the six browser verbs and `args` is its arguments as JSON
-   * text. No window id, no tab id, no view id and no page: the *only* thing this
-   * end may name is one of its own sessions, and which windows that session
-   * holds is a fact the answering end looks up in its own binding map. So a host
-   * cannot enumerate the windows on a device, cannot probe for one, and cannot
-   * reach a window that was never attached to the session it is asking about —
-   * the same property `browser-tools.ts`'s {@link boundOf} gives a session on
-   * one machine, kept across the wire by carrying no more than it already had.
-   *
-   * `session` is this host's own id for the session. The answering end pairs it
-   * with the machine id it knows this host by, which is exactly the
-   * `<machineId>\0<sessionId>` key the binding was written under when the person
-   * attached the window. Neither end has to be told the key; each holds half.
-   *
-   * ## Why JSON text rather than a typed argument object
-   *
-   * The six verbs have five schemas between them and they change. A typed union
-   * here would be a sixth copy of those schemas that has to be kept in step with
-   * `browser-tools.ts`, `catalogue.ts` and both ends of this wire, and the day
-   * one of them drifts is the day an argument is silently dropped — which is the
-   * failure `create`'s hand-off comment above already records once. The
-   * arguments are validated where they are acted on, by the tool's own
-   * `precheck`, which is the only place that can validate them correctly.
+   * What it carries, and what it deliberately does not, is on
+   * {@link WindowCallFrame}.
    */
-  | { t: 'window.call'; id: string; session: string; tool: string; args: string }
+  | WindowCallFrame
+  /**
+   * Which of **your** sessions this host is holding a browser window for.
+   *
+   * Capability `hostWindows`, and the mirror of the client's `window.holds`. It
+   * exists because the arrangement is not always the one `windows` assumes: a
+   * desktop that dialled out watches the far machine's sessions and attaches its
+   * own windows to them, and the far machine — the one with a screen in front of
+   * a person — can hold a window for a session on the machine that dialled it.
+   * Nothing on this side of the wire can derive that; it is a `Map` in the other
+   * app's process, so it is said. See {@link WindowHoldsFrame}.
+   */
+  | WindowHoldsFrame
+  /**
+   * What the browser verb **you** asked for did.
+   *
+   * Capability `hostWindows`. The same frame a client sends for the other
+   * arrangement, read the other way round; see {@link WindowResultFrame}. It is
+   * matched against a question this host was asked and nothing else — an id that
+   * names no outstanding ask is dropped in silence rather than refused, because
+   * an answer and a deadline crossing on the wire is an ordinary race whose
+   * outcome is already correct.
+   */
+  | WindowResultFrame
   /* ---- capability `copilot` ---------------------------------------------- */
   /** Answer to `copilot.state`, and pushed whenever any of it changes. */
   | { t: 'copilot.state'; state: CopilotStateReport }
@@ -2941,6 +3068,21 @@ export type ParseResult =
 const bad = (reason: string): ParseResult => ({ ok: false, code: 'bad-message', reason })
 const tooLarge = (reason: string): ParseResult => ({ ok: false, code: 'too-large', reason })
 
+/**
+ * A window validator's answer, in this parser's vocabulary.
+ *
+ * The three checks are shared with `parseServerMessage` because the frames are
+ * shared; the *refusal* is not, because only this direction carries a
+ * {@link ProtocolErrorCode} and a close code with it. This is the whole of the
+ * translation, and keeping `oversize` distinct is the point of having one: a
+ * frame over a cap has to close with `too-large`, which is the code that tells a
+ * peer its own frame was the problem rather than its framing.
+ */
+function fromWindowRead(read: WindowRead<ClientMessage>): ParseResult {
+  if (read.ok) return { ok: true, message: read.message }
+  return read.oversize === true ? tooLarge(read.reason) : bad(read.reason)
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -3231,6 +3373,93 @@ function utf8Length(value: string): number {
 function overBytes(value: string, cap: number): boolean {
   if (value.length > cap) return true
   return utf8Length(value) > cap
+}
+
+/* --------------------------------------------- the window frame validators -- */
+
+/**
+ * One validator's answer, in a vocabulary both parsers can translate.
+ *
+ * The two parsers below refuse in different words — `parseClientMessage` carries
+ * a {@link ProtocolErrorCode} that decides a close code, `parseServerMessage`
+ * carries a bare reason — and neither vocabulary belongs inside a shape check.
+ * So the checks answer in this one and each parser says it in its own.
+ *
+ * `oversize` is the one distinction that has to survive the translation: a frame
+ * over a cap closes the channel with `too-large` rather than `bad-message`, and
+ * a size refusal reported as a malformed frame would send the wrong close code
+ * to the one peer that could have done something about it.
+ */
+type WindowRead<T> = { ok: true; message: T } | { ok: false; reason: string; oversize?: true }
+
+/**
+ * The three window frames, shape-checked once for both directions.
+ *
+ * These exist because the same three frames now travel host→client and
+ * client→host — see {@link WindowHoldsFrame} — and a validator written twice is
+ * two caps that agree today. `MAX_WINDOW_RESULT_BYTES` is exactly the number
+ * that closed the link between two machines when one end of it was missing; it
+ * is not a number to keep two copies of.
+ *
+ * Nothing here decides anything beyond shape and size. Whether this peer may ask
+ * at all, whether the tool is one it may name, and whether the session exists
+ * are all questions for the end that holds the window, and a parser that started
+ * answering them would be a second allow-list in the file least able to keep it
+ * in step with the first.
+ */
+function readWindowHolds(parsed: Record<string, unknown>): WindowRead<WindowHoldsFrame> {
+  const raw = Array.isArray(parsed.sessions) ? parsed.sessions : null
+  if (raw === null) return { ok: false, reason: 'window.holds without a session list' }
+  /*
+   * Trimmed, and bad entries dropped rather than made a reason to refuse. The
+   * one thing this frame can do is address a verb, and an entry that is not a
+   * usable id addresses nothing — the same argument {@link MAX_WINDOW_HOLDS}
+   * makes about the length of the list.
+   */
+  const sessions: string[] = []
+  for (const entry of raw.slice(0, MAX_WINDOW_HOLDS)) {
+    const session = id(entry)
+    if (session !== null) sessions.push(session)
+  }
+  return { ok: true, message: { t: 'window.holds', sessions } }
+}
+
+function readWindowCall(parsed: Record<string, unknown>): WindowRead<WindowCallFrame> {
+  const requestId = id(parsed.id)
+  const session = id(parsed.session)
+  const tool = asString(parsed.tool)
+  const args = asString(parsed.args)
+  if (requestId === null) return { ok: false, reason: 'window.call without an id' }
+  if (session === null) return { ok: false, reason: 'window.call without a session' }
+  if (tool === null || tool === '' || tool.length > MAX_TOOL_NAME_LENGTH) {
+    return { ok: false, reason: 'window.call without a usable tool name' }
+  }
+  if (args === null) return { ok: false, reason: 'window.call without arguments' }
+  if (overBytes(args, MAX_WINDOW_ARGS_BYTES)) {
+    return { ok: false, reason: 'window.call larger than the argument cap', oversize: true }
+  }
+  return { ok: true, message: { t: 'window.call', id: requestId, session, tool, args } }
+}
+
+function readWindowResult(parsed: Record<string, unknown>): WindowRead<WindowResultFrame> {
+  const requestId = id(parsed.id)
+  if (!requestId) return { ok: false, reason: 'window.result without an id' }
+  if (typeof parsed.ok !== 'boolean') return { ok: false, reason: 'window.result without an outcome' }
+  /*
+   * `body` is not parsed. It is JSON text composed by a tool on the other
+   * machine and it is handed to the MCP client that asked, unread by anything
+   * here; parsing it would mean this file having an opinion about six tool
+   * schemas it does not own. What is checked is that it is a string, and that it
+   * is small enough to have crossed a relay honestly — see
+   * {@link MAX_WINDOW_RESULT_BYTES} for why an over-long one is refused here and
+   * cut down by the end that composed it.
+   */
+  const body = asString(parsed.body)
+  if (body === null) return { ok: false, reason: 'window.result without a body' }
+  if (overBytes(body, MAX_WINDOW_RESULT_BYTES)) {
+    return { ok: false, reason: 'window.result larger than the answer cap', oversize: true }
+  }
+  return { ok: true, message: { t: 'window.result', id: requestId, ok: parsed.ok, body } }
 }
 
 /* ------------------------------------------------------------------ parser -- */
@@ -3782,7 +4011,7 @@ export function parseClientMessage(raw: unknown): ParseResult {
       if (parsed.remember === true) answer.remember = true
       return { ok: true, message: answer }
     }
-    /* ---- capability `windows` ------------------------------------------- */
+    /* ---- capabilities `windows` and `hostWindows` ----------------------- */
     /*
      * Shape-checked here and matched to a question nowhere near here. Whether
      * this host asked anything, whether this device is the one it asked, and
@@ -3790,44 +4019,25 @@ export function parseClientMessage(raw: unknown): ParseResult {
      * because only it is holding the request — the same split `credential.*`
      * makes three cases above.
      *
-     * `body` is not parsed. It is JSON text composed by a tool on the other
-     * machine and it is handed to the MCP client that asked, unread by anything
-     * here; parsing it would mean this file having an opinion about six tool
-     * schemas it does not own. What is checked is that it is a string, and that
-     * it is small enough to have crossed a relay honestly — see
-     * {@link MAX_WINDOW_RESULT_BYTES} for why an over-long one is refused rather
-     * than cut.
+     * All three read through the validators next to `overBytes`, which are the
+     * same ones `parseServerMessage` reads them through. Two copies of these
+     * checks would be two copies of {@link MAX_WINDOW_RESULT_BYTES}, and that
+     * number has already cost a link between two machines once by being wrong in
+     * one place.
      */
+    case 'window.holds':
+      return fromWindowRead(readWindowHolds(parsed))
+    case 'window.result':
+      return fromWindowRead(readWindowResult(parsed))
     /*
-     * A device saying which of this machine's sessions it is holding a window
-     * for. Shape and size only; `window-asks.ts` decides what it means.
+     * And the mirror: a device asking *this* host to act on a window it holds.
      *
-     * Anything in the list that is not a usable id is dropped rather than made a
-     * reason to refuse the frame, and the list is trimmed rather than refused —
-     * the same argument {@link MAX_WINDOW_HOLDS} makes. The one thing this frame
-     * can do is address a verb, and a bad entry in it addresses nothing.
+     * `server.ts` refuses it unless this host advertised `hostWindows` to that
+     * device, which is where the capability is enforced; a parser that enforced
+     * it would need the connection, which it does not have and must not.
      */
-    case 'window.holds': {
-      const raw = Array.isArray(parsed.sessions) ? parsed.sessions : null
-      if (raw === null) return bad('window.holds without a session list')
-      const sessions: string[] = []
-      for (const entry of raw.slice(0, MAX_WINDOW_HOLDS)) {
-        const session = id(entry)
-        if (session !== null) sessions.push(session)
-      }
-      return { ok: true, message: { t: 'window.holds', sessions } }
-    }
-    case 'window.result': {
-      const requestId = id(parsed.id)
-      if (!requestId) return bad('window.result without an id')
-      if (typeof parsed.ok !== 'boolean') return bad('window.result without an outcome')
-      const body = asString(parsed.body)
-      if (body === null) return bad('window.result without a body')
-      if (overBytes(body, MAX_WINDOW_RESULT_BYTES)) {
-        return tooLarge('window.result larger than the answer cap')
-      }
-      return { ok: true, message: { t: 'window.result', id: requestId, ok: parsed.ok, body } }
-    }
+    case 'window.call':
+      return fromWindowRead(readWindowCall(parsed))
     case 'credential.deny': {
       const requestId = id(parsed.id)
       if (!requestId) return bad('credential.deny without an id')
@@ -5354,13 +5564,15 @@ export function parseServerFrame(parsed: unknown): ServerParse {
       // for ever.
       return { ok: true, message: { t: 'upload.failed', id, message: asString(parsed.message) ?? '' } }
     }
-    /* ---- capability `windows` ------------------------------------------- */
+    /* ---- capabilities `windows` and `hostWindows` ----------------------- */
     /*
-     * A browser verb, on its way in from the machine a session is running on.
+     * The same three frames the client parser reads, through the same three
+     * validators, because they are the same frames — see
+     * {@link WindowHoldsFrame}.
      *
-     * Nothing here decides whether it is allowed. The tool name is not checked
-     * against a list, the arguments are not read, and the session id is not
-     * looked up — all three belong to the end that holds the window, because
+     * Nothing here decides whether any of them is allowed. The tool name is not
+     * checked against a list, the arguments are not read, and the session id is
+     * not looked up — all three belong to the end that holds the window, because
      * that is the end that holds the grant, the binding map and the tool's own
      * `precheck`. A parser that started refusing tool names would be a second
      * allow-list, in the file least able to keep it in step with the first.
@@ -5368,20 +5580,16 @@ export function parseServerFrame(parsed: unknown): ServerParse {
      * What is checked is the shape and the size, which is what a parser is for.
      */
     case 'window.call': {
-      const requestId = id(parsed.id)
-      const session = id(parsed.session)
-      const tool = asString(parsed.tool)
-      const args = asString(parsed.args)
-      if (requestId === null) return { ok: false, reason: 'window.call without an id' }
-      if (session === null) return { ok: false, reason: 'window.call without a session' }
-      if (tool === null || tool === '' || tool.length > MAX_TOOL_NAME_LENGTH) {
-        return { ok: false, reason: 'window.call without a usable tool name' }
-      }
-      if (args === null) return { ok: false, reason: 'window.call without arguments' }
-      if (overBytes(args, MAX_WINDOW_ARGS_BYTES)) {
-        return { ok: false, reason: 'window.call larger than the argument cap' }
-      }
-      return { ok: true, message: { t: 'window.call', id: requestId, session, tool, args } }
+      const read = readWindowCall(parsed)
+      return read.ok ? { ok: true, message: read.message } : { ok: false, reason: read.reason }
+    }
+    case 'window.holds': {
+      const read = readWindowHolds(parsed)
+      return read.ok ? { ok: true, message: read.message } : { ok: false, reason: read.reason }
+    }
+    case 'window.result': {
+      const read = readWindowResult(parsed)
+      return read.ok ? { ok: true, message: read.message } : { ok: false, reason: read.reason }
     }
     case 'pong':
       return { ok: true, message: { t: 'pong' } }

@@ -23,10 +23,13 @@ import {
 
 const HERE = { sessionId: 'sess-1', machineId: '' }
 
-function deps(options: { attached?: boolean; holders?: string[] } = {}) {
+function deps(
+  options: { attached?: boolean; holders?: string[]; machineHolders?: string[] } = {},
+) {
   return {
     attachedHere: () => options.attached ?? false,
     holders: () => options.holders ?? [],
+    machineHolders: () => options.machineHolders ?? [],
   }
 }
 
@@ -44,9 +47,32 @@ describe('routing a browser verb to the app that holds the window', () => {
     expect(windowOwnerOf(HERE.sessionId)).toBeNull()
 
     expect(routeWindowVerb(HERE, deps({ holders: ['mac'] }))).toEqual({
-      kind: 'device',
-      deviceId: 'mac',
+      kind: 'peer',
+      holder: { kind: 'device', id: 'mac' },
     })
+  })
+
+  it('sends it to a machine this app dialled out to when that is where the window is', () => {
+    /*
+     * The mirror, and the cell that did not exist before tonight. A session
+     * running *here* whose window is in the app of a machine this desktop
+     * dialled — announced over `CAPABILITY.hostWindows` and landing in the second
+     * desk. The route has to carry which id space the answer came from, or the
+     * verb goes to the wrong wire.
+     */
+    expect(routeWindowVerb(HERE, deps({ machineHolders: ['office-pc'] }))).toEqual({
+      kind: 'peer',
+      holder: { kind: 'machine', id: 'office-pc' },
+    })
+  })
+
+  it('reads a build with no machine desk as no machine holding anything', () => {
+    // The dep is optional so every caller written before the mirror compiles.
+    // Absent must mean "none" rather than throw: the headless host has no second
+    // desk and every session on it is routed through this same function.
+    expect(
+      routeWindowVerb(HERE, { attachedHere: () => false, holders: () => [] }),
+    ).toEqual({ kind: 'here' })
   })
 
   it('keeps a session its device started pointed at that device, window here or not', () => {
@@ -63,7 +89,21 @@ describe('routing a browser verb to the app that holds the window', () => {
         { sessionId: 'guest-session', machineId: '' },
         deps({ attached: true, holders: ['mac'] }),
       ),
-    ).toEqual({ kind: 'device', deviceId: 'phone-1' })
+    ).toEqual({ kind: 'peer', holder: { kind: 'device', id: 'phone-1' } })
+  })
+
+  it('keeps it pointed there even when a machine this app dialled claims the window', () => {
+    // The same rule, one hop further out. A machine this desktop dialled naming
+    // somebody else's session would be a third computer inserting itself between
+    // a guest and its own browser, so branch 1 has no machine fallback either.
+    noteWindowOwner('guest-session', 'phone-1')
+
+    expect(
+      routeWindowVerb(
+        { sessionId: 'guest-session', machineId: '' },
+        deps({ machineHolders: ['office-pc'] }),
+      ),
+    ).toEqual({ kind: 'peer', holder: { kind: 'device', id: 'phone-1' } })
   })
 
   it('serves a local session against the window on this screen before any claim', () => {
@@ -87,7 +127,29 @@ describe('routing a browser verb to the app that holds the window', () => {
     // neither of them is wrong. A verb with two destinations has no correct one.
     expect(routeWindowVerb(HERE, deps({ holders: ['mac', 'laptop'] }))).toEqual({
       kind: 'ambiguous',
-      deviceIds: ['mac', 'laptop'],
+      holders: [
+        { kind: 'device', id: 'mac' },
+        { kind: 'device', id: 'laptop' },
+      ],
+    })
+  })
+
+  it('counts a device and a machine together, because neither of them is wrong', () => {
+    /*
+     * The two id spaces are gathered into one list rather than checked in an
+     * order, and this is why: a device that dialled in and a machine this app
+     * dialled out to can each have a window attached to one session here. There
+     * is no order that would be right, and preferring either would be driving one
+     * person's browser on a guess.
+     */
+    expect(
+      routeWindowVerb(HERE, deps({ holders: ['mac'], machineHolders: ['office-pc'] })),
+    ).toEqual({
+      kind: 'ambiguous',
+      holders: [
+        { kind: 'device', id: 'mac' },
+        { kind: 'machine', id: 'office-pc' },
+      ],
     })
   })
 
@@ -117,6 +179,26 @@ describe('the route is wired to the app rather than only written', () => {
     // Both halves of the lookup the rule cannot do for itself.
     expect(index).toMatch(/attachedHere:.*windowsOf\(/s)
     expect(index).toMatch(/holders:.*holdersOf\(/s)
+    // And the third: the machines this app dialled out to, which is the half the
+    // rule had no way to hear about until the frames ran both ways.
+    expect(index).toContain('machineHolders: (sessionId) => machineWindowAsks.holdersOf(sessionId)')
+  })
+
+  it('wires the return path end to end, not only the rule that would use it', () => {
+    /*
+     * "Built, tested, and never wired to boot" again, for the direction added
+     * tonight. Four things have to be true at once or a session here can never
+     * reach a window over there: a second desk, a wire under it, somewhere for
+     * the far machine's holdings to land, and a way to serve the mirror when this
+     * app is the one holding the window.
+     */
+    expect(index).toContain('const machineWindowAsks = createWindowAsks()')
+    expect(index).toContain('machineWindowAsks.serve({')
+    expect(index).toContain('windowsHeldThere: (machineId, sessions) => machineWindowAsks.held(')
+    expect(index).toContain('serveWindows: (deviceId, call)')
+    expect(index).toContain('windowsHeldFor: (deviceId)')
+    // And the fact travels down both kinds of link on the one subscription.
+    expect(index).toContain('remote.server.windowsHeldChanged()')
   })
 
   it('tells the paired machines which of their sessions has a window here', () => {

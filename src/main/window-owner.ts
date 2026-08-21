@@ -89,21 +89,52 @@ export function resetWindowOwnersForTests(): void {
 
 /* -------------------------------------------------------------- the route -- */
 
+/**
+ * Whose app holds the window — and which of this machine's two id spaces the id
+ * is from.
+ *
+ * The two are not interchangeable and must never be flattened into one string. A
+ * **device** is something connected *to* this app's host: `server.ts` minted its
+ * id at pairing and reaches it over a connection. A **machine** is something
+ * this app dialled *out* to: `machines/store.ts` minted its id and `ipc.ts`
+ * reaches it over a link. Two different desks, two different wires, and an id
+ * handed to the wrong one addresses nothing — which would be a browser verb that
+ * fails for a reason nobody can see.
+ */
+export type WindowHolder = { kind: 'device'; id: string } | { kind: 'machine'; id: string }
+
 /** Where one browser verb goes. */
 export type WindowRoute =
   /** This app. Every session in this window with a window of its own, and every session with none. */
   | { kind: 'here' }
-  /** That device's app, over `window.call`. */
-  | { kind: 'device'; deviceId: string }
+  /** Another app, over `window.call`. {@link WindowHolder} says which wire. */
+  | { kind: 'peer'; holder: WindowHolder }
   /** More than one computer holds a window for it, so there is no single answer. */
-  | { kind: 'ambiguous'; deviceIds: string[] }
+  | { kind: 'ambiguous'; holders: WindowHolder[] }
 
 /** What {@link routeWindowVerb} has to ask of the rest of the app. */
 export interface WindowRouteDeps {
   /** Does *this* app hold a browser window attached to that session? */
   attachedHere(sessionId: string, machineId: string): boolean
-  /** Which devices have said they are holding one. See `WindowAskDesk.holdersOf`. */
+  /**
+   * Which **devices** have said they are holding one. See `WindowAskDesk.holdersOf`
+   * on the desk `server.ts` fills in.
+   */
   holders(sessionId: string): readonly string[]
+  /**
+   * And which **machines** this app dialled out to have said the same.
+   *
+   * The other half of the matrix, and the half that only exists because the
+   * `windows` conversation now runs both ways. A desktop that dialled a PC
+   * attaches its own windows to the PC's sessions — that is `holders` above, seen
+   * from the PC — and the mirror is a session running *here* whose window is in
+   * the app over there, which the PC announces on `CAPABILITY.hostWindows`.
+   *
+   * Optional, so that every caller written before the mirror existed compiles and
+   * behaves exactly as it did. Absent is read as "none", which is what a build
+   * with no machine desk genuinely has.
+   */
+  machineHolders?(sessionId: string): readonly string[]
 }
 
 /**
@@ -120,7 +151,10 @@ export interface WindowRouteDeps {
  * So this branch has no local fallback and must never grow one. There is no
  * "unless a window here is attached to it" clause, because such a clause *is*
  * the door: attach one window on this machine to a guest's session and the
- * guest's agent has it.
+ * guest's agent has it. It has no *machine* fallback either, and for the same
+ * reason read one hop further out: a machine this app dialled naming somebody
+ * else's session would be a third computer inserting itself between a guest and
+ * its own browser.
  *
  * ## 2. Any other session's window is wherever it was attached
  *
@@ -128,15 +162,16 @@ export interface WindowRouteDeps {
  * than an inconsistency. Branch 1 is about somebody else's session, where a
  * local window is a boundary being walked around. This is the person's own
  * session, where a window they attached in this app is simply the nearest true
- * answer — it costs no frame, and it also means a paired machine cannot take a
+ * answer — it costs no frame, and it also means a paired computer cannot take a
  * local session's verbs away from the window on this screen by naming it in a
  * `window.holds`.
  *
- * Then the devices that said they hold one. Two of them is refused by the
- * caller rather than resolved: two people can each attach a window of their own
- * to one session here and neither is wrong, so a verb with two destinations has
- * no correct one and driving the wrong person's browser is not a thing to do on
- * a guess.
+ * Then the computers that said they hold one, **both kinds together**. They are
+ * gathered into one list rather than checked in an order, because there is no
+ * order that would be right: a device and a machine each holding a window for
+ * one session are two people each looking at a page, and preferring either would
+ * be driving one of their browsers on a guess. Two of anything is refused by the
+ * caller with a sentence, which is the same answer two devices already got.
  */
 export function routeWindowVerb(
   session: { sessionId: string; machineId: string },
@@ -146,14 +181,19 @@ export function routeWindowVerb(
    * A caller with no session id is the token that has been minted but not yet
    * bound — see `session-tools.ts`, which hands out exactly that for the breath
    * between the two. It may do nothing at all, and it certainly may not be
-   * routed to a machine on the strength of an id that names no session.
+   * routed to a computer on the strength of an id that names no session.
    */
   if (session.sessionId === '') return { kind: 'here' }
   const spawned = windowOwnerOf(session.sessionId)
-  if (spawned !== null) return { kind: 'device', deviceId: spawned }
+  if (spawned !== null) return { kind: 'peer', holder: { kind: 'device', id: spawned } }
   if (deps.attachedHere(session.sessionId, session.machineId)) return { kind: 'here' }
-  const holders = deps.holders(session.sessionId)
+  const holders: WindowHolder[] = [
+    ...deps.holders(session.sessionId).map((id): WindowHolder => ({ kind: 'device', id })),
+    ...(deps.machineHolders?.(session.sessionId) ?? []).map(
+      (id): WindowHolder => ({ kind: 'machine', id }),
+    ),
+  ]
   if (holders.length === 0) return { kind: 'here' }
-  if (holders.length > 1) return { kind: 'ambiguous', deviceIds: [...holders] }
-  return { kind: 'device', deviceId: holders[0] }
+  if (holders.length > 1) return { kind: 'ambiguous', holders }
+  return { kind: 'peer', holder: holders[0] }
 }

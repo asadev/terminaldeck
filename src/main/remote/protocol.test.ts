@@ -20,6 +20,8 @@ import {
   SHA256_HEX_LENGTH,
   OUTPUT_CHUNK_BYTES,
   CONTROL_IDS,
+  MAX_WINDOW_ARGS_BYTES,
+  MAX_WINDOW_RESULT_BYTES,
   PROTOCOL_ERROR_CODES,
   PROTOCOL_VERSION,
   chunkInput,
@@ -110,6 +112,7 @@ const CLIENT_TYPES: Record<ClientMessage['t'], true> = {
   'chat.read': true,
   'window.result': true,
   'window.holds': true,
+  'window.call': true,
 }
 
 /** Same guard for the other direction. */
@@ -158,6 +161,8 @@ const SERVER_TYPES: Record<ServerMessage['t'], true> = {
   'session.sent': true,
   'chat.rows': true,
   'window.call': true,
+  'window.holds': true,
+  'window.result': true,
 }
 
 const VALID_CLIENT: ClientMessage[] = [
@@ -291,6 +296,9 @@ const VALID_CLIENT: ClientMessage[] = [
   // for. The whole set every time, empty included: that is how a detach travels.
   { t: 'window.holds', sessions: [SESSION_ID] },
   { t: 'window.holds', sessions: [] },
+  // And the mirror: a client with the pty asking the host, which is the one
+  // holding the window. Same frame, opposite direction — see `WindowCallFrame`.
+  { t: 'window.call', id: 'win-3', session: SESSION_ID, tool: 'browser.read', args: '{}' },
 ]
 
 const SESSION: RemoteSession = {
@@ -349,6 +357,13 @@ const VALID_SERVER: ServerMessage[] = [
   // session that has not spoken yet.
   { t: 'chat.rows', rid: 'cht-2', id: SESSION_ID, rows: [], reset: true, found: false },
   { t: 'window.call', id: 'win-1', session: SESSION_ID, tool: 'browser.read', args: '{}' },
+  // The other direction of the same three frames: a host that holds the window
+  // saying which of this client's sessions it holds one for, and answering the
+  // client's ask.
+  { t: 'window.holds', sessions: [SESSION_ID] },
+  { t: 'window.holds', sessions: [] },
+  { t: 'window.result', id: 'win-4', ok: true, body: '{"url":"https://example.com"}' },
+  { t: 'window.result', id: 'win-5', ok: false, body: '{"message":"no window by that name"}' },
   { t: 'pong' },
   { t: 'created', session: SESSION },
   { t: 'closed', id: SESSION_ID },
@@ -2299,5 +2314,84 @@ describe('window.holds', () => {
   it('refuses a frame with no list at all', () => {
     expect(parseClientMessage({ t: 'window.holds' }).ok).toBe(false)
     expect(parseClientMessage({ t: 'window.holds', sessions: 'all of them' }).ok).toBe(false)
+  })
+})
+/**
+ * The three window frames, read the same way whichever end they arrive at.
+ *
+ * They travel in both directions since 2026-08-21: whichever computer holds the
+ * `WebContentsView` serves, whichever holds the pty asks, and which of those a
+ * given desktop is depends only on who dialled whom. That is one shape per
+ * frame and one validator per frame, and this block is what stops the second
+ * copy from being written later: a check that passes here and fails there is a
+ * frame that crosses one way and closes the channel the other.
+ */
+describe('the window frames in both directions', () => {
+  const CASES: Record<string, unknown>[] = [
+    { t: 'window.holds', sessions: [SESSION_ID, '../../etc/passwd', 42, '', 'a-second-id'] },
+    { t: 'window.holds', sessions: [] },
+    { t: 'window.holds' },
+    { t: 'window.holds', sessions: 'all of them' },
+    { t: 'window.call', id: 'w-1', session: SESSION_ID, tool: 'browser.read', args: '{}' },
+    { t: 'window.call', id: 'w-1', session: SESSION_ID, tool: '', args: '{}' },
+    { t: 'window.call', id: 'w-1', session: 'a/b', tool: 'browser.read', args: '{}' },
+    { t: 'window.call', id: 'w-1', session: SESSION_ID, tool: 'browser.read' },
+    { t: 'window.result', id: 'w-1', ok: true, body: '{}' },
+    { t: 'window.result', id: 'w-1', ok: 'yes', body: '{}' },
+    { t: 'window.result', id: 'w-1', ok: true },
+  ]
+
+  it('agrees on every frame, valid or not', () => {
+    for (const frame of CASES) {
+      const asClient = parseClientMessage(frame)
+      const asServer = parseServerMessage(JSON.stringify(frame))
+      expect([frame.t, asClient.ok]).toEqual([frame.t, asServer.ok])
+      if (asClient.ok && asServer.ok) {
+        expect(asClient.message).toEqual(asServer.message)
+      }
+    }
+  })
+
+  it('agrees on the caps, which is the number that cost a link once', () => {
+    /*
+     * `MAX_WINDOW_RESULT_BYTES` was right in the parser and missing at the end
+     * that composed the answer for one evening, and a real page outline took the
+     * link between two machines down — terminals, transfers and all. A second
+     * copy of these checks is a second place for that to happen, so the point of
+     * this test is that there is only one.
+     */
+    const huge = { t: 'window.result', id: 'w-1', ok: true, body: 'x'.repeat(MAX_WINDOW_RESULT_BYTES + 1) }
+    const fat = { t: 'window.call', id: 'w-1', session: SESSION_ID, tool: 'browser.read', args: 'x'.repeat(MAX_WINDOW_ARGS_BYTES + 1) }
+    for (const frame of [huge, fat]) {
+      expect(parseClientMessage(frame).ok).toBe(false)
+      expect(parseServerMessage(JSON.stringify(frame)).ok).toBe(false)
+    }
+    // And the over-size refusal keeps its own close code on the direction that
+    // carries one: a size refusal reported as a malformed frame would send the
+    // wrong code to the one peer that could have done something about it.
+    const refusal = parseClientMessage(huge)
+    if (refusal.ok) throw new Error('unreachable')
+    expect(refusal.code).toBe('too-large')
+  })
+
+  it('trims an over-long holdings list the same way at both ends', () => {
+    const many = Array.from({ length: MAX_WINDOW_HOLDS + 50 }, (_, n) => `session-${n}`)
+    for (const parsed of [
+      parseClientMessage({ t: 'window.holds', sessions: many }),
+      parseServerMessage(JSON.stringify({ t: 'window.holds', sessions: many })),
+    ]) {
+      expect(parsed.ok).toBe(true)
+      if (!parsed.ok) throw new Error('unreachable')
+      if (parsed.message.t !== 'window.holds') throw new Error('unreachable')
+      expect(parsed.message.sessions).toHaveLength(MAX_WINDOW_HOLDS)
+    }
+  })
+
+  it('offers both halves of the conversation as capabilities', () => {
+    // Two strings rather than a wider reading of one. A build shipped before
+    // tonight advertises `windows` and means only the old half; a frame sent on
+    // the strength of that word is a machine falling off the network.
+    expect(CAPABILITIES).toContain('windows')
+    expect(CAPABILITIES).toContain('hostwindows')
   })
 })

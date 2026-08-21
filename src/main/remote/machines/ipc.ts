@@ -31,7 +31,7 @@
  */
 
 import { createRemoteReach, type ReachAnswer, type RemoteReach } from '../../localhost-reach'
-import { CONTROL_IDS, MAX_URL_LENGTH, USAGE_WANTS, emptyUsageReading } from '../protocol'
+import { CONTROL_IDS, MAX_URL_LENGTH, USAGE_WANTS, emptyUsageReading, type WindowCallFrame } from '../protocol'
 import { DEFAULT_RELAY_URL } from '../../../shared/relay-wire'
 import type { InvokeRegistrar } from '../../ipc-seam'
 import type { PairingToken } from '../device-auth'
@@ -193,6 +193,35 @@ export interface MachinesIpcDeps {
    * sessions on one paired computer are not facts the next one gets to hear.
    */
   windowsHeld?(machineId: string): readonly string[]
+  /**
+   * That machine has said which of **this** one's sessions it is holding a
+   * browser window for.
+   *
+   * The mirror of {@link windowsHeld}, arriving rather than leaving. It lands on
+   * the machine-side `WindowAskDesk`, which is the same desk type the host side
+   * fills in from `server.ts` — one table per direction, and this dep is the
+   * only way into the second one.
+   *
+   * Its presence is also the switch: without it a link never advertises
+   * `CAPABILITY.hostWindows`, so no machine ever sends the frame, so a build that
+   * cannot use the fact is never told it. See `guest.ts`'s hello.
+   */
+  windowsHeldThere?(machineId: string, sessions: readonly string[]): void
+  /**
+   * That machine has answered a browser verb this one asked it to run.
+   *
+   * Not keyed by machine, deliberately: the id on the answer is one this app
+   * minted and handed to exactly one link, so the desk already knows which
+   * question it belongs to and a machine id would be a second key that has to
+   * agree with the first. An id the desk is not holding is dropped there, which
+   * is what an answer that crossed its own deadline looks like.
+   */
+  windowAnswered?(result: { id: string; ok: boolean; body: string }): void
+  /**
+   * That machine's link is no longer online, so nothing outstanding to it can
+   * still be answered. See the call site for why the *holdings* survive it.
+   */
+  windowsUnreachable?(machineId: string): void
   now?: () => number
 }
 
@@ -210,6 +239,25 @@ export interface MachinesIpc {
    * reconnection.
    */
   drivesWindows(machineId: string): boolean
+  /**
+   * Put one browser verb on that machine's link, and say whether it was heard.
+   *
+   * The wire half of the machine-side `WindowAskDesk` — a count rather than a
+   * boolean because that is the shape the desk's `WindowWire.ask` takes on both
+   * directions, and on this one it is only ever nought or one: a machine is one
+   * link, unlike a device, which can be attached from two windows at once.
+   *
+   * Zero is the answer the desk turns into a sentence in milliseconds instead of
+   * a fifty-five second wait: the link is down, or that machine's build never
+   * advertised `CAPABILITY.hostWindows` and would close the channel on a frame
+   * it has never parsed.
+   */
+  askWindow(machineId: string, call: WindowCallFrame): number
+  /**
+   * Could {@link askWindow} reach that machine right now, without sending
+   * anything? The same two conditions, asked ahead of time.
+   */
+  servesWindows(machineId: string): boolean
   /**
    * A browser window here was attached to, or detached from, a session on a
    * paired machine. Tell every machine that is up which of its sessions this app
@@ -356,6 +404,22 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
           // ever named. Told after the close rather than instead of it: this is
           // bookkeeping catching up with a fact, not a second way to close.
           deps.tunnelsDropped?.(machine.id)
+          /*
+           * And every browser verb still waiting on that machine, settled now
+           * rather than at its deadline.
+           *
+           * `WindowAskDesk.gone` makes the argument: a tool call that can be
+           * answered in milliseconds must not spend fifty-five seconds finding
+           * out the machine hung up, because a model waiting that long concludes
+           * the tool is broken and starts looking for another way in.
+           *
+           * What is *not* dropped is the table of what that machine said it
+           * holds. A laptop that closed its lid still has the window attached to
+           * it, and the honest sentence for a verb sent there is "that computer
+           * is not connected right now" — forgetting instead would answer "no
+           * browser window is attached to this session", which is false.
+           */
+          deps.windowsUnreachable?.(machine.id)
         }
         announce()
       },
@@ -404,6 +468,21 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
       ...(deps.windowsHeld === undefined
         ? {}
         : { windowsHeld: () => deps.windowsHeld!(machine.id) }),
+      /*
+       * And the mirror pair: what that machine says it is holding for *us*, and
+       * where its answers land.
+       *
+       * Spread on the same rule as the two above, and the presence of
+       * `onWindowHolds` is what makes the link advertise `hostWindows` at all —
+       * so a build with no desk never tells a far machine it may be asked, and
+       * never receives a frame it would drop.
+       */
+      ...(deps.windowsHeldThere === undefined
+        ? {}
+        : { onWindowHolds: (sessions) => deps.windowsHeldThere!(machine.id, sessions) }),
+      ...(deps.windowAnswered === undefined
+        ? {}
+        : { onWindowResult: (result) => deps.windowAnswered!(result) }),
       now,
     })
     links.set(machine.id, link)
@@ -1233,6 +1312,14 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
     drivesWindows: (machineId: string): boolean => store.drivesWindows(machineId),
     announceWindows(): void {
       for (const link of links.values()) link.announceWindows()
+    },
+    askWindow(machineId: string, call: WindowCallFrame): number {
+      const link = links.get(machineId)
+      if (!link) return 0
+      return link.askWindow(call) ? 1 : 0
+    },
+    servesWindows(machineId: string): boolean {
+      return links.get(machineId)?.servesWindows() ?? false
     },
     sendFile,
     wake(): void {

@@ -70,6 +70,7 @@ import {
   type RemoteSession,
   type ServerMessage,
   type UsageWant,
+  type WindowCallFrame,
 } from '../protocol'
 import { thisMachineName } from '../../platform/host'
 import type { LocalhostMessage } from '../tunnel'
@@ -377,6 +378,32 @@ export interface MachineLink {
    * drift and this cannot.
    */
   announceWindows(): boolean
+  /**
+   * Ask that machine to act on a browser window **it** is holding, for a session
+   * running here.
+   *
+   * The mirror of {@link announceWindows} and of the `window.call` this link
+   * *receives*: same frame, opposite direction, and it goes out only after that
+   * machine has advertised `CAPABILITY.hostWindows`. `false` means nothing was
+   * sent — the link is down, or that machine's build has never heard of the
+   * frame in this direction — and the desk turns that into a sentence in
+   * milliseconds rather than a fifty-five second wait.
+   *
+   * Nothing is decided here. The grant is the far machine's, read there per
+   * call; the window is resolved there inside that session's own binding; the
+   * answer comes back as a `window.result` and is settled on the desk.
+   */
+  askWindow(call: WindowCallFrame): boolean
+  /**
+   * Could {@link askWindow} reach that machine right now, without sending
+   * anything?
+   *
+   * The same two conditions `askWindow` applies — an online link, on a build that
+   * advertised `hostWindows` — asked ahead of time. Separate from a probe send,
+   * because a probe that put a frame on a socket would be a lookup writing to
+   * somebody's network.
+   */
+  servesWindows(): boolean
   /** Ask again what is listening over there. Refused unless it advertised `localhost`. */
   ports(): boolean
   /**
@@ -673,6 +700,32 @@ export interface MachineLinkOptions {
    * now".
    */
   windowsHeld?(): readonly string[]
+  /**
+   * That machine says it is holding a browser window for these sessions of
+   * **ours**. The list replaces whatever it said last.
+   *
+   * The mirror of {@link windowsHeld}, arriving instead of leaving, and the fact
+   * without which the return path could never fire. A window is a
+   * `WebContentsView` in the renderer of the app somebody is looking at; when the
+   * person is sitting at *that* machine and puts a page beside a session running
+   * *here*, the relation is written in that app's `browser-binding.ts` and there
+   * is nothing on this machine's pty that says so. So it travels, on
+   * `CAPABILITY.hostWindows`, and lands in the machine-side `WindowAskDesk`.
+   *
+   * Present or absent is also what this link advertises on: absent means this
+   * build cannot ask, so it never claims the capability, so the far machine never
+   * sends the frame. See {@link MachineLink.askWindow}.
+   */
+  onWindowHolds?(sessions: readonly string[]): void
+  /**
+   * That machine has answered a browser verb this app asked it to run.
+   *
+   * Handed straight out rather than resolved here: the promise, the deadline and
+   * the sentence for a machine that never answers all live on the desk, which is
+   * the same file that holds them for the other direction. This link is a socket
+   * and a state machine.
+   */
+  onWindowResult?(result: { id: string; ok: boolean; body: string }): void
   now?: () => number
   /** Seams for the tests, so nothing here dials the public internet. */
   dial?: (request: DialRequest) => Promise<GuestChannel>
@@ -843,6 +896,22 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
     if (options.windowsHeld === undefined) return false
     if (!current.capabilities.includes(CAPABILITY.windows)) return false
     return send({ t: 'window.holds', sessions: [...options.windowsHeld()] })
+  }
+
+  /**
+   * See {@link MachineLink.askWindow}. The same two gates as `announceWindows`,
+   * pointing the other way.
+   *
+   * The version check is the one that matters and it is not interchangeable with
+   * the one above: a machine that advertised `windows` said it may *ask* about
+   * windows this app holds, which is silence on whether it holds any of its own
+   * or knows the frame that asks about them. Sending on the wrong word would put
+   * a `window.call` from a client on a host that has never parsed one, and
+   * `parseClientMessage` over there answers an unknown type by closing the
+   * channel — the link, its terminals and its transfers, lost to a page read.
+   */
+  function servesWindows(): boolean {
+    return current.state === 'online' && current.capabilities.includes(CAPABILITY.hostWindows)
   }
 
   /**
@@ -1160,6 +1229,39 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
           })
         return
       }
+      case 'window.holds': {
+        /*
+         * That machine saying which of *this* one's sessions it is holding a
+         * browser window for.
+         *
+         * The mirror of the frame this link sends on every welcome, and it is
+         * handled with the same indifference: recorded whatever the ids are and
+         * whether or not this machine has ever heard of them. It is not a grant
+         * and it takes nothing away — `routeWindowVerb` puts a window attached
+         * *here* ahead of it — so a machine that named a session it holds no
+         * window for has arranged for its own answers to be refusals.
+         *
+         * A frame arriving on a build that cannot use it is dropped rather than
+         * refused: this app advertises `hostWindows` only when it can, so a
+         * machine sending it anyway is one that ignored the negotiation, and
+         * closing a working link over that would cost more than the frame does.
+         */
+        options.onWindowHolds?.([...message.sessions])
+        return
+      }
+      case 'window.result': {
+        /*
+         * And that machine's answer to a verb this one asked for.
+         *
+         * Matched against the outstanding question on the desk, which drops an
+         * id it is not holding in silence: an answer and this end's deadline
+         * crossing on the wire is an ordinary race whose outcome is already
+         * correct — the tool call has been answered — and closing the link over
+         * it would turn a slow network into a dropped machine.
+         */
+        options.onWindowResult?.({ id: message.id, ok: message.ok, body: message.body })
+        return
+      }
       case 'sessions':
         publish({ sessions: message.sessions })
         return
@@ -1424,22 +1526,39 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
     // holds the key this machine paired against, which is why sending a bearer
     // secret down it is safe.
     /*
-     * What this end can *serve*, which on this link is exactly one thing.
+     * What this end can serve, and what it may ask — the two halves of the
+     * window conversation, one string each.
      *
-     * Every other capability string in this protocol is a verb the host serves
-     * and the guest sends; `windows` runs the other way, so it is advertised
-     * from here — and only when a handler was actually wired. A build that lists
-     * it without one would have a far machine sending `window.call` into a
-     * socket that answers nothing, which is a tool call somebody's turn is
-     * blocked on, waiting out a deadline for a feature that was never there.
+     * Every other capability in this protocol is a verb the host serves and the
+     * guest sends. These two run the other way, so they are advertised from
+     * here, and each only when the handler behind it was actually wired:
+     *
+     *  - `windows` says *"I hold browser windows and will serve asks about
+     *    them"*. A build that listed it without `onWindowCall` would have a far
+     *    machine sending `window.call` into a socket that answers nothing —
+     *    a tool call somebody's turn is blocked on, waiting out a deadline for a
+     *    feature that was never there.
+     *  - `hostWindows` says *"I have sessions of my own and I may ask about
+     *    windows **you** hold"*. Without `onWindowHolds` there is nowhere to put
+     *    the far machine's answer, so the frame would arrive and be dropped, and
+     *    a capability that produces a dropped frame is a lie told on a socket.
+     *
+     * They are independent. The headless host holds no windows and lists only
+     * the second; a build with no desk lists only the first; a desktop lists
+     * both, because on a link between two desktops either end can be the one
+     * with the screen.
      */
+    const capabilities = [
+      ...(options.onWindowCall === undefined ? [] : [CAPABILITY.windows]),
+      ...(options.onWindowHolds === undefined ? [] : [CAPABILITY.hostWindows]),
+    ]
     opened.send(
       serialize({
         t: 'hello',
         protocol: PROTOCOL_VERSION,
         token: options.secrets.credential,
         device: describeThisMachine(),
-        ...(options.onWindowCall === undefined ? {} : { capabilities: [CAPABILITY.windows] }),
+        ...(capabilities.length === 0 ? {} : { capabilities }),
       }),
     )
 
@@ -1549,6 +1668,11 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
       return send(message)
     },
     announceWindows,
+    askWindow(call: WindowCallFrame): boolean {
+      if (!servesWindows()) return false
+      return send(call)
+    },
+    servesWindows,
     openThere(url): boolean {
       if (!current.capabilities.includes(CAPABILITY.web)) return false
       // The URL is not checked here and deliberately is not. The far machine

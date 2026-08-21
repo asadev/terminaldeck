@@ -26,16 +26,28 @@
  * carried a verb from the second to the first.
  *
  * `remote/protocol.ts`'s `window.call` is that wire, and this is the end of it
- * that decides. The far machine forwards; **this** end — the one whose browser
+ * that decides. The far computer forwards; **this** end — the one whose browser
  * it is — is where the grant, the binding lookup and every tier check live.
+ *
+ * ## One decider, two doors
+ *
+ * Since the frames run in both directions, a `window.call` can arrive here two
+ * ways: down a link this desktop dialled (`machines/guest.ts`), or up a
+ * connection a device made to this desktop's own host (`remote/server.ts`). They
+ * are the same question and they are answered by this one function — a second
+ * dispatcher is how one of them comes to allow what the other refuses. What the
+ * two call sites supply differently is only the grant to read and the place to
+ * name in the refusal; see {@link WindowServeDeps.grantSwitch}.
  *
  * ## The two questions, in this order
  *
- *  1. **May that machine ask at all?** {@link WindowServeDeps.allowed}, read per
- *     call. A machine paired here, whose folders and sessions this desktop can
- *     reach, has not thereby been handed the browser on this screen — see
+ *  1. **May that computer ask at all?** {@link WindowServeDeps.allowed}, read
+ *     per call. A computer paired here, whose folders and sessions this desktop
+ *     can reach, has not thereby been handed the browser on this screen — see
  *     `MachineStore.drivesWindows` for why windows are their own axis and why
- *     that axis defaults closed.
+ *     that axis defaults closed, and `window-grants.ts` for the same axis
+ *     pointing at a device that dialled in rather than a machine this desktop
+ *     dialled out to.
  *  2. **Is that verb one of the six?** {@link SESSION_TOOLS}, the same positive
  *     list a session on this machine holds on its own token. Checked here as
  *     well as by `server.ts`'s `allowed` predicate, because this path does not
@@ -93,6 +105,23 @@ export interface WindowServeDeps {
    * grant must land on the very next call, not on the next reconnection.
    */
   allowed(machineId: string): boolean
+  /**
+   * Where the person turns that grant on, in the words they will read.
+   *
+   * A dependency rather than a sentence in {@link serveWindowCall}, because this
+   * function now serves **two** doors and the switch is not in the same place
+   * behind them. A machine this desktop dialled out to has a card in Machines
+   * and its switch is on that card; a device that dialled in has a row in
+   * Settings → Remote and its switch is there. One hard-coded clause would have
+   * been right for one of them and a wild-goose chase for the other — and the
+   * whole reason this refusal names a place is that it is the one refusal on
+   * this path a person can do something about.
+   *
+   * A phrase rather than a boolean or an enum, so the two call sites read as the
+   * sentences they produce and a third door has to write its own rather than
+   * pick the nearest of two.
+   */
+  grantSwitch: string
   /**
    * The dispatcher, or null before `deck-control` has finished starting.
    *
@@ -187,9 +216,9 @@ export async function serveWindowCall(
      * `session-verbs.ts` exists to stop.
      */
     return refuse(
-      'this machine is not allowed to act on browser windows on the computer that holds them. The ' +
-        'person can turn that on for this machine in Machines, beside its name. Say what you would ' +
-        'have done on the page and let them do it.',
+      'this computer is not allowed to act on browser windows on the computer that holds them. The ' +
+        `person can turn that on ${deps.grantSwitch}. Say what you would have done on the page and ` +
+        'let them do it.',
     )
   }
 

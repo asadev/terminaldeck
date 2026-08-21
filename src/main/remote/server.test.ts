@@ -4117,3 +4117,167 @@ describe('a browser window on the device, driven by a session here', () => {
     expect(client.received.some((m) => m.t === 'error')).toBe(false)
   })
 })
+describe('a browser window here, driven by a session on the device', () => {
+  /**
+   * The mirror, and the cell that did not exist before 2026-08-21.
+   *
+   * `windows` above is this machine asking a device to move a browser it holds.
+   * This is the opposite arrangement — a device that dialled in has the pty, and
+   * the window is in *this* app — and it is just as ordinary, because which of
+   * two desktops is the host depends only on who dialled whom. It is the same
+   * three frames read the other way round, gated on a second capability so that
+   * a client from before tonight is never sent one it would answer by closing
+   * the channel.
+   */
+  function server(): {
+    serveWindows: (
+      deviceId: string,
+      call: { sessionId: string; tool: string; args: string },
+    ) => Promise<{ ok: boolean; body: string }>
+    seen: { deviceId: string; call: { sessionId: string; tool: string; args: string } }[]
+    answer: { ok: boolean; body: string }
+    fail: boolean
+  } {
+    const state = {
+      seen: [] as { deviceId: string; call: { sessionId: string; tool: string; args: string } }[],
+      answer: { ok: true, body: '{"title":"Example"}' },
+      fail: false,
+      serveWindows: (
+        deviceId: string,
+        call: { sessionId: string; tool: string; args: string },
+      ): Promise<{ ok: boolean; body: string }> => {
+        state.seen.push({ deviceId, call })
+        if (state.fail) return Promise.reject(new Error('the browser is switched off'))
+        return Promise.resolve(state.answer)
+      },
+    }
+    return state
+  }
+
+  it('is not advertised by a host with nothing that can act on a window', async () => {
+    // The same rule every capability here follows, and the one that keeps a
+    // device from sending a frame nobody will answer: the headless daemon has
+    // no browser, so it never claims it can be driven.
+    const harness = await serve()
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    const hello = await client.until((m) => m.t === 'welcome', 'the welcome')
+    if (hello.t !== 'welcome') throw new Error('unreachable')
+    expect(hello.capabilities).not.toContain('hostwindows')
+  })
+
+  it('serves the verb and answers on the same socket', async () => {
+    const acting = server()
+    const harness = await serve({ serveWindows: acting.serveWindows })
+    const client = await connect(harness.port)
+    client.send({ ...HELLO, capabilities: ['hostwindows'] })
+    const welcome = await client.until((m) => m.t === 'welcome', 'the welcome')
+    if (welcome.t !== 'welcome') throw new Error('unreachable')
+    expect(welcome.capabilities).toContain('hostwindows')
+
+    client.send({ t: 'window.call', id: 'w-7', session: 's1', tool: 'browser.read', args: '{}' })
+    const result = await client.until((m) => m.t === 'window.result', 'the answer')
+    expect(result).toEqual({ t: 'window.result', id: 'w-7', ok: true, body: '{"title":"Example"}' })
+    // The device id is supplied by this end, from the connection, and never read
+    // off the frame: it is the half of the caller key the far end cannot know.
+    expect(acting.seen).toEqual([
+      { deviceId: 'device-1', call: { sessionId: 's1', tool: 'browser.read', args: '{}' } },
+    ])
+  })
+
+  it('answers even when nothing here can act, rather than leaving a turn waiting', async () => {
+    /*
+     * The far end is inside an MCP tool call with a model waiting on it. Silence
+     * costs a whole turn and produces the thing `session-verbs.ts` was written to
+     * stop: an agent that concludes it has not found the way in yet and goes
+     * looking for another.
+     */
+    const harness = await serve({ windows: undefined })
+    const client = await connect(harness.port)
+    client.send({ ...HELLO, capabilities: ['hostwindows'] })
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'window.call', id: 'w-8', session: 's1', tool: 'browser.read', args: '{}' })
+    const result = await client.until((m) => m.t === 'window.result', 'the refusal')
+    if (result.t !== 'window.result') throw new Error('unreachable')
+    expect(result.ok).toBe(false)
+    expect(String(JSON.parse(result.body).message)).toContain('not set up to be driven')
+  })
+
+  it('turns a server that threw into a refusal on the wire', async () => {
+    const acting = server()
+    acting.fail = true
+    const harness = await serve({ serveWindows: acting.serveWindows })
+    const client = await connect(harness.port)
+    client.send({ ...HELLO, capabilities: ['hostwindows'] })
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'window.call', id: 'w-9', session: 's1', tool: 'browser.step', args: '{}' })
+    const result = await client.until((m) => m.t === 'window.result', 'the refusal')
+    if (result.t !== 'window.result') throw new Error('unreachable')
+    expect(result.ok).toBe(false)
+    expect(String(JSON.parse(result.body).message)).toContain('switched off')
+  })
+
+  it('tells that device which of its sessions has a window here, on the welcome', async () => {
+    /*
+     * The fact the far end cannot derive: the window is a `WebContentsView` in
+     * this process and the pty is on that computer. On the welcome rather than
+     * on request, because this socket is new after every reconnect and the far
+     * end's table went with the old one.
+     */
+    const acting = server()
+    const harness = await serve({
+      serveWindows: acting.serveWindows,
+      windowsHeldFor: (deviceId) => (deviceId === 'device-1' ? ['s1', 's2'] : []),
+    })
+    const client = await connect(harness.port)
+    client.send({ ...HELLO, capabilities: ['hostwindows'] })
+    const holds = await client.until((m) => m.t === 'window.holds', 'the holdings')
+    expect(holds).toEqual({ t: 'window.holds', sessions: ['s1', 's2'] })
+  })
+
+  it('says nothing to a client that never advertised the direction', async () => {
+    /*
+     * `parseServerMessage` on an older client answers a frame it has never heard
+     * of by closing the channel. A device that falls off the network is a far
+     * worse outcome than a window it cannot be told about — the same argument
+     * `MachineLink.announceWindows` makes from the other end.
+     */
+    const acting = server()
+    const harness = await serve({
+      serveWindows: acting.serveWindows,
+      windowsHeldFor: () => ['s1'],
+    })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+    await new Promise((settle) => setTimeout(settle, 30))
+    expect(client.received.some((m) => m.t === 'window.holds')).toBe(false)
+
+    // And a push has nobody to reach, which is a count rather than an error.
+    expect(harness.endpoint.windowsHeldChanged()).toBe(0)
+  })
+
+  it('re-reads the set on a push, so an attach after the welcome still arrives', async () => {
+    // The person attaches a window ten minutes into a session. Nothing about the
+    // connection changed; the answer did.
+    const acting = server()
+    let held: string[] = []
+    const harness = await serve({
+      serveWindows: acting.serveWindows,
+      windowsHeldFor: () => held,
+    })
+    const client = await connect(harness.port)
+    client.send({ ...HELLO, capabilities: ['hostwindows'] })
+    await client.until((m) => m.t === 'window.holds', 'the first holdings')
+
+    held = ['s3']
+    expect(harness.endpoint.windowsHeldChanged()).toBe(1)
+    const next = await client.until(
+      (m) => m.t === 'window.holds' && m.sessions.includes('s3'),
+      'the new holdings',
+    )
+    expect(next).toEqual({ t: 'window.holds', sessions: ['s3'] })
+  })
+})
