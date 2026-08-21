@@ -10,6 +10,55 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+Two things he hit within an hour of installing 0.9.0.
+
+### Fixed
+
+- **A session could open a browser window and then not see inside it.** *"other
+  sessions still cant see inside the browser window they opened they can just
+  open, only copilot is capable for that."* The tools were minted correctly and
+  then thrown away before the spawn: on the path every fresh Claude session
+  takes, the command line was rebuilt from the provider table with the copilot's
+  own `extraArgs` alone, discarding the spec that carried `--mcp-config`. The
+  copilot kept its tools because its flags *are* `extraArgs`; everything a
+  person started lost them. His phrasing was the diagnosis — opening never
+  needed a tool, because the `open` shim is on every session's PATH. Reading
+  did. One binding now holds everything the app puts on a command line and both
+  call sites read it, and a test starts a real session and reads the argv back
+  off the spawn rather than asserting on source text.
+- **A session that cannot drive now says why in one sentence**, beside the
+  window list it already gets, instead of failing in a way that reads as the
+  feature being broken. Five reasons; four are dead ends and say so, and the one
+  that is not — a session started in the moment before the control endpoint
+  binds — says to start it again.
+- **The refusal for a window a session does not have named a tool that session
+  cannot call.** It pointed at `sessions.list`, which is not on the session
+  allow-list, so following the advice cost a turn and returned "no tool called
+  sessions_list" — while confirming the tool exists, which is the disclosure the
+  allow-list was built to prevent. It now names `browser.open` and the window's
+  own menu. The copilot's wording is unchanged.
+- **Moving a page back to this computer left it on the machine it came from.**
+  *"when i change the machine it should attempt to browse with that machine
+  instead of staying on previous one."* The move navigated to
+  `localhost:<origin port>` — which **is** the tunnel whenever the local
+  listener took the same number, which is the ordinary case. Chromium re-fetched
+  from the far machine, the picker took this Mac's name, and the chip beside the
+  address kept saying `Office PC:3100`: both labels individually true, describing
+  a state the failed move should never have left behind. The port is handed back
+  first now, and if it cannot be, nothing is claimed — the picker returns to the
+  machine still serving the page and says so.
+
+### Still not true, and worth saying plainly
+
+- **Only a Claude session started on this computer gets the browser verbs.** A
+  session on a paired machine or on a server does not: this app never starts
+  those, and the browser binding does not cross the wire. That is the other half
+  of *"full capability for all sessions"* and it is a piece of work, not a flag.
+- **The picker and the address chip can still disagree**, because the tunnel
+  state they read is per browser tab. Two tabs on one tunnel: moving one home
+  closes the listener the other is reading.
+
+
 ## [0.9.0] — 2026-08-21
 
 His third recorded review — 25 minutes, 2,765 words — turned into 82 numbered
