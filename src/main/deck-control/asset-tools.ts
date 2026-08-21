@@ -318,7 +318,7 @@ export function assetTools(deps: AssetToolsDeps): ToolSpec[] {
   const ledgers = new Map<string, LedgerStore>()
   const ledgerFor = (runId: string, mode: LedgerMode): LedgerStore => {
     const path = ledgerPath(deps.userData(), runId)
-    const key = `${mode} ${path}`
+    const key = `${mode}\0${path}`
     const held = ledgers.get(key)
     if (held) return held
     const store = openLedger(path, { mode, now })

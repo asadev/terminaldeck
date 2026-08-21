@@ -600,11 +600,11 @@ interface Seed {
   expiresAt: number
 }
 
-/** `<partition> <origin>` → seed. Memory only, like the vault. */
+/** `<partition>\0<origin>` → seed. Memory only, like the vault. */
 const seeds = new Map<string, Seed>()
 
 function seedKey(partition: string, origin: string): string {
-  return `${partition} ${origin}`
+  return `${partition}\0${origin}`
 }
 
 /**
