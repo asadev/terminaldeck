@@ -2050,6 +2050,43 @@ const api = {
   browserWorkerForgetLift: (liftId: string): Promise<unknown> =>
     ipcRenderer.invoke('browser-worker:forget-lift', liftId),
 
+  /* ------------------------------------------------ the scraping settings -- */
+
+  /*
+   * The four capabilities that had engines and no door.
+   *
+   * Request rules, passive capture, asset renditions with their ledger and the
+   * coverage check were all finished and all took their configuration as an
+   * argument on a tool call, so nothing set on the Scraping panel outlived one
+   * call and no `ipcMain` channel reached them at all. `browser-scraping-ipc.ts`
+   * is the store and these are the wrappers over it.
+   *
+   * Optional on the far side, every one of them: `scraping-bridge.ts` binds
+   * method by method and draws a section as unavailable when its method is
+   * missing, so a renderer newer than this preload loses one section rather
+   * than the whole browser panel.
+   */
+  browserScrapingConfig: (profileId: string): Promise<unknown> =>
+    ipcRenderer.invoke('browser-scraping:config', profileId),
+  browserScrapingConfigSet: (profileId: string, patch: unknown): Promise<unknown> =>
+    ipcRenderer.invoke('browser-scraping:config-set', profileId, patch),
+  browserScrapingStatus: (profileId: string): Promise<unknown> =>
+    ipcRenderer.invoke('browser-scraping:status', profileId),
+  // The whole status each time, for the reason `browser:downloads` gives: a
+  // delta needs both ends to agree about what they last saw, and a panel that
+  // was opened halfway through a run never saw the first half.
+  onBrowserScrapingStatus: (cb: (status: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, status: unknown) => cb(status)
+    ipcRenderer.on('browser-scraping:changed', handler)
+    return () => ipcRenderer.off('browser-scraping:changed', handler)
+  },
+  browserScrapingCaptureClear: (profileId: string): Promise<unknown> =>
+    ipcRenderer.invoke('browser-scraping:capture-clear', profileId),
+  browserScrapingCaptureReveal: (profileId: string): Promise<void> =>
+    ipcRenderer.invoke('browser-scraping:capture-reveal', profileId),
+  browserScrapingLedgerClear: (profileId: string): Promise<unknown> =>
+    ipcRenderer.invoke('browser-scraping:ledger-clear', profileId),
+
   /*
    * Where this browser has been, per profile.
    *

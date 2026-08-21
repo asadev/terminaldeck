@@ -3,6 +3,11 @@ import { app, type IpcMain } from 'electron'
 import { readBlockCapture, setBlockCapture } from './browser-block-capture'
 import { captureDir } from './browser-capture-store'
 import { blockShotDirFor } from './browser-scrape-paths'
+import {
+  captureBoundsOf,
+  fetchRulesOf,
+  scrapeSettingsFor,
+} from './browser-scrape-settings'
 import { browserTabContents, browserTabProfile } from './browser-tab'
 import { BLANK_URL } from './browser-url'
 import type { DriveStatus } from './browser-drive'
@@ -444,7 +449,48 @@ export function registerBrowserDriveIpc(ipcMain: IpcMain, deps: BrowserDriveDeps
       if (profileId === null) return null
       const id = profileId === '' ? 'isolated' : profileId
       const userData = app.getPath('userData')
-      return { dir: blockShotDirFor(userData, id), on: readBlockCapture(userData, id) }
+      /*
+       * One switch, not two.
+       *
+       * Two lanes on 2026-08-21 each gave this camera an off switch and each
+       * put it in its own store — the Scraping panel writes
+       * `checks.screenshotOnBlock`, and this seam was reading a separate file.
+       * A person toggling the panel would have changed a value nothing read,
+       * which is the exact shape of dead control this round exists to remove.
+       * The panel's store wins for a real profile.
+       *
+       * An isolated tab keeps the separate file, and that is not an oversight:
+       * it has no stored settings because its jar dies with it, so its own file
+       * is the only way to turn the camera off for one — see the note above
+       * about a folder with an answer and no way to give one.
+       */
+      const on =
+        profileId === ''
+          ? readBlockCapture(userData, id)
+          : scrapeSettingsFor(userData, profileId).checks.screenshotOnBlock !== false
+      return { dir: blockShotDirFor(userData, id), on }
+    },
+
+    /**
+     * What the page's profile has been told to do, for whatever the call did
+     * not name.
+     *
+     * Resolved here for the same reason `captureFolder` is: the answer turns on
+     * which browser profile the tab was built in, which `browser-tab.ts` stamps
+     * at creation and the driver has no business looking up. An Isolated tab
+     * has no profile and gets nothing stored — its jar dies with it, so a
+     * setting filed under it would belong to nobody.
+     */
+    scrapeDefaults: (viewId) => {
+      const profileId = browserTabProfile(viewId)
+      if (profileId === null || profileId === '') return null
+      const settings = scrapeSettingsFor(app.getPath('userData'), profileId)
+      return {
+        rules: fetchRulesOf(settings),
+        capture: settings.capture.on,
+        bounds: captureBoundsOf(settings),
+        blockShots: settings.checks.screenshotOnBlock,
+      }
     },
     publish: (status: DriveStatus) => deps.send(DRIVE_STATE_CHANNEL, status),
     now: () => Date.now(),

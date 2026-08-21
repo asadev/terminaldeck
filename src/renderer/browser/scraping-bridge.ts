@@ -765,7 +765,18 @@ export function readScrapingStatus(raw: unknown): ScrapingStatus | null {
         }
       : null,
     lastCheck:
-      check && typeof check.url === 'string' && check.url !== ''
+      /*
+       * A check is identified by *when it ran*, not by where.
+       *
+       * This used to require a non-empty `url` and it was the wrong guard: the
+       * coverage engine records `url: ''` for any check whose caller did not
+       * pass `pageUrl`, and the panel never draws the URL at all — it draws the
+       * verdict and the time. So the strict version answered `null` for a check
+       * that really ran, and the panel then said *"No check has run."* about a
+       * run that had checked itself. Saying nobody looked when somebody did is
+       * the exact failure this file is written against, in reverse.
+       */
+      check && typeof check.url === 'string'
         ? {
             url: check.url,
             stated: readCount(check.stated),

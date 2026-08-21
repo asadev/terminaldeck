@@ -28,15 +28,18 @@ function harness(
 ) {
   let clock = 1_000_000
   const settings = cleanPace({ maxConcurrent: 8, minDelayMs: 0, jitterMs: 0, ...pace })
+  const changes: number[] = []
   const pool = createWorkerPool({
     workers: () => workers,
     pace: () => settings,
     now: () => clock,
     random: () => random,
+    changed: () => changes.push(clock),
   })
   return {
     pool,
     settings,
+    changes,
     tick: (ms: number) => {
       clock += ms
     },
@@ -291,5 +294,57 @@ describe('what a screen is told', () => {
     const second = pool.status().find((one) => one.profileId === 'a')?.readyInMs
     expect(first).toBe(3_000)
     expect(second).toBe(3_000)
+  })
+})
+
+describe('saying so when something changed', () => {
+  /*
+   * The panel's fleet line read "4 workers · busy not measured" on a build where
+   * this pool knew exactly which of them were busy — because nothing in the
+   * process emitted an event and the panel refuses to print a number it has not
+   * been told. This is that event.
+   */
+  it('announces a lease taken and a lease let go', () => {
+    const { pool, changes } = harness(THREE)
+    pool.lease({ holder: 'a-session' })
+    expect(changes).toHaveLength(1)
+    pool.release({ holder: 'a-session', profileId: 'a' })
+    expect(changes).toHaveLength(2)
+  })
+
+  it('says nothing about a refusal, a renewal, or a release by the wrong holder', () => {
+    const { pool, changes } = harness(THREE, { maxConcurrent: 1 })
+    pool.lease({ holder: 'first' })
+    changes.length = 0
+    // Refused: nothing changed, so nothing is announced.
+    expect(pool.lease({ holder: 'second' }).ok).toBe(false)
+    // A renewal moves a deadline and no worker's state.
+    expect(pool.renew({ holder: 'first', profileId: 'a' })).toBe(true)
+    // And a release from somebody who is not holding it does nothing at all.
+    expect(pool.release({ holder: 'second', profileId: 'a' })).toBe(false)
+    expect(changes).toEqual([])
+  })
+
+  it('never announces from status, which is what would re-enter the reader', () => {
+    const { pool, changes, tick } = harness(THREE)
+    pool.lease({ holder: 'a-session', holdMs: 1_000 })
+    changes.length = 0
+    tick(2_000)
+    // The lease has expired and `status()` sweeps it — but a sweep noticed while
+    // somebody is building an answer is already in the answer they are reading,
+    // and announcing it would re-enter whatever asked.
+    expect(pool.status()[0].busy).toBe(false)
+    expect(changes).toEqual([])
+  })
+
+  it('announces a worker leaving the pool while it is held', () => {
+    const { pool, changes } = harness(THREE)
+    pool.lease({ holder: 'a-session', profileId: 'b' })
+    changes.length = 0
+    pool.forget('b')
+    expect(changes).toHaveLength(1)
+    // …and nothing at all for a worker the pool never had a fact about.
+    pool.forget('nobody')
+    expect(changes).toHaveLength(1)
   })
 })

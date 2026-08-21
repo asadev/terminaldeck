@@ -227,6 +227,7 @@ import {
 import { registerBrowserSessionIpc } from './browser-session'
 import { registerBrowserProfileIpc } from './browser-profiles'
 import { leaseForCaller, registerBrowserWorkerIpc, workerOfView } from './browser-workers-ipc'
+import { registerBrowserScrapingIpc } from './browser-scraping-ipc'
 import { releaseWorker, renewWorker, workerList, workerPace, workerStatus } from './browser-workers'
 import { injectionsFor } from './browser-session-lift'
 import { workerTools } from './deck-control/worker-tools'
@@ -3210,6 +3211,16 @@ function registerIpc(): void {
    * verbs below and no way to lift. See `browser-session-lift.ts`.
    */
   registerBrowserWorkerIpc(ipcMain)
+  /*
+   * And the settings the four scraping engines had nowhere to read from.
+   *
+   * Immediately after the workers because it reports the fleet as part of one
+   * configuration read, and because its status push is fired by the worker
+   * pool. See `browser-scraping-ipc.ts` for why the engines needed a store at
+   * all: every one of them takes its configuration as an argument on a tool
+   * call, so nothing a person set on that screen outlived the call.
+   */
+  registerBrowserScrapingIpc(ipcMain, { send: (channel, ...args) => send(channel, ...args) })
 
   /*
    * The browser's tools store.

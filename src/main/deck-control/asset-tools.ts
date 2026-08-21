@@ -27,6 +27,13 @@ import { blockCaptureOff } from '../browser-block-capture'
 import { readBlocksUnder } from '../browser-block-watch'
 import type { AssetOpen } from '../browser-asset-session'
 import { blockShotDir, coveragePath, ledgerPath, runDir } from '../browser-scrape-paths'
+import {
+  coveragePatternOf,
+  ledgerModeOf,
+  renditionRulesOf,
+  scrapeSettingsFor as settingsFor,
+} from '../browser-scrape-settings'
+import { noteAssetBatch, noteRunProfile, runOwnerOf } from '../browser-scrape-status'
 import type { JsonSchema, ToolContext, ToolOutput, ToolSpec } from './catalogue'
 import { emptySummary, withEmptiness } from './empty-result'
 import { Refused, type Tier } from './surface'
@@ -336,6 +343,11 @@ const COVERAGE_SCHEMA: JsonSchema = {
     tolerance: { type: 'number', description: 'How many items short is still complete. Default 0.' },
     what: { type: 'string', description: 'What was being counted, for the record.' },
     pageUrl: { type: 'string', description: 'The page this is about, for the record.' },
+    profileId: {
+      type: 'string',
+      description:
+        'Which browser profile this run belongs to. Its stored pattern is used when none is given.',
+    },
   },
   required: ['runId'],
   additionalProperties: false,
@@ -456,6 +468,26 @@ export function assetTools(deps: AssetToolsDeps): ToolSpec[] {
    * cached `resume` store answering a `refetch` call would be the exact silent
    * skip this whole tool exists to stop.
    */
+  /**
+   * The mode a call will actually run in.
+   *
+   * What it named, or — when it named nothing — what the profile that owns the
+   * run has stored. One helper rather than the same three lines in three places,
+   * because the third place is the action-log summary, and a log that printed
+   * `(resume)` about a run that refetched would be the quietest possible way for
+   * this setting to become untrue.
+   *
+   * The owner is read off the run's own folder when the call does not carry a
+   * profile, which is what makes the panel's switch reach `assets.ledger` — that
+   * tool has a run id and no profile at all. See `runOwnerOf`.
+   */
+  const modeFor = (args: Record<string, unknown>, runId: string): LedgerMode => {
+    const typed = optStr(args, 'mode')
+    if (typed === 'refetch' || typed === 'resume') return typed
+    const owner = optStr(args, 'profileId') ?? (runOwnerOf(deps.userData(), runId) || null)
+    return ledgerModeOf(settingsFor(deps.userData(), owner)) ?? 'resume'
+  }
+
   const ledgers = new Map<string, LedgerStore>()
   const ledgerFor = (runId: string, mode: LedgerMode): LedgerStore => {
     const path = ledgerPath(deps.userData(), runId)
@@ -499,8 +531,15 @@ export function assetTools(deps: AssetToolsDeps): ToolSpec[] {
     summary: (args) => `Find the best rendition of ${scrubUrl(optStr(args, 'url') ?? '?')}`,
     run: async (args): Promise<ToolOutput> => {
       const url = httpUrl(args, 'url')
-      const rules = readRenditionRules(args.rules)
       const profileId = optStr(args, 'profileId')
+      // The profile's stored pair when the call named no rules — the same
+      // bargain `assets.fetch` makes, and the reason the panel's one from→to
+      // field is a setting rather than a note to self. A named rule set wins,
+      // including a deliberately empty one.
+      const rules =
+        args.rules === undefined || args.rules === null
+          ? renditionRulesOf(settingsFor(deps.userData(), profileId))
+          : readRenditionRules(args.rules)
       const minBytes = optNum(args, 'minBytes')
       const choice = await chooseRendition({
         url,
@@ -601,7 +640,7 @@ export function assetTools(deps: AssetToolsDeps): ToolSpec[] {
     run: async (args): Promise<ToolOutput> => {
       const runId = str(args, 'runId')
       const op = str(args, 'op')
-      const mode: LedgerMode = optStr(args, 'mode') === 'refetch' ? 'refetch' : 'resume'
+      const mode = modeFor(args, runId)
       const store = ledgerFor(runId, mode)
 
       if (op === 'decide') {
@@ -823,8 +862,34 @@ export function assetTools(deps: AssetToolsDeps): ToolSpec[] {
       const captured = optNum(args, 'captured') ?? 0
       const given = optNum(args, 'stated')
       const text = optStr(args, 'text')
-      const pattern = optStr(args, 'pattern')
+      /*
+       * Whose run this is: the call, or the run's own record of it.
+       *
+       * `assets.coverage` has a run id and rarely a profile, and one
+       * `assets.fetch` that named a profile has already filed the whole run — so
+       * a check on that run finds the pattern its own profile stored without the
+       * caller having to say so twice. See `runOwnerOf`.
+       */
+      const profileId = optStr(args, 'profileId') ?? (runOwnerOf(deps.userData(), runId) || null)
+      /*
+       * The profile's own pattern, when the call gave none and the profile has
+       * one switched on.
+       *
+       * Every site prints its total differently, which is why the pattern is a
+       * setting at all — and a person who worked out the expression for a site
+       * once should not have to hand it to every call. A pattern on the call
+       * always wins. A stored one that will not compile never gets this far:
+       * `safePattern` refuses it when it is typed, so the field comes back empty
+       * and the panel shows the typo instead of a run quietly not checking.
+       */
+      const typedPattern = optStr(args, 'pattern')
+      const storedPattern =
+        profileId === null ? '' : coveragePatternOf(settingsFor(deps.userData(), profileId))
+      const pattern = typedPattern ?? (storedPattern === '' ? null : storedPattern)
       const flags = optStr(args, 'flags')
+      // The same attribution `assets.fetch` writes: a coverage check that is
+      // not filed under a profile is one the Scraping panel cannot show.
+      if (profileId !== null) noteRunProfile(deps.userData(), runId, profileId)
 
       /*
        * A stated total the caller gave wins over one read out of the text.
@@ -975,18 +1040,36 @@ export function assetTools(deps: AssetToolsDeps): ToolSpec[] {
     },
     summary: (args) => {
       const urls = Array.isArray(args.urls) ? args.urls.length : 0
-      const mode = optStr(args, 'mode') ?? 'resume'
+      // The mode that will actually run, not the argument: see `modeFor`.
+      const mode = modeFor(args, optStr(args, 'runId') ?? '')
       return `Fetch ${urls} asset${urls === 1 ? '' : 's'} into ${optStr(args, 'dir') ?? '?'} (${mode})`
     },
     run: async (args): Promise<ToolOutput> => {
       const runId = str(args, 'runId')
       const dir = str(args, 'dir')
       const urls = readUrlList(args)
-      const rules = readRenditionRules(args.rules)
-      const mode: LedgerMode = optStr(args, 'mode') === 'refetch' ? 'refetch' : 'resume'
       const profileId = optStr(args, 'profileId')
+      /*
+       * What the profile stored, for whatever this call did not name.
+       *
+       * The four scraping engines take their configuration on the call, which
+       * left a person no way to say *"always upgrade this profile's images"* —
+       * `browser-scraping-ipc.ts` is the store that fixed it and this is where
+       * a stored answer reaches a run. A named argument always wins; a stored
+       * one only fills a silence.
+       */
+      const stored = settingsFor(deps.userData(), profileId)
+      const rules =
+        args.rules === undefined || args.rules === null
+          ? renditionRulesOf(stored)
+          : readRenditionRules(args.rules)
+      const mode = modeFor(args, runId)
       const minBytes = optNum(args, 'minBytes')
       const store = ledgerFor(runId, mode)
+      // Whose run this is, written into the run's own folder, so the Scraping
+      // panel can answer "what has this profile fetched" and "empty this
+      // profile's ledger" after a restart. See `browser-scrape-status.ts`.
+      if (profileId !== null) noteRunProfile(deps.userData(), runId, profileId)
 
       const batch = await fetchAssets({
         urls,
@@ -1001,6 +1084,13 @@ export function assetTools(deps: AssetToolsDeps): ToolSpec[] {
           ...(args.requireLarger === undefined ? {} : { requireLarger: args.requireLarger === true }),
         },
       })
+
+      /*
+       * Told to the panel, so its Assets numbers are measured rather than
+       * absent. Only the tallies this process actually counted travel; nothing
+       * here invents a number for a run it did not see.
+       */
+      if (profileId !== null) noteAssetBatch(profileId, batch.tally)
 
       /*
        * `empty` and `emptyReason`, from `empty-result.ts` rather than a second

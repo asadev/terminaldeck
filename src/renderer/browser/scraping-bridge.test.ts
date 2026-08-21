@@ -209,6 +209,13 @@ describe('reading what happened', () => {
 
   it('has no last check when the answer names no page', () => {
     expect(readScrapingStatus({ lastCheck: { stated: 10, got: 10 } })?.lastCheck).toBeNull()
+    // …but a check that ran and was never told which page it was about is still
+    // a check that ran. The engine records `url: ''` for those, the panel never
+    // draws the URL, and answering `null` here made the panel say "No check has
+    // run." about a run that had checked itself.
+    expect(
+      readScrapingStatus({ lastCheck: { url: '', stated: 10, got: 7, at: 5 } })?.lastCheck,
+    ).toEqual({ url: '', stated: 10, got: 7, at: 5 })
   })
 })
 

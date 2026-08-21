@@ -65,12 +65,12 @@ function status(over: Partial<NetworkStatus> = {}): NetworkStatus {
   return {
     armed: true,
     suspended: false,
-    rules: { image: 'cheap' },
+    rules: { image: 'fulfill' },
     counts: {
       paused: 0,
       allowed: 0,
       blocked: 0,
-      cheap: 0,
+      fulfilled: 0,
       stuck: 0,
       sized: { attributes: 0, srcset: 0, box: 0, none: 0, unknown: 0 },
       derivedHeights: 0,
@@ -418,7 +418,7 @@ const CASES: Case[] = [
     label: 'a start that would arm nothing is refused, never performed',
     empty: false,
     why: 'the precheck refuses a start with no rule and no capture, so every start that returns armed something. See browser-network-tool.ts.',
-    run: async () => harness().deck.call('browser.network', { action: 'start', rules: { image: 'cheap' } }),
+    run: async () => harness().deck.call('browser.network', { action: 'start', rules: { image: 'fulfill' } }),
   },
   {
     id: 'browser.network',

@@ -82,7 +82,7 @@ async function settle(): Promise<void> {
 describe('what arming actually turns on', () => {
   it('intercepts only the kinds a rule names, and never the document', async () => {
     const r = rig()
-    await r.network.arm({ rules: { image: 'cheap', font: 'block' }, capture: null })
+    await r.network.arm({ rules: { image: 'fulfill', font: 'block' }, capture: null })
     const [enable] = r.of('Fetch.enable')
     expect(enable.params.patterns).toEqual([
       { urlPattern: '*', resourceType: 'Image', requestStage: 'Request' },
@@ -126,7 +126,7 @@ describe('a paused image is answered with a picture the page can measure', () =>
      * happened.
      */
     const r = rig({ size: () => ({ width: 800, height: 600, from: 'attributes', derivedHeight: false }) })
-    await r.network.arm({ rules: { image: 'cheap' }, capture: null })
+    await r.network.arm({ rules: { image: 'fulfill' }, capture: null })
     await pause(r)
 
     const [fulfil] = r.of('Fetch.fulfillRequest')
@@ -149,7 +149,7 @@ describe('a paused image is answered with a picture the page can measure', () =>
       'https://x.example/4.jpg': null,
     }
     const r = rig({ size: (url) => sizes[url] })
-    await r.network.arm({ rules: { image: 'cheap' }, capture: null })
+    await r.network.arm({ rules: { image: 'fulfill' }, capture: null })
     for (const url of Object.keys(sizes)) {
       r.emit('Fetch.requestPaused', { requestId: url, resourceType: 'Image', request: { url } })
     }
@@ -157,12 +157,12 @@ describe('a paused image is answered with a picture the page can measure', () =>
     const counts = r.network.status().counts
     expect(counts.sized).toEqual({ attributes: 1, srcset: 1, box: 1, none: 0, unknown: 1 })
     expect(counts.derivedHeights).toBe(1)
-    expect(counts.cheap).toBe(4)
+    expect(counts.fulfilled).toBe(4)
   })
 
   it('falls back to one pixel only when the page states nothing', async () => {
     const r = rig({ size: () => null })
-    await r.network.arm({ rules: { image: 'cheap' }, capture: null })
+    await r.network.arm({ rules: { image: 'fulfill' }, capture: null })
     await pause(r)
     const png = Buffer.from(String(r.of('Fetch.fulfillRequest')[0].params.body), 'base64')
     expect(png.readUInt32BE(16)).toBe(1)
@@ -171,7 +171,7 @@ describe('a paused image is answered with a picture the page can measure', () =>
 
   it('answers a kind that is not an image with something that parses', async () => {
     const r = rig()
-    await r.network.arm({ rules: { stylesheet: 'cheap', xhr: 'cheap' }, capture: null })
+    await r.network.arm({ rules: { stylesheet: 'fulfill', xhr: 'fulfill' }, capture: null })
     r.emit('Fetch.requestPaused', {
       requestId: 'c1',
       resourceType: 'Stylesheet',
@@ -205,7 +205,7 @@ describe('a paused image is answered with a picture the page can measure', () =>
 
   it('lets through a resource type no rule can name', async () => {
     const r = rig()
-    await r.network.arm({ rules: { image: 'cheap' }, capture: null })
+    await r.network.arm({ rules: { image: 'fulfill' }, capture: null })
     r.emit('Fetch.requestPaused', {
       requestId: 'w1',
       resourceType: 'WebSocket',
@@ -223,7 +223,7 @@ describe('a paused request is answered whatever goes wrong', () => {
         throw new Error('the page is gone')
       },
     })
-    await r.network.arm({ rules: { image: 'cheap' }, capture: null })
+    await r.network.arm({ rules: { image: 'fulfill' }, capture: null })
     r.emit('Fetch.requestPaused', {
       requestId: 'r1',
       resourceType: 'Image',
@@ -238,7 +238,7 @@ describe('a paused request is answered whatever goes wrong', () => {
 
   it('gives up on a probe that never answers, inside the bound', async () => {
     const r = rig({ size: () => new Promise(() => undefined) })
-    await r.network.arm({ rules: { image: 'cheap' }, capture: null })
+    await r.network.arm({ rules: { image: 'fulfill' }, capture: null })
     r.emit('Fetch.requestPaused', {
       requestId: 'r1',
       resourceType: 'Image',
@@ -265,7 +265,7 @@ describe('a paused request is answered whatever goes wrong', () => {
         return {}
       },
     })
-    await r.network.arm({ rules: { image: 'cheap' }, capture: null })
+    await r.network.arm({ rules: { image: 'fulfill' }, capture: null })
     r.emit('Fetch.requestPaused', {
       requestId: 'r1',
       resourceType: 'Image',
@@ -283,7 +283,7 @@ describe('a paused request is answered whatever goes wrong', () => {
         return { width: 10, height: 10, from: 'box', derivedHeight: false }
       },
     })
-    await r.network.arm({ rules: { image: 'cheap' }, capture: null })
+    await r.network.arm({ rules: { image: 'fulfill' }, capture: null })
     for (let n = 0; n < 5; n += 1) {
       r.emit('Fetch.requestPaused', {
         requestId: `r${n}`,
@@ -470,7 +470,7 @@ describe('stopping never leaves a hole unrecorded', () => {
 
   it('turns both domains off and stops listening', async () => {
     const r = rig()
-    await r.network.arm({ rules: { image: 'cheap' }, capture: { store: r.store, bodyKinds: new Set(['xhr']) } })
+    await r.network.arm({ rules: { image: 'fulfill' }, capture: { store: r.store, bodyKinds: new Set(['xhr']) } })
     expect(r.listening()).toBe(true)
     await r.network.disarm()
     expect(r.of('Fetch.disable')).toHaveLength(1)
@@ -481,7 +481,7 @@ describe('stopping never leaves a hole unrecorded', () => {
 
   it('closes the books without sending anything when the page has gone', async () => {
     const r = rig()
-    await r.network.arm({ rules: { image: 'cheap' }, capture: { store: r.store, bodyKinds: new Set(['xhr']) } })
+    await r.network.arm({ rules: { image: 'fulfill' }, capture: { store: r.store, bodyKinds: new Set(['xhr']) } })
     const before = r.sent.length
     const status = r.network.abandon('the page was released')
     // Nothing sent — a command to a destroyed WebContents is an unhandled
@@ -501,7 +501,7 @@ describe('the baton', () => {
      * never finishes loading, in order to type a password into it.
      */
     const r = rig()
-    await r.network.arm({ rules: { image: 'cheap' }, capture: { store: r.store, bodyKinds: new Set(['xhr']) } })
+    await r.network.arm({ rules: { image: 'fulfill' }, capture: { store: r.store, bodyKinds: new Set(['xhr']) } })
     await r.network.suspend('the person was given the page')
     expect(r.of('Fetch.disable')).toHaveLength(1)
     expect(r.network.status().suspended).toBe(true)

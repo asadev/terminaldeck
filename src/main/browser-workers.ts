@@ -165,6 +165,9 @@ function ensure(userData: string): WorkerStore {
 
 /** For tests, which must not inherit each other's state. */
 export function resetWorkersForTests(): void {
+  // The listener first: `pool.reset()` announces, and a test that inherited the
+  // previous one would be pushing a status into a channel nobody registered.
+  listener = null
   store = null
   storeDir = null
   registeredAt.clear()
@@ -289,6 +292,7 @@ export function ensureWorkers(userData: string, count: unknown): WorkerProfile[]
     registeredAt.set(profile.id, now)
   }
   save(userData, current)
+  announce()
   return workerList(userData)
 }
 
@@ -312,6 +316,7 @@ export function registerWorker(userData: string, profileId: unknown): WorkerProf
     current.workers.push(profileId)
     registeredAt.set(profileId, Date.now())
     save(userData, current)
+    announce()
   }
   return workerList(userData)
 }
@@ -334,6 +339,7 @@ export function unregisterWorker(userData: string, profileId: unknown): WorkerPr
     // not leave a lease behind that nothing can see and nothing can release.
     pool.forget(profileId as string)
     save(userData, current)
+    announce()
   }
   return workerList(userData)
 }
@@ -348,6 +354,7 @@ export function setWorkerPace(userData: string, raw: unknown): PaceSettings {
   const current = ensure(userData)
   current.pace = cleanPace(raw)
   save(userData, current)
+  announce()
   return current.pace
 }
 
@@ -369,7 +376,33 @@ export const pool: WorkerPool = createWorkerPool({
   pace: () => (storeDir === null ? { ...DEFAULT_PACE } : workerPace(storeDir)),
   now: () => Date.now(),
   random: () => Math.random(),
+  changed: () => announce(),
 })
+
+/* ------------------------------------------------------------- the change -- */
+
+/**
+ * Told whenever the fleet or one of its leases moves.
+ *
+ * One listener, set once by `browser-scraping-ipc.ts` at startup, because there
+ * is one window to tell. It exists so a screen can show *busy* as a measured
+ * number: the pool has always known which workers are leased and nothing in
+ * this process ever said so, which is why the panel's fleet line read
+ * "busy not measured" on a build that knew.
+ *
+ * Fired for a pace change as well as a lease, because the pace is what
+ * `WorkerStatus.readyInMs` is computed from — a fleet whose delay was just
+ * halved is a different answer to the same question.
+ */
+let listener: (() => void) | null = null
+
+export function onWorkersChanged(cb: (() => void) | null): void {
+  listener = cb
+}
+
+function announce(): void {
+  listener?.()
+}
 
 export function workerStatus(userData: string): WorkerStatus[] {
   ensure(userData)
