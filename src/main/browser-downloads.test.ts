@@ -253,7 +253,7 @@ describe('the stored list', () => {
   it('refuses a folder with a control character in it', () => {
     // A NUL truncates the path at the syscall boundary, so the string on screen
     // and the file on disk stop being the same thing.
-    expect(readDestination({ machineId: '', machineName: '', folder: '/tmp/a .evil' })).toEqual(
+    expect(readDestination({ machineId: '', machineName: '', folder: '/tmp/a\0.evil' })).toEqual(
       { machineId: '', machineName: '', folder: '' },
     )
     expect(readDestination('nope').folder).toBe('')

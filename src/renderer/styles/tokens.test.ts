@@ -1308,6 +1308,10 @@ describe('the app type scale reaches the terminal it sits around', () => {
         'src/renderer/browser/BrowserWorkspace.css:10px',
         'the profile initial, sized to an 18px circle',
       ],
+      [
+        'src/renderer/browser/BrowserWorkspace.css:9px',
+        'the downloads badge, sized to the 13px pill it sits in',
+      ],
       ['src/renderer/shell/shell.css:0.92em', 'a nested line, a shade under its parent'],
       ['src/renderer/components/ChatView.css:0.86em', 'code inside a chat line'],
       ['src/renderer/settings/SettingsWindow.css:inherit', 'a control taking the row it is on'],
