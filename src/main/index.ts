@@ -196,7 +196,13 @@ import { browserDrive, registerBrowserDriveIpc } from './browser-drive-ipc'
 import { browserNetworkTool } from './deck-control/browser-network-tool'
 import { assetTools } from './deck-control/asset-tools'
 import { probeAsset } from './browser-asset-probe'
+import {
+  installBrowserStore,
+  installedBrowserTools,
+  registerBrowserStoreIpc,
+} from './browser-store-ipc'
 import { browserTools } from './deck-control/browser-tools'
+import { storeTools } from './deck-control/store-tools'
 import { registerChromeImportIpc } from './chrome-import'
 import { registerPrerequisitesIpc } from './prerequisites'
 import { registerAttachBringInIpc } from './attach-bring-in'
@@ -1584,6 +1590,24 @@ function browserWorkerTools(): ReturnType<typeof workerTools> {
   })
 }
 
+/**
+ * The one tool every installed store tool comes through, or none of it.
+ *
+ * Same judgement as `browserDriveTools` one line up, and the same reason: a
+ * catalogue missing a tool is something the copilot reports honestly when asked
+ * what it can do, and a `!` here would be a crash at launch instead.
+ *
+ * `installedBrowserTools` is passed as a **function**, never a snapshot. The
+ * argument is the one `callers.ts` makes about grants: a list read once at wiring
+ * time would freeze whatever was installed at launch, so pressing Install would
+ * change nothing until the app was restarted — a control that does nothing, which
+ * is the exact defect this round is about.
+ */
+function browserStoreTools(): ReturnType<typeof storeTools> {
+  const drive = browserDrive()
+  return drive === null ? [] : storeTools({ drive, installed: installedBrowserTools })
+}
+
 function registerIpc(): void {
   // Installed first so it wraps every handler registered below.
   // Off unless the user turned Debug mode on. Consulted per call rather than
@@ -2636,6 +2660,17 @@ function registerIpc(): void {
    * verbs below and no way to lift. See `browser-session-lift.ts`.
    */
   registerBrowserWorkerIpc(ipcMain)
+
+  /*
+   * The browser's tools store.
+   *
+   * Built here and wired one line below, because this is the only place that
+   * knows where `userData` is — everything else about it is in
+   * `browser-store.ts`, which takes a root and a catalogue and touches no
+   * Electron, so it can be tested without an app.
+   */
+  installBrowserStore({ userData: () => app.getPath('userData') })
+  registerBrowserStoreIpc(ipcMain)
 
   /*
    * Downloads in the built-in browser, including the ones bound for a computer
@@ -3701,6 +3736,7 @@ app.whenReady().then(() => {
         userData: () => app.getPath('userData'),
         probe: (url, options) => probeAsset(url, options),
       }),
+      ...browserStoreTools(),
       ...(servers === null ? [] : serverTools({ room: servers.room, grants: servers.grants })),
     ],
     /*

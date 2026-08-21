@@ -191,6 +191,8 @@ export const SESSION_TOOLS: ReadonlySet<string> = new Set([
   'browser.network',
   'browser_network',
   ...ASSET_TOOL_NAMES,
+  'browser.extract',
+  'browser_extract',
 ])
 
 /**

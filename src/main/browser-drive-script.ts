@@ -46,8 +46,16 @@
 
 /* ------------------------------------------------------------ the wiring -- */
 
-/** Where the arguments are substituted. One interpolation point, one JSON literal. */
-const ARGS_TOKEN = '/*__DECK_ARGS__*/null'
+/**
+ * Where the arguments are substituted. One interpolation point, one JSON literal.
+ *
+ * Exported alongside {@link PREAMBLE}, so that `browser-store-script.ts` writes
+ * the same token rather than a second spelling of it. A hard-coded copy in the
+ * other file would look identical and stop being identical the day this one is
+ * renamed — and the failure would be a script that silently received `null` for
+ * its arguments and returned an empty page.
+ */
+export const ARGS_TOKEN = '/*__DECK_ARGS__*/null'
 
 /**
  * Put the arguments into a script.
@@ -83,8 +91,15 @@ export function withArgs(script: string, args: unknown): string {
  * than the instance methods. The page owns its own objects and may have
  * replaced any of them; a driver that called `el.getBoundingClientRect()`
  * directly would be reading a number the site chose.
+ *
+ * Exported since 2026-08-21, for `browser-store-script.ts`, and for the reason
+ * the paragraph above already gives: `isSecret` must be **one** definition. A
+ * store tool's engine reads text out of a page, so it needs the same predicate,
+ * and a second copy of a rule about passwords is one copy that gets updated. The
+ * store's script is one of the scripts this comment is about in every way except
+ * which file it is typed in.
  */
-const PREAMBLE = `
+export const PREAMBLE = `
 var D = Document.prototype, E = Element.prototype, H = HTMLElement.prototype;
 var qs = function (sel) { try { return D.querySelector.call(document, sel) } catch (e) { return null } };
 var qsa = function (sel) { try { return Array.prototype.slice.call(D.querySelectorAll.call(document, sel)) } catch (e) { return [] } };

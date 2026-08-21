@@ -225,7 +225,7 @@ function noSuchWindow(context: ToolContext): Refused {
 }
 
 /** A resolved target: the page to drive, and the window it belongs to. */
-interface Bound {
+export interface Bound {
   target: DriveTarget
   window: BoundWindow
 }
@@ -292,6 +292,11 @@ function targetOf(window: BoundWindow): Bound {
  * The machine is part of the lookup and not optional here. The binding is keyed
  * `<machineId>\0<sessionId>`, and a session on his PC asking about `B1` under
  * this computer's key would be asking about somebody else's window.
+ *
+ * Exported since 2026-08-21 for `store-tools.ts`, and exported rather than
+ * re-implemented for the obvious reason: this function *is* the permission
+ * model for naming a page, and a second copy of it is a second copy that will
+ * one day disagree with this one about whose window `B1` is.
  */
 export function boundOf(args: Record<string, unknown>, context: ToolContext): Bound | null {
   const owner = callingSession(context)

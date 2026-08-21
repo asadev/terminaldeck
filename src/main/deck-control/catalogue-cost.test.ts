@@ -3,6 +3,7 @@ import type { BrowserDrive } from '../browser-driver'
 import { serverTools, type ServerToolsDeps } from '../servers/tools'
 import { browserNetworkTool } from './browser-network-tool'
 import { browserTools } from './browser-tools'
+import { storeTools } from './store-tools'
 import {
   buildCatalogue,
   catalogueCost,
@@ -47,6 +48,7 @@ function shipped(): ToolSpec[] {
     whereTool({ window: { read: async () => null }, page: () => null }),
     ...browserTools({} as BrowserDrive),
     browserNetworkTool({} as BrowserDrive),
+    ...storeTools({ drive: {} as BrowserDrive, installed: () => [] }),
     ...serverTools({} as ServerToolsDeps),
   ]
 }
@@ -63,6 +65,7 @@ describe('the catalogue that ships', () => {
     expect(wire).toContain('browser_close')
     expect(wire).toContain('browser_network')
     expect(wire).toContain('servers_look')
+    expect(wire).toContain('browser_extract')
   })
 
   it('costs what it costs, written down so a rewrite that doubles it is visible', () => {
@@ -115,6 +118,8 @@ describe('the catalogue that ships', () => {
      * `app_where` and the three `servers.*` verbs outside the only measurement
      * anybody was running — `browser.close` made it 25, and `browser.network`
      * made it 26. Fixing it means
+     * anybody was running — `browser.close` made it 25, and the tools store's
+     * one door made it 26. Fixing it means
      * removing or merging tools, which is a decision about the product and not
      * one to take inside a defect fix, so what is done here is to stop the
      * number being invisible: `control.cost()` has always reported

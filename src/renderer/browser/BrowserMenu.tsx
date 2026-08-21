@@ -63,6 +63,15 @@ interface Props {
    * the row goes with the thing behind it rather than being drawn disabled.
    */
   onDownloads?: () => void
+  /**
+   * Open the browser tools store.
+   *
+   * Absent when the preload has not wired all three of its channels — see
+   * `storeAvailable`. Absent rather than disabled, for the reason `onHistory`
+   * gives above: disabled says *"not now"*, and the truth in that build is
+   * *"not at all"*.
+   */
+  onTools?: () => void
   onClose(): void
 }
 
@@ -126,6 +135,7 @@ export function BrowserMenu({
   onFlow,
   onCookies,
   onDownloads,
+  onTools,
   onClose,
 }: Props) {
   const isStartPage = url !== '' && url === startUrl
@@ -187,6 +197,33 @@ export function BrowserMenu({
             }}
           >
             Downloads
+          </button>
+        )}
+
+        {/*
+          Tools, and the store behind it.
+
+          *"i think we can have a tools store for extensions to this browser with
+          all open source best tools in the market so people can use the tool of
+          their choice in the browser, which tools will not be here only when they
+          download."*
+
+          Beside Downloads because it is the same kind of row — about this browser
+          rather than about this page — and it is the **only** door to the store,
+          which is why it is a standing row rather than a button that appears once
+          something is installed. A store nobody can find is a store with nothing
+          in it.
+        */}
+        {onTools && (
+          <button
+            type="button"
+            className="bw-menu-item"
+            onClick={() => {
+              onTools()
+              onClose()
+            }}
+          >
+            Tools
           </button>
         )}
 

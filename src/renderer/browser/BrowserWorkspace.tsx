@@ -14,6 +14,7 @@ import { DrawPanel } from './DrawPanel'
 import { RecorderPanel } from './RecorderPanel'
 import { ScreenshotPopup } from './ScreenshotPopup'
 import { HistoryPanel } from './HistoryPanel'
+import { ToolsPanel } from './ToolsPanel'
 import { ProfileSettings } from './ProfileSettings'
 import { ScrapingPanel } from './ScrapingPanel'
 import { WorkersPanel } from './WorkersPanel'
@@ -43,6 +44,7 @@ import {
   resolveDownloadsApi,
   type DownloadsView,
 } from './downloads-bridge'
+import { resolveStoreApi, storeAvailable } from './store-bridge'
 import { anchorInWindow, type Box } from './popup-anchor'
 import {
   historyAvailable,
@@ -701,6 +703,17 @@ export function BrowserWorkspace({
   const downloads = useMemo(() => resolveDownloadsApi(), [])
   const [downloadsView, setDownloadsView] = useState<DownloadsView>(() => readDownloadsView(null))
   const [downloadsOpen, setDownloadsOpen] = useState(false)
+
+  /*
+   * The tools store.
+   *
+   * Resolved once and asked for nothing until the panel opens — a store has no
+   * badge, no push and nothing to say while it is shut, so reading it at mount
+   * would be a disk read per browser panel for a dialog most sessions never
+   * open. The panel loads its own list, the way `HistoryPanel` does.
+   */
+  const store = useMemo(() => resolveStoreApi(), [])
+  const [toolsOpen, setToolsOpen] = useState(false)
 
   /*
    * ---------------------------------------------------------------------------
@@ -3013,6 +3026,10 @@ export function BrowserWorkspace({
               ? () => openAt(menuButtonRef.current, () => setDownloadsOpen(true))
               : undefined
           }
+          /* The only door to the store, so it goes with the thing behind it:
+             absent on a preload that cannot install or remove, rather than a row
+             that opens a panel whose buttons could never work. */
+          onTools={storeAvailable(store) ? () => openAt(null, () => setToolsOpen(true)) : undefined}
           onClose={() => setMenuOpen(false)}
         />
       )}
@@ -3152,6 +3169,8 @@ export function BrowserWorkspace({
         }}
         onClose={() => setHistoryFor(null)}
       />
+
+      <ToolsPanel open={toolsOpen} api={store} onClose={() => setToolsOpen(false)} />
     </div>
   )
 }
