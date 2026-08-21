@@ -167,6 +167,25 @@ export interface DeckControlServerOptions {
 
 /* --------------------------------------------------------------- guarding -- */
 
+/**
+ * The peer, and the one rule that is not negotiable.
+ *
+ * Left deliberately as narrow as it has always been on 2026-08-21, when this
+ * endpoint started being handed to sessions running **inside a WSL
+ * distribution** — which is the obvious place somebody would reach for a wider
+ * rule. It needs none: under mirrored networking a distribution's connection to
+ * `127.0.0.1` arrives on this host's loopback and is already a loopback literal
+ * here. Under NAT it does not arrive at all, because this server binds
+ * `127.0.0.1` and the operating system refuses the gateway address before any
+ * rule of ours is consulted, so loosening this would not make that case work —
+ * it would only widen who else may knock.
+ *
+ * If the NAT case is ever built it takes a second listener on the WSL virtual
+ * switch, an allow-set holding the single address the distribution itself
+ * reported, **and** a grant flag on the token saying it was minted for a session
+ * in that distribution — both required together, neither of them here.
+ * `wsl-reach.ts` carries the whole argument and the reason it was not built.
+ */
 function isLoopback(address: string | undefined): boolean {
   if (!address) return false
   return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1'

@@ -251,6 +251,7 @@ import { overlayFor, resolveAppearance, titleBarChrome, type Appearance } from '
 import { registerSetupIpc } from './setup'
 import { registerCookieImportIpc } from './cookie-import'
 import { registerBrowserIsolationIpc } from './browser-isolation'
+import { distroPlacement } from './wsl-reach'
 import { linuxPathFromUnc, registerWslIpc } from './wsl'
 import { createRoutines, registerRoutinesIpc } from './routines'
 import { DEFAULT_GLOBAL_MAX_RUNS_PER_HOUR } from './routines/engine'
@@ -687,7 +688,17 @@ const core = createHostCore({
    * the honest answer and the one this app already gives for the `open` shim.
    */
   sessionTools: {
-    prepare: () => sessionTools?.prepare() ?? null,
+    prepare: (inside) => sessionTools?.prepare(inside) ?? null,
+    /*
+     * And a session in a Linux folder may have them too, once the distribution
+     * has said it can reach this endpoint.
+     *
+     * Read through `deckControl` rather than captured for the reason above it:
+     * the endpoint comes up after this object is built. `wsl-reach.ts` asks the
+     * distribution once per port and remembers, so this is a `wsl.exe` run on
+     * the first WSL session of a run and nothing on any after it.
+     */
+    insideDistro: (target) => distroPlacement(target, deckControl?.endpoint.url ?? ''),
     /*
      * And yes, a session a device started may have them — to reach **that
      * device's** windows and nothing here.
