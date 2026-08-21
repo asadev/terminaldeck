@@ -41,6 +41,7 @@ import { ModeSwitch, type SessionViewMode, type WorkspaceMode } from './shell/Mo
 import { BrowserWorkspace } from './browser/BrowserWorkspace'
 import { SwarmGrid } from './layout/SwarmGrid'
 import { SplitView } from './layout/SplitView'
+import { SLOT_ATTR, slotStyle, usePaneSlots } from './layout/pane-slots'
 import {
   closePane,
   emptyLayout,
@@ -622,6 +623,15 @@ function Workspace() {
    * entire time — twice nearly deleted for it. This is the wiring.
    */
   const [panes, setPanes] = useState<PaneLayout>(emptyLayout)
+  /*
+   * The layout, readable from a callback that must not be rebuilt when it
+   * changes. `selectTab` is handed to the rail, the strip, the palette and the
+   * keyboard dispatcher, and it has to know whether the window is split — but
+   * listing `panes` would hand all four a new function on every drag of a
+   * divider.
+   */
+  const panesRef = useRef<PaneLayout>(panes)
+  panesRef.current = panes
   const [openFile, setOpenFile] = useState<string | null>(null)
   /**
    * The close that is waiting on an answer — one session, or a whole project.
@@ -1082,6 +1092,38 @@ function Workspace() {
   }, [openMachineSession])
 
   /*
+   * And so is putting one in a pane of a split.
+   *
+   * `openMachineSession` is the *unsplit* window's answer and is deliberately
+   * cleared on the way into a split — see `splitPanes` — so without this a
+   * remote session dropped into a pane would have a bar, a hole and nothing to
+   * fill it. Read off the layout for the same reason the effect above is read
+   * off the window: whichever surface says a session is on screen is the one
+   * that has to mount it.
+   *
+   * Additive only, like the one above. A pane retargeted to something else does
+   * not take the terminal down: the whole point of this list is that it survives
+   * the session being switched away from, and the prune below is what removes an
+   * entry, on the far machine's own word.
+   */
+  const paneMachineIds = isSplit(panes) ? tabIds(panes).join('|') : ''
+  useEffect(() => {
+    if (paneMachineIds === '') return
+    const wanted = paneMachineIds
+      .split('|')
+      .map((id) => readMachineTabId(id))
+      .filter((entry): entry is { machineId: string; sessionId: string } => entry !== null)
+    if (wanted.length === 0) return
+    setMachineSessionPanes((open) => {
+      const missing = wanted.filter(
+        (want) =>
+          !open.some((pane) => pane.machineId === want.machineId && pane.sessionId === want.sessionId),
+      )
+      return missing.length === 0 ? open : [...open, ...missing]
+    })
+  }, [paneMachineIds])
+
+  /*
    * And a session that has ended over there takes its pane with it.
    *
    * Read through a ref rather than depended on, so this runs when the far
@@ -1120,6 +1162,16 @@ function Workspace() {
   const serverSessionTabs: WorkspaceTab[] = serverTabs(serverSessions)
 
   /**
+   * The set of open server shells, as one string.
+   *
+   * A dependency, not a value anything reads — the same device
+   * `linkedMachineSessions` is, for the same reason: `serverSessions` is a fresh
+   * array whenever anything about a shell changes, so an effect that listed it
+   * would run on every status tick rather than when a shell appears or goes.
+   */
+  const serverSessionKey = serverSessions.map((entry) => entry.tabId).join('|')
+
+  /**
    * Everything the strip and the rail list — this window's, the machines' and
    * the servers'.
    *
@@ -1130,6 +1182,38 @@ function Workspace() {
    * local one does.
    */
   const openTabs: WorkspaceTab[] = [...tabs, ...machineTabs, ...serverSessionTabs]
+
+  /**
+   * What a pane is allowed to go on naming — everything open, plus the remote
+   * sessions this window has a pane for and cannot currently ask about.
+   *
+   * `pruneClosedPanes` closes a pane whose window is not in the list it is
+   * handed, so the list has to be the *authority* on what exists. It used to be
+   * `tabs`, which is this window's own sessions and pages, and that was correct
+   * while a pane could hold nothing else. Now that a pane can hold a session on
+   * a paired machine or a terminal on a server, handing it `tabs` would close
+   * those panes on the very next render — the same class of bug that made a
+   * browser page impossible to put in a pane, one argument narrower than the
+   * thing it decides.
+   *
+   * The second half is the one that is easy to get wrong. `machineTabs` is built
+   * from each machine's *live* roster, so a link that drops for three seconds
+   * empties it — and pruning on that would tear a hand-made layout apart every
+   * time the relay reconnected. `machineSessionPanes` keeps its entries through
+   * a dropped link on exactly that argument, so the panes for a machine that is
+   * not answering are kept here too. A machine that *is* answering and says the
+   * session is gone is believed, because then its tab is genuinely absent from
+   * `machineTabs` while the machine is in the list.
+   */
+  const panePruneList: readonly { id: string }[] = [
+    ...openTabs,
+    ...machineSessionPanes
+      .filter((pane) => {
+        const row = machines.machines.find((entry) => entry.machine.id === pane.machineId)
+        return !row?.link
+      })
+      .map((pane) => ({ id: machineTabId(pane.machineId, pane.sessionId) })),
+  ]
 
   /**
    * Forget a machine was ever closed, once work nobody here closed is on it.
@@ -1272,6 +1356,16 @@ function Workspace() {
    */
   const tabsRef = useRef(tabs)
   tabsRef.current = tabs
+  /*
+   * And the same list widened to every computer, for the two callers that must
+   * not be narrower than the pane model: the Split command, which seeds a pane
+   * from whatever you are looking at, and the prune, which decides what a pane
+   * may keep naming. See `panePruneList`.
+   */
+  const openTabsRef = useRef(openTabs)
+  openTabsRef.current = openTabs
+  const panePruneRef = useRef(panePruneList)
+  panePruneRef.current = panePruneList
   const autoNameRef = useRef(autoNameSessions)
   autoNameRef.current = autoNameSessions
 
@@ -1392,6 +1486,23 @@ function Workspace() {
   const splitting = isSplit(panes)
 
   /**
+   * The pane area itself, and where inside it each pane's hole is.
+   *
+   * A session on a paired machine and a terminal on a server are mounted beside
+   * the pane tree rather than inside it — they cannot be unmounted without
+   * replaying a scrollback over the relay or closing an SSH shell — so a pane
+   * that holds one draws an empty body and this measures it. See
+   * `layout/pane-slots.ts` for the whole argument, including why a portal is not
+   * the answer.
+   *
+   * The signature is the arrangement, so a layout change re-measures on the
+   * render that caused it rather than a frame later; the observers inside the
+   * hook cover a divider being dragged and the window being resized.
+   */
+  const panesHostRef = useRef<HTMLDivElement>(null)
+  const paneSlots = usePaneSlots(panesHostRef, splitting, splitting ? tabIds(panes).join('|') : '')
+
+  /**
    * The session the app acts on: the focused pane's while split, the open tab's
    * otherwise.
    *
@@ -1406,6 +1517,38 @@ function Workspace() {
     ? sessions.find((session) => session.id === focusedId) ?? null
     : null
 
+  /**
+   * The tab whose *view* is on screen — which is not always the local one.
+   *
+   * `focusedId` above is the local answer: the focused pane's tab while split,
+   * the selected tab otherwise. It was also the only answer, and everything
+   * about how the window is *drawn* was keyed on it — `sessionView[focusedId]`,
+   * `setSessionView({[focusedId]: next})`, the rail's highlight. With a session
+   * on a paired machine or a terminal on a server filling the pane, that is the
+   * id of a session **that is not on screen**, so pressing Terminal/Chat read
+   * and wrote the mode of a different session entirely: the switch could show
+   * Chat over a remote terminal because some local tab was in chat mode, and
+   * pressing it turned that local tab back into a terminal while the remote
+   * pane carried on unchanged. Nothing on screen moved, which is the worst
+   * shape a control can have.
+   *
+   * So the window has one answer for "what am I looking at" and it is this one.
+   * `focusedId` keeps its own meaning — the *local* session the app acts on,
+   * which is what `setActiveSession`, the store's selection and every pty call
+   * still need — and the two are deliberately different values rather than one
+   * value with a comment.
+   *
+   * While the window is split, the panes already name what they hold, whichever
+   * computer it is on, so the focused pane is the whole answer.
+   */
+  const shownTabId: string | null = splitting
+    ? focusedId
+    : openMachineSession !== null
+      ? machineTabId(openMachineSession.machineId, openMachineSession.sessionId)
+      : openServerSession !== null
+        ? openServerSession
+        : focusedId
+
   useEffect(() => unread.subscribe((snapshot) => setUnreadIds(snapshot.ids)), [unread])
 
   /**
@@ -1417,17 +1560,19 @@ function Workspace() {
    * row's ✕, the process exiting, a whole project closing) and only one of them
    * is a place a caller could remember to prune.
    *
-   * **`tabs`, not `sessions`.** A pane may hold a browser page, and handed the
-   * session list this call declares that pane dead and collapses the whole
-   * hand-made layout on the render after the page was opened — which is exactly
-   * what happened when the globe was first wired to the focused pane, and why
-   * it was backed out. `layout/panes.ts` carries the long version. The deps are
-   * the two lists `tabs` is built from plus the feature registry that filters
-   * it, because `tabs` itself is a fresh array on every render.
+   * **Every kind of window, not only the sessions and not only this machine's.**
+   * A pane may hold a browser page, a session on a paired machine or a terminal
+   * on a server, and handed a narrower list this call declares those panes dead
+   * and collapses the whole hand-made layout on the render after one was opened
+   * — which is exactly what happened when the globe was first wired to the
+   * focused pane, and why it was backed out. `panePruneList` is the authority
+   * and `layout/panes.ts` carries the long version. The deps are the lists that
+   * authority is built from, as the two flattened strings rather than the arrays
+   * themselves, because every one of those arrays is rebuilt on every render.
    */
   useEffect(() => {
-    setPanes((current) => pruneClosedPanes(current, tabsRef.current))
-  }, [sessions, extraTabs, features])
+    setPanes((current) => pruneClosedPanes(current, panePruneRef.current))
+  }, [sessions, extraTabs, features, linkedMachineSessions, serverSessionKey])
 
   /**
    * A layout that belongs to a feature that has just gone.
@@ -2237,6 +2382,19 @@ function Workspace() {
       if (remote) {
         clearPanel()
         setCopilotPending(false)
+        /*
+         * While the window is split, it fills the pane you are looking at —
+         * exactly as a local session or a browser page does, and for the same
+         * reason: the rail is a list of what you have open, not a layout editor,
+         * and a click that took the whole frame back would be the list undoing
+         * the arrangement rather than driving it. Taking the frame is what this
+         * did unconditionally, which is half of why a remote session could not
+         * be *put* in a pane at all.
+         */
+        if (isSplit(panesRef.current)) {
+          setPanes((current) => showInFocusedPane(current, id))
+          return
+        }
         setOpenMachineSession(remote)
         setOpenServerSession(null)
         return
@@ -2254,6 +2412,11 @@ function Workspace() {
       if (readServerTabId(id)) {
         clearPanel()
         setCopilotPending(false)
+        // And into the focused pane while split, for the reason above.
+        if (isSplit(panesRef.current)) {
+          setPanes((current) => showInFocusedPane(current, id))
+          return
+        }
         setOpenMachineSession(null)
         setOpenServerSession(id)
         return
@@ -3418,16 +3581,60 @@ function Workspace() {
   const splitPanes = useCallback(() => {
     clearPanel()
     setSwarm(false)
+    /*
+     * The panes become the authority on what is on screen, so the two
+     * whole-window answers are put away.
+     *
+     * They are not a *second* place a remote session can be — they are the
+     * unsplit window's way of saying "this fills the frame", and a split frame
+     * has no such thing. Leaving them set meant `heading`, `modesBlocked` and
+     * every pane's visibility disagreeing about whether the server terminal was
+     * the whole window or one of two panes. `seedSplit` has already been handed
+     * `shownTabId`, so whatever was on screen is in the first pane before this
+     * takes effect, and `closeSplit` puts it back.
+     */
+    setOpenMachineSession(null)
+    setOpenServerSession(null)
     setPanes((current) =>
-      // `tabsRef`, not `sessionsRef`: pressing Split while a page is in front
-      // used to seed the first pane from the session list, so the page you were
-      // reading simply disappeared the moment you split the window.
-      isSplit(current) ? splitFocused(current) : seedSplit(tabsRef.current, focusedId),
+      /*
+       * `openTabsRef`, not `sessionsRef` and no longer `tabsRef`. Pressing Split
+       * while a page is in front used to seed the first pane from the session
+       * list, so the page you were reading disappeared the moment you split;
+       * pressing it over a session on a paired machine or a terminal on a server
+       * did the same thing to that session, because those are not in `tabs`
+       * either. `shownTabId` rather than `focusedId` for the identical reason —
+       * it is the tab actually on screen, on whichever computer.
+       */
+      isSplit(current) ? splitFocused(current) : seedSplit(openTabsRef.current, shownTabId),
     )
-  }, [clearPanel, focusedId])
+  }, [clearPanel, shownTabId])
 
-  /** Leave the layout behind and go back to one session filling the window. */
-  const closeSplit = useCallback(() => setPanes(emptyLayout()), [])
+  /**
+   * Leave the layout behind and go back to one session filling the window.
+   *
+   * The window that comes back is the pane you were working in, whichever
+   * computer that pane's session is on. `paneForTab` is the routing — the same
+   * function the strip's ✕ uses, asked the same question: *given an id, where
+   * does that window live*. Without it, collapsing a split whose focused pane
+   * held a terminal on a server would leave `openServerSession` null, and the
+   * unsplit window would fall back to whatever local tab happened to be active
+   * — the session you had been typing into replaced by one you had not chosen.
+   *
+   * The `local` half is what `setMode` used to do on its own. It is here
+   * because three other things collapse a split — the palette's swarm toggle,
+   * the dashboard's session count, closing the second-to-last pane — and each of
+   * them needs the window to land somewhere honest too.
+   */
+  const closeSplit = useCallback(() => {
+    const landing = paneForTab(shownTabId)
+    setOpenMachineSession(landing.machine)
+    setOpenServerSession(landing.server)
+    if (landing.local && shownTabId !== null) {
+      setSelection(showTabSelection(shownTabId))
+      setActiveSession(shownTabId)
+    }
+    setPanes(emptyLayout())
+  }, [shownTabId, setActiveSession])
 
   /**
    * Terminal, Chat, Split — what the window is doing.
@@ -3453,18 +3660,20 @@ function Workspace() {
         splitPanes()
         return
       }
+      // Which window you land on, and the selection that goes with it, is
+      // `closeSplit`'s job — see there for why it moved.
       closeSplit()
       setSwarm(false)
-      // The focused pane's session, so leaving a split leaves you looking at
-      // the half you were working in rather than at whatever tab was active
-      // before you split.
-      if (focusedId) {
-        setSelection(showTabSelection(focusedId))
-        setActiveSession(focusedId)
-        setSessionView((views) => ({ ...views, [focusedId]: next }))
-      }
+      /*
+       * `shownTabId`, not `focusedId`: the mode belongs to the session that is
+       * on screen, and with a remote or server terminal filling the pane those
+       * two are different ids. Writing `focusedId` there set the view of a
+       * local tab nobody was looking at — see `shownTabId`.
+       */
+      if (shownTabId === null) return
+      setSessionView((views) => ({ ...views, [shownTabId]: next }))
     },
-    [splitPanes, closeSplit, focusedId, setActiveSession, features],
+    [splitPanes, closeSplit, shownTabId, features],
   )
 
   /** Arrow-key travel between panes, geometric rather than by tree order. */
@@ -4086,6 +4295,115 @@ function Workspace() {
     />
   )
 
+  /**
+   * Which session a set of controls acts on, and on which computer — for any
+   * tab, of any of the three kinds.
+   *
+   * ## Why this is one function
+   *
+   *   > *"So it should not matter that which session I am in, but all of them
+   *   > should show the exactly same things up there, all exact same features."*
+   *
+   * The window's bar and every guest pane's bar draw the same component,
+   * `SessionControls`, and what made them different was not the component — it
+   * was three separate expressions working out what to hand it, each written
+   * beside the thing it served and each withholding a different piece. This is
+   * that answer, asked once. `barControls` below is `controlsFor(barTabId)` and
+   * a pane's is `controlsFor(paneTabId)`; there is no third reading anywhere.
+   *
+   * ## The three branches are three different lookups, not three policies
+   *
+   * A **server terminal** is found by its tab id in this window's own list of
+   * shells, and answers `null` until the far end has handed back an id for the
+   * shell — the tab exists from the moment of the click and the shell opens
+   * asynchronously, so drawing the cluster before then is four chips saying
+   * "Unknown" about a session that has not started. `provider` is `undefined`
+   * on purpose rather than as a gap: this app did not launch whatever is in that
+   * shell, so `refuseByProvider` is handed the absence it is built around and
+   * consults the screen instead. A plain `sh` is refused with a sentence; a
+   * `claude` somebody started in there is driven exactly as a local one is.
+   *
+   * A **session on a paired machine** is found in that machine's own roster, and
+   * answers `null` while the link is down — falling through to a local session
+   * there would put a local session's model chip on a bar above a remote pane,
+   * which is the worst outcome available: a control that looks right and acts on
+   * the wrong computer. Its `provider` is narrowed because it arrives as a
+   * free-form string off a network; anything unrecognised becomes `undefined`,
+   * which means "ask the screen".
+   *
+   * A **local session** is the case every caller written before any of this
+   * meant, and `target: undefined` is what says so.
+   */
+  const controlsFor = (
+    tabId: string | null,
+  ): {
+    sessionId: string
+    cwd: string | null
+    provider: ProviderId | undefined
+    exited: boolean
+    target: ControlsTarget | undefined
+  } | null => {
+    if (tabId === null) return null
+    if (readServerTabId(tabId)) {
+      const row = serverSessions.find((entry) => entry.tabId === tabId) ?? null
+      const shellId = serverShellIds[tabId]
+      if (row === null || shellId === undefined) return null
+      return {
+        sessionId: shellId,
+        cwd: null,
+        provider: undefined,
+        // The one fact this window genuinely observes about a server shell:
+        // `servers:shell:closed` fired. There is no exit code on that channel
+        // and none is invented here.
+        exited: row.status === 'exited',
+        target: { kind: 'server' },
+      }
+    }
+    const remote = readMachineTabId(tabId)
+    if (remote) {
+      const row = machines.machines.find((entry) => entry.machine.id === remote.machineId) ?? null
+      const live = row?.link?.sessions.find((session) => session.id === remote.sessionId) ?? null
+      if (live === null) return null
+      return {
+        sessionId: live.id,
+        cwd: null,
+        provider: isProviderId(live.provider) ? live.provider : undefined,
+        exited: live.exitCode !== null,
+        target: { kind: 'machine', machineId: remote.machineId },
+      }
+    }
+    const local = windowSessions.find((entry) => entry.id === tabId) ?? null
+    if (local === null) return null
+    return {
+      sessionId: local.id,
+      cwd: local.projectPath ?? null,
+      provider: local.provider,
+      /* The session's real exit code, never a literal. The cluster reads the
+         screen to tell a shell with an agent in it from a plain one, and a
+         killed CLI leaves its banner on the last frame — so a hardcoded `false`
+         would keep live model and effort chips on the bar of a session whose
+         process is already gone. */
+      exited: local.exitCode !== null,
+      target: undefined,
+    }
+  }
+
+  /**
+   * Which computer a tab's session runs on, when it is not this one.
+   *
+   * Read off the tab rather than by taking its id apart, because the tab is
+   * where the machine's *name* is — `machineTabs` and `serverTabs` both carry it
+   * — and a pane bar has to print a name, not an id. Null for one of this
+   * window's own sessions, a browser page or the copilot, which is the test
+   * every caller here actually wants.
+   */
+  const paneWhere = (tab: WorkspaceTab): { tab: WorkspaceTab; where: string } | null =>
+    tab.machine
+      ? { tab, where: tab.machine.name }
+      : tab.server
+        ? { tab, where: tab.server.name }
+        : null
+
   const mainView = () => {
     /*
      * A terminal on a server is on screen, and this function draws nothing.
@@ -4105,8 +4423,17 @@ function Workspace() {
      * below would mount every local terminal and show whichever one `activeTab`
      * fell back to, underneath an opaque pane — a terminal nobody can see, with
      * the keyboard, taking keystrokes meant for the server.
+     *
+     * **Unless the window is split.** A split names what every pane holds, on
+     * whichever computer, and the server pane is placed over the hole its own
+     * pane leaves rather than over the whole frame — see `layout/pane-slots.ts`.
+     * Returning null here regardless is what made splitting over a server
+     * terminal draw an empty window: this function is the only thing that mounts
+     * `SplitView`, so a `splitPanes()` from the command palette (which nothing
+     * blocked) left a window with a mode switch reading Split and nothing under
+     * it.
      */
-    if (openServerSession !== null) return null
+    if (!splitting && openServerSession !== null) return null
     /*
      * A session on another machine is on screen, and this function draws
      * nothing — for the reason the branch above draws nothing for a server.
@@ -4125,8 +4452,12 @@ function Workspace() {
      * controlling"* — and opening one from the rail puts it where every other
      * session goes, in the same frame, in the same terminal, with the same
      * theme.
+     *
+     * And below the split, for the reason the branch above is: a pane holding a
+     * remote session is a pane, and the layout has to be drawn for it to have
+     * one.
      */
-    if (openMachineSession !== null && machines.bridge !== null) return null
+    if (!splitting && openMachineSession !== null && machines.bridge !== null) return null
     if (showingPanel && panel) {
       return (
         <PanelView
@@ -4291,12 +4622,29 @@ function Workspace() {
              * the split kept mounted behind a sidebar page rather than a change
              * in this expression.
              */
-            const paneTab = tabId ? tabs.find((entry) => entry.id === tabId) ?? null : null
-            const sessionTab = paneTab?.kind === 'session' ? paneTab : null
+            const paneTab = tabId ? openTabs.find((entry) => entry.id === tabId) ?? null : null
+            /*
+             * `openTabs`, not `tabs`, and that one word is most of what makes a
+             * server terminal splittable at all.
+             *
+             *   > *"Like I cannot even split"* / *"I cannot make it to the chat
+             *   > view"*
+             *
+             * `tabs` is this window's own sessions and pages. A pane holding a
+             * session on a paired machine or a terminal on a server found
+             * nothing in it, so it drew "Nothing in this pane yet" over a live
+             * terminal — which is why the refusal upstream was honest at the
+             * time and is not any more.
+             */
+            const elsewhere = paneTab === null ? null : paneWhere(paneTab)
+            const sessionTab = paneTab?.kind === 'session' && elsewhere === null ? paneTab : null
             const pageTab = paneTab?.kind === 'browser' ? paneTab : null
             const session = sessionTab
               ? windowSessions.find((entry) => entry.id === sessionTab.id) ?? null
               : null
+            /* The same expression the window's own bar uses, asked about this
+               pane's tab. One function, three kinds — see `controlsFor`. */
+            const paneControls = controlsFor(elsewhere ? elsewhere.tab.id : session?.id ?? null)
 
             return (
               <div className="pane-cell" data-focused={focused} data-primary={primary}>
@@ -4330,7 +4678,14 @@ function Workspace() {
                     focused={focused}
                     onClose={closePaneAt}
                     subject={
-                      session && sessionTab
+                      elsewhere
+                        ? {
+                            kind: 'elsewhere',
+                            title: tabLabel(elsewhere.tab, openTabs),
+                            where: `on ${elsewhere.where}`,
+                            status: elsewhere.tab.status ?? 'idle',
+                          }
+                        : session && sessionTab
                         ? {
                             kind: 'session',
                             id: session.id,
@@ -4374,27 +4729,46 @@ function Workspace() {
                       about the CLI already running in this one.
                     */
                     controls={
-                      session ? (
+                      paneControls ? (
                         <SessionControls
-                          sessionId={session.id}
-                          cwd={session.projectPath ?? null}
-                          provider={session.provider}
-                          /* The session's real exit code, never a literal.
-                             The cluster reads this pane's screen to tell a
-                             shell with an agent in it from a plain one, and a
-                             killed CLI leaves its banner on the last frame —
-                             so a hardcoded `false` here would keep live model
-                             and effort chips on the bar of a session whose
+                          sessionId={paneControls.sessionId}
+                          cwd={paneControls.cwd}
+                          provider={paneControls.provider}
+                          /* Never a literal. `controlsFor` computes it per kind
+                             from the record that actually knows — this window's
+                             session list, the far machine's roster, the server
+                             shell's own status. The cluster reads this pane's
+                             screen to tell a shell with an agent in it from a
+                             plain one, and a killed CLI leaves its banner on the
+                             last frame, so a hardcoded `false` would keep live
+                             model and effort chips on the bar of a session whose
                              process is already gone. */
-                          exited={session.exitCode !== null}
+                          exited={paneControls.exited}
                           onOpenConnectors={openConnectors}
+                          /* Which computer this pane's session is on. `undefined`
+                             for one of this window's own, which is what every
+                             caller written before there were three kinds meant. */
+                          target={paneControls.target}
                         />
                       ) : undefined
                     }
                   />
                 )}
                 <div className="pane-cell-body">
-                  {session ? (
+                  {elsewhere ? (
+                    /*
+                     * The hole a terminal that lives elsewhere is drawn over.
+                     *
+                     * Empty, deliberately. The terminal itself is mounted beside
+                     * the pane tree, for as long as its tab exists, because
+                     * unmounting it either replays a whole scrollback over the
+                     * relay or closes an SSH shell for real — see
+                     * `layout/pane-slots.ts` for the measurement, and the block
+                     * at the bottom of this component for the mounts. This
+                     * element is what tells it where to be.
+                     */
+                    <div className="pane-remote-slot" {...{ [SLOT_ATTR]: elsewhere.tab.id }} />
+                  ) : session ? (
                     <TerminalView
                       // Keyed on the pane as well as the session, so the same
                       // session opened in two panes gets two terminals rather
@@ -4648,8 +5022,24 @@ function Workspace() {
    * says nothing.
    */
   const headingTab = splitting
-    ? (hostPane?.tabId ? tabs.find((tab) => tab.id === hostPane.tabId) ?? null : null)
+    ? /* `openTabs`, not `tabs`: a pane can hold a session on a paired machine or
+         a terminal on a server now, and looked up in this window's own list
+         those come back `null` — a split whose host pane held a server shell
+         drew a bar with no name, no controls and no folder over a live
+         terminal. */
+      (hostPane?.tabId ? openTabs.find((tab) => tab.id === hostPane.tabId) ?? null : null)
     : activeTab
+
+  /**
+   * The tab the window's own bar acts on.
+   *
+   * The **host** pane while split — see `hostPane` for why the bar belongs to
+   * the pane with no box rather than to the focused one — and whatever is on
+   * screen otherwise, on whichever computer. One id, handed to `controlsFor`, so
+   * the cluster on this bar and the name beside it cannot come to be about two
+   * different sessions.
+   */
+  const barTabId: string | null = splitting ? hostPane?.tabId ?? null : shownTabId
 
   /**
    * Whether the pane the bar is naming has the keyboard.
@@ -4662,27 +5052,6 @@ function Workspace() {
    * otherwise a convention a first-time user has to guess.
    */
   const headingFocused = !splitting || (hostPane !== null && hostPane.id === panes.focusedPaneId)
-
-  /**
-   * The running session the window's bar is about, when it is about one.
-   *
-   * The bar's own controls — model, effort, fast mode, connectors — act on this
-   * and on nothing else. Resolved from the *same* `headingTab` the bar's name,
-   * folder and account come from, deliberately: the controls have to belong to
-   * whichever session that bar is claiming, or the window would be naming one
-   * session and setting the model of another, which is the confusion the split
-   * chrome was reorganised to end.
-   *
-   * The tab is not enough on its own. `provider` — what is actually running in
-   * the pty — lives on the session record rather than on the tab, and it is the
-   * thing that decides whether these are offered at all: a `/bin/zsh -l` has no
-   * model to set. Null while a sidebar view is filling the window, where the
-   * bar's heading is a page's name and there is no session under it.
-   */
-  const headingSession =
-    !showingPanel && headingTab?.kind === 'session' && !(headingTab.isCopilot && copilotMachine !== null)
-      ? windowSessions.find((entry) => entry.id === headingTab.id) ?? null
-      : null
 
   /**
    * What the window's own bar says — and while the window is split, it says the
@@ -4895,8 +5264,33 @@ function Workspace() {
         }
       : headingTab
       ? {
-          title: labelOf(headingTab),
-          subtitle: null,
+          /*
+           * `tabLabel` for a window on another computer, `labelOf` for one of
+           * this window's own.
+           *
+           * `labelOf` numbers a session among the tabs *this window owns*, which
+           * for a shell on somebody's server is a number counted against local
+           * sessions in a folder it has nothing to do with. `tabLabel` counts
+           * siblings on the same machine — the other terminals on that server,
+           * the other sessions on that PC — and is the same function the strip
+           * and the rail use, so three surfaces print one number.
+           *
+           * Only reachable while the window is split, because unsplit the tab in
+           * front is resolved from this window's own list and the two branches
+           * above already name a remote session and a server terminal. It is
+           * written for both kinds anyway rather than for the server alone: a
+           * host pane holding a remote session is the same situation and the
+           * next person to open this file should not have to discover that.
+           */
+          title:
+            headingTab.machine || headingTab.server ? tabLabel(headingTab, openTabs) : labelOf(headingTab),
+          // Which computer it is on — the one fact that makes this bar
+          // different from the identical-looking local one.
+          subtitle: headingTab.machine
+            ? `on ${headingTab.machine.name}`
+            : headingTab.server
+              ? `on ${headingTab.server.name}`
+              : null,
           // The path is a control now rather than a caption — see FolderChip.
           folder: headingTab.kind === 'session' ? headingTab.projectPath ?? null : null,
           // And so is the account, beside it — see AccountChip. Null for a
@@ -4951,11 +5345,6 @@ function Workspace() {
    */
   const headingFolder = heading.folder
 
-  /** The row behind the open server terminal, for the facts the tab does not carry. */
-  const openServerRow = openServerSession
-    ? (serverSessions.find((entry) => entry.tabId === openServerSession) ?? null)
-    : null
-
   /**
    * The session the window's control cluster acts on, and which computer it is on.
    *
@@ -4979,93 +5368,35 @@ function Workspace() {
    * call sites are three things to keep in step, and the first one to drift
    * would be the remote one nobody looks at.
    *
-   * ## What each branch carries, and the two deliberate absences
+   * ## The branches moved, and that is the point
    *
-   * `cwd` is null for both remote branches. It is only ever used for two things
-   * — the transcript the model is read from, and the folder the connectors are
-   * resolved in — and both of those are files on **this** computer. A paired
-   * machine reads its own; a server has none here. Passing a far path would have
-   * resolved this machine's project connectors under somebody else's session on
-   * any machine where the two happen to share a checkout path.
+   * They used to be spelled out here, three of them, and a guest pane's bar had
+   * a fourth copy of the local one — so a pane could never hold a session on
+   * another computer, because the only expression that knew how to reach one
+   * lived in the window's bar. They are `controlsFor` now, above `mainView`,
+   * where both callers can see it: this line and every pane. What is left here
+   * is the two gates that are genuinely about the *window* rather than about a
+   * session — the swarm grid and a sidebar view, neither of which has a session
+   * bar for the cluster to sit on.
    *
-   * `provider` is undefined for a server terminal, and that is the honest value
-   * rather than a gap: this app did not launch whatever is in that shell, so
-   * `refuseByProvider` is handed the absence it is built around and consults the
-   * screen instead. A plain `sh` is refused with a sentence; a `claude` somebody
-   * started in there is driven exactly as a local one is.
+   * `cwd` is null for both remote branches, in there. It is only ever used for
+   * two things — the transcript the model is read from, and the folder the
+   * connectors are resolved in — and both are files on **this** computer. A
+   * paired machine reads its own; a server has none here. Passing a far path
+   * would have resolved this machine's project connectors under somebody else's
+   * session on any machine where the two happen to share a checkout path.
    */
-  const barControls: {
-    sessionId: string
-    cwd: string | null
-    provider: ProviderId | undefined
-    exited: boolean
-    target: ControlsTarget | undefined
-  } | null =
-    swarm || showingPanel
+  const barControls =
+    swarm ||
+    showingPanel ||
+    /* The copilot's page, switched to another machine. The tab is this window's
+       own — so `controlsFor` would find this Mac's copilot session and draw a
+       model picker for it — while the pane underneath is a conversation on a
+       PC. `headingSession` used to carry this guard; it is here now because
+       this is the only thing that was still reading it. */
+    (headingTab?.isCopilot === true && copilotMachine !== null)
       ? null
-      : openServerRow
-        ? /*
-           * Only once the far end has handed back its id for the shell.
-           *
-           * The tab exists from the moment of the click and the shell is opened
-           * asynchronously, so for a beat there is a terminal on screen with
-           * nothing behind it to read. Drawing the cluster then would be four
-           * chips saying "Unknown" about a session that has not started, which
-           * is a worse answer than the bar being briefly plain. See
-           * `serverShellIds`.
-           */
-          serverShellIds[openServerRow.tabId] === undefined
-          ? null
-          : {
-              sessionId: serverShellIds[openServerRow.tabId],
-              cwd: null,
-              provider: undefined,
-              // The one fact this window genuinely observes about a server
-              // shell: `servers:shell:closed` fired. There is no exit code on
-              // that channel and none is invented here.
-              exited: openServerRow.status === 'exited',
-              target: { kind: 'server' },
-            }
-        : openMachineSession
-          ? /*
-             * Only while that machine is still listing the session.
-             *
-             * `openRemoteSession` is read out of the link's own roster, so it
-             * goes when the link drops — and falling through to `headingSession`
-             * there would put a *local* session's model chip on the bar above a
-             * remote pane, which is the worst outcome available: a control that
-             * looks right and acts on the wrong computer.
-             */
-            !openRemoteSession
-            ? null
-            : {
-                sessionId: openRemoteSession.id,
-                cwd: null,
-                // The far machine's own record of what it launched, narrowed
-                // because it arrives as a free-form string off a network. Anything
-                // this build does not recognise becomes `undefined`, which means
-                // "ask the screen" — the same answer a shell with an agent typed
-                // into it produces, and the safe one.
-                provider: isProviderId(openRemoteSession.provider) ? openRemoteSession.provider : undefined,
-                exited: openRemoteSession.exitCode !== null,
-                target: {
-                  kind: 'machine',
-                  machineId: openMachineSession.machineId,
-                },
-              }
-          : headingSession
-            ? {
-                sessionId: headingSession.id,
-                cwd: headingSession.projectPath ?? null,
-                provider: headingSession.provider,
-                /* The same fact the account chip beside it already gets through
-                   `chromeSession`, and for the same reason: presence is settled
-                   off the record first and off the screen only for a session
-                   that is still alive. See the note on the `exited` prop. */
-                exited: headingSession.exitCode !== null,
-                target: undefined,
-              }
-            : null
+      : controlsFor(barTabId)
 
   /**
    * Which segments of the mode switch cannot act on what is on screen, and why.
@@ -5075,44 +5406,49 @@ function Workspace() {
    * It used to vanish over a session on a paired machine or a terminal on a
    * server, and vanishing was wrong for the segment that works: **Terminal is
    * exactly what both of those are already showing**. Withdrawing the whole
-   * control because two of its three answers are unreachable left an empty
+   * control because two of its three answers were unreachable left an empty
    * stretch of toolbar, and an empty stretch of toolbar cannot tell "not built"
-   * from "not possible" — which is the complaint that produced this pass.
+   * from "not possible".
    *
-   * ## Why the other two genuinely cannot, checked rather than assumed
+   * ## Split is no longer one of them
    *
-   * **Chat** renders a conversation out of the agent's own transcript file,
-   * parsed by `chat-transcript.ts` from a path under this machine's Claude
-   * config directory. That file is on the far machine's disk for a paired
-   * session and on the server's for an SSH one, and nothing on either wire
-   * carries it — the only parsed conversation that travels is the copilot's own
-   * `copilot.chat`, which is a different feature about a different session.
+   *   > *"Like I cannot even split"*
    *
-   * **Split** arranges *this window's* panes, and `panes` are filled from the
-   * local session list. A remote session is drawn by `mainView` as one whole
-   * window and a server terminal is mounted outside the pane tree entirely — see
-   * the note beside `ServerSessionPane` — so there is nothing for a second pane
-   * to hold.
+   * It said: *"Split arranges this window's own panes, and a terminal on a
+   * server is mounted beside them so its scrollback survives being switched away
+   * from."* Both halves of that were true and the conclusion was not. The panes
+   * hold every kind of tab now, and a terminal that has to stay mounted is drawn
+   * over the hole its own pane leaves rather than being moved into it — see
+   * `layout/pane-slots.ts`. Nothing about the scrollback changed; what changed
+   * is that the pane tree stopped being the only thing allowed to say where a
+   * rectangle is.
    *
-   * Neither sentence is an apology and neither is permanent. They say what would
-   * have to travel, which is the honest description of a gap.
+   * ## Chat, and what is still genuinely missing
+   *
+   * Chat renders a conversation out of the agent's own transcript file. For a
+   * session on a **paired machine** that file is read by the machine it is on
+   * and the collapsed bubbles travel — `chat.read` / `chat.rows`, the same wire
+   * the phone client already uses — so that segment acts.
+   *
+   * For a terminal on a **server** it does not, and the sentence says exactly
+   * what is absent rather than apologising. A server does not run this app:
+   * there is a pty over SSH and nothing that reads the far filesystem for a
+   * conversation, so the transcript would have to be found and tailed over that
+   * channel. See `NEXT-UPDATE.md`.
+   *
+   * ## Keyed on what is on screen
+   *
+   * `shownTabId`, like the `view` beside it. These two used to come from
+   * different places — the sentence from the window's `openMachineSession`, the
+   * view from the local focused tab — so the switch could be live over a session
+   * it was refusing to act on and refuse over one it was not showing.
    */
-  const modesBlocked: Partial<Record<WorkspaceMode, string>> | undefined =
-    openMachineSession !== null
-      ? {
-          chat: `Chat reads the agent's own transcript file, which is on ${
-            openMachine ? openMachine.machine.name : 'that machine'
-          }'s disk. Nothing on the link between these two machines carries it.`,
-          split:
-            'Split arranges this window’s own panes, and a session running on another machine is drawn as a window rather than as a pane.',
-        }
-      : openServerSession !== null
-        ? {
-            chat: 'Chat reads the agent’s own transcript file, which is on that server’s disk. This app opens a terminal there, not a filesystem it reads conversations out of.',
-            split:
-              'Split arranges this window’s own panes, and a terminal on a server is mounted beside them so its scrollback survives being switched away from.',
-          }
-        : undefined
+  const shownIsServer = shownTabId !== null && readServerTabId(shownTabId) !== null
+  const modesBlocked: Partial<Record<WorkspaceMode, string>> | undefined = shownIsServer
+    ? {
+        chat: 'Chat reads the agent’s own transcript file, which is on that server’s disk. This app opens a terminal there, not a filesystem it reads conversations out of.',
+      }
+    : undefined
 
   /**
    * What the mode switch is showing, and what it will not offer.
@@ -5129,7 +5465,7 @@ function Workspace() {
    * terminal. `sessionMode` is the same expression `mode` falls through to, not
    * a second reading of anything.
    */
-  const sessionMode: SessionViewMode = focusedId ? sessionView[focusedId] ?? 'terminal' : 'terminal'
+  const sessionMode: SessionViewMode = shownTabId ? sessionView[shownTabId] ?? 'terminal' : 'terminal'
   const mode: WorkspaceMode = splitting ? 'split' : sessionMode
 
   /**
@@ -5150,20 +5486,16 @@ function Workspace() {
    * and a window where the highlighted row and the highlighted pill disagree is
    * the defect `covered` was written for, in a third costume.
    *
-   * A remote session is first, because when one is on screen it is what is on
-   * screen: it fills the pane above every local tab, exactly as it did before it
-   * had a pill. `focusedId` is the split's focused pane, which is the local
-   * answer and the one that has to win over `activeTab` — see the strip's own
-   * note about the bar below agreeing with it.
+   * `shownTabId` is that question already answered, once, at the top of this
+   * component: a remote session or a server terminal when one fills the pane
+   * (it *is* what is on screen, exactly as it was before it had a pill), the
+   * focused pane while split, and the selected tab otherwise. This used to
+   * repeat the three branches here, which meant the rail and the mode switch
+   * each had their own copy of "what am I looking at" and only one of them was
+   * right. `activeTab` remains the fallback for a window whose focused pane
+   * holds nothing.
    */
-  const railActiveTabId = openMachineSession
-    ? machineTabId(openMachineSession.machineId, openMachineSession.sessionId)
-    : /* And a terminal on a server, for the identical reason: when one is on
-         screen it *is* what is on screen, filling the pane above every local
-         tab. It is already a tab id, so nothing has to be re-joined. */
-      openServerSession !== null
-      ? openServerSession
-      : focusedId ?? activeTab?.id ?? null
+  const railActiveTabId = shownTabId ?? activeTab?.id ?? null
 
   /**
    * The session bar, absent inside a browser page.
@@ -5216,6 +5548,22 @@ function Workspace() {
    * would leave those pages mounted nowhere at all.
    */
   const splitHeldTabIds = new Set<string>(splitting ? tabIds(panes) : [])
+
+  /**
+   * Whether a session that lives on another computer is the thing on screen.
+   *
+   * Two arrangements and one question. Split, a pane names it and the pane has
+   * to be drawn at all — a sidebar view or the swarm grid takes the frame ahead
+   * of the layout, so the panes underneath are covered and every terminal in
+   * them is hidden with it. Unsplit, `openMachineSession` / `openServerSession`
+   * are the window's answer, and `showPanel` already clears both.
+   *
+   * Asked here, once, rather than at each of the two mount lists: they are the
+   * same question about two kinds of far session, and the copy that drifts is
+   * always the one nobody has open.
+   */
+  const remoteOnScreen = (tabId: string): boolean =>
+    splitting ? !showingPanel && !swarm && splitHeldTabIds.has(tabId) : railActiveTabId === tabId
 
   /**
    * The one browser page that is genuinely on screen, or null.
@@ -5948,7 +6296,7 @@ function Workspace() {
           </WindowToolbar>
         )}
 
-        <div className="panes">
+        <div className="panes" ref={panesHostRef}>
           {/* Named for whatever the bar above is naming, which is the host
               session. The fallback catches the one case with no name at all: a
               split whose host pane is still empty, where "Split view" describes
@@ -6044,7 +6392,11 @@ function Workspace() {
                 shellKey={entry.shellKey}
                 startIn={entry.startIn}
                 bridge={serversBridge}
-                visible={openServerSession === entry.tabId}
+                /* Where in the pane area to draw, when a pane is holding it. See
+                   `layout/pane-slots.ts`; `undefined` leaves the stylesheet's
+                   `inset: 0`, which is the unsplit window. */
+                box={slotStyle(paneSlots[entry.tabId])}
+                visible={remoteOnScreen(entry.tabId)}
                 onEnded={() => serverShellEnded(entry.tabId)}
                 /* The one thing this pane knows that the bar above it needs.
                    See `serverShellIds`. */
@@ -6081,11 +6433,11 @@ function Workspace() {
               <div
                 key={`${pane.machineId}\u0000${pane.sessionId}`}
                 className="remote-pane"
-                data-visible={
-                  openMachineSession !== null &&
-                  openMachineSession.machineId === pane.machineId &&
-                  openMachineSession.sessionId === pane.sessionId
-                }
+                /* Boxed into one pane's hole, or filling the whole pane area.
+                   See `layout/pane-slots.ts`. */
+                data-boxed={paneSlots[machineTabId(pane.machineId, pane.sessionId)] !== undefined}
+                style={slotStyle(paneSlots[machineTabId(pane.machineId, pane.sessionId)])}
+                data-visible={remoteOnScreen(machineTabId(pane.machineId, pane.sessionId))}
               >
                 <MachineSessionPane
                   machineId={pane.machineId}

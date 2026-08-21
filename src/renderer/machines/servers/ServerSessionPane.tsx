@@ -47,6 +47,7 @@ export function ServerSessionPane({
   shellKey,
   startIn,
   bridge,
+  box,
   visible,
   onEnded,
   onOpened,
@@ -72,6 +73,16 @@ export function ServerSessionPane({
    */
   startIn: string | null
   bridge: ServersBridge
+  /**
+   * Where in the pane area to draw, when one pane of a split is holding this
+   * shell rather than the whole window.
+   *
+   * Absent means the whole pane area, which is the stylesheet's own `inset: 0`
+   * and the unsplit window. This pane cannot be *moved* into the pane tree —
+   * unmounting it closes the SSH shell — so a split draws an empty box where it
+   * belongs and this is the rectangle of it. See `layout/pane-slots.ts`.
+   */
+  box?: Record<string, string> | undefined
   visible: boolean
   onEnded(): void
   /**
@@ -96,7 +107,13 @@ export function ServerSessionPane({
   const fontFamily = stringSetting(settings, 'appearance.terminalFontFamily')
 
   return (
-    <div className="server-pane" data-visible={visible} data-shell={shellKey}>
+    <div
+      className="server-pane"
+      data-visible={visible}
+      data-boxed={box !== undefined}
+      style={box}
+      data-shell={shellKey}
+    >
       <ServerTerminal
         serverId={serverId}
         startIn={startIn}

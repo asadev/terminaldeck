@@ -195,6 +195,63 @@ describe('a pane holding a page', () => {
   })
 })
 
+describe('a pane holding a session on another computer', () => {
+  /*
+   *   > *"I want exactly same identical view of every type of session inside,
+   *   > including remote session, including local session"* — 2026-08-21
+   *
+   * A terminal on a server and a session on a paired PC can be in a pane now
+   * (see `layout/pane-slots.ts`), so a pane has to be able to say what it is
+   * holding. Same status dot, same name, same controls slot; two things
+   * different and each is a fact rather than a withholding.
+   */
+  const html = render({
+    kind: 'elsewhere',
+    title: 'Session 1',
+    where: 'on Office PC',
+    status: 'working',
+  })
+
+  it('names the session and the computer it is running on', () => {
+    // Which machine is the one thing about this pane a reader cannot work out
+    // from anything else on screen, and a pane is exactly where two machines
+    // end up side by side.
+    expect(html).toContain('Session 1')
+    expect(html).toContain('on Office PC')
+    expect(html).toContain('status-dot')
+  })
+
+  it('draws no control that would act on this Mac', () => {
+    /*
+     * The account menu switches a local pty's login, the folder tooltip names a
+     * path in this filesystem, and the bind menu attaches a window in this app
+     * to a local session. Over a shell on somebody's server all three would do
+     * the wrong thing quietly, which is the one outcome this pass is removing.
+     * The window's own bar carries the account for the session it names.
+     */
+    expect(html).not.toContain('account-chip')
+    expect(html).not.toContain('folder-title')
+    expect(html).not.toContain('bind-button')
+  })
+
+  it('does not offer a rename that would edit nothing', () => {
+    // The name belongs to the far machine, which is where it is edited.
+    expect(html).not.toContain('double-click or F2 to rename')
+  })
+
+  it('keeps the controls slot, because those do reach the far session', () => {
+    // `SessionControls` is routed by `controls-target.ts`: model, effort and
+    // fast mode travel to a paired machine over `machines:controls:*` and to a
+    // server over its own SSH channel. This is the one pane bar in the window
+    // that would have had nowhere to put them.
+    expect(html).toContain('data-slot="session-controls"')
+  })
+
+  it('still closes, like any other pane', () => {
+    expect(html).toContain('aria-label="Close this pane"')
+  })
+})
+
 describe('a pane nobody has filled', () => {
   const html = render({ kind: 'empty' })
 

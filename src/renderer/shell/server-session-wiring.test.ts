@@ -116,31 +116,55 @@ describe('the pane is mounted for as long as its tab exists', () => {
      * if the shell were left open to avoid that, strand a live one on somebody's
      * machine with no way back to it.
      */
-    const panes = /<div className="panes">([\s\S]*?)\n {8}<\/div>/.exec(APP)?.[0] ?? ''
+    const panes = /<div className="panes" ref=\{panesHostRef\}>([\s\S]*?)\n {8}<\/div>/.exec(APP)?.[0] ?? ''
     expect(panes, 'the panes block has changed shape').not.toBe('')
     expect(panes).toContain('<ServerSessionPane')
     expect(panes.indexOf('</ErrorBoundary>')).toBeLessThan(panes.indexOf('<ServerSessionPane'))
   })
 
   it('mounts one per open terminal and hides all but the one in front', () => {
-    const panes = /<div className="panes">([\s\S]*?)\n {8}<\/div>/.exec(APP)?.[0] ?? ''
+    const panes = /<div className="panes" ref=\{panesHostRef\}>([\s\S]*?)\n {8}<\/div>/.exec(APP)?.[0] ?? ''
     expect(panes).toContain('serverSessions.map(')
-    expect(panes).toContain('visible={openServerSession === entry.tabId}')
+    /*
+     * `remoteOnScreen`, not `openServerSession === entry.tabId`, since
+     * 2026-08-21. The window has two arrangements now and the id is only the
+     * unsplit one's answer: with the window split, a *pane* names what it holds
+     * and several far terminals can be on screen at once. The one question is
+     * asked in one place — see `remoteOnScreen` — because the copy that drifts
+     * is always the one nobody has open.
+     */
+    expect(panes).toContain('visible={remoteOnScreen(entry.tabId)}')
+    const onScreen = /const remoteOnScreen = [\s\S]*?\n\n/.exec(APP)?.[0] ?? ''
+    expect(onScreen, 'remoteOnScreen has changed shape').not.toBe('')
+    // The layout while split, the window's own selection otherwise — and
+    // covered by a sidebar view or the swarm grid, both of which take the frame
+    // ahead of the panes.
+    expect(onScreen).toContain('splitHeldTabIds.has(tabId)')
+    expect(onScreen).toContain('railActiveTabId === tabId')
+    expect(onScreen).toContain('!showingPanel && !swarm')
     // Keyed on the tab id, so a second terminal on the same server is a
     // genuinely different pane rather than the same one re-rendered.
     expect(panes).toContain('key={entry.tabId}')
   })
 
-  it('draws nothing at all from `mainView` while one is on screen', () => {
+  it('draws nothing at all from `mainView` while one fills the window', () => {
     /*
      * Without the early return, the branch below would mount every local
      * terminal and show whichever one `activeTab` fell back to — underneath an
      * opaque pane. A terminal nobody can see, with the keyboard, taking
      * keystrokes meant for the server.
+     *
+     * `!splitting &&` since 2026-08-21, and the guard is the point rather than a
+     * relaxation. A split names what every pane holds, on whichever computer,
+     * and the server terminal is placed over the hole its own pane leaves rather
+     * than over the whole frame. Returning null regardless is what made
+     * `splitPanes()` from the command palette — which nothing blocked — draw a
+     * window with a mode switch reading Split and nothing under it, because
+     * `mainView` is the only thing that mounts `SplitView`.
      */
-    const main = /const mainView = \(\) => \{[\s\S]*?\n {4}if \(openMachineSession/.exec(APP)?.[0] ?? ''
+    const main = /const mainView = \(\) => \{[\s\S]*?\n {4}if \(!splitting && openMachineSession/.exec(APP)?.[0] ?? ''
     expect(main, 'mainView has changed shape').not.toBe('')
-    expect(main).toContain('if (openServerSession !== null) return null')
+    expect(main).toContain('if (!splitting && openServerSession !== null) return null')
   })
 })
 
@@ -169,13 +193,25 @@ describe('the controls a shell can reach, and the ones it cannot', () => {
    * local one, and that the two modes which genuinely cannot act say why.
    */
   it('reaches the cluster through the server channel, not the local one', () => {
-    const table = /const barControls: \{[\s\S]*?\n {12}: null\n/.exec(APP)?.[0] ?? ''
-    expect(table, 'barControls has changed shape').not.toBe('')
+    /*
+     * `controlsFor` rather than `const barControls` since 2026-08-21. The three
+     * branches moved out of the window's bar and into one function above
+     * `mainView`, because a *pane* has to reach a server terminal too and the
+     * only expression that knew how lived on the bar — so a pane holding one
+     * drew "Nothing in this pane yet" over a live shell. The bar is
+     * `controlsFor(barTabId)` now and a pane is `controlsFor(paneTabId)`; there
+     * is no second reading anywhere.
+     */
+    const table = /const controlsFor = \([\s\S]*?\n {2}\}\n/.exec(APP)?.[0] ?? ''
+    expect(table, 'controlsFor has changed shape').not.toBe('')
     // The far end's own id for the shell, which is the only handle the main
     // process holds the SSH channel under — not `shellKey`, which is this
     // window's and names nothing over there.
-    expect(table).toContain('serverShellIds[openServerRow.tabId]')
+    expect(table).toContain('const shellId = serverShellIds[tabId]')
+    expect(table).toContain('sessionId: shellId')
     expect(table).toContain("target: { kind: 'server' }")
+    // And the bar goes through it rather than keeping a branch of its own.
+    expect(APP).toContain('controlsFor(barTabId)')
     /*
      * And no `cwd` and no `provider`. Both would be facts about *this* machine:
      * a path here resolves this machine's connectors and transcripts, and a
@@ -183,29 +219,44 @@ describe('the controls a shell can reach, and the ones it cannot', () => {
      * makes `refuseByProvider` consult the screen instead of the record, which
      * is the only witness there is to what is running in that terminal.
      */
-    const branch = /serverShellIds\[openServerRow\.tabId\][\s\S]*?\n {12}\}/.exec(table)?.[0] ?? ''
+    const branch = /sessionId: shellId,[\s\S]*?\n {6}\}/.exec(table)?.[0] ?? ''
     expect(branch, 'the server branch has changed shape').not.toBe('')
     expect(branch).toContain('cwd: null')
     expect(branch).toContain('provider: undefined')
   })
 
-  it('gives chat and split a reason rather than taking the switch away', () => {
+  it('refuses chat with a reason, and no longer refuses split', () => {
     /*
      * Terminal is exactly what a server terminal is already showing, so
      * withdrawing the whole switch took a working segment with it and left an
      * empty stretch of toolbar — which cannot tell "not built" from "not
-     * possible". Chat reads the agent's own transcript file, which is on that
-     * server's disk; Split arranges this window's own panes, and these are
-     * mounted outside them so their scrollback survives being switched away
-     * from. Both sentences are on the control, on the segment, where somebody
-     * presses.
+     * possible".
+     *
+     * **Split was refused and is not any more.** Its sentence read: *"Split
+     * arranges this window's own panes, and a terminal on a server is mounted
+     * beside them so its scrollback survives being switched away from."* Both
+     * halves were true and the conclusion was not — the panes hold every kind of
+     * tab now and the terminal is drawn over the hole its own pane leaves, so
+     * nothing about the scrollback changed. *"Like I cannot even split"*,
+     * 2026-08-21.
+     *
+     * **Chat is still refused, and the sentence is the honest description of a
+     * gap.** A server does not run this app: there is a pty over SSH and nothing
+     * that reads the far filesystem, so the transcript would have to be found and
+     * tailed over that channel. A session on a paired machine is not refused,
+     * because the machine reads its own file and the bubbles travel.
+     *
+     * Keyed on `shownTabId` rather than on the window's `openServerSession`, so
+     * the sentence and the `view` beside it come from the same place — they used
+     * not to, and the switch could be live over a session it was refusing to act
+     * on.
      */
-    const table = /const modesBlocked:[\s\S]*?\n {8}: undefined\n/.exec(APP)?.[0] ?? ''
+    const table = /const modesBlocked:[\s\S]*?\n {4}: undefined\n/.exec(APP)?.[0] ?? ''
     expect(table, 'modesBlocked has changed shape').not.toBe('')
-    expect(table).toContain('openServerSession !== null')
+    expect(table).toContain('shownIsServer')
     expect(table).toMatch(/chat:\s*'Chat reads the agent[^']*server/)
-    expect(table).toMatch(/split:\s*'Split arranges this window[^']*server/)
-    // And the switch is drawn for one, or the sentences reach nobody.
+    expect(table, 'split is refused again').not.toContain('split:')
+    // And the switch is drawn for one, or the sentence reaches nobody.
     const guard = /\{\(activeSession \|\| splitting[\s\S]*?\? \(/.exec(APP)?.[0] ?? ''
     expect(guard, 'the ModeSwitch guard has changed shape').not.toBe('')
     expect(guard).toContain('openServerSession !== null')

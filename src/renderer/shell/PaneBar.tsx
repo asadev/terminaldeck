@@ -126,6 +126,31 @@ export type PaneSubject =
       onManageAccounts(): void
     }
   /**
+   * A session that is not on this computer — one on a paired machine, or a
+   * terminal on a server.
+   *
+   *   > *"I want exactly same identical view of every type of session inside,
+   *   > including remote session, including local session"*
+   *
+   * The same status dot, the same name, the same controls slot beside it. Two
+   * differences, and each is a fact rather than a withholding:
+   *
+   *  - **`where`** is printed, because which computer a pane is running on is
+   *    the one thing about it that a reader cannot work out from anything else
+   *    on screen, and a pane is exactly where two machines end up side by side.
+   *  - **No account chip, no folder chip and no browser binding.** Each of those
+   *    three is a *control* that acts on this Mac: the account menu switches a
+   *    local pty's login, the folder tooltip names a path in this filesystem,
+   *    and the bind menu attaches a window in this app to a local session. Drawn
+   *    over a session on somebody's server they would be three controls that do
+   *    the wrong thing quietly, which is the one outcome this pass is removing.
+   *    The window's own bar carries the account for the session it names.
+   *
+   * The heading is not renameable either, and that is the same fact: the name
+   * belongs to the far machine, which is where it is edited.
+   */
+  | { kind: 'elsewhere'; title: string; where: string; status: SessionStatus }
+  /**
    * A browser page.
    *
    * It has no account, no model and no effort — there is no agent and no config
@@ -296,6 +321,18 @@ export function PaneBar({ paneId, subject, focused, controls, onClose }: Props) 
         </>
       )}
 
+      {subject.kind === 'elsewhere' && (
+        <>
+          <StatusDot status={subject.status} />
+          {/* A plain span rather than `SessionTitle`: that component's whole
+              point is that double-click and F2 open a rename, and a rename here
+              would edit nothing — the name is the far machine's. Same class, so
+              it is the same text at the same weight in the same place. */}
+          <span className="pane-cell-title">{subject.title}</span>
+          <span className="pane-cell-where">{subject.where}</span>
+        </>
+      )}
+
       {subject.kind === 'page' && (
         <>
           <svg
@@ -324,7 +361,7 @@ export function PaneBar({ paneId, subject, focused, controls, onClose }: Props) 
           holds the session's controls when there are any. A page and an empty
           pane get the spacer without the slot: there is nothing about either of
           them that a model or an effort could describe. */}
-      {subject.kind === 'session' ? (
+      {subject.kind === 'session' || subject.kind === 'elsewhere' ? (
         <div className="pane-cell-slot" data-slot="session-controls">
           {controls}
         </div>
