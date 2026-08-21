@@ -107,7 +107,7 @@ import {
 } from './shell/workspace-tabs'
 import { ServerSessionPane } from './machines/servers/ServerSessionPane'
 import { ServerChatPane } from './machines/servers/ServerChatPane'
-import { agentLabel, serverChatWired, useServerSignIn } from './machines/servers/server-chat'
+import { serverChatWired, signInLine, useServerSignIn } from './machines/servers/server-chat'
 import { MachineSessions } from './machines/new-session-context'
 import { MachineSessionViews } from './machines/session-view-context'
 import { ServerSessions } from './machines/servers/session-context'
@@ -5458,6 +5458,21 @@ function Workspace() {
     serversBridge,
     headingServerTabId === null ? null : serverShellIds[headingServerTabId] ?? null,
   )
+  /**
+   * The one line, and the tooltip under it.
+   *
+   * Composed in `server-chat.ts` beside the reader rather than here, because
+   * which of the four sentences applies is a decision about an answer and this
+   * file draws answers. Null only while the first ask is still in flight, which
+   * is the one moment there genuinely is nothing to say.
+   */
+  const serverWords =
+    serverSignIn === null
+      ? null
+      // Whichever of the two the bar is naming — the pane on screen, or a server
+      // tab that is the heading without being the open pane. Empty is a real
+      // answer and the composer has a plain word for it.
+      : signInLine(serverSignIn, (openServerTab ?? headingTab)?.server?.name ?? '')
 
   /**
    * The session the window's control cluster acts on, and which computer it is on.
@@ -6263,7 +6278,7 @@ function Workspace() {
                         </>
                       )}
                     </div>
-                  ) : headingServerTabId !== null && serverSignIn !== null ? (
+                  ) : headingServerTabId !== null && serverWords !== null ? (
                     /*
                       A terminal on a server, which has no folder chip and no
                       account menu, and does have one true thing to say in that
@@ -6281,10 +6296,17 @@ function Workspace() {
                       session's* agent is on is not a fact the SSH side carries,
                       and there is nothing here that could switch one — so what
                       is drawn is the fact that does exist, said as what it is:
-                      the sign-in of the agent in the home this shell landed in.
-                      See `serverSignIn`. It is a `span` with no hover, no
-                      chevron and no handler, deliberately: on this bar anything
-                      that looks pressable is pressable.
+                      which coding logins the account this shell signed in as
+                      holds. It is a `span` with no hover, no chevron and no
+                      handler, deliberately: on this bar anything that looks
+                      pressable is pressable.
+
+                      And it is never blank. The four situations that used to
+                      draw an empty slot — a server nobody had opened, one that
+                      would not answer, one with no agent on it, and one whose
+                      agents are all signed out — each have their own sentence
+                      now. `signInLine` in `server-chat.ts` is where they are,
+                      and which of them applies is the whole of what it decides.
                     */
                     <div className="toolbar-chips">
                       {heading.subtitle !== null ? (
@@ -6293,11 +6315,8 @@ function Workspace() {
                           <span className="toolbar-chip-sep" aria-hidden="true" />
                         </>
                       ) : null}
-                      <span
-                        className="toolbar-signin"
-                        title={`${agentLabel(serverSignIn.agentId)} in this server account’s home is signed in as ${serverSignIn.account}. This app did not start what is running in this terminal, so this is a fact about the account you signed in as — not about this session.`}
-                      >
-                        {agentLabel(serverSignIn.agentId)} signs in as {serverSignIn.account}
+                      <span className="toolbar-signin" title={serverWords.title}>
+                        {serverWords.line}
                       </span>
                     </div>
                   ) : null

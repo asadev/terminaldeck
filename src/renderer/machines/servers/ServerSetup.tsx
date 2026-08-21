@@ -95,8 +95,18 @@ export function ServerSetup({
 }) {
   const [offer, setOffer] = useState<SetupOffer | null>(null)
   const [states, setStates] = useState<Partial<Record<AgentId, SetupState>>>({})
-  const [asking, setAsking] = useState<AgentId | null>(null)
-  const [running, setRunning] = useState<{ agentId: AgentId; want: 'install' | 'sign-in' } | null>(null)
+  /**
+   * Which row is asking to be sure, and about what.
+   *
+   * Two kinds now. Both are two-press actions with a sentence in between, and
+   * both sentences are written on the other side beside the work — so the only
+   * thing this has to remember is which of the two the row is in the middle of.
+   */
+  const [asking, setAsking] = useState<{ agentId: AgentId; want: 'install' | 'sign-out' } | null>(null)
+  const [running, setRunning] = useState<{
+    agentId: AgentId
+    want: 'install' | 'sign-in' | 'sign-out'
+  } | null>(null)
   const [refusal, setRefusal] = useState('')
 
   const look = useCallback(() => {
@@ -146,8 +156,22 @@ export function ServerSetup({
       const call =
         running.want === 'install'
           ? bridge.installOnServer?.(server.id, running.agentId, shellId)
-          : bridge.signInOnServer?.(server.id, running.agentId, shellId)
-      if (call === undefined) return
+          : running.want === 'sign-out'
+            ? bridge.signOutOnServer?.(server.id, running.agentId, shellId)
+            : bridge.signInOnServer?.(server.id, running.agentId, shellId)
+      if (call === undefined) {
+        /*
+         * A preload older than the channel this press needs.
+         *
+         * It returned here silently, which is a button that opens a terminal
+         * and then does nothing at all — the shape of failure this app has been
+         * caught with most often. The rows guard their own buttons on the same
+         * condition, so this is the belt to that pair of braces rather than the
+         * ordinary path, and it says so rather than shrugging.
+         */
+        setRefusal('This build of the app cannot ask a server to do that.')
+        return
+      }
       void call.then((raw) => {
         if (succeeded(raw)) return
         setRefusal(readSentence(raw))
@@ -179,8 +203,12 @@ export function ServerSetup({
           state={states[row.agentId] ?? row.state}
           busy={running !== null}
           mine={running?.agentId === row.agentId}
-          asking={asking === row.agentId}
-          onAsk={() => setAsking(row.agentId)}
+          asking={asking?.agentId === row.agentId ? asking.want : null}
+          /* Both halves, and both are real: this build has to carry the channel
+             and that agent has to have a command. Either missing means no
+             button, and the second one puts its reason on the row. */
+          canSignOut={bridge.signOutOnServer !== undefined && row.whyNoSignOut === null}
+          onAsk={(want) => setAsking({ agentId: row.agentId, want })}
           onCancelAsk={() => setAsking(null)}
           onInstall={() => {
             setAsking(null)
@@ -191,6 +219,11 @@ export function ServerSetup({
             setRefusal('')
             setRunning({ agentId: row.agentId, want: 'sign-in' })
           }}
+          onSignOut={() => {
+            setAsking(null)
+            setRefusal('')
+            setRunning({ agentId: row.agentId, want: 'sign-out' })
+          }}
           onRemove={() => {
             void bridge.removeServerSetup?.(server.id, row.agentId).then(look, look)
           }}
@@ -200,12 +233,84 @@ export function ServerSetup({
 
       {refusal !== '' && <p className="servers-card-why">{refusal}</p>}
 
+      {/*
+        The one-time code, when the sign-in running below has printed one.
+
+        Above the terminal rather than in it, because in it is where it already
+        is and that was the problem: ten characters, painted in a colour, in the
+        middle of a scrollback, to be retyped into a browser window that is by
+        then covering the terminal. The sentence for it is `state.line`, written
+        on the other side beside the flow that produced it; this draws the code
+        and the one thing a person can do with it.
+      */}
+      {running !== null && (states[running.agentId]?.code ?? '') !== '' && (
+        <OneTimeCode code={states[running.agentId]?.code ?? ''} />
+      )}
+
       {running !== null && (
         <div className="servers-setup-terminal">
           <ServerTerminal serverId={server.id} bridge={bridge} onOpened={begin} onEnded={stop} />
         </div>
       )}
     </section>
+  )
+}
+
+/**
+ * The code a device sign-in is waiting for, and the one press that moves it.
+ *
+ * ## Why it is drawn at all
+ *
+ * Because the alternative is the thing that was there: *"enter the code it
+ * shows below"*, over a terminal in which the code is one indented, coloured,
+ * ten-character token somewhere in an installer's scrollback — and a browser
+ * window has just opened on top of the app. Every part of that is a person
+ * doing work this app could have done: finding it, reading it correctly, and
+ * typing it into a field on another screen.
+ *
+ * ## Why Copy is only drawn when it can copy
+ *
+ * `navigator.clipboard` is not always there — an insecure context, a build
+ * where it has been withheld — and a Copy that silently does nothing is exactly
+ * the control this app has been caught drawing before. Where there is no
+ * clipboard the code is still on screen, still in one piece, and still
+ * selectable, which is the honest smaller version of the same help.
+ *
+ * The state is deliberately momentary and unlabelled beyond the word: nothing
+ * here claims the code *was* accepted, only that it was copied. What happens
+ * next is on the page the browser opened, and the terminal below says so.
+ */
+export function OneTimeCode({ code }: { code: string }) {
+  const [copied, setCopied] = useState(false)
+  const canCopy = typeof navigator !== 'undefined' && navigator.clipboard !== undefined
+
+  useEffect(() => {
+    if (!copied) return
+    const clear = setTimeout(() => setCopied(false), 2000)
+    return () => clearTimeout(clear)
+  }, [copied])
+
+  return (
+    <div className="servers-setup-code">
+      {/* `aria-label` rather than the bare text: read out, `519G-KS0UC` is a
+          string of letters, and a screen reader saying it as a word is a code
+          nobody can transcribe. */}
+      <code className="servers-setup-code-value" aria-label={code.split('').join(' ')}>
+        {code}
+      </code>
+      {canCopy && (
+        <Button
+          onClick={() => {
+            void navigator.clipboard.writeText(code).then(
+              () => setCopied(true),
+              () => setCopied(false),
+            )
+          }}
+        >
+          {copied ? 'Copied' : 'Copy'}
+        </Button>
+      )}
+    </div>
   )
 }
 
@@ -218,16 +323,18 @@ export function ServerSetup({
  * install wants to see that the other two are still there and still theirs to
  * set up next.
  */
-function AgentRow({
+export function AgentRow({
   row,
   state,
   busy,
   mine,
   asking,
+  canSignOut,
   onAsk,
   onCancelAsk,
   onInstall,
   onSignIn,
+  onSignOut,
   onRemove,
   onStop,
 }: {
@@ -235,11 +342,15 @@ function AgentRow({
   state: SetupState
   busy: boolean
   mine: boolean
-  asking: boolean
-  onAsk: () => void
+  /** Which of the two two-press actions this row is in the middle of, if either. */
+  asking: 'install' | 'sign-out' | null
+  /** Whether a sign-out can actually be performed from here. Never drawn hopefully. */
+  canSignOut: boolean
+  onAsk: (want: 'install' | 'sign-out') => void
   onCancelAsk: () => void
   onInstall: () => void
   onSignIn: () => void
+  onSignOut: () => void
   onRemove: () => void
   onStop: () => void
 }) {
@@ -252,7 +363,7 @@ function AgentRow({
         <p className="servers-setup-say">{lineFor(row, state)}</p>
         <div className="servers-setup-ask">
           {idle && agent === null && row.canInstall && (
-            <Button tone="primary" onClick={onAsk}>
+            <Button tone="primary" onClick={() => onAsk('install')}>
               Set it up
             </Button>
           )}
@@ -261,6 +372,19 @@ function AgentRow({
               Sign in
             </Button>
           )}
+          {/*
+            And out again, on a row that has a login to let go of.
+
+            The pane above this one used to say in a notice that this could not
+            be done — *"nothing on this side can ask a server to forget a login
+            it holds"* — and that was a stated limitation rather than a measured
+            one. Two of the three have a command for exactly this. The third
+            carries its reason on the row instead, below, and gets no button:
+            §4.1, a control that cannot act is removed.
+          */}
+          {idle && agent !== null && agent.signedIn === 'yes' && canSignOut && (
+            <Button onClick={() => onAsk('sign-out')}>Sign out</Button>
+          )}
           {idle && agent !== null && agent.version === '' && row.canInstall && (
             /*
              * Found, and it will not start. A different offer from a first
@@ -268,9 +392,21 @@ function AgentRow({
              * than nothing, and "Set it up" would read as though the app had not
              * noticed what is already there.
              */
-            <Button onClick={onAsk}>Install it again</Button>
+            <Button onClick={() => onAsk('install')}>Install it again</Button>
           )}
-          {mine && <Button onClick={onStop}>Stop</Button>}
+          {/*
+            One button, two words, and which word is a fact about the route.
+
+            On the two routes this app cannot watch to the end — a sign-in
+            finished at a prompt, and one that happens inside the agent's own
+            full-screen interface — nothing on this side is ever told that it
+            worked, and the row sat on *"signing in…"* for ever. `state.byHand`
+            is exactly those two, so the button says what the press means there:
+            the person has finished, and the far end is read again. Everywhere
+            else the flow ends by itself and the only thing a press can mean is
+            stopping it.
+          */}
+          {mine && <Button onClick={onStop}>{state.byHand ? 'I’m done' : 'Stop'}</Button>}
           {idle && state.weInstalled && agent !== null && (
             <Button tone="danger" onClick={onRemove}>
               Remove what was installed
@@ -282,16 +418,29 @@ function AgentRow({
       {/* The reason there is no button, in the server's own terms. Never a
           greyed control with nothing to say for itself. */}
       {idle && agent === null && row.why !== null && <p className="servers-card-why">{row.why}</p>}
+      {/* The reason a signed-in row has no Sign out, in that agent's own terms,
+          and only where it would otherwise be the missing control. */}
+      {idle && agent !== null && agent.signedIn === 'yes' && row.whyNoSignOut !== null && (
+        <p className="servers-card-why">{row.whyNoSignOut}</p>
+      )}
       {state.detail !== '' && <p className="servers-card-why">{state.detail}</p>}
 
-      {asking && (
+      {asking !== null && (
         <div className="servers-setup-ask-first">
           {/* Written where the work is implemented, and rendered here unchanged. */}
-          <p className="settings-prose">{row.consequence}</p>
+          <p className="settings-prose">
+            {asking === 'install' ? row.consequence : row.signOutConsequence}
+          </p>
           <div className="servers-card-actions">
-            <Button tone="primary" onClick={onInstall}>
-              Install
-            </Button>
+            {asking === 'install' ? (
+              <Button tone="primary" onClick={onInstall}>
+                Install
+              </Button>
+            ) : (
+              <Button tone="primary" onClick={onSignOut}>
+                Sign out
+              </Button>
+            )}
             <Button onClick={onCancelAsk}>Cancel</Button>
           </div>
         </div>

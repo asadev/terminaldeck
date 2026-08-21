@@ -586,6 +586,15 @@ export interface ServersBridge {
   installOnServer?(id: string, agentId: string, shellId: string): Promise<unknown>
   /** `servers:setup:signin` — same terminal, and it follows an install on its own. */
   signInOnServer?(id: string, agentId: string, shellId: string): Promise<unknown>
+  /**
+   * `servers:setup:signout` — the same terminal again, asking the agent to
+   * forget the login it holds.
+   *
+   * Optional like the rest of this group, and it matters here: a preload older
+   * than this channel must lose the button, not the pane. Absent draws nothing,
+   * which is the screen this app had before the two commands were measured.
+   */
+  signOutOnServer?(id: string, agentId: string, shellId: string): Promise<unknown>
   /** `servers:setup:cancel` — stop it and leave nothing behind on the server. */
   cancelServerSetup?(id: string): Promise<unknown>
   /** `servers:setup:remove` — the way back, and only for what this app installed. */
@@ -952,6 +961,15 @@ export interface SetupState {
    * above the prompt it goes with.
    */
   byHand: boolean
+  /**
+   * The one-time code the sign-in printed, when it has printed one.
+   *
+   * Empty until it appears and empty on every route that has none. It is lifted
+   * out of the terminal's own output by the main process — see `setup.ts` — so
+   * that the ten characters a person would otherwise have squinted at and
+   * retyped are on screen in one place, in large type, with a Copy beside them.
+   */
+  code: string
   /** True when this app is the thing that installed it, which is what makes a way back honest. */
   weInstalled: boolean
   version: string | null
@@ -973,6 +991,10 @@ export interface SetupRow {
   why: string | null
   /** The consequence sentence, written where the install is implemented. */
   consequence: string
+  /** The same, for signing out, written in the same place. */
+  signOutConsequence: string
+  /** Why this one cannot be signed out from here, in its own terms. Null when it can. */
+  whyNoSignOut: string | null
   state: SetupState
 }
 
@@ -1010,6 +1032,7 @@ export function asSetupState(value: unknown): SetupState | null {
     line: text(value.line),
     detail: text(value.detail),
     byHand: value.byHand === true,
+    code: text(value.code),
     weInstalled: value.weInstalled === true,
     version: readText(value.version),
   }
@@ -1035,6 +1058,11 @@ export function asSetupOffer(value: unknown): SetupOffer | null {
       canInstall: raw.canInstall === true,
       why: readText(raw.why),
       consequence: text(raw.consequence),
+      signOutConsequence: text(raw.signOutConsequence),
+      // A reason present is a button withheld, and an unreadable one is treated
+      // as *no reason* rather than as a refusal nobody can read — the far end
+      // that could not say why is the far end that has the command.
+      whyNoSignOut: readText(raw.whyNoSignOut),
       state,
     })
   }

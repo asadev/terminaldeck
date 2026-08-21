@@ -112,12 +112,39 @@ import {
   type ServerFacts,
   type ServiceFact,
 } from './facts'
+import {
+  AGENT_ENV_PROBE,
+  AGENT_VERSION_AWK,
+  readAgentEnv,
+  signInCases,
+  type SignInVars,
+} from './agent-signin'
+
+/**
+ * What the agent section calls the variables it reads and writes.
+ *
+ * The snippets themselves are in `agent-signin.ts`, because `setup.ts` asks the
+ * same question again the moment an install or a sign-in finishes and the two
+ * copies had already drifted into two different answers about the same machine.
+ * This names the variables; that file knows how to ask.
+ */
+const AGENT_VARS: SignInVars = {
+  binary: 'ab',
+  state: 'ai',
+  account: 'ae',
+  codexHome: 'CXH',
+  geminiEnv: 'GENV',
+}
 
 /**
  * The script, exactly as it is sent.
  *
- * Kept as one string rather than assembled from pieces so that what ships is
- * what was measured. It is delivered on standard input; see `connection.ts`.
+ * One string, and the four holes in it are named above: the agent section is
+ * spliced in from `agent-signin.ts` so that this file and `setup.ts` cannot come
+ * to disagree about whether somebody is signed in. Everything the splice inserts
+ * was run against a real server before it was written down, and the emitted
+ * script — not the pieces — is what was run. It is delivered on standard input;
+ * see `connection.ts`.
  */
 export const PROBE_SCRIPT = `LC_ALL=C
 export LC_ALL
@@ -280,22 +307,18 @@ else
   sec adminunits cannot "we can only tell which programs were added by hand on a server that keeps them this way"
 fi
 
-ALOGIN=$("\${SHELL:-/bin/sh}" -lc 'command -v claude; command -v codex; command -v gemini' 2>/dev/null)
+ALOGIN=$("\${SHELL:-/bin/sh}" -lc 'command -v claude; command -v codex; command -v gemini; ${AGENT_ENV_PROBE}' 2>/dev/null)
+${readAgentEnv('ALOGIN', AGENT_VARS)}
 sec agents ok
 for a in claude codex gemini; do
   ab=$(PATH="$AW" command -v "$a" 2>/dev/null)
   [ -n "$ab" ] || ab=$(printf '%s\\n' "$ALOGIN" | grep "/$a$" 2>/dev/null | head -n 1)
   [ -n "$ab" ] || continue
-  av=$("$ab" --version 2>/dev/null | head -n 1 | awk '{print $1}')
+  av=$("$ab" --version 2>/dev/null | head -n 1 | awk '${AGENT_VERSION_AWK}')
   ai=unknown
   ae=
-  if [ "$a" = claude ] && [ -n "$av" ]; then
-    as=$("$ab" auth status --json 2>/dev/null | tr -d ' \\t\\n\\r')
-    case "$as" in
-      *'"loggedIn":true'*)  ai=yes ;;
-      *'"loggedIn":false'*) ai=no ;;
-    esac
-    ae=$(printf '%s' "$as" | sed -n 's/.*"email":"\\([^"]*\\)".*/\\1/p')
+  if [ -n "$av" ]; then
+${signInCases('a', AGENT_VARS)}
   fi
   printf '%s\\t%s\\t%s\\t%s\\t%s\\n' "$a" "$ab" "$av" "$ai" "$ae"
 done

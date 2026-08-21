@@ -7,6 +7,9 @@ import {
   authPortOf,
   installCommand,
   installConsequence,
+  oneTimeCodeIn,
+  signOutConsequence,
+  whyNoSignOut,
   whyNotInstall,
   type SetupDeps,
   type SetupRunResult,
@@ -45,6 +48,14 @@ interface Recorded {
   states: SetupState[]
   shell: SetupShell
   deps: SetupDeps
+  /**
+   * Everything currently listening to that shell's output.
+   *
+   * Exposed so a test can be the far end: a device sign-in's whole visible
+   * behaviour is a reaction to bytes arriving, and there is no other way to
+   * make them arrive.
+   */
+  listeners: Array<(chunk: string) => void>
 }
 
 /**
@@ -97,7 +108,7 @@ function box(over: { url?: string; connects?: boolean } = {}): Recorded {
     broadcast: (next) => states.push(next),
   }
 
-  return { scripts, typed, states, shell, deps }
+  return { scripts, typed, states, shell, deps, listeners }
 }
 
 describe('the pane offers every agent, not the one this app is built by', () => {
@@ -371,5 +382,191 @@ describe('an install that cannot happen', () => {
     )
     expect(state.step).toBe('failed')
     expect(typed).toEqual([])
+  })
+})
+
+/**
+ * The one-time code, lifted out of a terminal on its way past.
+ *
+ * The exact bytes below came off a real box on 2026-08-21 — `codex login
+ * --device-auth` under a scratch `HOME`, captured with `cat -v` so that nothing
+ * about the colouring is guessed at. That is the whole reason this test exists
+ * rather than a hand-written approximation: the code is painted, so a reader
+ * that does not strip the escapes matches nothing, and one that matches the
+ * wrong thing puts a wrong code on screen — which is worse than the terminal it
+ * replaced.
+ */
+const MEASURED_DEVICE_OUTPUT =
+  'Welcome to Codex [v\u001B[90m0.149.0\u001B[0m]\r\n' +
+  "\u001B[90mOpenAI's command-line coding agent\u001B[0m\r\n\r\n" +
+  'Follow these steps to sign in with ChatGPT using device code authorization:\r\n\r\n' +
+  '1. Open this link in your browser and sign in to your account\r\n' +
+  '   \u001B[94mhttps://auth.openai.com/codex/device\u001B[0m\r\n\r\n' +
+  '2. Enter this one-time code \u001B[90m(expires in 15 minutes)\u001B[0m\r\n' +
+  '   \u001B[94m519G-KS0UC\u001B[0m\r\n\r\n' +
+  '\u001B[90mContinue only if you started this login in Codex.\u001B[0m\r\n'
+
+const DEVICE_URL = 'https://auth.openai.com/codex/device'
+
+/** Let the flow get as far as a condition, without waiting on the clock. */
+async function until(ready: () => boolean, turns = 50): Promise<void> {
+  for (let turn = 0; turn < turns && !ready(); turn += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
+}
+
+describe('the code reaches the panel, not just the terminal', () => {
+  it('puts the code on the state the moment the sign-in prints it', async () => {
+    /*
+     * The half that matters. Reading the code correctly is worth nothing if it
+     * stays inside the flow — what the person was doing before was finding ten
+     * coloured characters in an installer's scrollback and retyping them into a
+     * browser window that had just opened on top of the app.
+     *
+     * The fake shell here does what the real one did on the box: prints the
+     * device block, then the sentinel the flow waits for.
+     */
+    const { deps, shell, states, listeners } = box()
+    const setups = new ServerSetups(deps)
+    const done = setups.signIn('s1', 'codex', shell, '/home/asad/.local/bin/codex')
+    // Waited for rather than slept through: the flow opens a browser before it
+    // types, so the listeners it reads the terminal with do not exist in the
+    // turn `signIn` was called in. This is the work arriving, not a timer.
+    await until(() => listeners.length >= 2)
+    for (const listener of [...listeners]) listener(MEASURED_DEVICE_OUTPUT)
+    for (const listener of [...listeners]) listener('__terminaldeck_setup 0\r\n')
+    await done
+
+    const withCode = states.filter((state) => state.code !== '')
+    expect(withCode.length).toBeGreaterThan(0)
+    expect(withCode[0].code).toBe('519G-KS0UC')
+    expect(withCode[0].agentId).toBe('codex')
+    // And the line changes with it: a sentence pointing at the terminal is the
+    // right sentence only while the terminal is the best thing on screen.
+    expect(withCode[0].line).toContain('waiting for this code')
+  })
+
+  it('carries no code on a route that has none, rather than an empty box', async () => {
+    const { deps, shell, states } = box({ connects: false })
+    const setups = new ServerSetups(deps)
+    await setups.signIn('s1', 'claude', shell, '/home/asad/.local/bin/claude')
+    expect(states.every((state) => state.code === '')).toBe(true)
+  })
+})
+
+describe('the one-time code a device sign-in prints', () => {
+  it('reads it out of the exact bytes a real Codex printed', () => {
+    expect(oneTimeCodeIn(MEASURED_DEVICE_OUTPUT, DEVICE_URL)).toBe('519G-KS0UC')
+  })
+
+  it('answers nothing while the code has not been printed yet', () => {
+    // The ordinary state for the first second of every sign-in. Null is what
+    // leaves the panel showing the sentence and no code, rather than an empty
+    // box that looks like a code that failed to arrive.
+    const half = MEASURED_DEVICE_OUTPUT.slice(0, MEASURED_DEVICE_OUTPUT.indexOf('2. Enter'))
+    expect(oneTimeCodeIn(half, DEVICE_URL)).toBeNull()
+  })
+
+  it('will not lift a code-shaped word out of output that is not a sign-in', () => {
+    /*
+     * The failure this guard exists for: a token alone on a line is distinctive
+     * and it is not distinctive *enough*. Somebody's login banner, a ticket
+     * number in a message of the day, a build tag — none of them is the code,
+     * and showing one as the code is the control-that-looks-like-it-worked this
+     * whole area is arranged against.
+     */
+    expect(oneTimeCodeIn('Last login: Thu\r\nBUILD-2024A\r\n$ ', DEVICE_URL)).toBeNull()
+  })
+
+  it('still finds it when the sentence around it has been reworded', () => {
+    // The phrase is a sentence in somebody else's program and nobody promised
+    // not to change it. The address this app opened is the second anchor.
+    const reworded = `Type the code below at ${DEVICE_URL}\r\n\r\n   ABCD-EF123\r\n`
+    expect(oneTimeCodeIn(reworded, DEVICE_URL)).toBe('ABCD-EF123')
+  })
+
+  it('takes the code after the phrase rather than something earlier on screen', () => {
+    const noise = `SERVER-01A\r\n2. Enter this one-time code\r\n   519G-KS0UC\r\n`
+    expect(oneTimeCodeIn(noise, null)).toBe('519G-KS0UC')
+  })
+})
+
+describe('signing an agent out on a server, which this pane said it could not do', () => {
+  /*
+   * The notice at the top of the settings pane said, in as many words, that this
+   * was impossible: *"signing one out does not [work], because nothing on this
+   * side can ask a server to forget a login it holds."* Measured on a real box
+   * on 2026-08-21, `codex logout` answers *"Successfully logged out"* and
+   * removes `auth.json`, and `claude auth logout` is in that CLI's own `auth`
+   * list beside `login` and `status`. It was a stated limitation, not a measured
+   * one, and this is what it became.
+   */
+  function signedOutAfter(signedIn: AgentFact['signedIn']): Recorded {
+    const made = box()
+    const under = made.deps.runScript
+    made.deps.runScript = async (serverId, script): Promise<SetupRunResult> => {
+      if (script.includes('command -v')) {
+        return { code: 0, stdout: `/usr/bin/codex\t0.149.0\t${signedIn}\t`, stderr: '' }
+      }
+      return under(serverId, script)
+    }
+    return made
+  }
+
+  it('types the agent’s own command into the terminal the person is watching', async () => {
+    const made = signedOutAfter('no')
+    const setups = new ServerSetups(made.deps)
+    const done = setups.signOut('s1', 'codex', made.shell, '/usr/bin/codex')
+    await until(() => made.typed.some((line) => line.includes('logout')))
+    for (const listener of [...made.listeners]) listener('__terminaldeck_setup 0\r\n')
+    const state = await done
+
+    expect(made.typed.some((line) => line.startsWith('/usr/bin/codex logout;'))).toBe(true)
+    expect(state.step).toBe('idle')
+  })
+
+  it('believes the server rather than the command’s exit status', async () => {
+    /*
+     * Measured: `codex logout` exits the same way whether it removed a login or
+     * found none to remove. So a zero that left a login in place must not be
+     * reported as a sign-out — the flow asks the machine afterwards and that
+     * answer wins.
+     */
+    const made = signedOutAfter('yes')
+    const setups = new ServerSetups(made.deps)
+    const done = setups.signOut('s1', 'codex', made.shell, '/usr/bin/codex')
+    await until(() => made.typed.some((line) => line.includes('logout')))
+    for (const listener of [...made.listeners]) listener('__terminaldeck_setup 0\r\n')
+    const state = await done
+
+    expect(state.step).toBe('failed')
+    expect(state.line).toContain('still signed in')
+  })
+
+  it('refuses, with the agent’s own reason, where there is no command for it', async () => {
+    // Gemini CLI has no `logout` — measured against its own `--help`, whose
+    // subcommands are mcp, extensions, skills, hooks and gemma. The row carries
+    // the reason and draws no button; this is the same refusal from the flow.
+    const made = box()
+    const setups = new ServerSetups(made.deps)
+    const state = await setups.signOut('s1', 'gemini', made.shell, '/usr/bin/gemini')
+    expect(state.step).toBe('failed')
+    expect(state.line).toBe(whyNoSignOut('gemini'))
+    expect(made.typed).toEqual([])
+  })
+
+  it('says what it will do before it does it, in the words of the file that does it', () => {
+    // §4.3, the same rule the install's sentence follows. Both name the server,
+    // and both say the thing a person would want to be sure of before pressing.
+    const said = signOutConsequence('claude', 'hetzner-1')
+    expect(said).toContain('hetzner-1')
+    expect(said).toContain('stays installed')
+    expect(said).toContain('sign in again')
+  })
+
+  it('has a reason for exactly the one agent that cannot', () => {
+    expect(whyNoSignOut('claude')).toBeNull()
+    expect(whyNoSignOut('codex')).toBeNull()
+    expect(whyNoSignOut('gemini')).not.toBeNull()
   })
 })
