@@ -87,6 +87,7 @@ import {
   type DeviceConfinement,
 } from './confine'
 import { forgetBoundary, noteBoundary } from './session-boundary'
+import { forgetNoVerbs, noteNoVerbs, type NoVerbsReason } from './session-verbs'
 import { currentOpenShim, prependShim } from './open-shim'
 import { currentAppContext } from './app-context'
 import { installDeviceHomes, installHomeScopes } from './transcript'
@@ -938,13 +939,70 @@ export function createHostCore(options: HostCoreOptions): HostCore {
       target === null
         ? (options.sessionTools?.prepare() ?? null)
         : null
-    const spec = withLaunchArgs(
-      table,
-      sessionTools === null ? (extraArgs ?? []) : [...(extraArgs ?? []), ...sessionTools.args],
-      platform,
-      process.env,
-      target,
-    )
+    /*
+     * Why this launch has no verbs, in the vocabulary a session can be told in.
+     *
+     * Computed here, beside the gate, rather than inferred later from the
+     * session's provider and folder: an inference would be a second copy of the
+     * conditions above, and the day one of them moved the app would start
+     * telling somebody a reason that had stopped being true. `null` means the
+     * verbs are on the command line — and a caller that composed its own tool
+     * surface gets `null` too, because there is exactly one and it composes
+     * these same verbs into it. See `session-verbs.ts`.
+     */
+    const noVerbs: NoVerbsReason | null =
+      sessionTools !== null || (extraArgs ?? []).length > 0
+        ? null
+        : guest !== undefined || confine !== undefined
+          ? 'device'
+          : target !== null
+            ? 'wsl'
+            : provider !== 'claude' || addedRuns
+              ? 'provider'
+              : /*
+                 * A build with no seam at all and a run whose endpoint is not up
+                 * yet are two different sentences, and only one of them is a
+                 * dead end. The headless host passes no seam and never will
+                 * (`endpoint`); the desktop always passes one and answers null
+                 * only in the few hundred milliseconds before its control
+                 * server binds, which catches restored tabs (`early`). Telling
+                 * a restored tab there is no endpoint would be false a second
+                 * later and would leave him with a session that quietly cannot
+                 * see — which is the whole complaint.
+                 */
+                options.sessionTools === undefined
+                ? 'endpoint'
+                : 'early'
+    /*
+     * Everything this app puts on the command line that the caller did not ask
+     * for — one binding, because it is read **twice** and the second reader
+     * forgot it.
+     *
+     * `wanted`, four hundred lines down, rebuilds the whole argument list from
+     * `table` when a fresh Claude session is given `--session-id`, and it used
+     * to rebuild it from `extraArgs` alone. So the copilot — whose flags *are*
+     * `extraArgs` — kept its tools, and every ordinary session had
+     * `--mcp-config` composed here, written to disk, registered against a live
+     * token, and then dropped on the floor before the spawn. Measured on his Mac
+     * an hour after 0.9.0 shipped: two files under `<userData>/session-tools`
+     * with matching timestamps, and two live processes reading
+     * `claude --session-id <uuid>` and nothing else.
+     *
+     * What he saw from the other end is the whole of the report — *"other
+     * sessions still cant see inside the browser window they opened they can
+     * just open"*. Opening never needed a tool: the `open` shim is on every
+     * session's PATH and lands the page in a window here. Reading it is the tool
+     * that was never there.
+     *
+     * A session that is quietly launched without the thing it was just given is
+     * the exact shape of failure this file already carries two long warnings
+     * about — the provider fallback that started a shell instead, and the
+     * `--session-id` rebuild that threw away a resume. One name for the flags,
+     * used everywhere they are needed, is what stops there being a third.
+     */
+    const composed: readonly string[] =
+      sessionTools === null ? (extraArgs ?? []) : [...(extraArgs ?? []), ...sessionTools.args]
+    const spec = withLaunchArgs(table, composed, platform, process.env, target)
 
     // Resolve the profile the session should run as and hand the PTY its
     // config-dir override. Without this the picker records a choice that never
@@ -1231,13 +1289,24 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      * exited, and the tab was left empty. That is the whole of *"it's not
      * keeping the conversation history"* on the path that was supposed to fix
      * it. A resume keeps the arguments that were chosen for it.
+     *
+     * ## And `composed`, never `extraArgs`
+     *
+     * This rebuild starts from `table` — the untouched provider spec — so every
+     * flag this app composes has to be handed to it again, and this line used to
+     * hand it `extraArgs` alone. `extraArgs` is one caller's flags, the
+     * copilot's; the browser verbs every ordinary session is given are the
+     * *other* half of what was folded into `spec` above. So the copilot kept its
+     * tools and every ordinary Claude session lost its `--mcp-config` on the one
+     * path that always runs for a fresh session, which is every session a person
+     * starts. `composed` is both halves under one name; see where it is built.
      */
     const wanted =
       declaredId === null
         ? chosen
         : withLaunchArgs(
             table,
-            [...(extraArgs ?? []), '--session-id', declaredId],
+            [...composed, '--session-id', declaredId],
             platform,
             process.env,
             target,
@@ -1368,6 +1437,19 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      * the second one is the one that gets forgotten on the path nobody exercises.
      */
     sessionTools?.started(meta.id)
+
+    /*
+     * Or, when there was none, the sentence this session may explain itself
+     * with.
+     *
+     * Written down here because this is the only place that knows *why*, and
+     * read at the top of every one of that session's turns by the hook answer —
+     * `browser-binding.ts` already tells it which windows are its own, and a
+     * session told it owns `B1` with no verb for it goes looking for another way
+     * in rather than concluding there is none. `session-verbs.ts` carries the
+     * measurement and the sentence.
+     */
+    if (noVerbs !== null) noteNoVerbs(meta.id, noVerbs)
 
     /*
      * Write down what this session is held inside, now that it has an id.
@@ -1902,6 +1984,10 @@ export function createHostCore(options: HostCoreOptions): HostCore {
       // an entry left behind would answer a question about an id that will never
       // be asked again — see `session-boundary.ts`.
       forgetBoundary(id)
+      // And why it had no browser verbs, for the same reason and on the same
+      // terms: ids are minted once, so an entry left behind answers a question
+      // nothing will ever ask again. See `session-verbs.ts`.
+      forgetNoVerbs(id)
       sessions.noteExit(id, exitCode)
       // The key that let this session ask a phone for a GitHub login stops
       // working the moment the session does. A key that outlived its session

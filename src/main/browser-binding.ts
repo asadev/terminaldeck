@@ -889,7 +889,11 @@ function windowLine(window: BoundWindow): string {
  * two attaches, a hook that timed out — would otherwise be left holding half a
  * list, and a list is small.
  */
-export function takeAnnouncement(sessionId: string, machineId = ''): string | null {
+export function takeAnnouncement(
+  sessionId: string,
+  machineId = '',
+  cannotDrive: string | null = null,
+): string | null {
   const key = keyOf(sessionId, machineId)
   if (!unannounced.has(key)) return null
   unannounced.delete(key)
@@ -902,6 +906,18 @@ export function takeAnnouncement(sessionId: string, machineId = ''): string | nu
     'Browser windows attached to this session (this just changed):',
     ...windows.map(windowLine),
     `"the browser" means ${slotName(windows[0].n)}.`,
+    /*
+     * And whether it may touch them — here as well as in the standing answer,
+     * for a sharper reason than the one {@link DISCRETION} gets.
+     *
+     * This is the moment a session opens a page through the shim: the attach
+     * marks it unannounced and the very next tool call drains this. So this is
+     * the sentence that arrives between *"the page is open in B1"* and the
+     * agent's first attempt to look at it — the gap where the measured
+     * behaviour was to go looking for a CDP port. Omitted entirely when it can
+     * drive, which is the ordinary case and pays nothing.
+     */
+    ...(cannotDrive === null ? [] : [cannotDrive]),
     // Here as well as in the standing answer, and for a sharper reason: this
     // one lands *mid-turn*, in the middle of work the agent is already
     // narrating, which is the likeliest moment of all for it to stop and
@@ -956,6 +972,24 @@ export interface HookContextInput {
    * thought, and so {@link DISCRETION} stays last.
    */
   map?: string | null
+  /**
+   * One sentence saying this session cannot act on the windows it has just been
+   * told about, or null when it can.
+   *
+   * Answered by the caller, exactly as `known` and `opensInApp` are, and for the
+   * same reason: the fact belongs to `host-core.ts`, which is the only place
+   * that knows whether a launch was given this app's browser verbs and why not.
+   * `session-verbs.ts` is the map between them and carries the whole argument.
+   *
+   * It is printed **only when the session has windows**, which is the one state
+   * where silence is actively harmful: a session that has been told it owns `B1`
+   * and has no verb for it does not conclude that it cannot look, it concludes
+   * that it has not found the way yet — measured, an agent proposing to install
+   * Playwright and attach to a CDP port. With no windows there is nothing to be
+   * misled about and the line would be words paid for on every turn to describe
+   * an absence.
+   */
+  cannotDrive?: string | null
 }
 
 /**
@@ -1072,6 +1106,9 @@ export function hookContext(
         ? `"the browser" means ${first}. \`open <url>\` goes to ${first} unless you detach it.`
         : `"the browser" means ${first}.`,
     )
+    // And whether it may touch them. See {@link HookContextInput.cannotDrive}
+    // for why this is gated on there being a window at all.
+    if (input.cannotDrive) lines.push(input.cannotDrive)
   } else if (input.opensInApp === true) {
     lines.push(
       "`open <url>` here opens a browser window in this app, not the machine's browser.",

@@ -11,6 +11,7 @@ import {
   resetForTests,
   takeAnnouncement,
 } from './browser-binding'
+import { noteNoVerbs, noVerbsLine, resetNoVerbsForTests } from './session-verbs'
 import {
   SESSION_HEADER,
   TOKEN_HEADER,
@@ -61,8 +62,14 @@ async function serve(knows = true): Promise<HookEndpoint> {
       event === 'PostToolUse'
         ? sessionId === null
           ? null
-          : takeAnnouncement(sessionId)
-        : hookContext(sessionId, '', { known: knows, opensInApp: true }),
+          : takeAnnouncement(sessionId, '', sessionId === null ? null : noVerbsLine(sessionId))
+        : hookContext(sessionId, '', {
+            known: knows,
+            opensInApp: true,
+            // The third thing `index.ts` hands in, read out of the same module
+            // rather than faked, so this covers the join and not a stand-in.
+            cannotDrive: sessionId === null ? null : noVerbsLine(sessionId),
+          }),
   })
   return live
 }
@@ -105,6 +112,7 @@ function knock(
 
 beforeEach(() => {
   resetForTests()
+  resetNoVerbsForTests()
 })
 
 afterEach(async () => {
@@ -273,5 +281,87 @@ describe('what the agent is told is what is true', () => {
 
     expect((await knock(endpoint, 'PostToolUse', 's1')).status).toBe(204)
     expect((await knock(endpoint, 'UserPromptSubmit', 's1')).context).toContain('https://stripe.com/x')
+  })
+})
+
+/**
+ * The sentence a session gets when it holds a window it cannot touch.
+ *
+ * Asad, on a session that had been told about its windows and had no verbs for
+ * them: *"Now, if I currently ask the session which is outside, it just don't
+ * know anything."* What that agent did next is the part worth pinning — it
+ * reasoned entirely from outside the app and proposed to install Playwright and
+ * read a CDP port. Being told about `B1` and given no way to look at it does not
+ * read as "you cannot look"; it reads as "you have not found the way yet".
+ *
+ * So the two facts travel together or the first one is a trap.
+ */
+describe('a session that cannot drive is told so, beside the windows it holds', () => {
+  it('says why at the top of the turn, in one sentence it can act on', async () => {
+    const endpoint = await serve()
+    noteNoVerbs('s1', 'provider')
+    attach({ sessionId: 's1', browserTabId: 'browser:1', viewId: 'v1', title: 'Docs' })
+
+    const said = (await knock(endpoint, 'UserPromptSubmit', 's1')).context ?? ''
+
+    // Both halves in the same answer: the window it owns, and the fact that
+    // owning it is not the same as being able to look at it.
+    expect(said).toContain('B1')
+    expect(said).toContain('Claude session')
+    expect(said).toContain('no other way in')
+  })
+
+  it('says it again mid-turn, which is when the agent is about to try', async () => {
+    const endpoint = await serve()
+    noteNoVerbs('s1', 'endpoint')
+    // The shim has just landed a page in a window. This is the gap between "it
+    // is open in B1" and the agent's first attempt to read it.
+    attach({ sessionId: 's1', browserTabId: 'browser:1', viewId: 'v1' })
+
+    const said = (await knock(endpoint, 'PostToolUse', 's1')).context ?? ''
+
+    expect(said).toContain('B1')
+    expect(said).toContain('control endpoint is not running')
+  })
+
+  it('says nothing at all to a session that can drive', async () => {
+    const endpoint = await serve()
+    attach({ sessionId: 's1', browserTabId: 'browser:1', viewId: 'v1' })
+
+    const said = (await knock(endpoint, 'UserPromptSubmit', 's1')).context ?? ''
+
+    expect(said).toContain('B1')
+    // Not a word of it. This line rides in every turn it appears in, out of the
+    // same context budget the top bar shows him, so the ordinary case pays
+    // nothing.
+    expect(said).not.toContain('cannot open, read or act on')
+  })
+
+  it('tells a session that merely started too early to be started again', async () => {
+    const endpoint = await serve()
+    // The desktop's control server binds a few hundred milliseconds after the
+    // window, and a restored tab can be launched inside that gap. The flag is
+    // read once at exec, so this session will never have the verbs — and the one
+    // thing that fixes it is a thing only he can do.
+    noteNoVerbs('s1', 'early')
+    attach({ sessionId: 's1', browserTabId: 'browser:1', viewId: 'v1' })
+
+    const said = (await knock(endpoint, 'UserPromptSubmit', 's1')).context ?? ''
+
+    expect(said).toContain('started again')
+    // And not the dead-end sentence the other four get: this door is open, it
+    // was simply shut when this session walked through.
+    expect(said).not.toContain('no other way in')
+  })
+
+  it('says nothing to a session with no windows to be misled about', async () => {
+    const endpoint = await serve()
+    noteNoVerbs('s1', 'wsl')
+
+    const said = (await knock(endpoint, 'UserPromptSubmit', 's1')).context ?? ''
+
+    // There is nothing here to reach for, so the sentence would be words paid
+    // for on every turn to describe an absence.
+    expect(said).not.toContain('cannot open, read or act on')
   })
 })

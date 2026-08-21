@@ -57,7 +57,28 @@
  * its own and proxying calls over the sealed channel, authenticated per session
  * the way `remote/copilot-runs.ts` authenticates a device's run — and that is
  * not built. Nothing here pretends otherwise: a session that cannot be given the
- * tools is simply launched without them, exactly as it was before.
+ * tools is simply launched without them, exactly as it was before — **and is
+ * told so**, which is the half that was missing. `session-verbs.ts` holds the
+ * reason `host-core.ts` wrote down and the one sentence the hook answer prints
+ * beside the window list, because a session that has been told it owns `B1` and
+ * has no verb for it goes looking for another way in rather than concluding
+ * there is none.
+ *
+ * ## The trap this file cannot defend itself against, and where it is closed
+ *
+ * `prepare()` writes a file, registers a token and hands back
+ * `['--mcp-config', file]`, and every one of those steps can succeed while the
+ * flag never reaches the process. It did, in 0.9.0: `host-core.ts` folded these
+ * args into the launch spec and then rebuilt the command line from the untouched
+ * provider table a few hundred lines later, to add `--session-id`. Two files
+ * under `<userData>/session-tools`, two live tokens, and two processes reading
+ * `claude --session-id <uuid>` with nothing else on them. Nothing here could
+ * have noticed — from this side a launch that dropped the flag looks exactly
+ * like a session that has simply not called a tool yet.
+ *
+ * So the assertion lives where the argv is: `host-core.session-tools.test.ts`
+ * starts a real session through `startSession` and reads the arguments off the
+ * spawn.
  */
 
 import { randomUUID } from 'node:crypto'

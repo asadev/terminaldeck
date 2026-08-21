@@ -200,6 +200,56 @@ describe('what that token may reach', () => {
     await client.close()
   })
 
+  it('reaches a window the person attached, not only one it opened itself', async () => {
+    /*
+     * *"the ones they open **or the ones we connect to the session**"*.
+     *
+     * `attach` is what the window's own menu calls, so this is that press. The
+     * session never opened this page and has no way to name another; what it
+     * holds is exactly what he handed it, and every verb has to reach it or
+     * attaching is a control that does nothing. Q4's parity requirement, from
+     * the caller that was added after it was written.
+     */
+    attach({ sessionId: 's1', browserTabId: 'browser:9', viewId: 'view-9', title: 'Docs' })
+    const prepared = tools.prepare()
+    prepared?.started('s1')
+    const client = await dial(configOf(prepared?.args ?? []))
+
+    for (const call of [
+      { name: 'browser_read', arguments: { window: 'B1' } },
+      { name: 'browser_step', arguments: { window: 'B1', verb: 'click', selector: '#go' } },
+      { name: 'browser_screenshot', arguments: { window: 'B1' } },
+      { name: 'browser_open', arguments: { window: 'B1', url: 'http://localhost:3000/next' } },
+    ]) {
+      const result = await client.callTool(call)
+      expect(result.isError, `${call.name} was refused over a window the person attached`).toBeFalsy()
+    }
+    await client.close()
+  })
+
+  it('is refused in words it can act on, naming nothing it may not call', async () => {
+    attach({ sessionId: 's1', browserTabId: 'browser:1', viewId: 'view-1' })
+    const prepared = tools.prepare()
+    prepared?.started('s1')
+    const client = await dial(configOf(prepared?.args ?? []))
+
+    const refused = await client.callTool({ name: 'browser_read', arguments: { window: 'B7' } })
+
+    const said = JSON.stringify(refused.content)
+    /*
+     * The refusal used to end *"sessions.list says which windows each session
+     * has"*, which is the one tool this caller may neither call nor find. A
+     * session that took the advice spent a turn being told there is no such
+     * tool — and the sentence had meanwhile confirmed that there is.
+     */
+    expect(said).not.toContain('sessions.list')
+    expect(said).not.toContain('sessions_list')
+    // What it can act on instead: make one, or ask him for one.
+    expect(said).toContain('browser.open')
+    expect(said).toContain('menu')
+    await client.close()
+  })
+
   it('stops working the moment the session is gone', async () => {
     attach({ sessionId: 's1', browserTabId: 'browser:1', viewId: 'view-1' })
     const prepared = tools.prepare()

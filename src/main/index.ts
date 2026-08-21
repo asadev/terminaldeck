@@ -188,6 +188,7 @@ import {
   sessionRemoved,
   takeAnnouncement,
 } from './browser-binding'
+import { noVerbsLine } from './session-verbs'
 import { currentOpenShim, removeOpenShim, writeOpenShim } from './open-shim'
 import { bootMapFor, writeAppContext } from './app-context'
 import { describeThisMachine } from './remote/machines/guest'
@@ -3531,11 +3532,26 @@ app.whenReady().then(() => {
       MID_TURN_EVENTS.has(event)
         ? sessionId === null
           ? null
-          : takeAnnouncement(sessionId, machineOfSession(sessionId) ?? '')
+          : takeAnnouncement(
+              sessionId,
+              machineOfSession(sessionId) ?? '',
+              noVerbsLine(sessionId),
+            )
         : hookContext(sessionId, sessionId === null ? '' : (machineOfSession(sessionId) ?? ''), {
             known: sessionId !== null && machineOfSession(sessionId) !== null,
             opensInApp: currentOpenShim() !== null,
             map: bootMapFor(event, sessionId),
+            /*
+             * And whether this one may act on the windows it is about to be
+             * told about.
+             *
+             * The third fact this file is the only place that can answer, on
+             * the same terms as the two above it: `host-core.ts` wrote down why
+             * a launch was not given the browser verbs, and null here is both
+             * "it has them" and "not ours" — which want the same silence. See
+             * `session-verbs.ts`.
+             */
+            cannotDrive: sessionId === null ? null : noVerbsLine(sessionId),
           }),
   })
     .then(() => syncInstalledHooks(defaultContext()))

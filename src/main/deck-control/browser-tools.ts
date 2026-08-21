@@ -189,6 +189,41 @@ async function asTool<T>(run: () => Promise<T>): Promise<T> {
 const NO_SUCH_WINDOW =
   'that session has no window by that name. sessions.list says which windows each session has.'
 
+/**
+ * The same refusal, for a caller that cannot call `sessions.list`.
+ *
+ * The sentence above ends in the one thing a session may not do. `sessions.list`
+ * is not on `SESSION_TOOLS`, so it is neither listable nor callable from a
+ * session's token — *"they should not be able to find it also"* — and the
+ * refusal was naming it anyway. Two costs, and both are real:
+ *
+ *  - **It is not actionable.** A session told to run `sessions.list` runs it,
+ *    is answered *"no tool called sessions_list"*, and has spent a turn learning
+ *    that the app's own advice does not work. That is precisely the dead control
+ *    this round is about, one layer down.
+ *  - **It says the tool exists.** A sentence that names a tool this caller must
+ *    not be able to find is the disclosure the allow-list was built to prevent,
+ *    handed over by the refusal rather than by the listing.
+ *
+ * What replaces it is the thing a session *can* act on, and it is deliberately
+ * two routes because there are two: it may make itself a window, and the person
+ * may hand it one. The ambiguity the original sentence protects is untouched —
+ * "no such session", "not yours" and "never existed" still produce these same
+ * words — because the two callers differ in what they may be told to do next,
+ * not in what they may learn.
+ */
+const NO_SUCH_WINDOW_OF_ITS_OWN =
+  'no window by that name is attached to this session. browser.open with no window opens one and ' +
+  'attaches it, and the person can attach one they already have from that window’s own menu.'
+
+/** Whichever of the two the caller can act on. */
+function noSuchWindow(context: ToolContext): Refused {
+  return new Refused(
+    'not-permitted',
+    callingSession(context) === null ? NO_SUCH_WINDOW : NO_SUCH_WINDOW_OF_ITS_OWN,
+  )
+}
+
 /** A resolved target: the page to drive, and the window it belongs to. */
 interface Bound {
   target: DriveTarget
@@ -263,7 +298,7 @@ function boundOf(args: Record<string, unknown>, context: ToolContext): Bound | n
   if (owner !== null) {
     const named = optStr(args, 'sessionId')
     if (named !== null && named !== owner.sessionId) {
-      throw new Refused('not-permitted', NO_SUCH_WINDOW)
+      throw noSuchWindow(context)
     }
     const name = optStr(args, 'window')
     if (name === null) {
@@ -271,13 +306,14 @@ function boundOf(args: Record<string, unknown>, context: ToolContext): Bound | n
       if (windows.length === 0) {
         throw new Refused(
           'not-permitted',
-          'no browser window is attached to this session. browser.open opens one and attaches it.',
+          'no browser window is attached to this session. browser.open with no window opens one and ' +
+            'attaches it, and the person can attach one they already have from that window’s own menu.',
         )
       }
       return targetOf(windows[0])
     }
     const window = windowNamed(owner.sessionId, name, owner.machineId)
-    if (window === null) throw new Refused('not-permitted', NO_SUCH_WINDOW)
+    if (window === null) throw noSuchWindow(context)
     return targetOf(window)
   }
   const sessionId = optStr(args, 'sessionId')
@@ -563,7 +599,7 @@ export function browserTools(drive: BrowserDrive): ToolSpec[] {
         }
         const named = optStr(args, 'sessionId')
         if (named !== null && named !== owner.sessionId) {
-          throw new Refused('not-permitted', NO_SUCH_WINDOW)
+          throw noSuchWindow(context)
         }
         if (args.newWindow === true && optStr(args, 'window') !== null) {
           throw new Refused('not-permitted', 'name window or newWindow, not both')

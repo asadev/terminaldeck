@@ -43,6 +43,7 @@ import { IdleController, type IdleReport } from '../main/idle'
 import { logger } from '../main/app-log'
 import { bootMapFor, writeAppContext } from '../main/app-context'
 import { hookContext, MID_TURN_EVENTS, takeAnnouncement } from '../main/browser-binding'
+import { noVerbsLine } from '../main/session-verbs'
 import { installHooksWhereConfigured } from '../main/hooks'
 import { resetDevPortsCache } from '../main/dev-ports'
 import { currentHookEndpoint, startHookServer, stopHookServer } from '../main/hook-server'
@@ -627,7 +628,7 @@ export async function createHeadlessHost(
       MID_TURN_EVENTS.has(event)
         ? sessionId === null
           ? null
-          : takeAnnouncement(sessionId)
+          : takeAnnouncement(sessionId, '', noVerbsLine(sessionId))
         : hookContext(sessionId, '', {
             // A session this host started, exited ones included — the same test
             // `index.ts` applies, so a `claude` somebody ran in an ssh session
@@ -635,6 +636,15 @@ export async function createHeadlessHost(
             known: sessionId !== null && core.ptys.list().some((meta) => meta.id === sessionId),
             opensInApp: false,
             map: bootMapFor(event, sessionId),
+            /*
+             * And the sentence every session on this host gets, because this
+             * build has no `deck-control` endpoint at all — see where the
+             * copilot is declined below for why it cannot have one. So a session
+             * here is never given the browser verbs, and the honest thing is for
+             * it to know that rather than to go looking. `host-core.ts` writes
+             * the reason down; this only reads it.
+             */
+            cannotDrive: sessionId === null ? null : noVerbsLine(sessionId),
           }),
   })
     .then(() => {
