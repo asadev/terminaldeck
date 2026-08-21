@@ -369,12 +369,27 @@
      smallest thing on the panel, which is exactly what `--t-caption` is for. */
   font-size: var(--t-caption);
   line-height: var(--lh-body);
-  color: var(--text-tertiary);
+  /* `var(--text-tertiary)` until 2026-08-21, and inert for the same reason the
+     size above it was: this app's third rung of ink is `--text-muted`, and the
+     name it asked for has never been defined. Nothing in this stylesheet sets a
+     colour on any ancestor of this row, so it inherited the window's ink — and
+     `.readiness-detail`, the prose line it sits directly beneath, is
+     `--text-secondary`. The quiet footnote was drawn no quieter than the
+     finding it belongs to, and by inheritance a step louder, which is the one
+     thing the note above says it must not do. */
+  color: var(--text-muted);
 }
 
 .readiness-touches-label {
   font-family: var(--font-ui);
-  color: var(--text-quaternary, var(--text-tertiary));
+  /* No colour, on purpose. This read `var(--text-quaternary, var(--text-tertiary))`
+     and neither name exists, so both halves were invalid and the lead-in has
+     always just inherited the row — which turns out to be the right answer. The
+     ink scale stops at three rungs where the fill scale runs to four (see
+     `tokens.css`), the row is already sitting on the quietest of the three, and
+     what actually separates "Changes" from the filenames after it is the family
+     swap on the line above: UI against mono. A fourth grey would only have said
+     that a second time, more faintly. */
 }
 
 /* What a fix will do, shown while it waits for a second confirmation. */
@@ -409,7 +424,11 @@
   margin: var(--sp-3) 0 0;
   max-width: 84ch;
   font-size: var(--t-callout);
-  color: var(--text-tertiary);
+  /* Was `var(--text-tertiary)`, which is not a token — see `tokens.css`. So
+     this inherited the panel's ink rather than receding from it, and a footnote
+     about rows that are not on screen was drawn no quieter than the rows that
+     are, which is exactly what the note above forbids. */
+  color: var(--text-muted);
 }
 
 .readiness-link {

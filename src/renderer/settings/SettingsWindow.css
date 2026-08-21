@@ -152,7 +152,16 @@
   background: transparent;
   font-family: var(--font-ui);
   font-size: var(--t-body);
-  color: var(--text-tertiary);
+  /* The line that makes the sentence above true — and it was not doing it.
+     `var(--text-tertiary)` is not a token this app defines (the third rung is
+     `--text-muted`; see `tokens.css`), so until 2026-08-21 this declaration was
+     invalid at computed-value time and the footer button inherited instead.
+     Nothing from `.settings` down sets a colour, so what it inherited was the
+     window's own `--text-primary` — while `.settings-nav-item` below wears
+     `--text-secondary`. "Deliberately quieter than a nav item" was rendering
+     one step *louder* than one, which is the reading the comment was written
+     to prevent. */
+  color: var(--text-muted);
   text-decoration: none;
   transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
@@ -1970,9 +1979,16 @@
   color: var(--text-primary);
 }
 
+/* Both greys below said `var(--text-tertiary)` until 2026-08-21. That is not a
+   token this app defines — the third rung of ink is `--text-muted`; see
+   `tokens.css` — so neither declaration survived computed-value time and both
+   elements inherited. Nothing between here and `body` sets a colour, so what
+   they inherited was `--text-primary`: the subtitle and the dismiss were drawn
+   in the same ink as the title next to them, which is the loudest ink there is
+   and the one thing a subtitle and a dismiss must not wear. */
 .settings-popover-note {
   font-size: var(--t-caption);
-  color: var(--text-tertiary);
+  color: var(--text-muted);
 }
 
 .settings-popover-close {
@@ -1984,7 +2000,7 @@
   border-radius: var(--radius-sm);
   background: transparent;
   font-size: var(--t-caption);
-  color: var(--text-tertiary);
+  color: var(--text-muted);
   cursor: pointer;
 }
 

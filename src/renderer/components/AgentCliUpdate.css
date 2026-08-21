@@ -143,7 +143,10 @@
 .agent-cli-hidden {
   margin: 0;
   font-size: var(--t-callout);
-  color: var(--text-tertiary);
+  /* Was `var(--text-tertiary)`, which this app has never defined, so the line
+     inherited instead of receding. `--text-muted` is the rung; see
+     `tokens.css`. */
+  color: var(--text-muted);
 }
 
 /* A sentence with a control in it, so it is set as text rather than as a

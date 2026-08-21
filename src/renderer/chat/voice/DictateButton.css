@@ -15,22 +15,37 @@
 
 /* Recording. A tint and a slow pulse rather than a red dot: the square icon
    already says "press to stop", and the button is 28px — a badge on it would be
-   three pixels of meaning. Colour is `--status-error` because that is this
+   three pixels of meaning. Colour is `--color-critical` because that is this
    app's "live and costing you something" red, and a recording microphone is the
-   one control where a person's next question is always "is it still on". */
+   one control where a person's next question is always "is it still on".
+
+   None of which happened. Until 2026-08-21 the red was written
+   `var(--status-error)` and the curve `var(--ease-standard)`, and this app
+   defines neither: its red is `--color-critical` — thirty-five stylesheets say
+   so, in this exact `color-mix(… N%, transparent)` idiom — and its standard
+   ease is plainly `--ease`, which `tokens.css` describes as "Apple's standard
+   ease-out". An undefined custom property is not a parse error; it is an
+   invalid value at computed-value time, thrown out *after* the cascade has
+   already chosen it. So the ink fell back to whatever the composer row
+   inherited, `color-mix()` died with its argument and left the button
+   transparent, and — because `animation` does not inherit — the shorthand reset
+   to `none`, which killed the pulse and with it any need for the keyframes
+   below, whose backgrounds were invalid for the same reason. The recording
+   state drew nothing at all. It went unreported because the glyph does swap to
+   a square, and one changed icon is enough to look like a state. */
 .cc-tool.dc-live {
-  color: var(--status-error);
-  background: color-mix(in srgb, var(--status-error) 14%, transparent);
-  animation: dc-pulse 1.6s var(--ease-standard) infinite;
+  color: var(--color-critical);
+  background: color-mix(in srgb, var(--color-critical) 14%, transparent);
+  animation: dc-pulse 1.6s var(--ease) infinite;
 }
 
 @keyframes dc-pulse {
   0%,
   100% {
-    background: color-mix(in srgb, var(--status-error) 14%, transparent);
+    background: color-mix(in srgb, var(--color-critical) 14%, transparent);
   }
   50% {
-    background: color-mix(in srgb, var(--status-error) 28%, transparent);
+    background: color-mix(in srgb, var(--color-critical) 28%, transparent);
   }
 }
 

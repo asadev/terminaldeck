@@ -268,7 +268,18 @@
   down every time somebody armed a switch.
 */
 .account-chip .account-chip-pending {
-  color: var(--text-tertiary, var(--text-secondary));
+  /* The fallback was carrying this on its own, and it landed on the wrong
+     colour. `--text-tertiary` is not a token — the third rung of ink is
+     `--text-muted`; see `tokens.css` — so the `var()` always fell through to
+     `--text-secondary`, which is exactly what `.account-chip-name[data-verified]`
+     wears. The pending account was therefore drawn in the *same* colour as the
+     account it has not become, separated only by weight. That is the one claim
+     the note above says this feature is not allowed to make early, made every
+     time somebody armed a switch. One step back from `--text-secondary` is
+     `--text-muted`, which is what "one step back from the name beside it"
+     means here; the fallback goes with it, because a fallback that always
+     fires is a comment pretending to be code. */
+  color: var(--text-muted);
   font-weight: var(--w-regular, 400);
   max-width: 18ch;
   overflow: hidden;

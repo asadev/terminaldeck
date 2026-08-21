@@ -98,7 +98,18 @@
      against white: a hint under a control inside a well is the darkest paper
      these ever sit on. primary 14.2:1, secondary 6.3:1, muted 4.8:1 — so even
      the quietest tier is AA body text wherever it lands, which the previous
-     muted grey (3.7:1 on the sidebar) was not. */
+     muted grey (3.7:1 on the sidebar) was not.
+
+     Three, and the third one is called `--text-muted`. It is not
+     `--text-tertiary`, and there is no `--text-quaternary` — but ten
+     declarations across six stylesheets asked for those two names, and every
+     one of them had been silently doing nothing until 2026-08-21. The slip is
+     an easy one because the *fills* directly above do run
+     secondary→tertiary→quaternary, so the ink reads as though it should too.
+     If you want the quiet tier it is `--text-muted`; if you want one quieter
+     than that, this app does not have one, and the answer is to separate the
+     two runs by family or weight rather than by inventing another grey.
+     `phantom-tokens.test.ts` fails now if any stylesheet names either. */
   --text-primary: #1c1c1c;
   --text-secondary: #545454;
   --text-muted: #666666;

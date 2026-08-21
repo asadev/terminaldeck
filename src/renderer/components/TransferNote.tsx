@@ -95,8 +95,19 @@ export function TransferNote({ line }: { line: string }) {
         bottom: 8,
         padding: '4px 8px',
         borderRadius: 6,
-        background: 'var(--chrome-solid, rgba(0,0,0,0.72))',
-        color: 'var(--text, #e6e6e6)',
+        /*
+         * Two of these named tokens that do not exist — `--chrome-solid` and
+         * `--text` — so both fell to their fallbacks every time, and the
+         * fallbacks are a dark chip with light ink. The note therefore drew
+         * itself inverted in the light theme, permanently, and nobody read it
+         * as a bug because an inverted toast is a thing toasts do. The names it
+         * wanted are `--bg-tertiary` (a solid chrome surface, which is what
+         * "chrome-solid" was reaching for) and `--text-primary`. The fallbacks
+         * are gone with them: a fallback behind a real token is dead, and a
+         * fallback behind a phantom is the whole design in disguise.
+         */
+        background: 'var(--bg-tertiary)',
+        color: 'var(--text-primary)',
         border: '1px solid var(--border, rgba(255,255,255,0.12))',
         font: '12px/1.4 var(--font-ui, system-ui, sans-serif)',
         whiteSpace: 'nowrap',
