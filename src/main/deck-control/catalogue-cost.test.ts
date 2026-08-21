@@ -73,7 +73,14 @@ function shipped(): ToolSpec[] {
     ...browserTools({} as BrowserDrive),
     browserNetworkTool({} as BrowserDrive),
     ...workerTools({} as never),
-    ...assetTools({ userData: () => '/tmp', probe: async () => ({}) as never }),
+    ...assetTools({
+      userData: () => '/tmp',
+      probe: async () => ({}) as never,
+      // This file measures the catalogue's size; nothing here fetches.
+      open: () => {
+        throw new Error('catalogue-cost measures definitions, it does not fetch')
+      },
+    }),
     ...storeTools({ drive: {} as BrowserDrive, installed: () => [] }),
     ...serverTools({} as ServerToolsDeps),
   ])

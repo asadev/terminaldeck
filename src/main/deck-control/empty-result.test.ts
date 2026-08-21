@@ -181,7 +181,15 @@ function harness(options: Options = {}): { deck: DeckControl; specs: ToolSpec[];
 
   const userData = mkdtempSync(join(tmpdir(), 'empty-result-data-'))
   const specs: ToolSpec[] = [
-    ...assetTools({ userData: () => userData, probe: async () => null, now: () => NOW }),
+    ...assetTools({
+      userData: () => userData,
+      probe: async () => null,
+      now: () => NOW,
+      // These tests are about what an empty answer says, not about fetching.
+      open: () => {
+        throw new Error('empty-result drives the answer shapes, it does not fetch')
+      },
+    }),
     ...workerTools(workerDeps),
     ...storeTools({ drive, installed: () => options.installed ?? installedDemo() }),
     browserNetworkTool(drive),
