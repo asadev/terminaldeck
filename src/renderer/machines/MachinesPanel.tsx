@@ -273,9 +273,16 @@ export function MachinesPanel({ bridge: supplied }: Props = {}) {
             because it is the thing that tells somebody which half to use. It is
             deliberately a checkable fact and not a description of purpose: you
             sit at one of these, and there is a copy of this app on it.
+
+            One line, where it was two. The second sentence explained how pairing
+            works — a six-digit code, shown on both screens — directly above a
+            block headed *Pair a device* that shows a code on one side and takes
+            one on the other. What the ceremony is called is not the distinction;
+            what it *costs* is, so the contrast with a server's address and
+            sign-in stays and the instructions go.
           */}
-          Computers and phones of your own, running this app too. You pair one with a six-digit code
-          shown on both screens — there is no address to type and no sign-in.
+          Computers and phones of your own, running this app too — paired with a code, not an
+          address and a sign-in.
         </p>
         <RemoteSection />
       </section>

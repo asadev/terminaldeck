@@ -480,6 +480,51 @@ export function removeWindowFromStrip(
 }
 
 /**
+ * The app has let go of this window: take its id out of the arrangement.
+ *
+ * ## The leak this closes, which is measured rather than feared
+ *
+ * {@link pruneOrder} is the strip's own bookkeeping and it can only run while
+ * the strip is on screen — `App.tsx` draws it behind `stripIsPresent`, so the
+ * component unmounts the moment the last tab goes, taking its `seen` set with
+ * it. Close the last promoted window and its id stays in the order with nobody
+ * left to notice; open another and the strip mounts with an empty `seen`, which
+ * is exactly the state in which `pruneOrder` is required to keep an id it has
+ * never watched arrive. It keeps it for the rest of the run.
+ *
+ * Twelve of those and {@link MAX_PROMOTED} is full of windows that do not exist:
+ * the bar looks half empty, the sidebar's "Show at the top" is refused, and a
+ * drag onto the strip does nothing at all with nothing on screen to say why.
+ * That is the worst shape a control can have, and it is reachable in a morning.
+ *
+ * ## Why here and not on a sweep
+ *
+ * Because the app already says this out loud, twice, and both are the moment it
+ * stops being true that the window is open: `closeTabNow`, which is ⌘W and the
+ * tab's own ✕ and the rail's Delete, and `session:removed`, which is everything
+ * that ends a session this window did not end — the copilot's `sessions.stop`, a
+ * paired phone, a routine. A timer, or a pass over the order at some later
+ * render, would be a second answer to a question that already has one, arriving
+ * late. *"Events, not polling."*
+ *
+ * Deliberately **not** a session's process exiting. A dead session keeps its
+ * tab, its scrollback and its place — reading what an agent printed before it
+ * died is the reason that tab is still worth having — and `session:removed` is
+ * the app letting go of the session altogether, which is a different event and
+ * the right one. `RemovalReason` already filters an account switch out of it, so
+ * a replacement id never arrives here; {@link replaceWindowInStrip} is what
+ * keeps that tab in place.
+ *
+ * Nothing is said about the selection, unlike {@link removeWindowFromStrip}:
+ * both callers already move it themselves, because a window that has been closed
+ * has to stop being shown for reasons that have nothing to do with this bar.
+ */
+export function forgetWindowInStrip(id: string, storage: Storage | null = defaultStorage()): void {
+  const store = promotedStore(storage)
+  store.set(demote(store.get(), id))
+}
+
+/**
  * One id has become another and the tab must not move.
  *
  * The strip is an arrangement somebody made by hand — this file's opening

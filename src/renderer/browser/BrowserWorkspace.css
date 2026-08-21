@@ -61,6 +61,23 @@
   display: none;
 }
 
+/* One pane of a split is holding this page, rather than the whole window.
+
+   The panel is normally an in-flow block filling `.panes`, which is right for
+   the unsplit window and cannot describe a rectangle inside it. A pane is such
+   a rectangle, and the renderer writes it as inline top/left/width/height — so
+   the panel is taken out of the flow and the four sides are released, or the box
+   would be pinned to the far edges and stretched rather than moved.
+
+   The same rule `.remote-pane[data-boxed]` and `.server-pane[data-boxed]` take
+   in `shell.css`, for the same reason: moving one of these in the React tree
+   remounts it, and for a page that is the `WebContentsView` closed and the site
+   loaded again. `layout/pane-slots.ts` is the measuring and the argument. */
+.bw[data-boxed='true'] {
+  position: absolute;
+  inset: auto;
+}
+
 /* --------------------------------------------------------------- toolbar -- */
 
 .bw-toolbar {

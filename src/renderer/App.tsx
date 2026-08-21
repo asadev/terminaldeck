@@ -129,12 +129,14 @@ import {
   type TabSelection,
 } from './shell/tab-selection'
 import {
+  forgetWindowInStrip,
   keepNewWindowInStrip,
   keepWindowBesideInStrip,
   removeWindowFromStrip,
   replaceWindowInStrip,
   stripIsPresent,
 } from './browser/workspace-strip'
+import { sessionAnchor } from './browser/strip-arrangement'
 import { ErrorBoundary } from './shell/ErrorBoundary'
 import { Tooltips } from './shell/Tooltips'
 import { UnreadTracker } from './unread'
@@ -914,6 +916,12 @@ function Workspace() {
     label: session.title,
     status: session.status,
     projectPath: session.projectPath,
+    // What this tab is in terms that outlive its own pty, so the arrangement of
+    // the strip can be put back after a restart. `session.cwd` and not
+    // `projectPath`: the folder the process was actually spawned in is what the
+    // main process remembers and what it hands back next launch. See
+    // `browser/strip-arrangement.ts`.
+    anchor: sessionAnchor(session),
     // The account this session actually runs as, filled in by the main
     // process at spawn. Absent for a shell and for any agent whose login this
     // app cannot isolate — see `SessionMeta.profileId`. The sidebar shows it
@@ -2753,6 +2761,10 @@ function Workspace() {
         unread.forget(id)
         notifier.forget(id)
         titler.forget(id)
+        // Including the top bar. The strip prunes its own order, but only while
+        // it is on screen and only for tabs it has watched arrive — see
+        // `forgetWindowInStrip` for the ids that leak past both.
+        forgetWindowInStrip(id)
         removeSession(id)
       }),
     [removeSession, unread, notifier, titler],
@@ -2768,6 +2780,10 @@ function Workspace() {
       unread.forget(id)
       notifier.forget(id)
       titler.forget(id)
+      // The strip too: this is the app letting go of the window, and an id left
+      // in the promoted order counts against its cap for the rest of the run.
+      // See `forgetWindowInStrip`.
+      forgetWindowInStrip(id)
       if (tab?.kind === 'session') {
         void window.deck.killSession(id)
         removeSession(id)
@@ -4876,64 +4892,27 @@ function Workspace() {
                     />
                   ) : pageTab ? (
                     /*
-                     * A live page, in a pane, beside a terminal.
+                     * A live page, in a pane, beside a terminal — drawn over
+                     * this hole rather than inside it.
                      *
-                     * The panel measures its own rectangle and pushes it to the
-                     * main process — the page is a native view floating over
-                     * this tree — so it needs nothing from the split beyond
-                     * being mounted inside it. Dragging the divider resizes the
-                     * stage, the ResizeObserver in there fires, and the view
-                     * follows.
+                     * It used to be mounted right here, and that was the last
+                     * page in the app that still reloaded when somebody did
+                     * something else. Unmounting a `BrowserWorkspace` closes its
+                     * `WebContentsView` for real, so moving the page out of the
+                     * always-mounted list below and into this subtree was a
+                     * remount: press Split and the site you were reading
+                     * reloaded, at its start address, under a person who asked
+                     * for a layout and not for a refresh. Leaving the split did
+                     * it again, in the other direction.
                      *
-                     * `visible` is the pane's own answer and not the window's:
-                     * a sidebar page covering the window has to park it, the
-                     * same as it does for a page filling the window.
+                     * So the pane keeps the page's *place* and nothing else. The
+                     * panel stays mounted where it was, this measures the hole,
+                     * and `layout/pane-slots.ts` hands it the rectangle — the
+                     * same arrangement a session on a paired machine and a shell
+                     * on a server already have, and its note is the argument for
+                     * it, including why a portal is not the answer.
                      */
-                    <BrowserWorkspace
-                      key={`${paneId}:${pageTab.id}`}
-                      visible={!showingPanel}
-                      parkPage={anyModalOpen}
-                      startUrl={stringSetting(settings, 'browser.startUrl')}
-                      // Where a *link* asked this page to open, when one did.
-                      // Empty for the globe, which goes to the start page.
-                      initialUrl={pageTab.url}
-                      // And whose network to open it on. Empty for this
-                      // computer, which is every page until a session on
-                      // another machine opens one.
-                      initialMachineId={pageTab.hostMachineId}
-                      // Which window this *is*, for the session ↔ browser
-                      // binding. Passed at BOTH mount sites, and that is the
-                      // point: this one keys the mount `${paneId}:${pageTab.id}`
-                      // and the flat one keys it `tab.id`, so the same page
-                      // remounts when the window is split or unsplit. A binding
-                      // that lived in this component's state would be silently
-                      // reset by that remount; the shell tab id is the same
-                      // string either side of it.
-                      tabId={pageTab.id}
-                      // The terminals open on servers, so the picker in this
-                      // page's popups can offer them. See `browserServerShells`.
-                      serverShells={browserServerShells}
-                      onStartUrl={(url) => {
-                        applySettings({ ...settings, 'browser.startUrl': url })
-                        void window.deck.setSettings({
-                          'browser.startUrl': url,
-                        })
-                      }}
-                      // The ⋯ menu's Settings row. The section is the one that
-                      // was always there; this is the door into it from the
-                      // panel it governs.
-                      onSettings={() => openSettings('browser')}
-                      onTitle={(title) => renameBrowserTab(pageTab.id, title)}
-                      onSendToAgent={(context) => {
-                        // The store's active session, which while the window is
-                        // split is the last *session* pane that had focus — a
-                        // page taking focus deliberately does not overwrite it
-                        // (see the effect that mirrors focus into the store).
-                        // So "send to the agent" from a page beside a terminal
-                        // reaches that terminal.
-                        if (activeSessionId) window.deck.writeToSession(activeSessionId, context)
-                      }}
-                    />
+                    <div className="pane-remote-slot" {...{ [SLOT_ATTR]: pageTab.id }} />
                   ) : (
                     // An instruction, not a placeholder. The sidebar fills the
                     // focused pane, so the first sentence names something that
@@ -5641,12 +5620,18 @@ function Workspace() {
     copilotPending
 
   /**
-   * The pages a *pane* is holding, which the always-mounted list must not
-   * mount a second time.
+   * Everything a *pane* is holding, which is what "on screen" means while the
+   * window is split.
+   *
+   * It used to have a second job — telling the always-mounted list which pages
+   * to skip, because the split branch mounted those itself. It does not any
+   * more: mounting a page in a pane was a remount, and a remount closes the
+   * `WebContentsView`, so entering a split reloaded the page the pane was
+   * holding. Every page is mounted in one place now and the pane draws a hole.
    *
    * Empty whenever the window is not split, and that is not a shortcut: a
-   * layout left over from a closed split still names tabs, and skipping them
-   * would leave those pages mounted nowhere at all.
+   * layout left over from a closed split still names tabs, and reading them as
+   * held would keep answering for an arrangement that is no longer on screen.
    */
   const splitHeldTabIds = new Set<string>(splitting ? tabIds(panes) : [])
 
@@ -5685,6 +5670,26 @@ function Workspace() {
     !(copilotPending && copilotSession === null)
       ? activeTab.id
       : null
+
+  /**
+   * Whether a page is the thing on screen — split or not.
+   *
+   * Two arrangements and one question, exactly as `remoteOnScreen` above is for
+   * the two kinds of far session, and split off from `visiblePageId` for the
+   * same reason: that expression answers *the one page filling the window*,
+   * which is null the moment the window is split, and a split can have a page in
+   * every pane.
+   *
+   * The second clause is the frame between a layout change and the re-measure.
+   * A page that a pane is holding has no rectangle for that one frame, so it has
+   * nothing to be drawn into — and an in-flow panel with no box lands under the
+   * split instead of in it. Hidden for a frame is the honest answer; the native
+   * view is parked and comes back with the hole it belongs in.
+   */
+  const pageOnScreen = (tabId: string): boolean =>
+    splitting
+      ? remoteOnScreen(tabId) && paneSlots[tabId] !== undefined
+      : tabId === visiblePageId
 
   return (
     /*
@@ -6430,13 +6435,16 @@ function Workspace() {
             screen", which it has to be: a hidden mount that still thought it was
             visible would composite a native page over Files.
 
-            A page a *pane* is holding is skipped, because the split branch
-            mounts that one itself and two components with the same `tabId` would
-            open two native views onto one tab.
+            **Every** one of them, including the page a pane of a split is
+            holding. That page used to be skipped here and mounted inside the
+            pane instead, which was the last route left to the bug above: moving
+            a panel between two subtrees is a remount, a remount closes the
+            `WebContentsView`, and so pressing Split reloaded the site somebody
+            was reading. The pane draws a hole and this mount is given its
+            rectangle — see `layout/pane-slots.ts`, and the `box` prop below.
           */}
           {tabs
             .filter((tab) => tab.kind === 'browser')
-            .filter((tab) => !splitHeldTabIds.has(tab.id))
             .map((tab) => (
               <BrowserWorkspace
                 key={tab.id}
@@ -6444,7 +6452,15 @@ function Workspace() {
                 // flag in here would blank the workspace behind every dialog —
                 // parking the native pages is what a dialog needs, and that is
                 // what `parkPage` is.
-                visible={tab.id === visiblePageId}
+                //
+                // `pageOnScreen` and not `tab.id === visiblePageId`, because a
+                // split can have a page in every pane and that expression is
+                // null the moment the window is split.
+                visible={pageOnScreen(tab.id)}
+                /* Where in the pane area to draw, when a pane of a split is
+                   holding it. `undefined` leaves the stylesheet's in-flow panel,
+                   which is the unsplit window. See `layout/pane-slots.ts`. */
+                box={slotStyle(paneSlots[tab.id])}
                 parkPage={anyModalOpen}
                 // Settings owns where a page opens; the panel's own button
                 // writes the same setting rather than a copy of it.

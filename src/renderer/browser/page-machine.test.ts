@@ -119,11 +119,21 @@ describe('the machine travels from the session to the pane', () => {
     expect(app).toContain('newBrowserTab(url, hostMachineId)')
   })
 
-  it('reaches both places a browser pane is mounted', () => {
+  it('reaches the one place a browser pane is mounted', () => {
     const app = read('renderer/App.tsx')
-    // Flat and split. A pane that got it at only one of them would lose the
-    // machine the first time the window was split.
-    expect(app.match(/initialMachineId=/g) ?? []).toHaveLength(2)
+    /*
+     * It used to have to reach two — the flat list and the pane the split
+     * renderer mounted — and a pane that got it at only one of them lost the
+     * machine the first time the window was split.
+     *
+     * There is one mount now, and that is the stronger version of the same
+     * claim rather than a weakening of it: mounting the page a second time
+     * inside the pane was a remount, a remount closes the `WebContentsView`,
+     * and so entering a split reloaded the page along with everything it knew.
+     * A second `initialMachineId=` appearing here means the second mount has
+     * come back.
+     */
+    expect(app.match(/initialMachineId=/g) ?? []).toHaveLength(1)
   })
 
   it('is taken up only once the machine is in the picker’s own list', () => {

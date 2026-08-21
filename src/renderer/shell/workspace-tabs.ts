@@ -31,6 +31,22 @@ export interface WorkspaceTab {
   /** Sessions only — the project the session runs in. */
   projectPath?: string
   /**
+   * Sessions only — what this tab is, in terms that outlive its own process.
+   *
+   * A session id is minted per run, so an arrangement of the tab strip written
+   * in ids means nothing after a quit. This is the identity `session-restore.ts`
+   * says survives one — the agent, the folder and the account — and it is what
+   * lets the strip put itself back. See `browser/strip-arrangement.ts`, which
+   * builds it and explains why it is a base rather than a whole identity.
+   *
+   * Absent on everything a restart does not bring back: a browser page (which
+   * the strip draws whether or not anything promoted it), a session on a paired
+   * machine, a shell on a server. Absent means "not part of the saved
+   * arrangement", which is the honest answer rather than a stale id that would
+   * match a different window next run.
+   */
+  anchor?: string
+  /**
    * Sessions only — the account the session is signed in as.
    *
    * Absent when no account applies, which is a plain shell or an agent whose

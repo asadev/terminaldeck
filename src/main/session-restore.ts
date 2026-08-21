@@ -127,6 +127,17 @@ import { isLinuxPath } from './wsl'
  * from the session's own output (`session-title.ts`) and the main process only
  * ever sets the folder's basename. Persisting one here would freeze a name the
  * renderer is about to recompute anyway.
+ *
+ * That first sentence is now load-bearing outside this file as well. The window
+ * arranges its tab strip by hand and that arrangement is a list of session ids,
+ * so it means nothing after a quit — the strip therefore writes itself down in
+ * *this* identity instead, the agent and the folder and the profile, and
+ * matches it against the tabs this module brings back. See
+ * `renderer/browser/strip-arrangement.ts`. Nothing crosses the bridge for it:
+ * all three fields are already on `SessionMeta`, and a fourth carrying the
+ * joined string would be a copy that can disagree with the folder beside it.
+ * What the two ends do share is the *rule*, so changing what a restored session
+ * is keyed on here changes where somebody's tabs come back.
  */
 export interface SavedSession {
   cwd: string
