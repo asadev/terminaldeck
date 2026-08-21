@@ -588,8 +588,17 @@ export interface ServersBridge {
   serverHostState?(id: string): Promise<unknown>
   /** `servers:host:install` — run in the terminal named by `shellId`. */
   installHostOnServer?(id: string, shellId: string): Promise<unknown>
-  /** `servers:host:pair` — a code out of a host that is already installed. */
+  /** `servers:host:pair` — a code for a phone, out of a host already installed. */
   pairHostOnServer?(id: string, shellId: string): Promise<unknown>
+  /**
+   * `servers:host:link` — link *this* computer to a host already installed.
+   *
+   * No code and no press to spend one: the main process reads the code out of
+   * the same SSH terminal it minted it in and redeems it there. See
+   * `main/servers/host.ts` above `ServerHosts.link` for why that is not a
+   * weakening, and why the phone keeps its code.
+   */
+  linkHostToThisComputer?(id: string, shellId: string): Promise<unknown>
   /** `servers:host:remove` — the way back, and it says what it leaves. */
   removeHostFromServer?(id: string, alsoData: boolean): Promise<unknown>
   /** `servers:host:cancel` — stop what this app started in that terminal. */
@@ -1086,6 +1095,14 @@ export interface HostOffer {
   consequence: string
   /** The two answers to the data question, each written where the work is. */
   removes: { keepData: string; withData: string }
+  /** Whether this build can link a host to this computer at all. */
+  canLink: boolean
+  /**
+   * What this computer already calls that host, or null when it is not linked
+   * to it. Decided in main, from the host id that server prints and the machine
+   * rows this desktop holds.
+   */
+  linkedAs: string | null
   state: HostState
 }
 
@@ -1152,6 +1169,14 @@ export function asHostOffer(value: unknown): HostOffer | null {
     reach: readText(value.reach),
     consequence: text(value.consequence),
     removes: { keepData: text(removes.keepData), withData: text(removes.withData) },
+    // A button is drawn only when the far end said yes — the same rule as
+    // `canInstall` above, and for the same reason.
+    canLink: value.canLink === true,
+    // Unreadable is "not linked", which draws the Link button — the same
+    // direction every other unreadable field is read in here, and the safe one:
+    // a press that mints its own code either links or says why, where a wrongly
+    // claimed link would be a sentence nobody could act on.
+    linkedAs: readText(value.linkedAs),
     state,
   }
 }

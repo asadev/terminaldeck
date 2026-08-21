@@ -203,15 +203,45 @@ What it does, as five steps it reports one at a time:
 4. **Starts** it: a systemd *user* unit where there is a user manager, `nohup`
    where there is not — and says which, plus whether it survives a logout and
    what would change that.
-5. **Pairs** it: runs `terminaldeck pair --kind mine` in that same terminal,
-   reads the code out of its output and offers to redeem it into this computer's
-   Machines list. It does **not** answer the `Approve it? [y/N]` question, which
-   carries the fingerprint.
+5. **Links this computer** to it: runs `terminaldeck pair --kind mine` in that
+   same terminal, reads the code out of its output, and redeems it **itself**,
+   in the same second. No code is shown, there is nothing to press, and the
+   install finishes with the server in the Machines list.
 
 `pair` in a real terminal is not decoration. It refuses to finish without a tty
 — `if (!process.stdin.isTTY)` it prints the code, says so, and stops, because
 approving nothing after appearing to wait would leave a device paired and
 locked out. An exec channel is not a tty; a shell is.
+
+#### Why step 5 shows nobody a code
+
+A pairing code exists because two machines that have never met need a shared
+secret a person can carry between them, and the fingerprint question exists
+because the peer is unknown. Neither holds here: **this app installed that host
+itself, minutes ago, over an SSH connection it authenticated** — it uploaded the
+package, ran the installer and read the version back — and the code is printed
+into that same connection's own terminal. Carrying six digits over a channel
+this app has already authenticated is not made stronger by showing them to
+somebody; it is only made a minute older, and that minute is what broke: the
+code was printed during the install, the panel went on drawing it after it had
+died, and the button that spent it answered *"No machine is showing that code.
+Check the digits"* to somebody who had pressed a button.
+
+Nothing the protocol checks is skipped — the same `machines/pair.ts` runs the
+rendezvous lookup, the Noise IK handshake against the host's real key, the
+one-shot token, and the device stays pending until it is approved. The
+fingerprint is checked *harder*: the app compares the one the host prints
+against the key it actually dialled with, character for character, and answers
+**n** when they differ. And the authority cannot be widened, because it is not a
+flag — it is possession of a terminal on that machine, so the flow can only
+ever link the server whose shell it is already holding.
+
+**The phone is unchanged.** A phone has no SSH channel to this app, so it keeps
+the code and the fingerprint question exactly as they were: **Show a code for a
+phone** mints a fresh one when somebody asks, and the person answers
+`Approve it? [y/N]` in the terminal. There is also **Link this computer** for a
+host this app did not install — the same step on its own, so the only way to
+link a running host is not to remove it and install it again.
 
 Removing it is the same screen: it stops the service, deletes the unit, the
 program and the private runtime, and leaves `~/.local/share/terminaldeck` — the

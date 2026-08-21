@@ -54,10 +54,25 @@
  * terminal, so nothing can be confirmed here"*, and exits — deliberately,
  * because *"pretending to wait and then approving nothing would leave a device
  * paired and permanently locked out."* An exec channel is not a tty. A shell is.
- * So pairing happens in the same real terminal the install ran in, the code is
- * read out of its output, and the fingerprint question is answered by the person
- * looking at it — which is the one part of pairing a person can actually check,
- * and the one part this app must not answer for them.
+ * So pairing happens in the same real terminal the install ran in, and the code
+ * is read out of its output.
+ *
+ * ## Two endings, and only one of them shows anybody a code
+ *
+ * {@link ServerHosts.link} is what an install ends with: it reads the code out
+ * of the terminal, redeems it here in the same second, checks the fingerprint
+ * the host prints against the key this desktop actually dialled with, and
+ * answers the approval question itself. Nothing is drawn, nothing is typed, and
+ * the server is linked when the install says it finished. The security argument
+ * for that — what is skipped, what is not, and why it cannot become a general
+ * door — is written out in full above that method, because that is the point
+ * where it is spent.
+ *
+ * {@link ServerHosts.pairDevice} is the other ending and it is the unchanged
+ * one: a code, minted when somebody presses for one, for a phone to type. A
+ * phone has no SSH channel to this app, so it keeps the code and it keeps the
+ * fingerprint question — which is, for that path, the one part of pairing a
+ * person can actually check and the one part this app must not answer for them.
  */
 
 import { BRAND } from '../../shared/brand'
@@ -83,9 +98,50 @@ export interface HostShell {
   write(data: string): void
 }
 
+/** What linking this computer to a freshly installed host came to. */
+export type LinkOutcome =
+  | {
+      ok: true
+      /** What this app now calls that machine in its Machines list. */
+      machineName: string
+      /**
+       * The fingerprint of the guest key **this** desktop dialled with.
+       *
+       * The whole point of carrying it back: the host is about to print the
+       * fingerprint of whichever device redeemed the code, and these two being
+       * the same string is what says it was this one. See
+       * {@link ServerHosts.link}.
+       */
+      deviceFingerprint: string
+    }
+  | { ok: false; message: string }
+
 export interface HostDeps {
   /** One script, one round trip. `ServerConnections.runScript`. */
   runScript(serverId: string, script: string): Promise<HostRunResult>
+  /**
+   * Redeem a pairing code this app just read out of that server's own terminal,
+   * and keep the machine it names.
+   *
+   * `MachinesIpc.linkWithCode`, injected rather than imported for the reason
+   * every other dependency here is: this module is exercised against a plain
+   * object with no relay, no sockets and no Electron anywhere near it.
+   *
+   * Optional, and its absence is an honest fallback rather than a failure: a
+   * build with no machine channels cannot redeem anything, so an install there
+   * ends by *showing* a code with the sentence saying where to type it, exactly
+   * as {@link ServerHosts.pairDevice} does. Never a link step that pretends.
+   */
+  linkThisComputer?(code: string): Promise<LinkOutcome>
+  /**
+   * How long to give a host to reach the relay, in milliseconds.
+   *
+   * A seam for the tests and nothing else. Every other ceiling in this file is a
+   * constant, for the reason `setup.ts` gives about its own; this one is
+   * overridable because a test that exercised {@link RELAY_CEILING_MS} honestly
+   * would *be* twenty seconds long, and a suite nobody runs catches nothing.
+   */
+  relayWaitMs?: number
   /**
    * Put a file from this computer onto that server, over SFTP, and answer where
    * it landed.
@@ -138,11 +194,18 @@ export interface HostState {
    */
   done: readonly string[]
   /**
-   * The code the host printed, once it has printed one.
+   * The code the host printed, once it has printed one **and somebody is meant
+   * to read it**.
    *
    * Exactly as it was printed. `cli.ts` states the rule and the bug that made it
    * one: *"an earlier version regrouped an already-grouped code into
    * `CSPA--0EC-H`, which nobody can type."* Nothing here reformats it.
+   *
+   * Null for the whole of {@link ServerHosts.link}, and that is a rule rather
+   * than an omission: the code that path reads is spent within the second, by
+   * this app, and putting it on a state that is broadcast to every window would
+   * put a live secret on a screen — and then leave a dead one there, which is
+   * the exact failure that flow exists to remove.
    */
   code: string | null
   /** True once this app put it here, which is what makes a way back honest. */
@@ -310,6 +373,49 @@ const STATUS_MARK = '--- status ---'
  */
 const NOT_RUNNING = /host:\s*not running/i
 
+/**
+ * What the host's own `status` says about the relay.
+ *
+ * The one fact that decides whether a code that host minted could be answered
+ * by anything at all: a rendezvous is published *through* the relay, so a host
+ * that is not connected to one mints a code nobody can look up. Read rather
+ * than assumed, because the failure it explains — an install finishing seconds
+ * before the host's first relay connection completes — looks identical to an
+ * expired code from this side.
+ *
+ * Read out of the block `renderStatus` writes rather than by grepping the whole
+ * output: that block is headed `Relay` and its next line is one of exactly
+ * three shapes, all three of them written in one place in `cli.ts`. A pattern
+ * loose enough to find `connected` anywhere in the output would also find it in
+ * the host's own first line.
+ */
+export type HostRelay = 'connected' | 'not-connected' | 'off' | 'unknown'
+
+export function relayState(status: string): HostRelay {
+  const lines = status.split('\n')
+  const at = lines.findIndex((line) => line.trim() === 'Relay')
+  if (at === -1) return 'unknown'
+  const said = (lines[at + 1] ?? '').trim()
+  if (said.startsWith('connected')) return 'connected'
+  if (said.startsWith('not connected')) return 'not-connected'
+  if (said.startsWith('off')) return 'off'
+  return 'unknown'
+}
+
+/**
+ * That host's public name at the relay, out of its own `status`, or `''`.
+ *
+ * The only thing that lets this app ask "am I already linked to *that* one" —
+ * a machine's row here is keyed by host id, so the id printed on that server is
+ * the join between the two. Printed only when the relay is connected, which is
+ * also the only state in which the answer is worth anything.
+ */
+const HOST_ID_PATTERN = /^[^\S\n]*host id[^\S\n]+(\S+)/m
+
+export function hostIdOf(status: string): string {
+  return HOST_ID_PATTERN.exec(status)?.[1] ?? ''
+}
+
 /** Turn one probe's answer into the two records above. */
 export function readHostProbe(out: string): HostLook {
   const marked = out.indexOf(`${STATUS_MARK}\n`)
@@ -472,6 +578,11 @@ export function hostConsequence(serverName: string, room: HostRoom): string {
     'when this computer is closed, you can open them from your phone, and it joins the machines list ' +
     `instead of sitting apart as a server. ${runtime} It needs no administrator access, writes only ` +
     'inside your home folder, and can be removed again from here.\n\n' +
+    // The promise the install now keeps, said before the press rather than
+    // discovered afterwards. It used to end holding a code somebody had to
+    // spend within a minute, and this sentence would have been a lie.
+    'This computer is linked to it as part of the install, so there is nothing to type in ' +
+    'afterwards. A code is only for a phone, and only when you ask for one.\n\n' +
     'It has no Copilot. That part of the app needs a window, and this host has none.'
   )
 }
@@ -585,6 +696,64 @@ const INSTALL_CEILING_MS = 12 * 60 * 1000
 
 /** The host mints a code and prints it at once; thirty seconds is a slow box. */
 const CODE_CEILING_MS = 30 * 1000
+
+/**
+ * The device's fingerprint, as the host prints it when something redeems a code.
+ *
+ * `renderNewDevice` writes `  Fingerprint    ABCD-EFGH-…` and nothing else on
+ * that line. Anchored on the word rather than on the shape of a fingerprint, for
+ * the same reason as {@link CODE_PATTERN} — and capital `F`, because the only
+ * other place this word is printed at all is the lower-case `fingerprint` in
+ * `renderStatus`'s relay block, which `pair` never prints.
+ */
+const FINGERPRINT_PATTERN = /Fingerprint[^\S\n]+(\S+)/
+
+/**
+ * What the host says after the approval question is answered, either way.
+ *
+ * Both halves are `cli.ts`'s own words — `renderApproved` for a device of kind
+ * `mine`, and `renderNotApproved`, which exists because *"a CLI that reports an
+ * outcome it did not read is worse than one that reports a failure"*. Read as
+ * one pattern rather than two waits, because two waits racing for one line is a
+ * flow that hangs whenever the wrong one is asked first.
+ */
+const VERDICT_PATTERN = /(Approved as your own device|was NOT approved)/
+
+/**
+ * How long the far end is given to notice a device, and to answer once it has.
+ *
+ * `pairWithCode` spends at most twelve seconds looking a machine up and fifteen
+ * pairing with it, so the fingerprint cannot appear before the redemption
+ * returns and should be on screen within a breath of it. The approval that
+ * follows is one round trip to a daemon on the same box.
+ */
+const LINK_CEILING_MS = 45 * 1000
+const VERDICT_CEILING_MS = 30 * 1000
+
+/**
+ * How long a host is given to reach the relay before a code is asked of it, and
+ * how often it is asked.
+ *
+ * The one wait in this file that asks the same question twice, and it is here
+ * for a race the install creates: the step before this starts the daemon, this
+ * step asks it for a code, and **a host that has not finished dialling the relay
+ * mints a code that was never published** — unfindable from the moment it was
+ * printed, because a rendezvous is published through the relay. `machines:code`
+ * refuses outright in that state and `pair` falls back to a code with no
+ * rendezvous behind it, which is a code this app cannot look up at all.
+ *
+ * Measured, one layer over: `remote/server.ts` records the public demo host
+ * failing in exactly this way — *"the container announced itself the moment its
+ * control socket was listening and the relay dial had not finished."*
+ *
+ * There is nothing to subscribe to here. The host is on the far side of an SSH
+ * connection and says what it is doing only when asked, so this asks, a few
+ * times, and then gives up and lets the link step report what it found. Twenty
+ * seconds is far longer than a datacentre handshake and far shorter than the
+ * two minutes the install before it took.
+ */
+const RELAY_CEILING_MS = 20 * 1000
+const RELAY_ASK_MS = 2 * 1000
 
 /** Not an exit status any shell reports, so it cannot be mistaken for one. */
 const NEVER_ANSWERED = -1
@@ -733,6 +902,74 @@ interface Attempt {
 }
 
 /**
+ * Everything one terminal has said since a run started, and a way to wait for
+ * the next thing it says.
+ *
+ * One subscription for a whole flow, rather than {@link ServerHosts.watchFor}'s
+ * one subscription per wait — and the difference is not tidiness. The linking
+ * flow reads three things out of this terminal in order, and the second of them
+ * is printed the instant a device redeems the first. A wait that attached its
+ * listener only after the redemption had been asked for would miss that line by
+ * however long a handshake takes, which is the shape of race that passes on a
+ * fast box and hangs on a slow one.
+ *
+ * Bounded by the flow that owns it: it is created for one run and closed in that
+ * run's `finally`, so nothing here accumulates a terminal's output for longer
+ * than the couple of minutes an install takes.
+ */
+class Tape {
+  private seen = ''
+  private readonly waiters: Array<() => void> = []
+  private readonly stop: () => void
+
+  constructor(shell: HostShell) {
+    this.stop = shell.onData((chunk) => {
+      this.seen += chunk
+      // A copy, because a waiter that matches removes itself from this array.
+      for (const look of [...this.waiters]) look()
+    })
+  }
+
+  /** Stop listening. Anything still waiting is left to its own ceiling. */
+  close(): void {
+    this.stop()
+  }
+
+  /**
+   * The first capture of `pattern`, or the whole match when it has no group.
+   *
+   * Looks at what has already been said *before* waiting for more — that is the
+   * whole point of the tape — and answers null on the ceiling or when somebody
+   * presses Stop. The patterns handed to this carry no `g` flag on purpose: a
+   * global regexp keeps `lastIndex` between calls and would start reading the
+   * tape from wherever the previous match ended.
+   */
+  next(pattern: RegExp, ceilingMs: number, attempt: Attempt): Promise<string | null> {
+    return new Promise<string | null>((resolve) => {
+      let settled = false
+      const done = (value: string | null): void => {
+        if (settled) return
+        settled = true
+        attempt.giveUp = null
+        clearTimeout(ceiling)
+        const at = this.waiters.indexOf(look)
+        if (at >= 0) this.waiters.splice(at, 1)
+        resolve(value)
+      }
+      const look = (): void => {
+        const match = pattern.exec(this.seen)
+        if (match !== null) done(match[1] ?? match[0])
+      }
+      const ceiling = setTimeout(() => done(null), ceilingMs)
+      ceiling.unref?.()
+      attempt.giveUp = () => done(null)
+      this.waiters.push(look)
+      look()
+    })
+  }
+}
+
+/**
  * One host install per server at a time, and each one reports every step.
  *
  * Keyed by server rather than globally: two servers can be set up at once from
@@ -859,9 +1096,18 @@ export class ServerHosts {
     step('service', 'Setting it to start on its own.')
     done.push(await this.startIt(serverId, after.host.command, look.room))
 
-    /* ------------------------------------------------------------- pair -- */
+    /* ------------------------------------------------------------- link -- */
 
-    return this.pair(serverId, shell, after.host.command, done)
+    /*
+     * The install ends linked, not holding a code.
+     *
+     * This is the last step because it is the one that makes the four before it
+     * worth anything: a host nothing is paired to is a program running on
+     * somebody's server that no screen in this app can reach. It used to end by
+     * printing a code and a button, and the code was dead by the time anybody
+     * read the panel. See {@link ServerHosts.link}.
+     */
+    return this.link(serverId, shell, after.host.command, done)
   }
 
   /**
@@ -913,16 +1159,25 @@ export class ServerHosts {
   }
 
   /**
-   * Show a pairing code, in the terminal that is on screen.
+   * Show a pairing code, in the terminal that is on screen — **for a phone**.
+   *
+   * The unchanged half of this feature, and it is a press of its own because a
+   * phone is the only thing left that needs one. Somebody who wants to reach
+   * this server from their pocket asks for a code, gets a fresh one with its own
+   * minute in front of it, and types it in. Nothing is left on screen from an
+   * earlier step, because nothing but this press mints one.
    *
    * The code is read out of the terminal rather than out of an exec channel
    * because `pair` refuses to finish without a tty — see the header. What is
-   * deliberately **not** done here is answering the `Approve it? [y/N]` question:
-   * the fingerprint printed above it is the only part of pairing a person can
-   * actually check, and an app that answered for them would have deleted the
-   * check while appearing to perform it.
+   * deliberately **not** done here is answering the `Approve it? [y/N]`
+   * question: the device on the other end of this code is one this app has
+   * never met and holds no channel to, so the fingerprint printed above that
+   * prompt is the only part of pairing a person can actually check, and an app
+   * that answered for them would have deleted the check while appearing to
+   * perform it. {@link ServerHosts.link} is a different case for a stated
+   * reason, and its argument does not reach across to here.
    */
-  async pair(
+  async pairDevice(
     serverId: string,
     shell: HostShell,
     command: string,
@@ -956,12 +1211,307 @@ export class ServerHosts {
     }
 
     return this.say(
-      state(serverId, 'done', 'It is running and waiting to be linked.', {
+      state(serverId, 'done', 'It is running and showing a code for a phone.', {
         done: [...done, 'It printed a pairing code.'],
         code,
         weInstalled: true,
       }),
     )
+  }
+
+  /**
+   * Link **this computer** to that host, with no code on any screen.
+   *
+   * ## Why no code is shown, and what is still checked
+   *
+   * A pairing code exists for one reason: two machines that have never met need
+   * a shared secret a person can carry between them. The fingerprint question
+   * exists for the matching reason — the peer is unknown, so somebody has to
+   * look at it.
+   *
+   * Neither is true here. **This app installed that host itself, minutes ago,
+   * over an SSH connection the person configured and this app authenticated.**
+   * It uploaded the package over that connection's SFTP channel, ran the
+   * installer down that connection's shell, and read the version back off the
+   * machine. Then the host prints the code into *that same connection's own
+   * terminal*, and this reads it there. A six-digit secret carried over a
+   * channel this app has already authenticated is not made stronger by being
+   * displayed to a person and typed back in — it is only made a minute older.
+   * That minute is the whole of the bug this replaces: the code was printed
+   * during the install, the panel went on drawing it after it had died, and the
+   * press that spent it asked the relay for a machine that had stopped showing
+   * it. The round trip through a person's eyes bought nothing and cost that.
+   *
+   * So what is skipped is a person's eyes. Every check the protocol makes still
+   * happens, in the same order and in the same code — `machines/pair.ts`, the
+   * same function the typed path calls:
+   *
+   *  - the rendezvous lookup at the relay, keyed on the code, which answers with
+   *    an address and nothing else;
+   *  - the Noise IK handshake against that machine's real static key, which is
+   *    what proves the peer is the machine the rendezvous named rather than the
+   *    relay answering for it;
+   *  - the one-shot token, redeemed at the far end and spendable once;
+   *  - the device left **pending** at that host until the approval below, which
+   *    is why a `welcome` here is followed by a refused connection.
+   *
+   * And the fingerprint is not skipped either — it is checked *harder*. The
+   * host prints the fingerprint of whichever device redeemed the code; this
+   * compares it character for character against the fingerprint of the guest key
+   * this desktop dialled with, which came back from the redemption. A person
+   * holding two screens is performing the same comparison with worse equipment
+   * and more ways to give up half way. When the two differ, something other than
+   * this computer redeemed the code: this answers **n**, and says so.
+   *
+   * ## Why this cannot become a general "link without a code" door
+   *
+   * Because there is no door — there is a shell. The authority is not a flag on
+   * a request that some other caller could set; it is possession of a terminal
+   * on that machine. The code is minted by that host, printed on that
+   * connection, and read back off that connection, so this can only ever link
+   * the one machine whose terminal a run started by this app is holding. There
+   * is no argument to it naming a machine, and nothing here can be aimed at a
+   * server somebody did not just open a connection to.
+   *
+   * ## What is deliberately unchanged
+   *
+   * The phone path, entirely. A phone has no SSH channel to this app, so none of
+   * the argument above applies to it: it keeps the code, it keeps the minute,
+   * and it keeps the fingerprint question — {@link ServerHosts.pairDevice}.
+   */
+  async link(
+    serverId: string,
+    shell: HostShell,
+    command: string,
+    done: readonly string[] = [],
+  ): Promise<HostState> {
+    const linkThisComputer = this.deps.linkThisComputer
+    /*
+     * A build with no machine channels cannot redeem anything, so it does the
+     * honest thing instead of a half-step: it shows the code and says where to
+     * type it. Never a link that reports success it did not perform.
+     */
+    if (linkThisComputer === undefined) return this.pairDevice(serverId, shell, command, done)
+
+    const attempt = this.attempts.get(serverId) ?? { serverId, stopRunning: null, giveUp: null }
+    this.attempts.set(serverId, attempt)
+    const failed = (line: string, detail = ''): HostState => {
+      this.attempts.delete(serverId)
+      return this.say(
+        state(serverId, 'failed', line, { done: [...done], detail, weInstalled: true }),
+      )
+    }
+
+    this.say(
+      state(serverId, 'pairing', 'Linking it to this computer.', {
+        done: [...done],
+        weInstalled: true,
+      }),
+    )
+    attempt.stopRunning = () => shell.write(INTERRUPT)
+
+    /**
+     * Somebody pressed Stop, rather than the far end going quiet.
+     *
+     * {@link ServerHosts.cancel} drops the attempt from the map *before* it
+     * wakes whatever is waiting, so an attempt that is no longer the registered
+     * one is the one signal that tells the two apart. They need telling apart:
+     * "it did not print a pairing code" is a sentence about the server, and
+     * somebody who pressed Stop would read it as a fault they had caused.
+     */
+    const stopped = (): boolean => this.attempts.get(serverId) !== attempt
+
+    /*
+     * One tape for the whole flow, attached before anything is typed.
+     *
+     * Three things are read out of this terminal in order — a code, a
+     * fingerprint, a verdict — and the second is printed the instant a device
+     * redeems the first. A wait that attached its listener only once the
+     * redemption had been asked for would miss that line by however long a
+     * handshake takes: a race that passes on a fast box and hangs on a slow one.
+     */
+    /*
+     * Give it a moment to reach the relay before asking it for a code. See
+     * {@link RELAY_CEILING_MS}: a code minted before the dial finishes was never
+     * published, so nothing could ever answer it — and an install reaches this
+     * line seconds after starting the daemon.
+     */
+    await this.waitForRelay(serverId, stopped)
+    if (stopped()) return failed('Stopped before it had asked for a pairing code.')
+
+    const tape = new Tape(shell)
+    try {
+      shell.write(`${shellQuote(command)} pair --kind mine\n`)
+      const code = await tape.next(CODE_PATTERN, CODE_CEILING_MS, attempt)
+      if (code === null) {
+        return stopped()
+          ? failed('Stopped before it had printed a pairing code.')
+          : failed('It did not print a pairing code.', 'Whatever it did print is in the terminal above.')
+      }
+
+      const linked = await linkThisComputer(code)
+      /*
+       * Pressed while the redemption was in flight, which is the one gap no
+       * `giveUp` reaches — nothing is waiting on the terminal for those few
+       * seconds, so a Stop lands with no wait to wake. Answered here instead,
+       * because the alternative is sitting out a forty-five second ceiling for a
+       * prompt in a terminal the person has already taken away, and then blaming
+       * the server for not printing it.
+       */
+      if (stopped()) {
+        return failed(
+          'Stopped while linking.',
+          linked.ok
+            ? `This computer paired with that host as ${linked.machineName}, and nothing approved it, ` +
+              'so it can reach nothing yet. Link this computer again to finish it with a fresh code.'
+            : '',
+        )
+      }
+      if (!linked.ok) {
+        // The command is still sitting there waiting for a device that is not
+        // coming. Stopped rather than left, or the panel would say this failed
+        // while a live code went on standing at the relay.
+        shell.write(INTERRUPT)
+        // Two sentences from two places, and both are wanted: the first is why
+        // the redemption failed, the second is which of that refusal's two
+        // causes this actually was. Either can be empty, and neither is padded.
+        //
+        // Asked again rather than reusing what the wait above settled on,
+        // because the interesting minute is the one that has just passed: a host
+        // that came up on the relay while the code was in flight is a different
+        // story from one that never did, and only a fresh answer tells them
+        // apart.
+        const why = await this.whyNothingAnswered(serverId)
+        // Named as the *linking* failing rather than the install, because by
+        // this point the host is installed and running on that server and a
+        // line that read like a failed install would send somebody to undo work
+        // that is fine. The finished steps above it stay on screen for the same
+        // reason, and **Link this computer** is what to press next.
+        return failed(
+          'The host is installed and running, and could not be linked to this computer.',
+          [linked.message, why].filter((part) => part !== '').join(' '),
+        )
+      }
+
+      const shown = await tape.next(FINGERPRINT_PATTERN, LINK_CEILING_MS, attempt)
+      if (shown === null) {
+        if (stopped()) return failed('Stopped before that host had shown the new device.')
+        shell.write(INTERRUPT)
+        return failed(
+          'This computer paired with that host, and the host never said so.',
+          'The terminal printed no new device, so there was no fingerprint to check and nothing to ' +
+            'approve. This computer is left paired and unapproved over there, which can reach ' +
+            'nothing. Link this computer again to try with a fresh code.',
+        )
+      }
+      /*
+       * The check the person is no longer making, made properly.
+       *
+       * Not a formality: what this rules out is another device having redeemed
+       * the code in the moment it was live. Answered `n` rather than simply
+       * abandoned, because that is the answer to the question actually on
+       * screen, and it leaves the intruder paired-and-locked-out rather than
+       * waiting on a prompt nobody is going to answer.
+       */
+      if (shown !== linked.deviceFingerprint) {
+        shell.write('n\n')
+        return failed(
+          'Something other than this computer answered that pairing code.',
+          `That host is showing ${shown}, and this computer paired as ${linked.deviceFingerprint}. ` +
+            'It was refused rather than approved, so nothing was let in: whatever did answer is left ' +
+            'over there paired and unapproved, which can reach nothing, and so is this computer. ' +
+            'Link this computer again to try with a fresh code.',
+        )
+      }
+
+      shell.write('y\n')
+      const verdict = await tape.next(VERDICT_PATTERN, VERDICT_CEILING_MS, attempt)
+      if (verdict !== 'Approved as your own device') {
+        if (stopped()) return failed('Stopped before that host had answered the approval.')
+        return failed(
+          'That host did not approve this computer.',
+          verdict === null
+            ? 'It never answered the approval. Its own output is in the terminal above.'
+            : 'It said so itself; its words are in the terminal above.',
+        )
+      }
+
+      this.attempts.delete(serverId)
+      return this.say(
+        state(serverId, 'done', 'It is running, and linked to this computer.', {
+          done: [
+            ...done,
+            `It is linked to this computer as ${linked.machineName}, approved as your own device.`,
+          ],
+          weInstalled: true,
+        }),
+      )
+    } finally {
+      tape.close()
+    }
+  }
+
+  /**
+   * Wait for that host to say it is on the relay, and answer what it settled on.
+   *
+   * Only `not-connected` is worth waiting on. `connected` is done; `off` means
+   * that host is not dialling out at all, which no amount of waiting changes;
+   * and `unknown` is a host too old to print the block, so waiting for a
+   * sentence it will never write would be twenty seconds spent on nothing.
+   *
+   * Answers rather than refuses, always: this is a courtesy that removes a race,
+   * not a gate. A host that never reaches the relay still gets its code asked
+   * for, and the sentence the person reads is written by the step that actually
+   * failed rather than by this one guessing ahead of it.
+   */
+  private async waitForRelay(serverId: string, stopped: () => boolean): Promise<HostRelay> {
+    const ceiling = this.deps.relayWaitMs ?? RELAY_CEILING_MS
+    const until = Date.now() + ceiling
+    for (;;) {
+      let seen: HostRelay
+      try {
+        seen = relayState((await this.look(serverId)).host.status)
+      } catch {
+        // The connection went with the terminal. The step after this says what
+        // it could not do; there is nothing useful to add here.
+        return 'unknown'
+      }
+      if (seen !== 'not-connected' || stopped() || Date.now() >= until) return seen
+      await new Promise<void>((wake) => {
+        const timer = setTimeout(wake, Math.min(RELAY_ASK_MS, ceiling))
+        timer.unref?.()
+      })
+    }
+  }
+
+  /**
+   * Why nothing answered a code that host had just minted — in that host's own
+   * terms, or `''` when it will not say.
+   *
+   * Worth the extra round trip because the two causes have nothing in common. A
+   * host that is not connected to the relay never published a rendezvous at all,
+   * so the code was unfindable from the moment it was printed and trying again
+   * will fail the same way; a host that *is* connected minted a code that was
+   * simply not answered in time, and another press is the whole remedy. Telling
+   * somebody to try again in the first case is telling them to wait for a minute
+   * to pass twice.
+   */
+  private async whyNothingAnswered(serverId: string): Promise<string> {
+    let relay: HostRelay = 'unknown'
+    try {
+      relay = relayState((await this.look(serverId)).host.status)
+    } catch {
+      // The connection went with the terminal, which is an ordinary way for this
+      // to end. The sentence above it already says what happened.
+      return ''
+    }
+    if (relay === 'connected') {
+      return 'That host says it is connected to the relay, so the code was published and simply was not answered in time. Linking again mints a fresh one.'
+    }
+    if (relay === 'not-connected' || relay === 'off') {
+      return `That host says its relay is ${relay === 'off' ? 'off' : 'not connected'}, so there was nothing at the relay to answer for the code. It has just started; give it a moment and link again.`
+    }
+    return ''
   }
 
   /**

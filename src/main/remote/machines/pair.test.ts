@@ -162,6 +162,31 @@ describe('pairing with a typed code', () => {
     expect(result.ok === false && result.message).toMatch(/last a minute/)
   })
 
+  /*
+   * The same refusal, written for the caller that actually has it.
+   *
+   * "Check the digits" is right for somebody who typed six of them and wrong for
+   * the server connector, which reads the code out of an SSH terminal it already
+   * holds — it named digits he had never entered, on the one screen where he had
+   * pressed a button instead. What is true for that caller is that nothing
+   * answered: the code went stale, or that machine is not on the relay at all.
+   */
+  it('does not tell a program to check digits it never typed', async () => {
+    const rig = dialler(() => 'hang-up')
+    const result = await pairWithCode({
+      code: CODE,
+      relayUrl: 'wss://relay.example',
+      dial: rig.dial,
+      lookupTimeoutMs: 200,
+      codeFrom: 'supplied',
+    })
+    expect(result).toMatchObject({ ok: false, reason: 'not-found' })
+    if (result.ok) return
+    expect(result.message).not.toMatch(/digits/i)
+    expect(result.message).toMatch(/went stale/)
+    expect(result.message).toMatch(/not connected to the relay/)
+  })
+
   it('passes the far machine’s refusal through in its own words', async () => {
     const rig = dialler((request) =>
       request.hostId === rendezvousIdentity(CODE)?.hostId ? 'offer' : 'refuse',

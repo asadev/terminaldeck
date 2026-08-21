@@ -40,6 +40,7 @@ import { thisMachineName } from '../../platform/host'
 import { createMachineLink, type MachineLink, type MachineLinkState } from './guest'
 import type { SendFileOutcome } from './upload-send'
 import { pairWithCode, type PairResult } from './pair'
+import { fingerprint } from '../../../shared/sealed'
 import { offerFrom } from './rendezvous'
 import { MachineStore, type Machine } from './store'
 
@@ -225,9 +226,64 @@ export interface MachinesIpcDeps {
   now?: () => number
 }
 
+/**
+ * What {@link MachinesIpc.linkWithCode} answers.
+ *
+ * Narrow on purpose. `PairResult` carries the guest **private** key and the
+ * bearer credential, which belong to the store and to nothing else; the one
+ * fact a caller outside this module has any use for is the fingerprint of the
+ * key this desktop dialled with, because that is what the far machine is about
+ * to print beside "New device" and the only way a caller can check that the
+ * device that turned up over there is this one.
+ */
+export type MachineLinked =
+  | {
+      ok: true
+      /** The machine's row id here, which is its public host id. */
+      machineId: string
+      /** What it is called in this app's Machines list. */
+      machineName: string
+      /**
+       * The fingerprint of the guest key this desktop paired with, in the same
+       * spelling `shared/sealed.ts` prints everywhere else — so it can be
+       * compared character for character with the one the far machine shows.
+       */
+      deviceFingerprint: string
+    }
+  | { ok: false; message: string }
+
 export interface MachinesIpc {
   /** Every machine and the state of its link, as the window would draw it. */
   view(): MachinesView
+  /**
+   * Redeem a code this app produced for itself, not one a person typed.
+   *
+   * The one caller is the server connector: it has just installed the host on
+   * that server over an SSH connection it authenticated, and it read the code
+   * out of that connection's own terminal. `servers/host.ts` carries the full
+   * argument for why that is a *stronger* proof of which machine this is than
+   * six digits retyped, and why nothing about the phone path changes.
+   *
+   * What this does **not** do is skip anything the protocol checks. It is the
+   * same {@link redeem} the typed channel uses — the same rendezvous lookup,
+   * the same Noise IK handshake against the machine's real key, the same
+   * one-shot token redeemed at the far end, and the same pending device that
+   * cannot open a session until that machine approves it. The only difference
+   * is who read the six digits, and the sentence a refusal is written for.
+   */
+  linkWithCode(code: string): Promise<MachineLinked>
+  /**
+   * Is this desktop already paired to the machine behind that host id, and what
+   * does it call it?
+   *
+   * Exposed so a screen that is looking at one machine from the *outside* — the
+   * server connector, which knows a server's host id from its `status` output —
+   * can say "already linked" instead of offering to link a second time. Null
+   * when there is no row for it. A name rather than a boolean because the panel
+   * that asks then names it, and a second lookup for the name would be a second
+   * chance to disagree with the first.
+   */
+  linkedTo(hostId: string): string | null
   /**
    * May sessions on that machine act on browser windows here? Read per call.
    *
@@ -550,11 +606,18 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
     return { cancelled: true }
   })
 
-  ipcMain.handle('machines:pair', async (_event, code: unknown): Promise<PairResult> => {
-    if (typeof code !== 'string') {
-      return { ok: false, reason: 'bad-code', message: 'That is not a pairing code.' }
-    }
-    const result = await pair({ code, relayUrl: relayUrl() })
+  /**
+   * Redeem one pairing code, keep the machine it named, and bring its link up.
+   *
+   * Extracted from the channel below because there are now two ways a code
+   * reaches this desktop and only one of them is a person typing — see
+   * {@link MachinesIpc.linkWithCode}. What must **not** exist is a second copy
+   * of this: the store row, the dropped stale link and the redial are the whole
+   * of "this desktop knows that machine", and a second path that did four of
+   * those five things would be a machine that is paired and never dials.
+   */
+  async function redeem(code: string, codeFrom: 'typed' | 'supplied'): Promise<PairResult> {
+    const result = await pair({ code, relayUrl: relayUrl(), codeFrom })
     if (!result.ok) return result
     try {
       const machine = store.remember({
@@ -581,6 +644,13 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
     }
     announce()
     return result
+  }
+
+  ipcMain.handle('machines:pair', async (_event, code: unknown): Promise<PairResult> => {
+    if (typeof code !== 'string') {
+      return { ok: false, reason: 'bad-code', message: 'That is not a pairing code.' }
+    }
+    return redeem(code, 'typed')
   })
 
   ipcMain.handle('machines:forget', (_event, id: unknown): MachinesView => {
@@ -1309,6 +1379,18 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
 
   return {
     view,
+    async linkWithCode(code: string): Promise<MachineLinked> {
+      const result = await redeem(code, 'supplied')
+      if (!result.ok) return { ok: false, message: result.message }
+      return {
+        ok: true,
+        machineId: result.offer.hostId,
+        machineName: result.offer.name === '' ? result.deviceName : result.offer.name,
+        deviceFingerprint: fingerprint(result.guestKeys.publicKey),
+      }
+    },
+    linkedTo: (hostId: string): string | null =>
+      store.list().find((machine) => machine.hostId === hostId)?.name ?? null,
     drivesWindows: (machineId: string): boolean => store.drivesWindows(machineId),
     announceWindows(): void {
       for (const link of links.values()) link.announceWindows()

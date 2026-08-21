@@ -1011,8 +1011,16 @@ const api = {
   serverHostState: (id: string): Promise<unknown> => ipcRenderer.invoke('servers:host:state', id),
   installHostOnServer: (id: string, shellId: string): Promise<unknown> =>
     ipcRenderer.invoke('servers:host:install', id, shellId),
+  /** A code for a phone, minted only when somebody presses for one. */
   pairHostOnServer: (id: string, shellId: string): Promise<unknown> =>
     ipcRenderer.invoke('servers:host:pair', id, shellId),
+  /**
+   * Link this computer to a host already on that server — no code, nothing
+   * drawn. The same step an install ends with; see `servers/host.ts` for why a
+   * code this app reads off its own SSH connection is not shown to anybody.
+   */
+  linkHostToThisComputer: (id: string, shellId: string): Promise<unknown> =>
+    ipcRenderer.invoke('servers:host:link', id, shellId),
   removeHostFromServer: (id: string, alsoData: boolean): Promise<unknown> =>
     ipcRenderer.invoke('servers:host:remove', id, alsoData),
   cancelServerHost: (id: string): Promise<unknown> => ipcRenderer.invoke('servers:host:cancel', id),

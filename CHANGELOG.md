@@ -18,11 +18,27 @@ A release with nothing under Unreleased is refused rather than shipped blank.
   install and it will install."* Machines → the server → **Sessions on this
   server**. Five steps, each reported as it happens: what the box has, copying
   the package over SFTP, the install in the terminal on screen, making it start
-  on its own, and a pairing code with one press to link it to this computer. It
-  works on a bare rented server with no Node and no npm — measured end to end on
+  on its own, and **linking this computer to it** — no code, nothing to press.
+  It works on a bare rented server with no Node and no npm — measured end to end on
   a Hetzner box, where the installer fetched and checksummed its own Node 22
   before installing. A machine that cannot take one gets the reason and **no
   button**, before anything is copied to it.
+- **Installing a host links this computer, with no pairing code on screen.** The
+  install used to end by printing a code beside a **Link it to this computer**
+  button. A code lives about a minute; by the time anybody had read the panel it
+  was dead, and pressing the button answered *"No machine is showing that code.
+  Check the digits"* to somebody who had never typed a digit. The install now
+  redeems the code itself, in the same second it is printed, over the SSH
+  connection it just installed the host down — a stronger proof of which machine
+  that is than six digits retyped — and it checks the fingerprint the host prints
+  against the key it actually dialled with, refusing the approval when they
+  differ. Nothing about a **phone** changes: a code is minted only when somebody
+  presses **Show a code for a phone**, it is fresh, and the person still answers
+  the fingerprint question in the terminal.
+- **Link this computer to a host that is already on a server.** The same step,
+  on its own, for a host this app did not install — otherwise the only way to
+  link one would be to remove it and install it again. The panel says which host
+  this computer is already linked to and offers no button for those.
 - **Uninstall it from the same place**, and it says what it leaves: the service,
   the unit, the program and the private Node runtime go; the paired devices and
   their folder grants stay unless a box is ticked.

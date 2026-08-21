@@ -74,6 +74,26 @@ export interface PairOptions {
   code: string
   /** The relay this machine dials. The far machine names its own in the offer. */
   relayUrl: string
+  /**
+   * Where the code came from, because one sentence below is written for a
+   * person and is wrong for a program.
+   *
+   * `'typed'` — somebody read six digits off another screen and typed them
+   * here. When nothing is showing that code the useful advice is to check the
+   * digits, because a misread digit is the common cause.
+   *
+   * `'supplied'` — **this app** read the code out of a channel it had already
+   * authenticated, and no human touched it. Telling that caller's user to
+   * "check the digits" names digits they never entered and sends them looking
+   * for a typing mistake that cannot exist. What is true there is that nothing
+   * answered for the code: it went stale, or the machine showing it is not
+   * connected to the relay to answer at all. The caller knows which — it can
+   * ask that machine directly — so this says the two possibilities and leaves
+   * the caller to name the one that happened.
+   *
+   * Defaults to `'typed'`, which is what every caller that does not say is.
+   */
+  codeFrom?: 'typed' | 'supplied'
   /** Seams for the tests, so nothing here reaches the public internet. */
   dial?: (request: DialRequest) => Promise<GuestChannel>
   freshKeys?: () => StaticKeyPair
@@ -154,8 +174,12 @@ export async function pairWithCode(options: PairOptions): Promise<PairResult> {
       ok: false,
       reason: 'not-found',
       message:
-        'No machine is showing that code. Check the digits, and that the code on the other ' +
-        'machine has not run out — they last a minute.',
+        (options.codeFrom ?? 'typed') === 'supplied'
+          ? 'Nothing answered for that code at the relay. A code lasts about a minute, so either it ' +
+            'went stale before this could use it, or that machine is not connected to the relay to ' +
+            'answer for it.'
+          : 'No machine is showing that code. Check the digits, and that the code on the other ' +
+            'machine has not run out — they last a minute.',
     }
   }
 

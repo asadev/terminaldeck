@@ -121,6 +121,7 @@ import {
 import {
   ServerHosts,
   hostConsequence,
+  hostIdOf,
   hostLine,
   reachLine,
   removeConsequence,
@@ -129,6 +130,7 @@ import {
   type HostOnServer,
   type HostRoom,
   type HostState,
+  type LinkOutcome,
 } from './host'
 import { NO_PACKAGE, type HostPackage } from './host-package'
 /*
@@ -222,6 +224,26 @@ export interface HostOffer {
   consequence: string
   /** What removing it would leave behind, for each answer to the data question. */
   removes: { keepData: string; withData: string }
+  /**
+   * Can this build link a host to this computer at all?
+   *
+   * False on a build with no Machines list, where `ServerHosts.link` falls back
+   * to *showing* the code. The panel reads this so it never draws a button
+   * labelled "Link this computer" that would put a code on screen instead —
+   * §4.1 again, and the exact shape of the bug this whole change is about.
+   */
+  canLink: boolean
+  /**
+   * What this computer already calls that host in its Machines list, or null
+   * when it has never been linked to it.
+   *
+   * Decided here, from two facts that already exist: the host id that server's
+   * own `status` prints, and the machine rows this desktop holds — which are
+   * keyed by host id. A panel that could not ask this would have to offer to
+   * link a machine it may already be linked to, which is a button whose honest
+   * label nobody could write.
+   */
+  linkedAs: string | null
   state: HostState
 }
 
@@ -434,6 +456,26 @@ export interface ServersIpcDeps {
    * fetch a package from a registry that holds a name reservation.
    */
   hostPackage?(): HostPackage | null
+  /**
+   * Redeem a pairing code this app read out of a server's own terminal, and
+   * keep the machine it names. `MachinesIpc.linkWithCode`.
+   *
+   * Optional for the same reason `hostPackage` is: a build with no machine
+   * channels cannot redeem anything, and `host.ts` answers that by showing the
+   * code instead of pretending to spend it. The security argument for a code
+   * this app supplies to itself is written where it is spent —
+   * `ServerHosts.link`.
+   */
+  linkThisComputer?(code: string): Promise<LinkOutcome>
+  /**
+   * Is this desktop already paired to the machine behind that host id, and what
+   * does it call it? `MachinesIpc.linkedTo`.
+   *
+   * What makes the panel able to say "already linked" instead of offering a
+   * second link, which is the difference between a screen that reports the world
+   * and one that offers a button and hopes.
+   */
+  linkedTo?(hostId: string): string | null
   /**
    * Copy a file off the server. **Absent today**, and its absence is a stated
    * fact rather than a gap: `connection.ts` exposes `run`, `runScript`, `probe`
@@ -2221,6 +2263,11 @@ export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDep
      * `host.ts` refuses on, with a sentence, before it copies anything.
      */
     putFile: deps.putFile,
+    // Read once, like `putFile` above and for the same reason: a build that
+    // cannot redeem a code is `undefined` at construction, which is the shape
+    // `host.ts` falls back on — showing the code — rather than a failure
+    // discovered half way through an install.
+    linkThisComputer: deps.linkThisComputer,
     // Null when this build carries no package, which is answered as an absent
     // button with a sentence rather than as a failure part-way through.
     hostPackage: () => deps.hostPackage?.() ?? null,
@@ -2245,8 +2292,23 @@ export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDep
         keepData: removeConsequence(look.host, false),
         withData: removeConsequence(look.host, true),
       },
+      canLink: deps.linkThisComputer !== undefined,
+      /*
+       * Null unless *both* halves answer: a host that is not connected to the
+       * relay prints no host id, and a build with no machine channels has no
+       * roster to ask. Either way the honest answer is "not known to be
+       * linked", which draws the Link button — a press that mints its own fresh
+       * code and can only ever succeed or say why.
+       */
+      linkedAs: linkedAs(look.host.status),
       state: hosts.stateOf(serverId),
     }
+  }
+
+  /** That host's row here, by the id it prints in its own `status`. */
+  const linkedAs = (status: string): string | null => {
+    const hostId = hostIdOf(status)
+    return hostId === '' ? null : (deps.linkedTo?.(hostId) ?? null)
   }
 
   const nameOf = (serverId: string): string =>
@@ -2293,6 +2355,16 @@ export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDep
     },
   )
 
+  /**
+   * A code, for a phone, minted because somebody asked for one.
+   *
+   * Its own channel and its own press, kept apart from `servers:host:link`
+   * below: one of them puts a live secret on a screen for a person to carry to
+   * another device, and the other spends one in this process without ever
+   * drawing it. Folding them together would mean one control whose behaviour
+   * depended on which machine you meant, which is the shape of thing nobody can
+   * label honestly.
+   */
   ipcMain.handle(
     'servers:host:pair',
     async (_event, serverId: unknown, shellId: unknown): Promise<ServerResult<{ state: HostState }>> => {
@@ -2308,7 +2380,43 @@ export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDep
         if (look.host.command === '') {
           return { ok: false, sentence: 'There is no host on this server to pair with.', detail: '' }
         }
-        return { ok: true, state: await hosts.pair(serverId, shell, look.host.command) }
+        return { ok: true, state: await hosts.pairDevice(serverId, shell, look.host.command) }
+      } catch (error) {
+        return failed(error)
+      }
+    },
+  )
+
+  /**
+   * Link **this** computer to a host that is already on that server.
+   *
+   * The same step an install now ends with, available on its own for the case
+   * an install cannot cover: a host that was put there some other way, or one
+   * this app installed before it could link. Without it the only way to link a
+   * running host to this computer would be to remove it and install it again.
+   *
+   * The authority is the same and it is not widened by having a channel of its
+   * own: this reaches `ServerHosts.link`, which mints the code *on that server*,
+   * through the shell named here, and reads it back off the same connection. A
+   * caller cannot name a machine — only a server this window already has a
+   * terminal open on.
+   */
+  ipcMain.handle(
+    'servers:host:link',
+    async (_event, serverId: unknown, shellId: unknown): Promise<ServerResult<{ state: HostState }>> => {
+      if (typeof serverId !== 'string' || typeof shellId !== 'string') {
+        return { ok: false, sentence: 'No server was named.', detail: '' }
+      }
+      const shell = shells.get(shellId)
+      if (shell === undefined) {
+        return { ok: false, sentence: 'That terminal is not open any more.', detail: '' }
+      }
+      try {
+        const look = await hosts.look(serverId)
+        if (look.host.command === '') {
+          return { ok: false, sentence: 'There is no host on this server to link to.', detail: '' }
+        }
+        return { ok: true, state: await hosts.link(serverId, shell, look.host.command) }
       } catch (error) {
         return failed(error)
       }

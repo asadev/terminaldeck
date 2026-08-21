@@ -2757,6 +2757,30 @@ function registerIpc(): void {
         resources: app.isPackaged ? process.resourcesPath : null,
         tree: app.isPackaged ? null : app.getAppPath(),
       }),
+    /*
+     * The last step of a host install: the code that host prints into the
+     * terminal on this screen, redeemed here in the same second.
+     *
+     * `machinesIpc` is captured rather than passed, and it is not null by the
+     * time this runs — it is registered above, and this closure is only reached
+     * from a button on a server page. `false` before then is not a case: the
+     * fallback is `ServerHosts.link` showing the code instead, which is what a
+     * build with no machine channels does.
+     *
+     * The security argument for redeeming a code this app read out of an SSH
+     * connection it authenticated, rather than showing it to somebody, is
+     * written where it is spent — `servers/host.ts`, above `ServerHosts.link`.
+     */
+    linkThisComputer: async (code) =>
+      (await machinesIpc?.linkWithCode(code)) ?? {
+        ok: false,
+        message: 'This build has no Machines list to link that host into.',
+      },
+    // And the question the panel asks before offering to link at all: is that
+    // host already one of this desktop's machines? Read per call off the same
+    // store, never cached here — a second copy is how a screen and the truth
+    // come to disagree.
+    linkedTo: (hostId) => machinesIpc?.linkedTo(hostId) ?? null,
     // §5.4 in one pair of lines: the page holds the connection while it is open
     // and lets go when it closes. There is no timer here and no keep-alive, and
     // a server nobody is looking at is not dialled at all.
