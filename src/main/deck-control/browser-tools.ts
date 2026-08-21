@@ -127,7 +127,7 @@ function str(args: Record<string, unknown>, key: string): string {
   return value
 }
 
-function optStr(args: Record<string, unknown>, key: string): string | null {
+export function optStr(args: Record<string, unknown>, key: string): string | null {
   const value = args[key]
   if (value === undefined || value === null || value === '') return null
   if (typeof value !== 'string') {
@@ -136,7 +136,7 @@ function optStr(args: Record<string, unknown>, key: string): string | null {
   return value
 }
 
-function optInt(args: Record<string, unknown>, key: string, fallback: number, min: number, max: number): number {
+export function optInt(args: Record<string, unknown>, key: string, fallback: number, min: number, max: number): number {
   const value = args[key]
   if (value === undefined || value === null) return fallback
   if (typeof value !== 'number' || !Number.isFinite(value)) {
@@ -165,7 +165,7 @@ function verbOf(args: Record<string, unknown>): StepVerb {
  * translation for `Refused`; this is what makes the driver's own vocabulary
  * arrive in it.
  */
-async function asTool<T>(run: () => Promise<T>): Promise<T> {
+export async function asTool<T>(run: () => Promise<T>): Promise<T> {
   try {
     return await run()
   } catch (error) {
@@ -293,7 +293,7 @@ function targetOf(window: BoundWindow): Bound {
  * `<machineId>\0<sessionId>`, and a session on his PC asking about `B1` under
  * this computer's key would be asking about somebody else's window.
  */
-function boundOf(args: Record<string, unknown>, context: ToolContext): Bound | null {
+export function boundOf(args: Record<string, unknown>, context: ToolContext): Bound | null {
   const owner = callingSession(context)
   if (owner !== null) {
     const named = optStr(args, 'sessionId')
@@ -409,7 +409,7 @@ function maybeBound(args: Record<string, unknown>, context: ToolContext): Bound 
  * summaries name the slot even when the call did not, which is what the dialog
  * and the action log have to say for a person to recognise the page.
  */
-function whereOf(args: Record<string, unknown>, context: ToolContext): string {
+export function whereOf(args: Record<string, unknown>, context: ToolContext): string {
   const name = optStr(args, 'window')
   const found = maybeBound(args, context)?.target.name ?? null
   if (found !== null) return found
@@ -425,7 +425,7 @@ function whereOf(args: Record<string, unknown>, context: ToolContext): string {
  * would be a second surface to keep in step, and the first verb somebody forgot
  * to add to it would be a dead end wearing the shape of a feature.
  */
-const TARGET_PROPERTIES: Record<string, JsonSchema> = {
+export const TARGET_PROPERTIES: Record<string, JsonSchema> = {
   sessionId: { type: 'string', description: 'With `window`, acts on that session’s window.' },
   window: { type: 'string', description: 'B1, B2 — a window attached to that session.' },
 }
@@ -510,60 +510,60 @@ const CLOSE_SCHEMA: JsonSchema = {
 
 /* --------------------------------------------------------------- the tools -- */
 
-export function browserTools(drive: BrowserDrive): ToolSpec[] {
-  /**
-   * Everything driving refuses to do for a caller that is not the person at
-   * this keyboard.
-   *
-   * Both gates are checks here rather than sentences in an instruction file,
-   * and both are sharper versions of `DRIVING-MODE.md` §7's:
-   *
-   *  - **Remote is refused at every one of the five tools**, not only at the
-   *    handover. A paired phone that can make this Mac open a page, click
-   *    through it and raise a banner saying "type your password", inside his own
-   *    trusted app chrome, is a remote phishing primitive with the best possible
-   *    disguise. A remote `act` grant is a real thing somebody might hand out
-   *    (`surface.ts:92`); this must not ride in on it.
-   *  - **A session of this app's own is not that**, and this is the distinction
-   *    the 2026-08-21 review turns on. The refusal above is about a *device*
-   *    driving this machine. What he asked for is a *session* driving the window
-   *    that is attached to it:
-   *
-   *      > *"But driving other browsers should be for all of the sessions,
-   *      > regardless of even they are Commander, they are not Commander, they
-   *      > are from remote channel, they are from server… Other sessions can
-   *      > drive any connected browser which we allow to the session to drive."*
-   *
-   *    A session caller can name nothing but its own attached windows — see
-   *    {@link boundOf} — so what it holds is exactly the thing the person handed
-   *    it by attaching a window, and no more. It cannot reach the page next
-   *    door, it cannot enumerate what exists, and it has no way to ask about a
-   *    session that is not itself. The device refusal above is untouched by it:
-   *    a device's token still carries `kind: 'remote'` and still lands in the
-   *    first branch, target or no target.
-   *  - **Unattended is refused**, because a routine at 03:00 driving somebody's
-   *    logged-in browser is the shape `surface.ts`'s
-   *    `not-permitted-unattended` was written from. A routine may still *offer*
-   *    to drive by posting an alert.
-   */
-  const mayDrive = (context: ToolContext, tool: string): void => {
-    if (callingSession(context) === null && context.caller.kind !== 'local') {
-      throw new Refused(
-        'not-granted',
-        `${tool} only works for the person at this machine. Driving a browser from a paired device is ` +
-          'not something this app does, and it will not be. Say what you would have opened and let them do it.',
-      )
-    }
-    if (context.attended === false) {
-      throw new Refused(
-        'not-permitted-unattended',
-        `${tool} drives a browser that holds the person's logins, and there is nobody at the machine to ` +
-          'watch it. Do not retry and do not look for another way. Say in your report what you would have ' +
-          'driven and why.',
-      )
-    }
+/**
+ * Everything driving refuses to do for a caller that is not the person at
+ * this keyboard.
+ *
+ * Both gates are checks here rather than sentences in an instruction file,
+ * and both are sharper versions of `DRIVING-MODE.md` §7's:
+ *
+ *  - **Remote is refused at every one of the five tools**, not only at the
+ *    handover. A paired phone that can make this Mac open a page, click
+ *    through it and raise a banner saying "type your password", inside his own
+ *    trusted app chrome, is a remote phishing primitive with the best possible
+ *    disguise. A remote `act` grant is a real thing somebody might hand out
+ *    (`surface.ts:92`); this must not ride in on it.
+ *  - **A session of this app's own is not that**, and this is the distinction
+ *    the 2026-08-21 review turns on. The refusal above is about a *device*
+ *    driving this machine. What he asked for is a *session* driving the window
+ *    that is attached to it:
+ *
+ *      > *"But driving other browsers should be for all of the sessions,
+ *      > regardless of even they are Commander, they are not Commander, they
+ *      > are from remote channel, they are from server… Other sessions can
+ *      > drive any connected browser which we allow to the session to drive."*
+ *
+ *    A session caller can name nothing but its own attached windows — see
+ *    {@link boundOf} — so what it holds is exactly the thing the person handed
+ *    it by attaching a window, and no more. It cannot reach the page next
+ *    door, it cannot enumerate what exists, and it has no way to ask about a
+ *    session that is not itself. The device refusal above is untouched by it:
+ *    a device's token still carries `kind: 'remote'` and still lands in the
+ *    first branch, target or no target.
+ *  - **Unattended is refused**, because a routine at 03:00 driving somebody's
+ *    logged-in browser is the shape `surface.ts`'s
+ *    `not-permitted-unattended` was written from. A routine may still *offer*
+ *    to drive by posting an alert.
+ */
+export function mayDrive(context: ToolContext, tool: string): void {
+  if (callingSession(context) === null && context.caller.kind !== 'local') {
+    throw new Refused(
+      'not-granted',
+      `${tool} only works for the person at this machine. Driving a browser from a paired device is ` +
+        'not something this app does, and it will not be. Say what you would have opened and let them do it.',
+    )
   }
+  if (context.attended === false) {
+    throw new Refused(
+      'not-permitted-unattended',
+      `${tool} drives a browser that holds the person's logins, and there is nobody at the machine to ` +
+        'watch it. Do not retry and do not look for another way. Say in your report what you would have ' +
+        'driven and why.',
+    )
+  }
+}
 
+export function browserTools(drive: BrowserDrive): ToolSpec[] {
   const openTool: ToolSpec = {
     id: 'browser.open',
     wire: 'browser_open',

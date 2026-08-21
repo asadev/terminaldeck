@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
-import type { IpcMain } from 'electron'
-import { browserTabContents } from './browser-tab'
+import { app, type IpcMain } from 'electron'
+import { captureDir } from './browser-capture-store'
+import { browserTabContents, browserTabProfile } from './browser-tab'
 import { BLANK_URL } from './browser-url'
 import type { DriveStatus } from './browser-drive'
 import { BrowserDrive } from './browser-driver'
@@ -392,6 +393,21 @@ export function registerBrowserDriveIpc(ipcMain: IpcMain, deps: BrowserDriveDeps
       )
     },
     contentsFor: (tabId) => browserTabContents(tabId),
+    /*
+     * Where a page's captured traffic is written: under the profile the tab was
+     * built in, inside the app's own data directory.
+     *
+     * An Isolated tab has no profile — its partition is in memory and dies with
+     * the process — so its runs are filed under `isolated`. They are still
+     * written to disk, deliberately: what is throwaway about an isolated tab is
+     * its *cookies*, and a harvest run whose output vanished with the tab would
+     * be a capture that captured nothing.
+     */
+    captureFolder: ({ viewId, runId }) => {
+      const profileId = browserTabProfile(viewId)
+      if (profileId === null) return null
+      return captureDir(app.getPath('userData'), profileId === '' ? 'isolated' : profileId, runId)
+    },
     publish: (status: DriveStatus) => deps.send(DRIVE_STATE_CHANNEL, status),
     now: () => Date.now(),
     ...(deps.openForSession

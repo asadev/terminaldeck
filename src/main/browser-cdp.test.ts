@@ -1,10 +1,13 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { cdpResourceType, cheapHeaders, RESOURCE_KINDS } from './browser-fetch-rules'
 import {
   ALLOWED_METHODS,
   DENIED_METHODS,
   isDrivableUrl,
+  SCREENED_FULFIL_HEADERS,
+  SCREENED_RESOURCE_TYPES,
   screenCommand,
   type DriveState,
 } from './browser-cdp'
@@ -108,7 +111,8 @@ describe('the deny list', () => {
       'DOM.setFileInputFiles', // reads his disk into a website
       'Browser.grantPermissions', // re-grants camera and microphone
       'Page.bringToFront', // focus belongs to the person
-      'Fetch.enable', // how an agent reads Authorization headers
+      'Fetch.continueWithAuth', // composes a password and sends it to a site
+      'Network.setExtraHTTPHeaders', // composes what his logged-in session sends
       'Runtime.evaluate', // the door a `browser.eval` tool would walk through
       'Page.navigate', // measured to bypass will-navigate entirely
     ]
@@ -132,12 +136,221 @@ describe('the deny list', () => {
     }
   })
 
-  it('allows exactly the input methods the driver needs', () => {
+  /**
+   * The arguments the two argument-checked methods need to pass.
+   *
+   * `Fetch.enable` and `Fetch.fulfillRequest` are the only entries on the
+   * allow-list that are not allowed *on their own* — being on the list is
+   * necessary and not sufficient, exactly as `Page.navigate` would be if it
+   * were ever added. Naming them here rather than loosening the loop is what
+   * keeps that visible: a third method growing an argument check will fail this
+   * test until somebody writes down what it takes.
+   */
+  const ARGUMENTS: Record<string, Record<string, unknown>> = {
+    'Fetch.enable': { patterns: [{ urlPattern: '*', resourceType: 'Image', requestStage: 'Request' }] },
+    'Fetch.fulfillRequest': { requestId: 'r1', responseCode: 200 },
+  }
+
+  it('allows exactly the methods the driver needs, given arguments it would send', () => {
     for (const method of ALLOWED_METHODS) {
-      expect(screenCommand({ ...agent, method }).ok).toBe(true)
+      const verdict = screenCommand({ ...agent, method, params: ARGUMENTS[method] ?? {} })
+      expect(verdict.ok, `${method} was refused`).toBe(true)
     }
     expect(ALLOWED_METHODS).toContain('Input.dispatchMouseEvent')
     expect(ALLOWED_METHODS).toContain('Input.insertText')
+    // The two halves of harvesting, which used to be denied outright.
+    expect(ALLOWED_METHODS).toContain('Fetch.fulfillRequest')
+    expect(ALLOWED_METHODS).toContain('Network.getResponseBody')
+  })
+})
+
+describe('request interception, which is allowed and is argument-checked', () => {
+  const agent = { state: 'agent' as DriveState }
+
+  /*
+   * `Fetch.enable` was on the deny-list until 2026-08-21, with the reason *"how
+   * an agent ends up reading Authorization headers off somebody's logged-in
+   * session"*. It moved, because answering an image request cheaply is the only
+   * way to harvest a lazy-loading page without losing it — see the header of
+   * `browser-cdp.ts` and the 16,498 floor plans behind it.
+   *
+   * The header argument is answered by construction rather than by refusal, and
+   * the construction is asserted in `browser-network.test.ts`: nothing reads a
+   * request's headers. What is asserted *here* is the part that is a rule — the
+   * arguments that would turn "answer a request" into something else.
+   */
+  it('lets the driver arm interception for the kinds a rule can name', () => {
+    const verdict = screenCommand({
+      ...agent,
+      method: 'Fetch.enable',
+      params: {
+        patterns: [
+          { urlPattern: '*', resourceType: 'Image', requestStage: 'Request' },
+          { urlPattern: '*', resourceType: 'Font', requestStage: 'Request' },
+        ],
+      },
+    })
+    expect(verdict.ok).toBe(true)
+  })
+
+  it('refuses interception with no patterns, because that pauses the document too', () => {
+    for (const params of [{}, { patterns: [] }]) {
+      const verdict = screenCommand({ ...agent, method: 'Fetch.enable', params })
+      expect(verdict.ok).toBe(false)
+      if (!verdict.ok) expect(verdict.reason).toContain('including the document')
+    }
+  })
+
+  it('refuses a pattern that names the page’s own document', () => {
+    const verdict = screenCommand({
+      ...agent,
+      method: 'Fetch.enable',
+      params: { patterns: [{ urlPattern: '*', resourceType: 'Document', requestStage: 'Request' }] },
+    })
+    expect(verdict.ok).toBe(false)
+  })
+
+  it('refuses response-stage interception, which is a larger power than pausing a request', () => {
+    const verdict = screenCommand({
+      ...agent,
+      method: 'Fetch.enable',
+      params: { patterns: [{ urlPattern: '*', resourceType: 'XHR', requestStage: 'Response' }] },
+    })
+    expect(verdict.ok).toBe(false)
+  })
+
+  it('refuses handling authentication, because the call that answers one is denied', () => {
+    const verdict = screenCommand({
+      ...agent,
+      method: 'Fetch.enable',
+      params: {
+        handleAuthRequests: true,
+        patterns: [{ urlPattern: '*', resourceType: 'Image', requestStage: 'Request' }],
+      },
+    })
+    expect(verdict.ok).toBe(false)
+    // And the other half stays shut, so neither exists without the other.
+    expect(DENIED_METHODS).toContain('Fetch.continueWithAuth')
+  })
+
+  /*
+   * Letting a request through is the harmless-sounding half of interception,
+   * and `url`, `method`, `postData` and `headers` all replace what the page
+   * asked for. A `continueRequest` carrying headers is this app composing an
+   * `Authorization` header on a request in his logged-in session — the exact
+   * power the old deny-list entry was about, reached through the door nobody
+   * was watching.
+   */
+  it('lets a paused request through, exactly as the driver sends it', () => {
+    expect(screenCommand({ ...agent, method: 'Fetch.continueRequest', params: { requestId: 'r1' } }).ok).toBe(true)
+  })
+
+  it.each([
+    ['url', 'https://elsewhere.example/'],
+    ['method', 'POST'],
+    ['postData', 'x=1'],
+    ['headers', [{ name: 'authorization', value: 'Bearer stolen' }]],
+  ])('refuses a continue that rewrites %s', (key, value) => {
+    const verdict = screenCommand({
+      ...agent,
+      method: 'Fetch.continueRequest',
+      params: { requestId: 'r1', [key]: value },
+    })
+    expect(verdict.ok).toBe(false)
+    if (!verdict.ok) expect(verdict.reason).toContain('but not rewritten')
+  })
+
+  it('refuses a continue that asks to intercept the response as well', () => {
+    const verdict = screenCommand({
+      ...agent,
+      method: 'Fetch.continueRequest',
+      params: { requestId: 'r1', interceptResponse: true },
+    })
+    expect(verdict.ok).toBe(false)
+  })
+
+  /*
+   * The sharpest of the new checks.
+   *
+   * `Fetch.fulfillRequest` writes a response **into his session**. A
+   * `set-cookie` on one is this app minting a cookie in a jar he is signed into
+   * — invisibly, from a tool call — and a `location` is it redirecting him. An
+   * allow-list of header names is what keeps "answer an image cheaply" unable
+   * to be anything else.
+   */
+  it('lets a cheap answer carry the headers a placeholder needs', () => {
+    const verdict = screenCommand({
+      ...agent,
+      method: 'Fetch.fulfillRequest',
+      params: { requestId: 'r1', responseCode: 200, responseHeaders: cheapHeaders('image/png', 71) },
+    })
+    expect(verdict.ok).toBe(true)
+  })
+
+  it.each([
+    ['set-cookie', 'session=stolen'],
+    ['Set-Cookie', 'session=stolen'],
+    ['location', 'https://elsewhere.example/'],
+    ['content-security-policy', "default-src 'none'"],
+  ])('refuses a cheap answer carrying %s', (name, value) => {
+    const verdict = screenCommand({
+      ...agent,
+      method: 'Fetch.fulfillRequest',
+      params: { requestId: 'r1', responseCode: 200, responseHeaders: [{ name, value }] },
+    })
+    expect(verdict.ok).toBe(false)
+  })
+
+  it('refuses a pre-encoded header block, which would walk past the name check', () => {
+    const verdict = screenCommand({
+      ...agent,
+      method: 'Fetch.fulfillRequest',
+      params: {
+        requestId: 'r1',
+        responseCode: 200,
+        binaryResponseHeaders: Buffer.from('set-cookie: a=b').toString('base64'),
+      },
+    })
+    expect(verdict.ok).toBe(false)
+  })
+
+  it.each([301, 302, 401, 404, 500])('refuses answering cheaply with %i', (responseCode) => {
+    const verdict = screenCommand({
+      ...agent,
+      method: 'Fetch.fulfillRequest',
+      params: { requestId: 'r1', responseCode },
+    })
+    expect(verdict.ok).toBe(false)
+  })
+
+  /*
+   * The gate spells its own vocabulary rather than importing it from the module
+   * it polices — a security check that reads its table out of the policed module
+   * can be widened by editing that module. This is what keeps the two
+   * statements one truth.
+   */
+  it('screens exactly the resource kinds the rules module can produce', () => {
+    expect([...SCREENED_RESOURCE_TYPES].sort()).toEqual(
+      RESOURCE_KINDS.map(cdpResourceType).sort(),
+    )
+    expect(SCREENED_RESOURCE_TYPES).not.toContain('Document')
+  })
+
+  it('screens every header a cheap answer actually sends', () => {
+    for (const header of cheapHeaders('image/png', 0)) {
+      expect(SCREENED_FULFIL_HEADERS).toContain(header.name)
+    }
+    expect(SCREENED_FULFIL_HEADERS).not.toContain('set-cookie')
+  })
+
+  it('still refuses the whole capture path while the person has the page', () => {
+    // Which is why `PageNetwork.suspend` disarms *before* the baton moves: a
+    // paused request that cannot be answered is a page that never loads, and
+    // handing him one of those to type a password into would be the worst
+    // version of this feature.
+    for (const method of ['Fetch.enable', 'Fetch.fulfillRequest', 'Network.getResponseBody']) {
+      expect(screenCommand({ state: 'human', method }).ok).toBe(false)
+    }
   })
 })
 

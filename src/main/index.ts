@@ -193,6 +193,7 @@ import { currentOpenShim, removeOpenShim, writeOpenShim } from './open-shim'
 import { bootMapFor, writeAppContext } from './app-context'
 import { describeThisMachine } from './remote/machines/guest'
 import { browserDrive, registerBrowserDriveIpc } from './browser-drive-ipc'
+import { browserNetworkTool } from './deck-control/browser-network-tool'
 import { browserTools } from './deck-control/browser-tools'
 import { registerChromeImportIpc } from './chrome-import'
 import { registerPrerequisitesIpc } from './prerequisites'
@@ -1529,7 +1530,11 @@ function reportRestore(decisions: readonly RestoreDecision[]): void {
  */
 function browserDriveTools(): ReturnType<typeof browserTools> {
   const drive = browserDrive()
-  return drive === null ? [] : browserTools(drive)
+  // `browser.network` is contributed here rather than from `browserTools()` so
+  // that the harvesting capability lives in its own file — see
+  // `deck-control/browser-network-tool.ts`. It closes over the same drive and is
+  // gated by the same `mayDrive` as the six.
+  return drive === null ? [] : [...browserTools(drive), browserNetworkTool(drive)]
 }
 
 /**

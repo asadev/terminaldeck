@@ -93,10 +93,16 @@ import { NO_TIERS, type Caller, type TierGrant } from './surface'
  * because the wire name and the dotted id are two names for one tool and a
  * caller picks which to send.
  *
- * Eight ids, and the list is written out rather than derived from
- * `browserTools()` on purpose: derivation would mean a ninth tool added to
- * that file one day silently becoming something every session on the machine
- * could call. A grant is a thing somebody writes down.
+ * The list is written out rather than derived from `browserTools()` on
+ * purpose: derivation would mean a tool added to that file one day silently
+ * becoming something every session on the machine could call. A grant is a
+ * thing somebody writes down — which is why `browser.network` is on it as two
+ * more lines rather than as a wildcard.
+ *
+ * The count used to be stated here and is not any more. Two lanes on
+ * 2026-08-21 each added to this list and each left the other's number behind,
+ * which is the failure a written-down number invites. `catalogue.ts` measures
+ * the real one and fails on a budget; that is the place for it.
  *
  * ## The two that were added for worker profiles, and the one that was not
  *
@@ -134,8 +140,7 @@ import { NO_TIERS, type Caller, type TierGrant } from './surface'
  * A `browser.lift` beside it would turn that gesture into a request an agent
  * can make in a retry loop, and a tool that copies a login between profiles is
  * a tool that exfiltrates one. The honest answer for that half of the feature
- * is that it is UI and a human gesture, and it is not on this list.
- */
+ * is that it is UI and a human gesture, and it is not on this list. */
 export const SESSION_TOOLS: ReadonlySet<string> = new Set([
   'browser.open',
   'browser_open',
@@ -153,6 +158,20 @@ export const SESSION_TOOLS: ReadonlySet<string> = new Set([
   'browser_workers',
   'browser.worker',
   'browser_worker',
+  /*
+   * Harvesting, added 2026-08-21, and it belongs to a session as much as to the
+   * copilot — arguably more. The person who runs a scrape runs it from a
+   * terminal, in a session, against a window they attached by hand; a grant
+   * that let the copilot arm a page and not the session doing the work would be
+   * the capability in the wrong hands by exactly one seat.
+   *
+   * It reaches nothing new. `browser-network-tool.ts` resolves its target
+   * through the same `boundOf` as the other six, so a session can arm only a
+   * window that was attached to it, and the capture folder is chosen by the
+   * app from the tab's own profile rather than by anything the caller says.
+   */
+  'browser.network',
+  'browser_network',
 ])
 
 /**
