@@ -89,7 +89,6 @@ const NO_MACHINE_ACTIONS: MachineActions = {
   disconnect: () => {},
   forget: () => {},
   open: () => {},
-  close: () => {},
   openPort: () => {},
   refreshPorts: () => {},
 }
@@ -133,7 +132,6 @@ function machinesHalf(over: Partial<MachinesHalf> = {}): MachinesHalf {
     view: { machines: [], links: [], here: '', blocked: null },
     reading: false,
     entry: { digits: '', busy: false, error: null, blocked: null },
-    open: null,
     actions: NO_MACHINE_ACTIONS,
     ...over,
   }
@@ -1012,10 +1010,14 @@ describe('the merge', () => {
     expect(both).toContain('Connected')
     expect(both).toContain('PC')
     expect(both).toContain(STUDIO.fingerprint)
-    // And what is running on it, as a control that opens it.
+    // And what is running on it, as a control that opens it — in the window.
+    // `aria-pressed="false"` was asserted on this row until the panel stopped
+    // drawing a terminal of its own: it was a toggle over that terminal, and a
+    // press that hands the session to the window has no pressed state to report.
     expect(both).toContain('agent')
     expect(both).toContain('…/projects/deck')
-    expect(both).toContain('aria-pressed="false"')
+    expect(both).toContain('machines-session-open')
+    expect(both).not.toContain('aria-pressed')
   })
 
   it('offers Connect instead when the link is down, and says what to do while it waits', () => {
@@ -1038,22 +1040,37 @@ describe('the merge', () => {
     expect(offline).not.toContain('in the desktop app')
   })
 
-  it('opens a session as a terminal in the same section', () => {
-    const open = render({
+  it('opens a session in the window’s view rather than in a second one here', () => {
+    /*
+     * This case used to say the opposite, and it was right about the code and
+     * wrong about the product.
+     *
+     * It rendered the section with `open` and a `pane` node and asserted
+     * `machines-pane`, `pane-stand-in`, `aria-pressed="true"` and a Close — the
+     * head of a remote session's terminal *inside this panel*, carrying a title
+     * and a folder and nothing else. The same session opened from the rail gets
+     * the control cluster, the usage bar, the account chip and the
+     * Terminal/Chat/Split switch. Two doors, and the one a person reaches by
+     * going to look at the machine opened onto less.
+     *
+     * *"every time I tell you I want exactly same identical view of every type
+     * of session inside, including remote session, including local session."*
+     * So the row is a way in and the section draws no session view at all:
+     * `MachinesHalf` no longer has an `open` or a `pane` to hand it one, and
+     * `machines/one-session-view.test.ts` pins where the press lands instead.
+     */
+    const listed = render({
       state: RUNNING,
       machines: machinesHalf({
         view: { machines: [STUDIO], links: [STUDIO_LINK], here: '', blocked: null },
-        open: { machineId: 'MACHINE1', sessionId: 's1' },
-        // The real one builds an xterm against a DOM, which is why it arrives
-        // as a node rather than being built by the view.
-        pane: <div className="pane-stand-in" />,
       }),
     })
-    expect(open).toContain('machines-pane')
-    expect(open).toContain('pane-stand-in')
-    expect(open).toContain('/Users/a/projects/deck')
-    expect(open).toContain('aria-pressed="true"')
-    expect(open).toContain('>Close</button>')
+    expect(listed).toContain('machines-session-open')
+    expect(listed).toContain('…/projects/deck')
+    expect(listed, 'the Remote panel is drawing a session view of its own again').not.toContain(
+      'machines-pane',
+    )
+    expect(listed).not.toContain('>Close</button>')
   })
 
   it('says so plainly when this build cannot reach the machine channels', () => {

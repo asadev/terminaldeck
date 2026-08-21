@@ -7,12 +7,8 @@ import { errorText } from '../settings/settings-bridge'
 import { detectPlatform, machineNoun, thisMachine, type UiPlatform } from '../platform'
 import { CODE_LENGTH, normaliseCode } from '../../shared/short-code'
 import { CodeEntry } from '../machines/CodeEntry'
-import {
-  MachineLinks,
-  MachineSessionPane,
-  machineActions,
-  type MachinesHalf,
-} from '../machines/MachineLinks'
+import { MachineLinks, machineActions, type MachinesHalf } from '../machines/MachineLinks'
+import { useMachineSessionView } from '../machines/session-view-context'
 import { asView, resolveBridge, type MachinesBridge, type MachinesView } from '../machines/types'
 import { DeviceFolders, type FolderDevice } from './DeviceFolders'
 import { DeviceSessions, type SessionDevice } from './DeviceSessions'
@@ -2598,6 +2594,17 @@ export function RemoteSection({ bridge: provided, machines: providedMachines }: 
    * argument, and it is the part worth reading before deleting the file.
    */
 
+  /**
+   * The window's one session view, or null when this page has no window.
+   *
+   * Not to be confused with the opener the paragraph above is about — that one
+   * *starts* a session on a far machine and has no readers; this one *shows* one
+   * that is already running, and is what a session row on a machine's card
+   * presses. `machines/session-view-context.ts` states the difference at the
+   * top, because the two names are one word apart.
+   */
+  const sessionView = useMachineSessionView()
+
   const [machineView, setMachineView] = useState<MachinesView>({
     machines: [],
     links: [],
@@ -2610,10 +2617,22 @@ export function RemoteSection({ bridge: provided, machines: providedMachines }: 
   const [typed, setTyped] = useState('')
   const [pairingMachine, setPairingMachine] = useState(false)
   const [pairError, setPairError] = useState<string | null>(null)
-  const [openSession, setOpenSession] = useState<{
-    machineId: string
-    sessionId: string
-  } | null>(null)
+  /*
+   * An `openSession` state stood here, and with it a `MachineSessionPane` built
+   * below and handed to `MachineLinks` as a node: which session on which machine
+   * this panel had a terminal open for, under the list, with a Close over it.
+   *
+   * That was the second in-session view — a remote session with a title, a
+   * folder and nothing else, while the same session in the window carries the
+   * control cluster, the usage bar, the account chip and the mode switch. It is
+   * gone; `machines/session-view-context.ts` carries the argument and
+   * `machines/one-session-view.test.ts` holds it out.
+   *
+   * The window mounts that terminal, once, for as long as the window lives —
+   * which is also why this panel must not mount a second copy of it: unmounting
+   * a far machine's terminal detaches from the machine, and coming back is
+   * answered with the whole scrollback replayed.
+   */
 
   const alive = useRef(true)
   useEffect(() => {
@@ -2839,18 +2858,6 @@ export function RemoteSection({ bridge: provided, machines: providedMachines }: 
       error: pairError,
       blocked: machineView.blocked,
     },
-    open: openSession,
-    pane:
-      machineBridge !== null && openSession !== null ? (
-        <MachineSessionPane
-          // Keyed, so switching sessions builds a new terminal rather than
-          // writing the next session's bytes into the last one's scrollback.
-          key={`${openSession.machineId}\u0000${openSession.sessionId}`}
-          machineId={openSession.machineId}
-          sessionId={openSession.sessionId}
-          bridge={machineBridge}
-        />
-      ) : undefined,
     actions: machineActions({
       bridge: machineBridge,
       digits: typed,
@@ -2858,7 +2865,16 @@ export function RemoteSection({ bridge: provided, machines: providedMachines }: 
       setView: setMachineView,
       setPairing: setPairingMachine,
       setError: setPairError,
-      setOpen: setOpenSession,
+      /*
+       * Null when this page is not inside a window — a unit test, or any tree
+       * that mounts the panel on its own. The session rows then draw what they
+       * know as text and no button, rather than a button with nowhere to send
+       * the press. See `session-view-context.ts`.
+       */
+      showSession:
+        sessionView === null
+          ? null
+          : (machineId, sessionId) => sessionView.show(machineId, sessionId),
       isAlive: () => alive.current,
     }),
   }

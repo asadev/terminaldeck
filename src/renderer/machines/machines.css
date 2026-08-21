@@ -164,7 +164,13 @@
   list-style: none;
 }
 
-.machines-session-open {
+/* The row a person presses to open that session in the window, and — where
+   there is no window around this page — the same three facts with no press on
+   them. One layout block for both, because the difference between them is what
+   happens on a click and must not also be a difference in where the text sits.
+   Everything below that promises interaction stays on the button alone. */
+.machines-session-open,
+.machines-session-line {
   display: flex;
   align-items: baseline;
   gap: var(--sp-3);
@@ -178,21 +184,22 @@
   font-family: inherit;
   font-size: var(--t-callout);
   text-align: left;
-  cursor: pointer;
   transition: background var(--dur-fast) var(--ease);
 }
 
-/* A hover state is a promise, so it is only on the control that keeps it. */
+/* Everything that promises a press is on the button and nowhere else — the
+   cursor included, which is the first of the four a person meets. A hover state
+   is a promise, and so is a hand. */
+.machines-session-open {
+  cursor: pointer;
+}
+
 .machines-session-open:hover {
   background: var(--bg-hover);
 }
 
 .machines-session-open:active {
   background: var(--bg-active);
-}
-
-.machines-session-open[aria-pressed='true'] {
-  background: var(--accent-soft);
 }
 
 .machines-session-open:focus-visible {
@@ -338,46 +345,14 @@
   color: var(--text-secondary);
 }
 
-/* --------------------------------------------------------------- pane -- */
+/* ----------------------------------------------------------- terminal -- */
 
-/* The session itself, under the list. It gets the full width of the section
-   rather than a column beside the list: a terminal squeezed into a column is
-   the thing this app's whole layout pass was about. */
-.machines-pane {
-  display: flex;
-  flex-direction: column;
-  min-height: 20rem;
-  margin: var(--sp-3) 0 0;
-  border-radius: var(--radius-lg);
-  overflow: hidden;
-  background: var(--terminal-bg);
-}
-
-.machines-pane-head {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-3);
-  padding: var(--sp-2) var(--sp-3);
-  background: var(--fill-quaternary);
-}
-
-.machines-pane-title {
-  font-size: var(--t-callout);
-  font-weight: var(--w-medium);
-  color: var(--text-primary);
-}
-
-.machines-pane-path {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-family: var(--font-mono);
-  font-size: var(--t-footnote);
-  color: var(--text-muted);
-}
-
+/* A `.machines-pane` and its head — title, folder, Close — stood here, styling
+   the terminal this panel used to draw under the list. That was the app's second
+   in-session view and it is gone; `MachineLinks.tsx` carries why. What is left
+   is the terminal's own body, which is still this file's because
+   `RemoteTerminal` is still a machines component — the window mounts it, in
+   `.remote-pane` (see `shell/shell.css`), and keeps it mounted. */
 .machines-terminal {
   flex: 1;
   min-height: 0;

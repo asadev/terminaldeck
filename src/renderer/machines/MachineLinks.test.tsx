@@ -72,7 +72,6 @@ const NOTHING: MachineActions = {
   disconnect: () => {},
   forget: () => {},
   open: () => {},
-  close: () => {},
   openPort: () => {},
   refreshPorts: () => {},
 }
@@ -124,7 +123,6 @@ function row(state: MachineLinkState, overrides: Partial<Machine> = {}): string 
     <MachineRow
       machine={machine(overrides)}
       link={state}
-      openSessionId={null}
       actions={NOTHING}
       platform="mac"
     />,
@@ -137,7 +135,6 @@ function half(over: Partial<MachinesHalf> = {}): MachinesHalf {
     view: { machines: [], links: [], here: '', blocked: null },
     reading: false,
     entry: { digits: '', busy: false, error: null, blocked: null },
-    open: null,
     actions: NOTHING,
     ...over,
   }
@@ -309,23 +306,94 @@ describe('what the card may press', () => {
 })
 
 describe('a session row', () => {
-  it('is a control that says whether it is the one open', () => {
-    const session = {
-      id: 's1',
-      title: 'agent',
-      cwd: '/Users/a/projects/deck',
-      provider: 'claude',
-      status: 'running',
-      exitCode: null,
-    }
-    const closed = renderToStaticMarkup(
-      <SessionRow session={session} open={false} onOpen={() => {}} onClose={() => {}} />,
-    )
-    const open = renderToStaticMarkup(
-      <SessionRow session={session} open onOpen={() => {}} onClose={() => {}} />,
-    )
-    expect(closed).toContain('aria-pressed="false"')
-    expect(open).toContain('aria-pressed="true"')
+  const SESSION = {
+    id: 's1',
+    title: 'agent',
+    cwd: '/Users/a/projects/deck',
+    provider: 'claude',
+    status: 'running',
+    exitCode: null,
+  }
+
+  /*
+   * It was a toggle — `aria-pressed`, pressed again to put the terminal away —
+   * and both halves of that went with the terminal this panel used to draw. A
+   * press hands the session to the window now, and a second press on a session
+   * already on screen has nothing to undo, so a pressed state here would be a
+   * claim this row cannot check.
+   */
+  it('is a plain way in, not a toggle over a terminal in this panel', () => {
+    const markup = renderToStaticMarkup(<SessionRow session={SESSION} onOpen={() => {}} />)
+    expect(markup).toContain('<button')
+    expect(markup).toContain('agent')
+    expect(markup).toContain('…/projects/deck')
+    expect(markup, 'the row claims a pressed state it cannot know').not.toContain('aria-pressed')
+  })
+
+  it('draws the facts and no button where there is no window to open it in', () => {
+    /*
+     * The rule this file's whole `open` route follows: a control that cannot act
+     * must be *absent*. A button with a no-op handler would look identical, keep
+     * its hover and its focus ring, and swallow the press.
+     */
+    const markup = renderToStaticMarkup(<SessionRow session={SESSION} onOpen={null} />)
+    expect(markup).not.toContain('<button')
+    expect(markup).toContain('machines-session-line')
+    // And still says what is running there, because that is a fact about the
+    // machine rather than an offer.
+    expect(markup).toContain('agent')
+    expect(markup).toContain('running')
+  })
+
+  it('sends the press to the window with both handles', () => {
+    // `machineTabId` joins them in `App.tsx` and only there — see
+    // `session-view-context.ts`. A row that pre-joined them would be a second
+    // place that knows how.
+    const shown: [string, string][] = []
+    const actions = machineActions({
+      bridge: NOOP_BRIDGE,
+      digits: '',
+      setDigits: () => {},
+      setView: () => {},
+      setPairing: () => {},
+      setError: () => {},
+      showSession: (machineId, sessionId) => shown.push([machineId, sessionId]),
+      isAlive: () => true,
+    })
+    actions.open?.('MACHINE1', 's1')
+    expect(shown).toEqual([['MACHINE1', 's1']])
+  })
+
+  it('has no way to open one at all when the window is not there', () => {
+    /*
+     * Absent, not present-and-refusing. `MachineRow` reads
+     * `actions.open === undefined` to decide whether to draw a button, so a
+     * no-op `open` would put a dead control on every session row of every tree
+     * that mounts this panel outside a window.
+     */
+    const actions = machineActions({
+      bridge: NOOP_BRIDGE,
+      digits: '',
+      setDigits: () => {},
+      setView: () => {},
+      setPairing: () => {},
+      setError: () => {},
+      showSession: null,
+      isAlive: () => true,
+    })
+    expect(actions.open).toBeUndefined()
+    expect(Object.keys(actions)).not.toContain('open')
+  })
+
+  it('keeps no close of its own, because it closes nothing', () => {
+    /*
+     * `close()` emptied this panel's `open` state — what the Close over the
+     * embedded terminal pressed. Ending a session on a far machine is the ✕ on
+     * its pill or its rail row, which is a real close on that machine; a `close`
+     * left on these actions would be the second, weaker meaning of the word back
+     * on the same screen.
+     */
+    expect(Object.keys(NOTHING)).not.toContain('close')
   })
 })
 
@@ -351,7 +419,25 @@ describe('the list', () => {
     expect(markup).not.toContain('No other machine yet')
   })
 
-  it('puts the terminal it was handed under the machine whose session is open', () => {
+  it('lists what is running on a machine as ways into the window, not as a terminal', () => {
+    /*
+     * This case is the inverse of the one it replaces, and the replacement is
+     * the change rather than a tidy-up.
+     *
+     * What stood here rendered the panel with `open` and a `pane` node and
+     * asserted `machines-pane`, `pane-stand-in` and `>Close</button>` — the
+     * head of a *second* in-session view: a remote session's terminal drawn
+     * inside the Remote panel with a title, a folder and a Close, and none of
+     * the bar the same session has in the window. A sibling case pinned that
+     * the head disappeared when the far machine ended the session, which was a
+     * real bug in a surface that should not have existed.
+     *
+     * *"every time I tell you I want exactly same identical view of every type
+     * of session inside, including remote session, including local session."*
+     * There is one view now and it is the window's;
+     * `machines/one-session-view.test.ts` holds the wiring that gets a press
+     * there, and this holds the markup: a row, and nothing under the list.
+     */
     const markup = renderToStaticMarkup(
       <MachineLinks
         half={half({
@@ -374,33 +460,17 @@ describe('the list', () => {
             here: '',
             blocked: null,
           },
-          open: { machineId: 'MACHINE1', sessionId: 's1' },
-          pane: <div className="pane-stand-in" />,
         })}
         platform="mac"
       />,
     )
-    expect(markup).toContain('machines-pane')
-    expect(markup).toContain('pane-stand-in')
-    expect(markup).toContain('>Close</button>')
-  })
-
-  it('draws no pane for a session that is not in the link any more', () => {
-    // Reachable: the far machine ends the session while its terminal is open.
-    // A head with a Close button over an empty box would claim a session that
-    // no longer exists.
-    const markup = renderToStaticMarkup(
-      <MachineLinks
-        half={half({
-          view: { machines: [machine()], links: [link()], here: '', blocked: null },
-          open: { machineId: 'MACHINE1', sessionId: 'gone' },
-          pane: <div className="pane-stand-in" />,
-        })}
-        platform="mac"
-      />,
+    expect(markup).toContain('machines-session-open')
+    expect(markup).toContain('agent')
+    expect(markup).toContain('…/projects/deck')
+    expect(markup, 'the panel is drawing a session view of its own again').not.toContain(
+      'machines-pane',
     )
-    expect(markup).not.toContain('pane-stand-in')
-    expect(markup).not.toContain('machines-pane')
+    expect(markup).not.toContain('>Close</button>')
   })
 })
 
@@ -485,7 +555,7 @@ function pressing(bridge: MachinesBridge | null, digits = ''): {
     setError: (next) => {
       state.error = next
     },
-    setOpen: () => {},
+    showSession: () => {},
     isAlive: () => true,
   })
   // Nothing here returns its promise, which is the point — these are presses.
@@ -796,7 +866,7 @@ describe('letting a machine act on browser windows here', () => {
 
   it('is off until somebody says otherwise', () => {
     const html = renderToStaticMarkup(
-      <MachineRow machine={machine()} link={link()} openSessionId={null} actions={withSwitch} />,
+      <MachineRow machine={machine()} link={link()} actions={withSwitch} />,
     )
     expect(html).toContain('act on browser windows here')
     // An unchecked box, and it has to be *rendered* unchecked: a store that
@@ -810,8 +880,7 @@ describe('letting a machine act on browser windows here', () => {
       <MachineRow
         machine={machine({ drivesWindows: true })}
         link={link()}
-        openSessionId={null}
-        actions={withSwitch}
+          actions={withSwitch}
       />,
     )
     expect(html).toContain('checked=""')
@@ -826,7 +895,7 @@ describe('letting a machine act on browser windows here', () => {
      * anything is not drawn.
      */
     const html = renderToStaticMarkup(
-      <MachineRow machine={machine()} link={link()} openSessionId={null} actions={NOTHING} />,
+      <MachineRow machine={machine()} link={link()} actions={NOTHING} />,
     )
     expect(html).not.toContain('act on browser windows here')
   })
@@ -837,7 +906,7 @@ describe('letting a machine act on browser windows here', () => {
     // no capability list and "it did not say" would be a claim about silence.
     const on = machine({ drivesWindows: true })
     const said = renderToStaticMarkup(
-      <MachineRow machine={on} link={link()} openSessionId={null} actions={withSwitch} />,
+      <MachineRow machine={on} link={link()} actions={withSwitch} />,
     )
     expect(said).toContain('cannot ask')
 
@@ -845,8 +914,7 @@ describe('letting a machine act on browser windows here', () => {
       <MachineRow
         machine={on}
         link={link({ capabilities: ['create', 'windows'] })}
-        openSessionId={null}
-        actions={withSwitch}
+          actions={withSwitch}
       />,
     )
     expect(able).not.toContain('cannot ask')
@@ -855,8 +923,7 @@ describe('letting a machine act on browser windows here', () => {
       <MachineRow
         machine={on}
         link={link({ state: 'offline', capabilities: [] })}
-        openSessionId={null}
-        actions={withSwitch}
+          actions={withSwitch}
       />,
     )
     expect(away).not.toContain('cannot ask')
@@ -882,7 +949,7 @@ describe('letting a machine act on browser windows here', () => {
       setView: (view) => seen.push(view),
       setPairing: () => {},
       setError: () => {},
-      setOpen: () => {},
+      showSession: () => {},
       isAlive: () => true,
     })
     actions.setDrivesWindows?.(machine(), true)
