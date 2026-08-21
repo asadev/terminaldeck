@@ -14,9 +14,11 @@ import {
   passwordsAvailable,
   profilesAvailable,
   readLoginList,
+  readPasswordStoreState,
   readProfileState,
   resolveAccountsApi,
   type AccountsApi,
+  type PasswordStoreState,
   type ProfileState,
   type SavedLoginSummary,
 } from '../../browser/accounts-bridge'
@@ -375,7 +377,17 @@ export function savedSummary(count: number, profileName: string): string {
  * `keptSummary` carries one: an irreversible button that names no quantity is
  * asking for a decision about an unknown.
  */
-export function forgetAllConfirmText(total: number): string {
+export function forgetAllConfirmText(total: number, faulted = false): string {
+  /*
+   * A faulted store has a count of zero, because nothing was read out of it —
+   * so the ordinary sentence would ask somebody to confirm forgetting "all 0
+   * saved passwords", which is both nonsense and a lie about what is in the
+   * file. What is actually being deleted is a file whose contents cannot be
+   * trusted and cannot be counted, and that is what this says.
+   */
+  if (faulted) {
+    return 'Delete the saved-login file? Its contents did not verify, so what is in it is unknown, and this cannot be undone.'
+  }
   if (total === 1) return 'Forget the one saved password? This is across every profile and cannot be undone.'
   return `Forget all ${total} saved passwords? This is across every profile and cannot be undone.`
 }
@@ -487,6 +499,11 @@ export function BrowserSection({ values, save, bridge, loading, accounts }: Brow
   /** Every profile's, not the active one's — what "Forget them all" acts on. */
   const [loginTotal, setLoginTotal] = useState(0)
   const [canStore, setCanStore] = useState<boolean | null>(null)
+  /**
+   * Where the store is and whether it verified. Null until the answer lands and
+   * on a preload that has no such channel, and nothing is drawn from it then.
+   */
+  const [store, setStore] = useState<PasswordStoreState | null>(null)
   const [confirmForgetAll, setConfirmForgetAll] = useState(false)
   const [loginNote, setLoginNote] = useState<string | null>(null)
 
@@ -745,7 +762,26 @@ export function BrowserSection({ values, save, bridge, loading, accounts }: Brow
 
   useEffect(loadLogins, [loadLogins])
 
+  /*
+   * Three facts about the store, from one call where the preload has it.
+   *
+   * `browser-password:state` answers whether saving works, where the file is,
+   * and whether that file verified. The older `:available` channel answers only
+   * the first, and is kept as the fallback so a preload from before this update
+   * still draws a correct — if quieter — panel rather than an empty one.
+   */
   useEffect(() => {
+    if (api.browserPasswordState) {
+      void api.browserPasswordState().then(
+        (raw) => {
+          const read = readPasswordStoreState(raw)
+          setStore(read)
+          setCanStore(read === null ? null : read.available)
+        },
+        () => setStore(null),
+      )
+      return
+    }
     if (!api.browserPasswordsAvailable) return
     void api.browserPasswordsAvailable().then(
       (value) => setCanStore(value === true),
@@ -772,6 +808,13 @@ export function BrowserSection({ values, save, bridge, loading, accounts }: Brow
     void api.browserPasswordForgetAll().then(
       () => {
         setLoginNote('Every saved password has been removed.')
+        // The file is gone, so a fault reported from it is gone too — and this
+        // is the button the fault's own sentence points at. Leaving the warning
+        // on screen after pressing it is a control that appears not to work.
+        void api.browserPasswordState?.().then(
+          (raw) => setStore(readPasswordStoreState(raw)),
+          () => undefined,
+        )
         loadLogins()
       },
       (cause: unknown) => setLoginNote(errorText(cause, 'Could not remove the saved passwords.')),
@@ -1280,8 +1323,58 @@ export function BrowserSection({ values, save, bridge, loading, accounts }: Brow
               password to a subdomain somebody else controls.
             */}
             <p className="settings-prose">
-              Kept in this machine’s secure store, and offered back only on the site they came from.
+              Kept in this machine’s secure store, and offered back only on the site they came
+              from. A page an agent opened is never filled in automatically — the browser offers
+              the login on the page instead, and it goes in when you press it.
             </p>
+
+            {/*
+              What is stored, and where it is.
+
+              "This machine’s secure store" is a sentence that sounds like an
+              answer and is not one: it names no file, nothing to look at and
+              nothing to delete. This names the file, says what is in it, and
+              puts a button next to it — because a path in a paragraph is
+              something somebody has to select, copy and paste into a Go-to-Folder
+              box, and the same information with the work already done is one
+              press. See `browser-passwords.ts` for what the bytes are.
+            */}
+            {store !== null && store.path !== '' && (
+              <p className="settings-prose">
+                One file, encrypted with a key held in this machine’s login keychain:{' '}
+                <code>{store.path}</code>. It holds the site, the username and the password of every
+                saved login, in every profile, and nothing else.{' '}
+                {store.exists && api.browserPasswordShowFile ? (
+                  <Button
+                    onClick={() => {
+                      void api.browserPasswordShowFile?.().then(
+                        (shown) =>
+                          setLoginNote(
+                            shown === true ? null : 'There is no file yet — nothing has been saved.',
+                          ),
+                        (cause: unknown) => setLoginNote(errorText(cause, 'Could not show the file.')),
+                      )
+                    }}
+                  >
+                    Show me the file
+                  </Button>
+                ) : null}
+              </p>
+            )}
+
+            {/*
+              A store that decrypted and then failed its own digest.
+
+              Drawn instead of, and above, everything else in this block — the
+              list below it is empty, and an empty list with no explanation is
+              read as "nothing was ever saved", which is the one conclusion that
+              makes somebody save it all again into a file being edited by
+              whoever edited it last. `browser-passwords.ts` measures why an
+              altered file is detectable at all.
+            */}
+            {store !== null && store.fault !== 'none' && (
+              <Notice tone="warn">{store.message}</Notice>
+            )}
 
             {/* `canStore` is null until the answer lands and on a machine that
                 cannot be asked, and this says nothing then. A warning about
@@ -1294,7 +1387,17 @@ export function BrowserSection({ values, save, bridge, loading, accounts }: Brow
               </Notice>
             )}
 
-            {activeProfile && logins !== null && (
+            {/*
+              Not while the store has faulted. The list below is empty because
+              nothing was read, and "Nothing saved yet" over a warning that the
+              file was altered is two sentences about one machine that cannot
+              both be true — and the one somebody acts on is the reassuring one.
+            */}
+            {activeProfile && logins !== null && store?.fault !== 'tampered' && (
+              // `unreadable` is not excluded here: there really is nothing
+              // saved *on this machine*, the notice above explains the file, and
+              // the summary is the line that says which profile the list below
+              // belongs to.
               <p className="settings-prose">{savedSummary(logins.length, activeProfile.name)}</p>
             )}
 
@@ -1316,7 +1419,7 @@ export function BrowserSection({ values, save, bridge, loading, accounts }: Brow
               // Inline for the same reason as the two above: a nested dialog's
               // Escape closes the settings window behind it.
               <div className="settings-confirm">
-                <span>{forgetAllConfirmText(loginTotal)}</span>
+                <span>{forgetAllConfirmText(loginTotal, store?.fault === 'tampered')}</span>
                 <Button tone="danger" onClick={forgetAllLogins}>
                   Forget them all
                 </Button>
@@ -1325,11 +1428,20 @@ export function BrowserSection({ values, save, bridge, loading, accounts }: Brow
             ) : (
               <Button
                 tone="danger"
-                disabled={loginTotal === 0}
+                /*
+                  Enabled while the store has faulted even though the count is
+                  zero — the count is zero *because* nothing was read, and this
+                  button is the exact thing the fault's own sentence tells
+                  somebody to press. A control a message points at and that is
+                  greyed out is the worst version of a dead control.
+                */
+                disabled={loginTotal === 0 && store?.fault !== 'tampered'}
                 title={
-                  loginTotal === 0
-                    ? 'There are no saved passwords to forget.'
-                    : 'Removes every saved password, in every profile.'
+                  store?.fault === 'tampered'
+                    ? 'Deletes the file that did not verify, so passwords can be saved again.'
+                    : loginTotal === 0
+                      ? 'There are no saved passwords to forget.'
+                      : 'Removes every saved password, in every profile.'
                 }
                 onClick={() => setConfirmForgetAll(true)}
               >

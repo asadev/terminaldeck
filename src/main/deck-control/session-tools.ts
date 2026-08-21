@@ -178,6 +178,47 @@ import { NO_TIERS, type Caller, type TierGrant } from './surface'
  * a tool that exfiltrates one. The honest answer for that half of the feature
  * is that it is UI and a human gesture, and it is not on this list.
  *
+ * ## There is no tool that touches a saved password, and there must not be
+ *
+ * The same argument, with more force, because a saved password is the one thing
+ * in this app that is worth more than the session it opens. `browser-passwords.ts`
+ * keeps an encrypted per-profile store; **nothing on this list, on
+ * {@link ELSEWHERE_TOOLS}, or in any other catalogue may read one, fill one, or
+ * say that one exists.** Three separate refusals, and each has to be stated
+ * because each is a different mistake:
+ *
+ *  - **No tool returns a password.** Obvious, and the least likely to be got
+ *    wrong. `browser-password:copy` puts it on the clipboard from the main
+ *    process and answers with a boolean; there is no read channel to wrap.
+ *  - **No tool enumerates the origins one is saved for.** Less obvious, and the
+ *    one a reasonable person adds by accident, because it sounds like metadata.
+ *    It is not: a list of the sites somebody has an account on is a map of their
+ *    life, it is exactly the reconnaissance a credential attack starts with, and
+ *    a `browser.logins` returning nothing but hostnames would hand it over
+ *    complete. `browser.workers` is the near miss to compare against — it names
+ *    *worker profiles* and whether each has been signed into during this run,
+ *    which is a fact about this app's own scratch identities, not about the
+ *    person.
+ *  - **No tool causes one to be typed.** The subtle one, and the one that was
+ *    actually broken. An agent never needed to see a password to use it: it
+ *    could call `browser.open` on a sign-in page in a window the person had
+ *    attached, let the browser autofill the saved login into it, and press the
+ *    button with `browser.step`. Signed in as the person, on a site the agent
+ *    chose, with the password never crossing any surface anybody was watching.
+ *    That is `browser.lift` by another name and it went through a hole this list
+ *    could not see, because the tool that did it is one of the six.
+ *
+ *    It is closed in `browser-fill-gate.ts`, where it has to be: not by removing
+ *    a tool, but by the browser refusing to fill a page an agent navigated to or
+ *    is holding. The person gets the login on one press in the panel over that
+ *    page — an `ipcMain` channel, the same door session-lifting is behind, for
+ *    the same reason.
+ *
+ * The rule that keeps all three true is the one this file already runs on: a
+ * grant is **written down**, never derived. `session-tools.test.ts` asserts that
+ * no name on either list matches password, login or credential, so the next tool
+ * that does gets caught by a test rather than by somebody reading this comment.
+ *
  * ## Why the asset tools are on it
  *
  * The six browser verbs let a session open a page and read it. The four in

@@ -7,6 +7,7 @@ import { ProfileMenu } from './ProfileMenu'
 import { CapturePopup } from './CapturePopup'
 import { DeviceBar } from './DeviceBar'
 import { PasswordOffer } from './PasswordOffer'
+import { SavedLoginBar, type SavedLoginOffer } from './SavedLoginBar'
 import { SignInBanner } from './SignInBanner'
 import { DrawLayer, type DrawSurface } from './DrawLayer'
 import { DriveBanner } from './DriveBanner'
@@ -49,6 +50,7 @@ import { anchorInWindow, type Box } from './popup-anchor'
 import {
   historyAvailable,
   passwordsAvailable,
+  sameOrigin,
   profilesAvailable,
   readProfileState as readProfiles,
   readSignInTrouble,
@@ -729,6 +731,16 @@ export function BrowserWorkspace({
   const [troubleFor, setTroubleFor] = useState('')
   const [offer, setOffer] = useState<{ id: string; origin: string; username: string } | null>(null)
   const [offerNote, setOfferNote] = useState('')
+  /**
+   * A saved login for the page on screen — filled, or waiting on a press.
+   *
+   * Separate from {@link offer}, which is the *other* half of the same feature:
+   * that one is "shall I remember this?" after a sign-in, this one is "there is
+   * one already" before it. They can both be true in a session and neither is a
+   * state of the other.
+   */
+  const [login, setLogin] = useState<SavedLoginOffer | null>(null)
+  const [loginNote, setLoginNote] = useState('')
   const accounts = useMemo(() => resolveAccountsApi(), [])
   const [focusToken, setFocusToken] = useState(0)
 
@@ -2295,6 +2307,43 @@ export function BrowserWorkspace({
   }, [accounts])
 
   /*
+   * A page that has a sign-in form this app has a login for.
+   *
+   * Scoped to this panel's own tabs for the same reason the offer above is: the
+   * push reaches every mounted browser panel in the window, and without the id
+   * check the bar would appear over three pages that do not have the form.
+   *
+   * `filled` decides what it says rather than whether it appears. A fill that
+   * happened is still worth one line, because it is the only place the *wrong*
+   * account is visible and switchable — see `SavedLoginBar`.
+   */
+  useEffect(() => {
+    if (!accounts.onBrowserLoginAvailable) return
+    return accounts.onBrowserLoginAvailable((id, origin, usernames, filled, note) => {
+      if (!tabsRef.current.some((tab) => tab.id === id)) return
+      if (!Array.isArray(usernames) || usernames.length === 0) return
+      setLoginNote('')
+      setLogin({ id, origin, usernames, filled, note })
+    })
+  }, [accounts])
+
+  /*
+   * The bar belongs to the tab it is about.
+   *
+   * Only the tab, and not the address — a navigation is handled by *matching*
+   * at render rather than by clearing here, and the difference is a real race
+   * rather than a preference. Both facts arrive as pushes from the main
+   * process: the new URL, then the new page's announcement a moment later. If
+   * React coalesces them into one commit, an effect keyed on the URL runs after
+   * both state updates and wipes the offer that had just been set, and the bar
+   * flashes and disappears for reasons nothing on screen explains.
+   */
+  useEffect(() => {
+    setLogin(null)
+    setLoginNote('')
+  }, [active?.id])
+
+  /*
    * A drawing belongs to the page it is a picture of.
    *
    * Switching or closing the tab has to end draw mode, and not only for tidiness:
@@ -2770,6 +2819,34 @@ export function BrowserWorkspace({
           url={pageUrl}
           onDismiss={() => setTrouble(null)}
         />
+      )}
+
+      {/*
+        Matched against the address that is on screen *now*, rather than trusted
+        because it arrived. A page that announced a sign-in form and then
+        navigated would otherwise leave an offer to fill a site nobody is
+        looking at — and pressing it fills nothing, because `browser-tab.ts`
+        checks the same thing again at the other end.
+      */}
+      {login && login.id === active?.id && sameOrigin(login.origin, pageUrl) && (
+        <SavedLoginBar
+          offer={login}
+          api={accounts}
+          onDone={(message) => {
+            setLogin(null)
+            setLoginNote(message)
+          }}
+          onDismiss={() => setLogin(null)}
+        />
+      )}
+
+      {loginNote !== '' && (
+        <p className="bw-said" role="status">
+          {loginNote}
+          <button type="button" className="bw-text-button" onClick={() => setLoginNote('')}>
+            Dismiss
+          </button>
+        </p>
       )}
 
       {offer && (

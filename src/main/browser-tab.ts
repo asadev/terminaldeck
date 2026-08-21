@@ -45,6 +45,7 @@ import {
   setPendingOffer,
   type SavedLogin,
 } from './browser-passwords'
+import { mayAutofill, stampDocument } from './browser-fill-gate'
 
 /**
  * The embedded browser tab: a real Chromium view, hosted inside the app window,
@@ -332,6 +333,30 @@ interface BrowserTab {
    * profile's password to it.
    */
   profileId: string
+  /**
+   * Was the document currently in this view committed while an agent held it?
+   *
+   * The whole of the state `browser-fill-gate.ts` needs and cannot read off a
+   * live page for itself: whether the debugger is attached is a fact about
+   * *now*, and this is a fact about the moment the document landed. Set at
+   * `did-navigate`, which is the only place a document changes.
+   *
+   * Starts false because a view's first document is `about:blank`, loaded by
+   * this module before anything could possibly be driving it.
+   */
+  documentFromAgent: boolean
+  /**
+   * The sign-in form this document last announced, and what is saved for it.
+   *
+   * Held so the renderer can offer the login on a press without asking the page
+   * again — and so that a page which announced once, was withheld from, and then
+   * had its form re-rendered does not lose the offer. Null whenever the current
+   * document has not said it has a sign-in form.
+   *
+   * Usernames only. This is the same {@link SavedLoginSummary} bargain one file
+   * over: there is no password in this shape and nowhere to put one.
+   */
+  signIn: { origin: string; usernames: string[] } | null
 }
 
 /**
@@ -515,6 +540,34 @@ function liveContents(tab: BrowserTab): WebContents | null {
   return wc && !wc.isDestroyed() ? wc : null
 }
 
+/**
+ * Is an agent holding this page right now?
+ *
+ * Answered by asking Chromium whether the CDP debugger is attached, rather than
+ * by consulting a map this module keeps in step with the drive. That is not
+ * shorthand: `browser-driver.ts:attach` is the only line in this repository
+ * that calls `wc.debugger.attach`, it holds the attachment for the whole of a
+ * drive rather than per command, and `detach` releases it. A second copy of
+ * that fact is a second thing to get wrong, and getting it wrong in the
+ * optimistic direction means a password typed into a page an agent chose.
+ *
+ * `browser-fill-gate.ts` carries the argument for why this is the right breadth
+ * — in particular why it stays true while a drive is parked in `human` waiting
+ * for the person, which is exactly when a credential is wanted and exactly when
+ * the press has to be theirs.
+ */
+function agentHolds(tab: BrowserTab): boolean {
+  const wc = liveContents(tab)
+  if (!wc) return false
+  try {
+    return wc.debugger.isAttached()
+  } catch {
+    // A view mid-teardown. Nothing is going to be filled into it either way,
+    // and the answer that withholds is the one to give when unsure.
+    return true
+  }
+}
+
 function stateOf(tab: BrowserTab): BrowserTabState {
   const wc = liveContents(tab)
   const url = wc ? wc.getURL() : ''
@@ -538,6 +591,39 @@ function stateOf(tab: BrowserTab): BrowserTabState {
 function push(tab: BrowserTab): void {
   if (tab.host.isDestroyed()) return
   tab.host.send('browser:state-changed', stateOf(tab))
+}
+
+/**
+ * Tell the app's own window that this page has a sign-in form and a login for
+ * it — and, when the fill was withheld, why.
+ *
+ * ## What crosses, and what does not
+ *
+ * The origin, the usernames, whether a fill happened and one sentence. **No
+ * password**, in the shape or anywhere near it, which is the rule
+ * `browser-passwords.ts` states at length and the reason its renderer-facing
+ * type has no field to forget to strip.
+ *
+ * ## Why usernames are on it at all
+ *
+ * Because the alternative is a button that says "Fill saved login" over a site
+ * somebody has two accounts on, which fills one of them and gives no way to
+ * say which. That is the shape of complaint this store already had — it filled
+ * the newest and the manager was the only place to change it, which is a
+ * different window, in a different pane, behind a different control. A list of
+ * names on the page is the answer, and a username is not a secret: it is on the
+ * screen the person is looking at, typed into the form.
+ */
+function tellHostAboutSignIn(tab: BrowserTab, message: string, filled: boolean): void {
+  if (tab.host.isDestroyed() || tab.signIn === null) return
+  tab.host.send(
+    'browser:login-available',
+    tab.id,
+    tab.signIn.origin,
+    tab.signIn.usernames,
+    filled,
+    message,
+  )
 }
 
 /**
@@ -1036,6 +1122,19 @@ function wireGuestEvents(tab: BrowserTab): void {
     push(tab)
   })
   wc.on('did-navigate', (_event: unknown, url: string) => {
+    /*
+     * Who put this document here — the one fact `browser-fill-gate.ts` cannot
+     * read off a live page later, because by then the drive may have let go.
+     *
+     * Before the early return below, deliberately: the error document Chromium
+     * commits after a failed load is still a document, and one an agent's
+     * navigation produced is still an agent's.
+     */
+    tab.documentFromAgent = stampDocument(agentHolds(tab))
+    // A new document has announced nothing yet. Left standing, the previous
+    // page's sign-in offer would sit in the panel over a page that has no form
+    // on it, and pressing it would fill nothing.
+    tab.signIn = null
     // Only a navigation that landed somewhere ELSE clears the failure. The
     // error page Chromium commits after a failed load is itself a navigation,
     // and it arrives carrying the URL that just failed — so `tab.error = null`
@@ -1058,6 +1157,12 @@ function wireGuestEvents(tab: BrowserTab): void {
   })
   wc.on('did-navigate-in-page', (_event, url: string, isMainFrame: boolean) => {
     if (!isMainFrame) return
+    // A route change an agent caused makes this an agent's page too, and this is
+    // the only signal there is for it: the document did not change, so
+    // `did-navigate` never fires. One-directional — a person's route change on
+    // a page an agent already navigated does not hand it back, because the
+    // agent chose the document underneath it.
+    if (agentHolds(tab)) tab.documentFromAgent = true
     // A single-page app changes the address without changing the document, and
     // the place somebody wants back is the route they were on rather than the
     // shell it was served from. Chrome records these for the same reason.
@@ -1234,6 +1339,8 @@ export function registerBrowserIpc(ipcMain: IpcMain): void {
           : worker !== null
             ? (opts.profileId as string)
             : activeProfile(app.getPath('userData')).id,
+      documentFromAgent: false,
+      signIn: null,
     }
     tabs.set(tab.id, tab)
 
@@ -1409,11 +1516,50 @@ export function registerBrowserIpc(ipcMain: IpcMain): void {
     if (origin === null) return
     const matches = loginsFor(allLogins(app.getPath('userData')), tab.profileId, origin)
     if (matches.length === 0) return
-    // The most recently saved one when there are several. That is the account
-    // last used here, which is the right guess and the one Chrome makes; the
-    // manager is where a different one is chosen.
-    const best = matches.reduce((a, b) => (b.updatedAt > a.updatedAt ? b : a))
-    wc.send(GUEST_LOGIN_FILL_CHANNEL, best.username, best.password)
+
+    /*
+     * Newest first, so the head of this list is the account last used here —
+     * the right guess, and the one Chrome makes. The rest are behind the picker
+     * in the panel, which is the answer to "it filled the wrong account", a
+     * complaint this store could not previously answer at all.
+     */
+    const ranked = [...matches].sort((a, b) => b.updatedAt - a.updatedAt)
+    tab.signIn = { origin, usernames: ranked.map((item) => item.username) }
+
+    /*
+     * The gate. See `browser-fill-gate.ts` for the whole argument; the short
+     * form is that a page an agent navigated to is never filled by itself,
+     * because filling it is how an agent signs in as the person without ever
+     * seeing a password.
+     */
+    const verdict = mayAutofill({
+      agentHolding: agentHolds(tab),
+      documentFromAgent: tab.documentFromAgent,
+      isolated: false,
+    })
+    if (verdict.fill) {
+      wc.send(GUEST_LOGIN_FILL_CHANNEL, ranked[0].username, ranked[0].password)
+    }
+    /*
+     * Say something when there is something to say, and not otherwise.
+     *
+     * Two cases, and one silence:
+     *
+     *  - **Withheld.** Always said. A fill that did not happen with nothing on
+     *    screen explaining it is the dead control this round is about, and the
+     *    press that replaces it has to be somewhere.
+     *  - **Filled, and there is more than one account here.** Said, because the
+     *    fill picks the most recently saved and that is a *guess* — this bar is
+     *    the only place on the page where a wrong guess is visible and
+     *    switchable.
+     *  - **Filled, and there is exactly one account.** Silent. Nothing was
+     *    decided, nothing can be corrected, and a strip that shrinks the page on
+     *    every sign-in form somebody has ever saved is friction bought with
+     *    nothing.
+     */
+    if (!verdict.fill || ranked.length > 1) {
+      tellHostAboutSignIn(tab, verdict.fill ? '' : verdict.message, verdict.fill)
+    }
   })
 
   /*
@@ -1447,6 +1593,80 @@ export function registerBrowserIpc(ipcMain: IpcMain): void {
       if (!isNewLogin(allLogins(app.getPath('userData')), entry)) return
       setPendingOffer(entry)
       if (!tab.host.isDestroyed()) tab.host.send('browser:password-offer', tab.id, origin, entry.username)
+    },
+  )
+
+  /*
+   * Fill it because a person pressed something.
+   *
+   * ## Why this channel exists
+   *
+   * `browser-fill-gate.ts` withholds the automatic fill on any page an agent
+   * navigated to or is holding. Withholding on its own would be resistance
+   * dressed up as security: the person is looking at their own sign-in form,
+   * their password is in this app, and the app declines to say so. This is the
+   * other half — the panel says a saved login exists and this is what the press
+   * calls.
+   *
+   * It is also the answer to a complaint the automatic fill could never
+   * answer, on pages no agent has ever touched: **two accounts on one site**.
+   * The fill picks the newest and, until now, the only way to use the other one
+   * was Settings → Browser → Saved passwords → Copy → click the field → paste.
+   * A name in a list on the page it belongs to is one press instead of six.
+   *
+   * ## Why an agent cannot reach it
+   *
+   * Two independent reasons, and the second is the one that holds if the first
+   * is ever weakened:
+   *
+   *  - It is an `ipcMain.handle` channel. The tool surface is an MCP endpoint
+   *    (`deck-control/server.ts`) with a written-out allow-list, and there is no
+   *    bridge from it to `ipcMain` — the same door `browser-workers-ipc.ts`
+   *    puts session-lifting behind, for the same reason, argued in
+   *    `session-tools.ts`.
+   *  - The sender is checked against the tab's own host renderer below. A guest
+   *    page cannot invoke it anyway (the guest preload is sandboxed, exposes
+   *    nothing through `contextBridge` and holds no `invoke`), and a page driven
+   *    by CDP is a guest page — `browser-cdp.ts` denies `Runtime.evaluate`
+   *    outright, so there is not even a script to try it from.
+   *
+   * ## What it answers
+   *
+   * Whether a fill was sent, and nothing else — the same bargain
+   * `browser-password:copy` strikes one file over. There is no shape here that
+   * carries a password back, so there is no future edit that forgets to strip
+   * one.
+   */
+  ipcMain.handle(
+    'browser-password:fill',
+    (event: IpcMainInvokeEvent, id: unknown, username: unknown) => {
+      const tab = typeof id === 'string' ? tabs.get(id) : undefined
+      // The window that owns the tab, and no other renderer. Cheap, and it
+      // means a second browser panel cannot fill a page it is not showing.
+      if (!tab || tab.host !== event.sender) return false
+      if (tab.profileId === '' || tab.signIn === null) return false
+      const wc = liveContents(tab)
+      if (!wc) return false
+      /*
+       * The origin comes from the *view*, not from the tab's remembered
+       * announcement, for the reason the two handlers above give: what Chromium
+       * committed is the fact. A page that announced a sign-in form and then
+       * navigated between the announcement and the press would otherwise be
+       * filled with the previous site's password.
+       */
+      const origin = originOf(wc.getURL())
+      if (origin === null || origin !== tab.signIn.origin) return false
+      const matches = loginsFor(allLogins(app.getPath('userData')), tab.profileId, origin)
+      if (matches.length === 0) return false
+      const wanted = typeof username === 'string' ? username : ''
+      const chosen =
+        matches.find((item) => item.username === wanted) ??
+        matches.reduce((a, b) => (b.updatedAt > a.updatedAt ? b : a))
+      // `true`: write over whatever is in the field. A person pressing this on
+      // a form the browser already filled with the other account is the ordinary
+      // case, and a press that silently declines is a dead control.
+      wc.send(GUEST_LOGIN_FILL_CHANNEL, chosen.username, chosen.password, true)
+      return true
     },
   )
 }

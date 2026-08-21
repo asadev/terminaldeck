@@ -5,7 +5,7 @@ vi.mock('electron', () => ({
   safeStorage: { isEncryptionAvailable: () => false },
 }))
 
-const { isNewLogin, loginsFor, originOf, readLogins, summarizeLogin, upsertLogin } =
+const { isNewLogin, loginsFor, originOf, readLogins, readStore, summarizeLogin, upsertLogin } =
   await import('./browser-passwords')
 
 const login = (over: Partial<Parameters<typeof summarizeLogin>[0]> = {}) => ({
@@ -114,5 +114,59 @@ describe('reading the store back', () => {
     expect(readLogins(null)).toEqual([])
     expect(readLogins('nope')).toEqual([])
     expect(readLogins({ entries: 'nope' })).toEqual([])
+  })
+})
+
+/**
+ * The digest that turns an unauthenticated cipher into one this file can trust.
+ *
+ * `safeStorage` on macOS is AES-CBC with no authentication tag — measured on
+ * Electron 41.10.5: the same string encrypts to the same bytes twice, and a bit
+ * flipped in an early block comes back *accepted* with sixteen bytes of
+ * plaintext rewritten. So confidentiality is `safeStorage`'s and integrity is
+ * this module's, and these are the three cases that distinguishes.
+ */
+describe('a payload is only used if it describes itself', () => {
+  const entries = [
+    {
+      profileId: 'default',
+      origin: 'https://example.com',
+      username: 'ada',
+      password: 'hunter2',
+      updatedAt: 1,
+    },
+  ]
+
+  it('reads a payload written before digests existed', () => {
+    // Refusing it would delete somebody's saved passwords to make a point about
+    // a format they have never heard of.
+    const read = readStore({ version: 1, entries })
+    expect(read.entries).toEqual(entries)
+    expect(read.fault).toBe('none')
+    expect(read.legacy).toBe(true)
+  })
+
+  it('refuses a payload whose digest does not match its entries', () => {
+    const read = readStore({ version: 2, entries, digest: 'f'.repeat(64) })
+    // Empty *and* faulted. The emptiness alone is the dangerous half: a person
+    // who is shown "nothing saved" saves it all again, into the file somebody
+    // is editing.
+    expect(read.entries).toEqual([])
+    expect(read.fault).toBe('tampered')
+  })
+
+  it('checks the digest against what was stored, not against what survived cleaning', () => {
+    /*
+     * A rewritten origin is exactly what this catches, and a rewritten origin
+     * very often no longer parses — so `readLogins` drops the row on the way
+     * through. Digesting the cleaned list would then reproduce a value that
+     * matched nothing and report no fault for the one file this exists for.
+     */
+    const read = readStore({
+      version: 2,
+      entries: [...entries, { origin: 'not-a-url', password: 'x' }],
+      digest: 'f'.repeat(64),
+    })
+    expect(read.fault).toBe('tampered')
   })
 })

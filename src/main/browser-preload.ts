@@ -524,14 +524,24 @@ export const GUEST_PRELOAD_SOURCE = `'use strict'
     ipc.send(CH_LOGIN_READY, location.href)
   }
 
-  ipc.on(CH_LOGIN_FILL, function (event, username, password) {
+  /*
+   * The replace flag is the difference between the browser deciding and a person
+   * deciding, and it is the whole reason this handler takes a third argument.
+   *
+   * Automatic fills never write over something already there: a page that
+   * restored a draft, or somebody half way through typing, owns those
+   * characters. A fill a person pressed for is the opposite case — the field
+   * very often already holds the *wrong* account, which is why they pressed —
+   * and refusing there would be a button that does nothing, which is worse than
+   * no button. browser-tab.ts sets it only on browser-password:fill.
+   */
+  ipc.on(CH_LOGIN_FILL, function (event, username, password, replace) {
     if (typeof password !== 'string' || password === '') return
     var pw = passwordField()
-    // Never over the top of something already there. A page that restored a
-    // draft, or a person half way through typing, owns those characters.
-    if (!pw || pw.value !== '') return
+    if (!pw) return
+    if (pw.value !== '' && replace !== true) return
     var user = usernameFieldFor(pw)
-    if (user && user.value === '' && typeof username === 'string' && username !== '') {
+    if (user && (user.value === '' || replace === true) && typeof username === 'string' && username !== '') {
       fillField(user, username)
     }
     fillField(pw, password)

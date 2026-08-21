@@ -1,6 +1,7 @@
+import { createHash } from 'node:crypto'
 import { existsSync, readFileSync, unlinkSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { clipboard, safeStorage, type IpcMain } from 'electron'
+import { clipboard, safeStorage, shell, type IpcMain } from 'electron'
 import { protectSecretFile, writeSecretFile } from './remote/secret-file'
 
 /**
@@ -65,6 +66,54 @@ import { protectSecretFile, writeSecretFile } from './remote/secret-file'
  * somebody else controls. Narrow and predictable beats broad and occasionally
  * catastrophic, and the manager shows the origin on every row so nothing about
  * it is a surprise.
+ *
+ * ## What `safeStorage` actually gives, measured rather than assumed
+ *
+ * Electron 41.10.5 on macOS 27, in a probe with no window, reading the real
+ * thing:
+ *
+ * | Question                                   | Answer                              |
+ * |--------------------------------------------|-------------------------------------|
+ * | `isEncryptionAvailable()` before app ready  | `true` (Linux is the one that lies) |
+ * | `getSelectedStorageBackend()`               | does not exist off Linux            |
+ * | ciphertext of `"hunter2"`, encrypted twice  | **byte-identical**                  |
+ * | first three bytes                           | `v10`, then binary                  |
+ * | one flipped bit in the *last* block         | throws                              |
+ * | one flipped bit in an *earlier* block       | **accepted**, plaintext rewritten   |
+ * | another app's blob, same Mac, same user     | throws                              |
+ * | a zero-length file                          | decrypts to `""`, does not throw    |
+ *
+ * Three of those rows are decisions rather than trivia.
+ *
+ * **It is confidentiality, not integrity.** Chromium's OSCrypt is AES-CBC with a
+ * key from the login keychain; deterministic output and a surviving mid-block
+ * flip are exactly the fingerprint of CBC with no authentication tag. Flipping a
+ * byte in block *N* garbles block *N* and flips the same bit in block *N+1*'s
+ * plaintext — so anybody who can **write this file** can choose sixteen bytes of
+ * the JSON. They cannot read a password that way. They can try to move one: turn
+ * a stored `https://bank.example` into a host they control, and the next visit
+ * types the person's password into it. That is a credential exfiltration through
+ * a file whose only other guard is `0600`, which stops other users and stops
+ * nothing running as this person — including an agent with a shell, which is
+ * most of what this app is for.
+ *
+ * So the payload carries {@link STORE_VERSION} 2: a SHA-256 over the entries,
+ * **inside** the encrypted blob. Forging a row now means also producing a
+ * matching digest in ciphertext, and every attempt at that garbles another
+ * block. There is no padding-oracle to work with either, because nothing here
+ * ever tells anybody why a decrypt failed — it is one sentence on one screen,
+ * to the person whose store it is.
+ *
+ * **A store that does not verify is not "empty".** Everything unreadable used to
+ * become an empty list, which is right for a blob from another machine and badly
+ * wrong for a blob somebody edited: the person sees nothing saved, saves it all
+ * again, and hands it to whoever is editing the file. So a digest mismatch is a
+ * {@link StoreFault}, it is said out loud, nothing is written over the top of it,
+ * and the file is named so it can be looked at or deleted.
+ *
+ * **Version 1 payloads still read**, undigested, and are upgraded on the next
+ * save. A store that was written before this existed cannot be proved either way
+ * and refusing it would delete somebody's passwords to make a point.
  */
 
 /* ------------------------------------------------------------------ shape -- */
@@ -142,7 +191,51 @@ function cleanField(raw: unknown): string {
  * would fill a form with the empty string and look like a bug in the site.
  */
 export function readLogins(raw: unknown): SavedLogin[] {
-  if (typeof raw !== 'object' || raw === null) return []
+  return readStore(raw).entries
+}
+
+/** The payload spelling this build writes. See the header for what changed. */
+export const STORE_VERSION = 2
+
+/**
+ * What is wrong with the store on disk, if anything.
+ *
+ * `'none'` is both "fine" and "there is no store yet"; those are the same to
+ * every caller. `'tampered'` is the one that must never be shown as an empty
+ * list — see the header.
+ */
+export type StoreFault = 'none' | 'tampered' | 'unreadable'
+
+export interface StoreRead {
+  entries: SavedLogin[]
+  fault: StoreFault
+  /** True for a version-1 payload, which is upgraded on the next save. */
+  legacy: boolean
+}
+
+/**
+ * The digest that makes an unauthenticated cipher behave like an authenticated
+ * one for this file's threat model.
+ *
+ * Over `JSON.stringify(entries)` and not over the whole payload, so that adding
+ * a field to the envelope later is not a false alarm on every existing store.
+ * It is a plain SHA-256 rather than an HMAC because it lives **inside** the
+ * encryption: an attacker who cannot decrypt cannot compute a digest that will
+ * land in the right place, and one who can decrypt already has the passwords.
+ */
+function digestOf(entries: readonly SavedLogin[]): string {
+  return createHash('sha256').update(JSON.stringify(entries)).digest('hex')
+}
+
+/**
+ * Read a decrypted payload, and say whether it is trustworthy.
+ *
+ * Split from {@link readLogins} rather than replacing it because the entry
+ * cleaning below is used on both paths and is worth keeping in one place, and
+ * because most callers only ever want the list.
+ */
+export function readStore(raw: unknown): StoreRead {
+  if (typeof raw !== 'object' || raw === null) return { entries: [], fault: 'none', legacy: false }
   const value = raw as Record<string, unknown>
   const list = Array.isArray(value.entries) ? value.entries : []
   const out: SavedLogin[] = []
@@ -160,7 +253,26 @@ export function readLogins(raw: unknown): SavedLogin[] {
       updatedAt: typeof record.updatedAt === 'number' ? record.updatedAt : 0,
     })
   }
-  return out
+
+  /*
+   * The digest is checked against what was *stored*, not against what survived
+   * the cleaning above — a payload whose entries were rewritten by a bit flip
+   * may well have lost some of them to `originOf` on the way through here, and
+   * comparing the cleaned list would then report "no fault" for exactly the
+   * file this check exists to catch.
+   */
+  const stored = typeof value.digest === 'string' ? value.digest : ''
+  if (stored === '') {
+    // Version 1, or a payload from a build older than digests. Read it, and say
+    // it is old so the next save writes it forward.
+    return { entries: out, fault: 'none', legacy: true }
+  }
+  if (stored !== digestOf(list as SavedLogin[])) {
+    // Nothing is returned. A tampered store must not be *used* either — the
+    // whole risk is a rewritten origin being offered to a page.
+    return { entries: [], fault: 'tampered', legacy: false }
+  }
+  return { entries: out, fault: 'none', legacy: false }
 }
 
 /**
@@ -249,11 +361,24 @@ export const NO_SECURE_STORE =
  */
 let cache: SavedLogin[] | null = null
 let cacheDir: string | null = null
+/**
+ * What was wrong with the store the last time it was read.
+ *
+ * Alongside the cache rather than derived on demand, because the read that
+ * discovers it happens once per process and the screen that has to say so is
+ * opened much later. A fault that was only visible during the read would be a
+ * fault nobody ever sees.
+ */
+let fault: StoreFault = 'none'
+/** True when the store on disk predates digests and is due an upgrade. */
+let legacy = false
 
 /** For tests, which must not inherit each other's store. */
 export function resetLoginsForTests(): void {
   cache = null
   cacheDir = null
+  fault = 'none'
+  legacy = false
 }
 
 /**
@@ -299,14 +424,109 @@ export function allLogins(userData: string): SavedLogin[] {
   // Windows, and idempotent, so this costs one `icacls` per process at most.
   protectSecretFile(dirname(path), path)
   try {
-    cache = readLogins(JSON.parse(decryptBlob(readFileSync(path))) as unknown)
+    const read = readStore(JSON.parse(decryptBlob(readFileSync(path))) as unknown)
+    cache = read.entries
+    fault = read.fault
+    legacy = read.legacy
   } catch {
     // Encrypted by a different OS user, a different machine, or an older
     // format. Unreadable is the same as absent from here — the alternative is a
     // browser that will not open because a file it cannot read exists.
+    //
+    // Note what is NOT in this branch: a payload that decrypted cleanly and
+    // then failed its digest. That is somebody editing the file, it comes back
+    // from `readStore` as a fault rather than an exception, and treating it as
+    // absent is the mistake the header spends a paragraph on.
+    //
+    // This is still *said*, though, and that is new. The list is empty either
+    // way — there is nothing to read and no key to read it with — but "nothing
+    // saved yet" and "there is a file here this app cannot open" are different
+    // facts, and only one of them explains where somebody's passwords went
+    // after they moved a profile between machines. A machine with no secure
+    // store at all is excluded, because that has its own sentence and two
+    // explanations for one screen is worse than one.
     cache = []
+    fault = safeStorage.isEncryptionAvailable() ? 'unreadable' : 'none'
+    legacy = false
   }
+  /*
+   * Carry an old store forward the moment it is opened, rather than the next
+   * time somebody happens to save a password.
+   *
+   * A version-1 payload has no digest, so until it is rewritten the integrity
+   * guard is not guarding anything — and nobody is going to be told "re-save
+   * your passwords to get the new format", which would be resistance invented
+   * out of nothing. One write, once, on the first read after the update.
+   *
+   * It is deliberately not a failure if it cannot happen: a machine with no
+   * secure store cannot write and does not need to, because it has no store to
+   * upgrade in the first place.
+   */
+  if (legacy && cache.length > 0) persist(userData, cache)
   return cache
+}
+
+/**
+ * What the manager needs to tell the truth about this machine's store, in one
+ * answer.
+ *
+ * One call rather than four, because the four are only ever wanted together and
+ * because a screen assembled from four awaits renders three intermediate states
+ * that are each a lie for a frame.
+ */
+export interface StoreState {
+  /** Can anything be saved here at all? False refuses rather than degrading. */
+  available: boolean
+  /** Where the file is. Named on screen; a person should not have to find it. */
+  path: string
+  /** True once something has been saved. */
+  exists: boolean
+  fault: StoreFault
+  /** Empty when there is nothing wrong. Shown verbatim. */
+  message: string
+}
+
+/**
+ * The sentence for a store that decrypted and then failed its own digest.
+ *
+ * It says what happened, what was *not* done about it, and what to do — in that
+ * order, because the middle one is the part somebody will not assume. "Could
+ * not read your passwords" on its own reads as data loss, and the natural next
+ * move after data loss is to save everything again, which is precisely the move
+ * this fault must not provoke.
+ */
+export const TAMPERED_STORE =
+  'The saved-login file on this machine did not verify — its contents have been altered since this app wrote them. Nothing has been used from it and nothing has been deleted. Look at the file, or forget every saved password and start again.'
+
+/**
+ * The sentence for a file that will not decrypt at all.
+ *
+ * A calmer one, and deliberately so: this is almost always a profile folder
+ * carried over from another machine or another user account, where the key
+ * simply is not on this keychain, and nothing has gone wrong. It is said at all
+ * because the alternative is a screen that reads "nothing saved yet" over a file
+ * full of somebody's passwords — which is the sentence that makes them think the
+ * app lost them.
+ *
+ * It names the consequence of carrying on, because carrying on is allowed here:
+ * saving a new password writes over this file, and that is a thing to know
+ * before rather than after.
+ */
+export const UNREADABLE_STORE =
+  'There is a saved-login file here that this app cannot open — it was encrypted on a different machine or by a different user account, and the key for it is not on this one. Nothing can be recovered from it. Saving a new password will write over it.'
+
+export function storeState(userData: string): StoreState {
+  // Through `allLogins` so the fault is the one from an actual read rather than
+  // from whenever the last one happened to be.
+  allLogins(userData)
+  return {
+    available: safeStorage.isEncryptionAvailable(),
+    path: loginsPath(userData),
+    exists: existsSync(loginsPath(userData)),
+    fault,
+    message:
+      fault === 'tampered' ? TAMPERED_STORE : fault === 'unreadable' ? UNREADABLE_STORE : '',
+  }
 }
 
 /**
@@ -336,11 +556,33 @@ export function allLogins(userData: string): SavedLogin[] {
  */
 function persist(userData: string, list: SavedLogin[]): SaveOutcome {
   if (!safeStorage.isEncryptionAvailable()) return { ok: false, message: NO_SECURE_STORE }
+  /*
+   * Never write over a store that failed its digest.
+   *
+   * The person is being told the file was altered and offered the two honest
+   * answers — look at it, or forget everything. Quietly saving a new password
+   * on top would destroy the evidence and produce a file that verifies, which
+   * is the one outcome worse than the fault.
+   */
+  if (fault === 'tampered') return { ok: false, message: TAMPERED_STORE }
+  /*
+   * `'unreadable'` is deliberately not refused. A blob from another machine
+   * cannot be recovered by anybody, so refusing to save would leave somebody
+   * permanently unable to use this feature on a profile they carried over —
+   * resistance with nothing at the end of it. {@link UNREADABLE_STORE} says on
+   * screen that the file will be written over, which is the honest place for
+   * that fact: before the save, not after it.
+   */
   const path = loginsPath(userData)
-  const blob = safeStorage.encryptString(JSON.stringify({ version: 1, entries: list }))
+  const blob = safeStorage.encryptString(
+    JSON.stringify({ version: STORE_VERSION, entries: list, digest: digestOf(list) }),
+  )
   writeSecretFile(dirname(path), path, blob.toString('base64'))
   cache = list
   cacheDir = userData
+  legacy = false
+  // Whatever was unreadable is gone, replaced by something this machine wrote.
+  fault = 'none'
   return { ok: true, message: 'Saved.' }
 }
 
@@ -365,6 +607,11 @@ export function forgetAllLogins(userData: string): SaveOutcome {
   if (existsSync(path)) unlinkSync(path)
   cache = []
   cacheDir = userData
+  // The one way out of a fault, and the reason the sentence for it offers this
+  // rather than only describing the problem: the file is gone, so there is
+  // nothing left to be wrong.
+  fault = 'none'
+  legacy = false
   return { ok: true, message: 'Cleared.' }
 }
 
@@ -402,6 +649,8 @@ export function setPendingOffer(entry: SavedLogin | null): void {
  *
  * Channels:
  * - `browser-password:available` (invoke)                         → boolean
+ * - `browser-password:state`     (invoke)                          → {@link StoreState}
+ * - `browser-password:show-file` (invoke)                          → boolean
  * - `browser-password:list`      (invoke, profileId)              → {@link SavedLoginSummary}[]
  * - `browser-password:forget`    (invoke, profileId, origin, user) → {@link SaveOutcome}
  * - `browser-password:forget-all`(invoke)                          → {@link SaveOutcome}
@@ -411,6 +660,31 @@ export function setPendingOffer(entry: SavedLogin | null): void {
  */
 export function registerBrowserPasswordIpc(ipcMain: IpcMain, userData: () => string): void {
   ipcMain.handle('browser-password:available', () => safeStorage.isEncryptionAvailable())
+
+  /**
+   * Everything the manager needs to say what is stored and where, in one call.
+   *
+   * The path is on it because "kept in this machine's secure store" is a
+   * sentence that sounds like an answer and is not one — it names no file,
+   * nowhere to look and nothing to delete. See {@link StoreState}.
+   */
+  ipcMain.handle('browser-password:state', () => storeState(userData()))
+
+  /**
+   * Show the file, rather than print where it is.
+   *
+   * A path in a paragraph is a thing somebody has to select, copy, open a
+   * Finder window for and paste into a Go-to-Folder box. `showItemInFolder`
+   * is the same information with the work already done. It reveals an
+   * encrypted blob, which is the honest thing to reveal: it is what is actually
+   * there.
+   */
+  ipcMain.handle('browser-password:show-file', () => {
+    const path = loginsPath(userData())
+    if (!existsSync(path)) return false
+    shell.showItemInFolder(path)
+    return true
+  })
 
   ipcMain.handle('browser-password:list', (_event, profileId: unknown) => {
     const wanted = typeof profileId === 'string' ? profileId : 'default'

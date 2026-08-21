@@ -288,6 +288,44 @@ describe('the saved-passwords block', () => {
     expect(summary.slice(0, summary.indexOf('}'))).not.toContain('password')
   })
 
+  it('asks about the right thing when the store itself is the problem', () => {
+    /*
+     * A store that decrypted and then failed its digest reads out as zero
+     * entries, because nothing was used from it. The ordinary confirm would
+     * therefore ask somebody to approve forgetting "all 0 saved passwords",
+     * which is nonsense and is also a claim about a file whose contents are by
+     * definition unknown.
+     */
+    expect(forgetAllConfirmText(0, true)).toMatch(/did not verify/)
+    expect(forgetAllConfirmText(0, true)).not.toMatch(/\b0\b/)
+    // And the ordinary sentence is untouched.
+    expect(forgetAllConfirmText(1)).toMatch(/the one saved password/)
+    expect(forgetAllConfirmText(4)).toMatch(/all 4 saved passwords/)
+  })
+
+  it('names a login by its username on every method that acts on one', () => {
+    /*
+     * The rule above bans a channel that *returns* a password. This is the
+     * companion it needs now that a channel exists which causes one to be
+     * **typed** — `browserPasswordFill`, the person's press behind the bar in
+     * the browser panel.
+     *
+     * A method that took a password as an argument would be the same leak
+     * spelled backwards: the string would have to exist on this side to be
+     * passed, which puts it in a React tree, in devtools and in any future
+     * crash report. So every method here addresses a login the way the manager
+     * does — profile, origin, username — and the main process looks the secret
+     * up for itself.
+     */
+    const bridge = readFileSync(join(__dirname, '..', '..', 'browser', 'accounts-bridge.ts'), 'utf8')
+    for (const line of bridge.split('\n')) {
+      if (!/^\s*browserPassword\w*\?\(/.test(line)) continue
+      expect(line, `${line.trim()} takes a password across the bridge`).not.toMatch(
+        /password\s*:\s*string/i,
+      )
+    }
+  })
+
   it('offers Copy rather than Reveal, and says where it goes', () => {
     const html = renderToStaticMarkup(
       <SavedLoginRow
