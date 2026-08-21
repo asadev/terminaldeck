@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
@@ -72,7 +72,7 @@ describe('the session lift, which is the dangerous one', () => {
   })
 
   it('refuses with a sentence rather than a grey button and no reason', () => {
-    expect(onScreen).toContain('liftBlockedReason(liftFrom, liftInto)')
+    expect(onScreen).toContain('liftBlockedReason(pageOpen, liftFrom, liftInto)')
     expect(onScreen).toContain('{liftRefusal}')
   })
 
@@ -97,10 +97,52 @@ describe('the session lift, which is the dangerous one', () => {
     expect(onScreen).toContain('Decline')
   })
 
+  it('says the session comes off the page in front, not out of the picker', () => {
+    /*
+     * `browser-worker:lift` takes the session from the page the person is
+     * looking at — that is what makes it a gesture rather than an action
+     * against a profile named in a field. The picker names which account it is
+     * *expected* to be, and a disagreement copies nothing. A screen that
+     * implied the dropdown was the source would be promising a lift this app
+     * deliberately cannot do.
+     */
+    expect(onScreen).toContain('The session is taken from the page in front of you')
+    expect(onScreen).toContain('nothing is copied and this says so')
+  })
+
+  it('promises an inbox only on a build that has one', () => {
+    // There is no channel behind the ask inbox today. A standing sentence
+    // saying asks show up here would be a claim about a mechanism this build
+    // does not have.
+    const inbox = onScreen.slice(onScreen.indexOf('Lifting copies'))
+    expect(inbox.slice(0, inbox.indexOf('</p>'))).toContain('liftRequestsAvailable(api) &&')
+  })
+
   it('has no way to lift into everything at once', () => {
     // A control meaning "and whatever else is a worker next week" is not
     // something a person can be said to have agreed to.
     expect(onScreen).not.toMatch(/All workers|Select all/)
+  })
+})
+
+describe('the fleet, which is the half with an engine behind it', () => {
+  it('takes the answer as the new fleet rather than reloading and hoping', () => {
+    // `registerWorker` refuses the default profile and a full fleet in silence.
+    // A panel that only reloaded would put the same name back in the dropdown
+    // and leave somebody pressing a control that does nothing.
+    expect(onScreen).toContain('const storeFleet = async (')
+    expect(onScreen).toContain('${nameOf(id)} was not enrolled. ${NOT_ENROLLED}')
+  })
+
+  it('offers minting as a total, with no button where a press would add nothing', () => {
+    expect(onScreen).toContain('mintPlan(mintTo, rows.length)')
+    expect(onScreen).toContain('mintTotal !== null && (')
+    expect(onScreen).toContain('void mint(mintTotal)')
+  })
+
+  it('draws neither control on a build that cannot do that half', () => {
+    expect(onScreen).toContain('{workersAvailable(api) && (')
+    expect(onScreen).toContain('{mintAvailable(api) && (')
   })
 })
 
@@ -174,6 +216,34 @@ describe('the store', () => {
 
   it('can take one out again', () => {
     expect(onScreen).toContain('void remove(tool)')
+  })
+})
+
+describe('one door to the job', () => {
+  const files = readdirSync(__dirname)
+
+  it('has no second workers panel to reach the same engine through', () => {
+    /*
+     * *"inside three dot give a feature of scrapping and inside that give all
+     * the features and modifications options with ui also."* The workers lane
+     * built its own panel behind the profile menu while this one was being
+     * written, so the same fleet, the same pace and the same lift had two
+     * screens. One of them had to go, and the one that stayed is the one he
+     * asked for.
+     */
+    expect(files).not.toContain('WorkersPanel.tsx')
+    expect(readFileSync(join(__dirname, 'ProfileMenu.tsx'), 'utf8')).not.toContain('Workers…')
+    expect(readFileSync(join(__dirname, 'BrowserWorkspace.tsx'), 'utf8')).not.toContain('WorkersPanel')
+  })
+
+  it('keeps every act that panel offered', () => {
+    // Deleting a screen must not delete a capability. Minting, enrolling,
+    // retiring, the pace and the lift are all on this one.
+    for (const act of ['void mint(', 'void enrol(', 'void retire(', 'void lift()']) {
+      expect(onScreen, `${act} is not on this panel`).toContain(act)
+    }
+    expect(onScreen).toContain("patch({ fleet: { concurrency: next } })")
+    expect(onScreen).toContain("patch({ fleet: { delayMs: next } })")
   })
 })
 

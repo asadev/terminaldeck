@@ -10,14 +10,23 @@
  * panel that shows all four (`ScrapingPanel.tsx`) is a fifth thing, and it was
  * written beside them rather than after them.
  *
- * So this module is deliberately **all contract and no engine**. Every method
- * below is optional, every one of them is a name the panel will call when a
- * build has it, and not one of them is implemented here or in `src/main` by this
- * change. That is the honest state of it, and it is why the availability
- * predicates further down are not a formality: on a build where a seam is
- * unwired the panel draws that section as unavailable and draws no control for
- * it at all, because a control that appears to work and does nothing is the
- * exact defect the whole browser review is made of.
+ * So this module is **the contract**, and every method below is optional. Not
+ * one of them is implemented under these names anywhere: the four lanes landed
+ * and registered their channels under their own — `browserWorkers*`,
+ * `browserStore*` — which is why `grep -c browserScraping src/preload/index.ts`
+ * still answers `0`. {@link resolveScrapingApi} therefore does two things in
+ * order: it binds any real `browserScraping*` a preload grows later, and then
+ * lays `scraping-adapter.ts` underneath to answer the rest out of what the
+ * lanes actually built.
+ *
+ * What the adapter cannot answer stays unanswered, and that is why the
+ * availability predicates further down are not a formality: on a build where a
+ * seam is unwired the panel draws that section as unavailable and draws no
+ * control for it at all, because a control that appears to work and does
+ * nothing is the exact defect the whole browser review is made of. Requests,
+ * Capture, Assets and the coverage check are in that state today — their
+ * engines exist, and they are reachable only from an agent's tool surface, not
+ * from any channel a window can call.
  *
  * ## Optional, every method, for the reason the other bridges give
  *
@@ -29,8 +38,9 @@
  * note. This is the fifth to take the same shape, and the one with the most
  * reason to: on the day it lands, *none* of it is wired.
  *
- * The types are mirrors of nothing yet — they are the shape the panel asks for,
- * and the engine side is expected to answer in it. They are written the way
+ * The types are the shape the panel asks for, and the engine side answers in it
+ * — through the adapter today, directly on the day a preload grows these names.
+ * They are written the way
  * `bridge.ts` asks feature types to cross: `unknown` over the wire, narrowed
  * here, never imported out of `src/main` (the renderer's tsconfig does not
  * include it).
@@ -46,6 +56,10 @@
  * plausible default, and {@link readOutcome} turns an unreadable reply into a
  * failure rather than a success.
  */
+
+import { adaptScrapingApi, type ScrapingHostContext } from './scraping-adapter'
+
+export type { ScrapingHostContext }
 
 /* ------------------------------------------------------------------ shape -- */
 
@@ -325,6 +339,21 @@ export interface ScrapingApi {
   browserScrapingWorkerAdd?(profileId: string): Promise<unknown>
   /** Retire one. The profile and everything in it stays; it stops being a worker. */
   browserScrapingWorkerRemove?(profileId: string): Promise<unknown>
+  /**
+   * Make worker profiles until there are this many in total.
+   *
+   * Separate from {@link browserScrapingWorkerAdd}, and the two are not
+   * variants of one another: enrolling takes a profile that already exists —
+   * one somebody has signed something into, or spent weeks warming up — and
+   * this one *mints* fresh ones, which is the only workable way to stand up
+   * eight of them at once. A total rather than a delta, because a field that
+   * adds four every time it is pressed is a field somebody presses twice.
+   *
+   * It only ever adds. Nothing on this seam deletes a profile: whatever a site
+   * decided about a worker is bound to that cookie jar and cannot be earned
+   * again by making a new one.
+   */
+  browserScrapingWorkerMint?(total: number): Promise<unknown>
 
   /* -- the session lift (scrape-workers), human-initiated only ----------- */
 
@@ -384,6 +413,7 @@ const METHODS = [
   'onBrowserScrapingStatus',
   'browserScrapingWorkerAdd',
   'browserScrapingWorkerRemove',
+  'browserScrapingWorkerMint',
   'browserScrapingLift',
   'browserScrapingLiftRequests',
   'browserScrapingLiftAnswer',
@@ -397,14 +427,30 @@ const METHODS = [
 ] as const satisfies readonly (keyof ScrapingApi)[]
 
 /**
- * Bind whatever of the seam this build has, method by method.
+ * Bind whatever of the seam this build has, and adapt the rest out of what the
+ * lanes actually shipped.
  *
- * Method by method rather than handed over whole, exactly as `resolveDriveApi`
- * does it, so a preload older than any one lane contributes what it has and
- * nothing else — and so the availability answers below can each be one honest
- * check instead of a `typeof` at every call site.
+ * Two layers, in this order, and the order is the whole design:
+ *
+ *  1. **The real names first.** Method by method, exactly as `resolveDriveApi`
+ *     does it, so a preload older than any one lane contributes what it has and
+ *     nothing else — and so the availability answers below can each be one
+ *     honest check instead of a `typeof` at every call site. The day a preload
+ *     grows `browserScrapingConfig`, that engine wins outright and nothing
+ *     below it is consulted for that method.
+ *  2. **The adapter underneath.** `scraping-adapter.ts` answers what it can out
+ *     of `browserWorkers*` and `browserStore*`, which is what those four lanes
+ *     registered. It fills a gap and never covers a real method.
+ *
+ * A seam neither layer can answer stays absent, which is the point: the panel
+ * turns each absence into a named, unavailable section rather than a control
+ * that does nothing.
+ *
+ * `context` carries the one thing a bridge resolved off `window.deck` cannot
+ * know — the id of the page in front of the person — and without it the lift is
+ * simply not offered, because a lift with no page is not this gesture.
  */
-export function resolveScrapingApi(host?: unknown): ScrapingApi {
+export function resolveScrapingApi(host?: unknown, context?: ScrapingHostContext): ScrapingApi {
   const source =
     host ??
     (typeof window === 'undefined' ? undefined : (window as unknown as { deck?: unknown }).deck)
@@ -414,6 +460,11 @@ export function resolveScrapingApi(host?: unknown): ScrapingApi {
   for (const name of METHODS) {
     const value = record[name]
     if (typeof value === 'function') api[name] = (value as (...args: never[]) => unknown).bind(source)
+  }
+  const adapted = adaptScrapingApi(source, context) as Record<string, unknown>
+  for (const name of METHODS) {
+    const value = adapted[name]
+    if (api[name] === undefined && typeof value === 'function') api[name] = value
   }
   return api as ScrapingApi
 }
@@ -456,6 +507,18 @@ export function workersAvailable(api: ScrapingApi): boolean {
     typeof api.browserScrapingWorkerAdd === 'function' &&
     typeof api.browserScrapingWorkerRemove === 'function'
   )
+}
+
+/**
+ * Can fresh workers be made?
+ *
+ * Its own answer rather than part of {@link workersAvailable}, because the two
+ * are genuinely separable: a build that can enrol the profiles somebody already
+ * has and cannot mint new ones is still a usable fleet screen, and it should
+ * draw the enrol control and no mint field rather than neither.
+ */
+export function mintAvailable(api: ScrapingApi): boolean {
+  return typeof api.browserScrapingWorkerMint === 'function'
 }
 
 /** Can a session be lifted by hand? */

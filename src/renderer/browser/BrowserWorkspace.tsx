@@ -17,8 +17,6 @@ import { HistoryPanel } from './HistoryPanel'
 import { ToolsPanel } from './ToolsPanel'
 import { ProfileSettings } from './ProfileSettings'
 import { ScrapingPanel } from './ScrapingPanel'
-import { WorkersPanel } from './WorkersPanel'
-import { resolveWorkersApi, workersAvailable } from './workers-bridge'
 import { SessionModal } from './SessionModal'
 import { Toolbar } from './Toolbar'
 import {
@@ -559,7 +557,20 @@ export function BrowserWorkspace({
   const agent = useAgentTarget(sessionBridge, serverShells)
   const iso = useMemo(() => isolation ?? resolveIsolationApi(), [isolation])
   const drawApi = useMemo(() => draw ?? resolveDrawApi(), [draw])
-  const scrapeApi = useMemo(() => scraping ?? resolveScrapingApi(), [scraping])
+  /*
+   * The id of the page in front, held in a ref for one caller.
+   *
+   * `scrapeApi` is memoised once and the active tab changes under it, so the
+   * lift cannot close over a tab id — it has to *ask* at the moment it is
+   * pressed. A ref is that, and it is also why the lift is a gesture on a page
+   * somebody is looking at rather than an action against a profile named in a
+   * dropdown. See `scraping-adapter.ts`.
+   */
+  const activeViewId = useRef('')
+  const scrapeApi = useMemo(
+    () => scraping ?? resolveScrapingApi(undefined, { viewId: () => activeViewId.current }),
+    [scraping],
+  )
   const driveApi = useMemo(() => resolveDriveApi(), [])
   const missing = useMemo(
     () => (bridge ? [] : missingBridgeMethods(typeof window === 'undefined' ? null : (window as unknown as { deck?: unknown }).deck)),
@@ -689,16 +700,6 @@ export function BrowserWorkspace({
   const [offer, setOffer] = useState<{ id: string; origin: string; username: string } | null>(null)
   const [offerNote, setOfferNote] = useState('')
   const accounts = useMemo(() => resolveAccountsApi(), [])
-  /*
-   * Worker profiles, on a bridge of their own.
-   *
-   * Separate from `accounts` for the reason `accounts-bridge.ts` gives about
-   * itself: a preload older than this feature contributes what it has, and the
-   * panel simply is not offered. A name added to `BRIDGE_METHODS` would blank
-   * the whole browser panel on such a build instead.
-   */
-  const workersApi = useMemo(() => resolveWorkersApi(), [])
-  const [workersOpen, setWorkersOpen] = useState(false)
   const [focusToken, setFocusToken] = useState(0)
 
   /*
@@ -919,6 +920,7 @@ export function BrowserWorkspace({
   const closeTabRef = useRef<(key: string) => void>(() => {})
 
   const active = tabs.find((tab) => tab.key === activeKey) ?? null
+  activeViewId.current = active?.id ?? ''
   const recording = recordings[activeKey] ?? EMPTY_RECORDING
   const capture = captures[activeKey] ?? null
   const zoom = zooms[activeKey] ?? 1
@@ -3097,34 +3099,12 @@ export function BrowserWorkspace({
             setSettingsFor(profileId)
           }}
           onReopen={reopenInActiveProfile}
-          /* Only where the preload can answer about workers. A row that opened
-             a panel with nothing in it would be the dead control this menu was
-             rebuilt to be rid of. */
-          onOpenWorkers={workersAvailable(workersApi) ? () => setWorkersOpen(true) : undefined}
           onClose={() => {
             setProfileOpen(false)
             readProfileName()
           }}
         />
       )}
-
-      {/*
-        Worker profiles, and the one control in this app that copies a login.
-
-        `viewId` is the page in front of the person, which is what makes the
-        lift a gesture *on a page they are looking at* rather than an action
-        against a site named in a field — see `WorkersPanel.tsx` and
-        `browser-session-lift.ts`. With no page open there is nothing to lift
-        and the button is absent rather than greyed.
-      */}
-      <WorkersPanel
-        open={workersOpen}
-        api={workersApi}
-        viewId={active?.id ?? ''}
-        pageUrl={active?.url ?? ''}
-        onOpenInWorker={(profileId: string) => openNewTab('', false, false, undefined, profileId)}
-        onClose={() => setWorkersOpen(false)}
-      />
 
       <SessionModal
         open={sessionOpen}
@@ -3179,6 +3159,9 @@ export function BrowserWorkspace({
         accounts={accounts}
         downloads={downloadsAvailable(downloads) ? downloadsView : null}
         profileId={activeProfileId}
+        /* The lift takes a session off the page in front, so with nothing in
+           front the button says so instead of being pressed twice to find out. */
+        pageOpen={activeViewId.current !== ''}
         onClose={() => setScrapingOpen(false)}
       />
 

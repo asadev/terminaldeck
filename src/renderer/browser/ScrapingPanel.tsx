@@ -9,6 +9,7 @@ import {
   RESOURCE_TYPES,
   liftAvailable,
   liftRequestsAvailable,
+  mintAvailable,
   readLiftRequests,
   readOutcome,
   readScrapingConfig,
@@ -28,6 +29,7 @@ import {
 } from './scraping-bridge'
 import {
   FULFILL_NOTE,
+  NOT_ENROLLED,
   NOT_MEASURED,
   REQUEST_RULES,
   bytesLine,
@@ -41,6 +43,7 @@ import {
   liftBlockedReason,
   liftLine,
   liftRequestLine,
+  mintPlan,
   reachLine,
   resourceLabel,
   ruleChange,
@@ -67,6 +70,14 @@ interface Props {
   downloads: DownloadsView | null
   /** The profile the browser is on, which is the one this panel opens editing. */
   profileId: string
+  /**
+   * Is there a page in front of the person right now?
+   *
+   * The Session section's one act takes a session off that page — see
+   * `scraping-adapter.ts` — so with nothing open there is nothing to lift, and
+   * the button says so before it is pressed rather than after.
+   */
+  pageOpen: boolean
   onClose(): void
 }
 
@@ -115,7 +126,15 @@ interface Props {
  * the line at the top says so, because a person looking for the switch deserves
  * to find the reason instead of hunting for it.
  */
-export function ScrapingPanel({ open, api, accounts, downloads, profileId, onClose }: Props) {
+export function ScrapingPanel({
+  open,
+  api,
+  accounts,
+  downloads,
+  profileId,
+  pageOpen,
+  onClose,
+}: Props) {
   const [profiles, setProfiles] = useState<BrowserProfile[]>([])
   /**
    * The profile whose settings are on screen.
@@ -137,6 +156,14 @@ export function ScrapingPanel({ open, api, accounts, downloads, profileId, onClo
   const [liftArming, setLiftArming] = useState(false)
   /** Emptying the resume ledger, which is the other thing with no undo. */
   const [ledgerArming, setLedgerArming] = useState(false)
+  /**
+   * How many workers there should be in total, as typed.
+   *
+   * Held as text rather than a number for the reason `NumberField` gives: a
+   * field that parses every keystroke cannot be typed into, because 12 becomes
+   * 1 the moment somebody starts replacing it.
+   */
+  const [mintTo, setMintTo] = useState('4')
   /**
    * The ask being approved, if one is.
    *
@@ -268,7 +295,7 @@ export function ScrapingPanel({ open, api, accounts, downloads, profileId, onClo
       outcome.ok
         ? outcome.count === null
           ? `${outcome.message} Nothing counted what moved, so this is unconfirmed.`
-          : `${countLine(outcome.count, 'cookie', 'cookies')} copied into ${liftInto.length === 1 ? nameOf(liftInto[0]) : `${liftInto.length} workers`}.`
+          : `${countLine(outcome.count, 'cookie', 'cookies')} copied into ${liftInto.length === 1 ? nameOf(liftInto[0]) : `${liftInto.length} workers`}. ${outcome.message}`
         : outcome.message,
     )
     await loadStatus()
@@ -298,24 +325,56 @@ export function ScrapingPanel({ open, api, accounts, downloads, profileId, onClo
   }
 
   /*
-   * The verbs that are one optional call and a reload.
-   *
-   * Written out rather than chained off an optional call at the call site: a
-   * `?.()` answers `undefined` on a build without the method, and `.then` on
-   * that is a crash inside a click handler on exactly the builds this panel is
-   * written to survive.
+   * The verbs, every one of them written out rather than chained off an
+   * optional call at the call site: a `?.()` answers `undefined` on a build
+   * without the method, and `.then` on that is a crash inside a click handler
+   * on exactly the builds this panel is written to survive.
    */
+
+  /**
+   * Take the fleet the engine answers with, and say when it did not change.
+   *
+   * The reply is the stored fleet rather than a boolean, exactly as `patch`
+   * takes its reply, and for a sharper reason here: `registerWorker` refuses
+   * the default profile and a full fleet **in silence**, so a panel that only
+   * reloaded would put the same name back in the dropdown and leave somebody
+   * pressing a control that does nothing.
+   */
+  const storeFleet = async (
+    answer: Promise<unknown>,
+    expect: (ids: readonly string[]) => string,
+  ): Promise<void> => {
+    const stored = readScrapingConfig(await answer)
+    if (stored === null) {
+      setNote('That change was not confirmed, so nothing here claims it was stored.')
+      await loadConfig()
+      return
+    }
+    setConfig(stored)
+    setNote(expect(stored.fleet?.profileIds ?? []))
+    await loadStatus()
+  }
+
   const enrol = async (id: string): Promise<void> => {
     if (!api.browserScrapingWorkerAdd) return
-    await api.browserScrapingWorkerAdd(id)
-    await loadConfig()
+    await storeFleet(api.browserScrapingWorkerAdd(id), (ids) =>
+      ids.includes(id) ? '' : `${nameOf(id)} was not enrolled. ${NOT_ENROLLED}`,
+    )
   }
 
   const retire = async (id: string): Promise<void> => {
     if (!api.browserScrapingWorkerRemove) return
-    await api.browserScrapingWorkerRemove(id)
-    await loadConfig()
-    await loadStatus()
+    await storeFleet(api.browserScrapingWorkerRemove(id), (ids) =>
+      ids.includes(id)
+        ? `${nameOf(id)} is still a worker — the engine did not retire it.`
+        : 'Retired. Its cookies and whatever a site decided about it are untouched.',
+    )
+  }
+
+  /** Make workers until there are `total` of them. Only ever adds. */
+  const mint = async (total: number): Promise<void> => {
+    if (!api.browserScrapingWorkerMint) return
+    await storeFleet(api.browserScrapingWorkerMint(total), () => '')
   }
 
   const clearCapture = async (): Promise<void> => {
@@ -331,8 +390,11 @@ export function ScrapingPanel({ open, api, accounts, downloads, profileId, onClo
     await loadStatus()
   }
 
+  /* What the total field would do if it were pressed, and the line beside it. */
+  const plan = mintPlan(mintTo, rows.length)
+  const mintTotal = plan.total
   const liftNames = liftInto.map(nameOf)
-  const liftRefusal = liftBlockedReason(liftFrom, liftInto)
+  const liftRefusal = liftBlockedReason(pageOpen, liftFrom, liftInto)
   const requests = config?.requests ?? null
   const capture = config?.capture ?? null
   const assets = config?.assets ?? null
@@ -460,6 +522,32 @@ export function ScrapingPanel({ open, api, accounts, downloads, profileId, onClo
               </div>
             )}
 
+            {/* Minting, which is the other half and not the same act: enrolling
+                takes a profile somebody already has, and this makes fresh ones,
+                which is the only workable way to stand eight of them up at
+                once. A total rather than a delta, and the button is absent
+                rather than inert when pressing it would add nothing. */}
+            {mintAvailable(api) && (
+              <div className="bw-scrape-row">
+                <label className="bw-scrape-field">
+                  <span className="bw-scrape-field-label">Workers in total</span>
+                  <input
+                    className="bw-menu-input bw-scrape-number"
+                    value={mintTo}
+                    inputMode="numeric"
+                    spellCheck={false}
+                    onChange={(event) => setMintTo(event.target.value)}
+                  />
+                </label>
+                {mintTotal !== null && (
+                  <button type="button" className="bw-primary" onClick={() => void mint(mintTotal)}>
+                    Make {mintTotal - rows.length} more
+                  </button>
+                )}
+                <span className="bw-muted">{plan.line}</span>
+              </div>
+            )}
+
             <NumberField
               label="At once"
               hint="How many workers may be working at the same time."
@@ -483,9 +571,11 @@ export function ScrapingPanel({ open, api, accounts, downloads, profileId, onClo
 
         <Head title="Session" scope="browser" profileName={profileName} />
         <p className="bw-scrape-hint">
-          Lifting copies a signed-in session out of one profile and into the workers, so they are
-          signed in too. It happens only when you press it here. Anything else that wants one has
-          to ask, and the ask shows up in this section for you to answer.
+          Lifting copies the signed-in session out of the page in front of you and into the workers
+          you tick, so they are signed in too. It happens only when you press it here: no tool in
+          this app can lift a session, and none is going to be added.
+          {liftRequestsAvailable(api) &&
+            ' Anything else that wants one has to ask, and the ask shows up in this section for you to answer.'}
         </p>
 
         {/*
@@ -563,6 +653,15 @@ export function ScrapingPanel({ open, api, accounts, downloads, profileId, onClo
                 </select>
               </label>
             </div>
+
+            {/* Which profile the session is expected to be, not which one it is
+                taken from. The engine takes it off the page in front — that is
+                what makes this a gesture on something you are looking at — and
+                the two can disagree. When they do, nothing is copied. */}
+            <p className="bw-scrape-hint">
+              The session is taken from the page in front of you. If that page is not signed in as
+              the profile named here, nothing is copied and this says so.
+            </p>
 
             {/* Named targets, ticked one at a time. There is deliberately no
                 "all workers": a lift is a named act between named profiles, and

@@ -213,6 +213,47 @@ export function fleetLine(rows: readonly WorkerRow[], measured: boolean): string
   return `${head} · ${rows.filter((row) => row.state === 'busy').length} busy`
 }
 
+/**
+ * What the "workers in total" field can do, and the line beside it.
+ *
+ * A total rather than a delta, and it only ever adds — which is exactly the
+ * kind of control somebody presses twice and then wonders why there are twelve
+ * of them. So the line always states what is there now, and `total` is `null`
+ * whenever pressing would do nothing: the button is then not drawn at all,
+ * rather than drawn and inert.
+ *
+ * Nothing here removes a worker. A worker's clearance is bound to its cookie
+ * jar and cannot be earned again by making a new one, so a field that could
+ * count down would be a field that quietly destroys the expensive part.
+ */
+export function mintPlan(typed: string, have: number): { total: number | null; line: string } {
+  const wanted = Number.parseInt(typed.trim(), 10)
+  if (!Number.isFinite(wanted) || wanted <= 0) {
+    return { total: null, line: 'Type how many workers you want in total.' }
+  }
+  if (wanted <= have) {
+    return {
+      total: null,
+      line: `${countLine(have, 'worker', 'workers')} now. This is a total and it only ever adds — type a bigger number to make more.`,
+    }
+  }
+  return {
+    total: wanted,
+    line: `${countLine(have, 'worker', 'workers')} now, so this makes ${wanted - have} more.`,
+  }
+}
+
+/**
+ * Why a profile that was picked did not become a worker.
+ *
+ * The engine refuses two of these in silence — the default profile, and a fleet
+ * already at its limit — and a silent refusal on a dropdown is a control that
+ * appears to work. The panel cannot know which of the two it was, so it says
+ * both rather than guessing one.
+ */
+export const NOT_ENROLLED =
+  'The default profile cannot be a worker — it holds every login from before this feature existed — and a fleet has a limit.'
+
 /** Profiles that are not workers yet — what Add offers. */
 export function enrollable(
   fleet: FleetConfig | null,
@@ -233,9 +274,14 @@ export function enrollable(
  * thing missing is the thing to say.
  */
 export function liftBlockedReason(
+  pageOpen: boolean,
   fromProfileId: string,
   intoProfileIds: readonly string[],
 ): string {
+  // The page first, because the page is the *source*: the session is taken off
+  // whatever is in front of the person, and with nothing in front there is
+  // nothing this button could take no matter what else is chosen.
+  if (!pageOpen) return 'Open the site in this window and sign in to it — the session is taken from the page in front of you.'
   if (fromProfileId === '') return 'Choose the profile that is signed in.'
   if (intoProfileIds.length === 0) return 'Choose at least one worker to inject it into.'
   if (intoProfileIds.includes(fromProfileId)) {
