@@ -39,6 +39,7 @@ import { AppearanceSection } from './sections/AppearanceSection'
 import { NotificationsSection } from './sections/NotificationsSection'
 import { AgentsSection } from './sections/AgentsSection'
 import { BrowserSection } from './sections/BrowserSection'
+import { ScrapingSection } from './sections/ScrapingSection'
 import { PowerSection } from './sections/PowerSection'
 import { AdvancedSection } from './sections/AdvancedSection'
 import { LinuxSection } from './sections/LinuxSection'
@@ -103,6 +104,16 @@ const LinuxSectionView: ComponentType<SectionProps> = () => <LinuxSection />
  * mistake `RemoteSection` shipped once, and the note above `PowerSectionView`
  * is the record of it.
  */
+/**
+ * Wrapped for the fourth time, and for the same reason as the three above: this
+ * pane holds none of this window's values and resolves its own three bridges —
+ * the scraping seams, the browser's profiles and the downloads view — off
+ * `window.deck`. Handing it `SectionProps.bridge` would give it the settings
+ * bridge as its own and it would draw the whole subject as missing from this
+ * build while every method sat on the preload.
+ */
+const ScrapingSectionView: ComponentType<SectionProps> = () => <ScrapingSection />
+
 const CopilotSectionView: ComponentType<SectionProps> = ({ setUpCopilot }) => (
   // One prop, and it is a capability of the *window* rather than a setting —
   // see `SectionProps.setUpCopilot` for why the setup flow cannot open from
@@ -134,6 +145,10 @@ const SECTION_VIEWS: Record<LiveSectionId, ComponentType<SectionProps>> = {
   features: ToolsSection,
   linux: LinuxSectionView,
   browser: BrowserSection,
+  // The browser's harvesting half, and the same `ScrapingBody` its three-dot
+  // panel draws — one component, so the two surfaces cannot come to disagree
+  // about what a control does. See `ScrapingSectionView`.
+  scraping: ScrapingSectionView,
   // Reads only, and resolves its own bridge. See `CopilotSectionView`.
   copilot: CopilotSectionView,
   // Wrapped, not cast. `SectionProps` carries its own `bridge` — the settings

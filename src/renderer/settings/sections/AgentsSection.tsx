@@ -171,6 +171,29 @@ export function deviceOfScope(scope: AgentScope): string | null {
 }
 
 /**
+ * The scope that should be on screen, given the devices that still exist.
+ *
+ * A device can be forgotten while its scope is the one selected, and without
+ * this the pane draws nothing at all under a button that is no longer in the
+ * switch: every button {@link ScopeSwitch} draws would read
+ * `aria-pressed="false"`, which is a segmented control with nothing selected.
+ *
+ * A function rather than the three lines it replaces, because it was those
+ * three lines in one pane and is now needed in every pane that carries the
+ * switch — and a guard re-typed per pane is a guard the next pane forgets. Pure,
+ * so it can be asserted without a DOM: these tests render static markup and run
+ * no effects, so the guard inside one was unreachable from a test.
+ */
+export function scopeAfterDevices(
+  scope: AgentScope,
+  devices: readonly { id: string }[],
+): AgentScope {
+  const wanted = deviceOfScope(scope)
+  if (wanted === null) return scope
+  return devices.some((device) => device.id === wanted) ? scope : 'this-machine'
+}
+
+/**
  * The buttons at the top of the pane: this machine, the servers, and every
  * device linked to this one.
  *
@@ -193,11 +216,23 @@ export function deviceOfScope(scope: AgentScope): string | null {
 export function ScopeSwitch({
   scope,
   devices = [],
+  label = 'Where these agents run',
   onScope,
 }: {
   scope: AgentScope
   /** The linked machines, in the order the rail lists them. */
   devices?: readonly { id: string; name: string }[]
+  /**
+   * What the group of buttons is, for a screen reader.
+   *
+   * A prop rather than a second component. This switch is shared — Coding AI
+   * and Scraping both draw it, and more panes will — and the one thing that
+   * genuinely differs between them is the sentence naming *what* runs in the
+   * chosen place. Forking the component to change four words is how two
+   * segmented controls come to behave differently; the default is the caller
+   * that has been here longest, so no existing call site changes.
+   */
+  label?: string
   onScope(next: AgentScope): void
 }) {
   const entries = [
@@ -205,7 +240,7 @@ export function ScopeSwitch({
     ...devices.map((device) => ({ id: deviceScope(device.id), label: device.name })),
   ]
   return (
-    <div className="settings-scope" role="group" aria-label="Where these agents run">
+    <div className="settings-scope" role="group" aria-label={label}>
       {entries.map((entry) => (
         <button
           key={entry.id}
@@ -669,10 +704,13 @@ export function AgentsSection(props: SectionProps) {
    * `aria-pressed="false"`, which is a segmented control with nothing selected.
    */
   useEffect(() => {
-    if (deviceOfScope(scope) === null) return
-    if (machines.machines.some((row) => row.machine.id === deviceOfScope(scope))) return
-    setScope('this-machine')
-  }, [scope, machines.machines])
+    setScope((current) =>
+      scopeAfterDevices(
+        current,
+        machines.machines.map((row) => row.machine),
+      ),
+    )
+  }, [machines.machines])
 
   const agents = agentsPresent(prereq)
   const present = new Set(agents.map((tool) => tool.id))

@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+// Relative rather than '@shared/…': vitest runs without the electron-vite alias,
+// so a *value* import through it resolves in the app and throws in a test.
+import { MAX_KEEP_MB, MAX_PACE_MS, MAX_WORKERS } from '../../shared/scrape-limits'
 import { Modal } from '../components/Modal'
 import { readProfileState, type AccountsApi, type BrowserProfile } from './accounts-bridge'
 import type { DownloadsView } from './downloads-bridge'
@@ -56,8 +59,23 @@ import {
   type SettingScope,
 } from './scraping-view'
 
-interface Props {
-  open: boolean
+/**
+ * Everything the body needs, on whichever surface is drawing it.
+ *
+ * There are two: the browser's own Scraping panel, and Settings → Scraping.
+ * They are the *same* controls with the same labels and the same help text
+ * because they are the same component — see {@link ScrapingBody}.
+ */
+export interface ScrapingBodyProps {
+  /**
+   * Is this body on screen right now?
+   *
+   * It gates every read and both subscriptions. In the modal it is the modal
+   * being open; on a settings pane it is the pane being mounted, which is what
+   * `SettingsWindow` does with its `key` — a closed surface that keeps a
+   * subscription is a listener nobody can see and nobody unsubscribes.
+   */
+  live: boolean
   /** The scraping seams — mostly unwired today. See `scraping-bridge.ts`. */
   api: ScrapingApi
   /** Profiles, which are real and shipped: a worker *is* a profile. */
@@ -80,6 +98,21 @@ interface Props {
    * the button says so before it is pressed rather than after.
    */
   pageOpen: boolean
+  /**
+   * May the session lift be offered here at all?
+   *
+   * The one gesture on this screen that is a fact about a **window** rather
+   * than about this machine: it takes the signed-in session off the page in
+   * front of the person. A settings pane has no page and never will have one,
+   * so it passes `false` and the section says so in a sentence instead of
+   * drawing a button that is disabled forever — see the note on `Unavailable`
+   * for why a control that cannot act is not drawn at all.
+   */
+  canLift: boolean
+}
+
+interface Props extends Omit<ScrapingBodyProps, 'live' | 'canLift'> {
+  open: boolean
   onClose(): void
 }
 
@@ -128,15 +161,15 @@ interface Props {
  * the line at the top says so, because a person looking for the switch deserves
  * to find the reason instead of hunting for it.
  */
-export function ScrapingPanel({
-  open,
+export function ScrapingBody({
+  live,
   api,
   accounts,
   downloads,
   profileId,
   pageOpen,
-  onClose,
-}: Props) {
+  canLift,
+}: ScrapingBodyProps) {
   const [profiles, setProfiles] = useState<BrowserProfile[]>([])
   /**
    * The profile whose settings are on screen.
@@ -238,33 +271,33 @@ export function ScrapingPanel({
   }, [editing])
 
   useEffect(() => {
-    if (!open) return
+    if (!live) return
     setEditing(profileId)
     setLiftFrom(profileId)
     setLiftInto([])
     void loadProfiles()
     void loadAsks()
     void loadTools()
-  }, [open, profileId, loadProfiles, loadAsks, loadTools])
+  }, [live, profileId, loadProfiles, loadAsks, loadTools])
 
   useEffect(() => {
-    if (!open) return
+    if (!live) return
     void loadConfig()
     void loadStatus()
     void loadCamera()
-  }, [open, loadConfig, loadStatus, loadCamera])
+  }, [live, loadConfig, loadStatus, loadCamera])
 
   /* The pushes, held only while the panel is up: a closed panel that keeps a
      subscription is a listener nobody can see and nobody unsubscribes. */
   useEffect(() => {
-    if (!open || !api.onBrowserScrapingStatus) return
+    if (!live || !api.onBrowserScrapingStatus) return
     return api.onBrowserScrapingStatus((raw) => setStatus(readScrapingStatus(raw)))
-  }, [open, api])
+  }, [live, api])
 
   useEffect(() => {
-    if (!open || !api.onBrowserScrapingLiftRequest) return
+    if (!live || !api.onBrowserScrapingLiftRequest) return
     return api.onBrowserScrapingLiftRequest(() => void loadAsks())
-  }, [open, api, loadAsks])
+  }, [live, api, loadAsks])
 
   const profileName = useMemo(
     () => profiles.find((profile) => profile.id === editing)?.name ?? '',
@@ -445,638 +478,682 @@ export function ScrapingPanel({
   const verdict = coverageVerdict(status?.lastCheck ?? null)
 
   return (
-    <Modal open={open} title="Scraping" onClose={onClose} size="lg">
-      <div className="bw-scrape">
-        {/* Which profile, at the top and again on every section head. A panel
-            that edits per-profile settings and does not say whose is a panel
-            somebody configures twice and loses once. */}
-        <div className="bw-scrape-profile">
-          <span className="bw-avatar" aria-hidden="true">
-            {profileInitial(profileName, profiles.find((p) => p.id === editing)?.avatar ?? '')}
-          </span>
-          <label className="bw-scrape-field">
-            <span className="bw-scrape-field-label">Settings for</span>
-            <select
-              className="bw-menu-input"
-              value={editing}
-              onChange={(event) => setEditing(event.target.value)}
-            >
-              {profiles.length === 0 && <option value={editing}>Loading…</option>}
-              {profiles.map((profile) => (
-                <option key={profile.id} value={profile.id}>
-                  {profile.name}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-
-        {/*
-          Headful, stated rather than switchable.
-
-          The window being visible is what makes this browser work against the
-          targets worth scraping — they refuse a headless client — and it is also
-          what lets somebody watch a run go wrong. There is no hidden mode and
-          this panel does not pretend one is coming.
-        */}
-        <p className="bw-scrape-headful">
-          Scraping happens in a window you can watch. There is no hidden mode: the sites worth
-          taking apart refuse a browser that has no screen.
-        </p>
-
-        {note !== '' && (
-          <p className="bw-menu-note" role="status">
-            {note}
-          </p>
-        )}
-
-        {/* The exception is named rather than glossed over. "Nothing on this
-            screen can be set" was true until the block camera got a seam of its
-            own, and a banner that had gone one control out of date would be the
-            panel telling somebody their switch does nothing while it works. */}
-        {!canConfigure && (
-          <p className="bw-scrape-unwired">
-            This build has no scraping configuration behind it, so most of this screen cannot be
-            set
-            {blockCaptureAvailable(api)
-              ? ' — the exception is the block camera under Checks, which is wired and does what it says.'
-              : '.'}{' '}
-            What is listed below is what the panel will show once an engine is.
-          </p>
-        )}
-
-        {/* ---------------------------------------------------------- workers -- */}
-
-        <Head title="Workers" scope="browser" profileName={profileName} />
-        {!canConfigure ? (
-          <Unavailable what="no engine keeps a fleet of worker profiles" />
-        ) : (
-          <>
-            {rows.length === 0 ? (
-              <p className="bw-muted">No workers yet.</p>
-            ) : (
-              <p className="bw-scrape-facts">{fleetLine(rows, canMeasure)}</p>
-            )}
-            {rows.length > 0 && (
-              <ul className="bw-menu-list">
-                {rows.map((row) => (
-                  <li key={row.profileId} className="bw-menu-row">
-                    <span className="bw-avatar" aria-hidden="true">
-                      {profileInitial(row.name, row.avatar)}
-                    </span>
-                    <span className="bw-menu-label">{row.name}</span>
-                    {row.orphaned && <span className="bw-badge">profile deleted</span>}
-                    {!row.enrolled && <span className="bw-badge">not enrolled</span>}
-                    <span className="bw-spacer" />
-                    <span className="bw-scrape-state" data-state={row.state}>
-                      {workerStateLabel(row.state)}
-                    </span>
-                    <span className="bw-menu-count">
-                      {countLine(row.requests, 'request', 'requests')}
-                    </span>
-                    {workersAvailable(api) && (
-                      <button
-                        type="button"
-                        className="bw-text-button"
-                        aria-label={`Retire ${row.name}`}
-                        onClick={() => void retire(row.profileId)}
-                      >
-                        Retire
-                      </button>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            )}
-
-            {/* Enrolling is choosing an existing profile, never minting one: a
-                worker is a profile with a cookie jar somebody may already be
-                signed into, and this panel does not create those. */}
-            {workersAvailable(api) && (
-              <div className="bw-scrape-row">
-                <select
-                  className="bw-menu-input"
-                  aria-label="Profile to enrol as a worker"
-                  value=""
-                  disabled={spare.length === 0}
-                  onChange={(event) => {
-                    if (event.target.value !== '') void enrol(event.target.value)
-                  }}
-                >
-                  <option value="">{spare.length === 0 ? 'Every profile is a worker' : 'Add a worker…'}</option>
-                  {spare.map((profile) => (
-                    <option key={profile.id} value={profile.id}>
-                      {profile.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-
-            {/* Minting, which is the other half and not the same act: enrolling
-                takes a profile somebody already has, and this makes fresh ones,
-                which is the only workable way to stand eight of them up at
-                once. A total rather than a delta, and the button is absent
-                rather than inert when pressing it would add nothing. */}
-            {mintAvailable(api) && (
-              <div className="bw-scrape-row">
-                <label className="bw-scrape-field">
-                  <span className="bw-scrape-field-label">Workers in total</span>
-                  <input
-                    className="bw-menu-input bw-scrape-number"
-                    value={mintTo}
-                    inputMode="numeric"
-                    spellCheck={false}
-                    onChange={(event) => setMintTo(event.target.value)}
-                  />
-                </label>
-                {mintTotal !== null && (
-                  <button type="button" className="bw-primary" onClick={() => void mint(mintTotal)}>
-                    Make {mintTotal - rows.length} more
-                  </button>
-                )}
-                <span className="bw-muted">{plan.line}</span>
-              </div>
-            )}
-
-            <NumberField
-              label="At once"
-              hint="How many workers may be working at the same time."
-              value={config?.fleet?.concurrency ?? null}
-              min={1}
-              max={64}
-              onCommit={(next) => void patch({ fleet: { concurrency: next } })}
-            />
-            <NumberField
-              label="Between requests"
-              hint="Milliseconds a worker waits before its next request."
-              value={config?.fleet?.delayMs ?? null}
-              min={0}
-              max={600000}
-              onCommit={(next) => void patch({ fleet: { delayMs: next } })}
-            />
-          </>
-        )}
-
-        {/* ---------------------------------------------------------- session -- */}
-
-        <Head title="Session" scope="browser" profileName={profileName} />
-        <p className="bw-scrape-hint">
-          Lifting copies the signed-in session out of the page in front of you and into the workers
-          you tick, so they are signed in too. It happens only when you press it here: no tool in
-          this app can lift a session, and none is going to be added.
-          {liftRequestsAvailable(api) &&
-            ' Anything else that wants one has to ask, and the ask shows up in this section for you to answer.'}
-        </p>
-
-        {/*
-          The inbox, above the button.
-
-          An agent that wants a session lifted gets to *ask*, and the ask lands
-          here as a row with two answers — which is the whole of "surfaces as a
-          request to the person, not as a completed action". It sits above the
-          control rather than below it so that a pending ask is the first thing
-          read in this section, and it is drawn only when there is one: an empty
-          inbox drawn every time would train somebody to skip past it.
-        */}
-        {liftRequestsAvailable(api) && asks.length > 0 && (
-          <ul className="bw-menu-list">
-            {asks.map((ask) => (
-              <li key={ask.id} className="bw-scrape-ask">
-                <span className="bw-scrape-ask-line">
-                  {liftRequestLine(ask.askedBy, nameOf(ask.fromProfileId), ask.intoProfileIds.map(nameOf))}
-                </span>
-                <span className="bw-scrape-ask-when">{timeLabel(ask.at)}</span>
-                {ask.reason !== '' && <span className="bw-muted">{ask.reason}</span>}
-                {approving === ask.id ? (
-                  <span className="bw-scrape-row">
-                    <button type="button" className="bw-danger" onClick={() => void answerAsk(ask, true)}>
-                      {liftLine(nameOf(ask.fromProfileId), ask.intoProfileIds.map(nameOf))}
-                    </button>
-                    <button
-                      type="button"
-                      className="bw-text-button"
-                      autoFocus
-                      onClick={() => setApproving('')}
-                    >
-                      Cancel
-                    </button>
-                  </span>
-                ) : (
-                  <span className="bw-scrape-row">
-                    <button type="button" className="bw-primary" onClick={() => setApproving(ask.id)}>
-                      Approve this lift
-                    </button>
-                    <button
-                      type="button"
-                      className="bw-text-button"
-                      onClick={() => void answerAsk(ask, false)}
-                    >
-                      Decline
-                    </button>
-                  </span>
-                )}
-              </li>
+    <div className="bw-scrape">
+      {/* Which profile, at the top and again on every section head. A panel
+          that edits per-profile settings and does not say whose is a panel
+          somebody configures twice and loses once. */}
+      <div className="bw-scrape-profile">
+        <span className="bw-avatar" aria-hidden="true">
+          {profileInitial(profileName, profiles.find((p) => p.id === editing)?.avatar ?? '')}
+        </span>
+        <label className="bw-scrape-field">
+          <span className="bw-scrape-field-label">Settings for</span>
+          <select
+            className="bw-menu-input"
+            value={editing}
+            onChange={(event) => setEditing(event.target.value)}
+          >
+            {profiles.length === 0 && <option value={editing}>Loading…</option>}
+            {profiles.map((profile) => (
+              <option key={profile.id} value={profile.id}>
+                {profile.name}
+              </option>
             ))}
-          </ul>
-        )}
+          </select>
+        </label>
+      </div>
 
-        {!liftAvailable(api) ? (
-          <Unavailable what="nothing in this build can copy a session between profiles" />
-        ) : (
-          <>
-            <div className="bw-scrape-row">
-              <label className="bw-scrape-field">
-                <span className="bw-scrape-field-label">Signed in as</span>
-                <select
-                  className="bw-menu-input"
-                  value={liftFrom}
-                  onChange={(event) => {
-                    setLiftFrom(event.target.value)
-                    setLiftArming(false)
-                  }}
-                >
-                  {profiles.map((profile) => (
-                    <option key={profile.id} value={profile.id}>
-                      {profile.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
+      {/*
+        Headful, stated rather than switchable.
 
-            {/* Which profile the session is expected to be, not which one it is
-                taken from. The engine takes it off the page in front — that is
-                what makes this a gesture on something you are looking at — and
-                the two can disagree. When they do, nothing is copied. */}
-            <p className="bw-scrape-hint">
-              The session is taken from the page in front of you. If that page is not signed in as
-              the profile named here, nothing is copied and this says so.
-            </p>
+        The window being visible is what makes this browser work against the
+        targets worth scraping — they refuse a headless client — and it is also
+        what lets somebody watch a run go wrong. There is no hidden mode and
+        this panel does not pretend one is coming.
+      */}
+      <p className="bw-scrape-headful">
+        Scraping happens in a window you can watch. There is no hidden mode: the sites worth
+        taking apart refuse a browser that has no screen.
+      </p>
 
-            {/* Named targets, ticked one at a time. There is deliberately no
-                "all workers": a lift is a named act between named profiles, and
-                a control that means "and whatever else is a worker next week" is
-                not something a person can be said to have agreed to. */}
-            <div className="bw-scrape-targets" role="group" aria-label="Workers to inject the session into">
-              {rows.length === 0 ? (
-                <p className="bw-muted">No workers yet, so there is nowhere to inject a session.</p>
-              ) : (
-                rows.map((row) => (
-                  <button
-                    key={row.profileId}
-                    type="button"
-                    className="bw-scrape-target"
-                    aria-pressed={liftInto.includes(row.profileId)}
-                    data-on={liftInto.includes(row.profileId) || undefined}
-                    disabled={row.profileId === liftFrom}
-                    title={row.profileId === liftFrom ? 'This is the profile being lifted from' : undefined}
-                    onClick={() => {
-                      setLiftArming(false)
-                      setLiftInto((prev) =>
-                        prev.includes(row.profileId)
-                          ? prev.filter((id) => id !== row.profileId)
-                          : [...prev, row.profileId],
-                      )
-                    }}
-                  >
-                    {row.name}
-                  </button>
-                ))
-              )}
-            </div>
+      {note !== '' && (
+        <p className="bw-menu-note" role="status">
+          {note}
+        </p>
+      )}
 
-            {liftRefusal !== '' ? (
-              <p className="bw-muted">{liftRefusal}</p>
-            ) : (
-              <p className="bw-scrape-hint">{liftLine(nameOf(liftFrom), liftNames)}</p>
-            )}
+      {/* The exception is named rather than glossed over. "Nothing on this
+          screen can be set" was true until the block camera got a seam of its
+          own, and a banner that had gone one control out of date would be the
+          panel telling somebody their switch does nothing while it works. */}
+      {!canConfigure && (
+        <p className="bw-scrape-unwired">
+          This build has no scraping configuration behind it, so most of this screen cannot be
+          set
+          {blockCaptureAvailable(api)
+            ? ' — the exception is the block camera under Checks, which is wired and does what it says.'
+            : '.'}{' '}
+          What is listed below is what the panel will show once an engine is.
+        </p>
+      )}
 
-            {/*
-              Armed, and the armed button names both ends.
+      {/* ---------------------------------------------------------- workers -- */}
 
-              The same two-press shape the profile rows use for deletion, and for
-              a harder reason: this one hands a live logged-in session to other
-              profiles on disk. The confirm carries the names rather than a
-              count, Cancel takes the focus, and nothing in this file can reach
-              `lift()` except this button.
-            */}
-            {liftArming ? (
-              <div className="bw-scrape-row">
-                <button type="button" className="bw-danger" onClick={() => void lift()}>
-                  {liftLine(nameOf(liftFrom), liftNames)}
-                </button>
-                <button
-                  type="button"
-                  className="bw-text-button"
-                  autoFocus
-                  onClick={() => setLiftArming(false)}
-                >
-                  Cancel
-                </button>
-              </div>
-            ) : (
-              <button
-                type="button"
-                className="bw-primary"
-                disabled={liftRefusal !== ''}
-                onClick={() => setLiftArming(true)}
-              >
-                Lift this session into the workers
-              </button>
-            )}
-          </>
-        )}
-
-        {/* --------------------------------------------------------- requests -- */}
-
-        <Head title="Requests" scope="profile" profileName={profileName} />
-        {!canConfigure ? (
-          <Unavailable what="no engine answers this browser's requests" />
-        ) : requests === null ? (
-          <Unavailable what="this build stores no request rules" />
-        ) : (
-          <>
-            <p className="bw-scrape-hint">{FULFILL_NOTE}</p>
+      <Head title="Workers" scope="browser" profileName={profileName} />
+      {!canConfigure ? (
+        <Unavailable what="no engine keeps a fleet of worker profiles" />
+      ) : (
+        <>
+          {rows.length === 0 ? (
+            <p className="bw-muted">No workers yet.</p>
+          ) : (
+            <p className="bw-scrape-facts">{fleetLine(rows, canMeasure)}</p>
+          )}
+          {rows.length > 0 && (
             <ul className="bw-menu-list">
-              {RESOURCE_TYPES.map((type) => (
-                <li key={type} className="bw-menu-row">
-                  <span className="bw-menu-label">{resourceLabel(type)}</span>
+              {rows.map((row) => (
+                <li key={row.profileId} className="bw-menu-row">
+                  <span className="bw-avatar" aria-hidden="true">
+                    {profileInitial(row.name, row.avatar)}
+                  </span>
+                  <span className="bw-menu-label">{row.name}</span>
+                  {row.orphaned && <span className="bw-badge">profile deleted</span>}
+                  {!row.enrolled && <span className="bw-badge">not enrolled</span>}
                   <span className="bw-spacer" />
-                  <Choice<RequestRule>
-                    label={`${resourceLabel(type)} rule`}
-                    value={requests[type] ?? null}
-                    options={REQUEST_RULES.map((rule) => ({ value: rule, label: ruleLabel(rule) }))}
-                    onPick={(rule) => void patch({ requests: ruleChange(type, rule) })}
-                  />
+                  <span className="bw-scrape-state" data-state={row.state}>
+                    {workerStateLabel(row.state)}
+                  </span>
+                  <span className="bw-menu-count">
+                    {countLine(row.requests, 'request', 'requests')}
+                  </span>
+                  {workersAvailable(api) && (
+                    <button
+                      type="button"
+                      className="bw-text-button"
+                      aria-label={`Retire ${row.name}`}
+                      onClick={() => void retire(row.profileId)}
+                    >
+                      Retire
+                    </button>
+                  )}
                 </li>
               ))}
             </ul>
-          </>
-        )}
+          )}
 
-        {/* ---------------------------------------------------------- capture -- */}
+          {/* Enrolling is choosing an existing profile, never minting one: a
+              worker is a profile with a cookie jar somebody may already be
+              signed into, and this panel does not create those. */}
+          {workersAvailable(api) && (
+            <div className="bw-scrape-row">
+              <select
+                className="bw-menu-input"
+                aria-label="Profile to enrol as a worker"
+                value=""
+                disabled={spare.length === 0}
+                onChange={(event) => {
+                  if (event.target.value !== '') void enrol(event.target.value)
+                }}
+              >
+                <option value="">{spare.length === 0 ? 'Every profile is a worker' : 'Add a worker…'}</option>
+                {spare.map((profile) => (
+                  <option key={profile.id} value={profile.id}>
+                    {profile.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
-        <Head title="Capture" scope="profile" profileName={profileName} />
-        {!canConfigure || capture === null ? (
-          <Unavailable what="this build records no background responses" />
-        ) : (
-          <>
-            <OnOff
-              label="Record background responses"
-              value={capture.on}
-              onPick={(next) => void patch({ capture: { on: next } })}
-            />
-            <p className="bw-scrape-hint">
-              Every XHR and fetch the page makes is written down as it answers, so a page that
-              loads its data after it renders is caught without asking it twice.
-            </p>
-            {/* The path ellipsises in a label built for one; the sentence that
-                stands in for a path the engine did not name must not, so it is a
-                different element rather than the same one wearing the same
-                truncation. */}
-            {capture.directory === '' ? (
-              <p className="bw-scrape-hint">This build did not say where captured responses go.</p>
-            ) : (
-              <div className="bw-menu-row">
-                <span className="bw-menu-label" title={capture.directory}>
-                  {capture.directory}
-                </span>
-                <span className="bw-spacer" />
-                {api.browserScrapingCaptureReveal && (
-                  <button
-                    type="button"
-                    className="bw-text-button"
-                    onClick={() => void api.browserScrapingCaptureReveal?.(editing)}
+          {/* Minting, which is the other half and not the same act: enrolling
+              takes a profile somebody already has, and this makes fresh ones,
+              which is the only workable way to stand eight of them up at
+              once. A total rather than a delta, and the button is absent
+              rather than inert when pressing it would add nothing. */}
+          {mintAvailable(api) && (
+            <div className="bw-scrape-row">
+              <label className="bw-scrape-field">
+                <span className="bw-scrape-field-label">Workers in total</span>
+                <input
+                  className="bw-menu-input bw-scrape-number"
+                  value={mintTo}
+                  inputMode="numeric"
+                  spellCheck={false}
+                  onChange={(event) => setMintTo(event.target.value)}
+                />
+              </label>
+              {mintTotal !== null && (
+                <button type="button" className="bw-primary" onClick={() => void mint(mintTotal)}>
+                  Make {mintTotal - rows.length} more
+                </button>
+              )}
+              <span className="bw-muted">{plan.line}</span>
+            </div>
+          )}
+
+          {/* The pool's own ceiling, not a rounder-looking one. This read
+              `max={64}` beside an engine that clamps to 16. */}
+          <NumberField
+            label="At once"
+            hint="How many workers may be working at the same time."
+            value={config?.fleet?.concurrency ?? null}
+            min={1}
+            max={MAX_WORKERS}
+            onCommit={(next) => void patch({ fleet: { concurrency: next } })}
+          />
+          {/* Ten minutes was accepted here and thirty seconds was stored:
+              the wait is awaited inside a tool call, so the pool caps it. */}
+          <NumberField
+            label="Between requests"
+            hint="Milliseconds a worker waits before its next request."
+            value={config?.fleet?.delayMs ?? null}
+            min={0}
+            max={MAX_PACE_MS}
+            onCommit={(next) => void patch({ fleet: { delayMs: next } })}
+          />
+        </>
+      )}
+
+      {/* ---------------------------------------------------------- session -- */}
+
+      <Head title="Session" scope="browser" profileName={profileName} />
+      {/*
+        The one section that is about a *window* rather than about this machine,
+        and the reason it is drawn and empty on a settings pane.
+
+        A lift takes the signed-in session off the page in front of the person.
+        Settings has no page and cannot grow one, so the button there could only
+        ever be disabled — and a control that is certain to refuse costs a click
+        to discover the lie. Named absence, one sentence, no control.
+      */}
+      {!canLift ? (
+        <p className="bw-scrape-hint">
+          A lift is taken off the page in front of you, and there is no page here. It is on the
+          browser’s own Scraping panel — three dots, then Scraping — where there is one.
+        </p>
+      ) : (
+        <>
+          <p className="bw-scrape-hint">
+            Lifting copies the signed-in session out of the page in front of you and into the workers
+            you tick, so they are signed in too. It happens only when you press it here: no tool in
+            this app can lift a session, and none is going to be added.
+            {liftRequestsAvailable(api) &&
+              ' Anything else that wants one has to ask, and the ask shows up in this section for you to answer.'}
+          </p>
+
+          {/*
+            The inbox, above the button.
+
+            An agent that wants a session lifted gets to *ask*, and the ask lands
+            here as a row with two answers — which is the whole of "surfaces as a
+            request to the person, not as a completed action". It sits above the
+            control rather than below it so that a pending ask is the first thing
+            read in this section, and it is drawn only when there is one: an empty
+            inbox drawn every time would train somebody to skip past it.
+          */}
+          {liftRequestsAvailable(api) && asks.length > 0 && (
+            <ul className="bw-menu-list">
+              {asks.map((ask) => (
+                <li key={ask.id} className="bw-scrape-ask">
+                  <span className="bw-scrape-ask-line">
+                    {liftRequestLine(ask.askedBy, nameOf(ask.fromProfileId), ask.intoProfileIds.map(nameOf))}
+                  </span>
+                  <span className="bw-scrape-ask-when">{timeLabel(ask.at)}</span>
+                  {ask.reason !== '' && <span className="bw-muted">{ask.reason}</span>}
+                  {approving === ask.id ? (
+                    <span className="bw-scrape-row">
+                      <button type="button" className="bw-danger" onClick={() => void answerAsk(ask, true)}>
+                        {liftLine(nameOf(ask.fromProfileId), ask.intoProfileIds.map(nameOf))}
+                      </button>
+                      <button
+                        type="button"
+                        className="bw-text-button"
+                        autoFocus
+                        onClick={() => setApproving('')}
+                      >
+                        Cancel
+                      </button>
+                    </span>
+                  ) : (
+                    <span className="bw-scrape-row">
+                      <button type="button" className="bw-primary" onClick={() => setApproving(ask.id)}>
+                        Approve this lift
+                      </button>
+                      <button
+                        type="button"
+                        className="bw-text-button"
+                        onClick={() => void answerAsk(ask, false)}
+                      >
+                        Decline
+                      </button>
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {!liftAvailable(api) ? (
+            <Unavailable what="nothing in this build can copy a session between profiles" />
+          ) : (
+            <>
+              <div className="bw-scrape-row">
+                <label className="bw-scrape-field">
+                  <span className="bw-scrape-field-label">Signed in as</span>
+                  <select
+                    className="bw-menu-input"
+                    value={liftFrom}
+                    onChange={(event) => {
+                      setLiftFrom(event.target.value)
+                      setLiftArming(false)
+                    }}
                   >
-                    Show
-                  </button>
+                    {profiles.map((profile) => (
+                      <option key={profile.id} value={profile.id}>
+                        {profile.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              {/* Which profile the session is expected to be, not which one it is
+                  taken from. The engine takes it off the page in front — that is
+                  what makes this a gesture on something you are looking at — and
+                  the two can disagree. When they do, nothing is copied. */}
+              <p className="bw-scrape-hint">
+                The session is taken from the page in front of you. If that page is not signed in as
+                the profile named here, nothing is copied and this says so.
+              </p>
+
+              {/* Named targets, ticked one at a time. There is deliberately no
+                  "all workers": a lift is a named act between named profiles, and
+                  a control that means "and whatever else is a worker next week" is
+                  not something a person can be said to have agreed to. */}
+              <div className="bw-scrape-targets" role="group" aria-label="Workers to inject the session into">
+                {rows.length === 0 ? (
+                  <p className="bw-muted">No workers yet, so there is nowhere to inject a session.</p>
+                ) : (
+                  rows.map((row) => (
+                    <button
+                      key={row.profileId}
+                      type="button"
+                      className="bw-scrape-target"
+                      aria-pressed={liftInto.includes(row.profileId)}
+                      data-on={liftInto.includes(row.profileId) || undefined}
+                      disabled={row.profileId === liftFrom}
+                      title={row.profileId === liftFrom ? 'This is the profile being lifted from' : undefined}
+                      onClick={() => {
+                        setLiftArming(false)
+                        setLiftInto((prev) =>
+                          prev.includes(row.profileId)
+                            ? prev.filter((id) => id !== row.profileId)
+                            : [...prev, row.profileId],
+                        )
+                      }}
+                    >
+                      {row.name}
+                    </button>
+                  ))
                 )}
               </div>
-            )}
-            <NumberField
-              label="Keep at most"
-              hint="Megabytes of captured responses. The oldest go when it is reached."
-              value={capture.keepMB}
-              min={1}
-              max={1000000}
-              onCommit={(next) => void patch({ capture: { keepMB: next } })}
-            />
-            {/* Measured, or said to be unmeasured. Never a zero standing in for
-                a number nobody counted — see NOT_MEASURED. */}
-            <p className="bw-scrape-facts">
-              {countLine(status?.capture?.recorded ?? null, 'response', 'responses')} ·{' '}
-              {bytesLine(status?.capture?.bytes ?? null, formatBytes)} · {droppedLine(status?.capture ?? null)}
-              {!canMeasure && ` · this build reports nothing, so all of it is ${NOT_MEASURED}`}
-            </p>
-            {api.browserScrapingCaptureClear && (
-              <button
-                type="button"
-                className="bw-text-button"
-                onClick={() => void clearCapture()}
-              >
-                Clear what has been captured
-              </button>
-            )}
-          </>
-        )}
 
-        {/* ----------------------------------------------------------- assets -- */}
+              {liftRefusal !== '' ? (
+                <p className="bw-muted">{liftRefusal}</p>
+              ) : (
+                <p className="bw-scrape-hint">{liftLine(nameOf(liftFrom), liftNames)}</p>
+              )}
 
-        <Head title="Assets" scope="profile" profileName={profileName} />
-        {!canConfigure || assets === null ? (
-          <Unavailable what="this build downloads no assets of its own" />
-        ) : (
-          <>
-            {/* A guarantee, stated as one. It is not a setting, so it is not
-                drawn as a switch somebody could look for and fail to find. */}
-            <p className="bw-scrape-hint">
-              Files are written byte for byte as the server sent them. Nothing re-encodes, resizes
-              or renames on the way to disk.
-            </p>
-            {downloads && (
-              <p className="bw-scrape-facts">
-                They land in {downloads.destination.folder === '' ? downloads.defaultFolder : downloads.destination.folder}
-                {downloads.destination.machineName !== '' && ` on ${downloads.destination.machineName}`}.
-              </p>
-            )}
+              {/*
+                Armed, and the armed button names both ends.
 
-            <OnOff
-              label="Upgrade asset URLs"
-              value={assets.upgrade.on}
-              onPick={(next) => void patch({ assets: { upgrade: { on: next } } })}
-            />
-            <div className="bw-scrape-row">
-              <TextField
-                label="Replace"
-                value={assets.upgrade.from}
-                placeholder="the part of the URL that names the small one"
-                onCommit={(next) => void patch({ assets: { upgrade: { from: next } } })}
-              />
-              <TextField
-                label="With"
-                value={assets.upgrade.to}
-                placeholder="the part that names the full one"
-                onCommit={(next) => void patch({ assets: { upgrade: { to: next } } })}
-              />
-            </div>
-            <p className="bw-scrape-hint">
-              If the upgraded URL answers 404, the original is fetched instead — so an upgrade rule
-              that is wrong about one file costs that file its resolution, never the file itself.
-            </p>
-
-            <OnOff
-              label="Resume ledger"
-              value={assets.ledger.on}
-              onPick={(next) => void patch({ assets: { ledger: { on: next } } })}
-            />
-            <p className="bw-scrape-hint">
-              Each asset is written down under its URL <em>and</em> the digest of what came back, so
-              a re-run skips only files that are byte for byte the ones already on disk.
-            </p>
-            <OnOff
-              label="Fetch again even where the ledger has it"
-              value={assets.ledger.refetch}
-              onPick={(next) => void patch({ assets: { ledger: { refetch: next } } })}
-            />
-            <p className="bw-scrape-hint">
-              On, the ledger goes on being written but stops skipping — which is how a run is made
-              to go and get everything again on purpose, rather than by emptying what it knows.
-            </p>
-            <p className="bw-scrape-facts">
-              {countLine(status?.assets?.fetched ?? null, 'asset', 'assets')} fetched ·{' '}
-              {countLine(status?.assets?.skipped ?? null, 'asset', 'assets')} skipped by the ledger ·{' '}
-              {countLine(status?.assets?.upgraded ?? null, 'upgrade', 'upgrades')} ·{' '}
-              {countLine(status?.assets?.fellBack ?? null, 'fallback', 'fallbacks')} ·{' '}
-              {countLine(status?.assets?.ledgerEntries ?? null, 'row', 'rows')} in the ledger
-            </p>
-            {api.browserScrapingLedgerClear &&
-              (ledgerArming ? (
+                The same two-press shape the profile rows use for deletion, and for
+                a harder reason: this one hands a live logged-in session to other
+                profiles on disk. The confirm carries the names rather than a
+                count, Cancel takes the focus, and nothing in this file can reach
+                `lift()` except this button.
+              */}
+              {liftArming ? (
                 <div className="bw-scrape-row">
-                  <button
-                    type="button"
-                    className="bw-danger"
-                    onClick={() => void clearLedger()}
-                  >
-                    Forget every asset {profileName === '' ? 'this profile' : profileName} has fetched
+                  <button type="button" className="bw-danger" onClick={() => void lift()}>
+                    {liftLine(nameOf(liftFrom), liftNames)}
                   </button>
                   <button
                     type="button"
                     className="bw-text-button"
                     autoFocus
-                    onClick={() => setLedgerArming(false)}
+                    onClick={() => setLiftArming(false)}
                   >
                     Cancel
                   </button>
                 </div>
               ) : (
-                <button type="button" className="bw-text-button" onClick={() => setLedgerArming(true)}>
-                  Empty the ledger
+                <button
+                  type="button"
+                  className="bw-primary"
+                  disabled={liftRefusal !== ''}
+                  onClick={() => setLiftArming(true)}
+                >
+                  Lift this session into the workers
                 </button>
-              ))}
-          </>
-        )}
+              )}
+            </>
+          )}
+        </>
+      )}
 
-        {/* ----------------------------------------------------------- checks -- */}
+      {/* --------------------------------------------------------- requests -- */}
 
-        <Head title="Checks" scope="profile" profileName={profileName} />
-        {!canConfigure || checks === null ? (
-          <Unavailable what="this build checks nothing it has taken" />
-        ) : (
-          <>
-            <OnOff
-              label="Check coverage against the page's own total"
-              value={checks.coverage.on}
-              onPick={(next) => void patch({ checks: { coverage: { on: next } } })}
+      <Head title="Requests" scope="profile" profileName={profileName} />
+      {!canConfigure ? (
+        <Unavailable what="no engine answers this browser's requests" />
+      ) : requests === null ? (
+        <Unavailable what="this build stores no request rules" />
+      ) : (
+        <>
+          <p className="bw-scrape-hint">{FULFILL_NOTE}</p>
+          <ul className="bw-menu-list">
+            {RESOURCE_TYPES.map((type) => (
+              <li key={type} className="bw-menu-row">
+                <span className="bw-menu-label">{resourceLabel(type)}</span>
+                <span className="bw-spacer" />
+                <Choice<RequestRule>
+                  label={`${resourceLabel(type)} rule`}
+                  value={requests[type] ?? null}
+                  options={REQUEST_RULES.map((rule) => ({ value: rule, label: ruleLabel(rule) }))}
+                  onPick={(rule) => void patch({ requests: ruleChange(type, rule) })}
+                />
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+
+      {/* ---------------------------------------------------------- capture -- */}
+
+      <Head title="Capture" scope="profile" profileName={profileName} />
+      {!canConfigure || capture === null ? (
+        <Unavailable what="this build records no background responses" />
+      ) : (
+        <>
+          <OnOff
+            label="Record background responses"
+            value={capture.on}
+            onPick={(next) => void patch({ capture: { on: next } })}
+          />
+          <p className="bw-scrape-hint">
+            Every XHR and fetch the page makes is written down as it answers, so a page that
+            loads its data after it renders is caught without asking it twice.
+          </p>
+          {/* The path ellipsises in a label built for one; the sentence that
+              stands in for a path the engine did not name must not, so it is a
+              different element rather than the same one wearing the same
+              truncation. */}
+          {capture.directory === '' ? (
+            <p className="bw-scrape-hint">This build did not say where captured responses go.</p>
+          ) : (
+            <div className="bw-menu-row">
+              <span className="bw-menu-label" title={capture.directory}>
+                {capture.directory}
+              </span>
+              <span className="bw-spacer" />
+              {api.browserScrapingCaptureReveal && (
+                <button
+                  type="button"
+                  className="bw-text-button"
+                  onClick={() => void api.browserScrapingCaptureReveal?.(editing)}
+                >
+                  Show
+                </button>
+              )}
+            </div>
+          )}
+          {/* And a terabyte was accepted here, against a capture store that
+              keeps at most four gigabytes. */}
+          <NumberField
+            label="Keep at most"
+            hint="Megabytes of captured responses. The oldest go when it is reached."
+            value={capture.keepMB}
+            min={1}
+            max={MAX_KEEP_MB}
+            onCommit={(next) => void patch({ capture: { keepMB: next } })}
+          />
+          {/* Measured, or said to be unmeasured. Never a zero standing in for
+              a number nobody counted — see NOT_MEASURED. */}
+          <p className="bw-scrape-facts">
+            {countLine(status?.capture?.recorded ?? null, 'response', 'responses')} ·{' '}
+            {bytesLine(status?.capture?.bytes ?? null, formatBytes)} · {droppedLine(status?.capture ?? null)}
+            {!canMeasure && ` · this build reports nothing, so all of it is ${NOT_MEASURED}`}
+          </p>
+          {api.browserScrapingCaptureClear && (
+            <button
+              type="button"
+              className="bw-text-button"
+              onClick={() => void clearCapture()}
+            >
+              Clear what has been captured
+            </button>
+          )}
+        </>
+      )}
+
+      {/* ----------------------------------------------------------- assets -- */}
+
+      <Head title="Assets" scope="profile" profileName={profileName} />
+      {!canConfigure || assets === null ? (
+        <Unavailable what="this build downloads no assets of its own" />
+      ) : (
+        <>
+          {/* A guarantee, stated as one. It is not a setting, so it is not
+              drawn as a switch somebody could look for and fail to find. */}
+          <p className="bw-scrape-hint">
+            Files are written byte for byte as the server sent them. Nothing re-encodes, resizes
+            or renames on the way to disk.
+          </p>
+          {downloads && (
+            <p className="bw-scrape-facts">
+              They land in {downloads.destination.folder === '' ? downloads.defaultFolder : downloads.destination.folder}
+              {downloads.destination.machineName !== '' && ` on ${downloads.destination.machineName}`}.
+            </p>
+          )}
+
+          <OnOff
+            label="Upgrade asset URLs"
+            value={assets.upgrade.on}
+            onPick={(next) => void patch({ assets: { upgrade: { on: next } } })}
+          />
+          <div className="bw-scrape-row">
+            <TextField
+              label="Replace"
+              value={assets.upgrade.from}
+              placeholder="the part of the URL that names the small one"
+              onCommit={(next) => void patch({ assets: { upgrade: { from: next } } })}
             />
             <TextField
-              label="Where the page states its total"
-              value={checks.coverage.pattern}
-              placeholder="a pattern with one number in it"
-              onCommit={(next) => void patch({ checks: { coverage: { pattern: next } } })}
+              label="With"
+              value={assets.upgrade.to}
+              placeholder="the part that names the full one"
+              onCommit={(next) => void patch({ assets: { upgrade: { to: next } } })}
             />
-            {/* The number a listing prints about itself is the only total that
-                is not the scrape's own opinion of how it went. Configurable
-                because every site writes that line differently. */}
-            <p className="bw-scrape-hint">
-              The number the page prints about itself — the total in a line like “1–24 of 16,498”.
-              What came back is compared against it, and a run that is short says so.
-            </p>
-            <p className="bw-scrape-facts" data-tone={verdict.tone}>
-              {verdict.line}
-              {status?.lastCheck && ` — ${timeLabel(status.lastCheck.at)}`}
-            </p>
-          </>
-        )}
+          </div>
+          <p className="bw-scrape-hint">
+            If the upgraded URL answers 404, the original is fetched instead — so an upgrade rule
+            that is wrong about one file costs that file its resolution, never the file itself.
+          </p>
 
-        {/* The camera has its own availability because it has its own engine.
-            Inside the coverage branch it would have gone dark on every build
-            whose configuration store does not exist — which is all of them —
-            while the photographing carried on underneath. */}
-        {!blockCaptureAvailable(api) ? (
-          <Unavailable what="this build cannot say whether it photographs the pages that refuse it" />
-        ) : (
-          <>
-            <OnOff
-              label="Screenshot the page when a request is blocked"
-              value={camera}
-              onPick={(next) => void setCameraOn(next)}
-            />
-            <p className="bw-scrape-hint">
-              A 403, a 429, a challenge or a navigation that ended somewhere it was not sent is
-              photographed as it happens — by then it is too late to ask for the picture. The image and
-              the evidence beside it stay in this app’s own folder, under this profile, and no paired
-              device can read them.
-            </p>
-          </>
-        )}
+          <OnOff
+            label="Resume ledger"
+            value={assets.ledger.on}
+            onPick={(next) => void patch({ assets: { ledger: { on: next } } })}
+          />
+          <p className="bw-scrape-hint">
+            Each asset is written down under its URL <em>and</em> the digest of what came back, so
+            a re-run skips only files that are byte for byte the ones already on disk.
+          </p>
+          <OnOff
+            label="Fetch again even where the ledger has it"
+            value={assets.ledger.refetch}
+            onPick={(next) => void patch({ assets: { ledger: { refetch: next } } })}
+          />
+          <p className="bw-scrape-hint">
+            On, the ledger goes on being written but stops skipping — which is how a run is made
+            to go and get everything again on purpose, rather than by emptying what it knows.
+          </p>
+          <p className="bw-scrape-facts">
+            {countLine(status?.assets?.fetched ?? null, 'asset', 'assets')} fetched ·{' '}
+            {countLine(status?.assets?.skipped ?? null, 'asset', 'assets')} skipped by the ledger ·{' '}
+            {countLine(status?.assets?.upgraded ?? null, 'upgrade', 'upgrades')} ·{' '}
+            {countLine(status?.assets?.fellBack ?? null, 'fallback', 'fallbacks')} ·{' '}
+            {countLine(status?.assets?.ledgerEntries ?? null, 'row', 'rows')} in the ledger
+          </p>
+          {api.browserScrapingLedgerClear &&
+            (ledgerArming ? (
+              <div className="bw-scrape-row">
+                <button
+                  type="button"
+                  className="bw-danger"
+                  onClick={() => void clearLedger()}
+                >
+                  Forget every asset {profileName === '' ? 'this profile' : profileName} has fetched
+                </button>
+                <button
+                  type="button"
+                  className="bw-text-button"
+                  autoFocus
+                  onClick={() => setLedgerArming(false)}
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button type="button" className="bw-text-button" onClick={() => setLedgerArming(true)}>
+                Empty the ledger
+              </button>
+            ))}
+        </>
+      )}
 
-        {/* ------------------------------------------------------------ store -- */}
+      {/* ----------------------------------------------------------- checks -- */}
 
-        <Head title="Store" scope="browser" profileName={profileName} />
-        {!storeAvailable(api) ? (
-          <Unavailable what="this build has no store to fetch a tool from" />
-        ) : tools.length === 0 ? (
-          <p className="bw-muted">Nothing in the store yet.</p>
-        ) : (
-          <ul className="bw-menu-list">
-            {tools.map((tool) => {
-              const refusal = installBlockedReason(tool)
-              return (
-                <li key={tool.id} className="bw-scrape-tool">
-                  <span className="bw-scrape-row">
-                    <span className="bw-menu-label">{tool.name}</span>
-                    {tool.version !== '' && <span className="bw-badge">{tool.version}</span>}
-                    <span className="bw-scrape-identity" data-identity={tool.identity}>
-                      {tool.identity === 'verified' ? 'Verified' : 'Not verified'}
-                    </span>
-                    <span className="bw-spacer" />
-                    {tool.installed ? (
-                      <button type="button" className="bw-text-button" onClick={() => void remove(tool)}>
-                        Remove
-                      </button>
-                    ) : (
-                      /* Absent rather than disabled: an Install that cannot
-                         install is a control that appears to work, and what is
-                         underneath it is somebody else's code arriving on his
-                         disk. The reason is on the row instead. */
-                      canInstall(tool) && (
-                        <button type="button" className="bw-primary" onClick={() => void install(tool)}>
-                          Install
-                        </button>
-                      )
-                    )}
+      <Head title="Checks" scope="profile" profileName={profileName} />
+      {!canConfigure || checks === null ? (
+        <Unavailable what="this build checks nothing it has taken" />
+      ) : (
+        <>
+          <OnOff
+            label="Check coverage against the page's own total"
+            value={checks.coverage.on}
+            onPick={(next) => void patch({ checks: { coverage: { on: next } } })}
+          />
+          <TextField
+            label="Where the page states its total"
+            value={checks.coverage.pattern}
+            placeholder="a pattern with one number in it"
+            onCommit={(next) => void patch({ checks: { coverage: { pattern: next } } })}
+          />
+          {/* The number a listing prints about itself is the only total that
+              is not the scrape's own opinion of how it went. Configurable
+              because every site writes that line differently. */}
+          <p className="bw-scrape-hint">
+            The number the page prints about itself — the total in a line like “1–24 of 16,498”.
+            What came back is compared against it, and a run that is short says so.
+          </p>
+          <p className="bw-scrape-facts" data-tone={verdict.tone}>
+            {verdict.line}
+            {status?.lastCheck && ` — ${timeLabel(status.lastCheck.at)}`}
+          </p>
+        </>
+      )}
+
+      {/* The camera has its own availability because it has its own engine.
+          Inside the coverage branch it would have gone dark on every build
+          whose configuration store does not exist — which is all of them —
+          while the photographing carried on underneath. */}
+      {!blockCaptureAvailable(api) ? (
+        <Unavailable what="this build cannot say whether it photographs the pages that refuse it" />
+      ) : (
+        <>
+          <OnOff
+            label="Screenshot the page when a request is blocked"
+            value={camera}
+            onPick={(next) => void setCameraOn(next)}
+          />
+          <p className="bw-scrape-hint">
+            A 403, a 429, a challenge or a navigation that ended somewhere it was not sent is
+            photographed as it happens — by then it is too late to ask for the picture. The image and
+            the evidence beside it stay in this app’s own folder, under this profile, and no paired
+            device can read them.
+          </p>
+        </>
+      )}
+
+      {/* ------------------------------------------------------------ store -- */}
+
+      <Head title="Store" scope="browser" profileName={profileName} />
+      {!storeAvailable(api) ? (
+        <Unavailable what="this build has no store to fetch a tool from" />
+      ) : tools.length === 0 ? (
+        <p className="bw-muted">Nothing in the store yet.</p>
+      ) : (
+        <ul className="bw-menu-list">
+          {tools.map((tool) => {
+            const refusal = installBlockedReason(tool)
+            return (
+              <li key={tool.id} className="bw-scrape-tool">
+                <span className="bw-scrape-row">
+                  <span className="bw-menu-label">{tool.name}</span>
+                  {tool.version !== '' && <span className="bw-badge">{tool.version}</span>}
+                  <span className="bw-scrape-identity" data-identity={tool.identity}>
+                    {tool.identity === 'verified' ? 'Verified' : 'Not verified'}
                   </span>
-                  {tool.publisher !== '' && <span className="bw-muted">{tool.publisher}</span>}
-                  {/* What it may reach, before it is on disk rather than after. */}
-                  <span className="bw-scrape-reach">{reachLine(tool)}</span>
-                  {refusal !== '' && <span className="bw-warn">{refusal}</span>}
-                </li>
-              )
-            })}
-          </ul>
-        )}
-      </div>
+                  <span className="bw-spacer" />
+                  {tool.installed ? (
+                    <button type="button" className="bw-text-button" onClick={() => void remove(tool)}>
+                      Remove
+                    </button>
+                  ) : (
+                    /* Absent rather than disabled: an Install that cannot
+                       install is a control that appears to work, and what is
+                       underneath it is somebody else's code arriving on his
+                       disk. The reason is on the row instead. */
+                    canInstall(tool) && (
+                      <button type="button" className="bw-primary" onClick={() => void install(tool)}>
+                        Install
+                      </button>
+                    )
+                  )}
+                </span>
+                {tool.publisher !== '' && <span className="bw-muted">{tool.publisher}</span>}
+                {/* What it may reach, before it is on disk rather than after. */}
+                <span className="bw-scrape-reach">{reachLine(tool)}</span>
+                {refusal !== '' && <span className="bw-warn">{refusal}</span>}
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+/**
+ * The same body, in the browser's own three-dot menu, inside a modal.
+ *
+ * A wrapper rather than a second panel. Until Settings grew a Scraping pane
+ * this component *was* the body, and the split is deliberately the smallest one
+ * that could exist: the modal owns the title bar and the close, and everything
+ * a person reads or presses is {@link ScrapingBody}. Nothing was re-typed to be
+ * moved, which is what makes *"exactly the same settings in both places"* a
+ * property of the code rather than a promise about it — the failure mode the
+ * settings window already names: *"when you reorganize you mostly miss the
+ * things and you drop some stuff."*
+ *
+ * `canLift` is true here and only here: this surface has a page in front of it.
+ */
+export function ScrapingPanel({ open, onClose, ...rest }: Props) {
+  return (
+    <Modal open={open} title="Scraping" onClose={onClose} size="lg">
+      <ScrapingBody live={open} canLift {...rest} />
     </Modal>
   )
 }

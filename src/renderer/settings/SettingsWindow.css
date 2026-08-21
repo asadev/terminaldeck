@@ -2052,3 +2052,27 @@
   color: var(--text-secondary);
   overflow-wrap: anywhere;
 }
+
+/* ------------------------------------------------------------- scraping -- */
+
+/*
+  The browser's Scraping panel, standing on a settings pane.
+
+  Three declarations rather than a stylesheet, because the panel is not restyled
+  here: it is the same markup the three-dot panel draws, its `.bw-` rules are
+  written entirely in this app's own tokens, and re-skinning it for this surface
+  is how one screen comes to look like a different feature from the other.
+
+  What this adds is only what a *pane* owes the block above it. `.bw-scrape` is a
+  flex column with no outer margin — inside a modal the dialog's own padding
+  provides that — so on a pane it would sit flush against the scope switch. The
+  spacing is `--sp-4`, which is what `.settings-group` leaves between blocks, so
+  the panel is held off the switch by exactly as much as any other pane's first
+  group is.
+*/
+.settings-panel > .bw-scrape {
+  margin-top: var(--sp-4);
+  /* The pane scrolls; the panel must not carry a second scroller inside it, and
+     a long capture path must wrap rather than widen the column. */
+  min-width: 0;
+}

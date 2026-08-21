@@ -52,6 +52,8 @@
  * an expired lease just stops counting.
  */
 
+import { MAX_PACE_MS, MAX_WORKERS } from '../shared/scrape-limits'
+
 /* ------------------------------------------------------------------ shape -- */
 
 /** One worker, as the pool sees it. The partition lives in `browser-workers.ts`. */
@@ -83,23 +85,29 @@ export interface PaceSettings {
 }
 
 /**
- * The ceiling on `minDelayMs + jitterMs`, and it is not arbitrary.
+ * The ceiling on `minDelayMs + jitterMs`, and the ceiling on the fleet.
  *
- * A lease is handed out by a tool call that **awaits the wait** — that is what
- * makes the delay a mechanism rather than a setting. An MCP client gives a tool
- * call sixty seconds, so a pace that could exceed that would turn a correct
- * delay into a timeout, and a timeout reads to a model as a broken tool worth
- * retrying immediately. Thirty seconds is comfortably inside it and far longer
- * than any polite gap.
+ * Both live in `shared/scrape-limits.ts` now, and are re-exported here so every
+ * caller that already had them keeps them. The move is not tidying: the panel
+ * that draws the two number fields is in the renderer, which cannot import this
+ * file, so it carried a second pair of numbers — `max={64}` and `max={600000}`
+ * — that the pool then clamped to 16 and 30,000 behind it.
  *
- * A person who genuinely wants a five-minute gap has an orchestrator outside
- * this app and can sleep in it; what this app must not do is accept the number
- * and then break on it.
+ * The reasoning stays worth having on both. On the pace: a lease is handed out
+ * by a tool call that **awaits the wait** — that is what makes the delay a
+ * mechanism rather than a setting. An MCP client gives a tool call sixty
+ * seconds, so a pace that could exceed that would turn a correct delay into a
+ * timeout, and a timeout reads to a model as a broken tool worth retrying
+ * immediately. Thirty seconds is comfortably inside it and far longer than any
+ * polite gap. A person who genuinely wants a five-minute gap has an
+ * orchestrator outside this app and can sleep in it; what this app must not do
+ * is accept the number and then break on it.
+ *
+ * And on the fleet: nothing above `MAX_WORKERS` is a pool, it is a fleet, and
+ * it is not what this is.
  */
-export const MAX_PACE_MS = 30_000
 
-/** Nothing above this is a pool, it is a fleet, and it is not what this is. */
-export const MAX_WORKERS = 16
+export { MAX_PACE_MS, MAX_WORKERS }
 
 export const DEFAULT_PACE: Readonly<PaceSettings> = Object.freeze({
   maxConcurrent: 3,

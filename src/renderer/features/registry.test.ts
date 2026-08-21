@@ -120,10 +120,19 @@ describe('the app itself is not in the store', () => {
 
   it('leaves settings, updates and profiles alone', () => {
     const owned = SECTIONS.filter((section) => featureOwningSection(section.id) !== null)
-    // Exactly one settings section belongs to a feature today. Written as the
-    // whole list rather than as a spot check, so adding a second is a decision
-    // somebody makes here rather than a side effect of a declaration.
-    expect(owned.map((section) => section.id)).toEqual(['browser'])
+    /*
+     * Two settings sections belong to a feature today, and both belong to the
+     * same one. Written as the whole list rather than as a spot check, so a
+     * third is a decision somebody makes here rather than a side effect of a
+     * declaration.
+     *
+     * Scraping joined on the day it became a pane: it is the built-in browser's
+     * harvesting half — the fleet is a set of that browser's profiles, the
+     * request rules are armed on its tabs — so with the browser pane
+     * uninstalled its every control writes to something that is not there.
+     * Everything else in the rail is core and stays whatever anybody installs.
+     */
+    expect(owned.map((section) => section.id)).toEqual(['browser', 'scraping'])
   })
 })
 
