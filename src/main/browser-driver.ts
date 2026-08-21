@@ -20,6 +20,10 @@ import {
   TEXT_SCRIPT,
   withArgs,
 } from './browser-drive-script'
+import { imageSizeScript } from './browser-capture-script'
+import { CaptureStore, type CaptureBounds } from './browser-capture-store'
+import type { FetchRules } from './browser-fetch-rules'
+import { PageNetwork, type NetworkStatus } from './browser-network'
 import { copilotPaths } from './copilot-home'
 import { navigatePage, type SteerablePage } from './browser-route'
 import { normalizeUrl, shortLabel } from './browser-url'
@@ -380,6 +384,19 @@ export interface DriveHost {
    * him about which tab he is on.
    */
   showWindow?(browserTabId: string): Promise<boolean>
+  /**
+   * Where this page's captured traffic may be written, for one run.
+   *
+   * Handed in rather than composed here for the reason every other member of
+   * this interface is: the answer depends on which browser *profile* the tab was
+   * built in, and that is a fact `browser-tab.ts` stamps at creation and this
+   * module has no business looking up. See `browserTabProfile`.
+   *
+   * Null when there is no such tab, and absent in a build that has no browser
+   * wiring — in which case `armNetwork` refuses to capture and says so, rather
+   * than arming something that writes nowhere.
+   */
+  captureFolder?(input: { viewId: string; runId: string }): string | null
 }
 
 /**
@@ -425,6 +442,15 @@ class Slot {
   isolated = false
   /** When something last happened here. Decides which slot the banner is about. */
   touchedAt = 0
+  /**
+   * This page's armed network, or null when nothing has armed one.
+   *
+   * On the slot rather than on the drive for the same reason `grantedOrigin` and
+   * `secretSelectors` are: it is a fact about a *document*. Two windows
+   * harvesting at once are two rule sets, two capture folders and two sets of
+   * counts, and a shared one would file B2's JSON under B1's run.
+   */
+  network: PageNetwork | null = null
   constructor(
     readonly key: string,
     /** `B2`, or empty for the copilot's own tab. */
@@ -673,6 +699,8 @@ export class BrowserDrive {
      * there, and the model is told nothing about why the site does not know it.
      */
     if (wc && slot === this.own && slot.isolated !== input.isolate) {
+      slot.network?.abandon('the page was replaced to change its isolation')
+      slot.network = null
       this.detach(slot)
       slot.viewId = null
       slot.grantedOrigin = null
@@ -777,6 +805,15 @@ export class BrowserDrive {
   /** The person closed the page, or it died. Ends that drive; never re-arms. */
   release(target?: DriveTarget | null): void {
     const slot = this.slotFor(target)
+    /*
+     * The books are closed before the debugger goes, and closed *without*
+     * sending anything — see `PageNetwork.abandon`. Detaching the debugger is
+     * what actually resumes any paused request, which is why this cannot be a
+     * disarm: a command sent to a page that has just gone is an unhandled
+     * rejection rather than an error anybody sees.
+     */
+    slot.network?.abandon('the page was released')
+    slot.network = null
     this.detach(slot)
     slot.viewId = null
     slot.isolated = false
@@ -1622,6 +1659,199 @@ export class BrowserDrive {
     return { path, width: size.width, height: size.height, masked: masked.painted }
   }
 
+  /* -------------------------------------------------------------- the network -- */
+
+  /**
+   * The page's network, armed: what it may fetch, and what it fetched.
+   *
+   * ## Why this lives here and not in a tool
+   *
+   * *"Don't build a full scraping framework inside a terminal app. The browser
+   * should expose these capabilities cleanly; the orchestration can live
+   * outside."* So what the drive owns is the arming and the counting; the crawl
+   * — the frontier, the pacing, the retries, the resume ledger — belongs to
+   * whatever is driving from outside, and none of it is in this repository.
+   *
+   * ## The two things this had to get right
+   *
+   *  - **Cheap, not blocked.** Answering an image request with a correctly
+   *    sized transparent PNG costs no bandwidth and keeps every lazy-loader
+   *    advancing. Blocking it is what lost 16,498 floor plans. See
+   *    `browser-placeholder.ts`.
+   *  - **Eager, not on demand.** Chromium evicts response bodies, so a capture
+   *    that fetches them when somebody asks fetches them too late. See
+   *    `browser-network.ts`.
+   */
+
+  /** Run ids, so two arms on one page are two folders. */
+  private runSeq = 0
+
+  /**
+   * The network for a slot, made on first use.
+   *
+   * The transport is three closures over the same `send`, `run` and debugger
+   * the rest of this class uses — so every command it issues goes through
+   * `screenCommand` and every read through the one isolated-world call. There
+   * is no second door, which is the property `browser-cdp.test.ts` asserts by
+   * counting call sites in this file.
+   */
+  private netFor(slot: Slot, wc: WebContents): PageNetwork {
+    if (slot.network !== null) return slot.network
+    const made = new PageNetwork({
+      send: (method, params = {}) => this.send(wc, slot, method, params),
+      onEvent: (handler) => {
+        const listener = (_event: unknown, method: string, params: unknown): void => {
+          handler(
+            method,
+            typeof params === 'object' && params !== null ? (params as Record<string, unknown>) : {},
+          )
+        }
+        wc.debugger.on('message', listener)
+        return () => {
+          try {
+            wc.debugger.off('message', listener)
+          } catch {
+            // The page is gone and took its emitter with it. Nothing to remove.
+          }
+        }
+      },
+      sizeOf: (url) => this.run<unknown>(imageSizeScript(url), null, slot),
+      now: () => this.host.now(),
+    })
+    slot.network = made
+    return made
+  }
+
+  /**
+   * Arm this page for harvesting.
+   *
+   * Arming twice on one page **replaces** the previous run rather than stacking
+   * on it: the old one is stopped, its summary is closed and handed back as
+   * `previous`, and a new folder is started. Two capture stores writing one
+   * manifest would interleave sequence numbers, and two rule sets would be one
+   * rule set with the other silently ignored — which is exactly the shape of
+   * quiet failure this whole piece of work exists to remove.
+   */
+  async armNetwork(
+    input: {
+      rules: FetchRules
+      capture: boolean
+      /** Which kinds' bodies to keep. Empty means the capture default. */
+      bodyKinds: ReadonlySet<string>
+      bounds: CaptureBounds
+    },
+    target?: DriveTarget | null,
+  ): Promise<{
+    window: string | null
+    rules: FetchRules
+    dir: string
+    manifest: string
+    previous: NetworkStatus | null
+  }> {
+    const { slot, wc } = await this.hold(target)
+    /*
+     * The previous run is stopped and handed back, never left running beside
+     * this one. Two stores appending one manifest would interleave sequence
+     * numbers; two rule sets would be one rule set with the other silently
+     * ignored.
+     */
+    const standing = slot.network
+    slot.network = null
+    const previous = standing === null ? null : await standing.disarm('it was armed again')
+
+    let store: CaptureStore | null = null
+    let dir = ''
+    if (input.capture) {
+      if (!this.host.captureFolder) {
+        throw new DriveRefused(
+          'this build cannot write captured traffic anywhere, so capture cannot be turned on. Arm the ' +
+            'rules on their own, or read the page.',
+        )
+      }
+      this.runSeq += 1
+      const folder = this.host.captureFolder({
+        viewId: slot.viewId ?? '',
+        runId: `run-${this.host.now()}-${this.runSeq}`,
+      })
+      if (folder === null) {
+        throw new DriveRefused('this page has no profile to file captured traffic under')
+      }
+      store = new CaptureStore(folder, input.bounds, { now: () => this.host.now() })
+      /*
+       * The folder is made *now*, while there is a caller to tell.
+       *
+       * Every later write happens inside a network event, where a throw would
+       * leave a request paused and a page hanging. A disk that will not take
+       * the directory is a refusal at the tool, not a run that quietly records
+       * nothing.
+       */
+      try {
+        store.open()
+      } catch (error) {
+        throw new DriveRefused(
+          `could not make the capture folder: ${error instanceof Error ? error.message : String(error)}`,
+        )
+      }
+      dir = store.dir
+    }
+
+    const network = this.netFor(slot, wc)
+    await network.arm({
+      rules: input.rules,
+      capture:
+        store === null
+          ? null
+          : {
+              store,
+              bodyKinds:
+                input.bodyKinds.size === 0 ? new Set(['xhr', 'fetch']) : new Set(input.bodyKinds),
+            },
+    })
+    /*
+     * Which page this folder came from, written into its own summary.
+     *
+     * A folder of JSON with no record of what produced it is most of the way to
+     * being useless — the same shape of half-answer as a dataset that never
+     * states its own total. Both ends are recorded, because a harvest
+     * navigates.
+     */
+    network.notePage({ url: wc.getURL(), title: wc.getTitle(), armed: true })
+    slot.touchedAt = this.host.now()
+    return {
+      window: slot === this.own ? null : slot.name,
+      rules: input.rules,
+      dir,
+      manifest: store === null ? '' : store.manifestPath,
+      previous,
+    }
+  }
+
+  /** What this page's network is doing, or null when nothing armed one. */
+  networkStatus(target?: DriveTarget | null): NetworkStatus | null {
+    const slot = this.slotFor(target)
+    return slot.network === null ? null : slot.network.status()
+  }
+
+  /**
+   * Stop, and answer with everything that happened.
+   *
+   * Null when nothing was armed — which the tool reports as a refusal rather
+   * than as an empty success, because "there was nothing to stop" and "the run
+   * captured nothing" are different facts and a caller acts on them
+   * differently.
+   */
+  async disarmNetwork(target?: DriveTarget | null): Promise<NetworkStatus | null> {
+    const slot = this.slotFor(target)
+    const network = slot.network
+    if (network === null) return null
+    slot.network = null
+    const wc = this.contents(slot)
+    // Best effort: a page that has gone still gets a summary, with the address
+    // it was armed on and nothing where it ended up.
+    if (wc) network.notePage({ url: wc.getURL(), title: wc.getTitle() })
+    return network.disarm()
+  }
+
   /* ------------------------------------------------------------- handover -- */
 
   /**
@@ -1686,6 +1916,16 @@ export class BrowserDrive {
         await this.attach(wc, slot)
       }
       slot.prompt = sanitizeHandoverPrompt(prompt) || 'The copilot needs you to do something on this page.'
+      /*
+       * Before the baton moves, never after.
+       *
+       * `screenCommand` refuses every command while the person has the page, so
+       * an interception left armed across a handover would pause his images and
+       * then be unable to answer them — he would be handed a page that never
+       * finishes loading, in order to type a password into it. The disarm has to
+       * be sent while this side may still send.
+       */
+      await slot.network?.suspend('the person was given the page').catch(() => undefined)
       this.move(slot, 'handover')
     }
 
@@ -1749,6 +1989,9 @@ export class BrowserDrive {
     slot.prompt = ''
     if (carryOn) {
       this.move(slot, 'resumed')
+      // The rules go back on with the baton. A run that stayed silently off
+      // after a handover would be a control that looks armed and is not.
+      void slot.network?.resume().catch(() => undefined)
       slot.waiting?.('resumed')
       slot.waiting = null
       return

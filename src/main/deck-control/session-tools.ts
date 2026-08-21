@@ -93,10 +93,11 @@ import { NO_TIERS, type Caller, type TierGrant } from './surface'
  * because the wire name and the dotted id are two names for one tool and a
  * caller picks which to send.
  *
- * Six ids, and the list is written out rather than derived from
- * `browserTools()` on purpose: derivation would mean a seventh tool added to
+ * Seven ids, and the list is written out rather than derived from
+ * `browserTools()` on purpose: derivation would mean an eighth tool added to
  * that file one day silently becoming something every session on the machine
- * could call. A grant is a thing somebody writes down.
+ * could call. A grant is a thing somebody writes down — which is why
+ * `browser.network` is on it as two more lines rather than as a wildcard.
  */
 export const SESSION_TOOLS: ReadonlySet<string> = new Set([
   'browser.open',
@@ -111,6 +112,20 @@ export const SESSION_TOOLS: ReadonlySet<string> = new Set([
   'browser_handover',
   'browser.close',
   'browser_close',
+  /*
+   * Harvesting, added 2026-08-21, and it belongs to a session as much as to the
+   * copilot — arguably more. The person who runs a scrape runs it from a
+   * terminal, in a session, against a window they attached by hand; a grant
+   * that let the copilot arm a page and not the session doing the work would be
+   * the capability in the wrong hands by exactly one seat.
+   *
+   * It reaches nothing new. `browser-network-tool.ts` resolves its target
+   * through the same `boundOf` as the other six, so a session can arm only a
+   * window that was attached to it, and the capture folder is chosen by the
+   * app from the tab's own profile rather than by anything the caller says.
+   */
+  'browser.network',
+  'browser_network',
 ])
 
 /**

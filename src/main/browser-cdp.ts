@@ -49,6 +49,49 @@ import { isNavigationAllowed } from './browser-url'
  * second precisely so that a future edit to the allow-list cannot quietly
  * unlock `Page.setDownloadBehavior` by adding `Page.*`.
  *
+ * ## What request interception is now for — 2026-08-21
+ *
+ * The deny-list used to carry the whole `Fetch` domain, with this reason: *"how
+ * an agent ends up reading `Authorization` headers off somebody's logged-in
+ * session. Nobody asked for it and §8 of the design says not to build it."*
+ * Both halves of that have changed, and the entry is not removed quietly.
+ *
+ * Somebody did ask for it, with numbers. A real property scrape lost **16,498
+ * floor plans** — not to being blocked, but to its own tooling *blocking images
+ * to go faster*, which stopped every lazy-loader on the page and so stopped the
+ * real image URLs from ever being written into the DOM. The fix is not to allow
+ * the images through; it is to **answer the request cheaply** — hand the page a
+ * valid, correctly-sized, transparent image out of this process, spend no
+ * bandwidth, and let the loader advance. `Fetch.enable` plus
+ * `Fetch.fulfillRequest` is the only mechanism Chromium has for that.
+ * `Network.getResponseBody` is the second half: the data on a modern page is in
+ * the JSON the page fetched for itself, not in its HTML.
+ *
+ * The `Authorization` argument still stands, and it is answered by construction
+ * rather than by refusal. A `Fetch.requestPaused` event carries the request's
+ * headers; `browser-network.ts` reads the URL and the resource type off it and
+ * **nothing else**, records neither, and `browser-network.test.ts` asserts the
+ * absence in the source rather than trusting it. No request header reaches a
+ * capture file, a tool result or the action log.
+ *
+ * What is refused here instead is the part of the domain that would *write*:
+ *
+ *  - `Fetch.enable { handleAuthRequests: true }` — the door to
+ *    `Fetch.continueWithAuth`, which composes a username and a password and
+ *    sends them to a site. Refused at the argument, and `continueWithAuth`
+ *    stays on the deny-list, so neither half exists without the other.
+ *  - `requestStage: 'Response'` — response-stage interception, which is a
+ *    strictly larger power than pausing a request, and is not what any of this
+ *    needs.
+ *  - An interception pattern naming `Document`, which would let a rule empty
+ *    the page it was pointed at.
+ *  - A fulfilled response carrying any header outside a five-name list. This is
+ *    the sharp one: `Fetch.fulfillRequest` writes a response **into his
+ *    session**, so `set-cookie` on one is this app minting a cookie in a jar he
+ *    is signed into, and `location` is it redirecting him. An allow-list of
+ *    header names is what makes "answer an image cheaply" unable to be anything
+ *    else.
+ *
  * ## The finding that makes the navigation re-check load-bearing
  *
  * `browser-tab.ts` refuses `file:`, `javascript:` and every non-http scheme by
@@ -126,6 +169,25 @@ export const ALLOWED_METHODS: readonly string[] = [
   // Where the page is scrolled to, so a click can be aimed at viewport
   // coordinates after the element has been scrolled into view.
   'Page.getLayoutMetrics',
+  /*
+   * Request control and passive capture — the two halves of harvesting, added
+   * 2026-08-21. See "What request interception is now for" below, which is the
+   * argument for moving these across; this list is the smallest set that
+   * implements it.
+   *
+   * `Fetch.enable` is additionally argument-checked, twice, and the fulfil is
+   * checked a third time — see {@link screenCommand}. The powers this pair
+   * would otherwise carry, HTTP authentication and response-stage interception,
+   * are refused at the arguments rather than left to a comment.
+   */
+  'Fetch.enable',
+  'Fetch.disable',
+  'Fetch.continueRequest',
+  'Fetch.fulfillRequest',
+  'Fetch.failRequest',
+  'Network.enable',
+  'Network.disable',
+  'Network.getResponseBody',
 ]
 
 /**
@@ -192,18 +254,32 @@ export const DENIED_METHODS: readonly string[] = [
   'Page.printToPDF',
   'Page.setInterceptFileChooserDialog',
   /*
-   * Request interception, which is how an agent ends up reading
-   * `Authorization` headers off somebody's logged-in session. Nobody asked for
-   * it and §8 of the design says not to build it.
+   * The half of request interception that stays refused.
+   *
+   * The other half moved to the allow-list on 2026-08-21 and the argument for
+   * it is in the header. These four did not, and each is refused for its own
+   * reason rather than by association:
+   *
+   *  - `Fetch.continueWithAuth` answers an HTTP authentication challenge — a
+   *    username and a password, composed by the caller, sent to a site. That is
+   *    signing in on somebody's behalf, which is what `browser.handover` exists
+   *    to refuse to do. It is also why `Fetch.enable { handleAuthRequests: true }`
+   *    is refused at the arguments: turning it on with no way to answer would
+   *    deadlock every authentication prompt on the page.
+   *  - `Fetch.getResponseBody` reads a body at the *response* interception
+   *    stage, which is a stage nothing here uses — capture reads finished
+   *    bodies through the `Network` domain instead. A power that is not needed
+   *    is a power that stays off; see the note on `Runtime.evaluate` below for
+   *    the same argument made at greater length.
+   *  - `Network.setRequestInterception` is the deprecated predecessor of
+   *    `Fetch`, with no patterns and therefore no way to narrow what it pauses.
+   *  - `Network.setExtraHTTPHeaders` writes headers onto every request the page
+   *    makes, in his logged-in session. Reading what a page sends is one thing;
+   *    composing what it sends is another, and nothing in harvesting needs it.
    */
-  'Fetch.enable',
-  'Fetch.continueRequest',
-  'Fetch.fulfillRequest',
-  'Fetch.failRequest',
-  'Fetch.getResponseBody',
   'Fetch.continueWithAuth',
+  'Fetch.getResponseBody',
   'Network.setRequestInterception',
-  'Network.getResponseBody',
   'Network.setExtraHTTPHeaders',
   /** Changes the viewport under a person who may be reading the page. */
   'Emulation.setDeviceMetricsOverride',
@@ -245,6 +321,171 @@ const DENIED = new Set(DENIED_METHODS)
  * `file:///etc/passwd` is refused.
  */
 const NAVIGATING_METHODS = new Set(['Page.navigate', 'Page.navigateToHistoryEntry'])
+
+/**
+ * Resource types an interception pattern may name.
+ *
+ * The seven `browser-fetch-rules.ts` offers, spelled again here rather than
+ * imported, and the duplication is deliberate in this one direction: a security
+ * gate that reads its vocabulary out of the module it polices can be widened by
+ * editing that module. `browser-cdp.test.ts` asserts the two lists agree, so
+ * there is one truth and two independent statements of it.
+ *
+ * `Document` is the absence that matters. A pattern naming it would let a rule
+ * block or cheaply answer the page's own HTML, which is a rule that empties the
+ * page somebody came to read.
+ */
+const INTERCEPTABLE_TYPES: ReadonlySet<string> = new Set([
+  'Image',
+  'Media',
+  'Font',
+  'Stylesheet',
+  'Script',
+  'XHR',
+  'Fetch',
+])
+
+/**
+ * Headers a fulfilled response may carry, and nothing else.
+ *
+ * A fulfilled response is written into the page's session by this process, so
+ * every header on it is something this app is saying to his browser. Four of
+ * these describe an empty placeholder and the fifth lets a cross-origin `fetch`
+ * see it at all. What is not here is the whole reason the list exists:
+ * `set-cookie` would mint a cookie in a jar he is signed into, `location` would
+ * redirect him, `content-security-policy` would rewrite what the page may do,
+ * and `set-cookie` in particular would do it invisibly.
+ */
+const FULFIL_HEADERS: ReadonlySet<string> = new Set([
+  'content-type',
+  'content-length',
+  'cache-control',
+  'access-control-allow-origin',
+  'timing-allow-origin',
+])
+
+/** Test seam: the two tables above, for the cross-check against the rules module. */
+export const SCREENED_RESOURCE_TYPES: readonly string[] = [...INTERCEPTABLE_TYPES]
+export const SCREENED_FULFIL_HEADERS: readonly string[] = [...FULFIL_HEADERS]
+
+/**
+ * `Fetch.enable`, argument by argument.
+ *
+ * Everything refused here is a capability the *method* carries and the feature
+ * does not need. A pattern list that is absent means "pause everything", which
+ * includes the document, so it is refused too — narrowing is not an
+ * optimisation here, it is how the document stays out of reach.
+ */
+function screenFetchEnable(params: Record<string, unknown>): Screening {
+  if (params.handleAuthRequests === true) {
+    return {
+      ok: false,
+      reason:
+        'this app does not answer HTTP authentication challenges on a page. Fetch.continueWithAuth is ' +
+        'refused for every caller, so handling them would leave every prompt on the page waiting for ever.',
+    }
+  }
+  const patterns = params.patterns
+  if (!Array.isArray(patterns) || patterns.length === 0) {
+    return {
+      ok: false,
+      reason:
+        'request interception must name the resource types it applies to. Without patterns it pauses ' +
+        'every request in the page, including the document.',
+    }
+  }
+  for (const raw of patterns) {
+    const pattern = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+    const type = pattern.resourceType
+    if (typeof type !== 'string' || !INTERCEPTABLE_TYPES.has(type)) {
+      return {
+        ok: false,
+        reason: `${String(type)} is not a resource type this app will intercept`,
+      }
+    }
+    const stage = pattern.requestStage
+    if (stage !== undefined && stage !== 'Request') {
+      return {
+        ok: false,
+        reason: 'only the request stage may be intercepted here; response-stage interception is refused',
+      }
+    }
+  }
+  return { ok: true }
+}
+
+/**
+ * `Fetch.continueRequest`, which looks inert and is not.
+ *
+ * Letting a paused request carry on is the harmless-sounding half of
+ * interception, and the method's arguments are anything but: `url`, `method`,
+ * `postData` and `headers` all *replace* what the page asked for. A
+ * `continueRequest` carrying a `headers` list is this app composing an
+ * `Authorization` header on a request in his logged-in session — which is the
+ * exact power the deny-list entry for this domain used to be about, reachable
+ * through the door that was left open rather than the one that was watched.
+ *
+ * The driver sends `{ requestId }` and nothing else, so refusing the rest costs
+ * it nothing and closes the hole by construction. `interceptResponse` is
+ * refused for the same reason `requestStage: 'Response'` is: it is the other
+ * spelling of the same escalation.
+ */
+function screenContinue(params: Record<string, unknown>): Screening {
+  for (const key of ['url', 'method', 'postData', 'headers', 'binaryPostData']) {
+    if (params[key] !== undefined) {
+      return {
+        ok: false,
+        reason: `a paused request may be let through but not rewritten; ${key} is refused`,
+      }
+    }
+  }
+  if (params.interceptResponse === true) {
+    return {
+      ok: false,
+      reason: 'only the request stage may be intercepted here; response-stage interception is refused',
+    }
+  }
+  return { ok: true }
+}
+
+/**
+ * `Fetch.fulfillRequest`, which is the one call here that writes.
+ *
+ * The status is bounded to the 2xx range and the headers to {@link
+ * FULFIL_HEADERS}, so a fulfilled response can be an empty placeholder and
+ * cannot be a redirect, a cookie, or a policy header.
+ */
+function screenFulfil(params: Record<string, unknown>): Screening {
+  const code = params.responseCode
+  if (typeof code !== 'number' || !Number.isInteger(code) || code < 200 || code > 299) {
+    return {
+      ok: false,
+      reason: 'a request may only be answered cheaply with a 2xx response',
+    }
+  }
+  const headers = params.responseHeaders
+  if (headers !== undefined) {
+    if (!Array.isArray(headers)) {
+      return { ok: false, reason: 'responseHeaders must be a list of name/value pairs' }
+    }
+    for (const raw of headers) {
+      const header = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+      const name = typeof header.name === 'string' ? header.name.toLowerCase() : ''
+      if (!FULFIL_HEADERS.has(name)) {
+        return {
+          ok: false,
+          reason: `a cheaply-answered request may not carry a ${name === '' ? 'nameless' : name} header`,
+        }
+      }
+    }
+  }
+  if (params.binaryResponseHeaders !== undefined) {
+    // The same header block, pre-encoded, which would walk straight past the
+    // check above. There is no reason for the driver to send it.
+    return { ok: false, reason: 'binaryResponseHeaders is not accepted here' }
+  }
+  return { ok: true }
+}
 
 /* ------------------------------------------------------------ the verdict -- */
 
@@ -313,10 +554,11 @@ export function screenCommand(input: {
     return { ok: false, reason: `${method} is refused for every caller at every time` }
   }
 
+  const params = (typeof input.params === 'object' && input.params !== null
+    ? (input.params as Record<string, unknown>)
+    : {})
+
   if (NAVIGATING_METHODS.has(method)) {
-    const params = (typeof input.params === 'object' && input.params !== null
-      ? (input.params as Record<string, unknown>)
-      : {})
     if (!isNavigationAllowed(params.url)) {
       return {
         ok: false,
@@ -324,6 +566,25 @@ export function screenCommand(input: {
       }
     }
   }
+
+  /*
+   * The two interception methods that carry a capability in their arguments.
+   *
+   * Same shape as the navigation check above and for the same reason: the
+   * method name alone does not say what the call does. `Fetch.enable` with an
+   * auth flag is a different power from `Fetch.enable` with an image pattern,
+   * and `Fetch.fulfillRequest` with a `set-cookie` header is a different power
+   * from one with a `content-type`.
+   */
+  if (method === 'Fetch.enable') return screenFetchEnable(params)
+  if (method === 'Fetch.continueRequest') return screenContinue(params)
+  if (method === 'Fetch.fulfillRequest') return screenFulfil(params)
+  /*
+   * `Fetch.failRequest` is deliberately not screened. Its only argument beyond
+   * the id is `errorReason`, every value of which is a way of telling the page
+   * the request did not happen — there is no spelling of it that reaches
+   * anything outside that page.
+   */
 
   return { ok: true }
 }

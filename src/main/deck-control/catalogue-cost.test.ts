@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { BrowserDrive } from '../browser-driver'
 import { serverTools, type ServerToolsDeps } from '../servers/tools'
+import { browserNetworkTool } from './browser-network-tool'
 import { browserTools } from './browser-tools'
 import {
   buildCatalogue,
@@ -25,8 +26,8 @@ import type { TourStage } from './tour-stage'
  *
  *  - `buildCatalogue()` — the built-ins, in `catalogue.ts`;
  *  - `tour.play` and `app.where`, contributed in `deck-control/index.ts`;
- *  - the six browser verbs and the three `servers.*` verbs, contributed in
- *    `main/index.ts`.
+ *  - the six browser verbs, `browser.network`, and the three `servers.*`
+ *    verbs, contributed in `main/index.ts`.
  *
  * A budget measured against a subset is not a budget. `catalogueCost`'s own
  * header says so — *"Measuring only the built-ins would leave the one growth
@@ -45,6 +46,7 @@ function shipped(): ToolSpec[] {
     tourTool({} as TourStage),
     whereTool({ window: { read: async () => null }, page: () => null }),
     ...browserTools({} as BrowserDrive),
+    browserNetworkTool({} as BrowserDrive),
     ...serverTools({} as ServerToolsDeps),
   ]
 }
@@ -59,21 +61,39 @@ describe('the catalogue that ships', () => {
     expect(wire).toContain('app_where')
     expect(wire).toContain('browser_open')
     expect(wire).toContain('browser_close')
+    expect(wire).toContain('browser_network')
     expect(wire).toContain('servers_look')
   })
 
   it('costs what it costs, written down so a rewrite that doubles it is visible', () => {
     const cost = catalogueCost(shipped())
     /*
-     * Measured 2026-08-20 on the assembled list: 25 tools, 26,929 characters,
-     * ~7,694 estimated tokens. Pinned rather than bounded because the point of
+     * Measured 2026-08-21 on the assembled list: 26 tools, 27,982 characters,
+     * ~7,995 estimated tokens. Pinned rather than bounded because the point of
      * writing it down is that somebody expanding a description sees the figure
      * move — a `toBeLessThan` at a round number hides every change under it.
      *
      * Generous slack on the characters and none on the count: prose is edited
      * constantly and a tool is added deliberately.
+     *
+     * ## Read this before adding the next tool
+     *
+     * There are **18 characters left** under the token ceiling — 28,000 is what
+     * 8,000 tokens buys at `ESTIMATED_CHARS_PER_TOKEN`, and this list is at
+     * 27,982. `browser.network` was written down to fit it: a title of one
+     * word, no `description` on three of its four properties, and the argument
+     * names left to the refusals that name them. That worked once and it will
+     * not work twice.
+     *
+     * So the next tool cannot be trimmed into this list, and trimming an
+     * existing tool's prose to make room is borrowing against the thing the
+     * prose is for. The way out is the one written on `MAX_CATALOGUE_TOKENS`
+     * and it has not changed: **do not raise the number** — add a
+     * `tools.describe` meta-tool and move the rarely-used definitions behind
+     * it, so the standing cost is a short index and the full schema is fetched
+     * by the one turn that needs it.
      */
-    expect(cost.tools).toBe(25)
+    expect(cost.tools).toBe(26)
     expect(cost.chars).toBeGreaterThan(24_000)
     expect(cost.chars).toBeLessThan(30_000)
   })
@@ -86,14 +106,15 @@ describe('the catalogue that ships', () => {
     /*
      * **This is a known breach, not a passing budget.**
      *
-     * `MAX_CATALOGUE_TOOLS` is 20 and the app ships 25. The count cap answers a
+     * `MAX_CATALOGUE_TOOLS` is 20 and the app ships 26. The count cap answers a
      * different question from the token cap and it is the one that binds: past
      * twenty tools the problem is not the bill, it is that a model choosing
      * between twenty-five things chooses worse.
      *
      * It was breached before tonight — 24 at `0.8.1`, with `tour_play`,
      * `app_where` and the three `servers.*` verbs outside the only measurement
-     * anybody was running — and `browser.close` made it 25. Fixing it means
+     * anybody was running — `browser.close` made it 25, and `browser.network`
+     * made it 26. Fixing it means
      * removing or merging tools, which is a decision about the product and not
      * one to take inside a defect fix, so what is done here is to stop the
      * number being invisible: `control.cost()` has always reported

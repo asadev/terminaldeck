@@ -696,6 +696,24 @@ export function browserTabContents(id: unknown): WebContents | null {
   return tab ? liveContents(tab) : null
 }
 
+/**
+ * Which browser profile a tab's page belongs to.
+ *
+ * `''` for a tab opened as Isolated, whose partition is in memory and belongs
+ * to nothing that outlives the process — the same spelling {@link
+ * BrowserTabState.profileId} already uses, so there are not two ways of saying
+ * it. `null` when there is no such tab.
+ *
+ * Read by the drive, through `DriveHost.captureFolder`, so that a page's
+ * captured traffic is filed under the cookie jar it was fetched with. A profile
+ * is a separate person's logins; two profiles' captures sharing one folder
+ * would put one sign-in's private JSON in with another's.
+ */
+export function browserTabProfile(id: unknown): string | null {
+  const tab = typeof id === 'string' ? tabs.get(id) : undefined
+  return tab ? tab.profileId : null
+}
+
 function destroyTabsFor(host: WebContents): void {
   for (const tab of [...tabs.values()]) {
     if (tab.host === host) destroyTab(tab)
