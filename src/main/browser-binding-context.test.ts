@@ -334,7 +334,7 @@ describe('a session that cannot drive is told so, beside the windows it holds', 
     // Not a word of it. This line rides in every turn it appears in, out of the
     // same context budget the top bar shows him, so the ordinary case pays
     // nothing.
-    expect(said).not.toContain('cannot open, read or act on')
+    expect(said).not.toContain('cannot read or act on')
   })
 
   it('tells a session that merely started too early to be started again', async () => {
@@ -354,6 +354,35 @@ describe('a session that cannot drive is told so, beside the windows it holds', 
     expect(said).not.toContain('no other way in')
   })
 
+  /**
+   * The two sentences it composed used to contradict each other.
+   *
+   * `hookContext` writes them in a fixed order, and the line before the refusal
+   * is *"`open <url>` goes to B1 unless you detach it"* on every launch where
+   * this run put the shim on the PATH — which is macOS and most of Linux. The
+   * refusal opened *"You cannot open, read or act on them from here"*. So a
+   * Codex or Gemini session with a window attached read, in one answer, on every
+   * turn: this is how you open a page into `B1`, and you cannot open them.
+   *
+   * The withheld thing was never `open` — the shim is a script on a PATH and has
+   * nothing to do with `--mcp-config`. It is reading and acting on the page. So
+   * both halves are pinned together here, because the defect was only ever
+   * visible in the composition.
+   */
+  it('does not deny the one route the line above it just promised', async () => {
+    const endpoint = await serve()
+    // Codex: no per-run MCP override, so no verbs — and the shim is on its PATH
+    // like everybody else's.
+    noteNoVerbs('s1', 'provider')
+    attach({ sessionId: 's1', browserTabId: 'browser:1', viewId: 'v1' })
+
+    const said = (await knock(endpoint, 'UserPromptSubmit', 's1')).context ?? ''
+
+    expect(said).toContain('`open <url>` goes to B1')
+    expect(said).toContain('cannot read or act on what is in them')
+    expect(said).not.toContain('cannot open')
+  })
+
   it('says nothing to a session with no windows to be misled about', async () => {
     const endpoint = await serve()
     noteNoVerbs('s1', 'wsl')
@@ -362,6 +391,6 @@ describe('a session that cannot drive is told so, beside the windows it holds', 
 
     // There is nothing here to reach for, so the sentence would be words paid
     // for on every turn to describe an absence.
-    expect(said).not.toContain('cannot open, read or act on')
+    expect(said).not.toContain('cannot read or act on')
   })
 })

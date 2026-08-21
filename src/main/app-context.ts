@@ -71,6 +71,19 @@ import { join } from 'node:path'
 import { BRAND } from '../shared/brand'
 import { writeFileAtomic } from './atomic-write'
 import { currentPlatform, isWindows, type Platform } from './platform/host'
+/*
+ * The closed set of reasons a session has no browser verbs, read rather than
+ * restated — see {@link drivingSection}, which exists because the last version
+ * of that paragraph was a second copy of a fact and went stale in a day.
+ *
+ * `session-verbs.ts` imports nothing, which is what makes this safe: this module
+ * is loaded by `src/headless/host.ts`, and that bundle cannot have `deck-control/`
+ * in it. Naming the tool server the verbs arrive on would have meant importing
+ * `deck-control/server.ts` for one string, so the paragraph below points at the
+ * session's own tool list instead — which is where the answer is anyway, and is
+ * live rather than written at launch.
+ */
+import { noVerbsReasons } from './session-verbs'
 
 /* ------------------------------------------------------------------ types -- */
 
@@ -685,14 +698,114 @@ call to look for.
 
 ${opening}
 
-## What a session can and cannot do with a window
+## What a session can do with a window
 
-It can be told what is in one, and it can put a page in front of the person. It
-cannot click, type, scroll or read the page — a session has no tool for any of
-that. Driving a page belongs to the copilot, which is a separate session with its
-own tool surface and its own confirmation gate.
-
-So "look at B2" from the person means: the page in that window is the subject.
-Ask them what it says, or open something into it.
+${drivingSection(input, home)}
 `
+}
+
+/**
+ * Whether a session may act on the page, and how it finds out which it is.
+ *
+ * ## What was here, and why it was the worst kind of wrong
+ *
+ * *"It cannot click, type, scroll or read the page — a session has no tool for
+ * any of that. Driving a page belongs to the copilot."* That was true when this
+ * page was written and false by the end of the same day:
+ * `deck-control/session-tools.ts` hands an ordinary session the six browser
+ * verbs, and both landed on 2026-08-21 from different lanes. So this app was
+ * writing a document, at every launch, telling every agent it started not to
+ * reach for tools that were sitting in that agent's own tool list — an argument
+ * *against* the correct behaviour, in the one channel a session cannot turn off.
+ *
+ * ## Why it does not simply say the opposite
+ *
+ * Because "a session can drive" is not true either. Five launches cannot be
+ * given the verbs and each has a reason — `session-verbs.ts` holds the closed
+ * set — and this document is written once per app start, long before any of
+ * those sessions exists. It cannot know which one is reading it.
+ *
+ * What it can do is name the fact that settles it and point at where that fact
+ * is already answered *per session*: the session's own tool list, and the one
+ * sentence `noVerbsLine` puts at the top of its context beside the window list.
+ * Both of those are live and specific, which a document rewritten at launch can
+ * never be — so this page's job is to stop the guessing, not to do the
+ * answering.
+ *
+ * ## And the reasons are rendered rather than restated
+ *
+ * {@link noVerbsReasons} is the same list the per-session sentence is composed
+ * from. Writing them out here again is exactly the mistake above, one round
+ * later.
+ */
+function drivingSection(input: AppContextInput, home: ContextHome): string {
+  const ssh = home.via === 'ssh'
+  /*
+   * The one route that does not depend on the verbs, named here as well as in
+   * *Opening a page* above because this is the section an agent reads at the
+   * moment it has just been told it cannot act.
+   *
+   * Two gates. Without the shim it would be a route that is not on this
+   * session's PATH; and on a server there is no session without the verbs for it
+   * to be the consolation for, so it would be a paragraph answering a question
+   * that cannot arise there.
+   */
+  const opener = input.opensInApp && !ssh
+    ? `\n\n\`open <url>\` does not depend on any of this. It is a script on this session's
+PATH, so a session without the verbs can still put a page in front of the person
+and say what it would have done with it.`
+    : ''
+  /*
+   * On a server there is only one answer, and it is provable rather than
+   * hopeful.
+   *
+   * `servers/window-drive.ts`'s `arm()` settles the **driving** half first and
+   * returns on any refusal; the belonging half — the hooks, and these documents
+   * — is only reached afterwards, and `belongFiles` writes the pages only inside
+   * `if (input.hooks)`. So a page of this app's on a server implies the wrapper,
+   * the wrapper implies `--mcp-config`, and a session able to read this sentence
+   * is a session holding the verbs. Printing the five local reasons here would
+   * be five sentences that cannot apply to the machine reading them, which is
+   * the defect this whole page is being rewritten for.
+   */
+  const which = ssh
+    ? `This session has this app's browser verbs, and that is not a hope. They
+arrive through the \`claude\` wrapper that is first on this shell's PATH, and
+this app puts these documents on a server only in the same breath as that
+wrapper — so a session able to read this page is a session able to act on its
+windows.`
+    : `Two answers, and a session is told which one is its own rather than left to
+find out by trying.`
+  const without = ssh
+    ? ''
+    : `\n\n**Without them.** They ride on a launch flag only Claude Code takes, added by
+this app when it starts the session, and there are launches that cannot be given
+it:
+
+${noVerbsReasons()
+  .map((clause) => `- ${clause[0].toUpperCase()}${clause.slice(1)}.`)
+  .join('\n')}
+
+Such a session is told which of those it is, in one sentence carrying the reason
+and what to do instead, at the top of its context as soon as it has a window to
+be told about. There is no second way in: reading the page through a debugging
+port, a browser driver or an extension of the session's own is not a route this
+app leaves open, and a turn spent looking for one is a turn spent on a door that
+is not there.`
+  const closing = ssh
+    ? 'So "look at B2" from the person means: read `B2`.'
+    : `So "look at B2" from the person means: read \`B2\` if this session has the
+verbs, and otherwise put a page there and ask them what it says.`
+  return `${which}
+
+**The verbs.** They are on the session's own tool list, carried in by a tool
+server this app names on the command line: \`browser_open\`, \`browser_read\`,
+\`browser_step\`, \`browser_screenshot\`, \`browser_handover\`, \`browser_close\`,
+and a \`tools_describe\` that indexes the rest — usually under whatever prefix
+the CLI puts on a tool it did not define. That list is the authority on what
+each one takes; nothing here repeats a schema that would go stale. They reach
+the windows attached to **this** session and no others: with no target they take
+the first one, \`B1\`, and \`window: "B2"\` names another of this session's own.${without}${opener}
+
+${closing}`
 }

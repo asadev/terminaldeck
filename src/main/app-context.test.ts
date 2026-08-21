@@ -12,6 +12,7 @@ import {
   resetForTests,
   writeAppContext,
 } from './app-context'
+import { noVerbsReasons } from './session-verbs'
 
 /**
  * The map, and the three promises it has to keep at once.
@@ -160,6 +161,53 @@ describe('the documents behind it', () => {
     expect(bare).toContain('does not put an opener on a session')
   })
 
+  /**
+   * The page argued *against* the tools the same day's other lane handed out.
+   *
+   * `browser-windows.md` closed with *"It cannot click, type, scroll or read the
+   * page — a session has no tool for any of that. Driving a page belongs to the
+   * copilot"*, which was true when it was written and false by that evening:
+   * `deck-control/session-tools.ts` puts six browser verbs on an ordinary
+   * session's own tool list. Both landed 2026-08-21, one lane each.
+   *
+   * So this app was writing a file, at every launch, telling every agent it
+   * started not to reach for tools that were sitting in that agent's tool list —
+   * an argument against the correct behaviour, in a channel nobody can turn off.
+   * These two assertions are the ones that would have caught it: the false
+   * sentence is gone, and the page names what is actually there.
+   */
+  it('does not tell a session it has no tool for the tools it has', () => {
+    const browser = readFileSync(join(contextDir(write()), 'browser-windows.md'), 'utf8')
+
+    expect(browser).not.toContain('a session has no tool for any of that')
+    expect(browser).not.toContain('Driving a page belongs to the copilot')
+    for (const verb of ['browser_open', 'browser_read', 'browser_step', 'browser_close']) {
+      expect(browser).toContain(verb)
+    }
+    // And the naming half, which is the whole reason the verbs are worth telling
+    // a session about here rather than leaving to the tool list: the window a
+    // hook answer calls `B1` is the one a verb calls `B1`.
+    expect(browser).toContain('`window: "B2"`')
+  })
+
+  /**
+   * And the reasons are rendered from the set the sentence is composed from.
+   *
+   * The failure above was a second copy of a fact going stale. A page that spelt
+   * the five reasons out again would be the same mistake one round later, so it
+   * renders `noVerbsReasons()` — and this pins that, by asserting the page
+   * against the list rather than against a string typed here.
+   */
+  it('lists every reason a session can be without them, from the one list', () => {
+    const browser = readFileSync(join(contextDir(write()), 'browser-windows.md'), 'utf8')
+
+    const reasons = noVerbsReasons()
+    expect(reasons.length).toBeGreaterThan(0)
+    for (const clause of reasons) {
+      expect(browser).toContain(`${clause[0].toUpperCase()}${clause.slice(1)}.`)
+    }
+  })
+
   it('names the machine it was written on, not the one being looked at', () => {
     const dir = write({ machineName: 'DESKTOP-DDGMNCV' })
     const sessions = readFileSync(join(contextDir(dir), 'sessions-and-machines.md'), 'utf8')
@@ -282,6 +330,28 @@ describe('what a session on a server is given instead', () => {
     const without = remote(false).pages
     expect(without['browser-windows.md']).toContain('opens **on this server** rather than in the')
     expect(without['INDEX.md']).toContain("this server's own opener")
+  })
+
+  /**
+   * A server session always has the verbs, so the page there does not hedge.
+   *
+   * `servers/window-drive.ts`'s `arm()` settles the driving half first and
+   * returns on any refusal; the hooks and these documents are only written
+   * afterwards, and `belongFiles` writes the pages only inside `if
+   * (input.hooks)`. So a session on a server that can read this page is holding
+   * the verbs, and printing the five local reasons there would be five sentences
+   * about launches that cannot happen on the machine reading them — the same
+   * class of defect as naming a file that is not there.
+   */
+  it('does not offer a server session reasons that belong to another machine', () => {
+    const browser = remote().pages['browser-windows.md']
+
+    expect(browser).toContain("browser verbs, and that is not a hope")
+    expect(browser).toContain('browser_read')
+    // Every clause the local page lists, and not one of them here.
+    for (const clause of noVerbsReasons()) {
+      expect(browser).not.toContain(`${clause[0].toUpperCase()}${clause.slice(1)}.`)
+    }
   })
 
   it('does not name a directory it cannot know yet', () => {

@@ -153,9 +153,32 @@ const THEN: Readonly<Record<NoVerbsReason, string>> = Object.freeze({
   device: 'Say what you would have done on the page and let the person do it; there is no other way in.',
   endpoint: 'Say what you would have done on the page and let the person do it; there is no other way in.',
   early:
-    'Tell the person this session has to be started again before it can act on its own windows, and do ' +
-    'not look for another way in.',
+    'Tell the person this session has to be started again before it can read a page in one of its own ' +
+    'windows, and do not look for another way in.',
 })
+
+/**
+ * Every reason, as clauses, for the document that has to describe the same set.
+ *
+ * `app-context.ts`'s `browser-windows.md` answers *"can this session act on the
+ * page"* at length, for a session that will read it long after the one-line
+ * answer above went past. Until this existed it answered it with a flat "a
+ * session has no tool for any of that", which had been true when it was written
+ * and was false the same day `deck-control/session-tools.ts` landed — one lane
+ * each, 2026-08-21, neither knowing about the other.
+ *
+ * So the page renders **this** rather than a second list. A reason added to
+ * {@link NoVerbsReason} shows up in the document by construction, and a page
+ * that disagreed with the sentence a session is actually given is no longer a
+ * thing anybody can write by forgetting.
+ *
+ * Order is the declaration order of {@link BECAUSE}, which is stable and is the
+ * order the reasons are argued in above. Nothing reads the keys, so they stay
+ * out of a document nobody can act on them in.
+ */
+export function noVerbsReasons(): readonly string[] {
+  return Object.values(BECAUSE)
+}
 
 /** sessionId → why it has no verbs. Absent means it has them, or is not ours. */
 const withheld = new Map<string, NoVerbsReason>()
@@ -191,11 +214,29 @@ export function forgetNoVerbs(sessionId: string): void {
  * same: say nothing. The only case that earns words is the one where this
  * process positively knows the agent is about to look for a way in that does
  * not exist.
+ *
+ * ## It used to deny `open`, which the line directly above it had just promised
+ *
+ * `hookContext` composes these in a fixed order, and the line before this one is
+ * *"`open <url>` goes to B1 unless you detach it"* whenever this run put the
+ * shim on the session's PATH — which is every macOS and most Linux launches. So
+ * a Codex or Gemini session with a window attached read two adjacent sentences,
+ * one saying a URL it opens lands in `B1` and the next saying it cannot open
+ * them. Both were composed from the same map, in the same answer, on every turn
+ * of that session.
+ *
+ * The withheld thing was never `open`: the shim is a script on a PATH and has
+ * nothing to do with `--mcp-config`. What is withheld is *reading and acting on
+ * the page*, which is what the six verbs do and what an agent goes hunting for a
+ * CDP port to get. So the sentence says that and leaves the one route that does
+ * work standing — which is also the more useful refusal, because "put a page
+ * there and describe what you would have done" is the fallback the clause after
+ * it then asks for.
  */
 export function noVerbsLine(sessionId: string): string | null {
   const reason = withheld.get(sessionId)
   if (reason === undefined) return null
-  return `You cannot open, read or act on them from here — ${BECAUSE[reason]}. ${THEN[reason]}`
+  return `You cannot read or act on what is in them from here — ${BECAUSE[reason]}. ${THEN[reason]}`
 }
 
 /** Test seam. Nothing in the app calls this; every real drop is a session ending. */
