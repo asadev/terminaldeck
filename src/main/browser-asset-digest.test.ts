@@ -106,10 +106,12 @@ describe('the guard over the download path', () => {
   /**
    * The files scanned, and why exactly these.
    *
-   * `browser-downloads.ts` is the only place in this app where bytes arrive from
-   * a socket and land on a disk. The asset modules are what a later pass would
-   * most plausibly be added to — "we already have the file open, we may as well
-   * make a thumbnail here".
+   * `browser-downloads.ts` and `browser-asset-fetch.ts` are the two places in
+   * this app where bytes arrive from a socket and land on a disk — one for a
+   * person clicking a link, one for a run pulling sixty thousand images — and
+   * `browser-download-names.ts` is the naming rule they share. The rest of the
+   * asset modules are what a later pass would most plausibly be added to — "we
+   * already have the file open, we may as well make a thumbnail here".
    *
    * `browser-driver.ts` is deliberately **not** scanned, and the omission is the
    * policy rather than a gap: it decodes an image and repaints it to mask
@@ -122,6 +124,9 @@ describe('the guard over the download path', () => {
    */
   const GUARDED = [
     'browser-downloads.ts',
+    'browser-download-names.ts',
+    'browser-asset-fetch.ts',
+    'browser-asset-session.ts',
     'browser-asset-ledger.ts',
     'browser-asset-rendition.ts',
     'browser-asset-probe.ts',

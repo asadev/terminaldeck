@@ -204,6 +204,7 @@ import { browserDrive, registerBrowserDriveIpc } from './browser-drive-ipc'
 import { browserNetworkTool } from './deck-control/browser-network-tool'
 import { assetTools } from './deck-control/asset-tools'
 import { probeAsset } from './browser-asset-probe'
+import { assetFetchFor } from './browser-asset-session'
 import {
   installBrowserStore,
   installedBrowserTools,
@@ -4114,6 +4115,11 @@ app.whenReady().then(() => {
       ...assetTools({
         userData: () => app.getPath('userData'),
         probe: (url, options) => probeAsset(url, options),
+        /*
+         * The same function the probe resolves its session with, so a `HEAD`
+         * and the `GET` after it cannot go out of different cookie jars.
+         */
+        open: (profileId) => assetFetchFor(profileId),
       }),
       ...browserStoreTools(),
       ...(servers === null ? [] : serverTools({ room: servers.room, grants: servers.grants })),
