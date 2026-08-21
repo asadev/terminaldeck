@@ -2244,6 +2244,10 @@
 .bw-scrape-option:disabled,
 .bw-scrape-target:disabled {
   color: var(--text-muted);
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* ------------------------------------------------------- the tools store -- */
 
 /*
@@ -2344,6 +2348,10 @@
 
 .bw-scrape-ask-line {
   color: var(--text-primary);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+}
+
 .bw-store-summary {
   margin: var(--sp-1) 0 0;
   color: var(--text-secondary);
@@ -2371,6 +2379,10 @@
 .bw-scrape-reach {
   color: var(--text-secondary);
   font-family: var(--font-mono);
+  font-size: var(--t-caption);
+  line-height: var(--lh-body);
+}
+
 .bw-store-facts {
   display: grid;
   grid-template-columns: max-content 1fr;
@@ -2421,6 +2433,8 @@
 
 .bw-scrape-identity[data-identity='verified'] {
   color: var(--color-positive);
+}
+
 .bw-store-note {
   margin: 0 0 var(--sp-2);
   color: var(--text-muted);

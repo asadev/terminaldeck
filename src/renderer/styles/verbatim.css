@@ -409,6 +409,10 @@
    host's own status output. All three are machine text and two of them are
    read aloud off the screen to be typed somewhere else. */
 .bw-store-version,
+/* What a store tool may reach, listed before you install it. Capabilities
+   being enumerated, not prose — and the one list in this app where a font
+   joining two characters could change what a permission appears to say. */
+.bw-scrape-reach,
 .servers-host-code-value,
 .servers-host-status pre {
   font-variant-ligatures: none;
