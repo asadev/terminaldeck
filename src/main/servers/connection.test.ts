@@ -53,7 +53,15 @@ const REAL_FINGERPRINT = 'SHA256:XIwvDdf+A9x4LMPTSJ3ZpH+YfqAbXLVeUwnpd4GHmM0'
 interface FakeOptions {
   hostKey?: Buffer
   /** What `exec` should answer with, keyed by the command line it was given. */
-  answers?: Record<string, { stdout?: string; code?: number }>
+  answers?: Record<string, { stdout?: string; code?: number; chunks?: Buffer[] }>
+  /**
+   * Commands whose channel is handed over still running, the way a `tail -f` is.
+   *
+   * Keyed by command line, and the test drives the channel it gets back — which
+   * is the whole point: a stream has no close to assert against, so what is
+   * worth pinning is what arrives *before* one.
+   */
+  follows?: Set<string>
   failWith?: Error & { level?: string; code?: string }
   /** What the SFTP subsystem should already contain, by absolute path. */
   sftp?: FakeSftpOptions
@@ -170,6 +178,7 @@ class FakeClient extends EventEmitter {
   ended = 0
   destroyed = 0
   ran: string[] = []
+  execChannels: FakeChannel[] = []
   stdinSeen: string[] = []
   windows: number[][] = []
   shellOptions: unknown = null
@@ -198,14 +207,24 @@ class FakeClient extends EventEmitter {
   exec(command: string, callback: (err: undefined, channel: FakeChannel) => void): boolean {
     this.ran.push(command)
     const channel = new FakeChannel((text) => this.stdinSeen.push(text))
+    this.execChannels.push(channel)
     callback(undefined, channel)
+    // A followed command is handed over still running: no data, no close, and
+    // the test emits both when it wants to.
+    if (this.options.follows?.has(command) === true) return true
     const answer = this.options.answers?.[command] ?? { stdout: '', code: 0 }
     setImmediate(() => {
-      channel.emit('data', Buffer.from(answer.stdout ?? '', 'utf8'))
+      // `chunks` splits the answer where TCP would, which is the only way to
+      // reach the boundary this file is meant to survive.
+      for (const chunk of answer.chunks ?? [Buffer.from(answer.stdout ?? '', 'utf8')]) {
+        channel.emit('data', chunk)
+      }
       channel.emit('close', answer.code ?? 0, undefined)
     })
     return true
   }
+
+  shellChannel: FakeChannel | null = null
 
   shell(window: unknown, callback: (err: undefined, channel: FakeChannel) => void): boolean {
     this.shellOptions = window
@@ -213,6 +232,7 @@ class FakeClient extends EventEmitter {
       () => undefined,
       (rows, cols, height, width) => this.windows.push([rows, cols, height, width]),
     )
+    this.shellChannel = channel
     callback(undefined, channel)
     return true
   }
@@ -573,6 +593,147 @@ describe('running things', () => {
   it('refuses an empty command rather than running a shell', async () => {
     const server = store.add({ name: 'a', address: 'example.test', username: 'ada' })
     await expect(connections().run(server.id, [])).rejects.toBeInstanceOf(ServerProblem)
+  })
+})
+
+/**
+ * A character that arrives in two pieces.
+ *
+ * ## Why this is split by hand rather than left to chance
+ *
+ * Because chance is what made it invisible. TCP decides where a chunk ends, and
+ * on a fast link with short answers it almost never ends inside a character —
+ * so a decode-per-chunk passes every test anybody writes, passes by hand, and
+ * then fails on somebody's server, once, in the middle of a path. Splitting the
+ * bytes deliberately is the only way to visit the boundary on purpose.
+ *
+ * The example is not decorative either. `servers/chat.ts` asks a server for a
+ * **list of file paths**, one per line, and then opens them. A folder named
+ * `~/Projekte/Café` on somebody's box comes back with two replacement
+ * characters where the `é` was, SFTP is handed a path that does not exist, and
+ * the pane says it cannot find a conversation the person can see in the terminal
+ * beside it. Nothing about that failure points at a chunk boundary.
+ */
+describe('a multi-byte character split across two chunks', () => {
+  /** `é` is `c3 a9`; `→` is `e2 86 92`. Both are cut where TCP would cut them. */
+  const WHOLE = 'file\t2026-08-21T09:00:00.000Z\t/home/ada/Café/a→b/x.jsonl\n'
+  const BYTES = Buffer.from(WHOLE, 'utf8')
+  const CUT_INSIDE_E_ACUTE = BYTES.indexOf(Buffer.from('é', 'utf8')) + 1
+  const CUT_INSIDE_ARROW = BYTES.indexOf(Buffer.from('→', 'utf8')) + 2
+
+  it('comes back whole out of a command', async () => {
+    const server = store.add({ name: 'a', address: 'example.test', username: 'ada' })
+    const pool = connections({
+      answers: {
+        'sh -s': {
+          chunks: [
+            BYTES.subarray(0, CUT_INSIDE_E_ACUTE),
+            BYTES.subarray(CUT_INSIDE_E_ACUTE, CUT_INSIDE_ARROW),
+            BYTES.subarray(CUT_INSIDE_ARROW),
+          ],
+        },
+      },
+    })
+    const result = await pool.runScript(server.id, 'find .')
+    expect(result.stdout).toBe(WHOLE)
+    // Stated separately because this is the assertion that fails on the old
+    // code, and `toBe` on the whole string does not say why.
+    expect(result.stdout).not.toContain('\uFFFD')
+  })
+
+  it('comes back whole out of a terminal', async () => {
+    // Same bug, different surface, and worse: a pty's bytes go into an emulator
+    // and no later byte repairs a glyph that was drawn wrong.
+    const server = store.add({ name: 'a', address: 'example.test', username: 'ada' })
+    const pool = connections()
+    const shell = await pool.shell(server.id, { cols: 80, rows: 24 })
+    const seen: string[] = []
+    shell.onData((chunk) => seen.push(chunk))
+    const channel = FakeClient.made[0].shellChannel
+    channel?.emit('data', BYTES.subarray(0, CUT_INSIDE_E_ACUTE))
+    channel?.emit('data', BYTES.subarray(CUT_INSIDE_E_ACUTE))
+    expect(seen.join('')).toBe(WHOLE)
+    expect(seen.join('')).not.toContain('\uFFFD')
+  })
+
+  it('is not decoded at all on a followed command', async () => {
+    // The stream hands over bytes precisely so that nobody downstream has to
+    // get this right twice: its caller is assembling a file, and a file's
+    // offsets are byte offsets.
+    const server = store.add({ name: 'a', address: 'example.test', username: 'ada' })
+    const pool = connections({ follows: new Set(["'tail' '-n' '0' '-f' 'x'"]) })
+    const stream = await pool.follow(server.id, ['tail', '-n', '0', '-f', 'x'])
+    const seen: Buffer[] = []
+    stream.onBytes((chunk) => seen.push(chunk))
+    const channel = FakeClient.made[0].execChannels[0]
+    channel.emit('data', BYTES.subarray(0, CUT_INSIDE_E_ACUTE))
+    channel.emit('data', BYTES.subarray(CUT_INSIDE_E_ACUTE))
+    expect(Buffer.concat(seen).equals(BYTES)).toBe(true)
+    stream.close()
+  })
+})
+
+/**
+ * A command that is not expected to finish.
+ *
+ * What is worth pinning is its *life*, not its output: it holds a connection
+ * open, and the two things that end it — the pane closing it and the far end
+ * exiting — race every time somebody closes a chat pane on a server whose `tail`
+ * has just died. Releasing twice would take the connection out from under
+ * whatever opened one next.
+ */
+describe('following a command', () => {
+  const CMD = "'tail' '-n' '0' '-f' '/x.jsonl'"
+
+  function following(): FakeOptions {
+    return { follows: new Set([CMD]) }
+  }
+
+  it('holds the connection until it is closed, and releases once', async () => {
+    const server = store.add({ name: 'a', address: 'example.test', username: 'ada' })
+    const pool = connections(following())
+    const stream = await pool.follow(server.id, ['tail', '-n', '0', '-f', '/x.jsonl'])
+    expect(pool.isOpen(server.id)).toBe(true)
+    stream.close()
+    stream.close()
+    expect(pool.isOpen(server.id)).toBe(false)
+    await pool.acquire(server.id)
+    stream.close()
+    expect(pool.isOpen(server.id)).toBe(true)
+  })
+
+  it('says what the far end complained about when it stops', async () => {
+    // The one thing the caller decides on: `tail: unrecognized option` is a
+    // server that cannot stream, and a fallback rather than an empty pane.
+    const server = store.add({ name: 'a', address: 'example.test', username: 'ada' })
+    const pool = connections(following())
+    const stream = await pool.follow(server.id, ['tail', '-n', '0', '-f', '/x.jsonl'])
+    const ends: { code: number | null; stderr: string }[] = []
+    stream.onEnd((why) => ends.push(why))
+    const channel = FakeClient.made[0].execChannels[0]
+    channel.stderr.emit('data', Buffer.from('tail: unrecognized option\n', 'utf8'))
+    channel.emit('close', 1, undefined)
+    expect(ends).toEqual([{ code: 1, stderr: 'tail: unrecognized option' }])
+    // And the connection went back, without anybody calling close().
+    expect(pool.isOpen(server.id)).toBe(false)
+  })
+
+  it('treats a channel error as the far end going away', async () => {
+    // Otherwise the caller waits forever for an `onEnd` the library has decided
+    // to deliver as an `error` instead, and the pane never falls back.
+    const server = store.add({ name: 'a', address: 'example.test', username: 'ada' })
+    const pool = connections(following())
+    const stream = await pool.follow(server.id, ['tail', '-n', '0', '-f', '/x.jsonl'])
+    let ended = 0
+    stream.onEnd(() => (ended += 1))
+    FakeClient.made[0].execChannels[0].emit('error', new Error('broken pipe'))
+    expect(ended).toBe(1)
+    expect(pool.isOpen(server.id)).toBe(false)
+  })
+
+  it('refuses an empty command rather than running a shell', async () => {
+    const server = store.add({ name: 'a', address: 'example.test', username: 'ada' })
+    await expect(connections().follow(server.id, [])).rejects.toBeInstanceOf(ServerProblem)
   })
 })
 

@@ -162,7 +162,7 @@ import { applyControl, readControls, type ApplyResult, type ControlsReading } fr
  * both rules rather than plumbing, and rules are the part worth pinning
  * exactly. See `servers/chat.ts`.
  */
-import { ServerChatSession, type ServerChatUpdate } from './chat'
+import { ServerChatSession, type ChatFeed, type ServerChatUpdate } from './chat'
 // The shadow terminal every local session already keeps. A server shell is a
 // real pty — `client.shell({ term: 'xterm-256color' })` — so the same emulator
 // reads it, which is the whole of what makes the controls reach one.
@@ -177,6 +177,17 @@ import { byteSize } from '../../shared/byte-size'
 
 export const SERVERS_SHELL_OUTPUT_CHANNEL = 'servers:shell:output'
 export const SERVERS_SHELL_CLOSED_CHANNEL = 'servers:shell:closed'
+/**
+ * A conversation on a server moved — pushed, because the server is the only
+ * thing that knows when.
+ *
+ * The payload is *"something changed on this shell, and here is how this pane is
+ * being kept current"* and deliberately not the conversation itself: the window
+ * then asks over `servers:chat:tail`, which is the same path a timer used, so
+ * there is one reader and one place a `/clear` is noticed. See
+ * `ServerChatSession.watch`.
+ */
+export const SERVERS_CHAT_CHANGED_CHANNEL = 'servers:chat:changed'
 /** Where a server's setup has got to. Pushed, because it changes without a press. */
 export const SERVERS_SETUP_CHANNEL = 'servers:setup:changed'
 /**
@@ -452,6 +463,24 @@ export interface ServersIpcDeps {
     from: number,
     length: number,
   ): Promise<{ bytes: Buffer; size: number }>
+  /**
+   * A command handed over still running, whose output arrives as it is produced.
+   * `ServerConnections.follow`.
+   *
+   * Optional, and its absence is the difference between a chat pane that is told
+   * when a conversation moves and one that asks every three seconds — his
+   * standing rule is *"events, not polling; they make the system heavier"*, and
+   * this is the seam that lets a server obey it. A build without it keeps the
+   * timer and the pane says which it is on; nothing silently goes stale.
+   */
+  follow?(
+    serverId: string,
+    argv: readonly string[],
+  ): Promise<{
+    onBytes(listener: (chunk: Buffer) => void): () => void
+    onEnd(listener: (why: { code: number | null; stderr: string }) => void): () => void
+    close(): void
+  }>
   /**
    * The headless-host package this build carries, or null when it carries none.
    *
@@ -1079,6 +1108,16 @@ export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDep
      * half a session, so the reader stays and the transcript is still readable
      * — the server wrote it and it is still lying there.
      */
+    /*
+     * The stream goes either way, and only the stream.
+     *
+     * A shell whose far end went away is a shell nothing will append to again,
+     * so a `tail -f` still running over there is a process on somebody's server
+     * and a channel on a connection this app promises not to hold. The reader
+     * survives it — see above — and answers from a timer, which is honest for a
+     * conversation that has finished.
+     */
+    shellChats.get(shellId)?.close()
     if (close) {
       shellOpenedAt.delete(shellId)
       shellChats.delete(shellId)
@@ -1653,6 +1692,21 @@ export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDep
           // instead of being written into a disposed emulator.
           screens.get(shellId)?.push(chunk)
           deps.broadcast(SERVERS_SHELL_OUTPUT_CHANNEL, { shellId, data: chunk })
+          /*
+           * And a third place, which is the only event there is for *which*
+           * conversation this terminal owns.
+           *
+           * `/clear` starts a new transcript under a new name; the old file
+           * simply stops growing, so the `tail -f` on it would sit there
+           * quietly while the pane showed a finished conversation for the rest
+           * of the session's life. Anything that changes the answer is
+           * something somebody typed into this shell, and it prints — so the
+           * bytes already arriving here are the signal, and an idle terminal
+           * asks that server nothing at all. `ServerChatSession.nudge` holds
+           * the rate limit; this line must stay free of one, or there would be
+           * two.
+           */
+          shellChats.get(shellId)?.nudge()
         })
         shell.onClose(() => {
           dropShell(shellId, false)
@@ -1983,6 +2037,13 @@ export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDep
       {
         runScript: (id, script) => deps.runScript(id, script),
         readFileRange,
+        /*
+         * Passed through only when this build has it. `ServerChatSession` reads
+         * its absence as "this pane is on a timer" and says so, rather than
+         * quietly showing a conversation that stopped updating — which is the
+         * one failure a live view is not allowed to have.
+         */
+        ...(deps.follow === undefined ? {} : { follow: deps.follow.bind(deps) }),
       },
       serverId,
       openedAt,
@@ -2006,6 +2067,18 @@ export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDep
       },
       now,
     )
+    /*
+     * And it pushes from here on.
+     *
+     * The window is told *that* the conversation moved and asks for it over the
+     * channel it already asks on. What ends the three-second timer this pane
+     * used to run is this line and the `refreshMs` the pane reads off the feed —
+     * `SERVERS_CHAT_CHANGED_CHANNEL` says which of the two is in use, so a
+     * server that cannot stream is still current and still says so.
+     */
+    session.watch((feed: ChatFeed) => {
+      deps.broadcast(SERVERS_CHAT_CHANGED_CHANNEL, { shellId, feed })
+    })
     shellChats.set(shellId, session)
     return session
   }
@@ -2065,8 +2138,38 @@ export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDep
    * eight of them. The shell itself is untouched — this is the *reading* being
    * closed, not the terminal.
    */
+  /**
+   * Somebody is looking at this conversation, or has stopped.
+   *
+   * ## Why the far end has to be told, and not just ignored here
+   *
+   * Because the far end can talk first now. A pane that is mounted but off
+   * screen used to cost exactly nothing — its timer was zero and it asked
+   * nothing — and a `tail -f` left running would quietly break that promise: it
+   * sends a transcript's appends whether or not this side reads them, and a long
+   * tool result on a background tab is real traffic on somebody's server for
+   * something nobody can see.
+   *
+   * The reader is kept through it, which is why this is not a close. A pane that
+   * dropped its reader on every tab switch would re-read the tail window across
+   * an SSH link every time somebody looked away and back.
+   */
+  ipcMain.handle(
+    'servers:chat:watch',
+    (_event, shellId: unknown, watching: unknown): { watching: boolean } => {
+      if (typeof shellId !== 'string') return { watching: false }
+      const on = watching === true
+      chatFor(shellId)?.setWatched(on)
+      return { watching: on }
+    },
+  )
+
   ipcMain.handle('servers:chat:close', (_event, shellId: unknown): { closed: boolean } => {
     if (typeof shellId !== 'string') return { closed: false }
+    // Before the delete, not instead of it: the reader is this map's to drop,
+    // and the `tail -f` on somebody's server is the session's to hang up. A
+    // forgotten session cannot close its own channel.
+    shellChats.get(shellId)?.close()
     return { closed: shellChats.delete(shellId) }
   })
 

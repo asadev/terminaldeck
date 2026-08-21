@@ -945,6 +945,35 @@ const api = {
   closeServerChat: (shellId: string): Promise<unknown> =>
     ipcRenderer.invoke('servers:chat:close', shellId),
   /*
+   * A conversation on a server moved.
+   *
+   * Pushed rather than asked for, which is the whole of what took a three-second
+   * timer off this pane: a `tail -f` runs on that server and the main process
+   * forwards *that it grew*, never the conversation itself — the window then
+   * reads it over `tailServerChat`, the same call the timer made, so there is
+   * one reader and one place a `/clear` is noticed.
+   *
+   * The payload also carries which of the two is in use, because a server whose
+   * `tail` will not follow keeps the timer and the pane has to say so rather
+   * than sit silently on something that stopped updating.
+   */
+  /*
+   * Somebody is looking at this conversation, or has stopped.
+   *
+   * A pane that is mounted but off screen used to cost exactly nothing, and it
+   * still does: this hangs up the `tail` on that server rather than leaving it
+   * to send a transcript's appends to a window that is going to discard them.
+   * The reader is kept, so coming back is one read and not the whole tail window
+   * across the link again.
+   */
+  watchServerChat: (shellId: string, watching: boolean): Promise<unknown> =>
+    ipcRenderer.invoke('servers:chat:watch', shellId, watching),
+  onServerChatChanged: (cb: (payload: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, payload: unknown) => cb(payload)
+    ipcRenderer.on('servers:chat:changed', handler)
+    return () => ipcRenderer.off('servers:chat:changed', handler)
+  },
+  /*
    * Which login the coding agent in that server account's home is signed in as.
    *
    * Deliberately not called `serverAccount`: it is not this session's account

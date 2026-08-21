@@ -2741,6 +2741,30 @@
   min-height: 0;
 }
 
+/* Which feed this pane is on: a `tail -f` running on that server, or the timer
+   that covers a server which cannot manage one. One muted line under the
+   composer — "as it is written" and "up to three seconds stale" look identical
+   on screen right until somebody is waiting on a reply, and this is the only
+   place that difference is visible. Sized and coloured like every other
+   secondary caption in the app rather than as a badge; it is a fact, not a
+   status light. */
+.server-chat-feed {
+  flex: none;
+  margin: 0;
+  padding: 5px 14px 8px;
+  font-family: var(--font-ui);
+  /* `--text-muted`, which is the third rung. `--text-tertiary` is not a token
+     this app defines and a declaration naming it is invalid at computed-value
+     time — the caption would inherit the pane's own `--text-primary` and read
+     louder than the conversation it annotates. Two files were caught doing
+     exactly that on 2026-08-21. */
+  font-size: var(--t-caption);
+  letter-spacing: var(--t-caption-ls);
+  line-height: 1.4;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border-subtle);
+}
+
 /* The hole a pane leaves for a terminal that is drawn over it.
 
    It has no background of its own on purpose: for the frame between a layout

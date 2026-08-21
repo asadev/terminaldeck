@@ -420,3 +420,391 @@ describe('a shell’s conversation, read over the wire', () => {
     expect(update.messages).toEqual([])
   })
 })
+
+/* --------------------------------------------------------------- the pushing -- */
+
+/**
+ * A conversation that arrives instead of being asked for.
+ *
+ * ## What was wrong with the version that worked
+ *
+ * Nothing a screenshot would show, which is why it needs a test. The pane asked
+ * for the same transcript every three seconds — twelve hundred round trips an
+ * hour over somebody's SSH link, almost all of them answering "nothing new", and
+ * still up to three seconds late when there was something. His standing rule is
+ * one sentence: *"events, not polling — they make the system heavier."*
+ *
+ * So there are two events and neither of them is a timer, and the pair is what
+ * these exercise:
+ *
+ *  1. **The file grew** — a `tail -f` running on that server, on the channel
+ *     `connection.ts` opens for a command that is not expected to finish.
+ *  2. **The file changed identity** — `/clear` starts a *new* transcript, the
+ *     old one simply stops growing, and no `tail` on earth reports that. The
+ *     event that does exist is the terminal's own output, which this app already
+ *     receives because it is drawing it two views away.
+ *
+ * And a third thing, which is the one a live view is not allowed to get wrong:
+ * when neither event is available the pane must **say** it is on a timer rather
+ * than look identical to one that is current.
+ */
+describe('a conversation that pushes', () => {
+  const OPENED = Date.parse('2026-08-21T10:00:00Z')
+
+  /** A `tail -f` the test can make grow, refuse, or die. */
+  class FakeFollow {
+    bytes: ((chunk: Buffer) => void)[] = []
+    ends: ((why: { code: number | null; stderr: string }) => void)[] = []
+    closes = 0
+
+    onBytes(listener: (chunk: Buffer) => void): () => void {
+      this.bytes.push(listener)
+      return () => undefined
+    }
+
+    onEnd(listener: (why: { code: number | null; stderr: string }) => void): () => void {
+      this.ends.push(listener)
+      return () => undefined
+    }
+
+    close(): void {
+      this.closes += 1
+    }
+
+    /** What the far end printing looks like from here. Bytes are discarded. */
+    grew(): void {
+      for (const listener of this.bytes) listener(Buffer.from('{}\n', 'utf8'))
+    }
+
+    died(stderr = 'tail: unrecognized option'): void {
+      for (const listener of this.ends) listener({ code: 1, stderr })
+    }
+  }
+
+  /** The far end, plus a channel it may or may not agree to open. */
+  class FollowingServer extends FakeServer {
+    followed: (readonly string[])[] = []
+    streams: FakeFollow[] = []
+    refuse = false
+
+    async follow(_serverId: string, argv: readonly string[]): Promise<FakeFollow> {
+      this.followed.push(argv)
+      if (this.refuse) throw new Error('no such command')
+      const stream = new FakeFollow()
+      this.streams.push(stream)
+      return stream
+    }
+  }
+
+  function sessionOn(server: ServerChatAccess, clock: { now: number }): ServerChatSession {
+    return new ServerChatSession(server, 'srv', OPENED, () => [], () => clock.now)
+  }
+
+  /** One turn of the event loop, so an `await`ed follow has settled. */
+  const settle = (): Promise<void> => new Promise((resolve) => setImmediate(resolve))
+
+  it('follows the bound transcript and says the pane is live', async () => {
+    const clock = { now: OPENED + 60_000 }
+    const server = new FollowingServer(() => clock.now)
+    server.files.set('/p/live.jsonl', said('user', stampAt(OPENED + 1_000), 'hello', 'u1'))
+
+    const session = sessionOn(server, clock)
+    session.watch(() => undefined)
+    const update = await session.load()
+
+    expect(update.found).toBe(true)
+    /*
+     * `-n 0`, not `-c +N`. POSIX specifies the leading `+` and several real
+     * `tail`s do not implement it — busybox reads `-c +5000` as *"the last 5000
+     * bytes"*, with no error and no complaint, and this side would splice those
+     * bytes into the file at the wrong offset and turn every line after them
+     * into garbage. `-n 0 -f` cannot be misread into producing bytes, and the
+     * bytes it does produce are thrown away: what this channel carries is the
+     * *fact* that the file grew.
+     */
+    expect(server.followed).toEqual([['tail', '-n', '0', '-f', '/p/live.jsonl']])
+    expect(update.feed).toBe('live')
+  })
+
+  it('tells the window the moment the channel is open, before anything is pushed', async () => {
+    // `tail -n 0 -f` starts at the file's end as it is when the command runs,
+    // and this side's offset is where the last read got to — a round trip
+    // earlier. Anything appended in between is in neither, and would sit unread
+    // until the next append happened along.
+    const clock = { now: OPENED + 60_000 }
+    const server = new FollowingServer(() => clock.now)
+    server.files.set('/p/live.jsonl', said('user', stampAt(OPENED + 1_000), 'hello', 'u1'))
+
+    const told: string[] = []
+    const session = sessionOn(server, clock)
+    session.watch((feed) => told.push(feed))
+    await session.load()
+    expect(told).toEqual(['live'])
+  })
+
+  it('keeps the timer, and says so, on a server whose tail will not follow', async () => {
+    const clock = { now: OPENED + 60_000 }
+    const server = new FollowingServer(() => clock.now)
+    server.refuse = true
+    server.files.set('/p/live.jsonl', said('user', stampAt(OPENED + 1_000), 'hello', 'u1'))
+
+    const session = sessionOn(server, clock)
+    session.watch(() => undefined)
+    const update = await session.load()
+    // Found the conversation, could not stream it, and says which — the whole
+    // point of the field. A pane that claimed `live` here would be a control
+    // that appears to work and does not.
+    expect(update.found).toBe(true)
+    expect(update.feed).toBe('polled')
+  })
+
+  it('falls back and tells the window when the tail dies later', async () => {
+    const clock = { now: OPENED + 60_000 }
+    const server = new FollowingServer(() => clock.now)
+    server.files.set('/p/live.jsonl', said('user', stampAt(OPENED + 1_000), 'hello', 'u1'))
+
+    const told: string[] = []
+    const session = sessionOn(server, clock)
+    session.watch((feed) => told.push(feed))
+    await session.load()
+    server.streams[0].died()
+    // Not silence: a pane that was told `live` and then hears nothing is a pane
+    // sitting on a conversation that has stopped moving, with no timer running
+    // because it was told it did not need one.
+    expect(told).toEqual(['live', 'polled'])
+    expect((await session.tail()).feed).toBe('polled')
+    // One attempt per file, not one per read: a `tail` that answered
+    // `unrecognized option` will answer it again in three seconds, and retrying
+    // would open and tear down a channel on somebody's server on every read —
+    // a busier version of the polling this is here to remove.
+    expect(server.followed).toHaveLength(1)
+  })
+
+  it('does not ask the server anything at all while nothing is pushed', async () => {
+    // The measurement the whole change is for. Before it, three reads and a
+    // survey every three seconds for as long as the pane was open.
+    const clock = { now: OPENED + 60_000 }
+    const server = new FollowingServer(() => clock.now)
+    server.files.set('/p/live.jsonl', said('user', stampAt(OPENED + 1_000), 'hello', 'u1'))
+
+    const session = sessionOn(server, clock)
+    session.watch(() => undefined)
+    await session.load()
+    const scripts = server.scripts
+    const reads = server.reads
+    clock.now += 600_000
+    await settle()
+    expect(server.scripts, 'ten quiet minutes').toBe(scripts)
+    expect(server.reads).toBe(reads)
+  })
+
+  it('moves the tail to the new file when /clear rebinds the conversation', async () => {
+    const clock = { now: OPENED + 60_000 }
+    const server = new FollowingServer(() => clock.now)
+    server.files.set('/p/first.jsonl', said('user', stampAt(OPENED + 1_000), 'hello', 'u1'))
+
+    const session = sessionOn(server, clock)
+    session.watch(() => undefined)
+    await session.load()
+    expect(server.followed).toHaveLength(1)
+
+    // `/clear`: a *new* file, and the old one simply stops growing.
+    server.files.set('/p/second.jsonl', said('user', stampAt(OPENED + 40_000), 'again', 'u2'))
+    clock.now += 20_000
+    const after = await session.tail()
+
+    expect(after.transcriptPath).toBe('/p/second.jsonl')
+    expect(after.reset, 'the view replaces rather than appends').toBe(true)
+    expect(server.followed[1]).toEqual(['tail', '-n', '0', '-f', '/p/second.jsonl'])
+    // And the channel on the finished conversation was hung up rather than left
+    // running on somebody's server delivering nothing forever.
+    expect(server.streams[0].closes).toBe(1)
+  })
+
+  it('asks again when the terminal prints, and not on every byte of it', async () => {
+    /*
+     * The pty is the only event there is for *which* file this is. `/clear`
+     * starts a new transcript and no `tail` reports that; what does exist is
+     * that somebody typed into this shell, and a shell prints. So the bytes
+     * already arriving for the terminal view are the signal — and an idle
+     * terminal asks that server nothing at all.
+     *
+     * Rate-limited to the window `resolve` uses, because a survey is a `find`
+     * and an `awk` per recent transcript on a machine somebody else is using,
+     * and a streaming reply would otherwise ask for one on every chunk.
+     */
+    const clock = { now: OPENED + 60_000 }
+    const server = new FollowingServer(() => clock.now)
+    server.files.set('/p/live.jsonl', said('user', stampAt(OPENED + 1_000), 'hello', 'u1'))
+
+    const told: string[] = []
+    const session = sessionOn(server, clock)
+    session.watch((feed) => told.push(feed))
+    await session.load()
+    told.length = 0
+
+    for (let i = 0; i < 500; i += 1) session.nudge()
+    expect(told, 'five hundred chunks of a streaming reply').toHaveLength(1)
+
+    clock.now += 16_000
+    session.nudge()
+    expect(told).toHaveLength(2)
+  })
+
+  it('asks sooner while no conversation has been found yet', async () => {
+    // The state a person is waiting out: they have opened a shell and are about
+    // to type the first message, and the pane should fill in when it lands.
+    const clock = { now: OPENED + 60_000 }
+    const server = new FollowingServer(() => clock.now)
+
+    const told: string[] = []
+    const session = sessionOn(server, clock)
+    session.watch((feed) => told.push(feed))
+    const update = await session.load()
+    expect(update.found).toBe(false)
+    // Nothing to follow, so nothing was asked to follow it — and the pane is
+    // told it is on a timer rather than left claiming a stream that is not there.
+    expect(server.followed).toEqual([])
+    expect(update.feed).toBe('polled')
+
+    told.length = 0
+    session.nudge()
+    clock.now += 5_100
+    session.nudge()
+    expect(told).toHaveLength(2)
+  })
+
+  it('hangs up the far end when the pane closes, and stops pushing', async () => {
+    const clock = { now: OPENED + 60_000 }
+    const server = new FollowingServer(() => clock.now)
+    server.files.set('/p/live.jsonl', said('user', stampAt(OPENED + 1_000), 'hello', 'u1'))
+
+    const told: string[] = []
+    const session = sessionOn(server, clock)
+    session.watch((feed) => told.push(feed))
+    await session.load()
+    told.length = 0
+
+    session.close()
+    expect(server.streams[0].closes).toBe(1)
+    // One last telling on the way out — that the stream has gone — and then
+    // nothing. See the case below for why that one matters.
+    expect(told).toEqual(['polled'])
+    told.length = 0
+    server.streams[0].grew()
+    clock.now += 60_000
+    session.nudge()
+    expect(told, 'a closed pane is not pushed to').toEqual([])
+    // Still readable: the transcript is lying on that server and a pane on a
+    // terminal that exited can still show what was said in it.
+    expect((await session.tail()).feed).toBe('polled')
+  })
+
+  it('hangs up the far end while nobody is looking, and reads to the end on return', async () => {
+    /*
+     * A pane that is mounted but off screen has always cost nothing. That
+     * promise needs keeping out loud now that the far end can talk first: a
+     * `tail -f` sends a transcript's appends whether or not this side reads
+     * them, and a long tool result on a background tab is real traffic on
+     * somebody's server for something nobody can see.
+     */
+    const clock = { now: OPENED + 60_000 }
+    const server = new FollowingServer(() => clock.now)
+    const path = '/p/live.jsonl'
+    server.files.set(path, said('user', stampAt(OPENED + 1_000), 'hello', 'u1'))
+
+    const told: string[] = []
+    const session = sessionOn(server, clock)
+    session.watch((feed) => told.push(feed))
+    await session.load()
+
+    session.setWatched(false)
+    expect(server.streams[0].closes).toBe(1)
+    expect((await session.tail()).feed).toBe('polled')
+
+    // Written while nobody was watching, so nothing pushed and nothing was read.
+    server.files.set(
+      path,
+      `${server.files.get(path)}${said('assistant', stampAt(OPENED + 70_000), 'while you were away', 'a1')}`,
+    )
+    told.length = 0
+
+    session.setWatched(true)
+    await settle()
+    // Told the moment the channel is back — which is also the catch-up, because
+    // the read that follows walks the file to the end.
+    expect(told).toEqual(['live'])
+    const back = await session.tail()
+    expect(back.messages.map((one) => one.text)).toContain('while you were away')
+    expect(back.feed).toBe('live')
+    // The reader survived it: coming back is one read, not the whole tail window
+    // across the link again.
+    expect(back.reset).toBe(false)
+  })
+
+  it('stops claiming to be live when the terminal it belongs to goes', async () => {
+    /*
+     * A shell whose far end went away keeps its tab and its scrollback, so its
+     * chat pane is still on screen — still reading "Live", and still holding its
+     * own timer off because it was told it did not need one. A sentence that
+     * says a dead terminal is streaming is the exact defect this round is
+     * against.
+     */
+    const clock = { now: OPENED + 60_000 }
+    const server = new FollowingServer(() => clock.now)
+    server.files.set('/p/live.jsonl', said('user', stampAt(OPENED + 1_000), 'hello', 'u1'))
+
+    const told: string[] = []
+    const session = sessionOn(server, clock)
+    session.watch((feed) => told.push(feed))
+    await session.load()
+    told.length = 0
+
+    session.close()
+    expect(told, 'the window was never told the stream had gone').toEqual(['polled'])
+  })
+
+  it('never lets two reads share one offset', async () => {
+    /*
+     * `ChatReader` advances a byte offset after each read, so two overlapping
+     * reads both start from the same place, both fetch the same range and both
+     * add its length — the offset ends up a chunk past where it should be and a
+     * paragraph is skipped. The dedupe set hides the duplicate half of that;
+     * nothing hides the missing half.
+     *
+     * It was a narrow window while the only callers were a load and a timer. It
+     * stops being narrow the moment the far end can talk first, because a push
+     * arriving while the pane is still loading is the ordinary case for a
+     * conversation being written right now.
+     */
+    const clock = { now: OPENED + 60_000 }
+    const server = new FollowingServer(() => clock.now)
+    const lines = [
+      said('user', stampAt(OPENED + 1_000), 'one', 'u1'),
+      said('assistant', stampAt(OPENED + 2_000), 'two', 'a1'),
+      said('assistant', stampAt(OPENED + 3_000), 'three', 'a2'),
+    ]
+    server.files.set('/p/live.jsonl', lines.join(''))
+
+    const session = sessionOn(server, clock)
+    session.watch(() => undefined)
+    const [load, tail] = await Promise.all([session.load(), session.tail()])
+    const seen = [...load.messages, ...tail.messages].map((one) => one.text).join('\n')
+    expect(seen).toContain('one')
+    expect(seen).toContain('two\n\nthree')
+  })
+
+  it('says it is on a timer when this build cannot follow anything', async () => {
+    // `follow` is optional on the seam, and a build without it is the build this
+    // app had yesterday. It must keep the timer, not lose the pane.
+    const clock = { now: OPENED + 60_000 }
+    const server = new FakeServer(() => clock.now)
+    server.files.set('/p/live.jsonl', said('user', stampAt(OPENED + 1_000), 'hello', 'u1'))
+
+    const session = sessionOn(server, clock)
+    session.watch(() => undefined)
+    const update = await session.load()
+    expect(update.found).toBe(true)
+    expect(update.feed).toBe('polled')
+  })
+})

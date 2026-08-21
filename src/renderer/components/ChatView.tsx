@@ -132,6 +132,27 @@ export interface ChatViewProps {
   conversationKey?: string
   /** Poll interval while the session is live. 0 disables it. Defaults to 2s. */
   refreshMs?: number
+  /**
+   * An outside source that says when this conversation moved.
+   *
+   * The pane's own watcher covers a transcript on **this** computer: the main
+   * process has an `fs.watch` on the directory and `useTranscriptChanges` rides
+   * it. A conversation somewhere else has no directory here to watch, and the
+   * only honest alternatives are a timer or a stale pane — so a caller that has
+   * arranged for its own push hands one in here and gets the same behaviour a
+   * local conversation gets. The one caller is a terminal on a server, where
+   * the push is a `tail -f` running over there; see `servers/ServerChatPane`.
+   *
+   * Returning null means *"there was nothing to subscribe to"*, and it is not
+   * the same as not passing this at all — a build whose preload is older than
+   * the channel says so that way.
+   *
+   * It does **not** switch the timer off. `refreshMs` decides that, and it stays
+   * with the caller, because only the caller knows whether its push is actually
+   * running: a subscription that exists and never fires is exactly how a pane
+   * ends up silently frozen on a conversation that has moved on.
+   */
+  subscribe?: (onChange: () => void) => (() => void) | null
   /** Injectable for tests; defaults to the preload bridge on `window.deck`. */
   bridge?: ChatBridge
   /**
@@ -838,6 +859,7 @@ export function ChatView({
   transcriptPath,
   conversationKey,
   refreshMs = 2000,
+  subscribe,
   bridge,
   provider,
   noAttachReason,
@@ -1036,6 +1058,22 @@ export function ChatView({
     setTranscriptRevision((n) => n + 1)
   }, [tail])
   const watched = useTranscriptChanges(scoped || key !== '' ? cwd : null, onTranscriptChange)
+
+  /**
+   * A push arranged by whoever mounted this pane, for a conversation that is not
+   * on this computer and therefore has no directory here to watch.
+   *
+   * Rides exactly as the local watcher does — the same `tail`, the same reader,
+   * the same dedupe in the main process — so the two kinds of conversation stay
+   * one code path. Whether the timer below also runs is `refreshMs`'s business
+   * and stays with the caller; see the prop.
+   */
+  useEffect(() => {
+    if (subscribe === undefined) return
+    const stop = subscribe(tail)
+    if (stop === null) return
+    return stop
+  }, [subscribe, tail])
 
   /**
    * The fallback, for a build with no cost channel or a pane opened on a

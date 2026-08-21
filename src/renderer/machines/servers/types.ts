@@ -540,6 +540,24 @@ export interface ServersBridge {
   pickServerKey?(): Promise<unknown>
   /** `servers:key-read` — the bytes of one key this process itself offered. */
   readServerKey?(path: string): Promise<unknown>
+  /**
+   * `servers:chat:watch` — is anybody looking at this conversation?
+   *
+   * Optional, and absent means the far end keeps streaming to a pane that is off
+   * screen: the build this app had before the push existed, which is slower and
+   * chattier rather than broken.
+   */
+  watchServerChat?(shellId: string, watching: boolean): Promise<unknown>
+  /**
+   * `servers:chat:changed` — a conversation on a server moved, pushed.
+   *
+   * Optional and out of `BRIDGE_METHODS` for the reason every channel added
+   * after the first is: a preload older than this one must lose the *push*, not
+   * the whole servers area. Absent means the chat pane keeps the timer it always
+   * had, which is a slower pane rather than a broken one — and it says which it
+   * is on either way.
+   */
+  onServerChatChanged?(cb: (payload: unknown) => void): () => void
   /** `servers:shell:output` */
   onServerShellOutput(cb: (chunk: unknown) => void): () => void
   /** `servers:shell:closed` */
