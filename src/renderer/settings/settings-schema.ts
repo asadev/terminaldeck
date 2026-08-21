@@ -333,6 +333,49 @@ export const SECTIONS = [
     blurb: 'What runs your sessions, the logins it uses, and what is installed.',
   },
   /*
+   * The servers, one at a time, with a pill naming which.
+   *
+   *   > *"build a proper version for scrapping and server control with switching
+   *   > pill just like in coding ai page in settings but build proper settings
+   *   > inside too exactly like local machine, exactly means exactly and all
+   *   > other applicaple places too"*
+   *
+   * ## Why it is a rail entry and not a group inside Coding AI
+   *
+   * On this table's own rule — a section is a *subject*. Coding AI answers
+   * "which AI runs my sessions, as which login, with what installed", and it
+   * already asks that of servers: its `servers` scope lists the coding logins on
+   * all of them, and that stays where it is. This entry answers a different
+   * question about one machine — its identity, the sign-in this computer holds,
+   * the folder its sessions start in, the two permissions it can be given, and
+   * whether anything of ours is installed on it. Four of those five are not
+   * about AI at all, and folding them under "Coding AI" is where somebody stops
+   * finding them.
+   *
+   * It is also the entry that pays for itself in the other direction: every one
+   * of those controls existed already, behind an **Advanced** door on the
+   * server's own page in the Machines panel, which is a screen you reach by
+   * leaving Settings.
+   *
+   * ## What it costs, stated rather than glossed
+   *
+   * The rail was capped at ten on a Mac and eleven on Windows, and this is the
+   * eleventh and twelfth. `nothing-dropped.test.tsx` carries the argument for
+   * raising it, beside the ceiling itself, because that is what that ceiling
+   * asks of anything that raises it.
+   */
+  {
+    id: 'servers',
+    label: 'Servers',
+    /*
+     * "What each of your servers is set to do" was the first draft and it says
+     * *set* twice by the time the reader gets to the first group heading. This
+     * one names the two halves a person arrives with: which machine, and what
+     * about it.
+     */
+    blurb: 'Each server you have added, and what it can be told to do.',
+  },
+  /*
    * The id stays `features` and the label says Tools.
    *
    * The store is gone — *"they are all necessary basic, they don't need to have

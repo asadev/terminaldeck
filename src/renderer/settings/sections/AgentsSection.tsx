@@ -153,10 +153,25 @@ export function agentsPresent(prereq: Prerequisites | null): ToolStatus[] {
  * therefore "this machine" against "servers" and never "remote", which in this
  * app already means something narrower.
  */
-export type AgentScope = 'this-machine' | 'servers' | `device:${string}`
+export type AgentScope =
+  | 'this-machine'
+  | 'servers'
+  | `device:${string}`
+  /**
+   * **One** server, by id — which is a narrower thing than `'servers'` above and
+   * had to be, rather than being folded into it.
+   *
+   * `'servers'` on this pane means *the coding logins on all of them*, which is
+   * the right scope for a question about accounts. The Servers pane asks a
+   * different question — what is this **one** machine set to do — and every
+   * answer it draws is per server: its identity, its sign-in, the folder its
+   * sessions start in, the two permissions it holds. A switch whose buttons were
+   * "This machine" and "Servers" could not name which.
+   */
+  | `server:${string}`
 
 /** The two that are always there. Linked devices are appended to them. */
-const SCOPES: readonly { id: AgentScope; label: string }[] = [
+export const SCOPES: readonly { id: AgentScope; label: string }[] = [
   { id: 'this-machine', label: 'This machine' },
   { id: 'servers', label: 'Servers' },
 ]
@@ -168,6 +183,20 @@ export function deviceScope(id: string): AgentScope {
 
 export function deviceOfScope(scope: AgentScope): string | null {
   return scope.startsWith('device:') ? scope.slice('device:'.length) : null
+}
+
+/**
+ * The scope for one server, and the server it names. The same one spelling, for
+ * the same reason: two places composing `server:${id}` by hand is two places to
+ * get the separator wrong, and the failure would be a switch that never matches
+ * its own selection.
+ */
+export function serverScope(id: string): AgentScope {
+  return `server:${id}`
+}
+
+export function serverOfScope(scope: AgentScope): string | null {
+  return scope.startsWith('server:') ? scope.slice('server:'.length) : null
 }
 
 /**
@@ -193,19 +222,44 @@ export function deviceOfScope(scope: AgentScope): string | null {
 export function ScopeSwitch({
   scope,
   devices = [],
+  servers = [],
+  fixed = SCOPES,
+  label = 'Where these agents run',
   onScope,
 }: {
   scope: AgentScope
   /** The linked machines, in the order the rail lists them. */
   devices?: readonly { id: string; name: string }[]
+  /**
+   * The stored servers, each its own scope.
+   *
+   * Appended the way `devices` is rather than folded into it, because the two
+   * are different kinds of machine in this app's vocabulary and `deviceScope`
+   * and `serverScope` mint different ids — a server in the devices list would
+   * be a button the Servers pane could never match.
+   */
+  servers?: readonly { id: string; name: string }[]
+  /**
+   * The scopes at the head of the switch, before the machines.
+   *
+   * Defaulted rather than always drawn, so this stays one component instead of
+   * two. Coding AI takes the default — *"two buttons at the top to switch
+   * between this machine and server machines"* — and the Servers pane passes
+   * none, because on a pane whose every control is a property of one server,
+   * *This machine* is a button with nothing behind it.
+   */
+  fixed?: readonly { id: AgentScope; label: string }[]
+  /** What the group of buttons is, for a screen reader. */
+  label?: string
   onScope(next: AgentScope): void
 }) {
   const entries = [
-    ...SCOPES,
+    ...fixed,
     ...devices.map((device) => ({ id: deviceScope(device.id), label: device.name })),
+    ...servers.map((server) => ({ id: serverScope(server.id), label: server.name })),
   ]
   return (
-    <div className="settings-scope" role="group" aria-label="Where these agents run">
+    <div className="settings-scope" role="group" aria-label={label}>
       {entries.map((entry) => (
         <button
           key={entry.id}

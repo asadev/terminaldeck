@@ -174,8 +174,34 @@ describe('every section id still resolves to a pane', () => {
      * something you *read*, exactly like the Shortcuts and Help entries that
      * left for the same reason.
      */
-    expect(sectionsFor('mac').length).toBeLessThanOrEqual(10)
-    expect(sectionsFor('windows').length).toBeLessThanOrEqual(11)
+    /*
+     * ## The eleventh is **Servers**, 2026-08-22, and this is what it paid
+     *
+     * Raised rather than squeezed, and the reason is the one this ceiling asks
+     * for. Everything on that pane existed already and none of it was in this
+     * window: a server's identity, the sign-in this computer keeps for it, the
+     * folder its sessions start in, the two permissions it can hold and the
+     * headless host on it were all behind an **Advanced** door on that server's
+     * own page in the Machines panel — a screen you reach by leaving Settings.
+     * Asad, on that gap: *"i have a server account connected, but coding AI
+     * things pages, i don't have any kind of control of server"*, and then, of
+     * this round, *"build proper settings inside too exactly like local machine,
+     * exactly means exactly"*.
+     *
+     * Folding it into Coding AI was considered and loses on this table's own
+     * rule that a section is a *subject*. Coding AI's `servers` scope answers
+     * "which logins are on my servers", and it keeps that. Four of the five
+     * groups on the new pane are not about AI at all.
+     *
+     * What it did **not** cost is a second implementation: the pane is
+     * assembled from the components the server's own page already draws —
+     * `ServerSetup`, `ServerHost`, `ServerDrivesWindows`, `ServerCopilotGrant`,
+     * `ServerFolderPicker` — for the same reason Coding AI is assembled from
+     * the three panes it replaced. Nothing was re-typed, so nothing could be
+     * dropped in the typing.
+     */
+    expect(sectionsFor('mac').length).toBeLessThanOrEqual(11)
+    expect(sectionsFor('windows').length).toBeLessThanOrEqual(12)
   })
 })
 

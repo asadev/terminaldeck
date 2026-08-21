@@ -38,6 +38,7 @@ import { ToolsSection } from './sections/ToolsSection'
 import { AppearanceSection } from './sections/AppearanceSection'
 import { NotificationsSection } from './sections/NotificationsSection'
 import { AgentsSection } from './sections/AgentsSection'
+import { ServerControlSection } from './sections/ServerControl'
 import { BrowserSection } from './sections/BrowserSection'
 import { PowerSection } from './sections/PowerSection'
 import { AdvancedSection } from './sections/AdvancedSection'
@@ -93,6 +94,16 @@ const PowerSectionView: ComponentType<SectionProps> = () => <PowerSection />
 const LinuxSectionView: ComponentType<SectionProps> = () => <LinuxSection />
 
 /**
+ * Wrapped for the fourth time, and for the reason `PowerSectionView` records:
+ * this pane resolves the **server** channels off `window.deck` and holds none of
+ * this window's values. Handing it `SectionProps` would give it the settings
+ * bridge as its own and it would decide this build cannot reach a server while
+ * every method sat on the preload — which is the mistake `RemoteSection` shipped
+ * once.
+ */
+const ServerControlView: ComponentType<SectionProps> = () => <ServerControlSection />
+
+/**
  * Wrapped for the third time, and for the strongest version of the reason.
  *
  * The Copilot pane stores nothing at all. Every one of its channels reads a
@@ -129,6 +140,9 @@ const SECTION_VIEWS: Record<LiveSectionId, ComponentType<SectionProps>> = {
   // rename, for the reason the schema gives beside that entry. Accounts and
   // Setup are assembled into it — see the note in `AgentsSection.tsx`.
   agents: AgentsSection,
+  // One server at a time, with the pill naming which. Resolves its own bridge —
+  // see `ServerControlView`.
+  servers: ServerControlView,
   // The id is `features` and the label is "Tools": `App.tsx` names this id and
   // is a file no agent may edit while others are working here.
   features: ToolsSection,

@@ -1,5 +1,5 @@
 import { useAppSettings } from '../../settings/useAppSettings'
-import { numberSetting, stringSetting } from '../../settings/settings-schema'
+import { booleanSetting, numberSetting, stringSetting } from '../../settings/settings-schema'
 import { ServerTerminal } from './ServerTerminal'
 import type { ServersBridge } from './types'
 
@@ -105,6 +105,13 @@ export function ServerSessionPane({
   const { values: settings } = useAppSettings()
   const fontSize = numberSetting(settings, 'appearance.terminalFontSize')
   const fontFamily = stringSetting(settings, 'appearance.terminalFontFamily')
+  /*
+   * The third of the terminal settings, and it was the one that never arrived.
+   * The two above were threaded through when this pane was written; selecting
+   * text in a server shell simply did not copy it, on a machine where every
+   * other terminal in the window did. See `ServerTerminal.copyOnSelect`.
+   */
+  const copyOnSelect = booleanSetting(settings, 'general.copyOnSelect')
 
   return (
     <div
@@ -120,6 +127,7 @@ export function ServerSessionPane({
         bridge={bridge}
         fontSize={fontSize}
         fontFamily={fontFamily}
+        copyOnSelect={copyOnSelect}
         visible={visible}
         onEnded={onEnded}
         onOpened={onOpened}

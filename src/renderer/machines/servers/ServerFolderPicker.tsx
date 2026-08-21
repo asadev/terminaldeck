@@ -190,7 +190,17 @@ interface Props {
   bridge: ServersBridge | null
   /** The chosen folder, or null for this server's default. */
   path: string | null
-  onChoose(path: string | null): void
+  /**
+   * Where a folder chosen **for one session** goes. Absent on a screen that is
+   * not starting one.
+   *
+   * Settings → Servers draws this control to answer *which folder do sessions on
+   * this server start in*, which is the tick in the window's foot and nothing
+   * else — there is no session there for *Use this folder* to be about. So it is
+   * optional, and its absence removes that button rather than leaving one whose
+   * press has nowhere to land. Same control, same browsing, one fewer promise.
+   */
+  onChoose?(path: string | null): void
 }
 
 export function ServerFolderPicker({ serverId, serverName, bridge, path, onChoose }: Props) {
@@ -284,10 +294,14 @@ export function ServerFolderPicker({ serverId, serverName, bridge, path, onChoos
           start={path ?? fallback}
           fallback={fallback}
           onRemember={remember}
-          onUse={(chosen) => {
-            onChoose(chosen)
-            setBrowsing(false)
-          }}
+          {...(onChoose === undefined
+            ? {}
+            : {
+                onUse: (chosen: string | null) => {
+                  onChoose(chosen)
+                  setBrowsing(false)
+                },
+              })}
           onClose={() => setBrowsing(false)}
         />
       )}
@@ -332,7 +346,8 @@ function FolderWindow({
   start: string | null
   fallback: string | null
   onRemember(path: string | null): void
-  onUse(path: string | null): void
+  /** Absent when nothing is waiting on an answer. Then no *Use this folder*. */
+  onUse?(path: string | null): void
   onClose(): void
 }) {
   const [at, setAt] = useState<Folder | null>(null)
@@ -652,17 +667,22 @@ function FolderWindow({
               Start here every time
             </label>
           )}
+          {/* *Cancel* is only honest while there is something to cancel. With no
+              session to answer, the tick beside it has already been written —
+              see `remember` — so the way out is *Close*, which is what it does. */}
           <button type="button" className="srvpick-btn" onClick={onClose}>
-            Cancel
+            {onUse === undefined ? 'Close' : 'Cancel'}
           </button>
-          <button
-            type="button"
-            className="srvpick-btn srvpick-btn-primary"
-            disabled={held === null}
-            onClick={() => onUse(held)}
-          >
-            Use this folder
-          </button>
+          {onUse !== undefined && (
+            <button
+              type="button"
+              className="srvpick-btn srvpick-btn-primary"
+              disabled={held === null}
+              onClick={() => onUse(held)}
+            >
+              Use this folder
+            </button>
+          )}
         </footer>
       </div>
     </div>,
