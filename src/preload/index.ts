@@ -1959,6 +1959,20 @@ const api = {
     return () => ipcRenderer.off('browser:downloads', handler)
   },
 
+  /* --------------------------------------------- browser tools store -- */
+
+  /*
+   * The tools store. Three invokes and no push, and `browser-store-ipc.ts` says
+   * why: a row changes only when somebody presses Install or Remove in the panel
+   * that is already on screen, so it re-reads. A push channel nothing ever fires
+   * is dead wiring wearing a feature's clothes.
+   */
+  browserStore: (): Promise<unknown> => ipcRenderer.invoke('browser-store:list'),
+  browserStoreInstall: (id: string): Promise<unknown> =>
+    ipcRenderer.invoke('browser-store:install', id),
+  browserStoreRemove: (id: string): Promise<unknown> =>
+    ipcRenderer.invoke('browser-store:remove', id),
+
   browserPasswordsAvailable: (): Promise<unknown> =>
     ipcRenderer.invoke('browser-password:available'),
   browserPasswords: (profileId: string): Promise<unknown> =>

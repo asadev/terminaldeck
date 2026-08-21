@@ -2043,3 +2043,132 @@
 .bw-dl-clear:hover {
   background: var(--bg-hover);
 }
+
+/* ------------------------------------------------------- the tools store -- */
+
+/*
+ * A store row is four facts and one button, and the facts are the point: what a
+ * tool reads and where it may run are what somebody is agreeing to when they
+ * press Install, so they are on the row rather than behind a disclosure.
+ */
+.bw-store-section {
+  margin-bottom: var(--sp-5);
+}
+
+.bw-store-heading {
+  margin: 0 0 var(--sp-2);
+  color: var(--text-secondary);
+  font-size: var(--t-footnote);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.bw-store-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.bw-store-row {
+  padding: var(--sp-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+}
+
+.bw-store-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.bw-store-name {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: var(--t-body);
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.bw-store-version {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
+}
+
+.bw-store-install {
+  flex-shrink: 0;
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font: inherit;
+  font-size: var(--t-footnote);
+  font-weight: 600;
+  white-space: nowrap;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+
+.bw-store-install:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.bw-store-install:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.bw-store-summary {
+  margin: var(--sp-1) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+}
+
+.bw-store-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 2px var(--sp-3);
+  margin: var(--sp-2) 0 0;
+}
+
+.bw-store-facts > div {
+  display: contents;
+}
+
+.bw-store-facts dt {
+  color: var(--text-muted);
+  font-size: var(--t-caption);
+}
+
+.bw-store-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-secondary);
+  font-size: var(--t-caption);
+}
+
+/* The answer to the last thing pressed on this row. Secondary, never critical:
+   an install that worked printed in red reads as a failure — the same argument
+   `.bw-said` makes one section up. */
+.bw-store-said {
+  margin: var(--sp-2) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--t-caption);
+  line-height: var(--lh-body);
+}
+
+.bw-store-note {
+  margin: 0 0 var(--sp-2);
+  color: var(--text-muted);
+  font-size: var(--t-caption);
+  line-height: var(--lh-body);
+}

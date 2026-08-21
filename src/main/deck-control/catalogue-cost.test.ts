@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { BrowserDrive } from '../browser-driver'
 import { serverTools, type ServerToolsDeps } from '../servers/tools'
 import { browserTools } from './browser-tools'
+import { storeTools } from './store-tools'
 import {
   buildCatalogue,
   catalogueCost,
@@ -45,6 +46,7 @@ function shipped(): ToolSpec[] {
     tourTool({} as TourStage),
     whereTool({ window: { read: async () => null }, page: () => null }),
     ...browserTools({} as BrowserDrive),
+    ...storeTools({ drive: {} as BrowserDrive, installed: () => [] }),
     ...serverTools({} as ServerToolsDeps),
   ]
 }
@@ -60,20 +62,29 @@ describe('the catalogue that ships', () => {
     expect(wire).toContain('browser_open')
     expect(wire).toContain('browser_close')
     expect(wire).toContain('servers_look')
+    expect(wire).toContain('browser_extract')
   })
 
   it('costs what it costs, written down so a rewrite that doubles it is visible', () => {
     const cost = catalogueCost(shipped())
     /*
      * Measured 2026-08-20 on the assembled list: 25 tools, 26,929 characters,
-     * ~7,694 estimated tokens. Pinned rather than bounded because the point of
-     * writing it down is that somebody expanding a description sees the figure
-     * move — a `toBeLessThan` at a round number hides every change under it.
+     * ~7,694 estimated tokens. Re-measured 2026-08-21 with `browser.extract`,
+     * the tools store's single door: 26. Pinned rather than bounded because the
+     * point of writing it down is that somebody expanding a description sees the
+     * figure move — a `toBeLessThan` at a round number hides every change under
+     * it.
+     *
+     * The store deliberately costs **one** definition however many tools are
+     * installed. A schema per installed tool would have put the growth of this
+     * number in a person's hands rather than in a reviewer's, which is the one
+     * thing `MAX_CATALOGUE_TOKENS` asks nobody to do — see the head of
+     * `store-tools.ts`.
      *
      * Generous slack on the characters and none on the count: prose is edited
      * constantly and a tool is added deliberately.
      */
-    expect(cost.tools).toBe(25)
+    expect(cost.tools).toBe(26)
     expect(cost.chars).toBeGreaterThan(24_000)
     expect(cost.chars).toBeLessThan(30_000)
   })
@@ -86,14 +97,15 @@ describe('the catalogue that ships', () => {
     /*
      * **This is a known breach, not a passing budget.**
      *
-     * `MAX_CATALOGUE_TOOLS` is 20 and the app ships 25. The count cap answers a
+     * `MAX_CATALOGUE_TOOLS` is 20 and the app ships 26. The count cap answers a
      * different question from the token cap and it is the one that binds: past
      * twenty tools the problem is not the bill, it is that a model choosing
      * between twenty-five things chooses worse.
      *
      * It was breached before tonight — 24 at `0.8.1`, with `tour_play`,
      * `app_where` and the three `servers.*` verbs outside the only measurement
-     * anybody was running — and `browser.close` made it 25. Fixing it means
+     * anybody was running — `browser.close` made it 25, and the tools store's
+     * one door made it 26. Fixing it means
      * removing or merging tools, which is a decision about the product and not
      * one to take inside a defect fix, so what is done here is to stop the
      * number being invisible: `control.cost()` has always reported

@@ -20,6 +20,11 @@ import {
   TEXT_SCRIPT,
   withArgs,
 } from './browser-drive-script'
+import {
+  EXTRACT_SCRIPT,
+  type ExtractPlan,
+  type ExtractResult,
+} from './browser-store-script'
 import { copilotPaths } from './copilot-home'
 import { navigatePage, type SteerablePage } from './browser-route'
 import { normalizeUrl, shortLabel } from './browser-url'
@@ -1200,6 +1205,41 @@ export class BrowserDrive {
       secret: raw.secret === true,
       text: raw.secret === true ? '' : String(raw.text ?? ''),
       truncated: raw.truncated === true,
+    }
+  }
+
+  /**
+   * Run one installed store tool's recipe against a page.
+   *
+   * The recipe is **arguments**, never code: it goes through the same
+   * `withArgs` seam every other script here uses, into `EXTRACT_SCRIPT`, which
+   * this repository wrote. `browser-store-recipe.ts` holds the whole argument
+   * for why the tools store is built this way rather than by downloading
+   * programs, and it is the argument this method exists to keep true — there is
+   * no second path from a store tool into a page.
+   *
+   * Everything else is the ordinary read path, unchanged: `hold` takes the
+   * baton, `run` refuses while a person has the page, and the isolated world is
+   * the same one `browser.read` uses. A store tool therefore cannot reach past
+   * `browser.read`; whether it may run on *this* page at all is settled one
+   * layer up, in `deck-control/store-tools.ts`, against the recipe's origins.
+   */
+  async extract(plan: ExtractPlan, target?: DriveTarget | null): Promise<ExtractResult> {
+    const { slot } = await this.hold(target)
+    const raw = await this.run<Partial<ExtractResult>>(EXTRACT_SCRIPT, plan, slot)
+    return {
+      url: String(raw.url ?? ''),
+      title: String(raw.title ?? ''),
+      fields: typeof raw.fields === 'object' && raw.fields !== null ? raw.fields : {},
+      rows: Array.isArray(raw.rows) ? raw.rows : [],
+      rowsOnPage: Number(raw.rowsOnPage ?? 0),
+      rowsReturned: Number(raw.rowsReturned ?? 0),
+      counts:
+        typeof raw.counts === 'object' && raw.counts !== null
+          ? (raw.counts as ExtractResult['counts'])
+          : {},
+      stated: typeof raw.stated === 'number' && Number.isFinite(raw.stated) ? raw.stated : null,
+      next: typeof raw.next === 'string' && raw.next !== '' ? raw.next : null,
     }
   }
 

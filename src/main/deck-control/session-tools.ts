@@ -93,10 +93,26 @@ import { NO_TIERS, type Caller, type TierGrant } from './surface'
  * because the wire name and the dotted id are two names for one tool and a
  * caller picks which to send.
  *
- * Six ids, and the list is written out rather than derived from
- * `browserTools()` on purpose: derivation would mean a seventh tool added to
+ * Seven ids, and the list is written out rather than derived from
+ * `browserTools()` on purpose: derivation would mean an eighth tool added to
  * that file one day silently becoming something every session on the machine
  * could call. A grant is a thing somebody writes down.
+ *
+ * ## Why the tools store adds exactly one id and never more
+ *
+ * `browser.extract` runs whatever a person installed from the browser's tools
+ * store, and it is on this list because **installing a tool must not be able to
+ * change this list.** A store that could add its own ids here would be a store
+ * whose contents decide their own permissions, and the argument two paragraphs
+ * up would be worth nothing — the whole point of a positive list is that
+ * somebody wrote it.
+ *
+ * So the store's reach is fixed at one written-down id whatever is installed,
+ * and what that id may do is bounded twice over: `store-tools.ts` resolves the
+ * window through the same `boundOf` these six use, and the recipe itself is
+ * data run by a script this repository wrote (`browser-store-recipe.ts`). An
+ * installed tool is therefore never more than `browser.read` on a page this
+ * session already holds, and a host-bound one is less.
  */
 export const SESSION_TOOLS: ReadonlySet<string> = new Set([
   'browser.open',
@@ -111,6 +127,8 @@ export const SESSION_TOOLS: ReadonlySet<string> = new Set([
   'browser_handover',
   'browser.close',
   'browser_close',
+  'browser.extract',
+  'browser_extract',
 ])
 
 /**
