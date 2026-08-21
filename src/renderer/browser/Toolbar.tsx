@@ -1,4 +1,16 @@
-import { useEffect, useRef, type FormEvent, type ReactNode, type RefObject } from 'react'
+import {
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+  type RefObject,
+} from 'react'
+import { createPortal } from 'react-dom'
+import type { HistoryVisit } from './accounts-bridge'
+import { completionFor, visitHost, visitLabel } from './history-view'
 import { type OmniboxResolution } from './omnibox'
 import { profileInitial } from './profile-badge'
 import { servedMark, servedTitle, type ServedBy } from './served-mark'
@@ -85,6 +97,24 @@ interface Props {
   profilesOpen?: boolean
   /** The active profile's name, which is what the button's hover label says. */
   profileName?: string
+  /** The active profile's chosen badge character, if it has one. */
+  profileAvatar?: string
+
+  /**
+   * Places this profile has been that match what is being typed, best first.
+   *
+   *   > *"When I type in the top chat bar, in if this whatever it is, if it was
+   *   > before there, it should… automatically pre-fill, pre-fill things should
+   *   > be there."*
+   *
+   * Fetched by the workspace from `browser-history.ts` — this component decides
+   * only what a list looks like and what the arrow keys do to it. Empty draws
+   * nothing at all: a drop-down that opens empty is a drop-down that covers the
+   * page for no reason, and covering the page is what opening it costs.
+   */
+  suggestions?: readonly HistoryVisit[]
+  /** Go to a row that was clicked or picked with the keyboard. */
+  onPick?: (url: string) => void
   /**
    * How many steps are in the recording so far.
    *
@@ -190,12 +220,16 @@ export function Toolbar({
   onProfiles,
   profilesOpen = false,
   profileName = '',
+  profileAvatar = '',
+  suggestions = [],
+  onPick,
   steps,
   onToggleIsolation,
   machinePicker,
   servedBy = null,
 }: Props) {
   const inputRef = useRef<HTMLInputElement>(null)
+  const fieldRef = useRef<HTMLFormElement>(null)
 
   useEffect(() => {
     if (focusToken === 0) return
@@ -209,8 +243,116 @@ export function Toolbar({
   const loading = tab?.loading === true
   const value = tab ? (tab.editing ? tab.draft : tab.url || tab.draft) : ''
 
+  /*
+   * The drop-down, and everything that is true only while it is on screen.
+   *
+   * `cursor` is where the arrow keys are, -1 for "nowhere, the field's own text
+   * is the answer" — which is the state Enter has to keep meaning "go to what I
+   * typed", or a suggestion list turns typing an address into a lottery.
+   *
+   * `dismissed` is Escape. It is per-edit rather than sticky: pressing Escape
+   * puts the list away and the next character typed brings it back, which is
+   * what every address bar does and the only behaviour that does not require
+   * remembering a mode.
+   */
+  const [cursor, setCursor] = useState(-1)
+  /* Unique per mount: two panels can be split side by side, and two lists
+     sharing one id would point every screen reader at the first one. */
+  const listId = useId()
+  const [dismissed, setDismissed] = useState(false)
+  const [box, setBox] = useState<{ left: number; top: number; width: number } | null>(null)
+  const editing = tab?.editing === true
+  const showSuggestions = editing && !dismissed && suggestions.length > 0
+
+  useEffect(() => {
+    // A new list is a new set of answers; keeping the old index would leave the
+    // highlight on whatever happens to be in that position now.
+    setCursor(-1)
+  }, [suggestions])
+
+  useEffect(() => {
+    if (!editing) setDismissed(false)
+  }, [editing])
+
+  /*
+   * Where the list hangs, measured from the field on the frame it is drawn in.
+   *
+   * The panel can be split, resized or moved between windows, so the rectangle
+   * is read rather than remembered — and it is only written to state when it has
+   * actually changed, because this effect runs on every keystroke.
+   */
+  useLayoutEffect(() => {
+    if (!showSuggestions) {
+      if (box !== null) setBox(null)
+      return
+    }
+    const field = fieldRef.current
+    if (!field) return
+    const rect = field.getBoundingClientRect()
+    const next = { left: rect.left, top: rect.bottom + 4, width: rect.width }
+    if (!box || box.left !== next.left || box.top !== next.top || box.width !== next.width) {
+      setBox(next)
+    }
+  }, [showSuggestions, value, box])
+
+  /*
+   * The inline half of *"automatically pre-fill"*.
+   *
+   * Chrome finishes the address in the field and selects the part it added, so
+   * one more keystroke replaces the guess rather than fighting it. That is what
+   * this pair does: `pendingSelect` is set at the moment a completion is written
+   * into the draft, and the layout effect below puts the selection over the
+   * added tail once the parent has re-rendered with the longer value.
+   *
+   * Only ever on an insertion. Completing on a deletion is the classic bug where
+   * Backspace cannot delete anything, because the character it removes is
+   * immediately typed back by the completion.
+   */
+  const pendingSelect = useRef<{ from: number; to: number } | null>(null)
+  /**
+   * The completion currently standing in the field, and the address it came
+   * from.
+   *
+   * Enter on `google.com` would otherwise go through the omnibox, which resolves
+   * a bare host to `http://` — the right default for a dev server and the wrong
+   * one for a page this browser has already loaded over https. Remembering which
+   * stored address produced the text means Enter goes back to exactly the page
+   * the suggestion was about, and it is cleared the moment the field stops being
+   * that text.
+   */
+  const completed = useRef<{ text: string; url: string } | null>(null)
+
+  useLayoutEffect(() => {
+    const wanted = pendingSelect.current
+    pendingSelect.current = null
+    const input = inputRef.current
+    if (!wanted || !input) return
+    if (input.value.length < wanted.to) return
+    input.setSelectionRange(wanted.from, wanted.to)
+  }, [value])
+
+  const pick = (url: string): void => {
+    setDismissed(true)
+    setCursor(-1)
+    onPick?.(url)
+  }
+
   const submit = (event: FormEvent): void => {
     event.preventDefault()
+    // A row under the arrow keys is what Enter means then — and it is a URL, so
+    // it goes straight to the tab rather than back through the omnibox, which
+    // would re-resolve a resolved address.
+    const chosen = cursor >= 0 ? suggestions[cursor] : undefined
+    if (chosen && onPick) {
+      pick(chosen.url)
+      return
+    }
+    const filled = completed.current
+    if (filled && filled.text === value && onPick) {
+      pick(filled.url)
+      return
+    }
+    setDismissed(true)
     onSubmit()
   }
 
@@ -276,7 +418,7 @@ export function Toolbar({
         The width this frees goes where he sent it: *"we can have a bigger link
         bar."*
       */}
-      <form className="bw-address" onSubmit={submit}>
+      <form className="bw-address" ref={fieldRef} onSubmit={submit}>
         {/*
           Where this loopback page actually comes from — and only the part of it
           that is not already on the bar.
@@ -311,7 +453,29 @@ export function Toolbar({
           autoCapitalize="off"
           aria-label="Address and search"
           placeholder="Enter a URL, or search"
-          onChange={(event) => onDraft(event.target.value)}
+          role="combobox"
+          aria-expanded={showSuggestions}
+          /* Named only while it exists. `aria-controls` pointing at an element
+             that is not in the document is worse than no attribute at all. */
+          aria-controls={showSuggestions ? listId : undefined}
+          aria-autocomplete="both"
+          aria-activedescendant={
+            showSuggestions && cursor >= 0 ? `${listId}-${cursor}` : undefined
+          }
+          onChange={(event) => {
+            const typed = event.target.value
+            // `inputType` is what separates typing from deleting, and it is on
+            // the native event rather than React's synthetic one.
+            const kind = (event.nativeEvent as InputEvent).inputType ?? ''
+            const inserting = kind === '' || kind.startsWith('insert')
+            const top = suggestions[0]
+            const filled = inserting && top && onPick ? completionFor(typed, top.url) : null
+            if (filled) pendingSelect.current = { from: typed.length, to: filled.length }
+            completed.current = filled && top ? { text: filled, url: top.url } : null
+            setCursor(-1)
+            setDismissed(false)
+            onDraft(filled ?? typed)
+          }}
           onFocus={(event) => {
             onEditing(true)
             event.target.select()
@@ -320,8 +484,26 @@ export function Toolbar({
           onKeyDown={(event) => {
             if (event.key === 'Escape') {
               event.stopPropagation()
+              // Escape puts the list away first and leaves the field alone. Two
+              // things on one key, in the order somebody expects them: the list
+              // is what appeared last, so it is what goes first.
+              if (showSuggestions) {
+                setDismissed(true)
+                setCursor(-1)
+                return
+              }
               onEditing(false)
               event.currentTarget.blur()
+              return
+            }
+            if (!showSuggestions) return
+            if (event.key === 'ArrowDown') {
+              event.preventDefault()
+              setCursor((at) => (at + 1 >= suggestions.length ? -1 : at + 1))
+            }
+            if (event.key === 'ArrowUp') {
+              event.preventDefault()
+              setCursor((at) => (at <= -1 ? suggestions.length - 1 : at - 1))
             }
           }}
         />
@@ -330,6 +512,75 @@ export function Toolbar({
           <span className="bw-address-hint">Search</span>
         )}
       </form>
+
+      {/*
+        The drop-down, portalled into `<body>` because it has to be.
+
+        A page here is a native `WebContentsView` composited above the entire
+        renderer, so a list rendered inside this toolbar's own tree would be
+        painted underneath the website — the fault he reported of the two menus
+        on the same bar: *"the drop-down is coming in the backside… they should
+        be the top first layer."* What makes a floating surface visible is
+        `overlay-watch.ts` finding it as a child of `<body>` and the workspace
+        parking the page for as long as it is there. That is the trade: the site
+        is not on screen while the list is open, which is the same bargain every
+        other popup on this bar already makes, and the list closes on the first
+        thing you do with it.
+      */}
+      {showSuggestions &&
+        box &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <ul
+            id={listId}
+            className="bw-suggest"
+            role="listbox"
+            aria-label="Earlier addresses"
+            style={{ left: box.left, top: box.top, width: box.width }}
+          >
+            {suggestions.map((entry, index) => (
+              <li key={entry.url}>
+                <button
+                  type="button"
+                  id={`${listId}-${index}`}
+                  className="bw-suggest-row"
+                  role="option"
+                  aria-selected={index === cursor}
+                  data-on={index === cursor || undefined}
+                  title={entry.url}
+                  /* `onMouseDown` and not `onClick`: the field has focus, and a
+                     click on this row blurs it first — which ends editing, which
+                     unmounts the row before its own click can land. */
+                  onMouseDown={(event) => {
+                    event.preventDefault()
+                    pick(entry.url)
+                  }}
+                >
+                  {/* The clock is what says where this row came from: somewhere
+                      this browser has already been, not a guess. Chrome draws
+                      the same glyph on the same rows. */}
+                  <svg
+                    className="bw-suggest-glyph"
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    aria-hidden="true"
+                  >
+                    <circle cx="12" cy="12" r="9" />
+                    <path d="M12 7v5l3 2" />
+                  </svg>
+                  <span className="bw-suggest-title">{visitLabel(entry)}</span>
+                  <span className="bw-suggest-host">{visitHost(entry.url)}</span>
+                </button>
+              </li>
+            ))}
+          </ul>,
+          document.body,
+        )}
 
       {/*
         Glyphs, and nothing else — the words came off on 2026-08-20.
@@ -448,7 +699,7 @@ export function Toolbar({
             onClick={onProfiles}
           >
             <span className="bw-avatar" aria-hidden="true">
-              {profileInitial(profileName)}
+              {profileInitial(profileName, profileAvatar)}
             </span>
           </button>
         )}

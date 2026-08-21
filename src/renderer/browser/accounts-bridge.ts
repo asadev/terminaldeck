@@ -27,6 +27,8 @@ export interface BrowserProfile {
   partition: string
   createdAt: number
   isDefault: boolean
+  /** One character for the badge, or `''` for the name's initial. */
+  avatar: string
 }
 
 /** Mirrors `ProfileState` in `src/main/browser-profiles.ts`. */
@@ -41,6 +43,15 @@ export interface SavedLoginSummary {
   origin: string
   username: string
   updatedAt: number
+}
+
+/** Mirrors `Visit` in `src/main/browser-history.ts`. */
+export interface HistoryVisit {
+  profileId: string
+  url: string
+  title: string
+  visitedAt: number
+  visits: number
 }
 
 /** Mirrors `SaveOutcome` in `src/main/browser-passwords.ts`. */
@@ -78,6 +89,20 @@ export interface AccountsApi {
   browserProfileActivate?(id: string): Promise<unknown>
   browserProfileDelete?(id: string): Promise<unknown>
 
+  browserProfileAvatar?(id: string, avatar: string): Promise<unknown>
+
+  /**
+   * Where this browser has been, per profile — `browser-history.ts`.
+   *
+   * There is no method here that *writes* a visit, and there is not meant to be.
+   * The store is fed by committed navigations in the main process, so nothing on
+   * this side can put a page into somebody's history that they never opened.
+   */
+  browserHistory?(profileId: string, query?: string): Promise<unknown>
+  browserHistorySuggest?(profileId: string, typed: string): Promise<unknown>
+  browserHistoryForget?(profileId: string, url: string): Promise<unknown>
+  browserHistoryClear?(profileId: string): Promise<unknown>
+
   browserPasswordsAvailable?(): Promise<unknown>
   browserPasswords?(profileId: string): Promise<unknown>
   browserPasswordForget?(profileId: string, origin: string, username: string): Promise<unknown>
@@ -108,6 +133,11 @@ const METHODS = [
   'browserProfileRename',
   'browserProfileActivate',
   'browserProfileDelete',
+  'browserProfileAvatar',
+  'browserHistory',
+  'browserHistorySuggest',
+  'browserHistoryForget',
+  'browserHistoryClear',
   'browserPasswordsAvailable',
   'browserPasswords',
   'browserPasswordForget',
@@ -156,6 +186,25 @@ export function profilesAvailable(api: AccountsApi): boolean {
   )
 }
 
+/**
+ * Is browsing history wired in this build?
+ *
+ * List, suggest and forget together, for the reason {@link profilesAvailable}
+ * gives: a History page that cannot forget a row, or an address bar that lists
+ * suggestions from a store nothing can open, is the half-feature this whole
+ * review is about. `browserProfileAvatar` is deliberately **not** in here — a
+ * preload that cannot set an avatar still has a perfectly good history, and the
+ * profile section hides that one control instead of the section.
+ */
+export function historyAvailable(api: AccountsApi): boolean {
+  return (
+    typeof api.browserHistory === 'function' &&
+    typeof api.browserHistorySuggest === 'function' &&
+    typeof api.browserHistoryForget === 'function' &&
+    typeof api.browserHistoryClear === 'function'
+  )
+}
+
 /** The same bargain for saved logins: list, forget and answer, or nothing. */
 export function passwordsAvailable(api: AccountsApi): boolean {
   return (
@@ -194,6 +243,7 @@ export function readProfileState(raw: unknown): ProfileState | null {
       partition: typeof record.partition === 'string' ? record.partition : '',
       createdAt: typeof record.createdAt === 'number' ? record.createdAt : 0,
       isDefault: record.isDefault === true,
+      avatar: typeof record.avatar === 'string' ? record.avatar : '',
     })
   }
   if (profiles.length === 0) return null
@@ -216,6 +266,31 @@ export function readLoginList(raw: unknown): SavedLoginSummary[] {
       origin: record.origin,
       username: typeof record.username === 'string' ? record.username : '',
       updatedAt: typeof record.updatedAt === 'number' ? record.updatedAt : 0,
+    })
+  }
+  return out
+}
+
+/**
+ * A history list, read the way every other `unknown` on this side is read.
+ *
+ * A row with no URL is dropped rather than drawn: it is the one thing on the
+ * page that cannot be clicked, and a row that does nothing when pressed is the
+ * complaint this whole review is made of.
+ */
+export function readVisitList(raw: unknown): HistoryVisit[] {
+  if (!Array.isArray(raw)) return []
+  const out: HistoryVisit[] = []
+  for (const entry of raw) {
+    if (typeof entry !== 'object' || entry === null) continue
+    const record = entry as Record<string, unknown>
+    if (typeof record.url !== 'string' || record.url === '') continue
+    out.push({
+      profileId: typeof record.profileId === 'string' ? record.profileId : '',
+      url: record.url,
+      title: typeof record.title === 'string' ? record.title : '',
+      visitedAt: typeof record.visitedAt === 'number' ? record.visitedAt : 0,
+      visits: typeof record.visits === 'number' ? record.visits : 1,
     })
   }
   return out

@@ -12,6 +12,8 @@ import { DriveBanner } from './DriveBanner'
 import { DrawPanel } from './DrawPanel'
 import { RecorderPanel } from './RecorderPanel'
 import { ScreenshotPopup } from './ScreenshotPopup'
+import { HistoryPanel } from './HistoryPanel'
+import { ProfileSettings } from './ProfileSettings'
 import { SessionModal } from './SessionModal'
 import { Toolbar } from './Toolbar'
 import {
@@ -32,12 +34,16 @@ import {
 } from './draw-bridge'
 import { anchorInWindow, type Box } from './popup-anchor'
 import {
+  historyAvailable,
   passwordsAvailable,
   profilesAvailable,
   readProfileState as readProfiles,
   readSignInTrouble,
+  readVisitList,
   resolveAccountsApi,
   signInHelpAvailable,
+  type HistoryVisit,
+  type ProfileState,
   type SignInTrouble,
 } from './accounts-bridge'
 import { useAgentTarget } from './useAgentTarget'
@@ -571,14 +577,26 @@ export function BrowserWorkspace({
    * two cannot disagree for longer than one menu.
    */
   const [profileOpen, setProfileOpen] = useState(false)
-  const [profileName, setProfileName] = useState('')
   /*
-   * Every profile's name by id, so a dialog opened from a row can be titled
-   * with the row it was opened from. Read in the same pass as the active name —
-   * one invoke, two answers — rather than a second round trip when the dialog
-   * opens, which would leave its header blank for a frame.
+   * The whole stored list, not a name and a map of names.
+   *
+   * A dialog opened from a row has to be titled with that row, badged with that
+   * row's own character, and — for the settings section — handed the row itself
+   * to edit. Holding the state once, read in the same pass the active name is
+   * read in, is what stops a second round trip leaving a header blank for a
+   * frame, and what stops three copies of the same list disagreeing.
    */
-  const [profileNames, setProfileNames] = useState<Record<string, string>>({})
+  const [profiles, setProfiles] = useState<ProfileState | null>(null)
+  /**
+   * Whose settings section is open, and whose history is — profile ids, or null.
+   *
+   * Two states rather than one "what is open", because the section opens the
+   * history and expects to still be there behind it.
+   */
+  const [settingsFor, setSettingsFor] = useState<string | null>(null)
+  const [historyFor, setHistoryFor] = useState<string | null>(null)
+  /** Earlier addresses matching the draft in the bar. Empty draws no list. */
+  const [suggestions, setSuggestions] = useState<readonly HistoryVisit[]>([])
   const [flowOpen, setFlowOpen] = useState(false)
   const [trouble, setTrouble] = useState<SignInTrouble | null>(null)
   const [troubleFor, setTroubleFor] = useState('')
@@ -1821,15 +1839,57 @@ export function BrowserWorkspace({
     void accounts.browserProfiles().then((raw) => {
       const state = readProfiles(raw)
       if (!state) return
-      const active = state.profiles.find((entry) => entry.id === state.activeId)
-      setProfileName(active ? active.name : '')
-      setProfileNames(Object.fromEntries(state.profiles.map((entry) => [entry.id, entry.name])))
+      setProfiles(state)
     })
   }, [accounts])
 
   useEffect(() => {
     readProfileName()
   }, [readProfileName])
+
+  const activeProfile = profiles?.profiles.find((entry) => entry.id === profiles.activeId) ?? null
+  const activeProfileId = activeProfile?.id ?? ''
+  const profileName = activeProfile?.name ?? ''
+  const profileOf = (id: string) => profiles?.profiles.find((entry) => entry.id === id) ?? null
+
+  /*
+   * What the address bar offers while somebody types.
+   *
+   *   > *"When I type in the top chat bar … if it was before there, it should…
+   *   > automatically pre-fill."*
+   *
+   * Asked of the main process on each keystroke, and deliberately not debounced:
+   * the store is in memory over there and the answer is a filter of at most 3000
+   * rows, so a delay would only be a delay. What *is* guarded is the round trip
+   * arriving late — a `stale` flag, because two keystrokes in flight can land
+   * out of order and a list that belongs to the previous character is a list
+   * that completes the wrong address.
+   *
+   * The active profile's history and nobody else's, which is the whole point of
+   * a profile. An Isolated tab has no profile at all and gets no suggestions,
+   * because it also records none.
+   */
+  const draft = active?.draft ?? ''
+  const draftEditing = active?.editing === true
+  const isolatedTab = active?.isolated === true
+  useEffect(() => {
+    if (!historyAvailable(accounts) || !draftEditing || isolatedTab || activeProfileId === '') {
+      setSuggestions([])
+      return
+    }
+    const typed = draft.trim()
+    if (typed === '') {
+      setSuggestions([])
+      return
+    }
+    let stale = false
+    void accounts.browserHistorySuggest?.(activeProfileId, typed).then((raw) => {
+      if (!stale) setSuggestions(readVisitList(raw))
+    })
+    return () => {
+      stale = true
+    }
+  }, [accounts, draft, draftEditing, isolatedTab, activeProfileId])
 
   /*
    * When recording stops, show what was recorded.
@@ -2230,6 +2290,15 @@ export function BrowserWorkspace({
         }
         profilesOpen={profileOpen}
         profileName={profileName}
+        profileAvatar={activeProfile?.avatar ?? ''}
+        /* Earlier addresses, from this profile's own history. The bar draws the
+           list and moves through it; where the rows come from and what a press
+           means are this panel's business. */
+        suggestions={suggestions}
+        onPick={(url) => {
+          setSuggestions([])
+          navigate(url)
+        }}
         steps={recording.steps.length}
         machinePicker={picker}
         /*
@@ -2596,6 +2665,15 @@ export function BrowserWorkspace({
           startUrl={startUrl}
           onStartUrl={onStartUrl}
           onSettings={onSettings}
+          /* Only where the preload has wired history and the tab belongs to a
+             profile. An Isolated tab records nothing, so there would be nothing
+             to open — and a row that opens an empty list somebody knows they
+             filled is worse than no row. */
+          onHistory={
+            historyAvailable(accounts) && activeProfileId !== '' && active?.isolated !== true
+              ? () => setHistoryFor(activeProfileId)
+              : undefined
+          }
           onFlow={recording.steps.length > 0 ? () => openAt(null, () => setFlowOpen(true)) : undefined}
           /* Only when there is no profile button to hold it — see `onCookies`
              in `BrowserMenu`. Site data belongs to a profile, and a build that
@@ -2618,6 +2696,14 @@ export function BrowserWorkspace({
             api ? async (profileId: string) => (await api.browserCookies(profileId)).length : undefined
           }
           onSiteData={(profileId: string) => setSessionFor(profileId)}
+          onOpenProfile={(profileId: string) => {
+            // The menu closes behind it: the section is a dialog over the same
+            // corner, and leaving a popup open underneath one is two surfaces
+            // fighting for the same pixels — the arrangement `openAt` exists to
+            // prevent between the two menus.
+            setProfileOpen(false)
+            setSettingsFor(profileId)
+          }}
           onReopen={reopenInActiveProfile}
           onClose={() => {
             setProfileOpen(false)
@@ -2630,9 +2716,52 @@ export function BrowserWorkspace({
         open={sessionOpen}
         bridge={api}
         profileId={sessionFor ?? ''}
-        profileName={sessionFor ? (profileNames[sessionFor] ?? profileName) : profileName}
+        profileName={sessionFor ? (profileOf(sessionFor)?.name ?? profileName) : profileName}
         isolated={active?.isolated === true}
         onClose={() => setSessionFor(null)}
+      />
+
+      {/*
+        A profile's own section, and its history.
+
+        Both are dialogs rather than popups, and for a reason the popups on this
+        bar cannot get around: a menu is anchored to the button that opened it
+        and is sized for rows of a few words, and neither a rename field nor a
+        day-by-day list of visits is that. They park the page exactly as a popup
+        does — see `overlay-watch.ts` — so both are built to be left quickly.
+      */}
+      <ProfileSettings
+        open={settingsFor !== null}
+        api={accounts}
+        profileId={settingsFor ?? ''}
+        onChanged={readProfileName}
+        onSiteData={(profileId: string) => {
+          setSettingsFor(null)
+          setSessionFor(profileId)
+        }}
+        onHistory={(profileId: string) => {
+          setSettingsFor(null)
+          setHistoryFor(profileId)
+        }}
+        onClose={() => setSettingsFor(null)}
+      />
+
+      <HistoryPanel
+        open={historyFor !== null}
+        api={accounts}
+        profileId={historyFor ?? ''}
+        profileName={historyFor === null ? '' : (profileOf(historyFor)?.name ?? '')}
+        profileAvatar={historyFor === null ? '' : (profileOf(historyFor)?.avatar ?? '')}
+        /* A row press is a navigation of this tab, through the same door the
+           address bar uses — so a machine picker pointing somewhere else is
+           still obeyed, and a page that fails still fails in one place. With no
+           page open there is no tab to navigate, and `act` would return in
+           silence: a press that does nothing. It opens one instead. */
+        onOpenUrl={(url: string) => {
+          if (active) navigate(url)
+          else openNewTab(url, false)
+        }}
+        onClose={() => setHistoryFor(null)}
       />
     </div>
   )

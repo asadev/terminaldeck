@@ -64,6 +64,20 @@ describe('every row says what its profile holds', () => {
     expect(onScreen).not.toContain('Cookies and site data')
   })
 
+  it('opens the profile’s own section, from the row and without switching', () => {
+    /*
+     *   > *"And now profiles doesn't have any kind of settings, I think, so they
+     *   > should have proper settings, proper section, just like Google Chrome."*
+     *
+     * The third door on the row. The two counts say what a profile *holds*; this
+     * is the one that leads to what you can *do* — its name, its badge, its
+     * logins — because none of those fit on a menu row. It takes the id, like
+     * the other two, so reading a profile still never switches into it.
+     */
+    expect(onScreen).toContain('`Settings for ${profile.name}`')
+    expect(onScreen).toContain('onOpenProfile(profile.id)')
+  })
+
   it('carries no headings over any of it', () => {
     expect(onScreen).not.toContain('In this profile')
   })

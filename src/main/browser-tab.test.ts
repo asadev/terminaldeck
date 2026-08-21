@@ -221,6 +221,7 @@ vi.mock('electron', () => ({
 
 const { destroyAllBrowserTabs, readCaptureRect, registerBrowserIpc, shouldComposite } =
   await import('./browser-tab')
+const { allVisits, resetHistoryForTests } = await import('./browser-history')
 const { GUEST_CANCEL_CHANNEL, GUEST_ELEMENT_CHANNEL } = await import('./browser-preload')
 
 type Handler = (event: unknown, ...args: unknown[]) => unknown
@@ -303,6 +304,7 @@ const settled = (): Promise<void> => new Promise((resolve) => setTimeout(resolve
 
 beforeEach(() => {
   destroyAllBrowserTabs()
+  resetHistoryForTests()
   created.length = 0
   rejectLoads = false
   captureFails = false
@@ -928,5 +930,81 @@ describe('readCaptureRect', () => {
   it('clamps a number that would break the layout it lands in', () => {
     const rect = readCaptureRect({ x: 1e308, y: -1e308, width: 1e308, height: -5 })
     expect(rect).toEqual({ x: 100000, y: -100000, width: 100000, height: 0 })
+  })
+})
+
+/**
+ * The other thing a committed navigation now does: write itself down.
+ *
+ *   > *"Then I need proper downloads folder and all of this stuff, history, save
+ *   > passwords and all of this."*
+ *
+ * The rules about which pages are kept live in `browser-history.ts` and are
+ * tested there. What is tested here is the wiring — that the event this module
+ * listens to is the one that means "Chromium landed on a page", and that the two
+ * cases where nothing may be recorded are actually not recorded.
+ */
+describe('what a navigation writes down', () => {
+  it('remembers a page the tab landed on', async () => {
+    const { guest } = await openTab({ url: 'http://localhost:3000' })
+    guest.emit('did-navigate', {}, 'http://localhost:3000/')
+
+    const kept = allVisits(USER_DATA)
+    expect(kept.map((visit) => visit.url)).toContain('http://localhost:3000/')
+    expect(kept[0].profileId).not.toBe('')
+  })
+
+  it('takes the title when the page announces one, without a second row', async () => {
+    const { guest } = await openTab({ url: 'http://localhost:3000' })
+    guest.emit('did-navigate', {}, 'http://localhost:3000/')
+    guest.emit('page-title-updated', {}, 'The dev server')
+
+    const kept = allVisits(USER_DATA).filter((visit) => visit.url === 'http://localhost:3000/')
+    expect(kept).toHaveLength(1)
+    expect(kept[0].title).toBe('The dev server')
+  })
+
+  it('writes down a route a single-page app moved to', async () => {
+    const { guest } = await openTab({ url: 'http://localhost:3000' })
+    guest.emit('did-navigate-in-page', {}, 'http://localhost:3000/settings', true)
+    expect(allVisits(USER_DATA).map((visit) => visit.url)).toContain(
+      'http://localhost:3000/settings',
+    )
+  })
+
+  it('does not write down the error page that a failed load commits', async () => {
+    /*
+     * Chromium fires `did-fail-load` and then commits its own error document,
+     * which arrives here as a navigation carrying the URL that just failed. A
+     * history row for a page that never loaded is a row that fails again when it
+     * is clicked.
+     */
+    const { guest } = await openTab({ url: 'http://localhost:3000' })
+    guest.emit('did-fail-load', {}, -102, 'ERR_CONNECTION_REFUSED', 'http://localhost:3000/', true)
+    guest.emit('did-navigate', {}, 'http://localhost:3000/')
+
+    expect(allVisits(USER_DATA)).toEqual([])
+  })
+
+  it('does not let the error page’s own title put it in the history either', async () => {
+    // Chromium titles its error document a moment after committing it, and a
+    // title update is also a visit. Without the same guard on both paths, the
+    // page that failed lands in the history under Chromium's wording.
+    const { guest } = await openTab({ url: 'http://localhost:3000' })
+    guest.emit('did-fail-load', {}, -102, 'ERR_CONNECTION_REFUSED', 'http://localhost:3000/', true)
+    guest.url = 'http://localhost:3000/'
+    guest.emit('page-title-updated', {}, 'localhost:3000 is unreachable')
+
+    expect(allVisits(USER_DATA)).toEqual([])
+  })
+
+  it('carries the tab’s own profile, which is what keeps two histories apart', async () => {
+    // An Isolated tab's profile id is `''` and `rememberVisit` refuses it — the
+    // rule, and the tab that has no profile, are both tested in
+    // `browser-history.test.ts`, where they can be driven without a real
+    // in-memory partition.
+    const { guest } = await openTab({ url: 'http://localhost:3000' })
+    guest.emit('did-navigate', {}, 'http://localhost:3000/')
+    expect(allVisits(USER_DATA)[0].profileId).toBe('default')
   })
 })

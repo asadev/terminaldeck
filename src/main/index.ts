@@ -206,6 +206,7 @@ import {
 import { registerBrowserSessionIpc } from './browser-session'
 import { registerBrowserProfileIpc } from './browser-profiles'
 import { registerBrowserPasswordIpc } from './browser-passwords'
+import { flushHistory, registerBrowserHistoryIpc } from './browser-history'
 import { registerBrowserSignInIpc } from './browser-signin'
 import { registerBrowserViewIpc } from './browser-view'
 import { registerDiagnosticsIpc } from './diagnostics'
@@ -2406,6 +2407,7 @@ function registerIpc(): void {
   // `registerBrowserSessionIpc` hardens that profile's session as its first act.
   registerBrowserProfileIpc(ipcMain, () => app.getPath('userData'))
   registerBrowserPasswordIpc(ipcMain, () => app.getPath('userData'))
+  registerBrowserHistoryIpc(ipcMain, () => app.getPath('userData'))
   registerBrowserSignInIpc(ipcMain)
   // registerBrowserSessionIpc hardens the active profile's session.
   registerBrowserSessionIpc(ipcMain)
@@ -3710,6 +3712,11 @@ app.on('before-quit', (event) => {
   // close, and that is the case this whole feature is for.
   ledger.flush()
   ledger.freeze()
+
+  // The browsing history, which is held in memory and written on a short delay
+  // so a page whose title ticks is not a file write a second. This is the
+  // moment that delay has to be made exact — see `flushHistory`.
+  flushHistory()
 
   // First, and before `killAll`. Killing a PTY makes it flush, exit and push a
   // status, and all three of those broadcast — into a render frame that is
