@@ -93,10 +93,48 @@ import { NO_TIERS, type Caller, type TierGrant } from './surface'
  * because the wire name and the dotted id are two names for one tool and a
  * caller picks which to send.
  *
- * Six ids, and the list is written out rather than derived from
- * `browserTools()` on purpose: derivation would mean a seventh tool added to
+ * Eight ids, and the list is written out rather than derived from
+ * `browserTools()` on purpose: derivation would mean a ninth tool added to
  * that file one day silently becoming something every session on the machine
  * could call. A grant is a thing somebody writes down.
+ *
+ * ## The two that were added for worker profiles, and the one that was not
+ *
+ * `browser.workers` and `browser.worker` (`worker-tools.ts`) are on this list,
+ * and each has to be argued for against the rule that put the list here:
+ *
+ *  - **`browser.workers` reads.** Names, busy/free, which of *this session's
+ *    own* windows is showing a page in each worker, and which hosts a worker
+ *    has been signed into during this run. It resolves windows through
+ *    `windowsOf(its own id)`, exactly as `browser.read` does, so it cannot
+ *    enumerate another session's windows or learn that one exists. It reads no
+ *    cookie and no value; there is no path from this surface to a jar at all
+ *    (`browser-cdp.ts` denies `Network.getCookies`, `Storage.getCookies` and
+ *    `Runtime.evaluate` outright). It is the answer to *"which of these may I
+ *    drive"*, and without it an agent handed eight worker profiles has no way
+ *    to tell a signed-in one from a signed-out one — which is the dead control
+ *    this whole round is about, one layer down.
+ *  - **`browser.worker` takes and releases one.** A lease is a coordination
+ *    token, not access: it grants nothing an agent did not already have, since
+ *    a worker is only drivable through a window the *person* attached. What it
+ *    does do is stop two agents driving one cookie jar, and serve the pace —
+ *    the call does not answer until the wait has actually elapsed, which is the
+ *    difference between a delay and a setting.
+ *
+ * **There is no tool that lifts a session, and there must not be.** Copying a
+ * signed-in session out of one profile and into the workers is the one action
+ * in this feature that moves a credential, and the entire design rests on it
+ * being a *human gesture*: a button in the browser panel, on the page the
+ * person is looking at, behind an `ipcMain` channel that this surface cannot
+ * reach — see `browser-workers-ipc.ts` and `browser-session-lift.ts`. An agent
+ * that needs a login asks with `browser.handover`, which raises a banner over
+ * the page with its sentence on it and hands the person the baton. That ask
+ * surfaces where they are looking and they answer it by signing in.
+ *
+ * A `browser.lift` beside it would turn that gesture into a request an agent
+ * can make in a retry loop, and a tool that copies a login between profiles is
+ * a tool that exfiltrates one. The honest answer for that half of the feature
+ * is that it is UI and a human gesture, and it is not on this list.
  */
 export const SESSION_TOOLS: ReadonlySet<string> = new Set([
   'browser.open',
@@ -111,6 +149,10 @@ export const SESSION_TOOLS: ReadonlySet<string> = new Set([
   'browser_handover',
   'browser.close',
   'browser_close',
+  'browser.workers',
+  'browser_workers',
+  'browser.worker',
+  'browser_worker',
 ])
 
 /**

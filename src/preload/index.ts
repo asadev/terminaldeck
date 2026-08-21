@@ -1909,6 +1909,40 @@ const api = {
     ipcRenderer.invoke('browser-profile:delete', id),
 
   /*
+   * Worker profiles, and the session lift.
+   *
+   * `browserWorkerLift` is the one method on this whole bridge that moves a
+   * live credential, and it is here — on the window's bridge — rather than in
+   * `deck-control`'s tool catalogue for exactly that reason. An `ipcMain`
+   * channel is reachable from this renderer and from nothing else: not from a
+   * page in the browser, which gets a different and much smaller preload, and
+   * not from an agent, which talks to the main process over a loopback MCP
+   * endpoint that dispatches tools rather than channels. So "the human lifts
+   * the session, in a window he is looking at" is a property of where this
+   * lives, not a rule somebody has to keep.
+   *
+   * Note what is missing and is meant to be: nothing here returns a cookie
+   * value or a stored key. The lift answers with counts, cookie *names* and the
+   * host — the same bargain `browserPasswordCopy` strikes one screen over, and
+   * the rule `browser-session.ts` set for the cookie panel before either.
+   */
+  browserWorkers: (): Promise<unknown> => ipcRenderer.invoke('browser-worker:list'),
+  browserWorkersEnsure: (count: number): Promise<unknown> =>
+    ipcRenderer.invoke('browser-worker:ensure', count),
+  browserWorkerRegister: (profileId: string): Promise<unknown> =>
+    ipcRenderer.invoke('browser-worker:register', profileId),
+  browserWorkerUnregister: (profileId: string): Promise<unknown> =>
+    ipcRenderer.invoke('browser-worker:unregister', profileId),
+  browserWorkerPace: (pace: unknown): Promise<unknown> =>
+    ipcRenderer.invoke('browser-worker:pace', pace),
+  browserWorkerLift: (request: { viewId: string }): Promise<unknown> =>
+    ipcRenderer.invoke('browser-worker:lift', request),
+  browserWorkerInject: (request: { liftId: string; profileIds?: string[] }): Promise<unknown> =>
+    ipcRenderer.invoke('browser-worker:inject', request),
+  browserWorkerForgetLift: (liftId: string): Promise<unknown> =>
+    ipcRenderer.invoke('browser-worker:forget-lift', liftId),
+
+  /*
    * Where this browser has been, per profile.
    *
    * `browser-history.ts` keeps it in its own file rather than in `settings.json`

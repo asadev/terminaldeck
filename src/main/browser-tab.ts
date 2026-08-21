@@ -28,6 +28,7 @@ import { openGuestLink } from './link-open'
 import { showGuestContextMenu } from './browser-context-menu'
 import { cleanUserAgent } from './browser-user-agent'
 import { activeProfile, DEFAULT_PARTITION, sessionForPartition } from './browser-profiles'
+import { workerSessionFor } from './browser-workers'
 import { rememberVisit } from './browser-history'
 import {
   closePopupsWith,
@@ -466,6 +467,26 @@ function preloadPath(): string {
 function hardenedGuestSession(): Session {
   const profile = activeProfile(app.getPath('userData'))
   const ses = sessionForPartition(profile.partition)
+  ses.setUserAgent(cleanUserAgent(app.userAgentFallback))
+  return ses
+}
+
+/**
+ * The session for a **worker** profile, or null for anything else.
+ *
+ * The `profileId` on a `browser:create` arrives from the renderer, and
+ * `fromPartition` will make a directory for any string it is handed — so the
+ * decision of whether this id may name a jar is not taken here. It is taken in
+ * `browser-workers.ts`, which answers null unless the id is in its own
+ * registry, and the registry can only be added to from the Workers panel.
+ *
+ * The user agent is set for the same reason `hardenedGuestSession` sets it: a
+ * worker whose UA still carried Electron's token would be routed down Google's
+ * restricted sign-in path, which is precisely the thing a worker is for.
+ */
+function workerSession(profileId: unknown): Session | null {
+  const ses = workerSessionFor(app.getPath('userData'), profileId)
+  if (ses === null) return null
   ses.setUserAgent(cleanUserAgent(app.userAgentFallback))
   return ses
 }
@@ -1100,7 +1121,7 @@ function tabForSender(event: IpcMainEvent): BrowserTab | null {
  *     registerBrowserIpc(ipcMain)
  *
  * Channels (all take the tab id returned by `browser:create`):
- * - `browser:create`   (invoke, {url?, bounds?, visible?, isolationKey?, background?}) → {@link BrowserTabState}
+ * - `browser:create`   (invoke, {url?, bounds?, visible?, isolationKey?, profileId?, background?}) → {@link BrowserTabState}
  * - `browser:navigate` (invoke, id, url)                   → {@link BrowserTabState}
  * - `browser:back` / `browser:forward` / `browser:reload` / `browser:stop`
  * - `browser:inspect`  (invoke, id, enabled)               → {@link BrowserTabState}
@@ -1121,6 +1142,21 @@ export function registerBrowserIpc(ipcMain: IpcMain): void {
       unknown
     >
 
+    /*
+     * A tab opened in a **worker profile**, rather than in the one switched on.
+     *
+     * `workerSession` answers null for every id that is not a registered worker
+     * — including a perfectly real profile of his own — so this argument cannot
+     * be used to open a page in the jar holding his bank login. The whole of
+     * that refusal is in `browser-workers.ts`; the reason it has to exist is
+     * that a session is fixed when a `WebContentsView` is constructed, so the
+     * only way to put a page in a chosen jar is to choose here.
+     *
+     * Without it, worker profiles would be cookie jars nothing could browse in:
+     * a session lifted into eight of them, and no way to open a page in any.
+     */
+    const worker = workerSession(opts.profileId)
+
     const view = new WebContentsView({
       webPreferences: {
         // An `isolationKey` means this tab was opened as Isolated and gets its
@@ -1128,7 +1164,7 @@ export function registerBrowserIpc(ipcMain: IpcMain): void {
         // fixed at construction and cannot be swapped afterwards, which is why
         // the choice has to be made here rather than bolted on later.
         preload: preloadPath(),
-        session: isolatedSession(opts.isolationKey) ?? hardenedGuestSession(),
+        session: isolatedSession(opts.isolationKey) ?? worker ?? hardenedGuestSession(),
         contextIsolation: true,
         nodeIntegration: false,
         nodeIntegrationInSubFrames: false,
@@ -1175,7 +1211,11 @@ export function registerBrowserIpc(ipcMain: IpcMain): void {
       // empty string matches no profile id, which is exactly the behaviour
       // wanted and is why it is not defaulted to 'default'.
       profileId:
-        isolatedSession(opts.isolationKey) !== null ? '' : activeProfile(app.getPath('userData')).id,
+        isolatedSession(opts.isolationKey) !== null
+          ? ''
+          : worker !== null
+            ? (opts.profileId as string)
+            : activeProfile(app.getPath('userData')).id,
     }
     tabs.set(tab.id, tab)
 

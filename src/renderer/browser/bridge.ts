@@ -192,6 +192,20 @@ export interface BrowserBridge {
      */
     isolationKey?: string
     /**
+     * Open this tab in a **worker profile's** cookie jar.
+     *
+     * Only a profile registered as a worker — `browser-workers.ts` refuses every
+     * other id, including a real profile of his own, so this cannot be pointed
+     * at the jar holding his bank login. Omitted, the tab joins whichever
+     * profile is switched on, which is what every tab in the app has always
+     * done.
+     *
+     * It has to be decided here rather than applied afterwards for the reason
+     * `isolationKey` does: a `WebContentsView`'s session is fixed when it is
+     * constructed and cannot be swapped.
+     */
+    profileId?: string
+    /**
      * The app's content canvas, as a hex colour, for a view with no page in it.
      *
      * Sent rather than decided in the main process for the same reason
