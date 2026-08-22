@@ -10,6 +10,35 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-08-22
+
+### Added
+
+- **Sign in to a server the way you add one on the desktop — from any device, no pairing code.** The phone's add-server form takes the address, your username and your password or key once; the host proves them by a sign-in to its own SSH on loopback, then remembers your device. A bare rented server is prepared from the app over that same login (the PWA, which a browser will not let make an SSH connection, shows the one-line install command instead). No code to read off one screen and type into another; the credential is the gate.
+- **The server is the source of truth.** Its sessions, its logins, its agent settings live on the server and are served to every device at once. Delete a session and it leaves both apps. Change the account or the default agent on the server and every attached client sees it. What stays on each device is only that device's own look — theme, size, sounds.
+- **See and remove every device signed in to a server, from any device.** A list with each device's name, when it was last seen and what it can reach, and a Remove that cuts one off without touching your SSH password or the others. Losing a phone no longer means reaching a desktop.
+- **The server runs its own browser.** Scraping, downloads, extensions and page-driving happen on the server, in its own Chromium, over its own disk and logins — not tunnelled from your Mac. Install a tool or an extension and it lands on the server.
+- **Watch and drive that browser from your phone.** A live picture of the server's browser, each device with its own scroll; your taps and typing go in as real input, not a video you cannot touch. What is ours — the terminal, chat, the scraping panel, downloads, the tab strip — is served as data and drawn natively, not as pixels. While you type a password into a page from your phone, the picture is curtained: the password never crosses the wire.
+- **Version awareness.** A connected server says which build it is running and, when your app is ahead, that it can be updated from a desktop.
+- **Everyday browser basics:** find-in-page (Cmd/Ctrl-F), zoom (Cmd/Ctrl -/=/0), and a Saved passwords section in the browser menu.
+- **A tools store that downloads on choose** — famous open-source browser tools fetched and checksummed only when you pick one, with each tool honest about whether it can work here.
+- **One first-run moment installs the session-context hooks for every agent at once** — no hunting for a Settings pane; a machine that has them is left alone.
+
+### Changed
+
+- **Account switching, model, effort and permission are one honest control on every session bar** — local, remote and server — and each names the account that session actually runs as, the same on the top bar, the usage bar and the terminal's own limit line. A session cannot change the account it was launched under; the menu now says so rather than opening a second tab that looks like a switch.
+- **Scraping settings actually take effect for the person who sets them** — a browser on a profile with rules is armed on navigation, so blocking images, capturing background responses, upgrading renditions and the coverage check are no longer things only an agent could reach. A profile with default settings attaches nothing.
+- **Your own servers and paired machines drive browser windows by default** — the connection is the permission; a guest machine stays off until you tick it.
+- **Scraping and server control each get the scope switch from Coding AI**, with per-scope settings, and the Copilot page's machine pills are quieter.
+
+### Fixed
+
+- Opening Settings → Servers, switching between servers, or leaving a server's page no longer closes the live terminals running on it.
+- The account shown on a server session's bar, the usage bar and the terminal limit line now agree, on Windows as well as macOS.
+- A saved password is no longer auto-filled into a page an agent navigated to or is holding.
+- Server file paths with non-ASCII characters are no longer corrupted in transit.
+
+
 ### Added
 
 - **Install the headless host on a connected server, from the app.** *"instead
@@ -1937,7 +1966,8 @@ First cut. macOS 12+, Apple silicon, unsigned.
 - Preferences with live dark/light theming
 - Session resume (`⌘⇧T`)
 
-[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.9.1...HEAD
+[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.10.0
 [0.9.1]: https://github.com/asadev/terminaldeck/releases/tag/v0.9.1
 [0.9.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.9.0
 [0.8.1]: https://github.com/asadev/terminaldeck/releases/tag/v0.8.1
