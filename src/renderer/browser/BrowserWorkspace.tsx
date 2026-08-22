@@ -104,6 +104,18 @@ import {
   type DriveStatus,
 } from './drive-bridge'
 import { resolveScrapingApi, type ScrapingApi } from './scraping-bridge'
+import {
+  chordTarget,
+  findAvailable,
+  parseChord,
+  parseFindCount,
+  printAvailable,
+  resolveFindApi,
+  workspaceChord,
+  type FindApi,
+  type FindCount,
+} from './find-bridge'
+import { FindBar } from './FindBar'
 import { resolveOmnibox } from './omnibox'
 import { browserOverlayDom, isCovered, watchOverlays, type Overlay } from './overlay-watch'
 import { ConnectSessionButton } from './BindChip'
@@ -387,6 +399,12 @@ export interface BrowserWorkspaceProps {
    * panel on every build whose preload predates it, which today is every build.
    */
   scraping?: ScrapingApi
+  /**
+   * Find-in-page and print, optional for the same reason as draw mode: a
+   * preload without them costs the find bar and the Print row, never the
+   * panel. `find-bridge.ts` says what counts as available.
+   */
+  find?: FindApi
 }
 
 const EMPTY_RECORDING: RecordingState = {
@@ -576,6 +594,7 @@ export function BrowserWorkspace({
   isolation,
   draw,
   scraping,
+  find,
 }: BrowserWorkspaceProps) {
   const api = useMemo(() => bridge ?? resolveBrowserBridge(), [bridge])
   /*
@@ -589,6 +608,7 @@ export function BrowserWorkspace({
   const agent = useAgentTarget(sessionBridge, serverShells)
   const iso = useMemo(() => isolation ?? resolveIsolationApi(), [isolation])
   const drawApi = useMemo(() => draw ?? resolveDrawApi(), [draw])
+  const findApi = useMemo(() => find ?? resolveFindApi(), [find])
   /*
    * The id of the page in front, held in a ref for one caller.
    *
@@ -615,6 +635,15 @@ export function BrowserWorkspace({
   const [recordings, setRecordings] = useState<Record<string, RecordingState>>({})
   const [zooms, setZooms] = useState<Record<string, number>>({})
   const [devtools, setDevtools] = useState<Record<string, boolean>>({})
+  /*
+   * Find, per tab — the bar belongs to the page it is searching, exactly like
+   * captures and recordings, so switching tabs must not carry one page's query
+   * (or its match count) onto another. The query survives closing the bar, the
+   * way the terminal's does: reopening find offers the last thing looked for.
+   */
+  const [finds, setFinds] = useState<Record<string, { open: boolean; query: string }>>({})
+  const [findCounts, setFindCounts] = useState<Record<string, FindCount | null>>({})
+  const findInputRef = useRef<HTMLInputElement>(null)
 
   const [presetId, setPresetId] = useState(FIT_ID)
   const [orientation, setOrientation] = useState<Orientation>('portrait')
@@ -953,6 +982,10 @@ export function BrowserWorkspace({
   tabsRef.current = tabs
   const activeRef = useRef('')
   activeRef.current = activeKey
+  /* For the handlers that fire from pushes and effects: the map as of now,
+     not as of when their closure was built. Same shape as `tabsRef`. */
+  const findsRef = useRef<Record<string, { open: boolean; query: string }>>({})
+  findsRef.current = finds
   /**
    * `closeTab`, reachable from the drive-open effect above it.
    *
@@ -968,6 +1001,8 @@ export function BrowserWorkspace({
   const recording = recordings[activeKey] ?? EMPTY_RECORDING
   const capture = captures[activeKey] ?? null
   const zoom = zooms[activeKey] ?? 1
+  const findState = finds[activeKey] ?? { open: false, query: '' }
+  const findCount = findCounts[activeKey] ?? null
 
   const enqueue = useCallback((work: () => Promise<void>): void => {
     queue.current = queue.current.then(work, work).catch(() => undefined)
@@ -1304,7 +1339,7 @@ export function BrowserWorkspace({
         onCreated?.(state.id)
         if (!claimed.ok) {
           setNotice(
-            `The page opened, but its extra controls did not attach (${claimed.reason ?? 'unknown'}). Zoom, screenshots and recording are unavailable for this tab.`,
+            `The page opened, but its extra controls did not attach (${claimed.reason ?? 'unknown'}). Zoom, find, print, screenshots and recording are unavailable for this tab.`,
           )
         }
       })
@@ -1862,6 +1897,8 @@ export function BrowserWorkspace({
       setRecordings((prev) => without(prev, key))
       setZooms((prev) => without(prev, key))
       setDevtools((prev) => without(prev, key))
+      setFinds((prev) => without(prev, key))
+      setFindCounts((prev) => without(prev, key))
 
       const isolationKey = tab?.isolationKey ?? null
       if (!api || !tab?.id) {
@@ -1960,6 +1997,145 @@ export function BrowserWorkspace({
     },
     [withId],
   )
+
+  /*
+   * Find-in-page. Every handler acts on the *active* tab and records under its
+   * key, because the bar is only ever drawn for the page in front — a chord
+   * from any other page is refused before these are called (`chordTarget`).
+   */
+  const openFind = useCallback((): void => {
+    if (!findAvailable(findApi)) return
+    const key = activeRef.current
+    if (!key) return
+    setFinds((prev) => ({ ...prev, [key]: { open: true, query: prev[key]?.query ?? '' } }))
+    // Already up: ⌘F again means "give me the field back", like the terminal's.
+    findInputRef.current?.select()
+  }, [findApi])
+
+  const setFindQuery = useCallback(
+    (value: string): void => {
+      const key = activeRef.current
+      setFinds((prev) => ({ ...prev, [key]: { open: true, query: value } }))
+      // An emptied field has nothing to count; the main process clears the
+      // highlights on the same call.
+      if (value === '') setFindCounts((prev) => without(prev, key))
+      withId(async (_a, id) => {
+        await findApi.browserFind?.(id, value, { first: true })
+      })
+    },
+    [findApi, withId],
+  )
+
+  const stepFind = useCallback(
+    (back: boolean): void => {
+      const query = findsRef.current[activeRef.current]?.query ?? ''
+      if (query === '') return
+      withId(async (_a, id) => {
+        await findApi.browserFind?.(id, query, { forward: !back })
+      })
+    },
+    [findApi, withId],
+  )
+
+  const closeFind = useCallback((): void => {
+    const key = activeRef.current
+    setFinds((prev) =>
+      prev[key]?.open ? { ...prev, [key]: { open: false, query: prev[key].query } } : prev,
+    )
+    setFindCounts((prev) => without(prev, key))
+    // The stop also hands the keyboard back to the page — the same hand-back
+    // the terminal's closeFind does with `term.focus()`.
+    withId(async (_a, id) => {
+      await findApi.browserFindStop?.(id, 'clear')
+    })
+  }, [findApi, withId])
+
+  const printPage = useCallback((): void => {
+    // A refusal ("no printer answered") lands in the notice bar via withId.
+    withId(async (_a, id) => {
+      await findApi.browserPrint?.(id)
+    })
+  }, [findApi, withId])
+
+  /*
+   * Chords forwarded from a focused page, and Chromium's match counts.
+   *
+   * The handler lives in a ref rewritten every render — the subscription is
+   * per `findApi` and must not re-subscribe per keystroke, but a frozen closure
+   * here would step yesterday's zoom. `chordTarget` is the gate: an id this
+   * panel never opened, or one of ours that is not the page in front, is
+   * refused before anything is drawn — the find bar over the wrong pane is the
+   * failure this feature must not have.
+   */
+  const onChordRef = useRef<(viewId: string, chord: ReturnType<typeof parseChord>) => void>(
+    () => {},
+  )
+  onChordRef.current = (viewId, chord) => {
+    if (!chord) return
+    const key = chordTarget(tabsRef.current, activeRef.current, viewId)
+    if (!key) return
+    if (chord === 'find') openFind()
+    else if (chord === 'find-close') closeFind()
+    else if (chord === 'find-next') stepFind(false)
+    else if (chord === 'find-prev') stepFind(true)
+    else if (chord === 'zoom-in') applyZoom(stepZoom(zoom, 1))
+    else if (chord === 'zoom-out') applyZoom(stepZoom(zoom, -1))
+    else if (chord === 'zoom-reset') applyZoom(1)
+    else if (chord === 'print' && printAvailable(findApi)) printPage()
+  }
+
+  useEffect(() => {
+    const offFind = findApi.onBrowserFind?.((id, raw) => {
+      const tab = tabForId(tabsRef.current, id)
+      const count = parseFindCount(raw)
+      if (!tab || !count) return
+      setFindCounts((prev) => ({ ...prev, [tab.key]: count }))
+    })
+    const offChord = findApi.onBrowserChord?.((id, raw) => onChordRef.current(id, parseChord(raw)))
+    return () => {
+      offFind?.()
+      offChord?.()
+    }
+  }, [findApi])
+
+  /* Opening the bar puts the caret in it, with the last query selected so
+     typing replaces and Enter repeats — the terminal bar's exact manners. */
+  useEffect(() => {
+    if (findState.open) findInputRef.current?.select()
+  }, [findState.open, activeKey])
+
+  /*
+   * A navigation empties the page the matches were counted on. The main
+   * process zeroes the count the moment the document starts to leave; this
+   * re-runs the query against the one that arrives, so a bar left open across
+   * a login redirect keeps describing the page in front rather than dying.
+   */
+  const activeUrl = active?.url ?? ''
+  useEffect(() => {
+    if (activeUrl === '') return
+    const key = activeRef.current
+    const tab = tabsRef.current.find((candidate) => candidate.key === key)
+    if (!tab?.id) return
+    const id = tab.id
+    const held = findsRef.current[key]
+    if (held?.open && held.query !== '') {
+      void findApi.browserFind?.(id, held.query, { first: true }).catch(() => undefined)
+    }
+    /*
+     * Re-read the zoom too. Chromium remembers zoom per origin inside the
+     * partition and applies it as the page arrives, so navigating from a site
+     * zoomed last week to one that never was changes the real factor under a
+     * mirror that was read once at claim — and then the chip shows a number
+     * the page is not at, which is the wrong-number defect the main handler's
+     * own comment warns about. `null` reads without writing.
+     */
+    if (api) {
+      void api
+        .browserZoom(id, null)
+        .then((factor) => setZooms((prev) => (prev[key] === factor ? prev : { ...prev, [key]: factor })))
+        .catch(() => undefined)
+    }
+  }, [activeUrl, findApi, api])
 
   /**
    * Start or stop recording — and turn inspection off if it was on.
@@ -2393,6 +2569,30 @@ export function BrowserWorkspace({
         setFocusToken((token) => token + 1)
         return
       }
+      /*
+       * Find and zoom, for keys pressed in this panel's own chrome — the other
+       * half of the routing `guestChord` does for a focused page. Terminals
+       * never let ⌘F reach here (`terminalChord` answers it per terminal and
+       * stops the event), so nothing is stolen from a session.
+       */
+      const pageChord = workspaceChord(event)
+      if (pageChord === 'find') {
+        if (findAvailable(findApi)) {
+          event.preventDefault()
+          openFind()
+        }
+        return
+      }
+      if (pageChord === 'zoom-in' || pageChord === 'zoom-out') {
+        event.preventDefault()
+        applyZoom(stepZoom(zoom, pageChord === 'zoom-in' ? 1 : -1))
+        return
+      }
+      if (pageChord === 'zoom-reset') {
+        event.preventDefault()
+        applyZoom(1)
+        return
+      }
       if (event.altKey && event.key === 'ArrowLeft') {
         event.preventDefault()
         act((a, id) => a.browserBack(id))
@@ -2413,12 +2613,19 @@ export function BrowserWorkspace({
         setMarks([])
         return
       }
+      if (event.key === 'Escape' && findState.open) {
+        // The bar's own input already answers Esc and stops it; this catches
+        // the same key when focus is elsewhere in the chrome.
+        event.preventDefault()
+        closeFind()
+        return
+      }
       if (event.key === 'Escape' && active?.inspecting) {
         event.preventDefault()
         act((a, id) => a.browserInspect(id, false))
       }
     },
-    [act, active?.inspecting, frame],
+    [act, active?.inspecting, frame, findApi, findState.open, openFind, closeFind, applyZoom, zoom],
   )
 
   /* -- the unwired case, which is what a half-wired preload actually produces. */
@@ -2783,7 +2990,28 @@ export function BrowserWorkspace({
           blank: active === null || onStartPage(active),
           here,
         })}
+        zoom={zoom}
+        onResetZoom={() => applyZoom(1)}
       />
+
+      {/*
+        Find, as a band in the flow directly under the toolbar. It cannot float
+        over the page the way the terminal's bar floats over scrollback — a
+        browser page is a native view composited above this entire renderer
+        (`overlay-watch.ts`) — so like every band here it shrinks the page's
+        rectangle once instead of covering it. Gated on `findAvailable`: a bar
+        whose invokes are missing is a control that looks like it works.
+      */}
+      {findState.open && findAvailable(findApi) && (
+        <FindBar
+          query={findState.query}
+          count={findCount}
+          inputRef={findInputRef}
+          onQuery={setFindQuery}
+          onStep={stepFind}
+          onClose={closeFind}
+        />
+      )}
 
       {/*
         Between the toolbar and the stage, deliberately.
@@ -3153,6 +3381,16 @@ export function BrowserWorkspace({
           startUrl={startUrl}
           onStartUrl={onStartUrl}
           onSettings={onSettings}
+          /* Find and Print go with the preload half that answers for them —
+             absent, not disabled, on a build that cannot do the thing. The zoom
+             row rides on `browserZoom`, which is in BRIDGE_METHODS: a panel
+             that draws at all can zoom. */
+          onFind={findAvailable(findApi) ? openFind : undefined}
+          onPrint={printAvailable(findApi) ? printPage : undefined}
+          zoom={zoom}
+          onZoomIn={() => applyZoom(stepZoom(zoom, 1))}
+          onZoomOut={() => applyZoom(stepZoom(zoom, -1))}
+          onZoomReset={() => applyZoom(1)}
           /* Only where the preload has wired history and the tab belongs to a
              profile. An Isolated tab records nothing, so there would be nothing
              to open — and a row that opens an empty list somebody knows they

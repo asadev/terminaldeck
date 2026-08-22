@@ -2010,6 +2010,25 @@ const api = {
     ipcRenderer.invoke('browser-view:record', id, on),
   browserRecordClear: (id: string): Promise<unknown> =>
     ipcRenderer.invoke('browser-view:record-clear', id),
+  // Find-in-page, print, and the chords a focused page forwards. Optional to
+  // the renderer on purpose — `find-bridge.ts`, same bargain as draw mode:
+  // adding these to BRIDGE_METHODS would blank the whole browser panel on any
+  // build whose preload predates them.
+  browserFind: (id: string, query: string, options?: unknown): Promise<void> =>
+    ipcRenderer.invoke('browser-view:find', id, query, options),
+  browserFindStop: (id: string, keep?: string): Promise<void> =>
+    ipcRenderer.invoke('browser-view:find-stop', id, keep),
+  browserPrint: (id: string): Promise<void> => ipcRenderer.invoke('browser-view:print', id),
+  onBrowserFind: (cb: (id: string, result: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, id: string, result: unknown) => cb(id, result)
+    ipcRenderer.on('browser:find', handler)
+    return () => ipcRenderer.off('browser:find', handler)
+  },
+  onBrowserChord: (cb: (id: string, chord: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, id: string, chord: unknown) => cb(id, chord)
+    ipcRenderer.on('browser:key', handler)
+    return () => ipcRenderer.off('browser:key', handler)
+  },
   // Both arguments forwarded, and the first of them is a bug fix: these two
   // took `domain` in the bridge's type and in the main handler, and dropped it
   // here. So the per-site `Clear` in the cookies dialog invoked the whole-jar

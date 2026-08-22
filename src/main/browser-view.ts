@@ -27,7 +27,8 @@ import {
 
 /**
  * Everything a browser tab can do that `browser-tab.ts` does not already do:
- * zoom, devtools, screenshots, load progress and the flow recorder.
+ * find-in-page, zoom, print, devtools, screenshots, load progress and the flow
+ * recorder.
  *
  * ## Why this module has to find the view for itself
  *
@@ -170,6 +171,15 @@ interface ViewEntry {
   host: WebContents
   recording: boolean
   /**
+   * A find session is open on this page.
+   *
+   * Held here because two decisions depend on it and neither may guess: Esc in
+   * the page closes the find bar *only* while one is up — otherwise Esc stays
+   * the page's own key — and releasing a tab mid-find must clear Chromium's
+   * highlights rather than leave orange marks on a page whose bar is gone.
+   */
+  finding: boolean
+  /**
    * The badge colour last handed over by the renderer.
    *
    * Held rather than passed around because every new document needs it again —
@@ -212,6 +222,22 @@ interface ViewEntry {
  */
 export const RECORDING_CHANNEL = 'browser:recording'
 export const PROGRESS_CHANNEL = 'browser:progress'
+/** Match counts from Chromium's `found-in-page`, for the find bar to print. */
+export const FIND_CHANNEL = 'browser:find'
+/**
+ * Chords pressed *inside the page*, forwarded to the renderer that owns the
+ * find bar and the zoom state.
+ *
+ * A browser page is its own WebContents: once somebody clicks into it, ⌘F goes
+ * to the site and the renderer never hears the key at all — which is how the
+ * browser shipped with a find bar reachable only while the address bar happened
+ * to have focus, i.e. never. `before-input-event` in {@link attach} is the one
+ * place both halves of the app can be heard from, and `preventDefault` there
+ * also stops the application menu's accelerators, so ⌘+ steps the *page's*
+ * zoom instead of the app chrome's — the two `role: 'zoomIn'` items in
+ * `menu.ts` keep the rest of the app exactly as it was.
+ */
+export const KEY_CHANNEL = 'browser:key'
 
 /* --------------------------------------------------------------- registry -- */
 
@@ -370,6 +396,10 @@ function attach(entry: ViewEntry): void {
   const onStart = (details: { isMainFrame: boolean; isSameDocument: boolean }) => {
     if (!details.isMainFrame || details.isSameDocument) return
     progress(entry, 'navigating', 0.15)
+    // The matches belonged to the document that is leaving. Zero the bar rather
+    // than let it keep asserting "3/17" about a page nobody can see; the
+    // renderer re-runs the query against the new document when the URL lands.
+    if (entry.finding) send(entry, FIND_CHANNEL, { ordinal: 0, matches: 0, final: true })
   }
   // Every document gets a fresh copy of the session preload, so recording has to
   // be switched back on after each navigation or it silently stops observing —
@@ -386,11 +416,41 @@ function attach(entry: ViewEntry): void {
   const onNavigate = (_event: unknown, url: string) => {
     record(entry, navigateStep(url, Date.now()))
   }
+  /*
+   * Match counts, straight from Chromium. The renderer never counts anything —
+   * the number beside the find field is this event, forwarded with the tab id,
+   * so the bar can only ever describe the page it is actually attached to.
+   */
+  const onFound = (
+    _event: unknown,
+    result: { requestId: number; activeMatchOrdinal: number; matches: number; finalUpdate: boolean },
+  ) => {
+    if (!entry.finding) return
+    send(entry, FIND_CHANNEL, {
+      ordinal: result.activeMatchOrdinal,
+      matches: result.matches,
+      final: result.finalUpdate,
+    })
+  }
+  /*
+   * The chords the chrome answers for a focused page — see {@link KEY_CHANNEL}.
+   * `preventDefault` keeps the key from the site *and* from the application
+   * menu's accelerators, which is what stops ⌘+ zooming the app chrome and ⌘P
+   * opening Quick Open over a page somebody is trying to print.
+   */
+  const onInput = (event: { preventDefault: () => void }, input: Parameters<typeof guestChord>[0]) => {
+    const chord = guestChord(input, entry.finding)
+    if (!chord) return
+    event.preventDefault()
+    send(entry, KEY_CHANNEL, chord)
+  }
 
   wc.on('did-start-navigation', onStart)
   wc.on('dom-ready', onDom)
   wc.on('did-stop-loading', onStop)
   wc.on('did-navigate', onNavigate)
+  wc.on('found-in-page', onFound)
+  wc.on('before-input-event', onInput)
 
   entry.detach.push(() => {
     if (wc.isDestroyed()) return
@@ -398,6 +458,8 @@ function attach(entry: ViewEntry): void {
     wc.off('dom-ready', onDom)
     wc.off('did-stop-loading', onStop)
     wc.off('did-navigate', onNavigate)
+    wc.off('found-in-page', onFound)
+    wc.off('before-input-event', onInput)
   })
 
   // A guest process can die on its own — a crash, or a window taking its child
@@ -418,6 +480,12 @@ function release(tabId: string): void {
   if (entry.recording) {
     entry.recording = false
     tellGuestRecording(entry)
+  }
+  // A page released mid-find would keep Chromium's highlights with no bar left
+  // to explain them or any key bound to clear them.
+  if (entry.finding && !entry.wc.isDestroyed()) {
+    entry.finding = false
+    entry.wc.stopFindInPage('clearSelection')
   }
   for (const off of entry.detach) off()
   views.delete(tabId)
@@ -464,6 +532,71 @@ export function clampZoom(value: unknown): number {
   return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, value))
 }
 
+/* ----------------------------------------------------------------- chords -- */
+
+/**
+ * What a keystroke inside the page means to the browser chrome, if anything.
+ *
+ * The chords a person reaches for in any browser, decided here because the page
+ * is the surface that usually has focus and the renderer cannot hear it. Pure
+ * and exported for the same reason `terminalChord` in `TerminalView.tsx` is —
+ * a routing rule is testable without a window, and this one decides who owns
+ * ⌘F per focused surface: a terminal answers it itself and never lets it
+ * bubble, the app's own DOM answers through the workspace's `onKeyDown`, and a
+ * page answers through here. Nothing global is bound, so nothing is stolen.
+ *
+ * `alt` excludes, as it does in `terminalChord`: ⌥⌘F is somebody else's chord,
+ * and on Windows AltGr arrives as control+alt and must keep typing `=` into
+ * the site rather than zooming it.
+ *
+ * Escape is the one entry that is not a mod chord, and it is gated on
+ * `finding`: while the find bar is up, Esc in the page closes it — the same
+ * key the bar's own input answers — and the rest of the time Esc belongs to
+ * the site.
+ */
+export type GuestChord =
+  | 'find'
+  | 'find-close'
+  | 'find-next'
+  | 'find-prev'
+  | 'zoom-in'
+  | 'zoom-out'
+  | 'zoom-reset'
+  | 'print'
+
+export function guestChord(
+  input: {
+    type: string
+    key: string
+    meta?: boolean
+    control?: boolean
+    shift?: boolean
+    alt?: boolean
+  },
+  finding: boolean,
+): GuestChord | null {
+  if (input.type !== 'keyDown') return null
+  if (input.alt) return null
+  const key = input.key.toLowerCase()
+  const mod = Boolean(input.meta) || Boolean(input.control)
+  if (!mod) {
+    return key === 'escape' && finding && !input.shift ? 'find-close' : null
+  }
+  if (key === 'f' && !input.shift) return 'find'
+  // ⌘G / ⌘⇧G step the find from inside the page, but only while a find is up —
+  // the rest of the time the site keeps its own shortcut.
+  if (key === 'g' && finding) return input.shift ? 'find-prev' : 'find-next'
+  if (key === '=' || key === '+') return 'zoom-in'
+  if (key === '-') return 'zoom-out'
+  if (key === '0' && !input.shift) return 'zoom-reset'
+  // ⌘P is Quick Open everywhere else in the app and stays that way — the menu
+  // accelerator still fires when the renderer has focus. With the *page*
+  // focused it prints the page, which is what fingers trained on any browser
+  // mean by it.
+  if (key === 'p' && !input.shift) return 'print'
+  return null
+}
+
 /* --------------------------------------------------------------- register -- */
 
 /**
@@ -477,6 +610,9 @@ export function clampZoom(value: unknown): number {
  * - `browser-view:claim`        (invoke, id)              → { ok, reason? }
  * - `browser-view:release`      (invoke, id)              → void
  * - `browser-view:zoom`         (invoke, id, factor)      → number
+ * - `browser-view:find`         (invoke, id, query, opts) → void
+ * - `browser-view:find-stop`    (invoke, id, keep)        → void
+ * - `browser-view:print`        (invoke, id)              → void
  * - `browser-view:devtools`     (invoke, id)              → boolean (now open?)
  * - `browser-view:screenshot`   (invoke, id)              → {@link ScreenshotResult}
  * - `browser-view:frame`        (invoke, id)              → {@link PageFrame}
@@ -486,11 +622,12 @@ export function clampZoom(value: unknown): number {
  * - `browser-view:record`       (invoke, id, {on, accent})→ {@link RecordingState}
  * - `browser-view:record-clear` (invoke, id)              → {@link RecordingState}
  *
- * Emits {@link PROGRESS_CHANNEL} (id, {@link LoadProgress}) and
- * {@link RECORDING_CHANNEL} (id, {@link RecordingState}) — `browser:progress`
- * and `browser:recording`, which are the names the preload subscribes to. Those
- * two disagreed with this file for the whole life of the feature; see the
- * comment on the constants.
+ * Emits {@link PROGRESS_CHANNEL} (id, {@link LoadProgress}),
+ * {@link RECORDING_CHANNEL} (id, {@link RecordingState}), {@link FIND_CHANNEL}
+ * (id, match counts) and {@link KEY_CHANNEL} (id, {@link GuestChord}) — all on
+ * the `browser:` prefix the preload subscribes to. The first two disagreed with
+ * this file for the whole life of the feature; see the comment on the
+ * constants, and `browser-view.channels.test.ts` for what now holds all four.
  */
 export function registerBrowserViewIpc(ipcMain: IpcMain): void {
   watchCreations()
@@ -509,6 +646,7 @@ export function registerBrowserViewIpc(ipcMain: IpcMain): void {
       wc,
       host: event.sender,
       recording: false,
+      finding: false,
       accent: '',
       steps: [],
       detach: [],
@@ -530,6 +668,56 @@ export function registerBrowserViewIpc(ipcMain: IpcMain): void {
     // reset their preference the first time they pressed a button.
     if (factor !== null && factor !== undefined) entry.wc.setZoomFactor(clampZoom(factor))
     return entry.wc.getZoomFactor()
+  })
+
+  ipcMain.handle(
+    'browser-view:find',
+    (_event, tabId: unknown, query: unknown, options: unknown) => {
+      const entry = entryFor(tabId)
+      const text = typeof query === 'string' ? query : ''
+      if (text === '') {
+        // An emptied field is the end of the session, not a search for ''.
+        if (entry.finding) {
+          entry.finding = false
+          entry.wc.stopFindInPage('clearSelection')
+        }
+        return
+      }
+      const opts = (typeof options === 'object' && options !== null ? options : {}) as {
+        forward?: unknown
+        first?: unknown
+      }
+      entry.finding = true
+      // Electron's `findNext` is named backwards: true begins a NEW session.
+      // The wire says `first`, which is the fact the renderer actually knows —
+      // "the query changed" — and the translation happens in exactly one place.
+      entry.wc.findInPage(text, {
+        forward: opts.forward !== false,
+        findNext: opts.first === true,
+      })
+    },
+  )
+
+  ipcMain.handle('browser-view:find-stop', (_event, tabId: unknown, keep: unknown) => {
+    const entry = entryFor(tabId)
+    entry.finding = false
+    entry.wc.stopFindInPage(keep === 'keep' ? 'keepSelection' : 'clearSelection')
+    // The bar had the keyboard; closing it gives the keys back to the page —
+    // the same hand-back the terminal's `closeFind` does with `term.focus()`.
+    entry.wc.focus()
+  })
+
+  ipcMain.handle('browser-view:print', async (_event, tabId: unknown) => {
+    const entry = entryFor(tabId)
+    // The system dialog, not silent printing: choosing a printer is the user's
+    // decision, and the callback is the only way Electron reports that no
+    // printer exists — which deserves a sentence, not a resolved promise.
+    await new Promise<void>((resolvePrint, reject) => {
+      entry.wc.print({}, (ok: boolean, reason: string) => {
+        if (ok || reason === 'cancelled' || reason === 'Print job canceled') resolvePrint()
+        else reject(new Error(`The page could not be printed: ${reason || 'no printer answered'}.`))
+      })
+    })
   })
 
   ipcMain.handle('browser-view:devtools', (_event, tabId: unknown) => {

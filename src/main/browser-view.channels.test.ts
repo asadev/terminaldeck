@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { PROGRESS_CHANNEL, RECORDING_CHANNEL } from './browser-view'
+import { FIND_CHANNEL, KEY_CHANNEL, PROGRESS_CHANNEL, RECORDING_CHANNEL } from './browser-view'
 
 /**
  * The two push channels, held against the preload that listens on them.
@@ -49,12 +49,27 @@ describe('the browser’s push channels reach the renderer', () => {
     expect(channels, `preload does not listen on ${PROGRESS_CHANNEL}`).toContain(PROGRESS_CHANNEL)
   })
 
+  it('the preload subscribes to the find channel, or the match count never lands', () => {
+    // The exact failure shape recording had: a bar that draws, a count frozen
+    // at nothing, and both sides individually correct.
+    expect(channels, `preload does not listen on ${FIND_CHANNEL}`).toContain(FIND_CHANNEL)
+  })
+
+  it('the preload subscribes to the page-chord channel, or ⌘F inside a page does nothing', () => {
+    expect(channels, `preload does not listen on ${KEY_CHANNEL}`).toContain(KEY_CHANNEL)
+  })
+
   it('nothing in this module still pushes on the old names', () => {
     // The literals, not the constants: a rename that changed one call site and
-    // left the other would pass the two cases above.
+    // left the other would pass the cases above.
     const source = readFileSync(join(__dirname, 'browser-view.ts'), 'utf8')
-    const pushes = [...source.matchAll(/send\(entry,\s*([A-Z_]+|'[^']+')/g)].map((m) => m[1])
-    expect(pushes.sort()).toEqual(['PROGRESS_CHANNEL', 'RECORDING_CHANNEL'])
+    const pushes = [...new Set([...source.matchAll(/send\(entry,\s*([A-Z_]+|'[^']+')/g)].map((m) => m[1]))]
+    expect(pushes.sort()).toEqual([
+      'FIND_CHANNEL',
+      'KEY_CHANNEL',
+      'PROGRESS_CHANNEL',
+      'RECORDING_CHANNEL',
+    ])
   })
 
   it('reads a preload that really does register subscriptions', () => {

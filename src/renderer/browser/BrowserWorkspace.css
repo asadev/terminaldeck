@@ -401,6 +401,31 @@
   text-overflow: ellipsis;
 }
 
+/*
+  The page's zoom, only while it is not 100%. Chrome's chip in Chrome's spot:
+  the end of the address field, because it is a fact about the page and must
+  not reflow the website by appearing — zoom steps several times in a row.
+  A control, not a label: pressing it is ⌘0.
+*/
+.bw-zoom {
+  flex-shrink: 0;
+  padding: 0 var(--sp-15);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+  line-height: 18px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.bw-zoom:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
 .bw-url {
   flex: 1;
   /* Not 0. An address bar that has been squeezed to nothing by the labels
@@ -786,6 +811,84 @@
   background: var(--tab-active);
 }
 
+/*
+  Find-in-page. The terminal's find bar, as a band: same field, same ↑ ↓ ✕, so
+  one learned bar is both bars — but in the flow rather than floating, because
+  nothing HTML floats over a native page (the essay above). Controls sit at the
+  right edge, where the terminal's pill sits over a session.
+*/
+.bw-find {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-2);
+  background: var(--tab-active);
+}
+
+.bw-find-input {
+  width: 190px;
+  height: var(--control-h);
+  padding: 0 var(--sp-2);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--t-callout);
+}
+
+.bw-find-input::placeholder {
+  color: var(--text-muted);
+}
+
+.bw-find-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* Chromium's own count. Fixed-width-ish and quiet — it changes on every
+   keystroke and must not make the buttons beside it walk. */
+.bw-find-count {
+  min-width: 3.5rem;
+  color: var(--text-secondary);
+  font-size: var(--t-footnote);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.bw-find-count[data-none] {
+  color: var(--text-muted);
+}
+
+.bw-find-btn {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: var(--icon-btn);
+  height: var(--icon-btn);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--t-callout);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.bw-find-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.bw-find-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
 /* The two account bands. Same geometry, different reason for existing, so the
    shared shape is written once and only the tint differs below. */
 .bw-signin,
@@ -947,6 +1050,56 @@
 
 .bw-menu-item:disabled,
 .bw-menu-choice:disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+/*
+  Zoom, as one row with three presses — Chrome's arrangement, kept because zoom
+  is one fact with three verbs and three full-width rows would say the same
+  word three times. The percentage doubles as Reset, exactly like the chip in
+  the address bar, so the two surfaces teach each other.
+*/
+.bw-menu-zoom {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  height: var(--control-h);
+  padding: 0 var(--sp-2);
+}
+
+.bw-menu-zoom-btn,
+.bw-menu-zoom-value {
+  display: grid;
+  place-items: center;
+  height: calc(var(--control-h) - 6px);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--t-callout);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.bw-menu-zoom-btn {
+  width: var(--icon-btn);
+  flex-shrink: 0;
+}
+
+.bw-menu-zoom-value {
+  flex: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.bw-menu-zoom-btn:hover:not(:disabled),
+.bw-menu-zoom-value:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.bw-menu-zoom-btn:disabled,
+.bw-menu-zoom-value:disabled {
   color: var(--text-muted);
   cursor: default;
 }
