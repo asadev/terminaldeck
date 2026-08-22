@@ -390,6 +390,35 @@ export interface HostCoreOptions {
      */
     reachesDeviceWindows?(deviceId: string | undefined): boolean
     /**
+     * Are the browser windows a session here drives held by **this host**?
+     *
+     * The headless server's answer, and the desktop's is the absence of this
+     * seam. Two different facts, and conflating them is what left a server's
+     * sessions with no verbs at all.
+     *
+     * `reachesDeviceWindows` above asks whether the *device* that started a
+     * session can serve a browser verb, because on a desktop that is where such
+     * a session's windows are: a device driving the browser on this Mac is
+     * refused and always will be, so the only windows in reach are the device's
+     * own. On a headless host there is no such refusal to make. The browser is
+     * the server's — a real Chromium of its own, behind the same `BrowserDrive`
+     * seam (`browser-headless-host.ts`) — and `HeadlessDriveHost.openForSession`
+     * attaches every window it opens to the calling session in the same
+     * `browser-binding` store the desktop mints `B1` from. So a session on the
+     * server drives the server's browser whoever asked for the session, and the
+     * device is not part of the question.
+     *
+     * Which is why it is a second seam rather than `reachesDeviceWindows`
+     * answering true. Answering true there would be this file being told that a
+     * phone can show a browser window — the exact claim that comment exists to
+     * refuse — in order to get a launch past a gate for an unrelated reason. The
+     * two are asked with `||` at the gate below, because either one being true is
+     * a session that has somewhere real to drive.
+     *
+     * Absent means no, which is the desktop and every test that predates this.
+     */
+    hostHoldsWindows?(): boolean
+    /**
      * Can a Claude CLI **inside this distribution** reach the tool endpoint, and
      * what is the config file called over there?
      *
@@ -1238,9 +1267,12 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      *    rule and no restart. `wsl-bridge.ts` is that program. Only a
      *    distribution that answered neither way is told why, in one sentence,
      *    and launched exactly as it was before.
-     *  - **The endpoint exists.** A build with no `deck-control` server — the
-     *    headless host, a test harness — passes no seam and every session is
-     *    launched the way it always was.
+     *  - **The endpoint exists.** A build with no `deck-control` server — a test
+     *    harness, or the public demo box, which withholds it on purpose — passes
+     *    no seam and every session is launched the way it always was. An
+     *    ordinary headless host is no longer in that list: it runs a tool
+     *    endpoint over its own Chromium and passes {@link
+     *    hostHoldsWindows}.
      */
     const forDevice = guest !== undefined || confine !== undefined
     /*
@@ -1251,7 +1283,9 @@ export function createHostCore(options: HostCoreOptions): HostCore {
     const insideDistro =
       target === null ? null : ((await options.sessionTools?.insideDistro?.(target)) ?? null)
     const sessionTools =
-      (!forDevice || options.sessionTools?.reachesDeviceWindows?.(confine?.deviceId) === true) &&
+      (!forDevice ||
+        options.sessionTools?.reachesDeviceWindows?.(confine?.deviceId) === true ||
+        options.sessionTools?.hostHoldsWindows?.() === true) &&
       (extraArgs ?? []).length === 0 &&
       provider === 'claude' &&
       !addedRuns &&
@@ -1272,15 +1306,30 @@ export function createHostCore(options: HostCoreOptions): HostCore {
     const noVerbs: NoVerbsReason | null =
       sessionTools !== null || (extraArgs ?? []).length > 0
         ? null
-        : forDevice
+        : /*
+           * The device sentence, and it is only a device's fault where the
+           * device is where the windows would be.
+           *
+           * `hostHoldsWindows` is the headless server, whose browser is its own
+           * — so telling a session there that *"the device that started this
+           * session cannot show a browser window"* would name the wrong
+           * computer about the wrong browser. Such a launch falls through to the
+           * endpoint clauses below, which is where its real reason is: on a
+           * server the only way to miss the verbs is to have started before the
+           * tool endpoint bound.
+           */
+          forDevice && options.sessionTools?.hostHoldsWindows?.() !== true
           ? 'device'
           : provider !== 'claude' || addedRuns
             ? 'provider'
             : /*
                * A build with no seam at all and a run whose endpoint is not up
                * yet are two different sentences, and only one of them is a dead
-               * end. The headless host passes no seam and never will
-               * (`endpoint`); the desktop always passes one and answers null
+               * end. A build with no `deck-control` server at all passes no
+               * seam — a test harness, and the public demo box, which withholds
+               * the tool endpoint deliberately (`endpoint`). The desktop always
+               * passes one, and so does a headless server since it grew a
+               * browser of its own, and both answer null
                * only in the few hundred milliseconds before its control server
                * binds, which catches restored tabs (`early`). Telling a
                * restored tab there is no endpoint would be false a second later

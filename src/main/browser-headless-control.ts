@@ -21,12 +21,26 @@
  *
  * It advertises the whole catalogue — `buildCatalogue()` always runs — but the
  * only handlers wired to anything live are the browser verbs, contributed as
- * `extraTools` over the drive. Nothing lists or calls the rest: `window-serve.ts`
- * gates every forwarded call on `ELSEWHERE_TOOLS` (the browser family) before it
- * reaches here, and there is no MCP endpoint on this host that would `tools/list`
- * them. So the {@link headlessSurface} the built-ins would read is never touched;
- * it throws if it ever is, which is the honest state rather than a stub that
- * pretends to answer.
+ * `extraTools` over the drive. Nothing lists or calls the rest, and there are now
+ * two doors that have to be true of rather than one:
+ *
+ *  - **A device's forwarded `window.call`.** `window-serve.ts` gates every
+ *    forwarded call on `ELSEWHERE_TOOLS` (the browser family) before it reaches
+ *    here.
+ *  - **A session on this host, over MCP.** `src/headless/host.ts` now runs a
+ *    `deck-control` endpoint over this control so a session started on the
+ *    server gets `--mcp-config` and can read the page it opened. The token
+ *    `session-tools.ts` mints per launch carries `SESSION_TOOLS`, and
+ *    `deck-control/server.ts` applies that set to `tools/list` **and**
+ *    `tools/call` — so the built-ins are neither listed nor reachable by
+ *    guessing a name.
+ *
+ * So the {@link headlessSurface} the built-ins would read is still never
+ * touched; it throws if it ever is, which is the honest state rather than a stub
+ * that pretends to answer. The endpoint's own fixed `token` is the one caller
+ * that would carry no grant and therefore see everything — it is minted by
+ * `startDeckControlServer` for a copilot this host does not have, is written to
+ * no file here, and is handed to nothing.
  *
  * ## Confirmations
  *

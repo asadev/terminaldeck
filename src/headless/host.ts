@@ -42,11 +42,19 @@ import { createHostCore, type HostCore } from '../main/host-core'
 import { IdleController, type IdleReport } from '../main/idle'
 import { logger } from '../main/app-log'
 import { bootMapFor, writeAppContext } from '../main/app-context'
-import { hookContext, MID_TURN_EVENTS, takeAnnouncement, view as bindingView } from '../main/browser-binding'
+import {
+  hookContext,
+  MID_TURN_EVENTS,
+  sessionRemoved,
+  takeAnnouncement,
+  view as bindingView,
+} from '../main/browser-binding'
 import { noVerbsLine } from '../main/session-verbs'
 import { HeadlessDriveHost } from '../main/browser-headless-host'
 import { BrowserDrive } from '../main/browser-driver'
 import { createHeadlessBrowserControl } from '../main/browser-headless-control'
+import { startDeckControlServer, stopDeckControlServer } from '../main/deck-control/server'
+import { createSessionTools, type SessionTools } from '../main/deck-control/session-tools'
 import { serveWindowCall } from '../main/remote/machines/window-serve'
 import { installHooksWhereConfigured } from '../main/hooks'
 import { resetDevPortsCache } from '../main/dev-ports'
@@ -392,6 +400,22 @@ export async function createHeadlessHost(
     session: null,
   })
 
+  /*
+   * The server's own tool endpoint, late-bound for the same reason
+   * `accountVerbs` above is.
+   *
+   * `createSessionTools` needs a listening MCP endpoint and the endpoint needs
+   * a `DeckControl` built over a browser this function has not made yet, so it
+   * is assembled a hundred lines below — while `createHostCore` has to be handed
+   * a `prepare` seam here, at construction, because a session can start the
+   * instant the core exists. Reading through the binding rather than capturing
+   * its value is what makes the seam answer the truth at the moment a session
+   * launches instead of the truth at the moment the core was built: null before
+   * the endpoint binds, which `host-core.ts` turns into the `early` sentence,
+   * and the real thing afterwards.
+   */
+  let sessionTools: SessionTools | null = null
+
   const core = createHostCore({
     storageDir: remoteStorageDir,
     userData: stateDir,
@@ -432,10 +456,67 @@ export async function createHeadlessHost(
      * host never dials out, so its `links` map — and thus `announceSessions` —
      * is always empty, which is why `onSessionStarted` omits it too.
      */
-    onSessionRemoved: (_id, reason) => {
+    onSessionRemoved: (id, reason) => {
       if (reason === 'replaced') return
+      /*
+       * The binding rows and the token, in the same breath the devices are told.
+       *
+       * Both are new here because both only became reachable when a session on
+       * this host got a browser of its own. `sessionRemoved` drops the `B1`/`B2`
+       * rows and frees their colour — without it a window belonging to a session
+       * this process has already let go stays in the map that composes every
+       * other session's hook answer. `sessionTools.release` drops the bearer
+       * token that let that session drive them: a token left on the table points
+       * at a session id nothing can resolve, which is the state
+       * `session-tools.ts`'s claim deadline exists to collect and should never
+       * have to. `src/main/index.ts` does the same two on the same edge.
+       */
+      sessionRemoved(id)
+      sessionTools?.release(id)
       tellDevices?.()
     },
+    /*
+     * The server's own tool endpoint, offered to every session that starts here.
+     *
+     * This is the seam `host-core.ts` composes `--mcp-config` from, and until
+     * this line the headless build passed none — so every session on a server
+     * was launched with no browser verbs and told, correctly for the build it
+     * was then, that *"this app's control endpoint is not running here"*. It is
+     * now, over a real Chromium of this host's own; see where `browserControl`
+     * and `sessionTools` are assembled below.
+     *
+     * `hostHoldsWindows` is the other half and the one that matters on a server:
+     * almost every session here is started by a device that dialled in, and the
+     * desktop's gate refuses those unless the *device* can hold a browser
+     * window. On this host the windows are neither the device's nor a phone's —
+     * they are this machine's — so the question is answered by the host rather
+     * than about the device. `host-core.ts` has the long form.
+     *
+     * Withheld entirely on the public demo box, which is what makes the sentence
+     * over there right rather than merely different: no seam at all is how
+     * `host-core.ts` spells *"this build has no control endpoint"*, and on that
+     * box it has none. Passing a seam whose `prepare` always answered null would
+     * instead tell a visitor's session that it started too early and should be
+     * started again, which is a door that is never going to open.
+     */
+    ...(options.publicHost === undefined
+      ? {
+          sessionTools: {
+            prepare: (inside) => sessionTools?.prepare(inside) ?? null,
+            /*
+             * True whether or not the endpoint came up, because it answers a
+             * question about this machine and not about this boot: the windows a
+             * session here would drive are held by this host. A boot where the
+             * endpoint failed to bind is then told `early` — "started before the
+             * endpoint did" — which is the desktop's own sentence for the same
+             * state, rather than being told that the phone that asked cannot
+             * show a browser window, which would be false about the wrong
+             * computer.
+             */
+            hostHoldsWindows: () => true,
+          },
+        }
+      : {}),
     /*
      * The two verbs whose absence was the whole defect. `createHostCore`
      * advertises `account` and `logins` exactly when a shell supplies these —
@@ -480,14 +561,15 @@ export async function createHeadlessHost(
    * the first drive — a missing binary is a named error, never a crash — so
    * building it here costs nothing until a device actually opens a page.
    *
-   * It is NOT wired to *local* sessions on this host: giving a session on this
-   * machine the browser verbs needs a `deck-control` MCP endpoint here, which is
-   * the copilot-tool-surface change the decline below still defers. What this
-   * lands is the cross-machine half — a device that dialled in drives a window
-   * this server holds, over `window.call`/`hostWindows`, served by
-   * `serveWindowCall` in the `registerRemoteIpc` options just below. So the
-   * `cannotDrive` sentence on this host's own sessions stays truthful and is left
-   * as it is.
+   * Wave-2 landed the cross-machine half — a device that dialled in drives a
+   * window this server holds, over `window.call`/`hostWindows`, served by
+   * `serveWindowCall` in the `registerRemoteIpc` options just below — and left
+   * *local* sessions out, because giving a session on this machine the browser
+   * verbs needs a `deck-control` MCP endpoint here and `deck-control` could not
+   * enter this bundle. Both edges that stopped it are cut: `browser-drive-ipc.ts`
+   * behind `browser-drive-current.ts`, and `live-surface.ts`'s settings read
+   * moved to the store half. So the endpoint is started below and the
+   * `cannotDrive` sentence stops being said about a session that can.
    */
   const browserHost = new HeadlessDriveHost({ userData: stateDir })
   const browserDrive = new BrowserDrive(browserHost)
@@ -495,6 +577,60 @@ export async function createHeadlessHost(
     drive: browserDrive,
     logDir: join(stateDir, 'browser-actions'),
   })
+
+  /*
+   * And the door a session *on this host* drives it through.
+   *
+   * The same `DeckControl` the wire already dispatches a device's `window.call`
+   * into, now also behind an MCP endpoint on this machine's loopback — so a
+   * Claude session started here is launched with `--mcp-config` naming a
+   * per-launch file, exactly as one in the desktop's window is, and its six
+   * browser verbs act on this server's own Chromium. One dispatcher for both
+   * doors: the tier check, the confirmation gate, the budgets and the action log
+   * are `deck-control`'s and there is no second copy of them here. See
+   * `browser-headless-control.ts`, which argues that at length.
+   *
+   * ## What a session on this host is granted, and what it cannot find
+   *
+   * The endpoint is not "the copilot's tool surface, on a server". The token
+   * `session-tools.ts` mints for each launch carries `SESSION_TOOLS`, which is
+   * the browser family and `tools.describe` and nothing else, and
+   * `deck-control/server.ts` applies that set to **both** `tools/list` and
+   * `tools/call` — so a session here cannot list `sessions.send`, cannot call it
+   * by guessing the name, and is not handed a paragraph of instructions
+   * describing a surface it does not have (`instructionsFor`). That matters more
+   * here than on the desktop: this control's non-browser surface is a proxy that
+   * throws, because nothing was ever supposed to reach it, and a listing that
+   * advertised it would be exactly the control that looks like it works and does
+   * not.
+   *
+   * ## Why the public demo box gets none of it
+   *
+   * A stranger's container hands out a shell on purpose; handing that shell a
+   * browser on the same machine is a fetch primitive pointed at whatever the
+   * host can route to, and the action log it would be written into is a log
+   * nobody owns. Withholding the endpoint is also what keeps the sentence
+   * truthful over there: with no seam passed, `host-core.ts` answers `endpoint`,
+   * which says this build has no control endpoint running, and on that box it
+   * does not.
+   *
+   * A failure to bind is logged and is not fatal. Every session then launches
+   * exactly as it did before this existed, and is told the `early` sentence
+   * rather than being given flags naming a socket that is not there.
+   */
+  if (options.publicHost === undefined) {
+    try {
+      const controlEndpoint = await startDeckControlServer({ control: browserControl })
+      sessionTools = createSessionTools(controlEndpoint, {
+        dir: join(stateDir, 'session-tools'),
+      })
+      logger.info('headless', 'the browser tools endpoint is up', { port: controlEndpoint.port })
+    } catch (error) {
+      logger.error('headless', 'the browser tools endpoint did not start; sessions here get no verbs', {
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
 
   const remote = registerRemoteIpc(desk, {
     sessions: core.sessions,
@@ -550,15 +686,28 @@ export async function createHeadlessHost(
      * server would therefore draw a fourth pill on the phone whose every Start
      * button refuses, which is worse than the absence, not better.
      *
-     * And `deck-control` cannot be imported into this bundle today.
-     * `deck-control/index.ts` imports `browserDrive` from
-     * `../browser-drive-ipc`, which loads `browser-tab` and `browser-driver` —
-     * `BrowserWindow`, `WebContentsView`, `nativeImage` — at module scope; and
-     * its `live-surface.ts` imports `settings-extra`, which loads `app`,
-     * `session` and `shell`. Both are real value imports rather than types, so
-     * the bundle would not start. Giving a server a copilot means putting a seam
-     * under those two edges the way `platform/paths.ts` did for `app.getPath`,
-     * which is a change to the copilot's whole tool surface.
+     * ## What has changed, and what has not
+     *
+     * The reason this used to give was that `deck-control` could not be imported
+     * into this bundle at all: `deck-control/index.ts` imported `browserDrive`
+     * from `../browser-drive-ipc` — `BrowserWindow`, `WebContentsView`,
+     * `nativeImage` at module scope — and its `live-surface.ts` imported
+     * `settings-extra`, which loads `app`, `session` and `shell`.
+     *
+     * Both edges are cut. The drive's state moved to `browser-drive-current.ts`
+     * and the settings read to `settings-store.ts`, the same treatment
+     * `platform/paths.ts` gave `app.getPath`, and `seam.test.ts` walks
+     * `deck-control/index.ts` and fails on a single runtime `electron` import.
+     * This host already runs a `deck-control` MCP endpoint of its own, above —
+     * that is what gives a session here the browser verbs.
+     *
+     * What is still missing is not an import. `registerDeckControlIpc` wants an
+     * `ipcMain` and an `isApprover(WebContents)`, because the confirmation for an
+     * `alter`-tier call is a dialog in a window, and there is no window here. A
+     * copilot on a server therefore needs its questions routed to a connected
+     * device — the `ConsentRelay` seam exists for exactly that and nothing on
+     * this host is wired to it — and a live surface built over *this* core rather
+     * than the desktop's. That is an assembly, and it is a different lane's.
      */
     /*
      * The git credential proxy, on every host except the public one.
@@ -1033,6 +1182,19 @@ export async function createHeadlessHost(
     // instant this resolves would race those writes. See `PtyManager.drain`.
     await core.ptys.drain()
     machines.stop()
+    /*
+     * The tool endpoint and every token it minted, before the browser it points
+     * at goes away.
+     *
+     * This order rather than the other one: `sessionTools.stop()` revokes the
+     * per-launch tokens and removes their config files, and `stopDeckControlServer`
+     * closes the socket, so after these two lines no call can arrive for a drive
+     * that is being torn down. The reverse would leave a live listener in front
+     * of a Chromium that is already closing, which is a refusal a caller reads as
+     * a fault rather than as a shutdown.
+     */
+    sessionTools?.stop()
+    await stopDeckControlServer().catch(() => undefined)
     // The server's browser is this host's to end — the CDP pipe closing never
     // kills Chromium, so this is the one place the child processes stop. [wave-2 Lane D]
     await browserHost.stop().catch(() => undefined)

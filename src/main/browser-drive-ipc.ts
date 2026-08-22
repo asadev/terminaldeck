@@ -13,6 +13,7 @@ import { browserTabContents, browserTabProfile } from './browser-tab'
 import { BLANK_URL } from './browser-url'
 import type { DriveStatus } from './browser-drive'
 import { BrowserDrive } from './browser-driver'
+import { setBrowserDrive } from './browser-drive-current'
 import { electronDrivenPage } from './browser-driven-electron'
 
 /**
@@ -255,7 +256,6 @@ export interface BrowserDriveDeps {
   }): Promise<{ route: 'tab' | 'system'; line: string }>
 }
 
-let drive: BrowserDrive | null = null
 
 /**
  * Build the drive and claim its channels. Call once from `registerIpc()`.
@@ -380,7 +380,7 @@ export function registerBrowserDriveIpc(ipcMain: IpcMain, deps: BrowserDriveDeps
       deps.send(channel, { id, tabId: browserTabId })
     })
 
-  drive = new BrowserDrive({
+  const drive = new BrowserDrive({
     openTab: async (input) => {
       /*
        * A pane of the copilot's own, first — never one that is already on
@@ -544,7 +544,7 @@ export function registerBrowserDriveIpc(ipcMain: IpcMain, deps: BrowserDriveDeps
     settle?.(shown === true)
   })
 
-  ipcMain.handle(DRIVE_READ_CHANNEL, () => drive?.status() ?? null)
+  ipcMain.handle(DRIVE_READ_CHANNEL, () => drive.status())
 
   /*
    * The two ends of one switch.
@@ -569,13 +569,29 @@ export function registerBrowserDriveIpc(ipcMain: IpcMain, deps: BrowserDriveDeps
   )
 
   ipcMain.on(DRIVE_RESUME_CHANNEL, (_event, carryOn: unknown) => {
-    drive?.resume(carryOn === true)
+    drive.resume(carryOn === true)
   })
 
+  /*
+   * And published, so that everything assembled after this — `deck-control`'s
+   * `where` tool above all — can find it without importing this file.
+   *
+   * Set at the end rather than beside the constructor so the drive is fully
+   * wired before anything can read it, which is the same ordering
+   * `registerIpc()` relies on by calling this before it builds the tool
+   * dispatcher.
+   */
+  setBrowserDrive(drive)
+
   return drive
 }
 
-/** The live drive, for anything assembled after `registerIpc`. Null before it. */
-export function browserDrive(): BrowserDrive | null {
-  return drive
-}
+/**
+ * The live drive, for anything assembled after `registerIpc`. Null before it.
+ *
+ * Re-exported from `browser-drive-current.ts` rather than declared here, and
+ * that module is the whole of why: an accessor declared beside `BrowserWindow`
+ * is an accessor nothing outside Electron can call. Kept as an export of this
+ * file so the desktop's callers read unchanged.
+ */
+export { browserDrive } from './browser-drive-current'

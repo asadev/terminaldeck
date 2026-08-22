@@ -39,9 +39,11 @@
  * only place that knows *why* a launch was not given the flags. It is read by
  * `index.ts` and by `src/headless/host.ts`, which compose the hook answer for
  * the desktop and for a shell with no window. And it must not drag
- * `deck-control/` into the headless bundle, which cannot have it —
- * `deck-control/index.ts` reaches Electron through `browserDrive`, and
- * `src/headless/host.ts` says so where it declines to build a copilot.
+ * `deck-control/` into either of them merely to name a reason — a map and some
+ * sentences have no business importing a dispatcher. (The headless bundle can
+ * now hold `deck-control`: the two Electron edges were cut on 2026-08-22 and a
+ * server runs its own tool endpoint. That makes this a layering rule rather than
+ * a physical one, which is a weaker reason and still the right one.)
  *
  * So this is what `browser-binding.ts` is: a map and some sentences, testable
  * without a window, an app object or a spawned process.
@@ -96,7 +98,15 @@ export type NoVerbsReason =
    * See the gate in `host-core.ts`.
    */
   | 'device'
-  /** This build has no `deck-control` endpoint at all — the headless host. */
+  /**
+   * This build has no `deck-control` endpoint at all.
+   *
+   * It used to mean the headless host, flatly. A server now runs one of its own
+   * over its own Chromium (`src/headless/host.ts`), so what is left is a build
+   * that withholds it on purpose — the public demo box, whose container hands a
+   * stranger a shell and must not hand them a browser on the same machine — and
+   * a test harness that passes no seam.
+   */
   | 'endpoint'
   /**
    * The endpoint was not up **yet** when this session started.

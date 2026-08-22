@@ -93,20 +93,40 @@ The core reaches for Electron in places that need a non-Electron answer:
 - `Notification` — a headless host has nobody to notify locally. It should
   forward to the paired devices instead, which is more useful anyway.
 - `BrowserWindow`, menus, the browser pane — GUI only, excluded from the build.
-- **`deck-control`, which is why a server has no copilot.** The one item on this
-  list still outstanding, and the only one a *user* meets. `deck-control` is the
-  copilot's whole tool surface, and `CopilotRuns` refuses a run without it rather
-  than starting a Claude CLI with no tools — so a headless host passes no copilot
-  layer at all, and a device approved as *my device* gets no Copilot on a server.
-  Two real value imports are in the way: `deck-control/index.ts` pulls
+- **`deck-control` — the two edges are cut; the copilot is the remaining half.**
+  `deck-control` is the copilot's whole tool surface, and two real value imports
+  used to keep the whole of it out of this build: `deck-control/index.ts` pulled
   `browserDrive` from `browser-drive-ipc`, which loads `browser-tab` and
   `browser-driver` (`BrowserWindow`, `WebContentsView`, `nativeImage`) at module
-  scope, and its `live-surface.ts` pulls `settings-extra`, which loads `app`,
-  `session` and `shell`. Both want the same treatment `app.getPath` got.
-  Until then the limit is *stated* rather than silent — `terminaldeck pair` and
-  `terminaldeck status` both say it — because on the wire "this host has no
-  copilot" and "you were approved as a guest" arrive as the same absence, and a
-  person cannot otherwise tell which happened.
+  scope, and its `live-surface.ts` pulled `settings-extra`, which loads `app`,
+  `session` and `shell`.
+
+  Both got the treatment `app.getPath` got, on 2026-08-22. The drive's *state*
+  moved to `browser-drive-current.ts` and only its Electron *construction* stayed
+  behind; the settings read moved to `settings-store.ts`, the half that needs
+  only `fs` and a user-data directory. `seam.test.ts` walks
+  `deck-control/index.ts` and fails on a single runtime `electron` import, so the
+  cut cannot close again quietly.
+
+  What that bought first is **browser verbs for sessions on a server**: this host
+  runs a `deck-control` MCP endpoint over its own Chromium
+  (`browser-headless-control.ts`), and every Claude session started here is
+  launched with `--mcp-config` naming a per-launch file, so it can *read and act
+  on* the page it opened rather than only open one. The grant is `SESSION_TOOLS`
+  — the browser family and nothing else — applied to `tools/list` and
+  `tools/call` alike.
+
+  What is still outstanding is the **copilot** itself: `CopilotRuns` refuses a run
+  without a tool surface, so a headless host still passes no copilot layer and a
+  device approved as *my device* gets no Copilot on a server. That is now an
+  assembly job (an approver, a live surface over this host's core) rather than an
+  import problem. Until it lands the limit is *stated* rather than silent —
+  `terminaldeck pair` and `terminaldeck status` both say it — because on the wire
+  "this host has no copilot" and "you were approved as a guest" arrive as the same
+  absence, and a person cannot otherwise tell which happened.
+
+  The public demo box gets **none** of this on purpose: a container that hands a
+  stranger a shell must not hand them a browser on the same machine.
 
 **The crypto needs no change and this is worth stating.** `src/shared/sealed.ts`
 uses `@noble/ciphers` with deliberately no "native when available" path, because
