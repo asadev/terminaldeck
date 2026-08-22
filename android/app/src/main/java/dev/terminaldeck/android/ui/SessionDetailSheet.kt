@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.dp
 import dev.terminaldeck.android.HostSummary
 import dev.terminaldeck.android.protocol.RemoteSessionView
 import dev.terminaldeck.android.ui.kit.DeckDivider
+import dev.terminaldeck.android.ui.kit.DeckSheetChrome
 import dev.terminaldeck.android.ui.kit.DeckFootnote
 import dev.terminaldeck.android.ui.kit.DeckGroup
 import dev.terminaldeck.android.ui.kit.DeckStatusDot
@@ -95,6 +96,7 @@ fun SessionDetailSheet(
         shape = Radius.sheetShape,
         dragHandle = null,
     ) {
+        DeckSheetChrome()
         Column(
             modifier = Modifier
                 .verticalScroll(rememberScrollState())

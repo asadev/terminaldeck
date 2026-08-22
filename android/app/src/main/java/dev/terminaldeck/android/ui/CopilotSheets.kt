@@ -25,6 +25,7 @@ import dev.terminaldeck.android.protocol.CopilotArguments
 import dev.terminaldeck.android.protocol.CopilotConsentQuestion
 import dev.terminaldeck.android.protocol.CopilotSessionRow
 import dev.terminaldeck.android.ui.kit.DeckDivider
+import dev.terminaldeck.android.ui.kit.DeckSheetChrome
 import dev.terminaldeck.android.ui.kit.DeckFootnote
 import dev.terminaldeck.android.ui.kit.DeckGroup
 import dev.terminaldeck.android.ui.kit.DeckPrimaryButton
@@ -104,6 +105,7 @@ fun CopilotConsentSheet(
         shape = Radius.sheetShape,
         dragHandle = null,
     ) {
+        DeckSheetChrome()
         Column(
             modifier = Modifier
                 .verticalScroll(rememberScrollState())
@@ -211,6 +213,7 @@ fun CopilotSessionsSheet(
         shape = Radius.sheetShape,
         dragHandle = null,
     ) {
+        DeckSheetChrome()
         Column(
             modifier = Modifier
                 .verticalScroll(rememberScrollState())

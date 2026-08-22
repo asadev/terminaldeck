@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import dev.terminaldeck.android.SessionBarView
 import dev.terminaldeck.android.protocol.AccountWire
 import dev.terminaldeck.android.protocol.foreignAccount
+import dev.terminaldeck.android.ui.kit.DeckSheetChrome
 import kotlin.math.roundToInt
 
 /**
@@ -126,6 +127,7 @@ fun SessionBarRow(
             sheetState = sheetState,
             containerColor = MaterialTheme.colorScheme.surface,
         ) {
+        DeckSheetChrome()
             AccountSheet(
                 current = view.account,
                 accounts = view.accounts,

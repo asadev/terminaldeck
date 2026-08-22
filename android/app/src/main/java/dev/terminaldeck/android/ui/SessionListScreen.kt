@@ -355,7 +355,16 @@ fun SessionListScreen(
                     // Still inside the pull box: an empty list is exactly where somebody reaches for
                     // this gesture, so a screen that only offered it once there was something to
                     // scroll would be missing the case it is for.
-                    EmptyState(state)
+                    EmptyState(
+                        state = state,
+                        // Empty *because of this phone* rather than because of the machine, which is
+                        // a different sentence and a different way out: the sessions exist, this
+                        // phone put them away, and the fix is the place they were put — not a New
+                        // Session button, and certainly not "no sessions on that machine", which is
+                        // the one thing that is not true.
+                        everythingArchived = state.live && archived.isNotEmpty(),
+                        onArchivedList = onArchivedList,
+                    )
                 } else {
                     LazyColumn(
                         contentPadding = PaddingValues(
@@ -553,7 +562,11 @@ private fun remaining(retryAt: Long): Int =
     ((retryAt - System.currentTimeMillis()).coerceAtLeast(0) / 1000.0).roundToInt()
 
 @Composable
-private fun EmptyState(state: DeckUiState) {
+private fun EmptyState(
+    state: DeckUiState,
+    everythingArchived: Boolean = false,
+    onArchivedList: () -> Unit = {},
+) {
     // Scrollable even with nothing in it, so the pull gesture above has something to pull.
     /*
      * A **sentence in all three cases**, never a spinner.
@@ -564,15 +577,26 @@ private fun EmptyState(state: DeckUiState) {
      * because there is no socket. Every one names the machine, because with two paired "no sessions"
      * does not say whose.
      */
-    Box(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+    ) {
         DeckEmptyState(
             text = when {
                 !state.loaded && state.transport is TransportState.Connecting ->
                     "Reaching ${state.hostLabel}…"
+                everythingArchived ->
+                    "Every session on ${state.hostLabel} is archived — they are still running there."
                 state.transport.isOnline -> "No sessions on ${state.hostLabel}."
                 else -> "Not connected to ${state.hostLabel}, so there is nothing to show yet."
             }
         )
+        // Not a New Session button. There is nothing wrong here and nothing to start.
+        if (everythingArchived) {
+            TextButton(onClick = onArchivedList) {
+                Text("Show archived", style = DeckType.control, color = DeckTheme.colors.accent)
+            }
+        }
     }
 }
 

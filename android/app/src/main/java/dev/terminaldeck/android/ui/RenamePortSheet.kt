@@ -18,6 +18,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import dev.terminaldeck.android.ports.PortBook
 import dev.terminaldeck.android.ui.kit.DeckFootnote
+import dev.terminaldeck.android.ui.kit.DeckSheetChrome
 import dev.terminaldeck.android.ui.kit.DeckPrimaryButton
 import dev.terminaldeck.android.ui.kit.DeckQuietButton
 import dev.terminaldeck.android.ui.kit.DeckTextField
@@ -59,6 +60,7 @@ fun RenamePortSheet(
         shape = Radius.sheetShape,
         dragHandle = null,
     ) {
+        DeckSheetChrome()
         Column(
             modifier = Modifier
                 .padding(horizontal = Space.screen)
