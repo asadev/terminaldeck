@@ -1,7 +1,8 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { app, nativeImage, type WebContents } from 'electron'
-import { attachBlockWatch } from './browser-block-watch'
+import type { BlockWatchDeps } from './browser-block-watch'
+import { maskFrame, type RawFrame } from './browser-png'
+import { userDataDir } from './platform/paths'
 import { screenCommand, type DriveState } from './browser-cdp'
 import {
   EMPTY_DRIVE_STATUS,
@@ -33,9 +34,7 @@ import {
 } from './browser-store-script'
 import { copilotPaths } from './copilot-home'
 import { blockShotDir } from './browser-scrape-paths'
-import { navigatePage, type SteerablePage } from './browser-route'
 import { normalizeUrl, shortLabel } from './browser-url'
-import { onWebContentsDestroyed } from './web-contents-teardown'
 
 /**
  * The engine: one page, driven properly.
@@ -84,46 +83,35 @@ import { onWebContentsDestroyed } from './web-contents-teardown'
  * what is actually at the centre point, and if that node is neither the target
  * nor inside it, the click is not sent.
  *
- * ## Where the protocol is used, and where it is not
+ * ## This engine drives a page it never names the shape of
  *
- * Only for **input**, and the reason is a single measured API difference:
- * `webContents.sendInputEvent()` requires the window to be focused
- * (`electron.d.ts:18068`) and CDP `Input.*` does not. Verified here with the
- * window explicitly blurred — `win.isFocused() === false` — after which
- * `Input.insertText` filled a field and two `Input.dispatchMouseEvent`s ran a
- * button's click handler. That is what makes "watch it work, then go and do
- * something else" possible, and it is why the driver is CDP-shaped at all.
+ * Nothing in this file imports Electron any more. Everything it needs from a
+ * live page — send a command, read the isolated world, capture a frame, load a
+ * URL, hear that the page settled or went — it takes through {@link DrivenPage},
+ * an interface with two implementations: `browser-driven-electron.ts` wraps a
+ * `WebContents` for the desktop, and `browser-driven-cdp.ts` speaks the pipe to
+ * a real headless Chromium for the server. The driver cannot tell them apart,
+ * which is the whole of what lets the same actionability loop run in both.
  *
- * Everything else deliberately avoids the protocol:
+ * Where each operation lands, and why it is shaped the way it is, is recorded on
+ * the two implementations. The properties this file keeps are transport-neutral:
  *
- *  - **Reading** goes through `executeJavaScriptInIsolatedWorld` with scripts
- *    from `browser-drive-script.ts`, so `Runtime.evaluate` is not merely denied
- *    at the gate — it is not needed, which is a stronger statement.
- *  - **Navigating** goes through `webContents.loadURL` after `normalizeUrl`,
- *    because `Page.navigate` bypasses the `will-navigate` guard entirely. That
- *    was measured, not assumed: a CDP navigate to `file:///etc/passwd` landed,
- *    with a `preventDefault()`-ing `will-navigate` handler installed. See the
- *    header of `browser-cdp.ts`.
- *  - **Screenshots** go through `webContents.capturePage()`, because
- *    `Page.captureScreenshot` was measured to *never resolve* on a view that is
- *    not composited, where `capturePage()` returned a correct image in the same
- *    state. A call that hangs forever is the worst possible shape for a feature
- *    whose complaint is instability.
+ *  - **Reading** goes through one call — {@link DrivenPage.runInIsolatedWorld} —
+ *    with scripts from `browser-drive-script.ts`, so `Runtime.evaluate` is not
+ *    merely denied at the gate, it is not needed. There is one read door and the
+ *    baton is checked in front of it.
+ *  - **Navigating** goes through {@link DrivenPage.loadURL} (the copilot's own
+ *    tab) or {@link DrivenPage.navigateGuarded} (a window the person can see),
+ *    after `normalizeUrl`, and never through a raw `Page.navigate` — which
+ *    `browser-cdp.ts` denies because it was measured to bypass the navigation
+ *    guard entirely.
+ *  - **Screenshots** come back from {@link DrivenPage.capture} as a raw RGBA
+ *    frame; the secret rectangles are painted out and the PNG is encoded here,
+ *    in `browser-png.ts`, so a password is gone from the pixels before the file
+ *    exists whichever transport took the picture.
  */
 
 /* ------------------------------------------------------------- constants -- */
-
-/**
- * The isolated world the drive's scripts run in.
- *
- * A fixed, arbitrary, high number so it cannot collide with world 0 (the page)
- * or with world 1, which is where a preload script's isolated context lives.
- * The guest preload in `browser-preload.ts` runs in that one; sharing a world
- * with it would mean the drive's helpers and the inspector's could see each
- * other's variables, and a name collision would be a bug nobody could
- * reproduce.
- */
-const DRIVE_WORLD = 31_017
 
 /** Longest an actionability wait runs before the step is refused. */
 export const DEFAULT_ACTION_TIMEOUT_MS = 10_000
@@ -284,6 +272,102 @@ export function boundKey(browserTabId: string): string {
   return `bound:${browserTabId}`
 }
 
+/* --------------------------------------------------------------- the page -- */
+
+/** A captured page frame — RGBA bytes and their size. See `browser-png.ts`. */
+export type { RawFrame }
+
+/**
+ * One live page, as everything this engine does to a page and nothing about how.
+ *
+ * The seam that lets the whole driver stop importing Electron. Under the desktop
+ * an implementation wraps a `WebContents` (`browser-driven-electron.ts`); under
+ * the headless server another speaks CDP to a real Chromium over a pipe
+ * (`browser-driven-cdp.ts`). Each method is one of the operations the driver used
+ * to do inline against `wc`, named for what it accomplishes rather than for the
+ * call that accomplishes it — so the driver can be read, and tested, without a
+ * browser in the room.
+ *
+ * Two of these are the security doors the rest of the app is built around, and
+ * `browser-cdp.test.ts` pins that each implementation has exactly one of each:
+ * {@link send} is the only place a debugger command leaves for the page, and the
+ * driver screens it first; {@link runInIsolatedWorld} is the only place page
+ * script runs, and it runs only strings this repository wrote.
+ */
+export interface DrivenPage {
+  /** The page's current URL, or the empty string if it cannot be read. */
+  url(): string
+  /** The page's current title. */
+  title(): string
+  /** Has the underlying page gone? Nothing can be driven once this is true. */
+  isGone(): boolean
+
+  /**
+   * Point this page at a URL. The plain load the copilot's own tab uses; the
+   * URL is already screened by `normalizeUrl` before it arrives here.
+   */
+  loadURL(url: string): Promise<void>
+  /**
+   * Navigate a window the person can see, honouring its own `beforeunload`.
+   * `'unfinished'` when the page declared it had unsaved work and refused.
+   */
+  navigateGuarded(url: string): Promise<'navigated' | 'unfinished'>
+
+  /** Take the page's debugger transport. Safe to call when already attached. */
+  attach(): Promise<void>
+  /** Let the transport go. Safe to call when nothing is attached. */
+  detach(): void
+  /** Is the transport attached right now? */
+  isAttached(): boolean
+  /**
+   * Send one command down the transport, and answer with its result.
+   *
+   * The single door. It is called only from the driver's own `send()`, which
+   * screens the method through `browser-cdp.ts` first — so this raw primitive
+   * carries no policy of its own.
+   */
+  send(method: string, params: Record<string, unknown>): Promise<Record<string, unknown>>
+  /**
+   * Subscribe to the transport's events; the returned function unsubscribes.
+   * Feeds `PageNetwork`, which is the only caller.
+   */
+  onEvent(handler: (method: string, params: Record<string, unknown>) => void): () => void
+
+  /**
+   * Run one of this repository's scripts in the drive's isolated world.
+   *
+   * The single read door. `code` is composed by the driver from a
+   * `browser-drive-script.ts` string and JSON arguments; there is no path from a
+   * model's text to a page's JavaScript.
+   */
+  runInIsolatedWorld<T>(code: string): Promise<T>
+
+  /** A raw RGBA frame of the page, for masking and encoding in `browser-png.ts`. */
+  capture(): Promise<RawFrame>
+
+  /** Is the page still loading? */
+  isLoading(): boolean
+  /**
+   * Call `handler` the next time the page settles — stops or fails to load. The
+   * returned function unsubscribes, which the settle wait uses on timeout.
+   */
+  onSettled(handler: () => void): () => void
+
+  /** The page's process is gone. The returned function unsubscribes. */
+  onGone(handler: () => void): () => void
+  /** The transport detached out from under the drive. Returns an unsubscribe. */
+  onDetached(handler: () => void): () => void
+  /**
+   * Run `handler` when this page is destroyed, once per `key`. Keyed and shared
+   * so watching one page from many places is one listener — see
+   * `web-contents-teardown.ts` for the desktop's registry.
+   */
+  onDestroyed(key: string, handler: () => void): void
+
+  /** Attach the automatic block-capture watcher to this page's navigations. */
+  watchBlocks(deps: BlockWatchDeps): void
+}
+
 /* -------------------------------------------------------------- the drive -- */
 
 /**
@@ -310,8 +394,8 @@ export interface DriveHost {
    * does not invent a tab.
    */
   openTab(input: { url: string; isolate: boolean }): Promise<string | null>
-  /** The live contents of a tab this app opened, or null once it has gone. */
-  contentsFor(tabId: string): WebContents | null
+  /** The live page of a tab this app opened, or null once it has gone. */
+  contentsFor(tabId: string): DrivenPage | null
   /** Tell the window the drive's state changed, so the banner can redraw. */
   publish(status: DriveStatus): void
   /** Epoch ms. Injected so a test can freeze it. */
@@ -522,7 +606,7 @@ export class BrowserDrive {
   private readonly own = new Slot('own', '')
   /** A session's attached windows, by slot key, created on first use. */
   private readonly bound = new Map<string, Slot>()
-  private watched = new WeakSet<WebContents>()
+  private watched = new WeakSet<DrivenPage>()
 
   constructor(private readonly host: DriveHost) {}
 
@@ -592,13 +676,13 @@ export class BrowserDrive {
 
   status(): DriveStatus {
     const slot = this.showing()
-    const wc = this.contents(slot)
+    const page = this.contents(slot)
     return {
       state: slot.state,
       tabId: slot.viewId,
       step: slot.step,
       prompt: slot.prompt,
-      url: wc ? wc.getURL() : '',
+      url: page ? page.url() : '',
     }
   }
 
@@ -624,10 +708,10 @@ export class BrowserDrive {
    * cooperation.
    */
   origin(target?: DriveTarget | null): string | null {
-    const wc = this.contents(this.slotFor(target))
-    if (!wc) return null
+    const page = this.contents(this.slotFor(target))
+    if (!page) return null
     try {
-      return new URL(wc.getURL()).origin
+      return new URL(page.url()).origin
     } catch {
       return null
     }
@@ -684,11 +768,11 @@ export class BrowserDrive {
     this.slotFor(target).grantedOrigin = origin
   }
 
-  private contents(slot: Slot): WebContents | null {
+  private contents(slot: Slot): DrivenPage | null {
     if (slot.viewId === null || slot.viewId === '') return null
-    const wc = this.host.contentsFor(slot.viewId)
-    if (!wc || wc.isDestroyed()) return null
-    return wc
+    const page = this.host.contentsFor(slot.viewId)
+    if (!page || page.isGone()) return null
+    return page
   }
 
   private publish(): void {
@@ -734,8 +818,8 @@ export class BrowserDrive {
     if (!normalized.ok) throw new DriveRefused(normalized.reason)
 
     let created = false
-    let wc = this.contents(slot)
-    if (!wc && slot !== this.own) {
+    let page = this.contents(slot)
+    if (!page && slot !== this.own) {
       throw new DriveRefused(
         `${slot.name} is not open any more. Read the window list again before naming one.`,
       )
@@ -757,16 +841,16 @@ export class BrowserDrive {
      * ordinary open is the same lie backwards — the person's sign-ins are not
      * there, and the model is told nothing about why the site does not know it.
      */
-    if (wc && slot === this.own && slot.isolated !== input.isolate) {
+    if (page && slot === this.own && slot.isolated !== input.isolate) {
       slot.network?.abandon('the page was replaced to change its isolation')
       slot.network = null
       this.detach(slot)
       slot.viewId = null
       slot.grantedOrigin = null
       slot.secretSelectors.clear()
-      wc = null
+      page = null
     }
-    if (!wc) {
+    if (!page) {
       const id = await this.host.openTab({ url: normalized.url, isolate: input.isolate })
       if (id === null) {
         /*
@@ -792,26 +876,26 @@ export class BrowserDrive {
       slot.viewId = id
       slot.isolated = input.isolate
       created = true
-      wc = this.contents(slot)
-      if (!wc) throw new DriveRefused('the browser tab went away before it could be driven')
+      page = this.contents(slot)
+      if (!page) throw new DriveRefused('the browser tab went away before it could be driven')
     } else if (slot === this.own) {
       // The tab already exists, so this is a navigation rather than an open.
       // Through `loadURL` and not `Page.navigate`: see the class header.
-      await wc.loadURL(normalized.url).catch(() => undefined)
+      await page.loadURL(normalized.url)
     } else {
       /*
        * An attached window is *his* window, so it gets the courtesy a browser
        * gives: the page's own `beforeunload` is asked first.
        *
        * The same rule the shim's route already follows — `browser-route.ts`
-       * says why at length — and reached through the same function, so a URL
-       * arriving by tool and a URL arriving by `open <url>` cannot treat a
-       * half-written form differently. Nothing here reads the URL, the title or
+       * says why at length — reached through {@link DrivenPage.navigateGuarded},
+       * so a URL arriving by tool and a URL arriving by `open <url>` cannot treat
+       * a half-written form differently. Nothing here reads the URL, the title or
        * how long the page has been open; the page's own declaration is the only
        * signal, because a heuristic would silently navigate over work whose
        * owner could never find out what decided that.
        */
-      const outcome = await navigatePage(wc as unknown as SteerablePage, normalized.url)
+      const outcome = await page.navigateGuarded(normalized.url)
       if (outcome === 'unfinished') {
         throw new DriveRefused(
           `${slot.name} says it has unfinished work on the page, so it was not navigated. Ask the person, ` +
@@ -820,11 +904,11 @@ export class BrowserDrive {
       }
     }
 
-    this.watch(wc, slot)
+    this.watch(page, slot)
     this.move(slot, 'claimed')
-    await this.attach(wc, slot)
+    await this.attach(page, slot)
 
-    const settled = await this.waitForSettled(wc, input.settleMs ?? DEFAULT_SETTLE_MS)
+    const settled = await this.waitForSettled(page, input.settleMs ?? DEFAULT_SETTLE_MS)
     /*
      * A fresh page is a fresh permission question.
      *
@@ -858,7 +942,7 @@ export class BrowserDrive {
      * the moment it becomes true.
      */
     this.publish()
-    return { url: wc.getURL(), title: wc.getTitle(), settled, created }
+    return { url: page.url(), title: page.title(), settled, created }
   }
 
   /** The person closed the page, or it died. Ends that drive; never re-arms. */
@@ -959,8 +1043,8 @@ export class BrowserDrive {
 
   /* ------------------------------------------------------------- the wire -- */
 
-  private async attach(wc: WebContents, slot: Slot): Promise<void> {
-    if (slot.attached && wc.debugger.isAttached()) return
+  private async attach(page: DrivenPage, slot: Slot): Promise<void> {
+    if (slot.attached && page.isAttached()) return
     /*
      * Before the attach, not after: the person-side arming of
      * `browser-profile-arm.ts` may already hold this page's debugger for the
@@ -970,7 +1054,7 @@ export class BrowserDrive {
      */
     this.host.pageHeld?.(slot.viewId ?? '')
     try {
-      if (!wc.debugger.isAttached()) wc.debugger.attach('1.3')
+      if (!page.isAttached()) await page.attach()
       slot.attached = true
     } catch (error) {
       throw new Error(
@@ -986,16 +1070,16 @@ export class BrowserDrive {
      * `catch` stays, because a hang here would look exactly like a slow site
      * and nobody would ever find it.
      */
-    await this.send(wc, slot, 'Page.enable').catch(() => undefined)
-    await this.send(wc, slot, 'Runtime.enable').catch(() => undefined)
+    await this.send(page, slot, 'Page.enable').catch(() => undefined)
+    await this.send(page, slot, 'Runtime.enable').catch(() => undefined)
   }
 
   private detach(slot: Slot): void {
-    const wc = this.contents(slot)
+    const page = this.contents(slot)
     slot.attached = false
-    if (wc) {
+    if (page) {
       try {
-        if (wc.debugger.isAttached()) wc.debugger.detach()
+        page.detach()
       } catch {
         // Already gone, or never attached. Either way there is nothing holding.
       }
@@ -1007,23 +1091,25 @@ export class BrowserDrive {
   }
 
   /**
-   * The only place a debugger command is sent.
+   * The only place the driver hands a command to a page's transport.
    *
    * Screened first, always, by `browser-cdp.ts` — which is a pure function over
    * the method name and the state, so the rule can be read and tested without
-   * an app. A caller that wanted to skip it would have to write a second
-   * `sendCommand` call, which is a thing a reviewer can grep for.
+   * an app. The one raw transport door lives on the {@link DrivenPage}
+   * implementation ({@link DrivenPage.send}); this is the one place that door is
+   * reached, and it is reached only after the screen. A caller that wanted to
+   * skip it would have to hold a page and call `send` on it directly, which is a
+   * thing a reviewer can grep for.
    */
   private async send(
-    wc: WebContents,
+    page: DrivenPage,
     slot: Slot,
     method: string,
     params: Record<string, unknown> = {},
   ): Promise<Record<string, unknown>> {
     const verdict = screenCommand({ state: slot.state, method, params })
     if (!verdict.ok) throw new DriveRefused(verdict.reason)
-    const result = (await wc.debugger.sendCommand(method, params)) as unknown
-    return typeof result === 'object' && result !== null ? (result as Record<string, unknown>) : {}
+    return page.send(method, params)
   }
 
   /**
@@ -1036,12 +1122,12 @@ export class BrowserDrive {
    * `browser-drive.ts` for why that whole mechanism went.
    */
   private async input(
-    wc: WebContents,
+    page: DrivenPage,
     slot: Slot,
     method: string,
     params: Record<string, unknown>,
   ): Promise<void> {
-    await this.send(wc, slot, method, params)
+    await this.send(page, slot, method, params)
   }
 
   /* ------------------------------------------------------- the page's life -- */
@@ -1049,11 +1135,11 @@ export class BrowserDrive {
   /**
    * Watch a tab for the page underneath it going away.
    *
-   * Registered once per WebContents. The teardown goes through
-   * `web-contents-teardown.ts` for the reason that module exists: eleven
-   * modules each being individually careful still produced a
-   * `MaxListenersExceededWarning`, and a twelfth being careful would not have
-   * helped.
+   * Registered once per page. The teardown goes through
+   * {@link DrivenPage.onDestroyed} — a keyed, shared registration, so eleven
+   * modules watching one page are one listener rather than the eleven that once
+   * produced a `MaxListenersExceededWarning`. The desktop's registry is in
+   * `web-contents-teardown.ts`.
    *
    * ## What this stopped watching for — 2026-08-21
    *
@@ -1073,12 +1159,12 @@ export class BrowserDrive {
    * the page's *lifetime*, which is not a preference: a view that has been
    * destroyed cannot be driven by anybody.
    */
-  private watch(wc: WebContents, slot: Slot): void {
-    onWebContentsDestroyed(wc, `browser-drive:${slot.key}`, () => {
+  private watch(page: DrivenPage, slot: Slot): void {
+    page.onDestroyed(`browser-drive:${slot.key}`, () => {
       if (this.contents(slot) === null) this.release(this.refOf(slot))
     })
-    if (this.watched.has(wc)) return
-    this.watched.add(wc)
+    if (this.watched.has(page)) return
+    this.watched.add(page)
 
     /*
      * A reload of the *app* destroys every browser tab — `hostDocumentReplaced`
@@ -1088,10 +1174,8 @@ export class BrowserDrive {
      * that starts moving on its own, which `DRIVING-MODE.md` §8 names as the
      * single behaviour that would make somebody uninstall.
      */
-    wc.on('render-process-gone', () =>
-      this.release(this.refOf(slot)),
-    )
-    wc.debugger.on('detach', () => {
+    page.onGone(() => this.release(this.refOf(slot)))
+    page.onDetached(() => {
       slot.attached = false
     })
 
@@ -1118,11 +1202,11 @@ export class BrowserDrive {
      */
     const shelf = (): { dir: string; on: boolean } =>
       this.host.blockCapture?.(slot.viewId ?? '') ?? {
-        dir: blockShotDir(app.getPath('userData')),
+        dir: blockShotDir(userDataDir()),
         on: true,
       }
 
-    attachBlockWatch(wc, {
+    page.watchBlocks({
       state: () => slot.state,
       enabled: () => shelf().on,
       dir: () => shelf().dir,
@@ -1136,7 +1220,7 @@ export class BrowserDrive {
         try {
           // One attempt. The window has not been revealed and must not be — see
           // `maskedPng`. No picture is a recorded outcome, not a failure.
-          return (await this.maskedPng(slot, wc, 1)).png
+          return (await this.maskedPng(slot, page, 1)).png
         } catch {
           return null
         }
@@ -1154,8 +1238,8 @@ export class BrowserDrive {
    * a model's text to a page's JavaScript — see `browser-drive-script.ts`.
    */
   private async run<T>(script: string, args: unknown, slot: Slot): Promise<T> {
-    const wc = this.contents(slot)
-    if (!wc) throw new DriveRefused('the page this was driving has gone')
+    const page = this.contents(slot)
+    if (!page) throw new DriveRefused('the page this was driving has gone')
     /*
      * The baton is checked here as well as in `send`, because reading does not
      * go through the debugger at all. Without this line the whole of §3's
@@ -1170,9 +1254,7 @@ export class BrowserDrive {
           : 'nothing is being driven, so there is no page to read',
       )
     }
-    return (await wc.executeJavaScriptInIsolatedWorld(DRIVE_WORLD, [
-      { code: withArgs(script, args) },
-    ])) as T
+    return page.runInIsolatedWorld<T>(withArgs(script, args))
   }
 
   /**
@@ -1204,7 +1286,7 @@ export class BrowserDrive {
   private async hold(
     target?: DriveTarget | null,
     options: { reveal?: boolean } = {},
-  ): Promise<{ slot: Slot; wc: WebContents }> {
+  ): Promise<{ slot: Slot; page: DrivenPage }> {
     const slot = this.slotFor(target)
     this.refuseWhileHuman(slot)
     /*
@@ -1220,8 +1302,8 @@ export class BrowserDrive {
     if (options.reveal === true && target && target.browserTabId !== '' && this.host.showWindow) {
       await this.host.showWindow(target.browserTabId).catch(() => false)
     }
-    const wc = this.contents(slot)
-    if (!wc) {
+    const page = this.contents(slot)
+    if (!page) {
       throw new DriveRefused(
         slot === this.own
           ? 'there is no page being driven; call browser.open first'
@@ -1229,11 +1311,11 @@ export class BrowserDrive {
       )
     }
     if (slot.state === 'idle') {
-      this.watch(wc, slot)
+      this.watch(page, slot)
       this.move(slot, 'claimed')
-      await this.attach(wc, slot)
+      await this.attach(page, slot)
     }
-    return { slot, wc }
+    return { slot, page }
   }
 
   async outline(
@@ -1511,7 +1593,7 @@ export class BrowserDrive {
     },
     target?: DriveTarget | null,
   ): Promise<{ verb: StepVerb; selector: string; label: string; url: string }> {
-    const { slot, wc } = await this.hold(target, { reveal: true })
+    const { slot, page } = await this.hold(target, { reveal: true })
 
     const selector = input.selector.trim()
     if (selector.length === 0) throw new DriveRefused('a step needs a selector')
@@ -1559,34 +1641,34 @@ export class BrowserDrive {
     try {
       switch (input.verb) {
         case 'click':
-          await this.clickAt(wc, slot, found.rect)
+          await this.clickAt(page, slot, found.rect)
           break
         case 'check':
-          await this.check(wc, slot, found, input.value)
+          await this.check(page, slot, found, input.value)
           break
         case 'type':
-          await this.type(wc, slot, found, selector, input.value ?? '')
+          await this.type(page, slot, found, selector, input.value ?? '')
           break
         case 'select':
           await this.select(slot, selector, input.value ?? '')
           break
         case 'press':
-          await this.press(wc, slot, found, input.key ?? 'Enter')
+          await this.press(page, slot, found, input.key ?? 'Enter')
           break
         case 'submit':
-          await this.clickAt(wc, slot, found.rect)
-          await this.press(wc, slot, found, 'Enter')
+          await this.clickAt(page, slot, found.rect)
+          await this.press(page, slot, found, 'Enter')
           break
       }
     } finally {
       this.setStep(slot, '')
     }
 
-    return { verb: input.verb, selector, label, url: wc.getURL() }
+    return { verb: input.verb, selector, label, url: page.url() }
   }
 
   private async clickAt(
-    wc: WebContents,
+    page: DrivenPage,
     slot: Slot,
     rect: { x: number; y: number; width: number; height: number },
   ): Promise<void> {
@@ -1594,20 +1676,20 @@ export class BrowserDrive {
     const y = Math.round(rect.y + rect.height / 2)
     // A move first, because a page whose button only styles itself on hover
     // will also only bind its handler on hover, and this costs one message.
-    await this.input(wc, slot, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none', buttons: 0 })
-    await this.input(wc, slot, 'Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1, buttons: 1 })
-    await this.input(wc, slot, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1, buttons: 0 })
+    await this.input(page, slot, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none', buttons: 0 })
+    await this.input(page, slot, 'Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1, buttons: 1 })
+    await this.input(page, slot, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1, buttons: 0 })
   }
 
   private async check(
-    wc: WebContents,
+    page: DrivenPage,
     slot: Slot,
     target: ProbeResult,
     value: string | undefined,
   ): Promise<void> {
     const wanted = value === undefined || value === '' ? true : value !== 'false'
     if (target.checked === wanted) return
-    await this.clickAt(wc, slot, target.rect as { x: number; y: number; width: number; height: number })
+    await this.clickAt(page, slot, target.rect as { x: number; y: number; width: number; height: number })
   }
 
   /**
@@ -1624,7 +1706,7 @@ export class BrowserDrive {
    * on opposite sides of a trust boundary.
    */
   private async type(
-    wc: WebContents,
+    page: DrivenPage,
     slot: Slot,
     target: ProbeResult,
     selector: string,
@@ -1670,14 +1752,14 @@ export class BrowserDrive {
      * it — so a page listening for `keydown` still sees ⌘A, which is what a
      * person pressing it would produce.
      */
-    await this.clickAt(wc, slot, target.rect as { x: number; y: number; width: number; height: number })
+    await this.clickAt(page, slot, target.rect as { x: number; y: number; width: number; height: number })
     const selectAll = process.platform === 'darwin' ? 4 : 2
-    await this.input(wc, slot, 'Input.dispatchKeyEvent', { type: 'rawKeyDown', modifiers: selectAll, key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65, commands: ['selectAll'] })
-    await this.input(wc, slot, 'Input.dispatchKeyEvent', { type: 'keyUp', modifiers: selectAll, key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65 })
+    await this.input(page, slot, 'Input.dispatchKeyEvent', { type: 'rawKeyDown', modifiers: selectAll, key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65, commands: ['selectAll'] })
+    await this.input(page, slot, 'Input.dispatchKeyEvent', { type: 'keyUp', modifiers: selectAll, key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65 })
 
     if (value.length === 0) {
-      await this.input(wc, slot, 'Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Delete', code: 'Delete', windowsVirtualKeyCode: 46, nativeVirtualKeyCode: 46 })
-      await this.input(wc, slot, 'Input.dispatchKeyEvent', { type: 'keyUp', key: 'Delete', code: 'Delete', windowsVirtualKeyCode: 46, nativeVirtualKeyCode: 46 })
+      await this.input(page, slot, 'Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Delete', code: 'Delete', windowsVirtualKeyCode: 46, nativeVirtualKeyCode: 46 })
+      await this.input(page, slot, 'Input.dispatchKeyEvent', { type: 'keyUp', key: 'Delete', code: 'Delete', windowsVirtualKeyCode: 46, nativeVirtualKeyCode: 46 })
       return
     }
 
@@ -1694,12 +1776,12 @@ export class BrowserDrive {
      */
     if (value.length <= PER_KEY_LIMIT) {
       for (const char of value) {
-        await this.input(wc, slot, 'Input.dispatchKeyEvent', { type: 'keyDown', text: char, unmodifiedText: char, key: char })
-        await this.input(wc, slot, 'Input.dispatchKeyEvent', { type: 'keyUp', key: char })
+        await this.input(page, slot, 'Input.dispatchKeyEvent', { type: 'keyDown', text: char, unmodifiedText: char, key: char })
+        await this.input(page, slot, 'Input.dispatchKeyEvent', { type: 'keyUp', key: char })
       }
       return
     }
-    await this.input(wc, slot, 'Input.insertText', { text: value })
+    await this.input(page, slot, 'Input.insertText', { text: value })
   }
 
   private async select(slot: Slot, selector: string, value: string): Promise<void> {
@@ -1714,7 +1796,7 @@ export class BrowserDrive {
   }
 
   private async press(
-    wc: WebContents,
+    page: DrivenPage,
     slot: Slot,
     target: ProbeResult,
     key: string,
@@ -1728,7 +1810,7 @@ export class BrowserDrive {
     // Aim the key at the element by focusing it first, unless the caller is
     // pressing into whatever already has focus after a `type`.
     if (target.rect && target.editable !== true) {
-      await this.clickAt(wc, slot, target.rect)
+      await this.clickAt(page, slot, target.rect)
     }
     const base = {
       key: spec.key,
@@ -1736,11 +1818,11 @@ export class BrowserDrive {
       windowsVirtualKeyCode: spec.vk,
       nativeVirtualKeyCode: spec.vk,
     }
-    await this.input(wc, slot, 'Input.dispatchKeyEvent', { ...base, type: 'rawKeyDown' })
+    await this.input(page, slot, 'Input.dispatchKeyEvent', { ...base, type: 'rawKeyDown' })
     if (spec.text !== undefined) {
-      await this.input(wc, slot, 'Input.dispatchKeyEvent', { type: 'char', text: spec.text })
+      await this.input(page, slot, 'Input.dispatchKeyEvent', { type: 'char', text: spec.text })
     }
-    await this.input(wc, slot, 'Input.dispatchKeyEvent', { ...base, type: 'keyUp' })
+    await this.input(page, slot, 'Input.dispatchKeyEvent', { ...base, type: 'keyUp' })
   }
 
   /* ---------------------------------------------------------- screenshots -- */
@@ -1749,8 +1831,8 @@ export class BrowserDrive {
    * A picture of the page, with every secret field painted out before the file
    * exists.
    *
-   * The masking happens on the raw bitmap in this process, between
-   * `capturePage()` and `toPNG()`, so there is never a moment at which an
+   * The masking happens on the raw frame in this process, between the capture
+   * and the PNG encode (`browser-png.ts`), so there is never a moment at which an
    * unmasked PNG is on disk or in a buffer anything else can read. That matters
    * even though the agent is shut out during a handover: a password manager
    * leaves the dots, a one-time-code field shows its digits in clear, and a
@@ -1763,9 +1845,9 @@ export class BrowserDrive {
   async screenshot(
     target?: DriveTarget | null,
   ): Promise<{ path: string; width: number; height: number; masked: number }> {
-    const { slot, wc } = await this.hold(target, { reveal: true })
-    const shot = await this.maskedPng(slot, wc, 12)
-    const dir = join(copilotPaths(app.getPath('userData')).root, 'screenshots')
+    const { slot, page } = await this.hold(target, { reveal: true })
+    const shot = await this.maskedPng(slot, page, 12)
+    const dir = join(copilotPaths(userDataDir()).root, 'screenshots')
     mkdirSync(dir, { recursive: true })
     const path = join(dir, `page-${Date.now()}.png`)
     writeFileSync(path, shot.png)
@@ -1789,7 +1871,7 @@ export class BrowserDrive {
    */
   private async maskedPng(
     slot: Slot,
-    wc: WebContents,
+    page: DrivenPage,
     attempts: number,
   ): Promise<{ png: Buffer; width: number; height: number; painted: number }> {
     const secrets = await this.run<{
@@ -1808,32 +1890,31 @@ export class BrowserDrive {
      * Captured with a short retry, because a window that was just brought
      * forward has not been composited yet.
      *
-     * `capturePage()` on a view with no surface either throws or hands back a
-     * zero-sized image, and both were reproduced by photographing a background
+     * A capture on a view with no surface either throws or hands back a
+     * zero-sized frame, and both were reproduced by photographing a background
      * window. The reveal above fixes it, but not in the same tick — the
      * workspace has to lay the view out and the compositor has to draw a frame
      * — so this waits for that rather than reporting "no visible surface" for a
-     * window that is on its way to being visible.
+     * window that is on its way to being visible. A headless target always
+     * composites, so the loop simply succeeds on its first pass there.
      */
-    let image
+    let frame: RawFrame | undefined
     let failure = 'it has no visible surface right now'
     for (let attempt = 0; attempt < Math.max(1, attempts); attempt++) {
       if (attempt > 0) await sleep(80)
       try {
-        const shot = await wc.capturePage()
-        const shotSize = shot.getSize()
-        if (shotSize.width > 0 && shotSize.height > 0) {
-          image = shot
+        const shot = await page.capture()
+        if (shot.width > 0 && shot.height > 0) {
+          frame = shot
           break
         }
       } catch (error) {
         failure = error instanceof Error ? error.message : String(error)
       }
     }
-    if (!image) throw new Error(`the page could not be photographed: ${failure}`)
-    const size = image.getSize()
-    const masked = maskRects(image, secrets.rects ?? [], secrets.viewport)
-    return { png: masked.png, width: size.width, height: size.height, painted: masked.painted }
+    if (!frame) throw new Error(`the page could not be photographed: ${failure}`)
+    const masked = maskFrame(frame, secrets.rects ?? [], secrets.viewport)
+    return { png: masked.png, width: frame.width, height: frame.height, painted: masked.painted }
   }
 
   /* -------------------------------------------------------------- the network -- */
@@ -1866,32 +1947,17 @@ export class BrowserDrive {
   /**
    * The network for a slot, made on first use.
    *
-   * The transport is three closures over the same `send`, `run` and debugger
-   * the rest of this class uses — so every command it issues goes through
-   * `screenCommand` and every read through the one isolated-world call. There
-   * is no second door, which is the property `browser-cdp.test.ts` asserts by
-   * counting call sites in this file.
+   * The transport is closures over the same `send` and `run` the rest of this
+   * class uses, plus the page's own event stream — so every command it issues
+   * goes through `screenCommand` and every read through the one isolated-world
+   * call. There is no second door, which is the property `browser-cdp.test.ts`
+   * asserts by counting call sites.
    */
-  private netFor(slot: Slot, wc: WebContents): PageNetwork {
+  private netFor(slot: Slot, page: DrivenPage): PageNetwork {
     if (slot.network !== null) return slot.network
     const made = new PageNetwork({
-      send: (method, params = {}) => this.send(wc, slot, method, params),
-      onEvent: (handler) => {
-        const listener = (_event: unknown, method: string, params: unknown): void => {
-          handler(
-            method,
-            typeof params === 'object' && params !== null ? (params as Record<string, unknown>) : {},
-          )
-        }
-        wc.debugger.on('message', listener)
-        return () => {
-          try {
-            wc.debugger.off('message', listener)
-          } catch {
-            // The page is gone and took its emitter with it. Nothing to remove.
-          }
-        }
-      },
+      send: (method, params = {}) => this.send(page, slot, method, params),
+      onEvent: (handler) => page.onEvent(handler),
       sizeOf: (url) => this.run<unknown>(imageSizeScript(url), null, slot),
       now: () => this.host.now(),
     })
@@ -1937,7 +2003,7 @@ export class BrowserDrive {
     manifest: string
     previous: NetworkStatus | null
   }> {
-    const { slot, wc } = await this.hold(target)
+    const { slot, page } = await this.hold(target)
     /*
      * What this page's profile stored, for the parts of the call that named
      * nothing. A stored answer never overrules one the caller gave, and
@@ -2019,7 +2085,7 @@ export class BrowserDrive {
       dir = store.dir
     }
 
-    const network = this.netFor(slot, wc)
+    const network = this.netFor(slot, page)
     await network.arm({
       rules,
       capture:
@@ -2039,7 +2105,7 @@ export class BrowserDrive {
      * states its own total. Both ends are recorded, because a harvest
      * navigates.
      */
-    network.notePage({ url: wc.getURL(), title: wc.getTitle(), armed: true })
+    network.notePage({ url: page.url(), title: page.title(), armed: true })
     slot.touchedAt = this.host.now()
     return {
       window: slot === this.own ? null : slot.name,
@@ -2076,10 +2142,10 @@ export class BrowserDrive {
     const network = slot.network
     if (network === null) return null
     slot.network = null
-    const wc = this.contents(slot)
+    const page = this.contents(slot)
     // Best effort: a page that has gone still gets a summary, with the address
     // it was armed on and nothing where it ended up.
-    if (wc) network.notePage({ url: wc.getURL(), title: wc.getTitle() })
+    if (page) network.notePage({ url: page.url(), title: page.title() })
     return network.disarm()
   }
 
@@ -2110,8 +2176,8 @@ export class BrowserDrive {
     title: string
   }> {
     const slot = this.slotFor(target)
-    const wc = this.contents(slot)
-    if (!wc) {
+    const page = this.contents(slot)
+    if (!page) {
       throw new DriveRefused(
         slot === this.own
           ? 'there is no page being driven; call browser.open first'
@@ -2142,9 +2208,9 @@ export class BrowserDrive {
       // the baton can only be handed from `agent`, and a handover on a window
       // nothing has driven yet is a perfectly ordinary opening move.
       if (slot.state === 'idle') {
-        this.watch(wc, slot)
+        this.watch(page, slot)
         this.move(slot, 'claimed')
-        await this.attach(wc, slot)
+        await this.attach(page, slot)
       }
       slot.prompt = sanitizeHandoverPrompt(prompt) || 'The copilot needs you to do something on this page.'
       /*
@@ -2189,8 +2255,8 @@ export class BrowserDrive {
     return {
       outcome,
       waitedMs: this.host.now() - startedAt,
-      url: live ? live.getURL() : '',
-      title: live ? live.getTitle() : '',
+      url: live ? live.url() : '',
+      title: live ? live.title() : '',
     }
   }
 
@@ -2253,33 +2319,31 @@ export class BrowserDrive {
   /**
    * Has the page stopped loading?
    *
-   * Answered from the WebContents rather than from a sleep, because the app
-   * already knows: `wireGuestEvents` wires `did-stop-loading` and
-   * `did-fail-load` per tab, so "has this settled" is a main-process fact. A
-   * driver that slept instead would be a driver whose timing is a guess, and
-   * guessed timing is exactly the flakiness this feature exists to remove.
+   * Answered from the page rather than from a sleep, because the app already
+   * knows: {@link DrivenPage.onSettled} rides the page's own settle events, so
+   * "has this settled" is a fact rather than a guess. A driver that slept
+   * instead would be a driver whose timing is a guess, and guessed timing is
+   * exactly the flakiness this feature exists to remove.
    *
    * Returns false rather than throwing on a timeout: a page that is still
    * streaming is usually usable, and the tool reports `settled: false` so the
    * model can decide rather than being told the open failed.
    */
-  private async waitForSettled(wc: WebContents, timeoutMs: number): Promise<boolean> {
-    if (!wc.isLoading()) return true
+  private async waitForSettled(page: DrivenPage, timeoutMs: number): Promise<boolean> {
+    if (!page.isLoading()) return true
     return new Promise<boolean>((resolve) => {
       let done = false
+      let off = (): void => undefined
       const finish = (value: boolean): void => {
         if (done) return
         done = true
         clearTimeout(timer)
-        wc.off('did-stop-loading', onStop)
-        wc.off('did-fail-load', onStop)
+        off()
         resolve(value)
       }
-      const onStop = (): void => finish(true)
       const timer = setTimeout(() => finish(false), timeoutMs)
       timer.unref?.()
-      wc.on('did-stop-loading', onStop)
-      wc.on('did-fail-load', onStop)
+      off = page.onSettled(() => finish(true))
     })
   }
 }
@@ -2319,147 +2383,6 @@ export function describeStep(verb: StepVerb, label: string, selector: string): s
     case 'submit':
       return `submitting ${name}`
   }
-}
-
-/**
- * Paint solid rectangles over a captured image, in place, on its raw bitmap.
- *
- * On the bitmap rather than by re-encoding through a drawing library, because
- * this repository has no drawing library in the main process and adding one to
- * hide a password would be a strange trade. `toBitmap()` hands back BGRA at the
- * image's device resolution; the rectangles arrive in CSS pixels, so they are
- * scaled by the ratio the buffer itself implies rather than by a device pixel
- * ratio read from the page — a page can lie about `devicePixelRatio`, and the
- * buffer cannot lie about its own length.
- */
-export function maskRects(
-  image: Electron.NativeImage,
-  rects: ReadonlyArray<{ x: number; y: number; width: number; height: number }>,
-  viewport: { width: number; height: number },
-): { png: Buffer; painted: number } {
-  if (rects.length === 0) return { png: image.toPNG(), painted: 0 }
-
-  const size = image.getSize()
-  const bitmap = image.toBitmap()
-  const shape = bitmapShape(size, bitmap.length, viewport)
-  if (shape === null) return { png: image.toPNG(), painted: 0 }
-
-  const painted = paintMasks(bitmap, shape, rects)
-  const rebuilt = nativeImage.createFromBitmap(bitmap, {
-    width: shape.pixelWidth,
-    height: shape.pixelHeight,
-    scaleFactor: shape.scale,
-  })
-  return { png: rebuilt.toPNG(), painted }
-}
-
-export interface BitmapShape {
-  pixelWidth: number
-  pixelHeight: number
-  /**
-   * Device pixels per **CSS** pixel — the number that puts a mask on the
-   * password field rather than a hundred pixels above it.
-   *
-   * This was wrong once, and the picture is what caught it. The first version
-   * derived the scale from the buffer's own length against
-   * `NativeImage.getSize()`, which is self-consistent and answers a different
-   * question: those two are both in device pixels, so the ratio is always 1 and
-   * the rectangles — which come from `getBoundingClientRect` and are in CSS
-   * pixels — were used unscaled. On a Retina page the mask landed at half the
-   * offset and half the size: a grey bar above the form, and a perfectly
-   * legible password box below it, in an image that *looked* redacted.
-   */
-  scale: number
-  /** What the image is scaled against. Reported so a caller can log it. */
-  viewport: { width: number; height: number }
-}
-
-/**
- * How big the raw buffer actually is, in device pixels.
- *
- * Derived from the buffer's own length rather than from a device pixel ratio
- * read out of the page, because the page can lie about `devicePixelRatio` and
- * the buffer cannot lie about how long it is. A mismatch throws rather than
- * falling back: returning the unmasked image is the single outcome this whole
- * path exists to prevent, so refusing the picture is the safe direction.
- *
- * Null when the image is empty, which is a caller's problem rather than a
- * masking failure.
- */
-export function bitmapShape(
-  size: { width: number; height: number },
-  bytes: number,
-  viewport: { width: number; height: number },
-): BitmapShape | null {
-  const pixels = bytes / 4
-  if (size.width <= 0 || size.height <= 0 || pixels <= 0) return null
-
-  /*
-   * How many bytes the buffer really holds, against the size the image claims.
-   *
-   * These are both device measurements, so the ratio is normally 1 — but it is
-   * checked rather than assumed, because an image whose buffer is not
-   * width×height×4 is one this arithmetic cannot index safely, and indexing it
-   * wrongly writes grey pixels somewhere other than over the password.
-   */
-  const buffered = Math.sqrt(pixels / (size.width * size.height))
-  if (!Number.isFinite(buffered) || buffered <= 0) return null
-  const pixelWidth = Math.round(size.width * buffered)
-  const pixelHeight = Math.round(size.height * buffered)
-  if (pixelWidth * pixelHeight * 4 !== bytes) {
-    throw new Error('the screenshot could not be masked, so it was not written')
-  }
-
-  /*
-   * And the number that matters: device pixels per CSS pixel.
-   *
-   * Refused rather than guessed when the page could not report its viewport. A
-   * default of 1 would be right on some machines and would silently mis-place
-   * every mask on a Retina display, which is the failure this whole function
-   * exists to prevent. The clamp catches a viewport that is absurd relative to
-   * the image — a page mid-resize, or a lying number — for the same reason.
-   */
-  if (!Number.isFinite(viewport.width) || viewport.width <= 0) {
-    throw new Error('the screenshot could not be masked, so it was not written')
-  }
-  const scale = pixelWidth / viewport.width
-  if (!Number.isFinite(scale) || scale < 0.25 || scale > 8) {
-    throw new Error('the screenshot could not be masked, so it was not written')
-  }
-  return { pixelWidth, pixelHeight, scale, viewport }
-}
-
-/**
- * Paint over the rectangles, in place, and say how many landed.
- *
- * Pure over a buffer so it can be driven from a test with a sentinel colour and
- * no Electron — which matters, because "the password was still in the PNG" is
- * not a defect anybody would notice by looking.
- */
-export function paintMasks(
-  bitmap: Buffer,
-  shape: BitmapShape,
-  rects: ReadonlyArray<{ x: number; y: number; width: number; height: number }>,
-): number {
-  let painted = 0
-  for (const rect of rects) {
-    const left = Math.max(0, Math.floor(rect.x * shape.scale))
-    const top = Math.max(0, Math.floor(rect.y * shape.scale))
-    const right = Math.min(shape.pixelWidth, Math.ceil((rect.x + rect.width) * shape.scale))
-    const bottom = Math.min(shape.pixelHeight, Math.ceil((rect.y + rect.height) * shape.scale))
-    if (right <= left || bottom <= top) continue
-    painted++
-    for (let y = top; y < bottom; y++) {
-      const rowStart = (y * shape.pixelWidth + left) * 4
-      const rowEnd = (y * shape.pixelWidth + right) * 4
-      // Opaque mid-grey, in BGRA order. Not black: a black rectangle on a dark
-      // page is invisible, and the point of the mask is that a person looking
-      // at the picture can see that something was hidden there.
-      bitmap.fill(0x80, rowStart, rowEnd)
-      for (let i = rowStart + 3; i < rowEnd; i += 4) bitmap[i] = 0xff
-    }
-  }
-  return painted
 }
 
 /** The empty status, re-exported so a caller need not import two modules. */

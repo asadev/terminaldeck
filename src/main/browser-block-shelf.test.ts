@@ -285,19 +285,26 @@ describe('the wiring that makes all of the above true in the app', () => {
    * for ever if the *call* in `BrowserDrive.watch` were deleted — the shelf would
    * be empty on every install and this file would be green. There is no way to
    * assert the real call: it needs an Electron `WebContents` and a real window.
-   * Reading the two lines that join the halves is the honest substitute, and a
+   * Reading the lines that join the halves is the honest substitute, and a
    * substitute that names what it is watching for is better than a gap that
    * names nothing.
+   *
+   * Since the `DrivenPage` seam, the join is two lines in two files: the driver
+   * builds the watcher's deps and hands them to the page through
+   * `page.watchBlocks`, and the Electron page wires those deps into the real
+   * `attachBlockWatch`. Both are read.
    */
   const read = (file: string): string => readFileSync(join(__dirname, file), 'utf8')
 
   it('has the drive attaching the watcher to every drivable page', () => {
     const driver = read('browser-driver.ts')
-    expect(driver).toContain('attachBlockWatch(wc, {')
+    expect(driver).toContain('page.watchBlocks({')
     // The switch and the folder both reach it. Either one hard-coded here is a
     // control that has come loose again.
     expect(driver).toContain('enabled: () => shelf().on')
     expect(driver).toContain('dir: () => shelf().dir')
+    // …and the Electron page is what turns that into a real watcher.
+    expect(read('browser-driven-electron.ts')).toContain('attachBlockWatch(this.wc, deps)')
   })
 
   it('has the folder and the switch resolved from the tab\'s own profile', () => {

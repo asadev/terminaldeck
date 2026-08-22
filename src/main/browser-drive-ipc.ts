@@ -13,6 +13,7 @@ import { browserTabContents, browserTabProfile } from './browser-tab'
 import { BLANK_URL } from './browser-url'
 import type { DriveStatus } from './browser-drive'
 import { BrowserDrive } from './browser-driver'
+import { electronDrivenPage } from './browser-driven-electron'
 
 /**
  * The drive, wired to a window.
@@ -418,7 +419,10 @@ export function registerBrowserDriveIpc(ipcMain: IpcMain, deps: BrowserDriveDeps
           : { waitMs: OPEN_TAB_TIMEOUT_MS },
       )
     },
-    contentsFor: (tabId) => browserTabContents(tabId),
+    contentsFor: (tabId) => {
+      const wc = browserTabContents(tabId)
+      return wc ? electronDrivenPage(wc) : null
+    },
     /*
      * Where a page's captured traffic is written: under the profile the tab was
      * built in, inside the app's own data directory.

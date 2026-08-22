@@ -51,6 +51,7 @@ describe('the debugger channel is not reachable from anywhere else', () => {
       'browser-cdp.ts',
       'browser-drive.ts',
       'browser-driver.ts',
+      'browser-driven-electron.ts',
       'browser-profile-arm.ts',
     ]) {
       expect(source(file)).not.toContain('getAllWebContents')
@@ -58,17 +59,21 @@ describe('the debugger channel is not reachable from anywhere else', () => {
     }
   })
 
-  it('sends debugger commands from exactly one place, and that place screens them', () => {
-    const driver = source('browser-driver.ts')
-    const sends = driver.match(/debugger\.sendCommand\(/g) ?? []
+  it('sends debugger commands from exactly one place, and the driver screens before it dispatches', () => {
+    // The one transport door now lives on the Electron `DrivenPage`, and there
+    // is exactly one of it. A second `sendCommand` added anywhere in that file
+    // would fail this count.
+    const electron = source('browser-driven-electron.ts')
+    const sends = electron.match(/debugger\.sendCommand\(/g) ?? []
     expect(sends).toHaveLength(1)
-    // …and that one call site is preceded by the screening, in the same
-    // function. Matching the text rather than the behaviour is the point: a
-    // second `sendCommand` added anywhere would fail the count above, and a
-    // first one that dropped the check would fail this.
-    const sendBody = driver.slice(driver.indexOf('private async send('), driver.indexOf('/** Announce and send'))
+    // …and the driver hands a command to that door only through its own `send()`,
+    // which screens it first. Matching the text rather than the behaviour is the
+    // point: `page.send(` reached without the screen ahead of it would fail here.
+    const driver = source('browser-driver.ts')
+    const sendBody = driver.slice(driver.indexOf('private async send('), driver.indexOf('private async input('))
     expect(sendBody).toContain('screenCommand(')
-    expect(sendBody.indexOf('screenCommand(')).toBeLessThan(sendBody.indexOf('sendCommand('))
+    expect(sendBody).toContain('page.send(')
+    expect(sendBody.indexOf('screenCommand(')).toBeLessThan(sendBody.indexOf('page.send('))
   })
 
   /*
@@ -85,7 +90,7 @@ describe('the debugger channel is not reachable from anywhere else', () => {
       (name) => name.endsWith('.ts') && !name.endsWith('.test.ts'),
     )
     const senders = files.filter((name) => source(name).includes('debugger.sendCommand('))
-    expect(senders.sort()).toEqual(['browser-driver.ts', 'browser-profile-arm.ts'])
+    expect(senders.sort()).toEqual(['browser-driven-electron.ts', 'browser-profile-arm.ts'])
   })
 
   it('no third file in main attaches the debugger', () => {
@@ -93,27 +98,34 @@ describe('the debugger channel is not reachable from anywhere else', () => {
       (name) => name.endsWith('.ts') && !name.endsWith('.test.ts'),
     )
     const attachers = files.filter((name) => source(name).includes('debugger.attach('))
-    expect(attachers.sort()).toEqual(['browser-driver.ts', 'browser-profile-arm.ts'])
+    expect(attachers.sort()).toEqual(['browser-driven-electron.ts', 'browser-profile-arm.ts'])
   })
 
   it('runs page script from exactly one place, and that place checks the baton', () => {
-    const driver = source('browser-driver.ts')
-    const runs = driver.match(/executeJavaScriptInIsolatedWorld\(/g) ?? []
+    // The one isolated-world read now lives on the Electron `DrivenPage`, and
+    // there is exactly one of it.
+    const electron = source('browser-driven-electron.ts')
+    const runs = electron.match(/executeJavaScriptInIsolatedWorld\(/g) ?? []
     expect(runs).toHaveLength(1)
-    // Ends at `hold`, the next member, so the assertion cannot be satisfied by
-    // a check belonging to some later method. The state is read off the slot
-    // rather than the driver because a driven page is now one of several, and
-    // the baton is a fact about a document, not about the driver.
+    // …and the driver reaches that read only through its own `run<T>`, which
+    // checks the baton first. Ends at `hold`, the next member, so the assertion
+    // cannot be satisfied by a check belonging to some later method. The state
+    // is read off the slot rather than the driver because a driven page is now
+    // one of several, and the baton is a fact about a document.
+    const driver = source('browser-driver.ts')
     const runBody = driver.slice(driver.indexOf('private async run<T>'), driver.indexOf('private async hold('))
     expect(runBody).toContain("slot.state !== 'agent'")
+    expect(runBody).toContain('page.runInIsolatedWorld')
   })
 
-  it('has no Electron import in the module that makes the decisions', () => {
+  it('has no Electron import in the modules that make the decisions or drive', () => {
     // The whole reason `screenCommand` is a pure function over strings. A file
-    // that imported Electron would be a file a test cannot drive, and this is
-    // the file whose every branch has to be driven.
+    // that imported Electron would be a file a test cannot drive, and these are
+    // the files whose every branch has to be driven. `browser-driver.ts` joins
+    // the list now that the `DrivenPage` seam put the Electron half behind it.
     expect(source('browser-cdp.ts')).not.toContain("from 'electron'")
     expect(source('browser-drive.ts')).not.toContain("from 'electron'")
+    expect(source('browser-driver.ts')).not.toContain("from 'electron'")
   })
 })
 

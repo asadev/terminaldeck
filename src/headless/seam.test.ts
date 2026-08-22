@@ -295,3 +295,25 @@ describe('the demo host actually approves the visitor it decided to approve', ()
     expect(wake).toBeGreaterThan(approve)
   })
 })
+
+describe('the headless build can drive a browser without Electron', () => {
+  /*
+   * Wave-2 gives the headless server a real browser of its own and drives it
+   * over CDP. The first step (this lane) extracted a `DrivenPage` seam so the
+   * engine — the driver and the PNG masking it finishes a screenshot with — no
+   * longer reaches for Electron. The Electron half moved to
+   * `browser-driven-electron.ts`, which is reached only from
+   * `browser-drive-ipc.ts` and never from a headless entry.
+   *
+   * These two files become reachable from the server once the host wiring lands
+   * (a later lane adds them to the closure contains-list above). They must be
+   * clean before they can be, so this asserts the property directly on the
+   * source — the same detector the closure walk uses, pointed at the files by
+   * name rather than reached through the graph.
+   */
+  it('keeps the driver and its PNG masking free of runtime Electron imports', () => {
+    for (const file of ['src/main/browser-driver.ts', 'src/main/browser-png.ts']) {
+      expect(runtimeElectronImports(readSource(file)), file).toEqual([])
+    }
+  })
+})

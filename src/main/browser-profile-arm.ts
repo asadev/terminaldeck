@@ -9,7 +9,7 @@ import {
   defaultBounds,
   type CaptureBounds,
 } from './browser-capture-store'
-import { maskRects } from './browser-driver'
+import { maskRects } from './browser-driven-electron'
 import { SECRET_RECTS_SCRIPT, TEXT_SCRIPT, withArgs } from './browser-drive-script'
 import { interceptedKinds, type FetchRules } from './browser-fetch-rules'
 import { PageNetwork, type NetworkTransport } from './browser-network'
