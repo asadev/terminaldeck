@@ -81,13 +81,22 @@ describe('the everyday rows he named, and only the ones that exist', () => {
     expect(onScreen).toMatch(/>\s*History\s*</)
   })
 
-  it('draws no row for a feature this release does not have', () => {
-    // A saved-passwords section is not in this release, and a menu entry that
-    // opens a page nobody built is the exact defect the whole review is made of.
-    // Downloads and Extensions were both left unasserted here on the grounds
-    // that if either landed it would arrive with its own store and its own row
-    // rather than by copying Chrome's list. Both did, and both did.
-    expect(onScreen).not.toContain('Saved passwords')
+  it('draws Passwords, because there is a manager behind it', () => {
+    // This test used to pin the row's ABSENCE, on the grounds that no
+    // saved-passwords surface existed. That went stale: `browser-passwords.ts`
+    // is a real encrypted store and `ProfileSettings.tsx` lists it with Copy
+    // and Forget — and the menu was still withholding the row on the strength
+    // of the old comment. The bargain is unchanged, only its answer: the row
+    // arrives after the thing does, and the thing is here.
+    expect(onScreen).toContain('onPasswords')
+    expect(onScreen).toMatch(/>\s*Passwords\s*</)
+  })
+
+  it('leaves Passwords out entirely on a build whose preload cannot answer', () => {
+    // Absent, not disabled — the same bargain History makes, decided by
+    // `passwordsAvailable` at the call site, and off for an Isolated tab,
+    // whose partition saves nothing to manage.
+    expect(onScreen).toContain('{onPasswords && (')
   })
 
   it('draws Extensions, because there is now a store behind it', () => {

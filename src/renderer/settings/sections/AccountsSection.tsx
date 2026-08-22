@@ -339,29 +339,36 @@ export function groupAccountsByProvider(accounts: readonly AccountView[]): Accou
  */
 export interface AccountRun {
   id: 'signed-in' | 'not-signed-in' | 'not-answered'
-  title: string
+  /** The words over the run, or null for the one run that carries no heading. */
+  title: string | null
   groups: AccountGroup[]
 }
 
 /**
- * The three things a row's sign-in state can be, in the words over each run.
+ * The words over each run — and null over the one that gets none.
  *
  * The second is his phrasing and it is the criterion for the run rather than a
  * claim about every row in it — a row lands there because it is not signed in
  * *or* because its agent will not start, and the row's own line says which.
  *
- * The third exists so that the second is never a lie. Sign-in is read one
+ * The third run exists so that the second is never a lie: sign-in is read one
  * process per account, so for the first moment of every visit nothing has
- * answered — and a two-way split would file every account under "not signed in"
- * on the strength of not having asked yet. It disappears on its own, and on a
- * machine where a probe genuinely failed it is where that account waits, with
- * the agent's own reason on it.
+ * answered, and a two-way split would file every account under "not signed in"
+ * on the strength of not having asked yet. But it is a *holding area*, not a
+ * category — he asked for **two** headings (*"whatever is not install or login
+ * should be separate, and all the login ones should be separate"*), and until
+ * 2026-08-22 this pane's first paint answered with three, the third reading
+ * "Not answered" over every account for the length of the probes. So the run
+ * keeps rows out of the two headed ones without claiming anything: no heading,
+ * first in the list, each row carrying its own state line — "Checking…", or
+ * the agent's reason where a probe genuinely failed. The pane never shows more
+ * headings than the two he asked for.
  */
-export const RUN_TITLE: Record<AccountRun['id'], string> = {
+export const RUN_TITLE = {
   'signed-in': 'Signed in',
   'not-signed-in': 'Not signed in or not installed',
-  'not-answered': 'Not answered',
-}
+  'not-answered': null,
+} as const satisfies Record<AccountRun['id'], string | null>
 
 /**
  * Which run one account belongs in, from what the agent said and nothing else.
@@ -397,12 +404,21 @@ export function runOfAccount(state: SignInView | undefined): AccountRun['id'] {
  * A run with nothing in it is not drawn, for the same reason an agent with no
  * accounts gets no heading: a heading over nothing is a label for an empty
  * space.
+ *
+ * The unanswered run comes **first**, and the position is load-bearing. It has
+ * no heading (see {@link RUN_TITLE}), so wherever it sits its rows borrow the
+ * nearest heading above them — and below the headed runs that would file an
+ * account nothing has answered for under whatever heading happened to be last,
+ * which is the libel the run exists to prevent. Above the first heading a row
+ * belongs to nothing, visibly. It also makes the first paint of every visit
+ * the flat agent-grouped list, which quietly becomes the two headed runs as
+ * the probes land, instead of three headings collapsing into two.
  */
 export function runsOfAccounts(
   accounts: readonly AccountView[],
   signIn: Readonly<Record<string, SignInView>>,
 ): AccountRun[] {
-  const order: AccountRun['id'][] = ['signed-in', 'not-signed-in', 'not-answered']
+  const order: AccountRun['id'][] = ['not-answered', 'signed-in', 'not-signed-in']
   return order.flatMap((id) => {
     const mine = accounts.filter((account) => runOfAccount(signIn[account.id]) === id)
     if (mine.length === 0) return []
@@ -969,11 +985,13 @@ export function AccountsView({
         The mark that used to sit on every row is on the agent heading instead:
         it was answering "which agent is this" once per account, which is the
         question the heading now answers once per group. See `runsOfAccounts`
-        for why there is a third run and why it is usually not there.
+        for the third, unheaded run — the holding area rows wait in while their
+        probes are out — and why it comes first. Only the two runs he asked for
+        ever carry a heading.
       */}
       {runs.map((run) => (
         <section key={run.id} className="settings-account-run" data-run={run.id}>
-          <h4 className="settings-account-run-title">{run.title}</h4>
+          {run.title !== null && <h4 className="settings-account-run-title">{run.title}</h4>}
           {run.groups.map((group) => (
             <div key={group.label} className="settings-account-group">
               <h5 className="settings-account-group-title">

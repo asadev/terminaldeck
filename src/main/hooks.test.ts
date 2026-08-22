@@ -26,6 +26,8 @@ import {
 } from './hook-server'
 import {
   HOOK_MARKER,
+  migrateCodexFeatureFlag,
+  migratedCodexFeatures,
   HOOK_PROVIDERS,
   applyInstall,
   applyRemove,
@@ -1019,5 +1021,111 @@ describe('installHooksWhereConfigured', () => {
     // A startup pass writing into somebody's own config without a person
     // present is exactly the case the backup was written for.
     expect(readFileSync(backupPathFor(context, 'claude'), 'utf8')).toBe(before)
+  })
+})
+
+describe('the codex feature flag migration', () => {
+  /**
+   * His real file, trimmed: the `[features]` block this app's own requirement
+   * string told him to write, in the spelling Codex deprecated in 0.146. The
+   * key still works — and prints a deprecation line into the terminal at every
+   * session start, which is his screen, spent by us.
+   */
+  const CONFIG = `model = "gpt-5.3-codex"
+
+[features]
+codex_hooks = true
+
+[hooks.state]
+trusted_hash = "abc123"
+`
+
+  it('renames the key in place and touches nothing else', () => {
+    const out = migratedCodexFeatures(CONFIG)
+    expect(out.changed).toBe(true)
+    expect(out.text).toContain('hooks = true')
+    expect(out.text).not.toContain('codex_hooks')
+    // Byte-for-byte apart from the one key: the trust hash Codex keeps in the
+    // same file is the thing no rewrite may disturb.
+    expect(out.text).toContain('trusted_hash = "abc123"')
+    expect(out.text).toContain('model = "gpt-5.3-codex"')
+    expect(out.text.split('\n').length).toBe(CONFIG.split('\n').length)
+  })
+
+  it('keeps the value and any trailing comment', () => {
+    const out = migratedCodexFeatures('[features]\ncodex_hooks = false # off for now\n')
+    expect(out.text).toContain('hooks = false # off for now')
+  })
+
+  it('drops the deprecated line when the new key already exists', () => {
+    // Presence alone triggers the warning, and two keys for one flag in one
+    // table is a file waiting to disagree with itself.
+    const out = migratedCodexFeatures('[features]\nhooks = true\ncodex_hooks = true\n')
+    expect(out.changed).toBe(true)
+    expect(out.text).toContain('hooks = true')
+    expect(out.text).not.toContain('codex_hooks')
+  })
+
+  it('does not touch a codex_hooks key outside [features]', () => {
+    const other = '[something_else]\ncodex_hooks = true\n'
+    expect(migratedCodexFeatures(other).changed).toBe(false)
+  })
+
+  it('answers unchanged for a file with nothing to migrate', () => {
+    expect(migratedCodexFeatures('[features]\nhooks = true\n').changed).toBe(false)
+    expect(migratedCodexFeatures('').changed).toBe(false)
+  })
+
+  it('rewrites the real file, keeps a backup, and is idempotent', () => {
+    const dir = join(root, '.codex')
+    mkdirSync(dir, { recursive: true })
+    const file = join(dir, 'config.toml')
+    writeFileSync(file, CONFIG)
+    const note = migrateCodexFeatureFlag(context)
+    expect(note).toContain('codex_hooks')
+    const rewritten = readFileSync(file, 'utf8')
+    expect(rewritten).toContain('hooks = true')
+    expect(rewritten).not.toContain('codex_hooks')
+    expect(readFileSync(join(context.backupDir, 'codex-config.toml'), 'utf8')).toBe(CONFIG)
+    // A second run finds nothing to do and says so by saying nothing.
+    expect(migrateCodexFeatureFlag(context)).toBe('')
+    expect(readFileSync(file, 'utf8')).toBe(rewritten)
+  })
+
+  it('writes no file onto a machine with no codex config', () => {
+    expect(migrateCodexFeatureFlag(context)).toBe('')
+    expect(existsSync(join(root, '.codex'))).toBe(false)
+  })
+
+  it('runs from the startup pass even when the hooks read complete', () => {
+    /*
+     * The state his machine is actually in: hooks installed and pointing here,
+     * so `syncInstalledHooks` skips the reinstall — and before this test, that
+     * skip also skipped the flag repair, so every Codex session kept opening on
+     * the deprecation line.
+     */
+    const dir = join(root, '.codex')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'config.toml'), CONFIG)
+    syncInstalledHooks(context)
+    expect(readFileSync(join(dir, 'config.toml'), 'utf8')).not.toContain('codex_hooks')
+  })
+
+  it('runs from the headless install pass too', () => {
+    const dir = join(root, '.codex')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'config.toml'), CONFIG)
+    installHooksWhereConfigured(context)
+    expect(readFileSync(join(dir, 'config.toml'), 'utf8')).not.toContain('codex_hooks')
+  })
+
+  it('is repaired by the codex Install button, and the message says so', () => {
+    const dir = join(root, '.codex')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'config.toml'), CONFIG)
+    const result = installHooks(context, 'codex')
+    expect(result.ok).toBe(true)
+    expect(result.message).toContain('Renamed the deprecated codex_hooks flag')
+    expect(readFileSync(join(dir, 'config.toml'), 'utf8')).not.toContain('codex_hooks')
   })
 })

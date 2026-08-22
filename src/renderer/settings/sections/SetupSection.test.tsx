@@ -1,7 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { SettingsPanel } from '../SettingsWindow'
-import { TOOL_MARK, showsOtherTools } from './SetupSection'
 import {
   eventState,
   foreignNote,
@@ -191,64 +190,25 @@ describe('a write result off the wire', () => {
   })
 })
 
-describe('the glyph on a tool row', () => {
-  it('does not give an installed tool the same mark as a missing one', () => {
-    // The row for a signed-out CLI says "Sign in needed" and the CSS tints it
-    // amber, but a `✕` shared with "Not found" made an installed tool look
-    // absent at a glance — and left colour as the only difference between them.
-    expect(TOOL_MARK['installed-not-authed']).not.toBe(TOOL_MARK.missing)
-    expect(new Set(Object.values(TOOL_MARK)).size).toBe(Object.keys(TOOL_MARK).length)
-    expect(TOOL_MARK.ready).toBe('✓')
-  })
-})
-
 describe('the Other tools disclosure', () => {
   /**
    * Asad, 2026-08-21, at the foot of Coding AI:
    *
    *   > *"If there is no tool, why we have this button, you know?"*
    *
-   * It held git and the GitHub CLI, and on a machine with neither it opened onto
-   * one line reading "Nothing reported yet." — a button whose entire content is
-   * the news that it has none. The sentence is gone with the button rather than
-   * shortened.
-   *
-   * A pure function because this is the state `renderToStaticMarkup` cannot
-   * reach: it runs no effects, so the probe never answers and the disclosure is
-   * always mid-read there.
+   * The disclosure was meant to hold git and the GitHub CLI, but the probe
+   * behind the pane answers only for the agents and Copilot — all of which this
+   * pane subtracts — so the list was empty on every machine, and the only thing
+   * a person ever saw was the pending branch flashing on each visit. It is gone
+   * whole, pending branch included, and this pins that it stays gone: a control
+   * that cannot ever hold a row has no honest moment to be drawn in.
    */
-  it('is not drawn once the probe has answered with nothing', () => {
-    expect(
-      showsOtherTools(0, { checking: false, snapshot: {
-          tools: [],
-          hooks: [],
-          endpoint: { running: false, address: null },
-          canRunSessions: true,
-          needsLogin: false,
-          checkedAt: 1,
-        }, error: null }),
-    ).toBe(false)
-  })
-
-  it('is drawn while the probe is still out, so it does not blink', () => {
-    // Before anything has answered, `tools` is empty for a reason that has
-    // nothing to do with the machine. A disclosure that vanished for a beat and
-    // came back is the same flicker the agent list had when it printed "No agent
-    // installed yet" on a paint that predated looking at anything.
-    expect(showsOtherTools(0, { checking: true, snapshot: null, error: null })).toBe(true)
-    expect(showsOtherTools(0, { checking: false, snapshot: null, error: null })).toBe(true)
-  })
-
-  it('is not drawn when the read failed and found nothing', () => {
-    // The error is on screen above it. A button offering to show what could not
-    // be read is a second, quieter claim that something is there.
-    expect(showsOtherTools(0, { checking: false, snapshot: null, error: 'Could not check.' })).toBe(
-      false,
-    )
-  })
-
-  it('is drawn whenever there is something in it', () => {
-    expect(showsOtherTools(2, { checking: false, snapshot: null, error: null })).toBe(true)
+  it('is gone, pending branch included', () => {
+    // `renderToStaticMarkup` runs no effects, so this render is exactly the
+    // probe-still-out paint — the one the old code drew the flashing button on.
+    const html = renderToStaticMarkup(<SettingsPanel bridge={{}} initialSection="setup" />)
+    expect(html).not.toContain('Other tools')
+    expect(html).not.toContain('settings-tool-ghost')
   })
 })
 

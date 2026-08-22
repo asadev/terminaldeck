@@ -50,6 +50,17 @@ export interface CopilotBridge {
   ensureCopilot(): Promise<unknown>
   stopCopilot(): Promise<unknown>
   copilotSignIn(): Promise<unknown>
+  /**
+   * The two session events the copilot's state actually moves on when nobody
+   * in this window touched it: its CLI exiting (killed from a terminal, or by
+   * anything else — the pty's exit broadcast carries it either way), and a
+   * copilot another window ensured (this window is not the caller, so the
+   * created push is how it hears). Optional so the harness's minimal bridges
+   * and an older preload keep working — the reads on ensure/stop/refresh cover
+   * everything a person does *here*.
+   */
+  onSessionExit?(cb: (id: string, exitCode: number) => void): () => void
+  onSessionCreated?(cb: (meta: unknown) => void): () => void
 }
 
 export interface Copilot {
@@ -102,17 +113,19 @@ export interface Copilot {
   refresh(): void
 }
 
-/**
- * How often the state is re-read while a window is open.
- *
- * Thirty seconds, and it is a backstop rather than the mechanism. Everything a
- * person does goes through `ensure`/`stop`/`refresh`, which read immediately;
- * this exists for the one thing nothing reports — a copilot killed from outside
- * the app — so the interval only has to be shorter than somebody's patience,
- * not shorter than their reaction time. Each tick is a handful of `stat` calls
- * on a directory of small files.
+/*
+ * `REFRESH_MS = 30_000` was here — a thirty-second poll whose own comment
+ * named its one purpose: "a copilot killed from outside the app", which it
+ * called the one thing nothing reports. That was wrong. The copilot is an
+ * ordinary session (`copilot-session.ts` holds a session id and asks
+ * `isAlive` of the same table every session lives in), so when its CLI dies —
+ * killed from a terminal, crashed, anything — the pty exit lands in this
+ * window as a `session:exit` push. The push had existed all along; the poll
+ * was the event's absence wearing a costume, and his rule is *"events, not
+ * polling — they make the system heavier"*. The hook subscribes to the two
+ * pushes below instead, and each fires on a real change at human frequency
+ * rather than 120 times an hour on none.
  */
-const REFRESH_MS = 30_000
 
 function bridge(): CopilotBridge | null {
   const deck = (globalThis as { deck?: Partial<CopilotBridge> }).deck
@@ -254,9 +267,23 @@ export function useCopilot(injected?: CopilotBridge | null): Copilot {
 
   useEffect(() => {
     refresh()
-    const timer = setInterval(refresh, REFRESH_MS)
-    return () => clearInterval(timer)
-  }, [refresh])
+    /*
+     * Re-read on the two events that can move this state without anything in
+     * this window being pressed: a session exiting (the copilot dying, however
+     * it dies) and a session being created (a copilot another window ensured —
+     * the window that asked hears the answer on its own call and no push).
+     * Deliberately unfiltered: session ids are not known here before the first
+     * read lands, exits and creations happen at human frequency, and a refresh
+     * is a handful of stats. What a person does in *this* window still reads
+     * immediately through ensure/stop/restart/refresh.
+     */
+    const offExit = deck?.onSessionExit?.(() => refresh())
+    const offCreated = deck?.onSessionCreated?.(() => refresh())
+    return () => {
+      offExit?.()
+      offCreated?.()
+    }
+  }, [deck, refresh])
 
   return {
     state,

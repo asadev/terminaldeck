@@ -249,6 +249,17 @@ export interface MachinesBridge {
   onMachineCopilotState(cb: (machineId: string, state: unknown) => void): () => void
   onMachineCopilotChat(cb: (machineId: string, bubble: unknown) => void): () => void
   onMachinesState(cb: (view: unknown) => void): () => void
+  /**
+   * A nudge that the remote picture moved — a device pairing or leaving, and
+   * since 2026-08-22 the relay link connecting or dropping. The payload is
+   * ignored on purpose (one read is one source of truth — `RemoteSection`'s
+   * words); `useMachines` re-reads the list on it, which is what keeps the
+   * pairing screen's `blocked` sentence honest without a timer. Optional, and
+   * deliberately **not** on {@link BRIDGE_METHODS}: an older preload without it
+   * must not blank the whole machines surface, it just re-reads less often —
+   * on `machines:state` pushes alone.
+   */
+  onRemoteConnections?(cb: (connections: unknown) => void): () => void
   onMachineOutput(cb: (chunk: unknown) => void): () => void
   /**
    * Send a file from this machine into a session running on that one.

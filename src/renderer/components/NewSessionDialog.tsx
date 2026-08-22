@@ -678,9 +678,17 @@ export function AgentChoices({
         control in the header would sit beside Project.
 
         Inside the `radiogroup` and deliberately so: arrowing down the agents and
-        arriving at "Add an agent" is the sequence somebody who has not found
+        arriving at "Add a CLI" is the sequence somebody who has not found
         what they want is already performing. It is a `<button>`, so it is not
         one of the options; it is the thing after them.
+
+        "Add a CLI", not "Add an agent" — T14, 2026-08-22. His done-when was
+        that nothing in the app still says "Add agent"; the Settings button
+        became **Add accounts** because that pane's rows are accounts. This
+        flow is not: pressing it registers another command-line tool, and a
+        button called "Add accounts" over a command-and-PATH form would be a
+        control whose label lies. "CLI" is his own word for the thing being
+        added — *"setting up CLI's, accounts, agents"*.
       */}
       {onAdd && (
         <button type="button" className="ns-agent ns-agent-add" onClick={onAdd}>
@@ -688,7 +696,7 @@ export function AgentChoices({
             +
           </span>
           <span className="ns-agent-text">
-            <span className="ns-agent-label">Add an agent</span>
+            <span className="ns-agent-label">Add a CLI</span>
             <span className="ns-hint">Any other command-line agent on this machine.</span>
           </span>
         </button>
@@ -1487,7 +1495,7 @@ export function NewSessionDialog({
      */
     <Modal
       open={open}
-      title={addingAgent ? 'Add an agent' : 'New session'}
+      title={addingAgent ? 'Add a CLI' : 'New session'}
       onClose={onClose}
       size="lg"
       hidden={browsing}
@@ -1513,7 +1521,7 @@ export function NewSessionDialog({
               className="modal-btn primary"
               disabled={agentBusy}
             >
-              {agentBusy ? 'Checking…' : 'Add agent'}
+              {agentBusy ? 'Checking…' : 'Add CLI'}
             </button>
           </>
         ) : (

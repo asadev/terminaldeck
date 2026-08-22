@@ -797,6 +797,16 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
     // of the permission, and a truthy value arriving from a bridge is not a
     // person pressing a switch.
     if (typeof id === 'string') store.setDrivesWindows(id, allowed === true)
+    /*
+     * Broadcast as well as answered — the same argument `machines:forget` and
+     * `machines:rename` make above, and until 2026-08-22 this was the one
+     * store write of the three that made it to nobody but its caller. A grant
+     * is drawn in more than one window, and the only thing keeping the others
+     * honest was the renderer's four-second poll — which is gone, because his
+     * rule is events, not polling, and a poll that exists to paper over a
+     * missing event is the event's absence wearing a costume.
+     */
+    announce()
     return view()
   })
 

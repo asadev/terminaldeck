@@ -981,6 +981,26 @@ describe('letting a machine act on browser windows here', () => {
     ).toBe(false)
   })
 
+  it('is broadcast as well as answered, so every other window hears the grant', async () => {
+    /*
+     * The same argument `machines:forget` and `machines:rename` already make,
+     * and until 2026-08-22 this was the one store write of the three that made
+     * it to nobody but its caller — every other surface only stayed honest
+     * because the renderer polled the list every four seconds. The poll is
+     * gone (events, not polling), so the event has to be real.
+     */
+    const dir = tempDir()
+    const hostId = paired(dir)
+    const app = rig({ dir })
+    app.broadcasts.length = 0
+
+    await app.invoke('machines:drive-windows', hostId, true)
+    const pushed = app.broadcasts.filter((entry) => entry.channel === MACHINES_STATE_CHANNEL)
+    expect(pushed.length).toBeGreaterThan(0)
+    const view = pushed[pushed.length - 1].payload as MachinesView
+    expect(view.machines[0].drivesWindows).toBe(true)
+  })
+
   it('hands an inbound browser verb to whatever the app wired, with the machine on it', async () => {
     const dir = tempDir()
     const hostId = paired(dir)

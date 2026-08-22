@@ -1103,10 +1103,17 @@ export function installHooks(context: HookContext, id: HookProviderId): HookWrit
 
   const status = readStatus(context, id)
   const note = backup ? ` The original was kept at ${backup}.` : ''
+  /*
+   * Codex's install repairs the deprecated feature flag in the same press.
+   * The requirement string has named the new spelling since 0.146 shipped;
+   * telling somebody to fix a file this same button could fix is resistance.
+   */
+  const migrated = id === 'codex' ? migrateCodexFeatureFlag(context) : ''
+  const flagNote = migrated === '' ? '' : ` ${migrated}`
   const requirement = spec.requirement ? ` ${spec.requirement}` : ''
   return {
     ok: true,
-    message: `Installed ${spec.events.length} hooks into ${file}.${note}${requirement}`,
+    message: `Installed ${spec.events.length} hooks into ${file}.${note}${flagNote}${requirement}`,
     status,
   }
 }
@@ -1150,6 +1157,115 @@ export function removeHooks(context: HookContext, id: HookProviderId): HookWrite
     message: `Removed ${result.removed} hook${result.removed === 1 ? '' : 's'} from ${file}. Nothing else in the file was changed.`,
     status: readStatus(context, id),
   }
+}
+
+/* -------------------------------------------- the codex feature flag -- */
+
+/**
+ * Rename the deprecated `[features] codex_hooks` key to `hooks` in the text of
+ * `~/.codex/config.toml`.
+ *
+ * The requirement string this app showed until 2026-08-21 told people to write
+ * `codex_hooks = true`. Codex renamed the flag in 0.146: the old key still
+ * works, but its mere *presence* makes Codex print
+ * "deprecated: `[features].codex_hooks` is deprecated" into the terminal at
+ * every session start — a line of the person's screen, spent by us, forever,
+ * on an edit we told them to make. The app already knows the new spelling
+ * (see `HOOK_PROVIDERS.codex.requirement`); leaving the old one in place was
+ * knowing about the problem and repairing nothing.
+ *
+ * A **text** transform, not a parse-and-serialise, and that is load-bearing:
+ * `config.toml` also carries `[hooks.state] trusted_hash` — the trust answer
+ * nothing this app writes can stand in for — plus whatever else the person
+ * keeps there. Re-serialising someone's TOML reorders and reformats it;
+ * renaming one key on one line cannot. Everything except that key's name is
+ * carried through byte for byte.
+ *
+ * Two cases, because both exist in the wild:
+ *
+ *  - `codex_hooks` present and `hooks` absent → the key is renamed in place,
+ *    keeping its value, its indentation and any trailing comment.
+ *  - both present → the deprecated line is removed, because presence alone
+ *    triggers the warning and `hooks` already carries the setting.
+ *
+ * Only inside the `[features]` table. A `codex_hooks` key in any other table
+ * is not the flag and is not touched.
+ */
+export function migratedCodexFeatures(toml: string): { changed: boolean; text: string } {
+  const lines = toml.split('\n')
+  let inFeatures = false
+  let hasHooks = false
+  const deprecated: number[] = []
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    const header = /^\s*\[\[?([^\]]*)\]?\]\s*(?:#.*)?$/.exec(line)
+    if (header) {
+      inFeatures = header[1].trim() === 'features'
+      continue
+    }
+    if (!inFeatures) continue
+    if (/^\s*(?:"hooks"|hooks)\s*=/.test(line)) hasHooks = true
+    if (/^\s*(?:"codex_hooks"|codex_hooks)\s*=/.test(line)) deprecated.push(i)
+  }
+  if (deprecated.length === 0) return { changed: false, text: toml }
+  if (hasHooks) {
+    // The new key is already there; the old line's only effect is the warning.
+    const keep = lines.filter((_, i) => !deprecated.includes(i))
+    return { changed: true, text: keep.join('\n') }
+  }
+  // Rename the first in place; drop any duplicate — two `hooks` keys in one
+  // table would be invalid TOML and Codex would refuse the whole file.
+  const out: string[] = []
+  for (let i = 0; i < lines.length; i++) {
+    if (i === deprecated[0]) {
+      out.push(lines[i].replace(/(^\s*)(?:"codex_hooks"|codex_hooks)(\s*=)/, '$1hooks$2'))
+    } else if (!deprecated.includes(i)) {
+      out.push(lines[i])
+    }
+  }
+  return { changed: true, text: out.join('\n') }
+}
+
+/**
+ * Run {@link migratedCodexFeatures} against the real file, atomically, with a
+ * one-time backup beside the hook backups.
+ *
+ * Returns a sentence for the panel when something was changed, and `''` when
+ * there was nothing to do — including when the file does not exist, which is
+ * the ordinary state of a machine with no Codex: writing `~/.codex/config.toml`
+ * onto such a machine would be leaving a config behind for a tool nobody has.
+ *
+ * Idempotent and copy-agnostic on purpose. Unlike a hook command, the flag
+ * names no endpoint and no copy of this app — `hooks = true` means the same
+ * thing whoever wrote it — so this is safe to run at every startup and from
+ * every copy, and {@link staleHooksBelongToAnotherCopy} deliberately has no
+ * say here.
+ */
+export function migrateCodexFeatureFlag(context: HookContext): string {
+  const file = join(context.home, '.codex', 'config.toml')
+  let raw: string
+  let mode: number
+  try {
+    raw = readFileSync(file, 'utf8')
+    mode = statSync(file).mode & 0o777
+  } catch {
+    return ''
+  }
+  const next = migratedCodexFeatures(raw)
+  if (!next.changed) return ''
+  // The same once-only backup the settings files get, under its own name.
+  try {
+    const backup = join(context.backupDir, 'codex-config.toml')
+    mkdirSync(dirname(backup), { recursive: true })
+    copyFileSync(file, backup, 1 /* COPYFILE_EXCL */)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+      // A backup that cannot be made is a reason not to rewrite the file.
+      return ''
+    }
+  }
+  writeAtomic(file, next.text, mode)
+  return `Renamed the deprecated codex_hooks flag to hooks in ${file}, so Codex stops printing a deprecation line at every session start.`
 }
 
 /**
@@ -1243,6 +1359,18 @@ export function staleHooksBelongToAnotherCopy(context: HookContext, id: HookProv
 }
 
 export function syncInstalledHooks(context: HookContext): HookProviderStatus[] {
+  /*
+   * The codex feature flag is repaired even when the hooks themselves read
+   * `complete` — which is exactly the state his machine is in: every hook
+   * pointing here, and every Codex session still opening on a deprecation
+   * line. The flag belongs to no copy of this app (see
+   * `migrateCodexFeatureFlag`), so the another-copy rule below does not apply.
+   */
+  try {
+    migrateCodexFeatureFlag(context)
+  } catch (error) {
+    console.error('[hooks] could not migrate the codex feature flag:', error)
+  }
   const out: HookProviderStatus[] = []
   for (const id of HOOK_PROVIDER_IDS) {
     const status = readStatus(context, id)
@@ -1297,6 +1425,14 @@ export function syncInstalledHooks(context: HookContext): HookProviderStatus[] {
  * returned status and does not stop the host coming up.
  */
 export function installHooksWhereConfigured(context: HookContext): HookProviderStatus[] {
+  // The same flag repair the desktop's startup pass makes, for the same
+  // reason, and under the same only-if-the-file-exists narrowing — the
+  // function itself refuses a machine with no `~/.codex/config.toml`.
+  try {
+    migrateCodexFeatureFlag(context)
+  } catch (error) {
+    console.error('[hooks] could not migrate the codex feature flag:', error)
+  }
   const out: HookProviderStatus[] = []
   for (const id of HOOK_PROVIDER_IDS) {
     const status = readStatus(context, id)

@@ -1106,9 +1106,13 @@ describe('the Copilot row moved here', () => {
   it('left nothing behind in Settings', () => {
     // Not a "moved to the GitHub page" pointer either: a cross-reference is
     // what made Setup and Agents read as two halves of one screen, and one is
-    // not being added back on the way out.
-    expect(settings).toContain("MOVED_TOOL_IDS: readonly string[] = ['copilot']")
-    expect(settings).toContain('MOVED_TOOL_IDS.includes(tool.id)')
+    // not being added back on the way out. The Settings pane used to prove
+    // this by filtering Copilot out of its tool list (`MOVED_TOOL_IDS`); since
+    // 2026-08-22 it draws no tool rows at all — the Other tools disclosure
+    // could never hold a row and is gone — so the stronger fact is pinned
+    // instead: nothing in that pane names Copilot.
+    expect(settings).not.toContain('tool.id')
+    expect(settings).not.toContain('<details')
   })
 
   it('brought the name and the state, and none of the four lines under them', () => {

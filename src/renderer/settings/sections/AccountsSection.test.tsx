@@ -1243,6 +1243,29 @@ describe('the account list after the 2026-08-19 review', () => {
     expect(runs.map((run) => run.id)).toEqual(['not-answered'])
   })
 
+  /**
+   * The heading count, 2026-08-22. He asked for two runs; the pane's first
+   * paint used to answer with three, the third reading "Not answered" over
+   * every account until the probes landed. The holding run still exists —
+   * `runOfAccount` above pins that nothing unanswered is filed as signed out —
+   * but it carries no heading and comes first, so its rows sit above the first
+   * heading and borrow none.
+   */
+  it('never draws a third heading, even while nothing has answered', () => {
+    // First paint of every visit: no probe has answered.
+    const first = render({ signIn: {} })
+    expect(first).not.toContain('Not answered')
+    expect((first.match(/settings-account-run-title/g) ?? []).length).toBe(0)
+    // The rows are still there, in the unheaded holding run.
+    expect(first).toContain('data-run="not-answered"')
+
+    // Mid-probe: one answered, one still out. One heading, and the unheaded
+    // rows come before it rather than under it.
+    const mid = render({ signIn: { system: signedIn } })
+    expect((mid.match(/<h4 class="settings-account-run-title">/g) ?? []).length).toBe(1)
+    expect(mid.indexOf('data-run="not-answered"')).toBeLessThan(mid.indexOf('>Signed in</h4>'))
+  })
+
   it('draws no heading over a run with nothing in it', () => {
     // The same rule an agent with no accounts follows, one level out.
     const html = render({ signIn: { system: signedIn, work: signedIn } })

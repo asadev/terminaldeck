@@ -40,6 +40,16 @@ interface Props {
    * disabled instead.
    */
   onHistory?: () => void
+  /**
+   * Open the saved-logins manager for the active profile.
+   *
+   * The manager is real — `browser-passwords.ts` is this app's own encrypted
+   * store, and `ProfileSettings.tsx` lists it with Copy and Forget, never a
+   * Reveal — so the row is drawn. Absent on a preload that has not wired the
+   * password channels, and for an Isolated tab, whose partition saves nothing;
+   * then there is no row, for the reason `onHistory` gives above.
+   */
+  onPasswords?: () => void
   /** Reopen the recorded flow. Absent when nothing has been recorded. */
   onFlow?: () => void
   /**
@@ -140,6 +150,7 @@ export function BrowserMenu({
   onScraping,
   onSettings,
   onHistory,
+  onPasswords,
   onFlow,
   onCookies,
   onDownloads,
@@ -305,10 +316,15 @@ export function BrowserMenu({
           Chrome's menu has eighteen rows and he asked for *"most of them"*. This
           one is here because the feature behind it is here: `browser-history.ts`
           keeps a real per-profile list and `HistoryPanel.tsx` opens it, clickable.
-          The rows for the things this release does not have — Downloads, Saved
-          passwords as a menu section, Extensions — are deliberately **not**
-          drawn, because a menu entry pointing at a page that does not exist is
-          worse than a menu that is short.
+
+          A sentence used to stand here saying Downloads, Saved passwords and
+          Extensions were "deliberately not drawn" because nothing was behind
+          them. It went stale one feature at a time — Downloads and Extensions
+          are rows above, and Passwords is the row below — and a comment that
+          says a control does not exist while the control sits beside it is how
+          the next lane deletes something real. The bargain it described still
+          holds and is worth restating in its live form: a row is drawn when the
+          thing behind it exists, and not a moment before.
 
           Absent rather than disabled when the preload has not wired history:
           disabled says "not now", and the truth in that build is "not at all".
@@ -323,6 +339,31 @@ export function BrowserMenu({
             }}
           >
             History
+          </button>
+        )}
+
+        {/*
+          Passwords — the other row he named out loud in the same breath as
+          History: *"I need most of them, and passwords history also."*
+
+          The thing behind it is `browser-passwords.ts`, this app's own
+          encrypted per-profile store, listed in the profile's section with the
+          same Copy and Forget the profile menu offers — never a Reveal,
+          because the value never crosses into this side of the app. The row
+          opens that section for the active profile, which is where the manager
+          lives; the count-door on each profile row (`ProfileMenu.tsx`) stays
+          the quick look at any *other* profile's list.
+        */}
+        {onPasswords && (
+          <button
+            type="button"
+            className="bw-menu-item"
+            onClick={() => {
+              onPasswords()
+              onClose()
+            }}
+          >
+            Passwords
           </button>
         )}
 
