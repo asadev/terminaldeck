@@ -139,19 +139,17 @@ import {
  * different problems with genuinely different fixes, and a machine whose work
  * lives in Ubuntu is exactly the machine that reads a message about `PATH` and
  * checks the wrong `PATH`.
+ *
+ * The declaration itself is in `agent-unavailable.ts` and re-exported here, so
+ * every importer keeps the name it already used. It had to move because the
+ * second caller in that list — `remote/session-create.ts` — is imported *by*
+ * this file, so it could never have imported this one back to name the type it
+ * was supposed to be catching; its header says what that cost on a real server.
  */
-export class AgentUnavailableError extends Error {
-  readonly provider: ProviderId
-
-  constructor(provider: ProviderId, label: string, insideWsl: boolean) {
-    super(
-      `${label} could not be found ${insideWsl ? 'inside the WSL distribution' : 'on this machine'}, ` +
-        `so this session was not started.`,
-    )
-    this.name = 'AgentUnavailableError'
-    this.provider = provider
-  }
-}
+export { AgentUnavailableError } from './agent-unavailable'
+// And in scope here, because `startSession` below is the one place that throws
+// it. A re-export alone does not bind the name inside this module.
+import { AgentUnavailableError } from './agent-unavailable'
 
 /**
  * What to call an agent when telling somebody it is missing.
