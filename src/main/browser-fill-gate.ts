@@ -38,11 +38,15 @@
  * ## How "an agent is holding this page" is known
  *
  * By the **CDP debugger being attached to it**, which is not a proxy for the
- * fact — it *is* the fact. `browser-driver.ts:attach` is the only line in this
- * repository that calls `wc.debugger.attach`, the drive holds the attachment
- * for the whole of a drive rather than per command, and `detach` releases it.
- * So there is no second piece of state to keep in step and no way for a
- * registry to drift out of date behind a page that is still being driven.
+ * fact — it *is* the fact, with one named subtraction. Two places in this
+ * repository call `wc.debugger.attach`: `browser-driver.ts:attach`, which
+ * holds the attachment for the whole of a drive rather than per command and
+ * releases it in `detach`; and `browser-profile-arm.ts`, which arms a page
+ * from the person's *own* stored scraping settings with no agent involved.
+ * `browser-tab.ts:agentHolds` subtracts the second through `personArmHolds`,
+ * whose answer collapses to "an agent holds it" the moment a drive claims the
+ * page — the drive tells it to stand down before any command can be sent — so
+ * the attachment that reaches this gate as `agentHolding` is always a drive's.
  *
  * It is also the widest of the candidate signals, deliberately. It stays true
  * while the drive is parked in `human` — the state `browser.handover` puts it

@@ -249,7 +249,25 @@ describe('the summary a caller reads to decide whether the run is usable', () =>
     expect(summary.incomplete).toBe(false)
     expect(summary.shortfall).toBe('')
     expect(summary.entries).toBe(1)
+    expect(summary.empty).toBe(false)
+    expect(summary.emptyReason).toBe('')
     expect(files.has('/data/captures/p1/run-1/capture-summary.json')).toBe(true)
+  })
+
+  it('says in words that a run which recorded nothing is not a small success', () => {
+    /*
+     * Item 8 of the scraping spec, applied to the summary file itself: the
+     * summary is read off disk long after any tool call, and a person's own
+     * browse-run has no tool call at all — so "empty" has to be *on* the
+     * result, not inferred from nine zeroes.
+     */
+    const { store, files } = harness()
+    const summary = store.close()
+    expect(summary.empty).toBe(true)
+    expect(summary.emptyReason).toContain('recorded nothing')
+    expect(String(files.get('/data/captures/p1/run-1/capture-summary.json'))).toContain(
+      'recorded nothing',
+    )
   })
 
   it('names every bound that dropped something, and how many', () => {

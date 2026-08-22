@@ -442,6 +442,20 @@ export interface DriveHost {
     /** Whether a page that refuses us is photographed. `null`: nobody said. */
     blockShots: boolean | null
   } | null
+  /**
+   * The drive took this page's debugger / let it go.
+   *
+   * Wired to `browser-profile-arm.ts`, which arms pages from the person's own
+   * stored scraping settings and must never share one debugger session with a
+   * drive: two `PageNetwork`s on one page would both answer the same paused
+   * request. `pageHeld` runs inside {@link BrowserDrive.attach} **before** any
+   * command is sent, so the person-side run has stood down by the time an
+   * agent can act; `pageFreed` runs on detach, after which the person side may
+   * reclaim the page. Absent in a build with no browser wiring, where there is
+   * no person-side arming to yield.
+   */
+  pageHeld?(viewId: string): void
+  pageFreed?(viewId: string): void
 }
 
 /**
@@ -947,6 +961,14 @@ export class BrowserDrive {
 
   private async attach(wc: WebContents, slot: Slot): Promise<void> {
     if (slot.attached && wc.debugger.isAttached()) return
+    /*
+     * Before the attach, not after: the person-side arming of
+     * `browser-profile-arm.ts` may already hold this page's debugger for the
+     * profile's own stored rules, and it must have stood down before this
+     * drive can find the session "already attached" and start sharing it.
+     * See {@link DriveHost.pageHeld}.
+     */
+    this.host.pageHeld?.(slot.viewId ?? '')
     try {
       if (!wc.debugger.isAttached()) wc.debugger.attach('1.3')
       slot.attached = true
@@ -971,12 +993,17 @@ export class BrowserDrive {
   private detach(slot: Slot): void {
     const wc = this.contents(slot)
     slot.attached = false
-    if (!wc) return
-    try {
-      if (wc.debugger.isAttached()) wc.debugger.detach()
-    } catch {
-      // Already gone, or never attached. Either way there is nothing holding.
+    if (wc) {
+      try {
+        if (wc.debugger.isAttached()) wc.debugger.detach()
+      } catch {
+        // Already gone, or never attached. Either way there is nothing holding.
+      }
     }
+    // After the debugger is gone, so the person side reclaims a page that is
+    // genuinely free rather than racing this teardown. Told even when the view
+    // has died — the other end drops dead pages on its own.
+    this.host.pageFreed?.(slot.viewId ?? '')
   }
 
   /**

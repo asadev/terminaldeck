@@ -293,6 +293,8 @@ describe('the three answers that must never collapse into one', () => {
             bytes: 900,
             incomplete: false,
             shortfall: '',
+            empty: false,
+            emptyReason: '',
           },
         }),
     })
@@ -327,6 +329,8 @@ describe('a capture with holes in it says so at the top of the result', () => {
             bytes: 40,
             incomplete: true,
             shortfall: 'bodies not kept: 3 over the 2097152-byte per-body bound (maxBodyBytes)',
+            empty: false,
+            emptyReason: '',
           },
         }),
     })

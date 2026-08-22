@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { cdpResourceType, cheapHeaders, RESOURCE_KINDS } from './browser-fetch-rules'
@@ -47,7 +47,12 @@ describe('the debugger channel is not reachable from anywhere else', () => {
    * calls that would create one.
    */
   it('never asks Electron for every WebContents in the process', () => {
-    for (const file of ['browser-cdp.ts', 'browser-drive.ts', 'browser-driver.ts']) {
+    for (const file of [
+      'browser-cdp.ts',
+      'browser-drive.ts',
+      'browser-driver.ts',
+      'browser-profile-arm.ts',
+    ]) {
       expect(source(file)).not.toContain('getAllWebContents')
       expect(source(file)).not.toContain('fromWebContents')
     }
@@ -64,6 +69,31 @@ describe('the debugger channel is not reachable from anywhere else', () => {
     const sendBody = driver.slice(driver.indexOf('private async send('), driver.indexOf('/** Announce and send'))
     expect(sendBody).toContain('screenCommand(')
     expect(sendBody.indexOf('screenCommand(')).toBeLessThan(sendBody.indexOf('sendCommand('))
+  })
+
+  /*
+   * The second holder of a debugger — `browser-profile-arm.ts`, which arms a
+   * page from the person's own stored scraping settings — has its own door
+   * and its own screen: a fixed allowlist of exactly the methods the network
+   * engine issues, since no baton and no model is anywhere near that path.
+   * Its own test file pins the door; what is pinned HERE is that no third
+   * file anywhere in main sends debugger commands at all, so the set of
+   * doors is closed by enumeration rather than by memory.
+   */
+  it('no third file in main sends debugger commands', () => {
+    const files = readdirSync(SRC).filter(
+      (name) => name.endsWith('.ts') && !name.endsWith('.test.ts'),
+    )
+    const senders = files.filter((name) => source(name).includes('debugger.sendCommand('))
+    expect(senders.sort()).toEqual(['browser-driver.ts', 'browser-profile-arm.ts'])
+  })
+
+  it('no third file in main attaches the debugger', () => {
+    const files = readdirSync(SRC).filter(
+      (name) => name.endsWith('.ts') && !name.endsWith('.test.ts'),
+    )
+    const attachers = files.filter((name) => source(name).includes('debugger.attach('))
+    expect(attachers.sort()).toEqual(['browser-driver.ts', 'browser-profile-arm.ts'])
   })
 
   it('runs page script from exactly one place, and that place checks the baton', () => {

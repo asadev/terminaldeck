@@ -46,6 +46,7 @@ import {
   type SavedLogin,
 } from './browser-passwords'
 import { mayAutofill, stampDocument } from './browser-fill-gate'
+import { personArmHolds, watchTabForScraping } from './browser-profile-arm'
 
 /**
  * The embedded browser tab: a real Chromium view, hosted inside the app window,
@@ -545,11 +546,21 @@ function liveContents(tab: BrowserTab): WebContents | null {
  *
  * Answered by asking Chromium whether the CDP debugger is attached, rather than
  * by consulting a map this module keeps in step with the drive. That is not
- * shorthand: `browser-driver.ts:attach` is the only line in this repository
- * that calls `wc.debugger.attach`, it holds the attachment for the whole of a
- * drive rather than per command, and `detach` releases it. A second copy of
+ * shorthand: `browser-driver.ts:attach` holds the attachment for the whole of
+ * a drive rather than per command, and `detach` releases it. A second copy of
  * that fact is a second thing to get wrong, and getting it wrong in the
  * optimistic direction means a password typed into a page an agent chose.
+ *
+ * There are exactly two callers of `wc.debugger.attach` in this repository:
+ * the drive, and `browser-profile-arm.ts`, which arms a page from the
+ * *person's own* stored scraping settings with no agent anywhere near it. The
+ * second one is subtracted here through {@link personArmHolds}, which answers
+ * true only while its own attachment is the sole reason the debugger is on —
+ * the drive's `attach()` tells it to stand down before any agent command can
+ * be sent, so the subtraction can never cover a page an agent could act on.
+ * Without the subtraction, storing a fulfil rule for a profile would silently
+ * switch off password autofill on every page of that profile — a control
+ * with a side effect nobody asked for, on the panel built to remove those.
  *
  * `browser-fill-gate.ts` carries the argument for why this is the right breadth
  * — in particular why it stays true while a drive is parked in `human` waiting
@@ -560,7 +571,7 @@ function agentHolds(tab: BrowserTab): boolean {
   const wc = liveContents(tab)
   if (!wc) return false
   try {
-    return wc.debugger.isAttached()
+    return wc.debugger.isAttached() && !personArmHolds(wc)
   } catch {
     // A view mid-teardown. Nothing is going to be filled into it either way,
     // and the answer that withholds is the one to give when unsure.
@@ -1355,6 +1366,16 @@ export function registerBrowserIpc(ipcMain: IpcMain): void {
     window.contentView.addChildView(view)
     applyLayout(tab)
     wireGuestEvents(tab)
+    /*
+     * The person's own scraping settings, armed on this tab's navigations —
+     * see `browser-profile-arm.ts`. Watching costs two listeners until the
+     * profile actually stores something; a profile with all-default settings
+     * never gets a debugger attached. An Isolated tab has no profile and no
+     * stored settings, so there is nothing to watch for one.
+     */
+    if (tab.profileId !== '') {
+      watchTabForScraping({ tabId: tab.id, profileId: tab.profileId, contents: view.webContents })
+    }
     // Everything that can take ownership of this view away, watched from the
     // side that survives it. Both are idempotent per host and per window.
     watchHost(event.sender)

@@ -8,6 +8,7 @@ import {
   fetchRulesOf,
   scrapeSettingsFor,
 } from './browser-scrape-settings'
+import { pageFreedByDrive, pageHeldByDrive } from './browser-profile-arm'
 import { browserTabContents, browserTabProfile } from './browser-tab'
 import { BLANK_URL } from './browser-url'
 import type { DriveStatus } from './browser-drive'
@@ -492,6 +493,14 @@ export function registerBrowserDriveIpc(ipcMain: IpcMain, deps: BrowserDriveDeps
         blockShots: settings.checks.screenshotOnBlock,
       }
     },
+    /*
+     * The handshake with the person-side arming — see `browser-profile-arm.ts`.
+     * A page the drive takes stops being armed from the profile's stored
+     * settings until the drive lets go; two captors on one debugger would both
+     * answer the same paused request.
+     */
+    pageHeld: (viewId) => pageHeldByDrive(viewId),
+    pageFreed: (viewId) => pageFreedByDrive(viewId),
     publish: (status: DriveStatus) => deps.send(DRIVE_STATE_CHANNEL, status),
     now: () => Date.now(),
     ...(deps.openForSession

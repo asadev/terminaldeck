@@ -22,6 +22,7 @@ import {
   fetchRulesOf,
   ledgerModeOf,
   mergeScrapeSettings,
+  onScrapeSettingsChanged,
   readScrapeSettings,
   renditionRulesOf,
   resetScrapeSettingsForTests,
@@ -303,5 +304,40 @@ describe('the ceilings the panel draws are the ceilings this store enforces', ()
       minDelayMs: SHARED_MAX_PACE_MS,
       jitterMs: 0,
     })
+  })
+})
+
+/**
+ * The change event that makes a toggle a live control.
+ *
+ * `browser-profile-arm.ts` re-arms open pages off this announcement — events,
+ * not polling — so a write that stored without announcing would be the old
+ * defect back in a quieter form: the file changes and the page does not.
+ */
+describe('announcing a stored write', () => {
+  it('tells the listener which profile changed and what now stands', () => {
+    const heard: { profileId: string; capture: boolean | null }[] = []
+    onScrapeSettingsChanged((profileId, settings) => {
+      heard.push({ profileId, capture: settings.capture.on })
+    })
+    setScrapeSettings(dir, 'work', { capture: { on: true } })
+    expect(heard).toEqual([{ profileId: 'work', capture: true }])
+  })
+
+  it('does not let a throwing listener take the panel reply down', () => {
+    onScrapeSettingsChanged(() => {
+      throw new Error('a listener with a bug')
+    })
+    const after = setScrapeSettings(dir, 'work', { capture: { on: true } })
+    expect(after.capture.on).toBe(true)
+  })
+
+  it('says nothing for a write that was refused for want of a profile', () => {
+    let called = 0
+    onScrapeSettingsChanged(() => {
+      called += 1
+    })
+    setScrapeSettings(dir, '', { capture: { on: true } })
+    expect(called).toBe(0)
   })
 })
