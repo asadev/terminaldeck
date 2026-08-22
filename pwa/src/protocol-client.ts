@@ -149,8 +149,22 @@ export {
  * would close the channel on the first one. This client does handle it (the
  * device screen), so naming it is honest and is what makes the roster on that
  * screen live rather than stale until the next visit.
+ *
+ * `watch` is here for the same shape of reason as `devices`, and it is the one
+ * name here that runs the other way: the host streams `browser.frame` and pushes
+ * `browser.surfaces.rows` **only** to a connection that named `watch`, because a
+ * client that had never heard of a screencast frame would close the channel on
+ * the first one. This client renders frames and sends `browser.input` back, so
+ * claiming it is honest — and it is what tells the host there is a screen on the
+ * other end worth casting to. The host still withholds it from a guest, so
+ * naming it does not widen what a guest may see.
  */
-export const CLAIMED_CAPABILITIES: string[] = [CAPABILITY.credential, CAPABILITY.devices, CAPABILITY.settings]
+export const CLAIMED_CAPABILITIES: string[] = [
+  CAPABILITY.credential,
+  CAPABILITY.devices,
+  CAPABILITY.settings,
+  CAPABILITY.watch,
+]
 
 /**
  * One session row, or null — the desktop's `parseSession`, under the name this

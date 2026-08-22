@@ -569,6 +569,26 @@ export const CAPABILITY = {
    * for the same axis pointing the other way.
    */
   hostWindows: 'hostwindows',
+  /**
+   * Watching the machine's browser, and driving it — a live cast of one surface
+   * and the taps that come back.
+   *
+   * Dual-listed like {@link windows}, and it means two different things by which
+   * end names it. A **host** lists it in `welcome.capabilities` to say *"I hold
+   * browser surfaces, I can stream one and act on the taps you send it"* — and it
+   * says so only when it can, gated on the host having been given a screencast
+   * seam (the same "advertise the thing that makes it possible" rule `windows`
+   * keeps against its own window access). A **client** lists it in
+   * `hello.capabilities` to say *"I render frames and I send input."*
+   *
+   * Withheld from a guest in `capabilitiesFor`, exactly like `logins`, `devices`
+   * and `settings`: there is no push frame that could correct a welcome later,
+   * and watching the owner's signed-in browser — his mail, his bank, the tab he
+   * left open — is an owner act. Watch and drive ride the *same* window-grants
+   * axis `window.call` does, because seeing a signed-in page is as sensitive as
+   * clicking it; a device that may not drive a window may not watch it either.
+   */
+  watch: 'watch',
 } as const
 
 /**
@@ -600,6 +620,7 @@ export const CAPABILITIES: string[] = [
   CAPABILITY.settings,
   CAPABILITY.windows,
   CAPABILITY.hostWindows,
+  CAPABILITY.watch,
 ]
 
 /**
@@ -1014,6 +1035,291 @@ export type WindowCallFrame = {
  * because a machine that has gone cannot send a frame saying so.
  */
 export type WindowResultFrame = { t: 'window.result'; id: string; ok: boolean; body: string }
+
+/* ------------------------------------------- the watch-and-drive frames -- */
+
+/**
+ * The live-view family, `browser.*`.
+ *
+ * A different conversation from the `window.*` family above. `window.holds`,
+ * `window.call` and `window.result` forward a *tool call* — an agent's verb, its
+ * arguments as JSON, an answer as JSON — between a session and the app that holds
+ * its `WebContentsView`. These carry *pixels and gestures*: the host screencasts
+ * one surface as a stream of JPEG frames, and a person on a phone taps and swipes
+ * them back. The two never collide, and not only because the prefixes differ:
+ * the tool ids `browser.open` and `browser.handover` ride *inside*
+ * `window.call.tool`, never as a frame `t`, so `t: 'browser.frame'` names no verb
+ * and `tool: 'browser.open'` names no frame.
+ *
+ * It is one capability, `watch`, dual-listed the way `windows` is: a host that
+ * can screencast a surface advertises it, and a client that renders frames and
+ * sends input claims it. Neither half is optional — a host that streamed to a
+ * client which had never heard of `browser.frame` would be filling a socket
+ * nobody was reading, and a client that sent `browser.input` to a host that
+ * never advertised `watch` would sit inside a gesture that goes nowhere.
+ */
+
+/**
+ * How many surfaces one connection may watch at once.
+ *
+ * A person watches one page, maybe two. Eight is well past that and it is here
+ * for the reason {@link MAX_WINDOW_HOLDS} is: the set of watched windows lands in
+ * a `Map` on the serving machine, and an unbounded set from a peer is memory
+ * somebody else chose the size of. Trimmed rather than refused, like the holds
+ * cap and unlike every size cap — a peer asking to watch a ninth window should
+ * lose the ninth, not the link that carries the other eight.
+ */
+export const MAX_WATCH_WINDOWS = 8
+
+/**
+ * The clamp on a watcher's requested frame width, in image pixels.
+ *
+ * The viewer asks for `canvas CSS width * devicePixelRatio`, which drives the
+ * host's `Page.startScreencast maxWidth`. Below {@link MIN_WATCH_WIDTH} a frame
+ * is unreadable; above {@link MAX_WATCH_WIDTH} it is bytes nobody's screen can
+ * show and a JPEG that will not fit the frame cap. Clamped rather than refused —
+ * a width out of range is a viewer on an unusual screen, not a hostile frame,
+ * and the honest answer is the nearest width this host will actually stream.
+ */
+export const MIN_WATCH_WIDTH = 160
+export const MAX_WATCH_WIDTH = 1600
+
+/**
+ * The clamp on requested JPEG quality.
+ *
+ * The working point is 50. One is the floor a frame is still worth sending at;
+ * eighty is the ceiling past which the bytes buy nothing a phone can see and a
+ * content page stops fitting the frame cap. Clamped for the same reason the
+ * width is: the number comes from a viewer negotiating its own link, not from an
+ * attacker, and the useful answer is the quality this host will actually encode.
+ */
+export const MIN_WATCH_QUALITY = 1
+export const MAX_WATCH_QUALITY = 80
+
+/**
+ * How many touch points one `browser.input.touch` may carry.
+ *
+ * A pinch is two, a rare three-finger gesture is three; ten is every finger a
+ * person has and well past any gesture a page reads. Here because the points
+ * arrive from a peer and are dispatched into `Input.dispatchTouchEvent`, and an
+ * unbounded array is a frame somebody else sized.
+ */
+export const MAX_TOUCH_POINTS = 10
+
+/**
+ * How many surfaces one `browser.surfaces.rows` may list.
+ *
+ * The tab strip of the watched browser. A person has a handful of tabs open; a
+ * hundred is a runaway. Sixty-four matches {@link MAX_ACCOUNTS_REPORTED} for the
+ * same reason it exists — a list from another machine that lands in this one's
+ * memory. Trimmed, and unreadable rows dropped, never a reason to refuse the
+ * frame: a tab strip that shows nine of ten surfaces is useful, one that shows
+ * none because the tenth was malformed is not.
+ */
+export const MAX_SURFACES_REPORTED = 64
+
+/**
+ * Longest surface title on the wire.
+ *
+ * A page sets its own `<title>`, so this is attacker-influenced display text —
+ * bounded here and stripped of the controls that let a title lie about which tab
+ * it is (see `DISPLAY_STRIP`). Wide enough for any real title, small enough that
+ * sixty-four of them still leave room in a frame.
+ */
+export const MAX_SURFACE_TITLE_LENGTH = 512
+
+/**
+ * Longest handover sentence carried under a masked frame.
+ *
+ * When the cast is curtained — a handover, or a secret field in view — the frame
+ * carries no image and one short line for the viewer to draw under its lock card
+ * ("The person is entering something private"). Composed host-side by
+ * `sanitizeHandoverPrompt`; bounded here so a masked frame stays tiny.
+ */
+export const MAX_WATCH_PROMPT_LENGTH = 256
+
+/**
+ * Largest raw JPEG one `browser.frame` may carry, before base64.
+ *
+ * Sized down from the relay, not up from a guess. A relayed payload may be at
+ * most `MAX_PAYLOAD_BYTES` — 96 KiB — (`relay-wire.ts`), and a `browser.frame`
+ * spends that budget on: the relay's own `ENVELOPE_HEADER` of 17 bytes (one type
+ * byte + a 16-byte channel id), the sealed frame's 16-byte Poly1305 tag (a data
+ * frame is `ciphertext || tag`, `sealed.ts`; the version byte rides only the
+ * handshake, but a byte of slack costs nothing to reserve), the frame's dozen
+ * small numbers and its two short strings ({@link MAX_SURFACE_TITLE_LENGTH} does
+ * not apply here — `window` and `prompt` do, each well under a kilobyte), and the
+ * JSON around all of it. Sixty-seven kilobytes of JPEG becomes ~90 KiB of base64
+ * ({@link MAX_FRAME_DATA_CHARS}), and ~90 KiB + ~1 KiB of metadata + 33 bytes of
+ * seal and envelope sits ~6 KiB under the 96 KiB ceiling — margin, not a frame
+ * that just fits.
+ *
+ * At the working point (maxWidth 800, quality 50) a content page encodes to
+ * 15-50 KB, so this is headroom rather than a wall; a photo-heavy page that
+ * overruns it is the host's to answer, by stepping quality down and dropping the
+ * frame that overran — never by chunking a live frame, which is stale before it
+ * reassembles.
+ */
+export const MAX_FRAME_BYTES = 67 * 1024
+
+/**
+ * The encoded length of a maximal frame: base64 is four characters per three
+ * bytes, the same arithmetic {@link MAX_NET_DATA_CHARS} does for a tunnelled
+ * chunk. This is the cap the `browser.frame` validator enforces on `data`.
+ *
+ * It is larger than {@link MAX_MESSAGE_BYTES}, and deliberately so: a frame is
+ * bounded by what a *relay* will carry, not by the 64 KiB text cap the string
+ * path applies to keystrokes and outlines. A `browser.frame` this size therefore
+ * reaches the parser as a decoded object — the path this module documents as
+ * "no frame to measure, bounded by the per-field caps below" — rather than as a
+ * capped string. See `MAX_MESSAGE_BYTES` for that split.
+ */
+export const MAX_FRAME_DATA_CHARS = Math.ceil(MAX_FRAME_BYTES / 3) * 4
+
+/**
+ * Watch a surface: start (or renegotiate) a screencast of it to this connection.
+ *
+ * `window` names the surface the way {@link WindowCallFrame} does not need to —
+ * the empty string is the front/own tab (the `OWN_TARGET` convention the driver
+ * keeps), and a non-empty value is a slot name like `B2`. `maxWidth` and
+ * `quality` are the viewer's request for this link and are *clamped*, not
+ * refused, into the MIN/MAX ranges above: they come from a viewer sizing its own
+ * canvas, not from an attacker, so the useful answer is the nearest width and
+ * quality this host will actually stream. `everyNth` optionally caps the source
+ * frame rate (CDP `everyNthFrame`), never below one.
+ *
+ * Idempotent: re-sending it for a window already watched is how a viewer
+ * renegotiates on resize or orientation change. Whether this connection *may*
+ * watch the surface is not decided here — it is the same window-grants axis
+ * `window.call` rides, read per frame on the serving end.
+ */
+export type BrowserWatchFrame = {
+  t: 'browser.watch'
+  window: string
+  maxWidth: number
+  quality: number
+  everyNth?: number
+}
+
+/** Stop the screencast of one surface to this connection. The mirror of watch. */
+export type BrowserUnwatchFrame = { t: 'browser.unwatch'; window: string }
+
+/**
+ * Rendered — send the next frame.
+ *
+ * Mirrors CDP's own `Page.screencastFrameAck`, and it is the whole of the
+ * backpressure: the host holds one un-acked frame per watcher and forwards the
+ * next only when this arrives, so the phone's real draw rate throttles the
+ * screencast itself and nothing buffers toward the 8 MB socket ceiling. `seq`
+ * echoes the frame that was drawn.
+ */
+export type BrowserFrameAckFrame = { t: 'browser.frame.ack'; window: string; seq: number }
+
+/**
+ * A tap, a key, a gesture or a paste, aimed at a watched surface.
+ *
+ * `seq` names the frame the coordinates were measured against, so a scroll that
+ * lands mid-gesture cannot desync the mapping: the host maps the coordinates
+ * with *that* frame's scale, which it still holds, rather than trusting a scale
+ * the viewer computed. `x`/`y` are image pixels of frame `seq` and are left as
+ * the numbers they are — the host owns the image→viewport mapping — but they
+ * must be finite, because a `NaN` reaching `Input.dispatchMouseEvent` is not a
+ * click anywhere.
+ *
+ * Exactly one of `mouse`/`key`/`touch`/`paste` is present. They are separate
+ * fields rather than a tagged union because each is dispatched down a different
+ * CDP method, and a frame naming two of them is a frame that could not have been
+ * one gesture. `paste` is `insertText`, control-stripped and bounded by
+ * {@link MAX_INPUT_BYTES} exactly as `input` is — and, host-side, refused into a
+ * known-secret field, the same rule that binds typing.
+ */
+export type BrowserInputFrame = {
+  t: 'browser.input'
+  window: string
+  seq: number
+  mouse?: {
+    type: 'down' | 'up' | 'move' | 'wheel'
+    x: number
+    y: number
+    button?: 'left' | 'right' | 'middle' | 'none'
+    clicks?: number
+    dx?: number
+    dy?: number
+  }
+  key?: { type: 'down' | 'up' | 'char'; key?: string; code?: string; text?: string; mods?: number }
+  touch?: { type: 'start' | 'move' | 'end' | 'cancel'; points: Array<{ x: number; y: number }> }
+  paste?: string
+}
+
+/**
+ * One screencast frame, host→client.
+ *
+ * `data` is a base64 JPEG and the only large field; everything else is the
+ * geometry a viewer needs to draw it and to measure a gesture against it. `w`/`h`
+ * are the image's own pixels, `dw`/`dh` the CSS viewport those pixels cover (the
+ * coordinate space input arrives in), and `scale` is `w/dw`. `offsetTop`,
+ * `pageScale`, `scrollX` and `scrollY` are CDP's screencast metadata, carried so
+ * the viewer can anchor overlays and the host can re-derive the exact mapping
+ * for the gesture that names this `seq`.
+ *
+ * `masked` is the handover curtain: when a secret field is in view or a person
+ * has taken the baton to type a password, `data` is the empty string and the
+ * viewer draws its own lock card under `prompt`. The pixels never enter this
+ * buffer — the frame is withheld at the source, not painted over — because there
+ * is no JPEG encoder in this repo to paint one with, and withholding is the only
+ * absolutely-safe answer. See the handover mask note for why suppression, not
+ * redaction.
+ *
+ * `data` is validated as base64 the way `net.data` is — {@link BASE64_RE}, a
+ * length that is a multiple of four, and a cap ({@link MAX_FRAME_DATA_CHARS}) —
+ * so a corrupt frame is refused here rather than handed half-decoded to
+ * `createImageBitmap`.
+ */
+export type BrowserFrameFrame = {
+  t: 'browser.frame'
+  window: string
+  seq: number
+  w: number
+  h: number
+  dw: number
+  dh: number
+  scale: number
+  offsetTop: number
+  pageScale: number
+  scrollX: number
+  scrollY: number
+  masked?: true
+  prompt?: string
+  data: string
+}
+
+/**
+ * Ask which surfaces are watchable — the browser's tab strip. Client→host.
+ *
+ * The tab strip is *our* UI, so it crosses as data rather than as pixels (the
+ * dual rule: a surface with an IPC representation is listed, only a live web
+ * document is watched). `rid` names this question, answered by
+ * {@link BrowserSurfacesRowsFrame}, which is also pushed unsolicited when the
+ * strip changes — the same shape of answer `devices.changed` gives.
+ */
+export type BrowserSurfacesFrame = { t: 'browser.surfaces'; rid: string }
+
+/**
+ * The watchable surfaces, host→client: an answer to `browser.surfaces` and an
+ * unsolicited push when the strip moves.
+ *
+ * `rid` is present when it answers a question and absent when it is a push, the
+ * same way `settings.state` carries an `rid` for a read and none for a change.
+ * Each row is a surface: its `window` name (empty for the front tab, or a slot),
+ * its `url` and `title` for the strip, and `live` — whether it is currently
+ * being cast. A malformed row is dropped, not fatal; the list is trimmed to
+ * {@link MAX_SURFACES_REPORTED}.
+ */
+export type BrowserSurfacesRowsFrame = {
+  t: 'browser.surfaces.rows'
+  rid?: string
+  surfaces: Array<{ window: string; url: string; title: string; live: boolean }>
+}
 
 /** Largest `input` payload. A paste, not a file upload. */
 export const MAX_INPUT_BYTES = 16 * 1024
@@ -2405,6 +2711,27 @@ export type ClientMessage =
    * lands in and for what this host does when two devices name one session.
    */
   | WindowHoldsFrame
+  /* ---- capability `watch`. The live view, and the taps that come back. ---- */
+  /**
+   * The five frames a watcher sends its host, and the one it asks with.
+   *
+   * `browser.watch`/`browser.unwatch` start and stop a cast; `browser.frame.ack`
+   * is the one-in-flight backpressure that ties the screencast to this phone's
+   * real draw rate; `browser.input` is a tap, key, gesture or paste aimed at a
+   * frame the viewer named by `seq`; `browser.surfaces` asks for the tab strip.
+   * All five reach the host directly rather than through the tool-RPC path
+   * `window.call` rides — they carry no tool name and no session, only a surface
+   * and a gesture — and every one of them is refused unless this host advertised
+   * `watch` to that device and the window-grants axis admits it. See the
+   * capability note on {@link CAPABILITY} for why watch and drive share that
+   * axis, and {@link BrowserInputFrame} for why exactly one of the four input
+   * kinds may be present.
+   */
+  | BrowserWatchFrame
+  | BrowserUnwatchFrame
+  | BrowserFrameAckFrame
+  | BrowserInputFrame
+  | BrowserSurfacesFrame
   /* ---- capability `copilot`. Refused per-tier, per device. ---------------- */
   /**
    * ## The rule that makes this whole surface safe: **no tool name is on the wire**
@@ -3130,6 +3457,23 @@ export type ServerMessage =
    * outcome is already correct.
    */
   | WindowResultFrame
+  /* ---- capability `watch`. The live view, host→client. ------------------- */
+  /**
+   * One screencast frame, and the watchable-surfaces list.
+   *
+   * `browser.frame` is the only large frame this protocol sends and the only one
+   * carrying pixels — a base64 JPEG of one surface, plus the geometry a viewer
+   * needs to draw it and to measure a gesture against it. Its size is bounded by
+   * what a relay carries ({@link MAX_FRAME_DATA_CHARS}) rather than by the text
+   * cap, so it reaches a reader as a decoded object, not a capped string; see
+   * {@link MAX_MESSAGE_BYTES}. `browser.surfaces.rows` is the tab strip as data —
+   * the dual rule again: only a live web document is watched as pixels, the strip
+   * that lists them is data. Both are gated on the same `watch` capability the
+   * client claims and this host advertises, and are addressed to the exact
+   * connection whose grant admits the surface — there is no broadcast.
+   */
+  | BrowserFrameFrame
+  | BrowserSurfacesRowsFrame
   /* ---- capability `copilot` ---------------------------------------------- */
   /** Answer to `copilot.state`, and pushed whenever any of it changes. */
   | { t: 'copilot.state'; state: CopilotStateReport }
@@ -3907,6 +4251,352 @@ function readWindowResult(parsed: Record<string, unknown>): WindowRead<WindowRes
   return { ok: true, message: { t: 'window.result', id: requestId, ok: parsed.ok, body } }
 }
 
+/* ------------------------------------- the watch-and-drive validators -- */
+
+/**
+ * A finite number, or null.
+ *
+ * A gesture's `x`/`y` and a frame's geometry are numbers this file deliberately
+ * does not clamp — the host owns the image→viewport mapping, and a screen is any
+ * size — but a `NaN` or an infinity is not a coordinate, and one reaching
+ * `Input.dispatchMouseEvent` is a click nowhere and a frame drawn at no scale.
+ * So the one thing checked is that it is a real number, the guard `whole` gives
+ * the sizes it *does* bound, without the range.
+ */
+function finiteNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+/**
+ * A watched surface's name, where the empty string is a real answer.
+ *
+ * The front/own tab is `''` — the `OWN_TARGET` convention the driver keeps — and
+ * that is the one place a `''` means a surface rather than a missing field, so it
+ * cannot go through `id`, which refuses the empty string. Anything else is a slot
+ * name held to the same `ID_RE` a session id is: the value selects a
+ * `WebContentsView` on the machine, and one with a slash or a control byte in it
+ * has no legitimate sender.
+ */
+function watchWindow(value: unknown): string | null {
+  if (value === '') return ''
+  return id(value)
+}
+
+/**
+ * Control bytes taken out of a paste before it is inserted.
+ *
+ * Wider than what `id` refuses, narrower than `DISPLAY_STRIP`: a paste is text a
+ * person is putting into a page, so tab, newline and carriage return stay — they
+ * are content in a field — and every other C0 control, DEL and C1 goes.
+ * *Stripped* rather than refused, because a paste that happens to carry a stray
+ * control byte is still a paste somebody meant to make, unlike a session id or a
+ * path where a control byte is a different, hostile value. Written as escapes
+ * for the reason `CONTROL_CHARS` is: a raw one here is invisible in every diff.
+ */
+const PASTE_STRIP = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g
+
+/** The four CDP mouse phases, the four buttons, the three key phases, the four touch phases. */
+const MOUSE_TYPES = ['down', 'up', 'move', 'wheel'] as const
+const MOUSE_BUTTONS = ['left', 'right', 'middle', 'none'] as const
+const KEY_TYPES = ['down', 'up', 'char'] as const
+const TOUCH_TYPES = ['start', 'move', 'end', 'cancel'] as const
+
+/** A key label or code — a W3C identifier like `ArrowLeft` or `KeyA`, never long. */
+const MAX_KEY_FIELD_LENGTH = 64
+
+function readWatch(parsed: Record<string, unknown>): WindowRead<BrowserWatchFrame> {
+  const window = watchWindow(parsed.window)
+  if (window === null) return { ok: false, reason: 'browser.watch without a usable window' }
+  const maxWidth = finiteNumber(parsed.maxWidth)
+  if (maxWidth === null) return { ok: false, reason: 'browser.watch without a width' }
+  const quality = finiteNumber(parsed.quality)
+  if (quality === null) return { ok: false, reason: 'browser.watch without a quality' }
+  const message: BrowserWatchFrame = {
+    t: 'browser.watch',
+    window,
+    // Clamped, not refused: the numbers come from a viewer sizing its own canvas
+    // and negotiating its own link, so the useful answer is the nearest width and
+    // quality this host will actually stream — see the MIN/MAX notes above.
+    maxWidth: Math.min(MAX_WATCH_WIDTH, Math.max(MIN_WATCH_WIDTH, Math.round(maxWidth))),
+    quality: Math.min(MAX_WATCH_QUALITY, Math.max(MIN_WATCH_QUALITY, Math.round(quality))),
+  }
+  const everyNth = parsed.everyNth
+  if (everyNth !== undefined) {
+    const nth = finiteNumber(everyNth)
+    if (nth === null) return { ok: false, reason: 'browser.watch with an unusable everyNth' }
+    // At least one, and a whole number of frames: a rate cap below one frame is
+    // no cap, and a fractional one is a viewer that computed it wrong.
+    message.everyNth = Math.max(1, Math.floor(nth))
+  }
+  return { ok: true, message }
+}
+
+function readUnwatch(parsed: Record<string, unknown>): WindowRead<BrowserUnwatchFrame> {
+  const window = watchWindow(parsed.window)
+  if (window === null) return { ok: false, reason: 'browser.unwatch without a usable window' }
+  return { ok: true, message: { t: 'browser.unwatch', window } }
+}
+
+function readFrameAck(parsed: Record<string, unknown>): WindowRead<BrowserFrameAckFrame> {
+  const window = watchWindow(parsed.window)
+  if (window === null) return { ok: false, reason: 'browser.frame.ack without a usable window' }
+  const seq = asWhole(parsed.seq)
+  if (seq === null || seq < 0) return { ok: false, reason: 'browser.frame.ack without a sequence number' }
+  return { ok: true, message: { t: 'browser.frame.ack', window, seq } }
+}
+
+/**
+ * A mouse event, or null if it is not one.
+ *
+ * A bad *optional* field refuses the whole event rather than being dropped: this
+ * is a gesture that will be dispatched into a page precisely, and a wrong button
+ * or an infinite wheel delta is not something to silently drop and act on the
+ * rest of. `x`/`y` are left as the image pixels they are.
+ */
+function readMouse(value: unknown): NonNullable<BrowserInputFrame['mouse']> | null {
+  if (!isRecord(value)) return null
+  const type = MOUSE_TYPES.find((phase) => phase === value.type)
+  if (type === undefined) return null
+  const x = finiteNumber(value.x)
+  const y = finiteNumber(value.y)
+  if (x === null || y === null) return null
+  const mouse: NonNullable<BrowserInputFrame['mouse']> = { type, x, y }
+  if (value.button !== undefined) {
+    const button = MOUSE_BUTTONS.find((name) => name === value.button)
+    if (button === undefined) return null
+    mouse.button = button
+  }
+  if (value.clicks !== undefined) {
+    const clicks = asWhole(value.clicks)
+    if (clicks === null || clicks < 0) return null
+    mouse.clicks = clicks
+  }
+  if (value.dx !== undefined) {
+    const dx = finiteNumber(value.dx)
+    if (dx === null) return null
+    mouse.dx = dx
+  }
+  if (value.dy !== undefined) {
+    const dy = finiteNumber(value.dy)
+    if (dy === null) return null
+    mouse.dy = dy
+  }
+  return mouse
+}
+
+/**
+ * A key event, or null.
+ *
+ * `key` and `code` are W3C identifiers and carry no control bytes ever, so one
+ * that does is refused; `text` is what the key produces and may legitimately be
+ * a control character — Enter is `\r` — so it is bounded but not stripped. All
+ * three are short: a key event that carried a paste would be `browser.input.paste`
+ * instead.
+ */
+function readKey(value: unknown): NonNullable<BrowserInputFrame['key']> | null {
+  if (!isRecord(value)) return null
+  const type = KEY_TYPES.find((phase) => phase === value.type)
+  if (type === undefined) return null
+  const key: NonNullable<BrowserInputFrame['key']> = { type }
+  for (const field of ['key', 'code'] as const) {
+    const raw = value[field]
+    if (raw !== undefined) {
+      if (typeof raw !== 'string' || raw.length > MAX_KEY_FIELD_LENGTH || CONTROL_CHARS.test(raw)) return null
+      key[field] = raw
+    }
+  }
+  if (value.text !== undefined) {
+    if (typeof value.text !== 'string' || value.text.length > MAX_KEY_FIELD_LENGTH) return null
+    key.text = value.text
+  }
+  if (value.mods !== undefined) {
+    const mods = asWhole(value.mods)
+    if (mods === null || mods < 0) return null
+    key.mods = mods
+  }
+  return key
+}
+
+/**
+ * A touch event, or null.
+ *
+ * The point count is bounded ({@link MAX_TOUCH_POINTS}) because it arrives from a
+ * peer and is dispatched into `Input.dispatchTouchEvent`; an empty list is a real
+ * touch phase (a `touchEnd` lifts the last finger). Every coordinate is finite
+ * and left as image pixels, like the mouse's.
+ */
+function readTouch(value: unknown): NonNullable<BrowserInputFrame['touch']> | null {
+  if (!isRecord(value)) return null
+  const type = TOUCH_TYPES.find((phase) => phase === value.type)
+  if (type === undefined) return null
+  if (!Array.isArray(value.points) || value.points.length > MAX_TOUCH_POINTS) return null
+  const points: Array<{ x: number; y: number }> = []
+  for (const point of value.points) {
+    if (!isRecord(point)) return null
+    const x = finiteNumber(point.x)
+    const y = finiteNumber(point.y)
+    if (x === null || y === null) return null
+    points.push({ x, y })
+  }
+  return { type, points }
+}
+
+function readInput(parsed: Record<string, unknown>): WindowRead<BrowserInputFrame> {
+  const window = watchWindow(parsed.window)
+  if (window === null) return { ok: false, reason: 'browser.input without a usable window' }
+  const seq = asWhole(parsed.seq)
+  if (seq === null || seq < 0) return { ok: false, reason: 'browser.input without a sequence number' }
+
+  // Exactly one of the four. They dispatch down four different CDP methods, so a
+  // frame naming two of them is a frame that could not have been one gesture, and
+  // a frame naming none is a gesture with no verb. Counted on the object itself,
+  // for the reason `input.data` is read once: a getter on the object path must be
+  // the thing this counts and the thing the branch below reads.
+  const present = (['mouse', 'key', 'touch', 'paste'] as const).filter((kind) => parsed[kind] !== undefined)
+  if (present.length !== 1) {
+    return { ok: false, reason: 'browser.input needs exactly one of mouse, key, touch or paste' }
+  }
+
+  const message: BrowserInputFrame = { t: 'browser.input', window, seq }
+  if (parsed.mouse !== undefined) {
+    const mouse = readMouse(parsed.mouse)
+    if (mouse === null) return { ok: false, reason: 'browser.input with an unusable mouse event' }
+    message.mouse = mouse
+  } else if (parsed.key !== undefined) {
+    const key = readKey(parsed.key)
+    if (key === null) return { ok: false, reason: 'browser.input with an unusable key event' }
+    message.key = key
+  } else if (parsed.touch !== undefined) {
+    const touch = readTouch(parsed.touch)
+    if (touch === null) return { ok: false, reason: 'browser.input with an unusable touch event' }
+    message.touch = touch
+  } else {
+    // paste — the only kind left, since exactly one was present. Control-stripped
+    // to text, then bounded by the same paste cap `input` gets; a control byte is
+    // not a reason to refuse a paste, only a thing to take out of it.
+    const raw = parsed.paste
+    if (typeof raw !== 'string') return { ok: false, reason: 'browser.input with an unusable paste' }
+    const paste = raw.replace(PASTE_STRIP, '')
+    if (overBytes(paste, MAX_INPUT_BYTES)) {
+      return { ok: false, reason: 'browser.input paste larger than the paste limit', oversize: true }
+    }
+    message.paste = paste
+  }
+  return { ok: true, message }
+}
+
+function readSurfaces(parsed: Record<string, unknown>): WindowRead<BrowserSurfacesFrame> {
+  const requestId = id(parsed.rid)
+  if (requestId === null) return { ok: false, reason: 'browser.surfaces without a request id' }
+  return { ok: true, message: { t: 'browser.surfaces', rid: requestId } }
+}
+
+/**
+ * One screencast frame, host→client, shape- and size-checked.
+ *
+ * The geometry is finite and unclamped — the image and the viewport are whatever
+ * the host measured. `data` is base64, validated the way `net.data` is:
+ * {@link BASE64_RE}, a length that is a multiple of four, and the frame cap
+ * ({@link MAX_FRAME_DATA_CHARS}) — so a corrupt frame is refused here rather than
+ * handed half-decoded to `createImageBitmap`. A masked frame must carry the empty
+ * string, because a curtained frame with pixels in it would be the password this
+ * whole path exists to keep off the wire.
+ */
+function readFrame(parsed: Record<string, unknown>): WindowRead<BrowserFrameFrame> {
+  const window = watchWindow(parsed.window)
+  if (window === null) return { ok: false, reason: 'browser.frame without a usable window' }
+  const seq = asWhole(parsed.seq)
+  if (seq === null || seq < 0) return { ok: false, reason: 'browser.frame without a sequence number' }
+  const w = finiteNumber(parsed.w)
+  const h = finiteNumber(parsed.h)
+  const dw = finiteNumber(parsed.dw)
+  const dh = finiteNumber(parsed.dh)
+  const scale = finiteNumber(parsed.scale)
+  const offsetTop = finiteNumber(parsed.offsetTop)
+  const pageScale = finiteNumber(parsed.pageScale)
+  const scrollX = finiteNumber(parsed.scrollX)
+  const scrollY = finiteNumber(parsed.scrollY)
+  if (
+    w === null || h === null || dw === null || dh === null || scale === null ||
+    offsetTop === null || pageScale === null || scrollX === null || scrollY === null
+  ) {
+    return { ok: false, reason: 'browser.frame without its geometry' }
+  }
+  const data = asString(parsed.data)
+  if (data === null) return { ok: false, reason: 'browser.frame without data' }
+  // Size before shape, so the close code stays `too-large` on the direction that
+  // carries one — the same order the window frames keep.
+  if (data.length > MAX_FRAME_DATA_CHARS) {
+    return { ok: false, reason: 'browser.frame data over the frame cap', oversize: true }
+  }
+  if (!BASE64_RE.test(data) || data.length % 4 !== 0) {
+    return { ok: false, reason: 'browser.frame data is not base64' }
+  }
+  const message: BrowserFrameFrame = {
+    t: 'browser.frame',
+    window,
+    seq,
+    w,
+    h,
+    dw,
+    dh,
+    scale,
+    offsetTop,
+    pageScale,
+    scrollX,
+    scrollY,
+    data,
+  }
+  if (parsed.masked === true) {
+    // A curtained frame carries no image, so its data must be empty. This is the
+    // one invariant on this frame that is a safety property rather than a shape:
+    // a masked frame with pixels in it is a redaction that leaked.
+    if (data !== '') return { ok: false, reason: 'a masked browser.frame must carry no data' }
+    message.masked = true
+    const prompt = asString(parsed.prompt)
+    if (prompt !== null && prompt !== '') {
+      message.prompt = prompt.replace(DISPLAY_STRIP, '').slice(0, MAX_WATCH_PROMPT_LENGTH)
+    }
+  }
+  return { ok: true, message }
+}
+
+/**
+ * The watchable-surfaces list, host→client.
+ *
+ * A malformed row is dropped, not fatal, and the list is trimmed to
+ * {@link MAX_SURFACES_REPORTED} — a tab strip that shows nine of ten surfaces is
+ * useful, one that refuses the frame over the tenth is not. `rid` is present when
+ * this answers a `browser.surfaces` and absent when it is an unsolicited push,
+ * the same way `settings.state` carries one for a read and none for a change.
+ */
+function readSurfaceRows(parsed: Record<string, unknown>): WindowRead<BrowserSurfacesRowsFrame> {
+  if (!Array.isArray(parsed.surfaces)) {
+    return { ok: false, reason: 'browser.surfaces.rows without a surface list' }
+  }
+  const surfaces: BrowserSurfacesRowsFrame['surfaces'] = []
+  for (const row of parsed.surfaces.slice(0, MAX_SURFACES_REPORTED)) {
+    if (!isRecord(row)) continue
+    const window = watchWindow(row.window)
+    if (window === null) continue
+    const url = asString(row.url)
+    if (url === null || url.length > MAX_URL_LENGTH) continue
+    // A page sets its own title, so it is attacker-influenced display text:
+    // stripped of the controls that let it lie about which tab it is, and bounded.
+    const rawTitle = asString(row.title)
+    const title = rawTitle === null ? '' : rawTitle.replace(DISPLAY_STRIP, '').slice(0, MAX_SURFACE_TITLE_LENGTH)
+    surfaces.push({ window, url, title, live: row.live === true })
+  }
+  const message: BrowserSurfacesRowsFrame = { t: 'browser.surfaces.rows', surfaces }
+  const rid = parsed.rid
+  if (rid !== undefined) {
+    const requestId = id(rid)
+    if (requestId === null) return { ok: false, reason: 'browser.surfaces.rows with an unusable request id' }
+    message.rid = requestId
+  }
+  return { ok: true, message }
+}
+
 /* ------------------------------------------------------------------ parser -- */
 
 /**
@@ -4601,6 +5291,27 @@ export function parseClientMessage(raw: unknown): ParseResult {
       if (rows === null) return bad('sessions.mine without a session list')
       return { ok: true, message: { t: 'sessions.mine', sessions: rows.slice(0, MAX_ANNOUNCED_SESSIONS) } }
     }
+    /* ---- capability `watch`. The five a watcher sends. --------------------- */
+    /*
+     * Shape and size only, authorised nowhere near here — the division every
+     * capability keeps. Whether this device may watch or drive the surface it
+     * names is the server's question, read per frame against the window-grants
+     * axis, because only it knows which device the socket belongs to. A parser
+     * that decided it would be a second grant, in the file least able to keep it
+     * in step with the first. The clamps live in the validators (a viewer's width
+     * and quality are negotiated, not hostile); the exactly-one-of-four rule and
+     * the paste strip live in `readInput`.
+     */
+    case 'browser.watch':
+      return fromWindowRead(readWatch(parsed))
+    case 'browser.unwatch':
+      return fromWindowRead(readUnwatch(parsed))
+    case 'browser.frame.ack':
+      return fromWindowRead(readFrameAck(parsed))
+    case 'browser.input':
+      return fromWindowRead(readInput(parsed))
+    case 'browser.surfaces':
+      return fromWindowRead(readSurfaces(parsed))
     case 'credential.deny': {
       const requestId = id(parsed.id)
       if (!requestId) return bad('credential.deny without an id')
@@ -6324,6 +7035,23 @@ export function parseServerFrame(parsed: unknown): ServerParse {
     }
     case 'window.result': {
       const read = readWindowResult(parsed)
+      return read.ok ? { ok: true, message: read.message } : { ok: false, reason: read.reason }
+    }
+    /* ---- capability `watch`. The live view, host→client. ------------------- */
+    /*
+     * Shape and size only. `browser.frame` is the one large frame this parser
+     * reads, and it reads it here on the *object* path — a caller that decoded a
+     * ~90 KiB frame has no string for the message cap to measure, and what bounds
+     * it is `readFrame`'s per-field cap ({@link MAX_FRAME_DATA_CHARS}). Whether
+     * the frame was allowed to be sent is the sender's question, decided per frame
+     * against the same window-grants axis the tap that comes back rides.
+     */
+    case 'browser.frame': {
+      const read = readFrame(parsed)
+      return read.ok ? { ok: true, message: read.message } : { ok: false, reason: read.reason }
+    }
+    case 'browser.surfaces.rows': {
+      const read = readSurfaceRows(parsed)
       return read.ok ? { ok: true, message: read.message } : { ok: false, reason: read.reason }
     }
     case 'pong':

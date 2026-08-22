@@ -23,11 +23,19 @@ import {
   CONTROL_IDS,
   MAX_WINDOW_ARGS_BYTES,
   MAX_WINDOW_RESULT_BYTES,
+  MIN_WATCH_WIDTH,
+  MAX_WATCH_WIDTH,
+  MIN_WATCH_QUALITY,
+  MAX_WATCH_QUALITY,
+  MAX_TOUCH_POINTS,
+  MAX_SURFACES_REPORTED,
+  MAX_FRAME_DATA_CHARS,
   PROTOCOL_ERROR_CODES,
   PROTOCOL_VERSION,
   chunkInput,
   chunkOutput,
   parseClientMessage,
+  parseServerFrame,
   parseServerMessage,
   serialize,
   type ClientMessage,
@@ -121,6 +129,11 @@ const CLIENT_TYPES: Record<ClientMessage['t'], true> = {
   'window.holds': true,
   'window.call': true,
   'sessions.mine': true,
+  'browser.watch': true,
+  'browser.unwatch': true,
+  'browser.frame.ack': true,
+  'browser.input': true,
+  'browser.surfaces': true,
 }
 
 /** Same guard for the other direction. */
@@ -178,6 +191,8 @@ const SERVER_TYPES: Record<ServerMessage['t'], true> = {
   'window.call': true,
   'window.holds': true,
   'window.result': true,
+  'browser.frame': true,
+  'browser.surfaces.rows': true,
 }
 
 const VALID_CLIENT: ClientMessage[] = [
@@ -354,6 +369,20 @@ const VALID_CLIENT: ClientMessage[] = [
   // how a device that closed its last terminal takes its rows out of the
   // picker.
   { t: 'sessions.mine', sessions: [] },
+  // Watching and driving. In-range width and quality so the clamp leaves them
+  // alone and the round trip holds; the clamp itself is exercised further down.
+  { t: 'browser.watch', window: 'B2', maxWidth: 800, quality: 50, everyNth: 2 },
+  // The front/own tab is the empty string, the one place `''` is a real window.
+  { t: 'browser.watch', window: '', maxWidth: 390, quality: 50 },
+  { t: 'browser.unwatch', window: 'B2' },
+  { t: 'browser.frame.ack', window: 'B2', seq: 42 },
+  // One frame per input kind, since exactly one of the four may be present.
+  { t: 'browser.input', window: 'B2', seq: 42, mouse: { type: 'down', x: 100, y: 200, button: 'left', clicks: 1 } },
+  { t: 'browser.input', window: '', seq: 7, mouse: { type: 'wheel', x: 10, y: 20, dx: 0, dy: -40 } },
+  { t: 'browser.input', window: 'B2', seq: 42, key: { type: 'down', key: 'Enter', code: 'Enter', mods: 0 } },
+  { t: 'browser.input', window: 'B2', seq: 42, touch: { type: 'move', points: [{ x: 1, y: 2 }, { x: 3, y: 4 }] } },
+  { t: 'browser.input', window: 'B2', seq: 42, paste: 'hello world' },
+  { t: 'browser.surfaces', rid: 'srf-1' },
 ]
 
 const SESSION: RemoteSession = {
@@ -456,6 +485,50 @@ const VALID_SERVER: ServerMessage[] = [
   { t: 'window.holds', sessions: [] },
   { t: 'window.result', id: 'win-4', ok: true, body: '{"url":"https://example.com"}' },
   { t: 'window.result', id: 'win-5', ok: false, body: '{"message":"no window by that name"}' },
+  // A screencast frame with a small, real base64 body, and its curtained twin:
+  // masked carries no image, an empty `data` the viewer draws its lock card over.
+  {
+    t: 'browser.frame',
+    window: 'B2',
+    seq: 1,
+    w: 800,
+    h: 1600,
+    dw: 400,
+    dh: 800,
+    scale: 2,
+    offsetTop: 0,
+    pageScale: 1,
+    scrollX: 0,
+    scrollY: 1200,
+    data: Buffer.from('a small stand-in for a jpeg').toString('base64'),
+  },
+  {
+    t: 'browser.frame',
+    window: 'B2',
+    seq: 2,
+    w: 0,
+    h: 0,
+    dw: 400,
+    dh: 800,
+    scale: 0,
+    offsetTop: 0,
+    pageScale: 1,
+    scrollX: 0,
+    scrollY: 0,
+    masked: true,
+    prompt: 'The person is entering something private',
+    data: '',
+  },
+  // The tab strip as data: an answer with an `rid`, and the empty unsolicited push.
+  {
+    t: 'browser.surfaces.rows',
+    rid: 'srf-1',
+    surfaces: [
+      { window: '', url: 'https://example.com/', title: 'Example', live: true },
+      { window: 'B2', url: 'https://mail.example/', title: 'Mail', live: false },
+    ],
+  },
+  { t: 'browser.surfaces.rows', surfaces: [] },
   { t: 'pong' },
   { t: 'created', session: SESSION },
   { t: 'closed', id: SESSION_ID },
@@ -2563,5 +2636,199 @@ describe('the window frames in both directions', () => {
     // the strength of that word is a machine falling off the network.
     expect(CAPABILITIES).toContain('windows')
     expect(CAPABILITIES).toContain('hostwindows')
+  })
+})
+
+/**
+ * The watch-and-drive frames: the live view, and the taps that come back.
+ *
+ * A different family from the window frames above. Those forward a tool call;
+ * these carry pixels one way and gestures the other, and they are
+ * direction-specific — `browser.watch`/`input`/`surfaces` only ever go
+ * client→host, `browser.frame`/`surfaces.rows` only ever host→client — so unlike
+ * the window frames there is no both-directions symmetry to pin. What is pinned
+ * is the round trip (in `VALID_CLIENT`/`VALID_SERVER` above), the clamps, the
+ * exactly-one-of rule, the paste strip, and the base64 cap that keeps a frame
+ * under the relay's ceiling.
+ */
+describe('the watch frames a viewer sends', () => {
+  const SEQ = 42
+
+  it('clamps a requested width and quality into range rather than refusing them', () => {
+    const tooBig = accepted({ t: 'browser.watch', window: 'B2', maxWidth: 9000, quality: 500 })
+    if (tooBig.t !== 'browser.watch') throw new Error('unreachable')
+    expect(tooBig.maxWidth).toBe(MAX_WATCH_WIDTH)
+    expect(tooBig.quality).toBe(MAX_WATCH_QUALITY)
+
+    const tooSmall = accepted({ t: 'browser.watch', window: 'B2', maxWidth: 1, quality: 0 })
+    if (tooSmall.t !== 'browser.watch') throw new Error('unreachable')
+    expect(tooSmall.maxWidth).toBe(MIN_WATCH_WIDTH)
+    expect(tooSmall.quality).toBe(MIN_WATCH_QUALITY)
+  })
+
+  it('rounds a fractional width and floors everyNth to at least one', () => {
+    const frame = accepted({ t: 'browser.watch', window: '', maxWidth: 799.6, quality: 50, everyNth: 0.9 })
+    if (frame.t !== 'browser.watch') throw new Error('unreachable')
+    expect(frame.maxWidth).toBe(800)
+    expect(frame.everyNth).toBe(1)
+  })
+
+  it('refuses a watch with no usable width, quality or window', () => {
+    expect(parseClientMessage({ t: 'browser.watch', window: 'B2', quality: 50 }).ok).toBe(false)
+    expect(parseClientMessage({ t: 'browser.watch', window: 'B2', maxWidth: 800 }).ok).toBe(false)
+    expect(parseClientMessage({ t: 'browser.watch', window: 'a/b', maxWidth: 800, quality: 50 }).ok).toBe(false)
+    // NaN is not a width, the same guard `whole` gives the sizes it bounds.
+    expect(parseClientMessage({ t: 'browser.watch', window: 'B2', maxWidth: NaN, quality: 50 }).ok).toBe(false)
+  })
+
+  it('takes the front tab as the empty string and a slot as a name', () => {
+    expect(accepted({ t: 'browser.unwatch', window: '' })).toEqual({ t: 'browser.unwatch', window: '' })
+    expect(accepted({ t: 'browser.unwatch', window: 'B2' })).toEqual({ t: 'browser.unwatch', window: 'B2' })
+    expect(parseClientMessage({ t: 'browser.unwatch', window: 'a b' }).ok).toBe(false)
+  })
+
+  it('refuses an ack or a surfaces ask that is missing its number or id', () => {
+    expect(parseClientMessage({ t: 'browser.frame.ack', window: 'B2' }).ok).toBe(false)
+    expect(parseClientMessage({ t: 'browser.frame.ack', window: 'B2', seq: -1 }).ok).toBe(false)
+    expect(parseClientMessage({ t: 'browser.frame.ack', window: 'B2', seq: 1.5 }).ok).toBe(false)
+    expect(parseClientMessage({ t: 'browser.surfaces' }).ok).toBe(false)
+    expect(parseClientMessage({ t: 'browser.surfaces', rid: 'a/b' }).ok).toBe(false)
+  })
+
+  it('needs exactly one of mouse, key, touch or paste on an input', () => {
+    // None.
+    expect(parseClientMessage({ t: 'browser.input', window: 'B2', seq: SEQ }).ok).toBe(false)
+    // Two.
+    expect(
+      parseClientMessage({
+        t: 'browser.input',
+        window: 'B2',
+        seq: SEQ,
+        mouse: { type: 'down', x: 1, y: 2 },
+        paste: 'x',
+      }).ok,
+    ).toBe(false)
+    // One is fine.
+    expect(parseClientMessage({ t: 'browser.input', window: 'B2', seq: SEQ, mouse: { type: 'down', x: 1, y: 2 } }).ok).toBe(true)
+  })
+
+  it('leaves image coordinates as the numbers they are, but refuses ones that are not numbers', () => {
+    const frame = accepted({ t: 'browser.input', window: 'B2', seq: SEQ, mouse: { type: 'move', x: 12.5, y: -3 } })
+    if (frame.t !== 'browser.input' || !frame.mouse) throw new Error('unreachable')
+    expect([frame.mouse.x, frame.mouse.y]).toEqual([12.5, -3])
+    expect(parseClientMessage({ t: 'browser.input', window: 'B2', seq: SEQ, mouse: { type: 'move', x: Infinity, y: 0 } }).ok).toBe(false)
+    expect(parseClientMessage({ t: 'browser.input', window: 'B2', seq: SEQ, mouse: { type: 'nope', x: 0, y: 0 } }).ok).toBe(false)
+    expect(parseClientMessage({ t: 'browser.input', window: 'B2', seq: SEQ, mouse: { type: 'down', x: 0, y: 0, button: 'thumb' } }).ok).toBe(false)
+  })
+
+  it('bounds a touch to its point cap and refuses a non-finite coordinate', () => {
+    const points = Array.from({ length: MAX_TOUCH_POINTS + 1 }, () => ({ x: 1, y: 1 }))
+    expect(parseClientMessage({ t: 'browser.input', window: 'B2', seq: SEQ, touch: { type: 'move', points } }).ok).toBe(false)
+    expect(parseClientMessage({ t: 'browser.input', window: 'B2', seq: SEQ, touch: { type: 'start', points: [{ x: 1, y: NaN }] } }).ok).toBe(false)
+    // An empty list is a real phase — a touchEnd lifts the last finger.
+    expect(parseClientMessage({ t: 'browser.input', window: 'B2', seq: SEQ, touch: { type: 'end', points: [] } }).ok).toBe(true)
+  })
+
+  it('strips control bytes out of a paste rather than refusing it, keeping tab', () => {
+    const TAB = String.fromCharCode(9)
+    const NUL = String.fromCharCode(0)
+    const DEL = String.fromCharCode(127)
+    const raw = 'a' + NUL + 'b' + TAB + 'c' + DEL + 'd'
+    const frame = accepted({ t: 'browser.input', window: 'B2', seq: SEQ, paste: raw })
+    if (frame.t !== 'browser.input') throw new Error('unreachable')
+    expect(frame.paste).toBe('ab' + TAB + 'cd')
+  })
+
+  it('refuses a paste past the paste cap, with the too-large close code', () => {
+    const refusal = refused({ t: 'browser.input', window: 'B2', seq: SEQ, paste: 'x'.repeat(MAX_INPUT_BYTES + 1) })
+    expect(refusal.code).toBe('too-large')
+  })
+})
+
+describe('the frames a host casts back', () => {
+  const BASE: Record<string, unknown> = {
+    t: 'browser.frame',
+    window: 'B2',
+    seq: 1,
+    w: 800,
+    h: 1600,
+    dw: 400,
+    dh: 800,
+    scale: 2,
+    offsetTop: 0,
+    pageScale: 1,
+    scrollX: 0,
+    scrollY: 0,
+  }
+
+  it('reads a real base64 frame on the object path, uncapped by the message limit', () => {
+    const data = Buffer.from('a stand-in for jpeg bytes').toString('base64')
+    const parsed = parseServerFrame({ ...BASE, data })
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok || parsed.message.t !== 'browser.frame') throw new Error('unreachable')
+    expect(parsed.message.data).toBe(data)
+  })
+
+  it('validates data as base64: the character set, a length that is a multiple of four, and the cap', () => {
+    expect(parseServerFrame({ ...BASE, data: 'not*base64!' }).ok).toBe(false)
+    expect(parseServerFrame({ ...BASE, data: 'AAA' }).ok).toBe(false) // length % 4 !== 0
+    // At the cap is fine; over is refused. This is the reason the cap is measured
+    // in characters and derived from the relay ceiling, not from the text cap.
+    expect(parseServerFrame({ ...BASE, data: 'A'.repeat(MAX_FRAME_DATA_CHARS) }).ok).toBe(true)
+    expect(parseServerFrame({ ...BASE, data: 'A'.repeat(MAX_FRAME_DATA_CHARS + 4) }).ok).toBe(false)
+  })
+
+  it('refuses a masked frame that still carries pixels, and accepts the empty curtain', () => {
+    const data = Buffer.from('pixels').toString('base64')
+    expect(parseServerFrame({ ...BASE, masked: true, data }).ok).toBe(false)
+    const curtain = parseServerFrame({ ...BASE, masked: true, prompt: 'private', data: '' })
+    expect(curtain.ok).toBe(true)
+    if (!curtain.ok || curtain.message.t !== 'browser.frame') throw new Error('unreachable')
+    expect([curtain.message.masked, curtain.message.data, curtain.message.prompt]).toEqual([true, '', 'private'])
+  })
+
+  it('refuses a frame whose sequence or geometry is not a finite number', () => {
+    expect(parseServerFrame({ ...BASE, scale: NaN, data: '' }).ok).toBe(false)
+    expect(parseServerFrame({ ...BASE, w: Infinity, data: '' }).ok).toBe(false)
+    expect(parseServerFrame({ ...BASE, seq: -1, data: '' }).ok).toBe(false)
+  })
+
+  it('drops a malformed surface row and trims the strip, never refusing the frame over one row', () => {
+    const parsed = parseServerFrame({
+      t: 'browser.surfaces.rows',
+      surfaces: [
+        { window: '', url: 'https://ok.example/', title: 'Fine', live: true },
+        { window: 'a/b', url: 'https://bad.example/', title: 'bad window', live: true },
+        { window: 'B3', url: 42, title: 'bad url', live: false },
+        { window: 'B4', url: 'https://second.example/', title: 'Second', live: false },
+      ],
+    })
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok || parsed.message.t !== 'browser.surfaces.rows') throw new Error('unreachable')
+    expect(parsed.message.surfaces.map((s) => s.window)).toEqual(['', 'B4'])
+
+    const many = Array.from({ length: MAX_SURFACES_REPORTED + 20 }, (_, n) => ({
+      window: 'B' + n,
+      url: 'https://x.example/',
+      title: 't',
+      live: false,
+    }))
+    const trimmed = parseServerFrame({ t: 'browser.surfaces.rows', surfaces: many })
+    if (!trimmed.ok || trimmed.message.t !== 'browser.surfaces.rows') throw new Error('unreachable')
+    expect(trimmed.message.surfaces).toHaveLength(MAX_SURFACES_REPORTED)
+  })
+
+  it('carries an rid when it answers and none when it is a push', () => {
+    const answer = parseServerFrame({ t: 'browser.surfaces.rows', rid: 'srf-1', surfaces: [] })
+    if (!answer.ok || answer.message.t !== 'browser.surfaces.rows') throw new Error('unreachable')
+    expect(answer.message.rid).toBe('srf-1')
+    const push = parseServerFrame({ t: 'browser.surfaces.rows', surfaces: [] })
+    if (!push.ok || push.message.t !== 'browser.surfaces.rows') throw new Error('unreachable')
+    expect(push.message.rid).toBeUndefined()
+    expect(parseServerFrame({ t: 'browser.surfaces.rows', rid: 'a/b', surfaces: [] }).ok).toBe(false)
+  })
+
+  it('lists watch as a capability both ends may name', () => {
+    expect(CAPABILITIES).toContain('watch')
   })
 })
