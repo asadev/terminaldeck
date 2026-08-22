@@ -407,7 +407,7 @@
   not reflow the website by appearing — zoom steps several times in a row.
   A control, not a label: pressing it is ⌘0.
 */
-.bw-zoom {
+.bw-zoom-reset {
   flex-shrink: 0;
   padding: 0 var(--sp-15);
   border: none;
@@ -421,7 +421,7 @@
   cursor: pointer;
 }
 
-.bw-zoom:focus-visible {
+.bw-zoom-reset:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -1px;
 }

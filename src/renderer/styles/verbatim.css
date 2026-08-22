@@ -412,6 +412,7 @@
 /* What a store tool may reach, listed before you install it. Capabilities
    being enumerated, not prose — and the one list in this app where a font
    joining two characters could change what a permission appears to say. */
+.bw-zoom-reset,
 .bw-scrape-reach,
 /* The pairing code the setup pane prints for a server, added 2026-08-22.
    Same reason as the host code beside it: it exists to be read off this

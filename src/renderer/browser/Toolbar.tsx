@@ -556,7 +556,7 @@ export function Toolbar({
         {has && onResetZoom && Math.round(zoom * 100) !== 100 && (
           <button
             type="button"
-            className="bw-zoom"
+            className="bw-zoom-reset"
             title="Reset zoom"
             aria-label={`Zoom ${Math.round(zoom * 100)}%, reset to 100%`}
             onClick={onResetZoom}

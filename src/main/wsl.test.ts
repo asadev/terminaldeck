@@ -871,6 +871,7 @@ describe('wired at launch, not to a button', () => {
   const index = readFileSync(join(__dirname, 'index.ts'), 'utf8')
   const core = readFileSync(join(__dirname, 'host-core.ts'), 'utf8')
   const headless = readFileSync(join(__dirname, '..', 'headless', 'host.ts'), 'utf8')
+  const switchRun = readFileSync(join(__dirname, 'session-switch-run.ts'), 'utf8')
 
   it('reads the machine from whenReady', () => {
     expect(index).toContain('wsl.refresh()')
@@ -911,7 +912,11 @@ describe('wired at launch, not to a button', () => {
   it('asks about a WSL folder’s existence in a way Windows can answer', () => {
     // existsSync('/home/asad/proj') is false on Windows however real the folder
     // is, so restore-on-launch would drop every WSL session as "folder gone".
-    expect(index).toContain('folderExists: (cwd) => folderExists(statablePath(cwd))')
+    // The desktop's restore probes moved into the shared `session-switch-run.ts`
+    // when account switching was lifted into the core; the wiring — and the
+    // statablePath guard that lets Windows answer about a \\wsl.localhost path —
+    // is unchanged, only relocated.
+    expect(switchRun).toContain('folderExists: (cwd) => folderExists(core.statablePath(cwd))')
     expect(index).toContain('existsSync(statablePath(session.cwd))')
     // And the headless restore, which is the one that matters on WSL: the distro
     // is shut down whenever the last terminal closes, so this path runs far more
