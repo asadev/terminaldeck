@@ -29,6 +29,7 @@ function row(over: Partial<StoreExtension> = {}): StoreExtension {
     needs: [],
     works: 'works',
     noRelease: '',
+    logo: '',
     measured: 'Watched working.',
     url: '',
     sha256: '',

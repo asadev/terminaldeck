@@ -244,6 +244,29 @@ export interface ExtensionEntry {
    * source, no button, and no verdict borrowed from anywhere.
    */
   noRelease?: string
+  /**
+   * Which mark the store draws on this row, as a key into
+   * `renderer/store/logo-data.ts`.
+   *
+   * A key rather than the picture, because the picture is 4 KB and this row
+   * crosses the IPC bridge every time a store opens: sending forty of them would
+   * be a quarter of a megabyte of base64 down the wire to draw forty squares the
+   * renderer already had. The renderer resolves the key against a module in its
+   * own bundle.
+   *
+   * **Optional, and it stays optional.** A row added faster than the fetch
+   * script is run draws the generated monogram in `StoreLogo.tsx` instead — this
+   * app's own letter-on-a-colour, which is honestly a placeholder and reads as
+   * one. Making it required would mean the only way to add a row was to have the
+   * network, and the failure would be a typecheck error rather than a slightly
+   * plainer square.
+   *
+   * `node scripts/store-logos.mjs` is what fetched the pictures and what
+   * refreshes them; `--check` names any whose upstream bytes have moved. The
+   * marks are third-party trademarks shown to identify the products, and the
+   * generated module's header carries the notice and the removal undertaking.
+   */
+  logo?: string
   /** `null` when there is nothing worth pinning: a measured refusal, or no release. */
   source: ExtensionSource | null
 }
@@ -283,6 +306,14 @@ export interface StoreExtension {
   measured: string
   /** Why there is no download for a row nothing was measured on, or `''`. */
   noRelease: string
+  /**
+   * The key of the mark the store draws, or `''` for a row that has none.
+   *
+   * `''` is not a defect: a sideloaded extension is a folder somebody dropped
+   * in and no catalogue knows anything about it, mark included. The renderer
+   * draws its own monogram for those. See {@link ExtensionEntry.logo}.
+   */
+  logo: string
   /** `''` for an entry with no download. */
   url: string
   sha256: string
@@ -854,6 +885,10 @@ export function createExtensionStore(options: ExtensionStoreOptions): ExtensionS
         needs: [],
         measured: '',
         noRelease: '',
+        /* Nobody's catalogue has ever seen this folder, so nobody's catalogue
+           has a mark for it. The store draws a monogram rather than borrowing
+           somebody else's picture for a program it has not read. */
+        logo: '',
         url: '',
         sha256: '',
         bytes: 0,
@@ -1057,6 +1092,7 @@ export function createExtensionStore(options: ExtensionStoreOptions): ExtensionS
           needs: [...(entry.needs ?? [])],
           measured: entry.measured,
           noRelease: entry.noRelease ?? '',
+          logo: entry.logo ?? '',
           url: entry.source?.url ?? '',
           sha256: entry.source?.sha256 ?? '',
           bytes: entry.source?.bytes ?? 0,

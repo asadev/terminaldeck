@@ -115,6 +115,8 @@ export interface McpStoreRow {
   taken: string
   blocked: string
   caveat: string
+  /** Which mark to draw, as a key into `store/logo-data.ts`. `''` for none. */
+  logo: string
 }
 
 export interface McpRuntimeReport {
@@ -263,6 +265,7 @@ function readRow(raw: unknown): McpStoreRow | null {
     taken: text(record.taken),
     blocked: text(record.blocked),
     caveat: text(record.caveat),
+    logo: text(record.logo),
   }
 }
 

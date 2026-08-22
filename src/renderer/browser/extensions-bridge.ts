@@ -95,6 +95,8 @@ export interface StoreExtension {
   measured: string
   /** Why nothing was measured and nothing is offered, or `''`. */
   noRelease: string
+  /** Which mark to draw, as a key into `store/logo-data.ts`. `''` for none. */
+  logo: string
   url: string
   sha256: string
   bytes: number
@@ -263,6 +265,7 @@ function readExtension(raw: unknown): StoreExtension | null {
     ),
     measured: text(record.measured),
     noRelease: text(record.noRelease),
+    logo: text(record.logo),
     url: text(record.url),
     sha256: text(record.sha256),
     bytes: count(record.bytes),

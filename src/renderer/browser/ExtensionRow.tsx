@@ -9,6 +9,7 @@ import {
   type StoreExtension,
 } from './extensions-bridge'
 import { StoreLinkOut } from '../store/StoreLinkOut'
+import { StoreLogo } from '../store/StoreLogo'
 
 /**
  * One row of the store's download half — an open-source browser extension.
@@ -92,7 +93,15 @@ export function ExtensionRow({
      that has a real Install, so no row ever carries both. */
   const elsewhere = linkOut(extension)
   return (
-    <li className="bw-store-row">
+    <li className="bw-store-row bw-store-row-logo">
+      {/*
+        The mark, first child and spanning the row — see `store/StoreLogo.css`.
+        It is what turns twenty-four paragraphs into a shelf somebody can scan,
+        and it comes out of this app's own bundle rather than off the vendor's
+        server. A row with no mark, which is every extension somebody added from
+        a folder, gets this app's own monogram rather than a broken picture.
+      */}
+      <StoreLogo name={extension.name} id={extension.id} logo={extension.logo} />
       <div className="bw-store-head">
         <span className="bw-store-name">{extension.name}</span>
         {/* A version only when there is a release this app has actually got

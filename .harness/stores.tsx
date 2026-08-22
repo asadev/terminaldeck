@@ -50,6 +50,7 @@ function extensionRows(): StoreExtension[] {
     needs: [...(entry.needs ?? [])],
     measured: entry.measured,
     noRelease: entry.noRelease ?? '',
+    logo: entry.logo ?? '',
     url: entry.source?.url ?? '',
     sha256: entry.source?.sha256 ?? '',
     bytes: entry.source?.bytes ?? 0,
@@ -89,10 +90,53 @@ function withOneInstalled(rows: StoreExtension[]): StoreExtension[] {
   )
 }
 
+/**
+ * One row nobody's catalogue has ever seen, because the mark is only half the
+ * feature.
+ *
+ * A folder somebody dropped in has no logo and never will, and the store draws
+ * `StoreLogo`'s generated monogram for it — a letter on one of this app's own
+ * `--bind-*` fills. That is the half of the picture that cannot be judged from
+ * a catalogue full of vendors' marks, so the harness carries one.
+ */
+function withOneAdded(rows: StoreExtension[]): StoreExtension[] {
+  return [
+    ...rows,
+    {
+      ...rows[0],
+      id: 'my-own-thing',
+      name: 'My own thing',
+      summary: 'A folder this app was pointed at. Nothing about it was measured.',
+      homepage: '',
+      licence: '',
+      version: '0.4.0',
+      works: 'unmeasured',
+      category: 'your-own',
+      tags: [],
+      measured: '',
+      logo: '',
+      url: '',
+      sha256: '',
+      bytes: 0,
+      state: 'installed',
+      installedVersion: '0.4.0',
+      installedAt: Date.now(),
+      enabled: true,
+      reach: [],
+      /* Inherited from the row this is spread from otherwise, which would have
+         the fixture claiming a reach nobody read off a manifest. */
+      everywhere: false,
+      popup: '',
+      sideloaded: true,
+      origin: '/Users/apple/Downloads/my-own-thing',
+    },
+  ]
+}
+
 const EXT: ExtensionsView = {
   profileId: 'default',
   profileName: 'Default',
-  extensions: withOneInstalled(extensionRows()),
+  extensions: withOneAdded(withOneInstalled(extensionRows())),
   folder: '/Users/apple/Library/Application Support/Terminal Deck/browser-extensions/default',
   orphans: [],
   profiles: [{ id: 'default', name: 'Default' }],
@@ -161,6 +205,7 @@ function mcpRows(): McpStoreRow[] {
         ? ''
         : `${RUNTIME_BINARY[entry.runtime]} is not on this machine. It needs ${RUNTIME_NEEDS[entry.runtime]}`,
       caveat: entry.caveat ?? '',
+      logo: entry.logo ?? '',
     }
   })
 }

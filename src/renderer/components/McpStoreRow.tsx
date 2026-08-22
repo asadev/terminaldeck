@@ -9,6 +9,7 @@ import {
   type McpStoreRow as Row,
 } from './mcp-store-bridge'
 import { StoreLinkOut } from '../store/StoreLinkOut'
+import { StoreLogo } from '../store/StoreLogo'
 
 /**
  * One row of the MCP store.
@@ -107,7 +108,13 @@ export function McpStoreRow({ row, busy, values, said, arming, onValue, onAct, o
   const elsewhere = mcpLinkOut(row)
 
   return (
-    <li className="mcp-store-row" data-state={row.state}>
+    <li className="mcp-store-row mcp-store-row-logo" data-state={row.state}>
+      {/*
+        The mark. Six of these rows wear the Model Context Protocol's own,
+        because six of them are that project's reference servers and that is the
+        true answer to whose they are — see `McpCatalogueEntry.logo`.
+      */}
+      <StoreLogo name={row.name} id={row.id} logo={row.logo} />
       <div className="mcp-store-head">
         <span className="mcp-store-name">{row.name}</span>
         <span className="mcp-tag">{ORIGIN_WORDS[row.origin]}</span>

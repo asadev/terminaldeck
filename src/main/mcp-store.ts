@@ -141,6 +141,8 @@ export interface McpStoreRow {
    */
   blocked: string
   caveat: string
+  /** The key of the mark the store draws, or `''`. See `McpCatalogueEntry.logo`. */
+  logo: string
 }
 
 export interface McpRuntimeReport {
@@ -399,6 +401,7 @@ export function buildStoreView(input: {
       taken: state === 'taken' && mine ? mine.commandLine : '',
       blocked,
       caveat: entry.caveat ?? '',
+      logo: entry.logo ?? '',
     }
   })
 

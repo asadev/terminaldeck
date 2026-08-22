@@ -48,6 +48,7 @@ const ROW: Row = {
   scope: '',
   taken: '',
   blocked: '',
+  logo: '',
   caveat: '',
 }
 
