@@ -35,9 +35,12 @@ const root = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'))
 
 /* ------------------------------------------------------------------ build -- */
 
-execFileSync(process.platform === 'win32' ? 'npx.cmd' : 'npx', ['vite', 'build', '--config', 'vite.headless.config.ts'], {
+execFileSync('npx', ['vite', 'build', '--config', 'vite.headless.config.ts'], {
   cwd: ROOT,
   stdio: 'inherit',
+  // shell:true so Windows resolves npx.cmd (Node refuses to spawn a .cmd
+  // directly, EINVAL); the args are static so shell quoting is not a risk.
+  shell: true,
 })
 
 /* ------------------------------------------------------------ dependencies -- */
@@ -182,7 +185,7 @@ const SHIP = join(ROOT, 'out', 'headless-package')
 rmSync(SHIP, { recursive: true, force: true })
 mkdirSync(SHIP, { recursive: true })
 
-execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['pack', '--silent', '--pack-destination', SHIP], { cwd: OUT, stdio: 'inherit' })
+execFileSync('npm', ['pack', '--silent', '--pack-destination', SHIP], { cwd: OUT, stdio: 'inherit', shell: true })
 const packed = readdirSync(SHIP).filter((name) => name.endsWith('.tgz'))
 if (packed.length !== 1) {
   console.error(`Expected one tarball in ${SHIP} and found ${packed.length}.`)
