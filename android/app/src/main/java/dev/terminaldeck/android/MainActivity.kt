@@ -33,6 +33,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import dev.terminaldeck.android.protocol.HostPlatform
 import dev.terminaldeck.android.transfer.PickedFile
+import dev.terminaldeck.android.ui.AddServerScreen
 import dev.terminaldeck.android.ui.CredentialPromptSheet
 import dev.terminaldeck.android.ui.DevicesScreen
 import dev.terminaldeck.android.ui.GitHubSheet
@@ -216,6 +217,9 @@ fun TerminalDeckApp(
             onForget = viewModel::forgetSelected,
             onRetry = viewModel::reconnect,
             onCancel = if (state.canLeavePairing) viewModel::cancelAddingHost else null,
+            // Always offered from here. This screen owns the window while nothing is paired, so it
+            // is the only door a phone with a server and no desktop has.
+            onAddServer = viewModel::beginAddingServer,
         )
     } else {
 
@@ -235,6 +239,7 @@ fun TerminalDeckApp(
                 onRenameHost = viewModel::rename,
                 onForgetHost = viewModel::forget,
                 onAddHost = viewModel::beginAddingHost,
+                onAddServer = viewModel::beginAddingServer,
                 onCloseSession = { session -> viewModel.endSession(session.id) },
                 // The read is triggered by the screen itself, keyed on the live connection, so it
                 // also re-reads if the socket drops and returns while the screen is open.
@@ -357,6 +362,26 @@ fun TerminalDeckApp(
     }
 
     } // end of the paired branch; the sheets below are drawn over either one
+
+    /*
+     * Adding a server sits above **both** branches, and that placement is the feature.
+     *
+     * It has to be reachable from the pair screen, because a phone with a server and no desktop
+     * never leaves it — and from the session list, because the second machine somebody adds is as
+     * likely to be a server as the first. A destination inside the NavHost could only be reached
+     * from the second of those; a mode of the pair screen could only be reached from the first.
+     *
+     * Drawn from the view model's state rather than a local flag so that a sign-in survives a
+     * rotation: the wait is seconds long, and a screen that reset half way through it would leave a
+     * device row minted on somebody's server that this phone has no credential for.
+     */
+    state.addServer?.let { adding ->
+        AddServerScreen(
+            view = adding,
+            onSignIn = viewModel::signInToServer,
+            onCancel = viewModel::cancelAddingServer,
+        )
+    }
 
     /*
      * The one screen that is the entire explanation of the credential proxy.

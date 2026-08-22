@@ -123,6 +123,16 @@ fun PairingScreen(
      * app, and a screen with no way out is how "add a machine" becomes "my phone forgot my machine".
      */
     onCancel: (() -> Unit)? = null,
+    /**
+     * The other kind of machine, reached from the one screen an unpaired phone can see.
+     *
+     * This screen owns the window while nothing is paired, so a phone whose owner has a **server**
+     * and no desktop has nothing else to look at. Without a way through to sign-in from here, that
+     * person's app is a field for a code that nothing will ever mint — which is exactly what
+     * 0.10.0 shipped. Defaulted so a caller that has not been taught about servers draws the screen
+     * it always drew rather than a control that leads nowhere.
+     */
+    onAddServer: (() -> Unit)? = null,
 ) {
     var code by remember { mutableStateOf("") }
     /*
@@ -214,6 +224,36 @@ fun PairingScreen(
                 onCode = { code = it },
                 onPair = { onPair(code) },
             )
+        }
+
+        /*
+         * The other ceremony, offered wherever the first one is.
+         *
+         * Under the card rather than beside the field: a code is what most people arrive with, and a
+         * screen that opened with two choices would make somebody decide something before they have
+         * been told what either is. It is drawn in every state of this screen, including the failing
+         * ones — a person whose code will never work is the person most likely to have a server.
+         */
+        onAddServer?.let { addServer ->
+            Spacer(Modifier.height(18.dp))
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Adding a server?",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        // Says the difference in one line, because "server" and "machine" are not
+                        // words a person is required to have learned before opening this app.
+                        text = "A machine nobody sits at has no code to show. Sign in to it instead.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Spacer(Modifier.width(10.dp))
+                TextButton(onClick = addServer) { Text("Add a server") }
+            }
         }
 
         Spacer(Modifier.height(24.dp))

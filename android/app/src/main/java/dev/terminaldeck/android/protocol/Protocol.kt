@@ -58,6 +58,28 @@ object Protocol {
     const val MAX_CREDENTIAL_SECRET_LENGTH = 4096
 
     /**
+     * The bounds on an `enroll` frame's login fields, and on the credential that comes back.
+     *
+     * Transcribed from `MAX_ENROLL_USERNAME_LENGTH` / `MAX_ENROLL_SECRET_BYTES` /
+     * `MAX_ENROLL_CREDENTIAL_LENGTH` in `src/main/remote/protocol.ts`, and checked on this side for
+     * the same reason the credential caps are: the desktop answers an over-long field by closing
+     * the socket, so a phone that sends one spends the connection instead of getting a sentence
+     * back. Checked here, the person is still looking at the field they can fix.
+     *
+     * The username is a genuine SSH login and is capped tight. The secret is capped in **bytes**
+     * rather than code units because a `key` sign-in carries a private-key PEM — kilobytes of
+     * base64 with real newlines in it — and it is the one field in this protocol where a line break
+     * is content rather than something to refuse.
+     *
+     * [MAX_ENROLL_CREDENTIAL_LENGTH] bounds what a *host* may hand back: real ones are
+     * `<id>.<secret>`, well under a hundred characters, and the cap is what stops a hostile machine
+     * answering a sign-in with a megabyte for this phone to keep.
+     */
+    const val MAX_ENROLL_USERNAME_LENGTH = 64
+    const val MAX_ENROLL_SECRET_BYTES = 16 * 1024
+    const val MAX_ENROLL_CREDENTIAL_LENGTH = 512
+
+    /**
      * Largest slice of a file in one `upload.data`, before base64.
      *
      * The same number as the desktop's `MAX_NET_CHUNK_BYTES`, because it is the same arithmetic:

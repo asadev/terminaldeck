@@ -30,6 +30,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
@@ -88,6 +89,15 @@ fun HostSwitcherSheet(
     onRename: (String, String?) -> Unit,
     onForget: (String) -> Unit,
     onAddHost: () -> Unit,
+    /**
+     * Add a server: an address and a login, rather than a code somebody reads off a screen.
+     *
+     * A second row rather than a second mode of the first, because the two ceremonies have nothing
+     * in common but the list they end up in — see `SERVERS-DESIGN.md`. Defaulted so that a caller
+     * which has not been taught about servers draws the sheet it always drew, rather than a row that
+     * leads nowhere.
+     */
+    onAddServer: () -> Unit = {},
     /**
      * The GitHub account this phone holds, or null when none is connected.
      *
@@ -234,6 +244,52 @@ fun HostSwitcherSheet(
                             } else {
                                 "The ones above stay paired and stay connected."
                             },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+
+                /*
+                 * The other kind of machine, and it has to be visible here.
+                 *
+                 * This sheet is where machines are managed, so a person looking for "how do I add my
+                 * server" looks here first and finds a row about codes. One row about pairing was
+                 * the whole of it in 0.10.0, which is why the feature Asad asked for most was
+                 * unreachable in a build that had every piece of its wire.
+                 *
+                 * No divider between the two: they are one pair of choices about the same question,
+                 * and a rule between them would read as one being a different kind of thing from the
+                 * row above.
+                 */
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 56.dp)
+                        .clickable {
+                            onDismiss()
+                            onAddServer()
+                        }
+                        .padding(horizontal = 20.dp, vertical = 12.dp),
+                ) {
+                    Icon(
+                        Icons.Filled.Dns,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp),
+                    )
+                    Spacer(Modifier.width(14.dp))
+                    Column {
+                        Text(
+                            text = "Add a server",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        Text(
+                            // Says what it needs before the tap, because the answer to "have I got
+                            // what this asks for" is what decides whether somebody taps it.
+                            text = "Sign in with its address and your login. No desktop needed.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )

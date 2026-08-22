@@ -104,6 +104,14 @@ fun SessionListScreen(
     onForgetHost: (String) -> Unit,
     onAddHost: () -> Unit,
     /**
+     * Add a **server** — the other kind of machine, and the other ceremony.
+     *
+     * Beside [onAddHost] rather than folded into it: a device is paired with a code minted by the
+     * app at the far end, a server is signed in to with a login it already trusts, and the two share
+     * neither a screen nor a verb. See `SERVERS-DESIGN.md`.
+     */
+    onAddServer: () -> Unit = {},
+    /**
      * End a session on the machine on screen. Drawn per row only when [DeckUiState.canCloseSessions]
      * — the machine advertised `close` — and confirmed once here before it is sent, because closing
      * is not undoable. The row is removed on the machine's `closed` answer, not on this tap.
@@ -278,6 +286,7 @@ fun SessionListScreen(
             onRename = onRenameHost,
             onForget = onForgetHost,
             onAddHost = onAddHost,
+            onAddServer = onAddServer,
             gitHubLogin = gitHubLogin,
             onGitHub = onGitHub,
             selectedLabel = state.hostLabel,

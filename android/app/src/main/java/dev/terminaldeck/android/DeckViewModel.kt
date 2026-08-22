@@ -24,11 +24,15 @@ import dev.terminaldeck.android.protocol.Capability
 import dev.terminaldeck.android.protocol.ClientMessage
 import dev.terminaldeck.android.protocol.HostPlatform
 import dev.terminaldeck.android.protocol.HostVersion
+import dev.terminaldeck.android.protocol.Protocol
 import dev.terminaldeck.android.protocol.ServerSettingKey
 import dev.terminaldeck.android.protocol.pasteRefusal
 import dev.terminaldeck.android.protocol.RemoteSessionView
 import dev.terminaldeck.android.protocol.ServerMessage
+import dev.terminaldeck.android.protocol.EnrollMethod
 import dev.terminaldeck.android.session.RemoteSessionBinding
+import dev.terminaldeck.android.signin.ServerAddress
+import dev.terminaldeck.android.signin.ServerSignIn
 import dev.terminaldeck.android.store.DeviceVault
 import dev.terminaldeck.android.store.KeystoreDeviceVault
 import dev.terminaldeck.android.store.PairingRecord
@@ -122,6 +126,24 @@ class DeckViewModel(
      */
     private val lookup: suspend (String, String) -> Rendezvous.Offer? = Rendezvous::lookupAt,
     /**
+     * Where a pasted server address and an SSH login turn into a credential.
+     *
+     * A seam for the same reason [lookup] is one: the real thing opens a WebSocket to a relay and
+     * makes a server run an SSH probe, so a unit test that reached it would dial the internet.
+     * Everything it needs is in one [ServerSignIn.Request] — including the secret, which lives for
+     * the length of the call and is deliberately never a field on this class.
+     */
+    private val serverSignIn: suspend (ServerSignIn.Request) -> ServerSignIn.Result = ServerSignIn::signIn,
+    /**
+     * What this phone calls itself when it introduces itself to a server it is signing in to.
+     *
+     * A parameter rather than a read of `android.os.Build`, because this class is deliberately free
+     * of Android — see [Clipboard] and [NetworkWatch] — and because `Build` on the unit-test
+     * classpath is a stub whose fields are null. The real one comes from [factory]; the default is
+     * the neutral word a server can still show in its device list.
+     */
+    private val deviceName: String = "Phone",
+    /**
      * This app's own build number, for the one comparison [DeckUiState.serverBehindSentence] makes
      * against the machine's `welcome.appVersion`. A plain string so a test can drive both sides of
      * it; the real one is `BuildConfig.VERSION_NAME`, injected by [factory]. Empty is the honest
@@ -148,6 +170,33 @@ class DeckViewModel(
     private var pairingError: String? = null
     /** True while the rendezvous is being asked where a typed code's machine is. */
     private var pairingLookup: Boolean = false
+
+    /**
+     * The Add-a-server screen is up, and what it is doing.
+     *
+     * Held here rather than in the composable so that a sign-in survives a rotation and cannot be
+     * started twice by one — a second `enroll` for the same login is a second SSH probe on somebody
+     * else's server and an attempt spent against its rate limiter.
+     *
+     * What is deliberately **not** here is the password or the key. Those live in the screen's own
+     * state and in the one call that spends them; a view model that held one would be holding it
+     * for as long as the process lives, in a class that is dumped whole into every crash report.
+     */
+    private var addingServer = false
+    private var serverSignInWorking: String? = null
+    private var serverSignInError: String? = null
+    /**
+     * Whether a sign-in is in flight, held separately from the job that is running it.
+     *
+     * Not `serverSignInJob != null`, and the difference is a real bug rather than a style: a
+     * coroutine can finish *before* `launch` returns — an unconfined dispatcher does it every time,
+     * and so does any answer that arrives without suspending — and the assignment of the job then
+     * lands after the body has already cleared it. The field would be left holding a completed job
+     * and every later sign-in would be silently refused, on a phone whose only symptom is a button
+     * that has stopped working.
+     */
+    private var signingIn = false
+    private var serverSignInJob: Job? = null
 
     private var notice: String? = null
 
@@ -322,6 +371,13 @@ class DeckViewModel(
 
             is ServerMessage.Detached,
             is ServerMessage.Pong,
+            // `enrolled` cannot legitimately arrive here. It is the answer to a sign-in, which
+            // happens on its own short socket before any of this exists — see
+            // [dev.terminaldeck.android.signin.ServerSignIn] — so one on a machine's durable
+            // connection is a frame nobody asked for. Dropped rather than acted on: it carries a
+            // credential, and storing one this app did not request would be letting whatever is at
+            // the other end of a socket re-key a paired machine.
+            is ServerMessage.Enrolled,
             -> return
 
             is ServerMessage.Welcome -> {
@@ -612,6 +668,178 @@ class DeckViewModel(
 
     fun clearPairingError() {
         pairingError = null
+        publish()
+    }
+
+    /* ---------------------------------------------------------------- signing in -- */
+
+    /**
+     * The user asked to add a **server** — the other kind of machine, and the other ceremony.
+     *
+     * A device is paired with a code minted by the app at the far end, which presupposes the app is
+     * there. A server has nobody sitting at it and nothing to mint anything, so it is reached by an
+     * address and a login it already trusts. Two ceremonies, one list of machines, and the screen
+     * says which is which. See `SERVERS-DESIGN.md`.
+     */
+    fun beginAddingServer() {
+        addingServer = true
+        serverSignInError = null
+        serverSignInWorking = null
+        publish()
+    }
+
+    /**
+     * Back out of adding a server.
+     *
+     * The sign-in in flight, if there is one, is cancelled with it. The server may still finish its
+     * side — an SSH probe is not something a phone can call back — and that is why the screen says
+     * so rather than this pretending it undid anything.
+     */
+    fun cancelAddingServer() {
+        serverSignInJob?.cancel()
+        serverSignInJob = null
+        signingIn = false
+        addingServer = false
+        serverSignInError = null
+        serverSignInWorking = null
+        publish()
+    }
+
+    /**
+     * Sign in to a server: parse the address, spend the login once, keep the credential.
+     *
+     * The sequence is `enroll` → `enrolled` → `hello` → `welcome` on one socket, driven by
+     * [dev.terminaldeck.android.signin.EnrollExchange], and what lands here is the end of it. The
+     * three things done on success are the same three [adoptPaired] does, in the same order and for
+     * the same reasons — write the record, bring that one machine's link up, and select it, because
+     * a sign-in that left the user looking at a different machine would read as having done nothing.
+     *
+     * ## What is checked here, and why here
+     *
+     * The username and the secret are bounded against [Protocol]'s enroll caps **before** anything
+     * is sent. The server refuses an over-long field by closing the socket, so a phone that sends
+     * one spends the connection and gets no sentence back; checked at this moment the person is
+     * still looking at the field they can fix.
+     *
+     * ## The secret
+     *
+     * It arrives as a parameter, goes into one [ServerSignIn.Request], and is referenced nowhere
+     * else. It is not written to the vault, not put in a field, not logged, and not carried into the
+     * outcome. After this function returns, the only copy left on the phone is the one in the text
+     * field the person typed it into, which the screen clears the moment it succeeds.
+     */
+    fun signInToServer(rawAddress: String, rawUsername: String, secret: String, method: EnrollMethod) {
+        // One at a time. Two `enroll` frames for one login are two SSH probes on somebody else's
+        // server and two attempts against its rate limiter — and the second is the one that gets a
+        // person locked out of their own machine.
+        if (signingIn) return
+
+        val address = when (val parsed = ServerAddress.parse(rawAddress)) {
+            is ServerAddress.Companion.Result.Bad -> return failSignIn(parsed.sentence)
+            is ServerAddress.Companion.Result.Ok -> parsed.address
+        }
+
+        // Trimmed, because a keyboard's trailing space is not part of a username — and the server
+        // trims it too, so a client that did not would be checking a different string from the one
+        // that gets used.
+        val username = rawUsername.trim()
+        if (username.isEmpty()) return failSignIn("Type the username you log in to that server with.")
+        if (username.length > Protocol.MAX_ENROLL_USERNAME_LENGTH) {
+            return failSignIn("That username is too long for a login — ${Protocol.MAX_ENROLL_USERNAME_LENGTH} characters at most.")
+        }
+        // Refused rather than stripped. A login is not display text, and stripping turns one value
+        // into a different, legal-looking one — which is a sign-in attempt as somebody else.
+        if (username.any { it.code <= 0x1f || it.code == 0x7f }) {
+            return failSignIn("That username has something in it that cannot be part of a login.")
+        }
+        if (secret.isEmpty()) {
+            return failSignIn(
+                if (method == EnrollMethod.Password) "Type the password for that login." else "Paste the private key for that login."
+            )
+        }
+        if (Protocol.overBytes(secret, Protocol.MAX_ENROLL_SECRET_BYTES)) {
+            return failSignIn("That key is too large to send. A server takes at most ${Protocol.MAX_ENROLL_SECRET_BYTES / 1024} KB.")
+        }
+
+        signingIn = true
+        serverSignInError = null
+        // A real sentence rather than a bare spinner: this is the longest wait in the app — the
+        // server runs an SSH probe against its own sshd and then a memory-hard hash — and a spinner
+        // with nothing beside it is indistinguishable from one that has stuck.
+        serverSignInWorking = "Signing in to ${address.shortId}…"
+        publish()
+
+        val job = viewModelScope.launch {
+            val result = try {
+                serverSignIn(
+                    ServerSignIn.Request(
+                        address = address,
+                        username = username,
+                        secret = secret,
+                        method = method,
+                        // The durable key, not a throwaway: the server binds the device row it mints
+                        // to the key that shook hands, and every reconnect afterwards is admitted by
+                        // it. See ServerSignIn's header.
+                        identity = vault.identity(),
+                        deviceName = deviceName,
+                    )
+                )
+            } finally {
+                signingIn = false
+            }
+            when (result) {
+                is ServerSignIn.Result.SignedIn -> adoptSignedIn(address, result)
+                is ServerSignIn.Result.Refused -> failSignIn(result.sentence)
+                is ServerSignIn.Result.Unreachable -> failSignIn(result.sentence)
+            }
+        }
+        // Kept only while it is still running. A job that finished before `launch` returned is
+        // nothing to cancel, and storing it would leave a dead handle behind for the next cancel to
+        // act on. See [signingIn].
+        serverSignInJob = job.takeIf { it.isActive }
+    }
+
+    /** The half of [signInToServer] that runs once a credential is in hand. */
+    private fun adoptSignedIn(address: ServerAddress, result: ServerSignIn.Result.SignedIn) {
+        vault.signedIn(
+            hostId = address.hostId,
+            hostStaticPublicKey = address.hostKey,
+            relayUrl = address.relayUrl,
+            credential = result.credential,
+            deviceId = result.deviceId,
+            deviceName = result.deviceName,
+        )
+        val record = vault.pairing(address.hostId) ?: return failSignIn(
+            "This phone could not save that server's credential. It has to be signed in to again."
+        )
+
+        val existing = links[address.hostId]
+        if (existing != null) {
+            // The same machine with a new credential. Taken down and brought back up so its socket
+            // reads what was just written rather than retrying with whatever it was refused with —
+            // and only this machine's link is touched.
+            existing.stop()
+            existing.record = record
+            existing.transport.connect()
+        } else {
+            adopt(record).transport.connect()
+        }
+
+        selectedHostId = address.hostId
+        vault.selectHost(address.hostId)
+        addingServer = false
+        addingHost = false
+        serverSignInWorking = null
+        serverSignInError = null
+        pairingError = null
+        notify("Signed in to ${record.label}.")
+        publish()
+    }
+
+    /** Every way a sign-in ends badly: the screen stays up, holding the sentence and the fields. */
+    private fun failSignIn(sentence: String) {
+        serverSignInWorking = null
+        serverSignInError = sentence
         publish()
     }
 
@@ -1051,6 +1279,11 @@ class DeckViewModel(
             hostKind = current?.hostKind,
             devices = current?.devices?.view(),
             serverSettings = current?.settings?.view(),
+            addServer = if (addingServer) {
+                AddServerView(working = serverSignInWorking, error = serverSignInError)
+            } else {
+                null
+            },
         )
     }
 
@@ -1097,6 +1330,10 @@ class DeckViewModel(
                         // This app's build, so a phone can say "update this server from a desktop"
                         // only when it is genuinely ahead. `BuildConfig` is enabled for this one read.
                         clientVersion = BuildConfig.VERSION_NAME,
+                        // What a server it signs in to will list this phone as. The same string the
+                        // transport introduces itself with, read in the one place that is allowed
+                        // to touch `android.os.Build`.
+                        deviceName = "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}".trim(),
                     ) { scope, hostId, store ->
                         WebSocketDeckTransport(scope = scope, hostId = hostId, vault = store)
                     }
@@ -1190,6 +1427,13 @@ data class DeckUiState(
     val devices: DeviceRosterView? = null,
     /** The two server-owned settings of the machine on screen, or null when it does not serve them. */
     val serverSettings: ServerSettingsView? = null,
+    /**
+     * The Add-a-server screen, or null when it is not up. Null is the normal state.
+     *
+     * Its own object rather than two loose fields, so that "the screen is showing" and "this is what
+     * it is doing" cannot disagree — and so that nothing about it can be read while it is closed.
+     */
+    val addServer: AddServerView? = null,
 ) {
     /** The machine on screen, if there is one. */
     val host: HostSummary? get() = hosts.firstOrNull { it.hostId == selectedHostId } ?: hosts.firstOrNull()
@@ -1400,6 +1644,26 @@ data class DeckUiState(
  */
 data class FolderChoice(val label: String, val folder: String?) {
     val isPath: Boolean get() = folder != null
+}
+
+/**
+ * The Add-a-server screen, as the view model sees it.
+ *
+ * Two nullable sentences and nothing else. Everything the person is typing — the address, the
+ * username, and above all the password or key — stays in the screen's own state: a view model that
+ * held a password would hold it for the life of the process, in a class that is dumped whole into
+ * every crash report.
+ *
+ * [working] is a sentence rather than a boolean because this is the longest wait in the app and the
+ * one place a bare spinner is indistinguishable from a hang. [error] is the server's own words
+ * wherever the server gave any.
+ */
+data class AddServerView(
+    val working: String? = null,
+    val error: String? = null,
+) {
+    /** Whether something is in flight. The one predicate the screen may disable its button on. */
+    val busy: Boolean get() = working != null
 }
 
 /** The pairing, as the UI is allowed to see it: no key material, no token. */
