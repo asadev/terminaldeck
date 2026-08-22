@@ -17,6 +17,29 @@
    actually needs.
    ============================================================================ */
 
+/* ------------------------------------------------------- the page's top -- */
+
+/*
+ * The leading group on Machines starts where every other page's content does.
+ *
+ * `.settings-group` carries `margin-top: var(--sp-10)` — the 40px that separates
+ * one group from the next inside the Settings sheet, where a pane title and its
+ * blurb always sit above the first group and earn that gap. Machines borrows the
+ * same class (this page is built from settings controls on purpose — see the
+ * header of `machines.css`) but has nothing above its first group, so the 40
+ * landed on top of `.panel-page`'s own 24 and pushed the page's first line to
+ * y=160 while Overview, Files, Artifacts, Source control, GitHub, AI readiness,
+ * MCP servers and Session updates all start at y=120.
+ *
+ * Measured, not guessed: eight pages at 120, this one alone at 160, so moving
+ * to Machines shifted the whole column down by forty pixels. Scoped to a group
+ * that is a panel page's *first* child, which is the only place the gap is
+ * unearned — the between-groups 40 further down the page is the rule working.
+ */
+.panel-page > .settings-group:first-child {
+  margin-top: 0;
+}
+
 /* ------------------------------------------------------------- the list -- */
 
 .servers-list {
