@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { ExtensionRow } from './ExtensionsPanel'
+import { ExtensionRow } from './ExtensionRow'
 import type { StoreExtension } from './extensions-bridge'
 
 /**
@@ -21,7 +21,7 @@ import type { StoreExtension } from './extensions-bridge'
  *    wider than the row said — so the two are the same thing or neither happens.
  *
  * There is no DOM in this project's test setup, so this renders through
- * `react-dom/server` the way `ToolsPanel.test.tsx` does. The panel around this
+ * `react-dom/server` the way `ToolRow.test.tsx` does. The panel around this
  * row loads through an effect, which SSR never runs, so the row is where
  * everything worth asserting lives.
  */
@@ -81,6 +81,33 @@ describe('every row', () => {
     const html = render()
     expect(html).toContain('MIT')
     expect(html).toContain('github.com/darkreader/darkreader')
+  })
+})
+
+describe('what will be fetched, and what was', () => {
+  it('says the exact URL, the exact byte count and the fingerprint before Install is pressed', () => {
+    // This is the disclosure. A store that fetches programs and will not say
+    // from where, or says "verified" without saying against what, is asking
+    // for the trust it exists to replace.
+    const html = render()
+    expect(html).toContain('https://example.com/a.zip')
+    expect(html).toContain('100 bytes, exactly')
+    expect(html).toContain('a'.repeat(64))
+    expect(html).toContain('must match this, or nothing is saved')
+  })
+
+  it('answers "where did this program come from" on an installed row, past tense', () => {
+    const html = render({ state: 'installed', enabled: true })
+    expect(html).toContain('https://example.com/a.zip')
+    expect(html).toContain('matched this before it was unpacked')
+  })
+
+  it('offers no provenance on a row with no download pinned', () => {
+    // A "cannot work here" row pins nothing, so a URL under it would be
+    // provenance for a fetch that can never happen.
+    const html = render({ works: 'no', state: 'unavailable', url: '', sha256: '', bytes: 0 })
+    expect(html).not.toContain('Download')
+    expect(html).not.toContain('sha256')
   })
 })
 

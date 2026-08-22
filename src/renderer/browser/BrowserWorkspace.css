@@ -2307,6 +2307,19 @@
   font-size: var(--t-caption);
 }
 
+/* The row's own answer to "do I have this". The store's built-in half is one
+   list rather than an Installed/More split, so the state rides the row — a
+   quiet chip, because installed is a fact and not an alert. */
+.bw-store-state {
+  flex-shrink: 0;
+  padding: 1px var(--sp-2);
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  color: var(--text-secondary);
+  font-size: var(--t-footnote);
+  font-weight: var(--w-medium);
+}
+
 .bw-store-install {
   flex-shrink: 0;
   height: var(--control-h-sm);
@@ -2443,13 +2456,13 @@
 }
 
 /*
-  The extension store's two controls that the tools store next door has no need
+  The download half's two controls that the store's built-in half has no need
   for.
 
   `.bw-ext-switch` is a real switch over a real effect: off calls
   `removeExtension`, which stops the program immediately. It sits beside Remove
   rather than replacing it because off and gone are different things — see
-  `ExtensionsPanel.tsx`. Sized like `.bw-store-version` so the row does not
+  `ExtensionRow.tsx`. Sized like `.bw-store-version` so the row does not
   change height when an extension goes from available to installed.
 */
 .bw-ext-switch {

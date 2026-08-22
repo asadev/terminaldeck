@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { ExtensionManifest } from '../browser-extension-support'
 import type { ExtensionResult, InstalledExtension } from '../browser-extensions'
 import { extensionTools, listExtensions, noteFor, type ExtensionToolDeps } from './extension-tools'
+import { STORE_PLACE } from './store-tools'
 import type { ToolContext } from './catalogue'
 
 function installed(id: string, manifest: Partial<ExtensionManifest>): InstalledExtension {
@@ -91,7 +92,10 @@ describe('listing', () => {
     const output = await tool.run({}, CONTEXT)
     const value = output.value as { extensions: unknown[]; note: string }
     expect(value.extensions).toEqual([])
-    expect(value.note).toContain('⋯ menu, under Extensions')
+    // The same words the menu row wears — STORE_PLACE, the one door to the
+    // unified store — so the sentence an agent relays matches the screen a
+    // person then goes looking at.
+    expect(value.note).toContain(STORE_PLACE)
   })
 })
 

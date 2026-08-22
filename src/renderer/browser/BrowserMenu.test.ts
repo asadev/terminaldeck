@@ -69,12 +69,13 @@ describe('the everyday rows he named, and only the ones that exist', () => {
    * review is made of. Adding one of these rows means building the thing first —
    * and then this test is what tells you to come back and change it.
    *
-   * **Extensions was one of those absences and is not any more.** It is a row
-   * now because there is a store behind it: `browser-extensions.ts` fetches,
-   * verifies and unpacks into a profile, `browser-extensions-ipc.ts` loads it
-   * into that profile's session, and `ExtensionsPanel.tsx` draws it. The bargain
-   * this block describes was kept rather than waived — the row arrived *after*
-   * the thing did.
+   * **Extensions was one of those absences and is not any more.** There is a
+   * store behind the word now: `browser-extensions.ts` fetches, verifies and
+   * unpacks into a profile, `browser-extensions-ipc.ts` loads it into that
+   * profile's session, and `StorePanel.tsx` draws it — as the download half of
+   * the one tools store, beside the built-in tools, rather than as a second
+   * door. The bargain this block describes was kept rather than waived — the
+   * row arrived *after* the thing did.
    */
   it('draws History', () => {
     expect(onScreen).toContain('onHistory')
@@ -90,16 +91,24 @@ describe('the everyday rows he named, and only the ones that exist', () => {
     expect(onScreen).not.toContain('Saved passwords')
   })
 
-  it('draws Extensions, because there is now a store behind it', () => {
-    expect(onScreen).toContain('onExtensions')
-    expect(onScreen).toMatch(/>\s*Extensions\s*</)
+  it('draws one Tools store row, because the store is one place', () => {
+    // His ask was one store — "a tools store for extensions to this browser
+    // with all open source best tools in the market … which tools will not be
+    // here only when they download". Two doors (Tools with nothing that
+    // downloads, Extensions with the downloads) was that ask inverted, so the
+    // menu carries exactly one door and no separate Extensions row.
+    expect(onScreen).toContain('onTools')
+    expect(onScreen).toMatch(/>\s*Tools store\s*</)
+    expect(onScreen).not.toContain('onExtensions')
+    expect(onScreen).not.toMatch(/>\s*Extensions\s*</)
   })
 
-  it('leaves Extensions out entirely on a build whose preload cannot answer', () => {
-    // Absent, not disabled — the same bargain History and Settings make, and
-    // `extensions-bridge.ts` says what counts as answerable: a list, an install,
-    // a remove and the switch. Anything less and the row does not appear.
-    expect(onScreen).toContain('{onExtensions && (')
+  it('leaves the Tools store out entirely on a build whose preload cannot answer', () => {
+    // Absent, not disabled — the same bargain History and Settings make.
+    // `store-bridge.ts` and `extensions-bridge.ts` say what counts as wired for
+    // each half; either half alone earns the row, and the dialog behind it
+    // draws only the half that is wired.
+    expect(onScreen).toContain('{onTools && (')
   })
 
   it('leaves History out entirely on a build whose preload cannot answer', () => {

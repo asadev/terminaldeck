@@ -89,7 +89,7 @@ export interface StoreToolDeps {
  * because *"install it"* with no place to do it is the dead end this whole
  * round is about. It is the same words the menu row uses.
  */
-export const STORE_PLACE = "the browser's ⋯ menu, under Tools"
+export const STORE_PLACE = "the browser's ⋯ menu, under Tools store"
 
 function optStr(args: Record<string, unknown>, key: string): string | null {
   const value = args[key]

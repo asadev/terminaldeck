@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { actionLabel, actionVerb, ToolRow } from './ToolsPanel'
+import { actionLabel, actionVerb, ToolRow } from './ToolRow'
 import type { StoreTool } from './store-bridge'
 
 /**
@@ -34,6 +34,7 @@ const TOOL: StoreTool = {
   origins: ['*'],
   url: '',
   fetched: false,
+  sha256: '7e5f266ec50bf32931cd23f893074be0702f531152eb4ebe6f3ba752499d8186',
   state: 'available',
   installedVersion: '',
   installedAt: 0,
@@ -67,6 +68,48 @@ describe('what a row shows before anybody presses anything', () => {
   it('does not claim to collect anything until there is a file that says so', () => {
     expect(markup).not.toContain('Collects')
     expect(html({ ...TOOL, state: 'installed', reads: ['images'] })).toContain('Collects')
+  })
+})
+
+describe('a built-in does not pretend to be a download', () => {
+  it('says outright that it ships in the app and that installing it downloads nothing', () => {
+    // The store's whole download half is real fetches with real verification.
+    // A first-party recipe sitting beside those with nothing on the row saying
+    // where it comes from would borrow that credibility without earning it.
+    const markup = html(TOOL)
+    expect(markup).toContain('Built into this app')
+    expect(markup).toContain('downloads nothing')
+    // And no fingerprint line: printing a digest for a thing that is never
+    // fetched would dress it as a download.
+    expect(markup).not.toContain(TOOL.sha256)
+  })
+
+  it('a fetched tool says its URL and the fingerprint the download must match', () => {
+    const fetched = html({ ...TOOL, fetched: true, url: 'https://example.com/recipe.json' })
+    expect(fetched).toContain('https://example.com/recipe.json')
+    expect(fetched).toContain(TOOL.sha256)
+    expect(fetched).toContain('must match this, or nothing is saved')
+    expect(fetched).not.toContain('downloads nothing')
+  })
+
+  it('an installed fetched tool says the download matched, past tense', () => {
+    const markup = html({
+      ...TOOL,
+      fetched: true,
+      url: 'https://example.com/recipe.json',
+      state: 'installed',
+    })
+    expect(markup).toContain('matched this before it was saved')
+    expect(markup).toContain('checked against it again every time it is read')
+  })
+})
+
+describe('the state, on the row', () => {
+  it('an installed row wears an Installed chip; an available one wears none', () => {
+    // The unified store draws the built-in half as one list, so "do I have
+    // this" is answered on the row rather than by which section it sits in.
+    expect(html({ ...TOOL, state: 'installed' })).toContain('Installed')
+    expect(html(TOOL)).not.toContain('Installed')
   })
 })
 

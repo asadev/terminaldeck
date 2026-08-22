@@ -6,6 +6,7 @@ import {
 } from '../browser-extension-support'
 import type { ExtensionResult, InstalledExtension } from '../browser-extensions'
 import type { JsonSchema, ToolContext, ToolOutput, ToolSpec } from './catalogue'
+import { STORE_PLACE } from './store-tools'
 import { Refused } from './surface'
 
 /**
@@ -171,7 +172,9 @@ export function extensionTools(deps: ExtensionToolDeps): ToolSpec[] {
         'changes what that page contains, so a blocker, a dark-mode rewriter or a URL cleaner will ' +
         'otherwise be reported as the site’s own behaviour. Switching one off is how you see a page ' +
         'as the site actually sends it. It cannot install or remove anything — that is done by hand ' +
-        'in the browser’s ⋯ menu, under Extensions.',
+        // One door, one spelling: the same words the menu row wears, imported
+        // from the tool that answers for the other half of the same store.
+        `in ${STORE_PLACE}.`,
       index:
         'List which browser extensions are running in a profile, and switch one on or off. Read it before reading a page an extension may be altering.',
       inputSchema: SCHEMA,
@@ -212,7 +215,7 @@ export function extensionTools(deps: ExtensionToolDeps): ToolSpec[] {
               extensions,
               note:
                 extensions.length === 0
-                  ? `No extensions are installed in ${profileName}. They are installed by hand, in the browser’s ⋯ menu, under Extensions.`
+                  ? `No extensions are installed in ${profileName}. They are installed by hand, in ${STORE_PLACE}.`
                   : '',
             },
             summary: {

@@ -15,8 +15,7 @@ import { DrawPanel } from './DrawPanel'
 import { RecorderPanel } from './RecorderPanel'
 import { ScreenshotPopup } from './ScreenshotPopup'
 import { HistoryPanel } from './HistoryPanel'
-import { ToolsPanel } from './ToolsPanel'
-import { ExtensionsPanel } from './ExtensionsPanel'
+import { StorePanel } from './StorePanel'
 import { ProfileSettings } from './ProfileSettings'
 import { ScrapingPanel } from './ScrapingPanel'
 import { SessionModal } from './SessionModal'
@@ -767,8 +766,7 @@ export function BrowserWorkspace({
    */
   const store = useMemo(() => resolveStoreApi(), [])
   const extensions = useMemo(() => resolveExtensionsApi(), [])
-  const [toolsOpen, setToolsOpen] = useState(false)
-  const [extensionsOpen, setExtensionsOpen] = useState(false)
+  const [storeOpen, setStoreOpen] = useState(false)
 
   /*
    * ---------------------------------------------------------------------------
@@ -3187,12 +3185,13 @@ export function BrowserWorkspace({
               : undefined
           }
           /* The only door to the store, so it goes with the thing behind it:
-             absent on a preload that cannot install or remove, rather than a row
-             that opens a panel whose buttons could never work. */
-          onTools={storeAvailable(store) ? () => openAt(null, () => setToolsOpen(true)) : undefined}
-          onExtensions={
-            extensionsAvailable(extensions)
-              ? () => openAt(null, () => setExtensionsOpen(true))
+             absent on a preload that can wire neither half, rather than a row
+             that opens a panel whose buttons could never work. Either half
+             alone earns the row — the panel draws only the half that is wired,
+             absent-not-disabled section by section. */
+          onTools={
+            storeAvailable(store) || extensionsAvailable(extensions)
+              ? () => openAt(null, () => setStoreOpen(true))
               : undefined
           }
           onClose={() => setMenuOpen(false)}
@@ -3316,20 +3315,20 @@ export function BrowserWorkspace({
         onClose={() => setHistoryFor(null)}
       />
 
-      <ToolsPanel open={toolsOpen} api={store} onClose={() => setToolsOpen(false)} />
-
       {/*
-        The extension store opens on the profile the browser is actually in, so
-        the first thing it says — what is installed *here* — is about the pages
-        in front of the person rather than about whichever profile came first in
-        a list. `browser-extensions.ts` has the argument for why an extension is
-        never a global fact.
+        The one store — downloads and built-ins in one dialog, the distinction
+        drawn by its sections. It opens on the profile the browser is actually
+        in, so the first thing its download half says — what is installed
+        *here* — is about the pages in front of the person rather than about
+        whichever profile came first in a list. `browser-extensions.ts` has the
+        argument for why an extension is never a global fact.
       */}
-      <ExtensionsPanel
-        open={extensionsOpen}
-        api={extensions}
+      <StorePanel
+        open={storeOpen}
+        store={store}
+        extensions={extensions}
         profileId={activeProfileId}
-        onClose={() => setExtensionsOpen(false)}
+        onClose={() => setStoreOpen(false)}
       />
     </div>
   )
