@@ -110,6 +110,38 @@ import type { ExtensionManifest } from './browser-extension-support'
 /** The build every sentence above was measured against. */
 export const COMPAT_MEASURED_ELECTRON = '41.10.5'
 
+/**
+ * Which browser this layer is being written for.
+ *
+ * Everything above was measured against Electron 41's Chromium, which omits the
+ * namespaces {@link COMPAT_PROVIDES} fills in. The headless server runs a full
+ * chrome-for-testing Chromium instead, which provides them natively — and the
+ * shim's own `if (!api.X)` guards already make it a no-op there for all but one
+ * of them. The exception is `storage.sync`, which the shim replaces
+ * *unconditionally* because on Electron the object exists and silently never
+ * works (see the install site). Under real Chromium that object exists and *does*
+ * work, so overwriting it would replace a working native store with a
+ * `storage.local` mirror — the one thing this layer must never do. This flag is
+ * how the shim knows not to.
+ */
+export type CompatRuntime = 'electron' | 'chromium'
+
+let runtime: CompatRuntime = 'electron'
+
+/**
+ * Tell this module which browser its shims are for. The server calls it with
+ * `'chromium'` at boot; the desktop leaves it at its `'electron'` default, so
+ * nothing about the desktop's behaviour changes.
+ */
+export function setCompatRuntime(next: CompatRuntime): void {
+  runtime = next
+}
+
+/** The runtime this module is currently compiling shims for. */
+export function compatRuntime(): CompatRuntime {
+  return runtime
+}
+
 /** The name of the file written into the unpacked extension. */
 export const COMPAT_FILE = 'td-compat.js'
 
@@ -364,6 +396,11 @@ export const COMPAT_SHIM = `/* Terminal Deck compatibility layer. Written by bro
   function provided(name) { if (report.provided.indexOf(name) < 0) report.provided.push(name) }
   function note(line) { if (report.notes.length < 40) report.notes.push(line) }
 
+  /* True when this is real chrome-for-testing, which provides these namespaces
+   * itself. The if(!api.X) guards below already self-disable there; this flag is
+   * for storage.sync, the one namespace replaced without such a guard. */
+  var TD_NATIVE = __TD_NATIVE__
+
   var inPage = false
   try { inPage = typeof location !== 'undefined' && location.protocol !== 'chrome-extension:' } catch (e) {}
 
@@ -524,8 +561,13 @@ export const COMPAT_SHIM = `/* Terminal Deck compatibility layer. Written by bro
       MAX_SUSTAINED_WRITE_OPERATIONS_PER_MINUTE: 1000000,
     }
     try {
-      Object.defineProperty(api.storage, 'sync', { value: mirror, writable: true, configurable: true })
-      provided('storage.sync')
+      /* Skip only when a native storage.sync is really present — real Chromium.
+       * On Electron the object exists but never works, so the guard would leave
+       * it broken; there TD_NATIVE is false and the mirror goes in as before. */
+      if (!(TD_NATIVE && api.storage.sync)) {
+        Object.defineProperty(api.storage, 'sync', { value: mirror, writable: true, configurable: true })
+        provided('storage.sync')
+      }
     } catch (e) { note('storage.sync: ' + e.message) }
   }
 
@@ -776,9 +818,20 @@ export const COMPAT_SHIM = `/* Terminal Deck compatibility layer. Written by bro
 })()
 `
 
-/** The layer's text for one extension, with its ruleset ids compiled in. */
+/**
+ * The layer's text for one extension, with its ruleset ids and the runtime
+ * compiled in.
+ *
+ * `__TD_NATIVE__` becomes `true` only for the chromium runtime, which is what
+ * makes the shim leave a working native `storage.sync` alone. Reads the module
+ * runtime rather than taking it as an argument so every existing one-argument
+ * caller keeps producing the desktop shim unchanged.
+ */
 export function compatShimFor(plan: CompatPlan): string {
-  return COMPAT_SHIM.replace('__TD_RULESETS__', JSON.stringify(plan.rulesets))
+  return COMPAT_SHIM.replace('__TD_RULESETS__', JSON.stringify(plan.rulesets)).replace(
+    '__TD_NATIVE__',
+    runtime === 'chromium' ? 'true' : 'false',
+  )
 }
 
 /* ---------------------------------------------------------------- the write -- */

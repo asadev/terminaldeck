@@ -13,6 +13,7 @@ import {
   popupPage,
   reachOf,
   requestedApis,
+  setExtensionRuntime,
   usesStaticRulesets,
 } from './browser-extension-support'
 
@@ -240,5 +241,62 @@ describe('the limits shown on screen', () => {
     expect(all).toContain('nothing updates itself')
     expect(all).toContain('chrome.storage.sync')
     expect(all).toContain('declarativenetrequest')
+  })
+})
+
+/**
+ * The same manifests, read against the full Chromium the server runs.
+ *
+ * Everything above is the Electron measurement. On the server the runtime flag
+ * says the compat-provided namespaces are native and the static-ruleset gap is
+ * closed — but only those: a namespace this file never measured on either
+ * runtime is left reported the way it always was. Each case resets the flag in a
+ * `finally`, because it is module state and the desktop default must not leak
+ * into the next test.
+ */
+describe('read against the full Chromium on the server', () => {
+  it('does not call the compat-provided namespaces missing any more', () => {
+    setExtensionRuntime('chromium')
+    try {
+      // contextMenus, notifications and webNavigation are shimmed on the desktop
+      // and native here — so not "missing" on the server.
+      expect(
+        missingApis(manifest({ permissions: ['contextMenus', 'notifications', 'webNavigation'] })),
+      ).toEqual([])
+    } finally {
+      setExtensionRuntime('electron')
+    }
+    // The desktop default is unchanged: they are still missing there.
+    expect(
+      missingApis(manifest({ permissions: ['contextMenus', 'notifications', 'webNavigation'] })),
+    ).toEqual(['contextMenus', 'notifications', 'webNavigation'])
+  })
+
+  it('still reports a namespace it never measured as native — measured cuts both ways', () => {
+    setExtensionRuntime('chromium')
+    try {
+      // `bookmarks` is not in the compat-provided set, so the server relaxation
+      // does not touch it: it stays reported exactly as the Electron measurement
+      // had it, rather than being claimed native on a guess.
+      expect(missingApis(manifest({ permissions: ['bookmarks'] }))).toEqual(['bookmarks'])
+    } finally {
+      setExtensionRuntime('electron')
+    }
+  })
+
+  it('reports the static-ruleset gap as resolved', () => {
+    const withRulesets = manifest({
+      declarative_net_request: { rule_resources: [{ id: 'ads', enabled: true, path: 'a.json' }] },
+    })
+    setExtensionRuntime('chromium')
+    try {
+      // Real Chromium enables a manifest ruleset marked enabled at load, so there
+      // is no dead-on-arrival blocking to warn about.
+      expect(usesStaticRulesets(withRulesets)).toBe(false)
+    } finally {
+      setExtensionRuntime('electron')
+    }
+    // The desktop default still spots it.
+    expect(usesStaticRulesets(withRulesets)).toBe(true)
   })
 })

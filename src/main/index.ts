@@ -226,6 +226,7 @@ import {
   DOWNLOADS_CHANNEL,
   installDownloads,
   registerBrowserDownloadIpc,
+  setDownloadWindow,
 } from './browser-downloads'
 import { registerBrowserPasswordIpc } from './browser-passwords'
 import { flushHistory, registerBrowserHistoryIpc } from './browser-history'
@@ -3379,7 +3380,6 @@ function registerIpc(): void {
     broadcast: (view) => {
       send(DOWNLOADS_CHANNEL, view)
     },
-    window: () => mainWindow,
     deliver: async (machineId, localPath, folder) => {
       if (serverStore.get(machineId) !== null) {
         try {
@@ -3414,6 +3414,7 @@ function registerIpc(): void {
       return await links.sendFile(machineId, localPath, folder === '' ? undefined : folder)
     },
   })
+  setDownloadWindow(() => mainWindow)
   registerBrowserDownloadIpc(ipcMain)
   registerBrowserPasswordIpc(ipcMain, () => app.getPath('userData'))
   registerBrowserHistoryIpc(ipcMain, () => app.getPath('userData'))

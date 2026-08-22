@@ -186,7 +186,14 @@ describe('the guard over the download path', () => {
      */
     expect(WRITERS.length).toBeGreaterThan(10)
     for (const file of [
-      'browser-downloads.ts',
+      // The download path, split by wave-2 so the server can carry it without
+      // Electron: the ledger, the desktop `will-download` transport (its
+      // `setSavePath` is the write), and the CDP transport (its move of the
+      // completed file). `browser-downloads.ts` is now only a re-export and
+      // writes nothing, so the scan follows the bytes to where they moved.
+      'browser-downloads-store.ts',
+      'browser-downloads-electron.ts',
+      'browser-downloads-cdp.ts',
       // The hole this rewrite exists to close: it has written response bodies
       // to disk since the day it was added and was outside the old list.
       'browser-capture-store.ts',
