@@ -45,14 +45,14 @@ describe('parseArgs', () => {
     expect(parseArgs(['--help'])).toEqual({ kind: 'help' })
   })
 
-  it('names the four commands when it does not understand one', () => {
+  it('names the commands when it does not understand one', () => {
     // A CLI that prints its whole usage because it did not understand you
     // teaches you nothing about which part it did not understand.
     const parsed = parseArgs(['restart'])
     expect(parsed.kind).toBe('error')
     if (parsed.kind !== 'error') return
     expect(parsed.message).toContain('restart')
-    expect(parsed.message).toContain('pair, status, folders and stop')
+    expect(parsed.message).toContain('pair, status, browser, folders and stop')
   })
 
   it('refuses arguments a command does not take', () => {
