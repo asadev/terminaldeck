@@ -37,6 +37,7 @@ import { PageEmpty } from './components/PageEmpty'
 import { BRAND } from '@shared/brand'
 import { setBindings } from './browser/binding-view'
 import { UpdateBanner } from './updates/UpdateBanner'
+import { HooksOffer } from './components/HooksOffer'
 import { ModeSwitch, type SessionViewMode, type WorkspaceMode } from './shell/ModeSwitch'
 import { BrowserWorkspace } from './browser/BrowserWorkspace'
 import { SwarmGrid } from './layout/SwarmGrid'
@@ -5853,9 +5854,18 @@ function Workspace() {
           onForgetHeld={held.forget}
           peeking={sidebar.peeking && sidebar.collapsed}
           // Above Settings, in the foot. Mounted here rather than inside the
-          // sidebar so the component stays where the wiring test can see it and
-          // where its bridge subscription belongs.
-          update={<UpdateBanner />}
+          // sidebar so the components stay where the wiring test can see them
+          // and where their bridge subscriptions belong. The offer rides the
+          // same slot because it is the same category of thing — the app
+          // talking to you about itself — and on the one launch both could
+          // appear (a fresh install with an update already out), the ask
+          // stands above the news.
+          update={
+            <>
+              <HooksOffer />
+              <UpdateBanner />
+            </>
+          }
           /* The pinned row's status dot, its sentence, and whether the window
              it opens is the one on screen. One connection, read here, so the
              rail and the window cannot disagree about whether it is running.

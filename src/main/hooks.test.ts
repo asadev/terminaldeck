@@ -27,16 +27,21 @@ import {
 import {
   HOOK_MARKER,
   HOOK_PROVIDERS,
+  acceptHookOffer,
   applyInstall,
   applyRemove,
   backupPathFor,
+  declineHookOffer,
   detectIndent,
   hookCommand,
+  hookOfferAnswer,
+  hookOfferPath,
   installHooks,
   installHooksWhereConfigured,
   isOurs,
   ownerOf,
   powershellPath,
+  readHookOffer,
   readStatus,
   removeHooks,
   syncInstalledHooks,
@@ -1019,5 +1024,195 @@ describe('installHooksWhereConfigured', () => {
     // A startup pass writing into somebody's own config without a person
     // present is exactly the case the backup was written for.
     expect(readFileSync(backupPathFor(context, 'claude'), 'utf8')).toBe(before)
+  })
+})
+
+/**
+ * The first-run offer — the consent step a fresh install actually sees.
+ *
+ * The gap it closes: `syncInstalledHooks` repairs only what this app already
+ * wrote, and the desktop's install button lived on a page nobody had a reason
+ * to open, so a machine where nobody had pressed it fired every hook into
+ * nothing, forever. These tests pin the promises the strip makes: it only
+ * offers on a genuinely fresh machine, one accept covers every installed CLI
+ * at once, and either answer — "Not now" included — is remembered for good.
+ */
+describe('the first-run offer', () => {
+  const writeCodex = (): string => {
+    const file = join(root, '.codex', 'hooks.json')
+    mkdirSync(join(root, '.codex'), { recursive: true })
+    writeFileSync(file, '{}\n', 'utf8')
+    return file
+  }
+
+  it('offers on a fresh machine, naming only the CLIs that are set up', () => {
+    writeClaude()
+
+    const offer = readHookOffer(context)
+
+    expect(offer.show).toBe(true)
+    expect(offer.answered).toBeNull()
+    expect(offer.eligible.map((status) => status.id)).toEqual(['claude'])
+    // Claude has no step of its own, so a clean accept can simply finish.
+    expect(offer.followUps).toEqual([])
+  })
+
+  it('carries the step a yes cannot take for the person', () => {
+    // Codex runs no hook until its own trust review is answered, and nothing
+    // this app writes can stand in for that. The offer says so, or the strip's
+    // clean finish claims "on" for a CLI sitting on untrusted hooks.
+    writeClaude()
+    writeCodex()
+
+    expect(readHookOffer(context).followUps).toEqual([HOOK_PROVIDERS.codex.requirement])
+  })
+
+  it('has nothing to offer on a machine with no CLIs, and records nothing', () => {
+    const offer = readHookOffer(context)
+
+    expect(offer.show).toBe(false)
+    // Deliberately unanswered: the question was never asked, so installing a
+    // CLI next week must ask it then — once — rather than never.
+    expect(existsSync(hookOfferPath(context))).toBe(false)
+  })
+
+  it('one accept covers every installed CLI at once', () => {
+    writeClaude()
+    writeCodex()
+
+    const results = acceptHookOffer(context)
+
+    expect(results.map((result) => result.ok)).toEqual([true, true])
+    expect(readStatus(context, 'claude').state).toBe('complete')
+    expect(readStatus(context, 'codex').state).toBe('complete')
+    // And not the one that is not on this machine.
+    expect(existsSync(join(root, '.gemini', 'settings.json'))).toBe(false)
+  })
+
+  it('never asks again after a yes', () => {
+    writeClaude()
+    acceptHookOffer(context)
+
+    expect(hookOfferAnswer(context)).toBe('accepted')
+    expect(readHookOffer(context).show).toBe(false)
+  })
+
+  it('remembers "Not now" as permanently as a yes, and writes nothing', () => {
+    const file = writeClaude()
+    const before = readFileSync(file, 'utf8')
+
+    declineHookOffer(context)
+
+    expect(hookOfferAnswer(context)).toBe('declined')
+    expect(readHookOffer(context).show).toBe(false)
+    expect(readFileSync(file, 'utf8')).toBe(before)
+  })
+
+  it('does not offer beside an existing install of ours', () => {
+    // The person has met the feature — through the Session updates page or an
+    // earlier version — and codex being unhooked beside it is their
+    // arrangement, not a fresh machine. A strip re-explaining the feature to
+    // the person who set it up is noise.
+    writeClaude()
+    writeCodex()
+    installHooks(context, 'claude')
+
+    expect(readHookOffer(context).show).toBe(false)
+  })
+
+  it('does not offer to take another copy of the app\'s install', () => {
+    // `stale` belonging to another copy must not become a prettier route to
+    // the silent takeover the boot sync refuses to make.
+    writeClaude()
+    installHooks({ ...context, endpoint: OTHER_COPY }, 'claude')
+
+    expect(readHookOffer(context).show).toBe(false)
+  })
+
+  it('carries a yes forward to a CLI installed later', () => {
+    // Day one: only Claude. Day thirty: Codex arrives. The offer never
+    // re-asks, so the standing consent is what covers the newcomer — at the
+    // next boot sync, not never.
+    writeClaude()
+    acceptHookOffer(context)
+    writeCodex()
+
+    const codex = syncInstalledHooks(context).find((status) => status.id === 'codex')
+
+    expect(codex?.state).toBe('complete')
+  })
+
+  it('a boot sync without a yes still leaves `none` alone', () => {
+    writeClaude()
+    declineHookOffer(context)
+
+    const claude = syncInstalledHooks(context).find((status) => status.id === 'claude')
+
+    expect(claude?.state).toBe('none')
+  })
+
+  it('turning a provider off withdraws the standing consent', () => {
+    // Otherwise the next boot's sync reinstalls the very hooks the person just
+    // removed, and the app is fighting them with their own consent.
+    writeClaude()
+    acceptHookOffer(context)
+
+    removeHooks(context, 'claude')
+
+    expect(hookOfferAnswer(context)).toBe('declined')
+    expect(syncInstalledHooks(context).find((status) => status.id === 'claude')?.state).toBe('none')
+  })
+
+  it('a remove on a never-asked machine settles the question too', () => {
+    // Removing every install returns the machine to all-`none`, which is the
+    // shape a fresh machine has — but it is not one, and waking up to a strip
+    // asking to turn back on what was just turned off would prove it.
+    writeClaude()
+    installHooks(context, 'claude')
+
+    removeHooks(context, 'claude')
+
+    expect(readHookOffer(context).show).toBe(false)
+  })
+
+  it('the headless pass honours an explicit no', () => {
+    // The marker lives under the same home the configs do: a person who said
+    // "Not now" on this machine has said it for this machine, and a host
+    // started beside their desktop must not overrule them for lack of a pane.
+    writeClaude()
+    declineHookOffer(context)
+
+    const claude = installHooksWhereConfigured(context).find((status) => status.id === 'claude')
+
+    expect(claude?.state).toBe('none')
+  })
+
+  it('an unreadable marker means unanswered, not either answer', () => {
+    writeClaude()
+    mkdirSync(join(root, BRAND.projectConfigDir), { recursive: true })
+    writeFileSync(hookOfferPath(context), '{ not json', 'utf8')
+
+    expect(hookOfferAnswer(context)).toBeNull()
+    // The failure direction is "ask": that costs one strip with a Not-now on
+    // it, never a write into somebody's dotfiles.
+    expect(readHookOffer(context).show).toBe(true)
+  })
+
+  it('records the yes even when an install fails, and reports the failure', () => {
+    writeClaude()
+    writeCodex()
+    // Claude's file goes unparseable *between* the offer being drawn and the
+    // press — not before, or eligibility would already exclude it.
+    const eligibleBefore = readHookOffer(context).eligible.map((status) => status.id)
+    expect(eligibleBefore).toContain('claude')
+    writeClaude('{ this is not json')
+
+    const results = acceptHookOffer(context)
+
+    // installHooks refuses the unparseable file and says so; codex landed.
+    expect(results.some((result) => !result.ok)).toBe(true)
+    expect(readStatus(context, 'codex').state).toBe('complete')
+    // Consent was given; one unwritable file does not re-ask a settled question.
+    expect(hookOfferAnswer(context)).toBe('accepted')
   })
 })

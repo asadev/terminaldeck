@@ -1145,6 +1145,24 @@ export function removeHooks(context: HookContext, id: HookProviderId): HookWrite
   backupOnce(context, id, file)
   writeAtomic(file, serialise(settings, result.data), settings.mode)
 
+  /*
+   * Turning any provider off withdraws the standing consent the first-run
+   * offer recorded, and settles the question if it was never asked. Both halves
+   * matter: with 'accepted' still on record, the next boot's sync would
+   * reinstall the very hooks this press just removed; with nothing on record, a
+   * person who removed every install would wake up to the first-run strip
+   * asking them to turn back on what they just turned off. A remove is a person
+   * managing this feature by hand — from here on, the Session updates page is
+   * the only thing that writes, and only when pressed.
+   */
+  try {
+    recordHookOfferAnswer(context, 'declined')
+  } catch {
+    // The removal itself succeeded and is what the caller asked about. An
+    // unwritable marker leaves the old answer standing, and the worst of that
+    // is a repair pass the panel's state makes visible — not data loss.
+  }
+
   return {
     ok: true,
     message: `Removed ${result.removed} hook${result.removed === 1 ? '' : 's'} from ${file}. Nothing else in the file was changed.`,
@@ -1243,13 +1261,28 @@ export function staleHooksBelongToAnotherCopy(context: HookContext, id: HookProv
 }
 
 export function syncInstalledHooks(context: HookContext): HookProviderStatus[] {
+  /*
+   * Standing consent, given once at the first-run offer, carried forward here.
+   *
+   * Without this branch a person who pressed "Turn it on" on day one and
+   * installed a second CLI on day thirty would have that CLI's tabs silent
+   * forever: the offer never re-asks (that is its promise), and `none` is not a
+   * state the repair half of this pass touches. The press was consent to the
+   * *feature* — "let tabs say what my assistants are doing" — not to a list of
+   * the assistants that happened to exist that morning, so a later arrival is
+   * covered by it. Turning any provider off on the Session updates page
+   * withdraws it (see `removeHooks`), because a boot pass that reinstalls what
+   * a person just removed is the app fighting them.
+   */
+  const standing = hookOfferAnswer(context) === 'accepted'
   const out: HookProviderStatus[] = []
   for (const id of HOOK_PROVIDER_IDS) {
     const status = readStatus(context, id)
-    if (
+    const repair =
       (status.state === 'stale' || status.state === 'partial') &&
       !staleHooksBelongToAnotherCopy(context, id)
-    ) {
+    const covered = standing && status.state === 'none' && status.fileExists
+    if (repair || covered) {
       try {
         out.push(installHooks(context, id).status)
         continue
@@ -1297,6 +1330,14 @@ export function syncInstalledHooks(context: HookContext): HookProviderStatus[] {
  * returned status and does not stop the host coming up.
  */
 export function installHooksWhereConfigured(context: HookContext): HookProviderStatus[] {
+  // An explicit "no" at the desktop's first-run offer covers this pass too: the
+  // marker lives under the same home directory these configs do, so a person
+  // who declined on this machine has declined for this machine — a headless
+  // host started beside their desktop must not overrule them just because no
+  // pane was open at the time.
+  if (hookOfferAnswer(context) === 'declined') {
+    return HOOK_PROVIDER_IDS.map((id) => readStatus(context, id))
+  }
   const out: HookProviderStatus[] = []
   for (const id of HOOK_PROVIDER_IDS) {
     const status = readStatus(context, id)
@@ -1317,6 +1358,162 @@ export function installHooksWhereConfigured(context: HookContext): HookProviderS
     }
   }
   return out
+}
+
+/* -------------------------------------------------------- first-run offer -- */
+
+/*
+ * The line between repairing silently and installing with one click.
+ *
+ * Two passes in this file write into a person's dotfiles without a button
+ * press, and both are **repair**: `syncInstalledHooks` re-aims `stale`/
+ * `partial` entries at boot, and its standing-consent branch finishes what an
+ * accepted offer started. Repair is safe to do silently because every byte it
+ * writes replaces a byte this app already wrote with the person's consent —
+ * the original Install press, or the offer below — and the file never gains
+ * anything they did not agree to.
+ *
+ * **Install** — the first entries of ours into a settings file the person owns
+ * and may edit by hand — is different in kind, and it is never silent on a
+ * machine with a person in front of it. Before this offer existed, the only
+ * consent step was a pane inside Settings that a fresh install had no reason to
+ * ever open, so on every machine that was not a developer's, the boot context,
+ * the browser verbs' announcements — all of it — reached no session at all.
+ * The two poles are both wrong: writing into `~/.claude/settings.json` behind
+ * someone's back is a silent surprise in a file they own, and consent nobody
+ * discovers is a feature nobody has. So the app asks once, plainly, with one
+ * button that covers every installed assistant at once — and remembers either
+ * answer forever. "Not now" is as durable as "yes"; the Session updates page
+ * remains the way to change your mind in both directions.
+ */
+
+export type HookOfferAnswer = 'accepted' | 'declined'
+
+export interface HookOffer {
+  /** Whether the first-run strip should be on screen at all. */
+  show: boolean
+  answered: HookOfferAnswer | null
+  /** Installed CLIs a "yes" would write into: settings file present, none of our hooks in it. */
+  eligible: HookProviderStatus[]
+  /**
+   * Steps a "yes" cannot take for the person, one sentence each — today that is
+   * Codex's own trust review, which nothing this app writes can stand in for.
+   * Carried on the offer so a clean accept can end by saying what is still
+   * theirs to do, rather than hiding and claiming "on" for an assistant whose
+   * CLI will sit on untrusted hooks in silence.
+   */
+  followUps: string[]
+}
+
+/**
+ * Where the answer is remembered: this app's own directory under the same home
+ * the provider configs live in — not `userData`, so a beta installed beside the
+ * stable copy does not re-ask a question the person already answered, and a
+ * reinstall does not either. "It never asks again" is a promise about the
+ * person, not about one copy of the app.
+ */
+export function hookOfferPath(context: HookContext): string {
+  return join(context.home, BRAND.projectConfigDir, 'hook-offer.json')
+}
+
+export function hookOfferAnswer(context: HookContext): HookOfferAnswer | null {
+  try {
+    const parsed = JSON.parse(readFileSync(hookOfferPath(context), 'utf8')) as {
+      answer?: unknown
+    }
+    return parsed.answer === 'accepted' || parsed.answer === 'declined' ? parsed.answer : null
+  } catch {
+    // Absent, unreadable, or unparseable all mean the same thing: no answer on
+    // record. The failure direction is "ask", which costs one strip with a
+    // "Not now" on it — never a write into somebody's dotfiles.
+    return null
+  }
+}
+
+export function recordHookOfferAnswer(context: HookContext, answer: HookOfferAnswer): void {
+  writeAtomic(
+    hookOfferPath(context),
+    `${JSON.stringify({ answer, at: new Date().toISOString() }, null, 2)}\n`,
+    0o600,
+  )
+}
+
+/**
+ * What the first-run strip should say, if anything.
+ *
+ * `show` requires all three of:
+ *
+ *  - **No answer on record.** Either button, once, ends this forever.
+ *  - **A genuinely fresh machine** — no provider anywhere in `complete`,
+ *    `stale` or `partial`. Any of ours already present means the person (or
+ *    their own earlier press on the Session updates page) has met the feature;
+ *    a strip re-explaining it to them is noise. This also covers another copy
+ *    of this app's install, which reads `stale` here: the offer must not be a
+ *    prettier route to the silent takeover `staleHooksBelongToAnotherCopy`
+ *    exists to prevent.
+ *  - **Something to install into** — at least one CLI whose settings file
+ *    exists with none of our hooks in it. A machine with no assistants gets no
+ *    strip and, deliberately, no recorded answer: the question has not been
+ *    asked, so installing a CLI next week asks it then, once.
+ */
+export function readHookOffer(context: HookContext): HookOffer {
+  const answered = hookOfferAnswer(context)
+  const statuses = readAllStatus(context)
+  const eligible = statuses.filter((status) => status.fileExists && status.state === 'none')
+  const fresh = statuses.every(
+    (status) => status.state !== 'complete' && status.state !== 'stale' && status.state !== 'partial',
+  )
+  const followUps = eligible
+    .map((status) => HOOK_PROVIDERS[status.id].requirement)
+    .filter((requirement): requirement is string => requirement !== null)
+  return { show: answered === null && fresh && eligible.length > 0, answered, eligible, followUps }
+}
+
+/**
+ * The one click. Installs into every eligible provider at once and records the
+ * consent as standing — `syncInstalledHooks` reads it to cover assistants
+ * installed later, so the question genuinely never comes back.
+ *
+ * The answer is recorded even if an individual install fails: consent was
+ * given, the failure is reported per row in the returned results, and the
+ * Session updates page shows the real state with a working button. Recording
+ * only on full success would re-ask a settled question because one file was
+ * unwritable.
+ */
+export function acceptHookOffer(context: HookContext): HookWriteResult[] {
+  /*
+   * Not `readHookOffer().eligible`, deliberately. Eligibility excludes `error`,
+   * and a file that went unparseable between the strip being drawn and the
+   * press would then be silently dropped — the strip hides on all-ok, claiming
+   * a press covered an assistant it skipped. Attempting the `error` file
+   * instead gets `installHooks`'s refusal, with its sentence, into the results
+   * where the person can see it. Anything of ours already present is skipped:
+   * `complete` needs nothing, and `stale`/`partial` are the boot sync's or —
+   * for another copy's install — nobody's to take without a per-provider press.
+   */
+  const results = readAllStatus(context)
+    .filter((status) => status.fileExists && (status.state === 'none' || status.state === 'error'))
+    .map((status) => {
+      try {
+        return installHooks(context, status.id)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        return { ok: false, message, status: readStatus(context, status.id) }
+      }
+    })
+  try {
+    recordHookOfferAnswer(context, 'accepted')
+  } catch (error) {
+    // The installs above still landed; with any of ours present the strip is
+    // structurally hidden anyway (`fresh` is false), so an unwritable marker
+    // costs nothing visible. Logged because it also carries standing consent.
+    console.error('[hooks] could not record the offer answer:', error)
+  }
+  return results
+}
+
+export function declineHookOffer(context: HookContext): void {
+  recordHookOfferAnswer(context, 'declined')
 }
 
 /* -------------------------------------------------------------------- ipc -- */
@@ -1344,10 +1541,13 @@ function asProviderId(value: unknown): HookProviderId | null {
  *     registerHooksIpc(ipcMain)
  *
  * Channels:
- *  - `hooks:status`  (invoke)              → HookProviderStatus[]
- *  - `hooks:install` (invoke, providerId)  → HookWriteResult
- *  - `hooks:remove`  (invoke, providerId)  → HookWriteResult
- *  - `hooks:sync`    (invoke)              → HookProviderStatus[]
+ *  - `hooks:status`        (invoke)              → HookProviderStatus[]
+ *  - `hooks:install`       (invoke, providerId)  → HookWriteResult
+ *  - `hooks:remove`        (invoke, providerId)  → HookWriteResult
+ *  - `hooks:sync`          (invoke)              → HookProviderStatus[]
+ *  - `hooks:offer`         (invoke)              → HookOffer
+ *  - `hooks:offer-accept`  (invoke)              → HookWriteResult[]
+ *  - `hooks:offer-decline` (invoke)              → HookOffer
  *
  * The renderer names a provider from a closed set and nothing else. It never
  * supplies a path, a command or a file to write — this module owns all three,
@@ -1363,6 +1563,29 @@ export function registerHooksIpc(
   ipcMain.handle('hooks:status', () => readAllStatus(context()))
 
   ipcMain.handle('hooks:sync', () => syncInstalledHooks(context()))
+
+  /*
+   * The first-run offer — see the block comment above `readHookOffer`. The
+   * renderer gets a verdict and a list, never a path to write or a command to
+   * install: accept and decline are whole actions here for the same reason the
+   * install channel takes only a provider id.
+   */
+  ipcMain.handle('hooks:offer', () => readHookOffer(context()))
+
+  ipcMain.handle('hooks:offer-accept', () => acceptHookOffer(context()))
+
+  ipcMain.handle('hooks:offer-decline', () => {
+    const ctx = context()
+    try {
+      declineHookOffer(ctx)
+    } catch (error) {
+      // An unwritable marker means the strip returns next launch with a working
+      // "Not now" — annoying, honest, and better than a decline that looked
+      // recorded and was not.
+      console.error('[hooks] could not record the offer answer:', error)
+    }
+    return readHookOffer(ctx)
+  })
 
   ipcMain.handle('hooks:install', (_event, providerId: unknown) => {
     const id = asProviderId(providerId)
