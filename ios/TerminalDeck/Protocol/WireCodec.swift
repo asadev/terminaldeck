@@ -108,7 +108,16 @@ enum WireCodec {
                          // of the field is the whole answer now, and it is a
                          // different question from what the capability list
                          // claims. See `CopilotConnection`.
-                         copilot: copilotConnection(object["copilot"])),
+                         copilot: copilotConnection(object["copilot"]),
+                         // What build the host runs, and which shell serves. Both
+                         // absent from every desktop before 0.10.0, and absent is
+                         // its own answer: the version reads as "older" and the
+                         // kind as `.unknown`, which name the box neutrally
+                         // rather than guessing. Display text with nothing to act
+                         // on, so `appVersion` is stripped and bounded on arrival
+                         // the same way `hostName` is.
+                         appVersion: hostName(object["appVersion"]),
+                         hostKind: HostKind(wire: string(object["hostKind"]))),
                 activity: list.activity)
 
         case "sessions":
@@ -226,7 +235,7 @@ enum WireCodec {
             guard let ch = string(object["ch"]), let encoded = string(object["data"]) else {
                 return .failed(reason: "net.data without a channel and data")
             }
-            guard let bytes = base64(encoded) else {
+            guard let bytes = strictBase64(encoded) else {
                 return .failed(reason: "net.data is not base64")
             }
             return .ok(.netData(ch: ch, data: bytes), activity: [:])
@@ -478,6 +487,88 @@ enum WireCodec {
                                  found: object["found"] as? Bool == true),
                        activity: [:])
 
+        case "enrolled":
+            guard let deviceId = string(object["deviceId"]),
+                  let deviceName = string(object["deviceName"]),
+                  let credential = string(object["credential"]) else {
+                return .failed(reason: "enrolled without an id, name and credential")
+            }
+            return .ok(.enrolled(deviceId: deviceId, deviceName: deviceName, credential: credential),
+                       activity: [:])
+
+        case "controls.reading":
+            guard let rid = string(object["rid"]), let id = string(object["id"]) else {
+                return .failed(reason: "controls.reading without a request and session")
+            }
+            return .ok(.controlsReading(rid: rid, id: id, reading: controlsReading(object["reading"])),
+                       activity: [:])
+
+        case "controls.applied":
+            // No `control` field on the wire: the asking side knows which control
+            // this answers from the `rid` it minted, and the `reading` is what
+            // redraws. See `controls.applied` in `protocol.ts`.
+            guard let rid = string(object["rid"]), let id = string(object["id"]) else {
+                return .failed(reason: "controls.applied without a request and session")
+            }
+            return .ok(.controlsApplied(rid: rid, id: id,
+                                        ok: object["ok"] as? Bool == true,
+                                        message: displayLine(object["message"]) ?? "",
+                                        reading: controlReading(object["reading"])),
+                       activity: [:])
+
+        case "settings.state":
+            guard let rid = string(object["rid"]) else {
+                return .failed(reason: "settings.state without a request")
+            }
+            return .ok(.settingsState(rid: rid, settings: serverSettings(object["settings"])),
+                       activity: [:])
+
+        case "settings.applied":
+            guard let rid = string(object["rid"]), let setting = serverSetting(object["setting"]) else {
+                return .failed(reason: "settings.applied without a request and setting")
+            }
+            return .ok(.settingsApplied(rid: rid,
+                                        ok: object["ok"] as? Bool == true,
+                                        message: displayLine(object["message"]) ?? "",
+                                        setting: setting),
+                       activity: [:])
+
+        case "settings.changed":
+            return .ok(.settingsChanged(settings: serverSettings(object["settings"])), activity: [:])
+
+        case "devices.rows":
+            guard let rid = string(object["rid"]) else {
+                return .failed(reason: "devices.rows without a request")
+            }
+            return .ok(.devicesRows(rid: rid, devices: deviceRoster(object["devices"])), activity: [:])
+
+        case "devices.revoked":
+            guard let rid = string(object["rid"]) else {
+                return .failed(reason: "devices.revoked without a request")
+            }
+            return .ok(.devicesRevoked(rid: rid,
+                                       ok: object["ok"] as? Bool == true,
+                                       message: displayLine(object["message"]) ?? "",
+                                       devices: deviceRoster(object["devices"])),
+                       activity: [:])
+
+        case "devices.changed":
+            return .ok(.devicesChanged(devices: deviceRoster(object["devices"])), activity: [:])
+
+        case "browser.frame":
+            guard let frame = browserFrame(object) else {
+                return .failed(reason: "browser.frame without usable geometry or data")
+            }
+            return .ok(.browserFrame(frame), activity: [:])
+
+        case "browser.surfaces.rows":
+            // `rid` is present when it answers a `browser.surfaces` and absent
+            // when it is an unsolicited push — the same split `settings.state`
+            // and `settings.changed` make, folded onto one case here.
+            return .ok(.browserSurfaces(rid: string(object["rid"]),
+                                        surfaces: browserSurfaces(object["surfaces"])),
+                       activity: [:])
+
         default:
             return .failed(reason: "unknown message type")
         }
@@ -599,7 +690,7 @@ enum WireCodec {
      * mirrors the rule `parseClientMessage` applies to the same field coming the
      * other way, which is the point — one wire, one definition of valid.
      */
-    private static func base64(_ text: String) -> Data? {
+    static func strictBase64(_ text: String) -> Data? {
         guard text.utf8.count % 4 == 0 else { return nil }
         var padding = 0
         for unit in text.utf8 {
@@ -797,6 +888,46 @@ enum WireCodec {
             object = ["t": "account.switch", "rid": rid, "id": id, "accountId": accountId]
         case let .chatRead(rid, id, tail):
             object = ["t": "chat.read", "rid": rid, "id": id, "tail": tail]
+
+        case let .enroll(version, device, username, secret, method, capabilities):
+            object = [
+                "t": "enroll",
+                "protocol": version,
+                "device": ["name": device.name, "platform": device.platform],
+                "username": username,
+                "secret": secret,
+                "method": method.rawValue,
+                // Always written, even when empty, for the reason `hello`'s is —
+                // a definite answer beats "absent" on a frame the far end may act
+                // on before the follow-up hello.
+                "capabilities": capabilities,
+            ]
+
+        case let .controlsRead(rid, id):
+            object = ["t": "controls.read", "rid": rid, "id": id]
+        case let .controlsApply(rid, id, control, value):
+            object = ["t": "controls.apply", "rid": rid, "id": id, "control": control.rawValue, "value": value]
+
+        case let .settingsRead(rid):
+            object = ["t": "settings.read", "rid": rid]
+        case let .settingsApply(rid, key, value):
+            object = ["t": "settings.apply", "rid": rid, "key": key.rawValue, "value": value]
+
+        case let .devicesList(rid):
+            object = ["t": "devices.list", "rid": rid]
+        case let .devicesRevoke(rid, device):
+            object = ["t": "devices.revoke", "rid": rid, "device": device]
+
+        case let .browserWatch(window, maxWidth, quality):
+            object = ["t": "browser.watch", "window": window, "maxWidth": maxWidth, "quality": quality]
+        case let .browserUnwatch(window):
+            object = ["t": "browser.unwatch", "window": window]
+        case let .browserFrameAck(window, seq):
+            object = ["t": "browser.frame.ack", "window": window, "seq": seq]
+        case let .browserInput(window, seq, input):
+            object = encodeBrowserInput(window: window, seq: seq, input: input)
+        case let .browserSurfaces(rid):
+            object = ["t": "browser.surfaces", "rid": rid]
         }
         guard let data = try? JSONSerialization.data(withJSONObject: object, options: []),
               let text = String(data: data, encoding: .utf8) else {

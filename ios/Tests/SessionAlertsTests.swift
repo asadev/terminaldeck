@@ -193,7 +193,7 @@ final class SessionAlertsTests: XCTestCase {
             onEvent?(.state(state))
             onEvent?(.message(.welcome(protocolVersion: 1, deviceId: "d", deviceName: "iPhone",
                                        token: nil, sessions: sessions, capabilities: ["create"],
-                                       hostPlatform: .mac, hostName: nil, folders: nil, copilot: .silent),
+                                       hostPlatform: .mac, hostName: nil, folders: nil, copilot: .silent, appVersion: nil, hostKind: .unknown),
                               activity: [:]))
         }
 

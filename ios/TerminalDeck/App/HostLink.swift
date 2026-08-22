@@ -82,6 +82,23 @@ final class HostLink: Identifiable {
     /// other — which is a subtler version of the constant string it replaces.
     private(set) var hostPlatform: HostPlatform = .unknown
 
+    /// What build the machine at the other end is running, e.g. `0.10.0`, or nil
+    /// when it never said — every host before 0.10.0. Display text and nothing
+    /// to act on: there is no update verb on this wire, so what it buys is the
+    /// one honest sentence a client can say when its own build is ahead. See
+    /// `hostVersionNote`. Per host for the reason `hostPlatform` is.
+    private(set) var hostAppVersion: String?
+
+    /// Which shell serves this machine — desktop or headless. `.unknown` for a
+    /// host older than the field, which names the box neutrally. Read so the
+    /// version sentence can say *server* where it would otherwise say *desktop*.
+    private(set) var hostKind: HostKind = .unknown
+
+    /// This phone's own device id, as this machine knows it — the `deviceId` the
+    /// welcome carries. Read by the device roster to mark and name this phone's
+    /// own row (its Remove is sign-out, not the same word as any other).
+    private(set) var thisDeviceId: String?
+
     /// What the switcher shows. The user's name for the machine, or its address.
     var label: String { credential.label }
 
@@ -197,6 +214,31 @@ final class HostLink: Identifiable {
      */
     @ObservationIgnored
     private(set) lazy var bar: SessionBarLink = SessionBarLink(wire: WireProxy { [weak self] message in
+        self?.transport?.send(message) ?? false
+    })
+
+    /**
+     * The 0.10.0 clients, each the phone half of a capability the desktop has
+     * answered since before this app asked. Lazily built for the reason `bar` is:
+     * they are state about a machine or a session that does not exist until a
+     * screen wants it. Each gates itself on what the welcome advertised — see
+     * `welcomed(capabilities:)` — so an older desktop or a guest gets exactly the
+     * screens it had before, never a control explaining what it lacks.
+     */
+    @ObservationIgnored
+    private(set) lazy var controls: SessionControlsLink = SessionControlsLink(wire: WireProxy { [weak self] message in
+        self?.transport?.send(message) ?? false
+    })
+    @ObservationIgnored
+    private(set) lazy var serverSettings: ServerSettingsLink = ServerSettingsLink(wire: WireProxy { [weak self] message in
+        self?.transport?.send(message) ?? false
+    })
+    @ObservationIgnored
+    private(set) lazy var devices: DeviceRosterLink = DeviceRosterLink(wire: WireProxy { [weak self] message in
+        self?.transport?.send(message) ?? false
+    })
+    @ObservationIgnored
+    private(set) lazy var watch: WatchLink = WatchLink(wire: WireProxy { [weak self] message in
         self?.transport?.send(message) ?? false
     })
 
@@ -1017,6 +1059,10 @@ final class HostLink: Identifiable {
                  * between a countdown and a transcript.
                  */
                 bar.dropped()
+                // The reading is a claim about now too, and no dead socket will
+                // correct it. The notice and the sheet the controls client holds
+                // are this-connection state, so they go with it.
+                controls.dropped()
             }
             if state.isLive && !wasLive {
                 for id in wanted {
@@ -1027,6 +1073,9 @@ final class HostLink: Identifiable {
                 // The re-attach above replays the terminal; this re-asks the
                 // three questions behind the row over it.
                 if let id = bar.sessionID { bar.follow(id) }
+                // And the control cluster over the same session, for the same
+                // reason: its subscription belonged to the connection that died.
+                if let id = controls.sessionID { controls.follow(id) }
             }
 
         case let .credential(stored):
@@ -1051,11 +1100,17 @@ final class HostLink: Identifiable {
         if upload?.receive(message) == true { return }
 
         switch message {
-        case let .welcome(_, _, _, _, list, capabilities, platform, name, folders, copilotConnection):
+        case let .welcome(_, deviceId, _, _, list, capabilities, platform, name, folders, copilotConnection, appVersion, kind):
             sessions = list
             lastActivity = activity
             lastError = nil
             hostPlatform = platform
+            thisDeviceId = deviceId
+            // Recorded on every welcome, like the platform: a machine can be
+            // updated between connections, and a stale version chip would name a
+            // build that is no longer there.
+            hostAppVersion = appVersion
+            hostKind = kind
             /*
              * The machine's own name, recorded on every connection.
              *
@@ -1111,6 +1166,15 @@ final class HostLink: Identifiable {
             // kept yesterday's names would ask questions this socket will not
             // answer.
             bar.welcomed(capabilities: capabilities)
+            // The 0.10.0 clients, each replaced with the fresh list for the same
+            // reason: a device that reconnects as a guest is handed a shorter one
+            // and a screen that kept yesterday's names would offer controls this
+            // socket will not answer. The settings, devices and watch clients
+            // re-read on their next visit; the controls client re-follows below.
+            controls.welcomed(capabilities: capabilities)
+            serverSettings.welcomed(capabilities: capabilities)
+            devices.welcomed(capabilities: capabilities)
+            watch.welcomed(capabilities: capabilities)
             // After `granted` is set, because the folders this asks about are
             // read from it — and on every welcome, because the desktop's
             // subscription belongs to the connection this welcome arrived on.
@@ -1223,6 +1287,10 @@ final class HostLink: Identifiable {
              * true when the attach went out.
              */
             if !replay, id == bar.sessionID { bar.noteOutput() }
+            // The same event drives the control cluster: the model line, the
+            // effort confirmation and the permission footer are all read from
+            // what the far pty writes, and from nothing else.
+            if !replay, id == controls.sessionID { controls.noteOutput() }
 
         case let .status(id, status):
             guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
@@ -1347,6 +1415,27 @@ final class HostLink: Identifiable {
             // question it did not ask, and an answer about a session that is no
             // longer on screen.
             bar.receive(message)
+
+        case .controlsReading, .controlsApplied:
+            // The control cluster over whichever session is on screen. It checks
+            // the rid and the session id, so an answer to a question it did not
+            // ask, or one about another session, is dropped.
+            controls.receive(message)
+
+        case .settingsState, .settingsApplied, .settingsChanged:
+            serverSettings.receive(message)
+
+        case .devicesRows, .devicesRevoked, .devicesChanged:
+            devices.receive(message)
+
+        case .browserFrame, .browserSurfaces:
+            watch.receive(message)
+
+        case .enrolled:
+            // A pre-authentication frame that only belongs to a sign-in in
+            // flight, driven by `SignIn` over the connecting socket — never on an
+            // established connection. Ignored here rather than acted on.
+            break
 
         case .pong:
             break

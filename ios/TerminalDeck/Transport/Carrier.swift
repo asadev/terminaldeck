@@ -274,7 +274,13 @@ final class DirectCarrier: Carrier {
             guard let self else { return }
             onEvent?(.closed(CarrierClose(code: code, detail: detail, beforeReady: !ready)))
         }
-        pipe.open(url: url, maximumMessage: Wire.maxMessageBytes)
+        // A `browser.frame` is the one message that exceeds the 64 KiB text cap
+        // — its base64 JPEG is larger by design — and the desktop admits it as
+        // the sole exception on its own door. The socket has to make the same
+        // room or a live-view frame is dropped before it can be drawn. See
+        // `Wire.maxFrameMessageBytes`; the relay carrier already opened at
+        // 96 KiB for the same reason.
+        pipe.open(url: url, maximumMessage: Wire.maxFrameMessageBytes)
     }
 
     func close() {

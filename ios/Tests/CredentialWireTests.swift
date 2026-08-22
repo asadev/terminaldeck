@@ -187,7 +187,13 @@ final class CredentialWireTests: XCTestCase {
     func testHelloAdvertisesTheCredentialCapability() {
         let object = encoded(WireCodec.hello(token: "t", device: DeviceDescriptor(name: "iPhone", platform: "iOS")))
         let claimed = object["capabilities"] as? [String]
-        XCTAssertEqual(claimed, [WireCapability.credential])
+        XCTAssertEqual(claimed?.contains(WireCapability.credential), true)
+        // As of 0.10.0 the hello also claims the pushes a client would otherwise
+        // miss (devices, settings) and the client half of watch — the same list
+        // `CLAIMED_CAPABILITIES` carries in the PWA.
+        XCTAssertEqual(Set(claimed ?? []),
+                       [WireCapability.credential, WireCapability.devices,
+                        WireCapability.settings, WireCapability.watch])
     }
 
     /**

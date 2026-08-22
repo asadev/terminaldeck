@@ -26,6 +26,40 @@ enum Wire {
     /// Largest inbound WebSocket message, fragments included.
     static let maxMessageBytes = 64 * 1024
 
+    /**
+     * The one message that may exceed `maxMessageBytes` — a `browser.frame`.
+     *
+     * A screencast frame's base64 JPEG is by design larger than the 64 KiB text
+     * cap that guards keystrokes and outlines; the desktop admits it on its own
+     * receive door as the sole exception, and this client's inbound socket has
+     * to make the same room or the frame is dropped before it can be decoded and
+     * drawn. It is the port of `MAX_FRAME_MESSAGE_BYTES` in `protocol.ts`:
+     * `MAX_FRAME_BYTES` (67 KiB) base64s to `ceil(n/3)*4` and gains 2 KiB for the
+     * envelope, and the sum still sits under the relay's 96 KiB payload ceiling.
+     * The relay carrier already opened at 96 KiB for that reason; the direct
+     * carrier opens at this so the tailnet path can carry a frame too.
+     */
+    static let maxFrameBytes = 67 * 1024
+    static let maxFrameDataChars = ((maxFrameBytes + 2) / 3) * 4
+    static let maxFrameMessageBytes = maxFrameDataChars + 2 * 1024
+
+    /// The live browser view — a cast of one surface, and the taps back. Ports of
+    /// the `WATCH` bounds in `protocol.ts`: a viewer's requested width and jpeg
+    /// quality are clamped into these, not refused, because they come from a
+    /// viewer sizing its own canvas rather than from an attacker.
+    static let minWatchWidth = 160
+    static let maxWatchWidth = 1600
+    static let minWatchQuality = 1
+    static let maxWatchQuality = 80
+    /// The soft ceiling on how many surfaces one connection watches at once.
+    static let maxWatchWindows = 8
+    /// The most surfaces one `browser.surfaces.rows` may list.
+    static let maxSurfacesReported = 64
+    /// The most touch points one `browser.input.touch` may carry.
+    static let maxTouchPoints = 10
+    /// The longest curtain prompt a masked frame may carry.
+    static let maxWatchPromptLength = 256
+
     /// Largest `input` payload. A paste, not a file upload.
     static let maxInputBytes = 16 * 1024
 
@@ -190,6 +224,46 @@ enum HostPlatform: Equatable {
         case .windows: return "PC"
         case .linux: return "machine"
         case .unknown: return "desktop"
+        }
+    }
+}
+
+/**
+ * Which shell is serving this connection — the Electron desktop, or the
+ * headless host a person installed on a server.
+ *
+ * Carried on `welcome` beside `appVersion` so this client can say *server*
+ * where it would otherwise have guessed *desktop*, and so the one sentence it
+ * renders about being behind — *update this server from a desktop* — names the
+ * right kind of box. A port of `HostKind` in `src/main/remote/protocol.ts`.
+ *
+ * `unknown` is a real case for the same reason `HostPlatform.unknown` is: the
+ * field is absent from every desktop released before it existed, and a value
+ * neither literal is dropped onto `unknown` rather than guessed — the same rule
+ * the platform noun keeps.
+ */
+enum HostKind: Equatable {
+    case desktop
+    case headless
+    case unknown
+
+    /// Maps the wire's two literals. Absent, or anything else, is `.unknown` —
+    /// which reads as the neutral "desktop or server" rather than a guess.
+    init(wire: String?) {
+        switch wire {
+        case "desktop": self = .desktop
+        case "headless": self = .headless
+        default: self = .unknown
+        }
+    }
+
+    /// The noun for the box behind this connection. `unknown` reads "machine",
+    /// which is true of both and singles out neither.
+    var noun: String {
+        switch self {
+        case .desktop: return "desktop"
+        case .headless: return "server"
+        case .unknown: return "machine"
         }
     }
 }
@@ -374,7 +448,75 @@ enum WireCapability {
     /// The desktop will read a session's transcript back as a conversation.
     static let chat = "chat"
 
-    static let claimed: [String] = [credential]
+    /**
+     * The desktop will read and set a session's model, effort, fast mode and
+     * permission — `controls.read` / `controls.apply`.
+     *
+     * Shipped on the desktop since 0.5.0 and asked for by nothing on this
+     * client until now: the desktop's own remote window already sends these
+     * frames (see `readControls` / `setControl` in
+     * `src/main/remote/machines/guest.ts`), so a phone could watch a session
+     * and never change what it runs at. Nothing new is on the wire; there was
+     * nobody asking. The cluster is drawn only when a real agent is drawing
+     * that session's screen — see `SessionControlsLink`.
+     */
+    static let controls = "controls"
+
+    /**
+     * The two settings this **machine** owns rather than each device —
+     * `settings.read` / `settings.apply`, the "This server" section.
+     *
+     * The coding tool a fresh session starts with, and whether the last layout
+     * is restored at launch. Withheld from a guest at the source, so a device
+     * that sees it in `welcome.capabilities` is entitled to change them. Claimed
+     * below because the desktop pushes `settings.changed` unsolicited when
+     * another device moves one, and a client that never claimed it would keep a
+     * stale value with no way to hear the correction.
+     */
+    static let settings = "settings"
+
+    /**
+     * The roster of every device signed in here, and the one verb that removes
+     * one — `devices.list` / `devices.revoke`, and the unsolicited
+     * `devices.changed`.
+     *
+     * Withheld from a guest at the source: the host only ever puts it in a
+     * welcome for one of the owner's own devices, so a device that sees it is
+     * both able to manage the roster and entitled to. Claimed below because the
+     * `devices.changed` push arrives without a request, and a client that had
+     * not claimed it would list a roster that never moved.
+     */
+    static let devices = "devices"
+
+    /**
+     * Watching the machine's browser, and driving it — `browser.watch`,
+     * `browser.frame`, `browser.input`, `browser.surfaces` — a live cast of one
+     * surface and the taps that come back.
+     *
+     * Dual-listed like the browser-window capabilities: a **host** lists it in
+     * `welcome.capabilities` to say *"I hold browser surfaces, I can stream one
+     * and act on the taps you send it"*; a **client** lists it in
+     * `hello.capabilities` to say *"I render frames and I send input"*, which is
+     * why it is in `claimed`. Withheld from a guest at the source — watching the
+     * owner's signed-in browser is an owner act — so a device that sees it in a
+     * welcome may both watch and drive.
+     */
+    static let watch = "watch"
+
+    /**
+     * What this build tells a desktop it can do, in `hello.capabilities`.
+     *
+     * Only names that run desktop→phone belong here, either as a *question* the
+     * desktop asks (`credential`), or as an unsolicited *push* a client would
+     * otherwise miss (`devices` / `settings` — the `*.changed` frames), or as
+     * the client half of a dual-listed name (`watch` — "I render frames and I
+     * send input"). The names this phone merely *asks for* — `create`,
+     * `localhost`, `upload`, `devserver`, `usage`, `account`, `chat`,
+     * `controls` — are gated by what the desktop advertised, so claiming them
+     * would say nothing. This is the same list `CLAIMED_CAPABILITIES` carries in
+     * `pwa/src/protocol-client.ts`.
+     */
+    static let claimed: [String] = [credential, devices, settings, watch]
 }
 
 /**
@@ -917,6 +1059,91 @@ enum ClientMessage: Equatable {
      * are the same read of the same file the agent is already writing.
      */
     case chatRead(rid: String, id: String, tail: Bool)
+
+    /* ---- sign-in. The one frame a connection may send before a `hello`. ----- */
+    /**
+     * Sign in with an account this machine already trusts, instead of a code.
+     *
+     * A port of `enroll` in `pwa/src/signin.ts`. Pre-authentication, over a
+     * sealed channel only: the host verifies `username`+`secret` against its own
+     * sshd on loopback, mints a pre-approved device bound to this connection's
+     * key, and answers `enrolled` with a credential — which this client stores
+     * and then presents in an ordinary `hello` on the *same* socket. `enroll`
+     * never authenticates the socket itself.
+     *
+     * `secret` is a password when `method` is `.password` and a private-key PEM
+     * when `.key`; the host chooses nothing from it, it only offers it to sshd.
+     * `capabilities` mirrors `hello`'s so the follow-up hello need not
+     * renegotiate, and grants nothing either way. There is no capability
+     * guarding this frame — there is nothing to advertise before a welcome, and
+     * a host too old to know it refuses `bad-message` and closes, which this
+     * client reads as "too old for sign-in; update it or use a pairing code".
+     */
+    case enroll(protocolVersion: Int, device: DeviceDescriptor, username: String,
+                secret: String, method: EnrollMethod, capabilities: [String])
+
+    /* ---- capability `controls`. Never sent unless the desktop offered it. --- */
+    /**
+     * What is this session's model, effort, fast mode and permission right now?
+     *
+     * Passive: the far end reads its own screen and settings and answers
+     * `controls.reading`. Nothing is typed. `rid` names this question — a split
+     * window can ask twice over one session — and `id` is authorised at the same
+     * door `input` is.
+     */
+    case controlsRead(rid: String, id: String)
+    /**
+     * Set one control on that session. **This types into the far terminal.**
+     *
+     * There is no command line here and there never must be: it names one of
+     * `ControlName` and a value, and the far end composes the command itself.
+     * Refused over there rather than negotiated here, and every path ends in a
+     * `controls.applied` — silence is never an answer.
+     */
+    case controlsApply(rid: String, id: String, control: ControlName, value: String)
+
+    /* ---- capability `settings`. The two settings this machine owns. -------- */
+    /// Read this machine's two server-owned settings. No key: the whole small
+    /// set, answered as `settings.state`. `rid` names the ask.
+    case settingsRead(rid: String)
+    /// Change one server-owned setting, over there. `key` is one of
+    /// `ServerSettingKey`; `value` is stringly, `'true'`/`'false'` or a provider
+    /// id. The outcome is `settings.applied`; every other listener hears
+    /// `settings.changed`.
+    case settingsApply(rid: String, key: ServerSettingKey, value: String)
+
+    /* ---- capability `devices`. The roster, and the one verb that removes. --- */
+    /// List every device signed in here. Answered with `devices.rows`.
+    case devicesList(rid: String)
+    /// Remove one device — revoke doubles as deny for a pending one. Self-revoke
+    /// is sign-out: the socket closing after this frame is the confirmation.
+    /// Answered with `devices.revoked`, unless the asker was the one removed.
+    case devicesRevoke(rid: String, device: String)
+
+    /* ---- capability `watch`. The live view, and the taps that come back. ---- */
+    /// Watch a surface: start (or renegotiate) a screencast of it. `window` is
+    /// `""` for the front/own tab, else a slot name. `maxWidth`/`quality` are
+    /// this viewer's request, clamped host-side. Idempotent — re-sending it is
+    /// how a resize renegotiates.
+    case browserWatch(window: String, maxWidth: Int, quality: Int)
+    /// Stop the screencast of one surface. The mirror of watch.
+    case browserUnwatch(window: String)
+    /// Rendered — send the next frame. The one-in-flight backpressure that ties
+    /// the cast to this phone's real draw rate. `seq` echoes the frame drawn.
+    case browserFrameAck(window: String, seq: Int)
+    /// A tap, a key, a gesture or a paste aimed at the frame named by `seq`, so
+    /// a scroll landing mid-gesture cannot desync the mapping. See `BrowserInput`.
+    case browserInput(window: String, seq: Int, input: BrowserInput)
+    /// Ask which surfaces are watchable — the browser's tab strip. Answered with
+    /// `browser.surfaces.rows`, also pushed when the strip changes.
+    case browserSurfaces(rid: String)
+}
+
+/// How a sign-in offers its secret. A password, or a private-key PEM — the host
+/// chooses nothing from it, it only hands it to sshd. Mirrors `enroll.method`.
+enum EnrollMethod: String, Equatable {
+    case password
+    case key
 }
 
 enum ServerMessage: Equatable {
@@ -966,7 +1193,18 @@ enum ServerMessage: Equatable {
      */
     case welcome(protocolVersion: Int, deviceId: String, deviceName: String, token: String?,
                  sessions: [RemoteSession], capabilities: Set<String>, hostPlatform: HostPlatform,
-                 hostName: String?, folders: [String]?, copilot: CopilotConnection)
+                 hostName: String?, folders: [String]?, copilot: CopilotConnection,
+                 // What build the host is running, e.g. `0.10.0` — **absent
+                 // means older**, and absent is its own answer: display text and
+                 // nothing to act on, bounded and stripped on arrival. There is
+                 // deliberately no update verb on this wire to pair it with;
+                 // what it buys is the one honest sentence a client can say when
+                 // its own build is ahead — *update this server from a desktop*.
+                 appVersion: String?,
+                 // Which shell is serving — desktop or headless. **Absent means
+                 // older**, read as `.unknown`, which names the box neutrally
+                 // rather than guessing.
+                 hostKind: HostKind)
     case sessions([RemoteSession])
     /**
      * This device's folder list changed while it was connected.
@@ -1231,6 +1469,55 @@ enum ServerMessage: Equatable {
      * opens the view is simply absent rather than opening an empty screen.
      */
     case chatRows(rid: String, id: String, rows: [CopilotChatMessage], reset: Bool, found: Bool)
+
+    /* ---- sign-in ---------------------------------------------------------- */
+    /**
+     * The device that was just signed in, with the credential to reconnect as.
+     *
+     * The answer to `enroll`, sent once, pre-authentication, over the sealed
+     * channel only. `credential` is the plaintext bearer secret — the client
+     * stores it and immediately sends a normal `hello` carrying it on the *same*
+     * socket. A refused sign-in is the ordinary `error` frame instead. Mirrors
+     * `enrolled` in `pwa/src/signin.ts`.
+     */
+    case enrolled(deviceId: String, deviceName: String, credential: String)
+
+    /* ---- capability `controls` -------------------------------------------- */
+    /// One session's whole control cluster, the answer to `controls.read`. `rid`
+    /// and `id` are checked before it is drawn — see `SessionControlsLink`.
+    case controlsReading(rid: String, id: String, reading: ControlsReadingWire)
+    /// The outcome of one `controls.apply`, carrying the far end's own sentence
+    /// and the reading it **re-read** off the session after the change settled —
+    /// never the pressed value, which is what makes a refused apply revert.
+    case controlsApplied(rid: String, id: String, ok: Bool, message: String, reading: ControlReadingWire)
+
+    /* ---- capability `settings` -------------------------------------------- */
+    /// The whole server-owned set, the answer to `settings.read`.
+    case settingsState(rid: String, settings: [ServerSettingWire])
+    /// The outcome of one `settings.apply`: the far end's sentence and the
+    /// machine's own re-read of the row, so a refused apply reverts.
+    case settingsApplied(rid: String, ok: Bool, message: String, setting: ServerSettingWire)
+    /// Unsolicited — another device (or the desktop pane) changed one of these.
+    /// No `rid`: it answers no ask.
+    case settingsChanged(settings: [ServerSettingWire])
+
+    /* ---- capability `devices` --------------------------------------------- */
+    /// The device roster, the answer to `devices.list`.
+    case devicesRows(rid: String, devices: [DeviceRosterRow])
+    /// The outcome of one `devices.revoke`, with the roster as it stands after.
+    case devicesRevoked(rid: String, ok: Bool, message: String, devices: [DeviceRosterRow])
+    /// Unsolicited — the roster moved (a device joined, left, or connected). No
+    /// `rid`: the same shape of push `settings.changed` gives.
+    case devicesChanged(devices: [DeviceRosterRow])
+
+    /* ---- capability `watch` ----------------------------------------------- */
+    /// One screencast frame — a base64 JPEG and the geometry to draw and measure
+    /// against it. `masked` is the handover curtain: `data` is empty and the
+    /// viewer draws its own lock card. See `BrowserFrame`.
+    case browserFrame(BrowserFrame)
+    /// The watchable surfaces — an answer to `browser.surfaces` (with `rid`) and
+    /// an unsolicited push when the strip changes (without).
+    case browserSurfaces(rid: String?, surfaces: [BrowserSurfaceRow])
 }
 
 enum ProtocolErrorCode: String, CaseIterable, Equatable {
