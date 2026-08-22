@@ -96,3 +96,126 @@ describe('letting go of a window the person disconnected', () => {
     expect(() => drive.releaseWindow('browser:9:9')).not.toThrow()
   })
 })
+
+/**
+ * The cast, wired through the driver (wave-3).
+ *
+ * The screencast mechanics — backpressure, masking, coordinate mapping — are
+ * exercised on the `PageCast` directly in `browser-watch.test.ts`. What is here
+ * is the glue the driver owns: that `startCast` claims an idle page and streams
+ * its `Page.screencastFrame` events through to the watcher, and that a handover
+ * curtains the cast at the source before the baton flips.
+ */
+describe('the driver casts a page and curtains it on handover', () => {
+  function fakePage() {
+    let handler: ((method: string, params: Record<string, unknown>) => void) | null = null
+    const sent: Array<{ method: string; params: Record<string, unknown> }> = []
+    const page = {
+      url: () => 'https://example.com/',
+      title: () => 'Example',
+      isGone: () => false,
+      loadURL: async () => undefined,
+      navigateGuarded: async () => 'navigated' as const,
+      attach: async () => undefined,
+      detach: () => undefined,
+      isAttached: () => true,
+      send: async (method: string, params: Record<string, unknown>) => {
+        sent.push({ method, params })
+        return {}
+      },
+      onEvent: (h: (method: string, params: Record<string, unknown>) => void) => {
+        handler = h
+        return () => {
+          handler = null
+        }
+      },
+      runInIsolatedWorld: async () => ({ rects: [], viewport: { width: 800, height: 600 } }),
+      capture: async () => ({ width: 0, height: 0, rgba: Buffer.alloc(0) }),
+      isLoading: () => false,
+      onSettled: () => () => undefined,
+      onGone: () => () => undefined,
+      onDetached: () => () => undefined,
+      onDestroyed: () => undefined,
+      watchBlocks: () => undefined,
+    }
+    return { page, sent, fire: (method: string, params: Record<string, unknown>) => handler?.(method, params) }
+  }
+
+  function jpeg(width: number, height: number): string {
+    return Buffer.from([
+      0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08,
+      (height >> 8) & 0xff, height & 0xff, (width >> 8) & 0xff, width & 0xff,
+      0x03, 0x01, 0x22, 0x00, 0x02, 0x11, 0x01, 0x03, 0x11, 0x01, 0xff, 0xd9,
+    ]).toString('base64')
+  }
+
+  const target = { key: boundKey('t1'), viewId: 'v1', browserTabId: 't1', name: 'B1' }
+
+  function frame(scrollY = 0) {
+    return {
+      data: jpeg(800, 600),
+      sessionId: 3,
+      metadata: { offsetTop: 0, pageScaleFactor: 1, deviceWidth: 800, deviceHeight: 600, scrollOffsetX: 0, scrollOffsetY: scrollY },
+    }
+  }
+
+  it('claims an idle page, streams a frame, and stops the cast when the watcher leaves', async () => {
+    const fp = fakePage()
+    const drive = new BrowserDrive({
+      openTab: async () => null,
+      contentsFor: () => fp.page as never,
+      publish: () => undefined,
+      now: () => 1_000,
+    })
+    const frames: Array<{ seq: number; data: string; masked?: true }> = []
+    const res = await drive.startCast({
+      target,
+      watcherId: 'w1',
+      window: 'B1',
+      options: { maxWidth: 800, quality: 50 },
+      emit: (f) => frames.push({ seq: f.seq, data: f.data, masked: f.masked }),
+    })
+    expect(res.ok).toBe(true)
+    expect(fp.sent.some((s) => s.method === 'Page.startScreencast')).toBe(true)
+
+    fp.fire('Page.screencastFrame', frame())
+    expect(frames).toHaveLength(1)
+    expect(frames[0].masked).toBeUndefined()
+    expect(frames[0].data.length).toBeGreaterThan(0)
+
+    await drive.stopCast(target, 'w1')
+    expect(fp.sent.some((s) => s.method === 'Page.stopScreencast')).toBe(true)
+  })
+
+  it('curtains every watcher of a page when the person is handed it', async () => {
+    const fp = fakePage()
+    const drive = new BrowserDrive({
+      openTab: async () => null,
+      contentsFor: () => fp.page as never,
+      publish: () => undefined,
+      now: () => 1_000,
+    })
+    const frames: Array<{ masked?: true; prompt?: string; data: string }> = []
+    await drive.startCast({
+      target,
+      watcherId: 'w1',
+      window: 'B1',
+      options: { maxWidth: 800, quality: 50 },
+      emit: (f) => frames.push({ masked: f.masked, prompt: f.prompt, data: f.data }),
+    })
+    fp.fire('Page.screencastFrame', frame())
+    drive.ackCast(target, 'w1', 1)
+    const before = frames.length
+
+    // Hand the page to the person. The cast is curtained before the baton flips:
+    // stopScreencast is sent, and a lock card is drawn.
+    void drive.handover('Type your password here.', 5, target)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(fp.sent.some((s) => s.method === 'Page.stopScreencast')).toBe(true)
+    const curtain = frames[frames.length - 1]
+    expect(frames.length).toBeGreaterThan(before)
+    expect(curtain.masked).toBe(true)
+    expect(curtain.data).toBe('')
+    expect(curtain.prompt).toContain('password')
+  })
+})

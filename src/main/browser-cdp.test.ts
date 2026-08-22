@@ -193,6 +193,8 @@ describe('the deny list', () => {
   const ARGUMENTS: Record<string, Record<string, unknown>> = {
     'Fetch.enable': { patterns: [{ urlPattern: '*', resourceType: 'Image', requestStage: 'Request' }] },
     'Fetch.fulfillRequest': { requestId: 'r1', responseCode: 200 },
+    'Page.startScreencast': { format: 'jpeg', quality: 50, maxWidth: 800 },
+    'Input.dispatchTouchEvent': { type: 'touchStart', touchPoints: [{ x: 10, y: 20 }] },
   }
 
   it('allows exactly the methods the driver needs, given arguments it would send', () => {
@@ -499,6 +501,8 @@ describe('the CDP tables screen the pipe transport', () => {
     'Browser.setDownloadBehavior': { behavior: 'allowAndName', downloadPath: DOWNLOADS },
     'Target.createTarget': { url: 'about:blank' },
     'Network.getCookies': { urls: ['https://example.com/'] },
+    'Page.startScreencast': { format: 'jpeg', quality: 50, maxWidth: 800 },
+    'Input.dispatchTouchEvent': { type: 'touchStart', touchPoints: [{ x: 10, y: 20 }] },
   }
 
   it('allows exactly the methods the server driver needs, given arguments it would send', () => {
@@ -736,5 +740,78 @@ describe('the one cookie relaxation is scoped to a single URL', () => {
     expect(screenCommand({ ...cdp, method: 'Storage.getCookies' }).ok).toBe(false)
     expect(CDP_DENIED_METHODS).toContain('Network.getAllCookies')
     expect(CDP_DENIED_METHODS).toContain('Storage.getCookies')
+  })
+})
+
+describe('the screencast is allow-listed on both transports and its arguments are screened (wave-3)', () => {
+  const agent = { state: 'agent' as DriveState }
+  const cdp = { transport: 'cdp' as const, state: 'agent' as DriveState }
+  const cast = { format: 'jpeg', quality: 50, maxWidth: 800 }
+
+  it('carries the four new methods onto both tables', () => {
+    for (const method of [
+      'Page.startScreencast',
+      'Page.stopScreencast',
+      'Page.screencastFrameAck',
+      'Input.dispatchTouchEvent',
+    ]) {
+      expect(ALLOWED_METHODS).toContain(method)
+      expect(CDP_ALLOWED_METHODS).toContain(method)
+      expect(DENIED_METHODS).not.toContain(method)
+      expect(CDP_DENIED_METHODS).not.toContain(method)
+    }
+  })
+
+  it('starts a jpeg screencast at a bounded quality and width', () => {
+    expect(screenCommand({ ...agent, method: 'Page.startScreencast', params: cast }).ok).toBe(true)
+    expect(screenCommand({ ...cdp, method: 'Page.startScreencast', params: cast }).ok).toBe(true)
+  })
+
+  it('refuses a screencast that is not jpeg — a png of a page blows the relay cap', () => {
+    expect(screenCommand({ ...cdp, method: 'Page.startScreencast', params: { ...cast, format: 'png' } }).ok).toBe(false)
+    // The CDP default is png, so a call that names no format at all is refused.
+    expect(screenCommand({ ...cdp, method: 'Page.startScreencast', params: { quality: 50, maxWidth: 800 } }).ok).toBe(false)
+  })
+
+  it.each([
+    { ...cast, quality: 0 },
+    { ...cast, quality: 81 },
+    { ...cast, quality: 50.5 },
+    { ...cast, maxWidth: 100 },
+    { ...cast, maxWidth: 1601 },
+    { ...cast, maxWidth: 800.5 },
+    { ...cast, maxHeight: 0 },
+    { ...cast, maxHeight: 5000 },
+    { ...cast, everyNthFrame: 0 },
+    { ...cast, everyNthFrame: 1.5 },
+  ])('refuses a screencast whose arguments are out of range: %o', (params) => {
+    expect(screenCommand({ ...cdp, method: 'Page.startScreencast', params }).ok).toBe(false)
+  })
+
+  it('accepts a bounded maxHeight and a source-rate cap of at least one', () => {
+    expect(screenCommand({ ...cdp, method: 'Page.startScreencast', params: { ...cast, maxHeight: 1200, everyNthFrame: 2 } }).ok).toBe(true)
+  })
+
+  it('stops the screencast and acks a frame with no argument check', () => {
+    expect(screenCommand({ ...cdp, method: 'Page.stopScreencast', params: {} }).ok).toBe(true)
+    expect(screenCommand({ ...cdp, method: 'Page.screencastFrameAck', params: { sessionId: 1 } }).ok).toBe(true)
+  })
+
+  it('dispatches a touch of at most ten points, and refuses more', () => {
+    expect(
+      screenCommand({ ...cdp, method: 'Input.dispatchTouchEvent', params: { type: 'touchStart', touchPoints: [{ x: 1, y: 2 }, { x: 3, y: 4 }] } }).ok,
+    ).toBe(true)
+    // A touchEnd carries no points, and that is allowed.
+    expect(screenCommand({ ...cdp, method: 'Input.dispatchTouchEvent', params: { type: 'touchEnd', touchPoints: [] } }).ok).toBe(true)
+    const many = Array.from({ length: 11 }, (_, i) => ({ x: i, y: i }))
+    expect(screenCommand({ ...cdp, method: 'Input.dispatchTouchEvent', params: { type: 'touchStart', touchPoints: many } }).ok).toBe(false)
+    // A touch with no point list at all is refused rather than dispatched.
+    expect(screenCommand({ ...cdp, method: 'Input.dispatchTouchEvent', params: { type: 'touchStart' } }).ok).toBe(false)
+  })
+
+  it('refuses the whole cast while the person has the page, reads and input alike', () => {
+    for (const method of ['Page.startScreencast', 'Page.stopScreencast', 'Page.screencastFrameAck', 'Input.dispatchTouchEvent']) {
+      expect(screenCommand({ transport: 'cdp', state: 'human', method, params: cast }).ok).toBe(false)
+    }
   })
 })

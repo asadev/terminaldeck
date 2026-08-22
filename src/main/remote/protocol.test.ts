@@ -30,6 +30,7 @@ import {
   MAX_TOUCH_POINTS,
   MAX_SURFACES_REPORTED,
   MAX_FRAME_DATA_CHARS,
+  MAX_FRAME_MESSAGE_BYTES,
   PROTOCOL_ERROR_CODES,
   PROTOCOL_VERSION,
   chunkInput,
@@ -2830,5 +2831,73 @@ describe('the frames a host casts back', () => {
 
   it('lists watch as a capability both ends may name', () => {
     expect(CAPABILITIES).toContain('watch')
+  })
+})
+
+describe('the type-aware message cap lets a frame past the text cap and nothing else (wave-3)', () => {
+  /** A browser.frame whose base64 data is exactly `dataChars` long. */
+  function frameMessage(dataChars: number): string {
+    return JSON.stringify({
+      t: 'browser.frame',
+      window: 'B2',
+      seq: 9,
+      w: 800,
+      h: 1600,
+      dw: 400,
+      dh: 800,
+      scale: 2,
+      offsetTop: 0,
+      pageScale: 1,
+      scrollX: 0,
+      scrollY: 0,
+      data: 'A'.repeat(dataChars),
+    })
+  }
+
+  it('admits a browser.frame whose body is far over the 64 KiB text cap', () => {
+    const message = frameMessage(MAX_FRAME_DATA_CHARS)
+    expect(Buffer.byteLength(message)).toBeGreaterThan(MAX_MESSAGE_BYTES)
+    expect(Buffer.byteLength(message)).toBeLessThanOrEqual(MAX_FRAME_MESSAGE_BYTES)
+    const result = parseServerMessage(message)
+    expect(result.ok, result.ok ? '' : result.reason).toBe(true)
+    if (result.ok) expect(result.message.t).toBe('browser.frame')
+  })
+
+  it('refuses a browser.frame whose body is over the frame ceiling', () => {
+    // Over the per-field data cap AND over the whole-message ceiling.
+    const message = frameMessage(MAX_FRAME_DATA_CHARS + 4 * 1024)
+    expect(Buffer.byteLength(message)).toBeGreaterThan(MAX_FRAME_MESSAGE_BYTES)
+    const result = parseServerMessage(message)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason).toContain('message cap')
+  })
+
+  it('does not let any other message borrow the frame allowance', () => {
+    // An output frame the size a frame is allowed to be is still refused: only a
+    // browser.frame may pass the text cap.
+    const message = JSON.stringify({ t: 'output', id: SESSION_ID, data: 'A'.repeat(MAX_FRAME_DATA_CHARS) })
+    expect(Buffer.byteLength(message)).toBeGreaterThan(MAX_MESSAGE_BYTES)
+    expect(Buffer.byteLength(message)).toBeLessThanOrEqual(MAX_FRAME_MESSAGE_BYTES)
+    const result = parseServerMessage(message)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason).toContain('message cap')
+  })
+
+  it('still holds an ordinary message to the 64 KiB text cap', () => {
+    const message = JSON.stringify({ t: 'output', id: SESSION_ID, data: 'A'.repeat(MAX_MESSAGE_BYTES) })
+    expect(Buffer.byteLength(message)).toBeGreaterThan(MAX_MESSAGE_BYTES)
+    expect(parseServerMessage(message).ok).toBe(false)
+  })
+
+  it('refuses an over-cap frame before it is parsed', () => {
+    // Not JSON, and over the frame ceiling: the size refusal must beat the parse.
+    const result = parseServerMessage('A'.repeat(MAX_FRAME_MESSAGE_BYTES + 1))
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason).not.toBe('not JSON')
+  })
+
+  it('still parses a small browser.frame on the ordinary path', () => {
+    const result = parseServerMessage(frameMessage(16))
+    expect(result.ok).toBe(true)
   })
 })

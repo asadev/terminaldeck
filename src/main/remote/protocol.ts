@@ -1177,6 +1177,27 @@ export const MAX_FRAME_BYTES = 67 * 1024
 export const MAX_FRAME_DATA_CHARS = Math.ceil(MAX_FRAME_BYTES / 3) * 4
 
 /**
+ * The largest a whole `browser.frame` message may be, envelope included.
+ *
+ * The type-aware cap the receive doors apply: every message holds to {@link
+ * MAX_MESSAGE_BYTES} — the 64 KiB text cap that guards keystrokes, outlines and
+ * everything else on the string path — except a `browser.frame`, whose base64
+ * JPEG ({@link MAX_FRAME_DATA_CHARS}) is by design larger than that cap. A frame
+ * spends {@link MAX_FRAME_DATA_CHARS} on its `data` and a little more on the
+ * fields around it: its `window` and (when masked) its `prompt` — each well under
+ * a kilobyte — its dozen small numbers, and the JSON keys. Two kilobytes of
+ * allowance covers all of that with room to spare, and the sum still sits under
+ * the relay's 96 KiB payload ceiling that {@link MAX_FRAME_BYTES} is sized from.
+ *
+ * A message over this is refused before it is parsed, on either receive door; a
+ * message between this and {@link MAX_MESSAGE_BYTES} is admitted only when it is
+ * in fact a `browser.frame`, so the larger allowance a frame is given cannot be
+ * borrowed by any other message. No chunking: a live frame split across
+ * envelopes is stale before it reassembles.
+ */
+export const MAX_FRAME_MESSAGE_BYTES = MAX_FRAME_DATA_CHARS + 2 * 1024
+
+/**
  * Watch a surface: start (or renegotiate) a screencast of it to this connection.
  *
  * `window` names the surface the way {@link WindowCallFrame} does not need to —
@@ -6218,7 +6239,31 @@ function asErrorCode(value: unknown): ProtocolErrorCode | null {
 /** The only door inbound text comes through on a client, mirroring `parseClientMessage`. */
 export function parseServerMessage(raw: unknown): ServerParse {
   if (typeof raw !== 'string') return { ok: false, reason: 'not text' }
-  if (overBytes(raw, MAX_MESSAGE_BYTES)) return { ok: false, reason: 'larger than the message cap' }
+  /*
+   * The type-aware cap (wave-3). Measured cheaply first: a message inside the
+   * ordinary text cap takes the ordinary path — one size check, one parse, byte
+   * for byte what it was before a frame existed. Only a message *over* that cap
+   * pays the second check, and the one message allowed past it is a
+   * `browser.frame`, whose base64 JPEG is by design larger than the text cap —
+   * up to {@link MAX_FRAME_MESSAGE_BYTES}, the ceiling a relay will carry a frame
+   * at. Anything larger, or anything this size that is not a frame, is refused;
+   * the frame's larger allowance is never borrowed by another message.
+   */
+  if (overBytes(raw, MAX_MESSAGE_BYTES)) {
+    if (overBytes(raw, MAX_FRAME_MESSAGE_BYTES)) {
+      return { ok: false, reason: 'larger than the message cap' }
+    }
+    let framed: unknown
+    try {
+      framed = JSON.parse(raw)
+    } catch {
+      return { ok: false, reason: 'not JSON' }
+    }
+    if (!isRecord(framed) || framed.t !== 'browser.frame') {
+      return { ok: false, reason: 'larger than the message cap' }
+    }
+    return parseServerFrame(framed)
+  }
   let parsed: unknown
   try {
     parsed = JSON.parse(raw)

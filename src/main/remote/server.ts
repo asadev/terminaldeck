@@ -94,10 +94,13 @@ import {
   MAX_CHAT_ROWS,
   MAX_COPILOT_LOG_ROWS,
   MAX_MESSAGE_BYTES,
+  MAX_WATCH_WINDOWS,
   PROTOCOL_VERSION,
   chunkOutput,
   parseClientMessage,
   serialize,
+  type BrowserFrameFrame,
+  type BrowserInputFrame,
   type ClientMessage,
   type CopilotChatMessage,
   type CopilotLinkWire,
@@ -715,6 +718,56 @@ export interface RemoteConnection {
   tunnels: TunnelInfo[]
 }
 
+/** One watchable surface — a row of the browser's tab strip, as data. */
+export interface ScreencastSurface {
+  window: string
+  url: string
+  title: string
+  live: boolean
+}
+
+/**
+ * The engine behind the live view of this machine's own browser (wave-3).
+ *
+ * Everything here is addressed by window name — `''` for the front tab, `B2` for
+ * a slot — and by a `watcherId` that is one connection's id, so a page watched by
+ * two connections is one screencast with two independent ack chains and neither
+ * can reach the other's. It decides nothing about permission: the server checks
+ * the grant before every `emit` and before it calls {@link input}. Wired over the
+ * `BrowserDrive` in `src/headless/host.ts`; a test drives a fake one.
+ */
+export interface ScreencastHost {
+  /**
+   * Start (or renegotiate) a cast of `window` to one watcher.
+   *
+   * `emit` is handed a whole `browser.frame` and is called for every frame; the
+   * server rebuilds it per watch so the grant is re-read before each frame it
+   * writes. Idempotent per `watcherId`: a second call is a renegotiation.
+   */
+  watch(input: {
+    watcherId: string
+    window: string
+    maxWidth: number
+    quality: number
+    everyNth?: number
+    emit: (frame: BrowserFrameFrame) => void
+  }): Promise<{ ok: boolean; reason?: string }>
+  /** Stop one watcher's cast of one window. */
+  unwatch(input: { watcherId: string; window: string }): Promise<void> | void
+  /** A watcher rendered a frame — release its next one. */
+  ack(input: { watcherId: string; window: string; seq: number }): void
+  /** Forward one input event from a watcher to the window it is watching. */
+  input(input: {
+    watcherId: string
+    window: string
+    frame: BrowserInputFrame
+  }): Promise<{ ok: boolean; reason?: string }>
+  /** The watchable surfaces — the browser's tab strip, as data. */
+  surfaces(): Promise<ScreencastSurface[]> | ScreencastSurface[]
+  /** Drop a watcher from every cast it holds — a socket that closed. */
+  dropWatcher(watcherId: string): Promise<void> | void
+}
+
 export interface RemoteEndpointOptions {
   sessions: SessionAccess
   auth: RemoteAuthenticator
@@ -870,6 +923,43 @@ export interface RemoteEndpointOptions {
    * paired computer are not facts the next one gets to hear.
    */
   windowsHeldFor?(deviceId: string): readonly string[]
+  /**
+   * The live view of this machine's own browser — wave-3's watch-and-drive.
+   *
+   * **Absent is the switch**, like every capability here: a host with no browser
+   * to screencast does not pass this, so `watch` is never advertised and a device
+   * never draws a viewer or sends a `browser.watch`. Present, it is the engine
+   * behind the `browser.*` live-view frames: it starts a screencast of a named
+   * window, streams its frames to `emit`, takes the viewer's acks and input, and
+   * lists the watchable surfaces. It never decides *whether* a device may watch —
+   * that is {@link RemoteEndpointOptions.drivesWindows}, read per frame here — and
+   * it never touches the socket; every frame goes out through this server's own
+   * `send`, after the grant is re-read.
+   *
+   * Addressed by window name only, never a session id: the browser is *this*
+   * machine's, so `''` is its front tab and `B2` is one of its slots, the same
+   * naming the driver keeps. Wired in `src/headless/host.ts` over the same
+   * `BrowserDrive` the `serveWindows` path drives.
+   */
+  screencast?: ScreencastHost
+  /**
+   * May this device watch and drive this machine's browser windows?
+   *
+   * The **one** grant watching and driving share — the same default-closed axis
+   * `window.call` rides (`WindowGrants.drives` for a device that dialled in): a
+   * device approved as the owner's own watches and drives by default, a guest
+   * stays off until ticked. Read **per frame** at send time, not once at watch
+   * time, so a grant revoked mid-cast stops the frames on the very next tick
+   * rather than on the next reconnection — the discipline `settings.changed` and
+   * `dev.state` recompute with.
+   *
+   * Absent means **closed**: a host that can screencast but names no grant axis
+   * has no way to say a device is trusted to drive it, and the safe reading of
+   * silence is no. The public demo box reads every device as a guest through this
+   * (its `WindowGrants` answers no for one), so watch and drive default closed
+   * there without a line that mentions the demo.
+   */
+  drivesWindows?(deviceId: string): boolean
   /**
    * Starting a project's dev server. **Absent is the switch**, as everywhere else.
    *
@@ -1749,6 +1839,17 @@ interface LiveConnection {
    */
   devFolders: Set<string>
   /**
+   * The browser windows this connection is watching, by window name — wave-3.
+   *
+   * Holds only windows that passed the grant check, and leaves with the socket
+   * exactly as `devFolders` does: on close every entry is unwatched and the
+   * watcher dropped from the driver, so a page no other connection watches stops
+   * being screencast and a reconnection starts fresh with no leaked subscription.
+   * Capped at {@link MAX_WATCH_WINDOWS} — a per-connection allocation a peer must
+   * not choose the size of — and trimmed rather than a reason to close the link.
+   */
+  watching: Set<string>
+  /**
    * Undo for this connection's copilot subscription, or null when it has none.
    *
    * Made on `copilot.attach` and not before, for the reason `tunnels` and
@@ -1930,6 +2031,16 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
      */
     if (name === CAPABILITY.hostWindows) return options.serveWindows !== undefined
     /*
+     * The live view, gated on the thing that makes it possible — a screencast
+     * engine over this machine's own browser — exactly as `windows`/`hostWindows`
+     * are gated on the desk and the server. Not gated on the grant here: the
+     * capability says this machine *can* stream a window, `capabilitiesFor` below
+     * withholds it from a guest (watching the owner's signed-in browser is an
+     * owner act), and {@link RemoteEndpointOptions.drivesWindows} is read per
+     * frame — the same three-layer shape `hostWindows` uses.
+     */
+    if (name === CAPABILITY.watch) return options.screencast !== undefined
+    /*
      * Three conditions, and all three are load-bearing.
      *
      * The module is the obvious one. `create` is there because starting a dev
@@ -2096,6 +2207,34 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
   }
 
   /**
+   * May this connection watch (and, gated the same way, drive) a window right
+   * now — read live at message time and again per frame at send time, so a grant
+   * revoked mid-cast stops the very next frame.
+   *
+   * Two layers. `ownDevice` excludes a guest outright: watching the owner's
+   * signed-in browser — his mail, his bank — is as much an owner act as clicking
+   * in it, which is why `capabilitiesFor` withholds the `watch` capability from a
+   * guest as well. Then the window-driving grant `drivesWindows`, the same one
+   * `window.call` rides: watching and driving share one grant on purpose. The
+   * grant is read per call; when a host wires no grant function an owner device
+   * defaults to allowed (the drive-by-default rule for a machine the person added
+   * or paired as their own), while a guest is already gone at the first layer.
+   */
+  function mayWatchNow(connection: LiveConnection): boolean {
+    const deviceId = connection.deviceId
+    if (deviceId === null) return false
+    if (!ownDevice(deviceId)) return false
+    const grant = options.drivesWindows
+    if (!grant) return true
+    try {
+      return grant(deviceId) === true
+    } catch (error) {
+      console.error('[remote] the window-driving grant threw; refusing the watch:', error)
+      return false
+    }
+  }
+
+  /**
    * May this device use any of this machine's logins at all?
    *
    * Absent store means yes, for the reason every other absence here does: a host
@@ -2177,6 +2316,12 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     // no push frame that could correct a welcome later, so a guest must never be
     // told the capability exists.
     if (!ownDevice(deviceId)) withheld.push(CAPABILITY.settings)
+    // And `watch` with them, and for the same reason (wave-3): watching a window
+    // is seeing the owner's signed-in browser — his mail, his bank — which is as
+    // much an owner act as clicking in it, and no push frame could correct a
+    // welcome later, so a guest must never be told the capability exists. The
+    // grant `drivesWindows` is the second layer, read per frame at send time.
+    if (!ownDevice(deviceId)) withheld.push(CAPABILITY.watch)
     const narrowed = withheld.length === 0 ? advertised : advertised.filter((name) => !withheld.includes(name))
     if (copilotEligible(deviceId)) return narrowed
     // `web` goes with it, and for the same reason: opening a page puts a window
@@ -5001,6 +5146,107 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
           })
         return
       }
+      case 'browser.watch': {
+        /*
+         * A device asking to watch a window of this machine's own browser (wave-3).
+         *
+         * Dropped in silence rather than refused with a frame when this host has
+         * no screencast engine, when this connection was never told the `watch`
+         * capability (a guest), or when the grant is currently off — the same
+         * "an announcement nobody asked for is dropped rather than made a reason
+         * to close somebody's link" that `sessions.mine` uses. There is no
+         * `browser.watch.result` frame: a device that may not watch simply never
+         * receives a `browser.frame`, which is what the viewer's absence already
+         * meant when the capability was withheld.
+         *
+         * The grant is checked here AND, crucially, inside `emit` — read per
+         * frame at send time, so a grant revoked mid-cast stops the frames on the
+         * very next tick, never one payload handed to a loop that keeps sending.
+         */
+        const cast = options.screencast
+        if (!cast || !mayWatchNow(connection)) return
+        // Trimmed rather than a reason to refuse: a ninth window loses the ninth.
+        if (!connection.watching.has(message.window) && connection.watching.size >= MAX_WATCH_WINDOWS) return
+        const watcherId = connection.id
+        const window = message.window
+        connection.watching.add(window)
+        void cast
+          .watch({
+            watcherId,
+            window,
+            maxWidth: message.maxWidth,
+            quality: message.quality,
+            ...(message.everyNth !== undefined ? { everyNth: message.everyNth } : {}),
+            emit: (frame) => {
+              // Recomputed the moment before the frame is written — the grant,
+              // and that this connection still watches this window.
+              if (!mayWatchNow(connection) || !connection.watching.has(window)) {
+                connection.watching.delete(window)
+                void Promise.resolve(cast.unwatch({ watcherId, window })).catch(() => undefined)
+                return
+              }
+              send(connection, frame)
+            },
+          })
+          .then((result) => {
+            if (!result.ok) connection.watching.delete(window)
+          })
+          .catch(() => {
+            connection.watching.delete(window)
+          })
+        return
+      }
+      case 'browser.unwatch': {
+        const cast = options.screencast
+        if (!cast) return
+        connection.watching.delete(message.window)
+        void Promise.resolve(cast.unwatch({ watcherId: connection.id, window: message.window })).catch(
+          () => undefined,
+        )
+        return
+      }
+      case 'browser.frame.ack': {
+        const cast = options.screencast
+        if (!cast) return
+        // An ack for a window this connection is not watching is a stale race
+        // (an unwatch that crossed a frame on the wire); dropped in silence.
+        if (!connection.watching.has(message.window)) return
+        cast.ack({ watcherId: connection.id, window: message.window, seq: message.seq })
+        return
+      }
+      case 'browser.input': {
+        /*
+         * Driving a watched window. Refused — dropped, no CDP send — under every
+         * condition a `browser.watch` is, and one more: a device may drive only a
+         * window it is *watching*, so an input naming a window not in its
+         * `watching` set is refused. Watching never widens driving beyond the
+         * frames the device is actually being shown, and the cast itself refuses
+         * input while a frame is masked, so a curtain is a wall in both
+         * directions.
+         */
+        const cast = options.screencast
+        if (!cast || !mayWatchNow(connection)) return
+        if (!connection.watching.has(message.window)) return
+        void Promise.resolve(
+          cast.input({ watcherId: connection.id, window: message.window, frame: message }),
+        ).catch(() => undefined)
+        return
+      }
+      case 'browser.surfaces': {
+        /*
+         * The browser's tab strip, as data (the dual rule: a surface with a data
+         * representation is listed, only a live web document is watched). Gated
+         * on the same axis as the frames it would lead to — a device that may not
+         * watch is not shown what it could watch.
+         */
+        const cast = options.screencast
+        if (!cast || !mayWatchNow(connection)) return
+        const rid = message.rid
+        void Promise.resolve(cast.surfaces())
+          .then((surfaces) => send(connection, { t: 'browser.surfaces.rows', rid, surfaces }))
+          .catch(() => undefined)
+        return
+      }
       case 'credential.ack':
       case 'credential.answer':
       case 'credential.deny': {
@@ -5150,6 +5396,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
       tunnels: null,
       uploads: null,
       devFolders: new Set(),
+      watching: new Set(),
       copilot: null,
       copilotOpen: false,
       helloTimer: null,

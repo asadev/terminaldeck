@@ -35,6 +35,8 @@ import {
 import { copilotPaths } from './copilot-home'
 import { blockShotDir } from './browser-scrape-paths'
 import { normalizeUrl, shortLabel } from './browser-url'
+import { PageCast, type CastFrame, type CastOptions, type CastSeam, type SecretScan } from './browser-watch'
+import type { BrowserInputFrame } from './remote/protocol'
 
 /**
  * The engine: one page, driven properly.
@@ -622,6 +624,16 @@ export class BrowserDrive {
   /** A session's attached windows, by slot key, created on first use. */
   private readonly bound = new Map<string, Slot>()
   private watched = new WeakSet<DrivenPage>()
+  /**
+   * The live screencast of each slot's page, by slot key — wave-3's watch path.
+   *
+   * One {@link PageCast} per page, holding every connection watching it; made on
+   * the first watch and dropped when its last watcher leaves. It never holds a
+   * page frame anywhere but in memory, and it drives the page only through this
+   * class's own screened {@link send}, so the baton refuses its screencast during
+   * a handover exactly as it refuses every other command.
+   */
+  private readonly casts = new Map<string, PageCast>()
 
   constructor(private readonly host: DriveHost) {}
 
@@ -972,6 +984,14 @@ export class BrowserDrive {
      */
     slot.network?.abandon('the page was released')
     slot.network = null
+    // The cast goes with the page: a screencast of a page that is gone has
+    // nothing to send, and its watchers are told by the socket rather than by a
+    // frame. Dropped from memory, never flushed to disk.
+    const cast = this.casts.get(slot.key)
+    if (cast) {
+      this.casts.delete(slot.key)
+      void cast.dispose().catch(() => undefined)
+    }
     this.detach(slot)
     slot.viewId = null
     slot.isolated = false
@@ -2238,6 +2258,14 @@ export class BrowserDrive {
        * be sent while this side may still send.
        */
       await slot.network?.suspend('the person was given the page').catch(() => undefined)
+      /*
+       * And the cast, curtained on the same side of the flip and for the same
+       * reason: `Page.stopScreencast` must be sent while this side may still
+       * send, so the pixels stop at the source before the baton reaches the
+       * person. After this, every watcher of this page sees a lock card and no
+       * frame carries data until the page is handed back.
+       */
+      await this.casts.get(slot.key)?.curtain(slot.prompt).catch(() => undefined)
       this.move(slot, 'handover')
     }
 
@@ -2304,6 +2332,9 @@ export class BrowserDrive {
       // The rules go back on with the baton. A run that stayed silently off
       // after a handover would be a control that looks armed and is not.
       void slot.network?.resume().catch(() => undefined)
+      // And the cast comes back with them: the screencast is restarted and the
+      // secret rects re-scanned, so the watchers' lock cards clear to live pixels.
+      void this.casts.get(slot.key)?.uncurtain().catch(() => undefined)
       slot.waiting?.('resumed')
       slot.waiting = null
       return
@@ -2312,6 +2343,107 @@ export class BrowserDrive {
     slot.waiting = null
     waiting?.('stopped')
     this.release(this.refOf(slot))
+  }
+
+  /* ---------------------------------------------------------------- watch -- */
+
+  /**
+   * Start (or renegotiate) a live cast of a page to one watcher.
+   *
+   * The screencast rides this class's own {@link send}, so it is screened by
+   * `browser-cdp.ts` and refused the instant the person takes the page — which is
+   * why a page with no drive yet is claimed here first (moved to `agent` and
+   * attached), the same opening move a handover on an idle window makes. `emit`
+   * is called by the cast for each frame; the server rebuilds it per watch so the
+   * grant is re-read before every frame it writes to a socket. A page that has
+   * gone is refused rather than cast into the void.
+   */
+  async startCast(input: {
+    target?: DriveTarget | null
+    watcherId: string
+    window: string
+    options: CastOptions
+    emit: (frame: CastFrame) => void
+  }): Promise<{ ok: boolean; reason?: string }> {
+    const slot = this.slotFor(input.target)
+    const page = this.contents(slot)
+    if (!page) {
+      return {
+        ok: false,
+        reason:
+          slot === this.own
+            ? 'there is no page being driven; open one first'
+            : `${slot.name} is not open any more`,
+      }
+    }
+    if (slot.state === 'human') {
+      return { ok: false, reason: 'the person has this page right now' }
+    }
+    if (slot.state === 'idle') {
+      this.watch(page, slot)
+      this.move(slot, 'claimed')
+      await this.attach(page, slot)
+    }
+    let cast = this.casts.get(slot.key)
+    if (!cast) {
+      cast = new PageCast(this.castSeam(page, slot))
+      this.casts.set(slot.key, cast)
+    }
+    await cast.watch(input.watcherId, input.window, input.options, input.emit)
+    return { ok: true }
+  }
+
+  /** Stop a watcher's cast; the page's cast is dropped when its last watcher leaves. */
+  async stopCast(target: DriveTarget | null | undefined, watcherId: string): Promise<void> {
+    const slot = this.slotFor(target)
+    const cast = this.casts.get(slot.key)
+    if (!cast) return
+    await cast.unwatch(watcherId)
+    if (cast.watcherCount === 0) this.casts.delete(slot.key)
+  }
+
+  /** A watcher rendered a frame — release its next one. */
+  ackCast(target: DriveTarget | null | undefined, watcherId: string, seq: number): void {
+    this.casts.get(this.slotFor(target).key)?.ack(watcherId, seq)
+  }
+
+  /** Forward one input event from a watcher to the page it is watching. */
+  async castInput(
+    target: DriveTarget | null | undefined,
+    watcherId: string,
+    frame: BrowserInputFrame,
+  ): Promise<{ ok: boolean; reason?: string }> {
+    const cast = this.casts.get(this.slotFor(target).key)
+    if (!cast) return { ok: false, reason: 'that window is not being watched' }
+    return cast.input(watcherId, frame)
+  }
+
+  /** Drop a watcher from every cast it holds — a socket that closed. */
+  async dropWatcher(watcherId: string): Promise<void> {
+    for (const [key, cast] of [...this.casts]) {
+      await cast.unwatch(watcherId)
+      if (cast.watcherCount === 0) this.casts.delete(key)
+    }
+  }
+
+  /**
+   * The seam a {@link PageCast} drives: this class's screened send, the page's
+   * event stream, its secret-rects scan, and whether the person holds it.
+   *
+   * `scanSecrets` reaches the page through the one isolated-world read every
+   * other read uses ({@link run}), so it is refused during a handover like
+   * everything else — which leaves the previous rects in place, the safe
+   * direction. Never a second door and never a file.
+   */
+  private castSeam(page: DrivenPage, slot: Slot): CastSeam {
+    return {
+      send: (method, params = {}) => this.send(page, slot, method, params),
+      onEvent: (handler) => page.onEvent(handler),
+      scanSecrets: () =>
+        this.run<SecretScan>(SECRET_RECTS_SCRIPT, {}, slot).catch(() => null),
+      isHuman: () => slot.state === 'human',
+      now: () => this.host.now(),
+    }
   }
 
   /* --------------------------------------------------------------- shared -- */

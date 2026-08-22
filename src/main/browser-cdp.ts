@@ -1,4 +1,11 @@
 import { isNavigationAllowed } from './browser-url'
+import {
+  MAX_TOUCH_POINTS,
+  MAX_WATCH_QUALITY,
+  MAX_WATCH_WIDTH,
+  MIN_WATCH_QUALITY,
+  MIN_WATCH_WIDTH,
+} from './remote/protocol'
 
 /**
  * The one door between the driver and Chromium's debugging protocol.
@@ -182,9 +189,47 @@ export const ALLOWED_METHODS: readonly string[] = [
   'Input.dispatchMouseEvent',
   'Input.dispatchKeyEvent',
   'Input.insertText',
+  /*
+   * Touch, for the watch-and-drive path (wave-3). A phone watching a page here
+   * sends genuine multi-touch gestures — a pinch, a two-finger scroll — and this
+   * is where they land; a single tap still goes through `dispatchMouseEvent`
+   * above, which needs no touch handler on the page and is the more reliable
+   * path. SAFETY: the arguments carry only coordinates — no url, no path — and
+   * the point count is bounded in {@link screenCommand}'s screencast branch, so
+   * an unbounded `touchPoints` from a peer cannot become an unbounded array
+   * dispatched into Chromium. Refused during `human` by the baton like every
+   * other input.
+   */
+  'Input.dispatchTouchEvent',
   // Where the page is scrolled to, so a click can be aimed at viewport
   // coordinates after the element has been scrolled into view.
   'Page.getLayoutMetrics',
+  /*
+   * Screencast — the live view a phone or a second desktop watches over the
+   * wire (wave-3). All three inherit into {@link CDP_ALLOWED_METHODS} through the
+   * spread below, so the desktop's `WebContentsView` cast and the headless CDP
+   * target both stream through one gate.
+   *
+   *  - `Page.startScreencast` is a READ (pixels leave the page), so it is refused
+   *    during `human` by the baton in {@link screenCommand} — which is why the
+   *    handover mask also stops the cast at the source before the baton flips.
+   *    Its arguments carry a format, a quality, a width and a source-rate cap,
+   *    each of which is a capability the feature bounds rather than a value the
+   *    caller may choose freely — so they are argument-checked in the screencast
+   *    branch: `jpeg` only (a PNG of a photo blows the relay's 96 KiB ceiling),
+   *    quality and width inside the MIN/MAX the protocol sizes to that ceiling,
+   *    a bounded height and a source rate of at least one.
+   *  - `Page.stopScreencast` carries no capability in its arguments; it is here
+   *    because the cast must be stoppable slightly *before* the baton flips to
+   *    human (see the handover mask), while sends are still permitted, the same
+   *    ordering the network suspend uses.
+   *  - `Page.screencastFrameAck` carries only a `sessionId`; harmless, but it is
+   *    a send, so during `human` it is refused too — the host stops acking, CDP
+   *    stops producing, which is a correct secondary brake on the pixels.
+   */
+  'Page.startScreencast',
+  'Page.stopScreencast',
+  'Page.screencastFrameAck',
   /*
    * Request control and passive capture — the two halves of harvesting, added
    * 2026-08-21. See "What request interception is now for" below, which is the
@@ -767,6 +812,120 @@ function screenCreateTarget(params: Record<string, unknown>): Screening {
   return { ok: true }
 }
 
+/**
+ * The tallest screencast image this host will produce, in pixels.
+ *
+ * A width past {@link MAX_WATCH_WIDTH} is bytes no phone can show and a JPEG that
+ * will not fit the frame cap — the protocol clamps it and this refuses it. Height
+ * has no protocol clamp because the viewer never asks for one; the driver leaves
+ * `maxHeight` off and CDP scales height to the width. But `startScreencast`
+ * *accepts* a height, so a caller could name one, and an unbounded one is the
+ * same runaway a width would be. Bounded here, generously — a tall page at
+ * `MAX_WATCH_WIDTH` is still under this — so a caller that sets one has to set a
+ * sane one.
+ */
+const MAX_SCREENCAST_HEIGHT = 4096
+
+/**
+ * `Page.startScreencast`, argument by argument.
+ *
+ * Every value here is a capability the feature bounds rather than one the caller
+ * chooses freely, so each is screened rather than trusted — the same discipline
+ * the navigation URL and the fetch pattern get. The driver already clamps these
+ * into range from a viewer's request (`readWatch` in `protocol.ts`), so a call
+ * that reaches here out of range is not a viewer on an odd screen but a caller
+ * that skipped the clamp, and it is refused rather than silently corrected.
+ *
+ *  - `format` must be `jpeg`. CDP's own default is `png`, and a PNG of a content
+ *    page is megabytes — it blows the relay's 96 KiB payload ceiling that
+ *    {@link MAX_WATCH_WIDTH}/{@link MAX_WATCH_QUALITY} are sized under. So the
+ *    format is required and pinned rather than defaulted.
+ *  - `quality` must be an integer in [{@link MIN_WATCH_QUALITY}, {@link
+ *    MAX_WATCH_QUALITY}] — the JPEG quality the frame cap is sized around.
+ *  - `maxWidth` must be an integer in [{@link MIN_WATCH_WIDTH}, {@link
+ *    MAX_WATCH_WIDTH}] — the image width the frame cap is sized around.
+ *  - `maxHeight`, if present, must be a positive integer no larger than
+ *    {@link MAX_SCREENCAST_HEIGHT}.
+ *  - `everyNthFrame`, if present, must be an integer of at least one — a
+ *    source-rate cap, never a rate multiplier.
+ */
+function screenScreencast(params: Record<string, unknown>): Screening {
+  if (params.format !== 'jpeg') {
+    return {
+      ok: false,
+      reason: 'a screencast is only ever streamed as jpeg; png of a page blows the relay payload ceiling',
+    }
+  }
+  const quality = params.quality
+  if (
+    typeof quality !== 'number' ||
+    !Number.isInteger(quality) ||
+    quality < MIN_WATCH_QUALITY ||
+    quality > MAX_WATCH_QUALITY
+  ) {
+    return {
+      ok: false,
+      reason: `a screencast quality must be an integer between ${MIN_WATCH_QUALITY} and ${MAX_WATCH_QUALITY}`,
+    }
+  }
+  const maxWidth = params.maxWidth
+  if (
+    typeof maxWidth !== 'number' ||
+    !Number.isInteger(maxWidth) ||
+    maxWidth < MIN_WATCH_WIDTH ||
+    maxWidth > MAX_WATCH_WIDTH
+  ) {
+    return {
+      ok: false,
+      reason: `a screencast width must be an integer between ${MIN_WATCH_WIDTH} and ${MAX_WATCH_WIDTH} pixels`,
+    }
+  }
+  const maxHeight = params.maxHeight
+  if (maxHeight !== undefined) {
+    if (
+      typeof maxHeight !== 'number' ||
+      !Number.isInteger(maxHeight) ||
+      maxHeight <= 0 ||
+      maxHeight > MAX_SCREENCAST_HEIGHT
+    ) {
+      return {
+        ok: false,
+        reason: `a screencast height, when given, must be a positive integer no larger than ${MAX_SCREENCAST_HEIGHT}`,
+      }
+    }
+  }
+  const everyNth = params.everyNthFrame
+  if (everyNth !== undefined) {
+    if (typeof everyNth !== 'number' || !Number.isInteger(everyNth) || everyNth < 1) {
+      return {
+        ok: false,
+        reason: 'a screencast source-rate cap, when given, must be an integer of at least one',
+      }
+    }
+  }
+  return { ok: true }
+}
+
+/**
+ * `Input.dispatchTouchEvent`, whose only danger is the number of points.
+ *
+ * The coordinates in `touchPoints` are just numbers dispatched into the page —
+ * there is no url and no path to smuggle — but the array arrives from a peer, and
+ * an unbounded one is an array somebody else sized landing in Chromium. Bounded
+ * to {@link MAX_TOUCH_POINTS}, which is every finger a person has and well past
+ * any gesture a page reads. An empty list is allowed: a `touchEnd` carries none.
+ */
+function screenTouch(params: Record<string, unknown>): Screening {
+  const points = params.touchPoints
+  if (!Array.isArray(points)) {
+    return { ok: false, reason: 'a touch event must carry a list of touch points' }
+  }
+  if (points.length > MAX_TOUCH_POINTS) {
+    return { ok: false, reason: `a touch event may carry at most ${MAX_TOUCH_POINTS} points` }
+  }
+  return { ok: true }
+}
+
 /* ------------------------------------------------------------ the verdict -- */
 
 export type Screening =
@@ -873,6 +1032,17 @@ export function screenCommand(input: {
   if (method === 'Fetch.enable') return screenFetchEnable(params)
   if (method === 'Fetch.continueRequest') return screenContinue(params)
   if (method === 'Fetch.fulfillRequest') return screenFulfil(params)
+  /*
+   * The screencast pair that carries a capability in its arguments (wave-3).
+   * `Page.startScreencast` names a format, a quality, a width and a source rate;
+   * `Input.dispatchTouchEvent` names a list of points. Both are allow-listed on
+   * both transports, so unlike the CDP-only checks below these can be reached on
+   * the desktop too — the screen is transport-agnostic and so are they.
+   * `Page.stopScreencast` and `Page.screencastFrameAck` carry no capability and
+   * are not screened here.
+   */
+  if (method === 'Page.startScreencast') return screenScreencast(params)
+  if (method === 'Input.dispatchTouchEvent') return screenTouch(params)
   /*
    * `Fetch.failRequest` is deliberately not screened. Its only argument beyond
    * the id is `errorReason`, every value of which is a way of telling the page
