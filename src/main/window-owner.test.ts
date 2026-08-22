@@ -209,6 +209,28 @@ describe('the route is wired to the app rather than only written', () => {
     expect(index).toContain('machinesIpc?.announceWindows()')
   })
 
+  it('tells the session over there that the window exists, on both kinds of link', () => {
+    /*
+     * The half that made the whole direction usable, and it is two lines that
+     * compile perfectly if either is deleted.
+     *
+     * Routing put the verb somewhere; nothing put the *window* in front of the
+     * agent that would send it. A session with a browser window on another
+     * computer and no way to learn so does not conclude it has one somewhere — it
+     * concludes it has none, and offers to print a link. Both wires land in the
+     * same function, because there is one map a peer's claim is written into and
+     * one place it is read.
+     */
+    expect(index).toContain('onWindowsHeld: (peer, held) => recordRemoteHolds(peer, held)')
+    // Twice: once for a device that dialled in, once for a machine this app
+    // dialled out to. A feature wired on one of the two is the half-working state
+    // this round exists to leave behind.
+    expect(index.match(/onWindowsHeld: \(peer, held\) => recordRemoteHolds\(peer, held\)/g)).toHaveLength(2)
+    // And the rows going the other way, built once and read by both senders.
+    expect(index).toMatch(/windowsHeldFor: \(deviceId\) => heldRowsFor\(deviceId, describeThisMachine\(\)\.name\)/)
+    expect(index).toMatch(/windowsHeld: \(machineId\) => heldRowsFor\(machineId, describeThisMachine\(\)\.name\)/)
+  })
+
   it('asks the desk whether a device can be reached, rather than answering yes', () => {
     // The constant `true` this replaced handed a phone six verbs that could only
     // ever refuse.

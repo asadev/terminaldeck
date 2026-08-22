@@ -27,6 +27,7 @@ import type { CopilotRemote } from './copilot-remote'
 import type { WindowAskDesk } from './window-asks'
 import { SessionFanout, type PtySource } from './session-fanout'
 import { CODE_LENGTH, isCode } from '../../shared/short-code'
+import type { HeldSession } from '../../shared/held-window'
 import {
   WS_PATH,
   authenticatorFor,
@@ -4319,6 +4320,117 @@ describe('a browser window on the device, driven by a session here', () => {
     // And the channel is unharmed by any of it.
     expect(client.received.some((m) => m.t === 'error')).toBe(false)
   })
+
+  it('also hands on what those windows *are*, so the session can be told it has one', async () => {
+    /*
+     * The half of this frame that did not exist until tonight.
+     *
+     * The desk above is enough to *address* a browser verb and is not one word
+     * of what an agent would have to know to send one — it has the session id it
+     * already had, and no slot name, no title and no URL. So the window was
+     * drivable by a session that had no way to learn it existed, which is the
+     * same thing as not having it: measured, an agent in that state concludes it
+     * has no browser and offers to print a link.
+     *
+     * Both halves come off the same arriving frame and neither substitutes for
+     * the other: routing with nothing to say is an agent that cannot find the
+     * window, and a sentence with no route is a name that refuses.
+     */
+    const held = desk()
+    const said: { peer: { id: string; name: string }; held: readonly HeldSession[] }[] = []
+    const harness = await serve({
+      windows: held.windows,
+      onWindowsHeld: (peer, rows) => said.push({ peer, held: rows }),
+    })
+    const client = await connect(harness.port)
+    client.send({ ...HELLO, capabilities: ['windows'] })
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({
+      t: 'window.holds',
+      sessions: ['s1'],
+      held: [
+        {
+          session: 's1',
+          windows: [{ n: 2, title: 'Stripe', url: 'https://stripe.com', host: 'Office PC' }],
+        },
+      ],
+    })
+    await new Promise((settle) => setTimeout(settle, 30))
+
+    /*
+     * The name is this machine's own label for the device, never the one that
+     * travelled — and the two differ right here, which is what makes the
+     * assertion worth making. The `hello` above says `iPhone`; the roster on
+     * this side says `Test iPhone`, and that is what is printed into the agent's
+     * turn. A name a peer wrote would be the one string in that sentence naming a
+     * computer, taken off a socket.
+     */
+    expect(said).toHaveLength(1)
+    expect(said[0].peer).toEqual({ id: 'device-1', name: 'Test iPhone' })
+    expect(said[0].held).toEqual([
+      {
+        session: 's1',
+        windows: [{ n: 2, title: 'Stripe', url: 'https://stripe.com', host: 'Office PC' }],
+      },
+    ])
+    // And the routing table is filled from the same frame, as it always was.
+    expect(held.windows.holdersOf('s1')).toEqual(['device-1'])
+  })
+
+  it('reads a device that has never heard of the rows as claiming no window it can name', async () => {
+    // Every build shipped before tonight sends `sessions` and nothing else. It
+    // must keep routing exactly as it did, and it must not be read as having
+    // described a window — an empty entry would print as a session that has
+    // windows nobody can name.
+    const held = desk()
+    const seen: HeldSession[][] = []
+    const harness = await serve({
+      windows: held.windows,
+      onWindowsHeld: (_peer, rows) => seen.push([...rows]),
+    })
+    const client = await connect(harness.port)
+    client.send({ ...HELLO, capabilities: ['windows'] })
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'window.holds', sessions: ['s1'] })
+    await new Promise((settle) => setTimeout(settle, 30))
+
+    expect(seen).toEqual([[]])
+    expect(held.windows.holdersOf('s1')).toEqual(['device-1'])
+  })
+
+  it('drops a row for a session the same frame does not claim', async () => {
+    /*
+     * The two halves of one frame are one read of one map on every sender, so
+     * this cannot happen honestly. It is refused anyway, and dropped rather than
+     * made a reason to close the link: `sessions` is what the router acts on, so
+     * a row for a session no verb will ever be addressed to is a line an agent
+     * cannot use.
+     */
+    const held = desk()
+    const seen: HeldSession[][] = []
+    const harness = await serve({
+      windows: held.windows,
+      onWindowsHeld: (_peer, rows) => seen.push([...rows]),
+    })
+    const client = await connect(harness.port)
+    client.send({ ...HELLO, capabilities: ['windows'] })
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({
+      t: 'window.holds',
+      sessions: ['s1'],
+      held: [
+        { session: 's1', windows: [{ n: 1 }] },
+        { session: 'never-claimed', windows: [{ n: 1, title: 'His bank' }] },
+      ],
+    })
+    await new Promise((settle) => setTimeout(settle, 30))
+
+    expect(seen).toEqual([[{ session: 's1', windows: [{ n: 1, title: '', url: '', host: '' }] }]])
+    expect(client.received.some((m) => m.t === 'error')).toBe(false)
+  })
 })
 describe('a browser window here, driven by a session on the device', () => {
   /**
@@ -4432,12 +4544,16 @@ describe('a browser window here, driven by a session on the device', () => {
     const acting = server()
     const harness = await serve({
       serveWindows: acting.serveWindows,
-      windowsHeldFor: (deviceId) => (deviceId === 'device-1' ? ['s1', 's2'] : []),
+      windowsHeldFor: (deviceId) => (deviceId === 'device-1' ? [heldRow('s1'), heldRow('s2')] : []),
     })
     const client = await connect(harness.port)
     client.send({ ...HELLO, capabilities: ['hostwindows'] })
     const holds = await client.until((m) => m.t === 'window.holds', 'the holdings')
-    expect(holds).toEqual({ t: 'window.holds', sessions: ['s1', 's2'] })
+    expect(holds).toEqual({
+      t: 'window.holds',
+      sessions: ['s1', 's2'],
+      held: [heldRow('s1'), heldRow('s2')],
+    })
   })
 
   it('says nothing to a client that never advertised the direction', async () => {
@@ -4450,7 +4566,7 @@ describe('a browser window here, driven by a session on the device', () => {
     const acting = server()
     const harness = await serve({
       serveWindows: acting.serveWindows,
-      windowsHeldFor: () => ['s1'],
+      windowsHeldFor: () => [heldRow('s1')],
     })
     const client = await connect(harness.port)
     client.send(HELLO)
@@ -4466,7 +4582,7 @@ describe('a browser window here, driven by a session on the device', () => {
     // The person attaches a window ten minutes into a session. Nothing about the
     // connection changed; the answer did.
     const acting = server()
-    let held: string[] = []
+    let held: HeldSession[] = []
     const harness = await serve({
       serveWindows: acting.serveWindows,
       windowsHeldFor: () => held,
@@ -4475,13 +4591,13 @@ describe('a browser window here, driven by a session on the device', () => {
     client.send({ ...HELLO, capabilities: ['hostwindows'] })
     await client.until((m) => m.t === 'window.holds', 'the first holdings')
 
-    held = ['s3']
+    held = [heldRow('s3')]
     expect(harness.endpoint.windowsHeldChanged()).toBe(1)
     const next = await client.until(
       (m) => m.t === 'window.holds' && m.sessions.includes('s3'),
       'the new holdings',
     )
-    expect(next).toEqual({ t: 'window.holds', sessions: ['s3'] })
+    expect(next).toEqual({ t: 'window.holds', sessions: ['s3'], held: [heldRow('s3')] })
   })
 
   /**
@@ -4571,3 +4687,15 @@ describe('a browser window here, driven by a session on the device', () => {
     expect(harness.endpoint.connections()[0]?.sessions).toEqual([])
   })
 })
+
+/**
+ * One held window, in the shape the frame now carries.
+ *
+ * The rows exist so the far end can *name* the window to an agent; nothing in
+ * these tests reads the title or the URL, so they are empty here for the same
+ * reason a real window with nothing loaded reports them empty — a placeholder
+ * that reads like a fact is the one thing these rows must never contain.
+ */
+function heldRow(session: string, n = 1): HeldSession {
+  return { session, windows: [{ n, title: '', url: '', host: '' }] }
+}

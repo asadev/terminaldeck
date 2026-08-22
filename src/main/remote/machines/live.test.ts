@@ -23,6 +23,7 @@
 import { randomBytes } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { connect as netConnect } from 'node:net'
+import { request as httpRequest } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -58,15 +59,71 @@ import { createMachineLink, type MachineLinkState } from './guest'
  * `RemoteConnection` as text from the other side instead, which is the same
  * guard the preload contract test uses across the same kind of seam.
  */
-import { attach, resetForTests as resetBindings, view as bindingView } from '../../browser-binding'
+import {
+  attach,
+  heldRowsFor,
+  hookContext,
+  recordRemoteHolds,
+  resetForTests as resetBindings,
+} from '../../browser-binding'
+import {
+  SESSION_HEADER,
+  TOKEN_HEADER,
+  startHookServer,
+  stopHookServer,
+  type HookEndpoint,
+} from '../../hook-server'
 import { pairWithCode, lookupMachine } from './pair'
 import { offerFrom, rendezvousIdentity, startBeacon, type MachineOffer } from './rendezvous'
+import type { HeldSession } from '../../../shared/held-window'
 
 const SESSION_ID = 'live-session-7f31'
 const SCROLLBACK = 'SCROLLBACK-FROM-THE-OTHER-MACHINE'
 
 const temps: string[] = []
 const closers: Array<() => void | Promise<void>> = []
+
+/**
+ * One hook call over the real unix socket, exactly as the installed `curl`
+ * command makes it.
+ *
+ * Over the socket rather than by calling the composer, because the whole point
+ * of this channel is that it is the *only* way anything reaches a running agent
+ * without a character being typed into somebody's terminal.
+ */
+function knockHook(endpoint: HookEndpoint, sessionId: string): Promise<string | null> {
+  const headers: Record<string, string> = { 'content-type': 'application/json' }
+  headers[TOKEN_HEADER] = endpoint.token
+  headers[SESSION_HEADER] = sessionId
+  return new Promise((settle, fail) => {
+    const req = httpRequest(
+      {
+        socketPath: endpoint.socketPath,
+        method: 'POST',
+        path: '/hook/claude/UserPromptSubmit',
+        headers,
+      },
+      (res) => {
+        let text = ''
+        res.setEncoding('utf8')
+        res.on('data', (chunk: string) => {
+          text += chunk
+        })
+        res.on('end', () =>
+          settle(
+            text === ''
+              ? null
+              : ((JSON.parse(text) as { hookSpecificOutput?: { additionalContext?: string } })
+                  .hookSpecificOutput?.additionalContext ?? null),
+          ),
+        )
+      },
+    )
+    req.on('error', fail)
+    req.write('{}')
+    req.end()
+  })
+}
 
 afterEach(async () => {
   for (const close of closers.splice(0).reverse()) await close()
@@ -380,7 +437,7 @@ async function farMachine(
      * file builds the machine it always built.
      */
     serveWindows?: (deviceId: string, call: { sessionId: string; tool: string; args: string }) => Promise<{ ok: boolean; body: string }>
-    windowsHeldFor?: (deviceId: string) => readonly string[]
+    windowsHeldFor?: (deviceId: string) => readonly HeldSession[]
   } = {},
 ): Promise<{
   relayUrl: string
@@ -1092,10 +1149,7 @@ describe('pairing, and then being a guest', () => {
         return Promise.resolve({ ok: true, body: '{}' })
       },
       // The real read `index.ts` makes, against the real binding map.
-      windowsHeldFor: (deviceId) =>
-        bindingView()
-          .sessions.filter((binding) => binding.machineId === deviceId && binding.windows.length > 0)
-          .map((binding) => binding.sessionId),
+      windowsHeldFor: (deviceId) => heldRowsFor(deviceId, 'Far machine'),
     })
     const code = far.desk.create()
     const beacon = startBeacon({ code: code.token, offer: far.offer, relayUrl: far.relayUrl })
@@ -1107,6 +1161,7 @@ describe('pairing, and then being a guest', () => {
     beacon?.stop()
 
     let heldThere: readonly string[] = []
+    let describedThere: readonly HeldSession[] = []
     const link = createMachineLink({
       id: paired.offer.hostId,
       secrets: {
@@ -1122,8 +1177,16 @@ describe('pairing, and then being a guest', () => {
       // What is running on this machine, which the far one cannot derive.
       ownSessions: () => ptys,
       // And what it says back: which of these sessions has a window over there.
-      onWindowHolds: (sessions) => {
+      onWindowHolds: (sessions, held) => {
         heldThere = sessions
+        describedThere = held ?? []
+        /*
+         * And straight into the map the agent's answer is composed from. This is
+         * the wiring `index.ts` does — one function, whichever wire the frame
+         * came in on — and it is the whole of what was missing: the fact reached
+         * the router and never reached the person's agent.
+         */
+        recordRemoteHolds({ id: 'far-machine', name: 'Far machine' }, describedThere)
       },
       baseBackoffMs: 20,
       maxBackoffMs: 60,
@@ -1172,6 +1235,41 @@ describe('pairing, and then being a guest', () => {
       () => heldThere.includes('pty-on-the-dialling-machine'),
       'the far machine to say it is holding a window for that session',
     )
+
+    /*
+     * 5a. And — the half that did not exist before tonight — it lands carrying
+     *     enough to *name* the window, and the agent in that pty is told, over
+     *     its own hook socket, before the first token of its next turn.
+     *
+     *     Everything up to step 5 was true for a while and could not be used: the
+     *     verb had somewhere to go and the session had no way to learn there was
+     *     a window to send it about. Measured, an agent in that state does not
+     *     conclude it has a browser on another computer — it concludes it has
+     *     none, and offers to print a link.
+     *
+     *     Note what the line says about *where*: the page is served by the
+     *     machine holding the window, so `host` is empty and only the "on Far
+     *     machine" clause prints. A `localhost` served through the tunnel would
+     *     read the other way round, which is the translation
+     *     `browser-binding-remote.test.ts` pins.
+     */
+    expect(describedThere).toEqual([
+      {
+        session: 'pty-on-the-dialling-machine',
+        windows: [{ n: 1, title: 'Example', url: 'https://example.com', host: 'Far machine' }],
+      },
+    ])
+
+    const hooks = await startHookServer({
+      dir: mkdtempSync(join(tmpdir(), 'td-live-hook-')),
+      contextFor: ({ sessionId }) => hookContext(sessionId, '', { known: true }),
+    })
+    closers.push(() => stopHookServer())
+    const answered = await knockHook(hooks, 'pty-on-the-dialling-machine')
+    expect(answered).toContain(
+      'B1 — Example — https://example.com — on Far machine',
+    )
+    expect(answered).toContain('"the browser" means B1.')
 
     // 6. Which is what the agent in that pty has been waiting for. It asks, over
     //    the same link, and the ask arrives at the computer whose browser it is —

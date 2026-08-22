@@ -50,6 +50,7 @@ import { pairWithCode, type PairResult } from './pair'
 import { fingerprint } from '../../../shared/sealed'
 import { offerFrom } from './rendezvous'
 import { MachineStore, type Machine } from './store'
+import type { HeldSession } from '../../../shared/held-window'
 
 /**
  * The one method of Electron's `IpcMain` this file uses.
@@ -200,7 +201,7 @@ export interface MachinesIpcDeps {
    * Answered per machine because a link may only be told about its own: the
    * sessions on one paired computer are not facts the next one gets to hear.
    */
-  windowsHeld?(machineId: string): readonly string[]
+  windowsHeld?(machineId: string): readonly HeldSession[]
   /**
    * What is running on **this** machine, for every link to say to its machine.
    *
@@ -230,6 +231,23 @@ export interface MachinesIpcDeps {
    * cannot use the fact is never told it. See `guest.ts`'s hello.
    */
   windowsHeldThere?(machineId: string, sessions: readonly string[]): void
+  /**
+   * The same frame's other half: not *which* sessions that machine holds a
+   * window for, but *what those windows are* — the slot name, the title, the URL.
+   *
+   * A second dep rather than two arguments to the one above, because they are
+   * answered by two different things and only one of them is allowed to fail
+   * quietly. `windowsHeldThere` fills the routing table, which is what makes a
+   * browser verb reach the far app at all; this fills the sentence an agent reads
+   * at the top of its next turn. A build with the first and not the second routes
+   * correctly and says nothing, which is exactly where this app was before
+   * tonight — so absence has to stay a working state rather than a compile error.
+   *
+   * It is not what the link advertises on. `hostWindows` still rides on
+   * `windowsHeldThere`, because the capability is a promise to *use* the frame
+   * and routing is using it.
+   */
+  onWindowsHeld?(peer: { id: string; name: string }, held: readonly HeldSession[]): void
   /**
    * That machine has answered a browser verb this one asked it to run.
    *
@@ -636,7 +654,16 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
        */
       ...(deps.windowsHeldThere === undefined
         ? {}
-        : { onWindowHolds: (sessions) => deps.windowsHeldThere!(machine.id, sessions) }),
+        : {
+            onWindowHolds: (sessions, held) => {
+              deps.windowsHeldThere!(machine.id, sessions)
+              // And the detail, when this build has somewhere to put it. `held`
+              // is absent from a machine older than this one, and `[]` is the
+              // honest reading of that: it says nothing about any window, which
+              // is what a machine that cannot describe one has said.
+              deps.onWindowsHeld?.({ id: machine.id, name: machine.name }, held ?? [])
+            },
+          }),
       ...(deps.windowAnswered === undefined
         ? {}
         : { onWindowResult: (result) => deps.windowAnswered!(result) }),

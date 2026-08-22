@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { contextDir, INDEX_FILE } from '../main/app-context'
-import { attach } from '../main/browser-binding'
+import { attach, recordRemoteHolds } from '../main/browser-binding'
 import {
   currentHookEndpoint,
   SESSION_HEADER,
@@ -311,6 +311,59 @@ describe('a session on this host is told what it is running inside', () => {
     expect(existsSync(join(contextDir(dir), INDEX_FILE))).toBe(true)
   })
 
+  it('names a browser window another computer holds for one of its sessions', async () => {
+    /*
+     * The case this host is actually in, and the one it could never answer.
+     *
+     * Nothing in this build calls `attach()` — there is no renderer here to put a
+     * `WebContentsView` beside a pty — so every window a session on this box has
+     * is on somebody else's screen. Asad's Mac pairs with the office PC, attaches
+     * one of *its* windows to a session running here, and until the rows on
+     * `window.holds` travelled, the agent in that session was told nothing: the
+     * verb had a route and the session had no way to learn there was a window to
+     * send it about.
+     *
+     * `recordRemoteHolds` is exactly what this host's `onWindowsHeld` calls, and
+     * the knock below is the real hook socket this process is already serving.
+     */
+    const endpoint = currentHookEndpoint()
+    expect(endpoint).not.toBeNull()
+
+    /*
+     * A real pty, because a peer's claim deliberately is not proof that this app
+     * started a session. The hook is installed for the whole account, so a
+     * machine that guessed an id must not be able to write into the context of a
+     * `claude` somebody ran in a plain ssh session on this box — `known` is
+     * answered by the pty manager and by nothing on the network.
+     */
+    const meta = await host.core.startSession({ cwd: dir, cols: 80, rows: 24, provider: 'shell' })
+
+    recordRemoteHolds({ id: 'machine-mac', name: "Asad's Mac" }, [
+      {
+        session: meta.id,
+        windows: [{ n: 1, title: 'Orders', url: 'https://example.com', host: '' }],
+      },
+    ])
+    const answer = await knock(endpoint as HookEndpoint, 'claude', 'SessionStart', meta.id)
+
+    expect(answer.status).toBe(200)
+    expect(answer.context).toContain("B1 — Orders — https://example.com — on Asad's Mac")
+    expect(answer.context).toContain('"the browser" means B1.')
+
+    // And a session this host never started is still told nothing, however
+    // confidently that machine names it.
+    recordRemoteHolds({ id: 'machine-mac', name: "Asad's Mac" }, [
+      {
+        session: meta.id,
+        windows: [{ n: 1, title: 'Orders', url: 'https://example.com', host: '' }],
+      },
+      { session: 'not-a-pty-here', windows: [{ n: 1, title: 'His bank', url: '', host: '' }] },
+    ])
+    expect((await knock(endpoint as HookEndpoint, 'claude', 'SessionStart', 'not-a-pty-here')).status).toBe(204)
+
+    host.core.ptys.kill(meta.id)
+  }, 30_000)
+
   it('tells a shell somebody started over ssh on this box nothing at all', async () => {
     const endpoint = currentHookEndpoint()
     // The hook is installed for the whole account, so it fires for a `claude`
@@ -596,5 +649,18 @@ describe('a session that ends on this host leaves every connected client’s lis
     expect(body).toMatch(/reason === 'replaced'/)
     expect(body).toMatch(/return/)
     expect(body).toMatch(/tellDevices\?\.\(\)/)
+  })
+
+  it('hands an arriving window.holds to the map the hook answer is composed from', () => {
+    /*
+     * Read as text for the reason the join above is: this is a dep on an options
+     * object, so a rename or a deletion compiles perfectly and takes the whole
+     * feature with it silently. There is nothing to observe from a harness — the
+     * frame arrives from a device that is not in this test — and the one thing
+     * worth pinning is that the wire is attached at all.
+     */
+    const source = readFileSync(join(__dirname, 'host.ts'), 'utf8')
+    expect(source).toMatch(/onWindowsHeld:\s*\(peer, held\)\s*=>\s*recordRemoteHolds\(peer, held\)/)
+    expect(source).toMatch(/windowsHeldFor:\s*\(deviceId\)\s*=>\s*heldRowsFor\(/)
   })
 })

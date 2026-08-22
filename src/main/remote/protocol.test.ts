@@ -2506,6 +2506,106 @@ describe('window.holds', () => {
     expect(parseClientMessage({ t: 'window.holds' }).ok).toBe(false)
     expect(parseClientMessage({ t: 'window.holds', sessions: 'all of them' }).ok).toBe(false)
   })
+
+  /**
+   * And the rows beside the ids, which are what let the far end *name* the
+   * window rather than only address it.
+   *
+   * Additive on a wire nobody can update in step: a build shipped before tonight
+   * reads `sessions` and ignores every other key, so an old peer keeps working
+   * and a new peer told nothing new falls back to what it did. Both parsers read
+   * them through the same validator, because they are the same frame.
+   */
+  describe('the windows themselves', () => {
+    const ROW = { n: 2, title: 'Stripe', url: 'https://stripe.com', host: 'Office PC' }
+
+    it('reads them on both sides of the wire', () => {
+      /*
+       * The same three frames now travel host-to-client and client-to-host, and
+       * one validator serves both — so a row that is legible in one direction has
+       * to be legible in the other. `parseServerMessage` takes the serialized
+       * text, which is the shape a real client reads off its socket.
+       */
+      const frame = {
+        t: 'window.holds',
+        sessions: [SESSION_ID],
+        held: [{ session: SESSION_ID, windows: [ROW] }],
+      }
+      const fromDevice = parseClientMessage(frame)
+      expect(fromDevice.ok).toBe(true)
+      if (!fromDevice.ok) throw new Error('unreachable')
+      expect(fromDevice.message).toEqual(frame)
+
+      const fromHost = parseServerMessage(serialize(frame as ServerMessage))
+      expect(fromHost.ok).toBe(true)
+      if (!fromHost.ok) throw new Error('unreachable')
+      expect(fromHost.message).toEqual(frame)
+    })
+
+    it('leaves the field off entirely when the peer sent none', () => {
+      /*
+       * Absent and empty mean opposite things to a reader — `[]` would say "these
+       * sessions have no windows", which contradicts their being in `sessions` and
+       * would make a reader delete a window it should have kept. So a frame from
+       * an older peer parses to the shape it has always parsed to, byte for byte.
+       */
+      const parsed = parseClientMessage({ t: 'window.holds', sessions: [SESSION_ID] })
+      expect(parsed.ok).toBe(true)
+      if (!parsed.ok) throw new Error('unreachable')
+      expect(parsed.message).toEqual({ t: 'window.holds', sessions: [SESSION_ID] })
+      expect(parsed.message).not.toHaveProperty('held')
+    })
+
+    it('drops a row for a session the same frame does not claim', () => {
+      // `sessions` is what the router acts on, so a row it will never address is
+      // a line an agent cannot use. Every honest sender builds one from the
+      // other, so this cannot happen except from something that is not one.
+      const parsed = parseClientMessage({
+        t: 'window.holds',
+        sessions: [SESSION_ID],
+        held: [
+          { session: SESSION_ID, windows: [{ n: 1 }] },
+          { session: 'never-claimed', windows: [{ n: 1, title: 'His bank' }] },
+          { session: '../../etc/passwd', windows: [{ n: 1 }] },
+        ],
+      })
+      expect(parsed.ok).toBe(true)
+      if (!parsed.ok) throw new Error('unreachable')
+      if (parsed.message.t !== 'window.holds') throw new Error('unreachable')
+      expect(parsed.message.held).toEqual([
+        { session: SESSION_ID, windows: [{ n: 1, title: '', url: '', host: '' }] },
+      ])
+    })
+
+    it('takes a duplicated session once, from its first row', () => {
+      // Nothing legitimate sends two — every sender walks a map keyed by session
+      // — and "last wins" would let a second row quietly replace a first a reader
+      // had already been told about.
+      const parsed = parseClientMessage({
+        t: 'window.holds',
+        sessions: [SESSION_ID],
+        held: [
+          { session: SESSION_ID, windows: [{ n: 1, title: 'First' }] },
+          { session: SESSION_ID, windows: [{ n: 9, title: 'Second' }] },
+        ],
+      })
+      if (!parsed.ok) throw new Error('unreachable')
+      if (parsed.message.t !== 'window.holds') throw new Error('unreachable')
+      expect(parsed.message.held?.[0].windows[0].title).toBe('First')
+      expect(parsed.message.held).toHaveLength(1)
+    })
+
+    it('does not close the link over rows it cannot read', () => {
+      const parsed = parseClientMessage({
+        t: 'window.holds',
+        sessions: [SESSION_ID],
+        held: 'all of them',
+      })
+      expect(parsed.ok).toBe(true)
+      if (!parsed.ok) throw new Error('unreachable')
+      expect(parsed.message).toEqual({ t: 'window.holds', sessions: [SESSION_ID] })
+    })
+  })
 })
 
 describe('sessions.mine', () => {

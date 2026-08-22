@@ -179,6 +179,7 @@ import { offerFrom, startBeacon, type Beacon, type MachineOffer } from './machin
 import { tailnetStatus, type TailnetStatus } from './tailnet'
 import { serveOff, serveOn } from './tailscale-serve'
 import { FrameReader, OPCODE, acceptKey, encodeFrame } from '../../shared/ws-frame'
+import type { HeldSession } from '../../shared/held-window'
 
 /* ------------------------------------------------------------------ types -- */
 
@@ -921,8 +922,32 @@ export interface RemoteEndpointOptions {
    * answer changes every time somebody attaches or detaches a window; and per
    * device, because a link may only be told about its own — the sessions of one
    * paired computer are not facts the next one gets to hear.
+   *
+   * Rows rather than bare ids, because the far end does more with this frame
+   * than route on it now: a session over there is *told* which browser windows
+   * it has at the top of its next turn, and a name, a title and a URL are what
+   * that sentence is made of. The ids in `sessions` are built from these rows
+   * rather than asked for separately, so one frame is one read of one map and
+   * its two halves cannot disagree. See `WindowHoldsFrame.held`.
    */
-  windowsHeldFor?(deviceId: string): readonly string[]
+  windowsHeldFor?(deviceId: string): readonly HeldSession[]
+  /**
+   * That device has said which of **this** machine's sessions it is holding a
+   * browser window for, and what those windows are.
+   *
+   * The mirror of {@link windowsHeldFor}, arriving rather than leaving, and it
+   * is *not* the routing half — `windows`, the {@link WindowAskDesk}, is what a
+   * browser verb is addressed through. This one exists so the session can be told
+   * the window is there. Both are fed from the same arriving frame and neither
+   * substitutes for the other: routing with nothing to say is an agent that
+   * cannot find a window it can drive, and a sentence with no route is a name
+   * that refuses.
+   *
+   * Optional, and absence is a working state rather than a missing feature: a
+   * host with no binding map to write into — the demo box — routes exactly as it
+   * did and says nothing, which is true of it.
+   */
+  onWindowsHeld?(peer: { id: string; name: string }, held: readonly HeldSession[]): void
   /**
    * The live view of this machine's own browser — wave-3's watch-and-drive.
    *
@@ -3655,7 +3680,19 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     if (held === undefined) return
     if (!connection.deviceId) return
     if (!connection.capabilities.includes(CAPABILITY.hostWindows)) return
-    send(connection, { t: 'window.holds', sessions: [...held(connection.deviceId)] })
+    /*
+     * The ids come out of the rows, never from a second question — see
+     * `WindowHoldsFrame.held`. A device older than this build reads `sessions`
+     * and ignores the rest, which is why both travel; what must never happen is
+     * the two describing different sets, because that device routes on one and
+     * prints the other.
+     */
+    const rows = [...held(connection.deviceId)]
+    send(connection, {
+      t: 'window.holds',
+      sessions: rows.map((row) => row.session),
+      ...(rows.length === 0 ? {} : { held: rows }),
+    })
   }
 
   /**
@@ -5018,6 +5055,34 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
          * come back refused.
          */
         options.windows?.held(connection.deviceId, message.sessions)
+        /*
+         * And the same frame's other half, to the one thing that can say a word
+         * about those windows to the agent whose session they are attached to.
+         *
+         * Two calls rather than one dep doing both, because they are two
+         * different jobs with two different failure modes: the desk above is what
+         * makes a browser verb reach that device at all, and this is what makes
+         * the session *know*. A build with the first and not the second is
+         * exactly where this app was before tonight — routing correctly and
+         * saying nothing — so this one is spread-optional and its absence is a
+         * working state rather than a crash.
+         *
+         * `held` is absent from a device older than this build, and `[]` is the
+         * honest reading: it has claimed no window it can describe.
+         */
+        options.onWindowsHeld?.(
+          /*
+           * The name as **this** machine knows it, not one the device sent.
+           *
+           * It is printed into an agent's turn — *"B1 … on Asad's iPhone"* — so
+           * it has to be the label the person chose on this screen. A name that
+           * travelled with the frame would be somebody else's to write, and the
+           * one string in this sentence that names a computer is the one worth
+           * refusing to take from the network.
+           */
+          { id: connection.deviceId, name: connection.deviceName },
+          message.held ?? [],
+        )
         return
       }
       case 'sessions.mine': {
@@ -6518,8 +6583,32 @@ export interface RemoteIpcDeps {
    * answer changes every time somebody attaches or detaches a window; and per
    * device, because a link may only be told about its own — the sessions of one
    * paired computer are not facts the next one gets to hear.
+   *
+   * Rows rather than bare ids, because the far end does more with this frame
+   * than route on it now: a session over there is *told* which browser windows
+   * it has at the top of its next turn, and a name, a title and a URL are what
+   * that sentence is made of. The ids in `sessions` are built from these rows
+   * rather than asked for separately, so one frame is one read of one map and
+   * its two halves cannot disagree. See `WindowHoldsFrame.held`.
    */
-  windowsHeldFor?(deviceId: string): readonly string[]
+  windowsHeldFor?(deviceId: string): readonly HeldSession[]
+  /**
+   * That device has said which of **this** machine's sessions it is holding a
+   * browser window for, and what those windows are.
+   *
+   * The mirror of {@link windowsHeldFor}, arriving rather than leaving, and it
+   * is *not* the routing half — `windows`, the {@link WindowAskDesk}, is what a
+   * browser verb is addressed through. This one exists so the session can be told
+   * the window is there. Both are fed from the same arriving frame and neither
+   * substitutes for the other: routing with nothing to say is an agent that
+   * cannot find a window it can drive, and a sentence with no route is a name
+   * that refuses.
+   *
+   * Optional, and absence is a working state rather than a missing feature: a
+   * host with no binding map to write into — the demo box — routes exactly as it
+   * did and says nothing, which is true of it.
+   */
+  onWindowsHeld?(peer: { id: string; name: string }, held: readonly HeldSession[]): void
   /**
    * The dev-server module, when this build has one.
    *
@@ -6949,6 +7038,7 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
      */
     ...(deps.serveWindows ? { serveWindows: deps.serveWindows } : {}),
     ...(deps.windowsHeldFor ? { windowsHeldFor: deps.windowsHeldFor } : {}),
+    ...(deps.onWindowsHeld ? { onWindowsHeld: deps.onWindowsHeld } : {}),
     // Spread rather than passed as possibly-undefined, like everything else that
     // is a switch: absent means this host does not advertise `devserver` at all.
     ...(deps.devServers ? { devServers: deps.devServers } : {}),

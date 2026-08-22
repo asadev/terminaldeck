@@ -42,7 +42,13 @@ import { createHostCore, type HostCore } from '../main/host-core'
 import { IdleController, type IdleReport } from '../main/idle'
 import { logger } from '../main/app-log'
 import { bootMapFor, writeAppContext } from '../main/app-context'
-import { hookContext, MID_TURN_EVENTS, takeAnnouncement, view as bindingView } from '../main/browser-binding'
+import {
+  heldRowsFor,
+  hookContext,
+  MID_TURN_EVENTS,
+  recordRemoteHolds,
+  takeAnnouncement,
+} from '../main/browser-binding'
 import { noVerbsLine } from '../main/session-verbs'
 import { HeadlessDriveHost } from '../main/browser-headless-host'
 import { BrowserDrive } from '../main/browser-driver'
@@ -651,12 +657,29 @@ export async function createHeadlessHost(
         call,
       ),
     // Which of that device's sessions this server is holding a window for, read
-    // from the one binding map at the moment of sending — the same filter the
-    // desktop makes, keyed on the same `machineId` field. [wave-2 Lane D]
-    windowsHeldFor: (deviceId) =>
-      bindingView()
-        .sessions.filter((binding) => binding.machineId === deviceId && binding.windows.length > 0)
-        .map((binding) => binding.sessionId),
+    // from the one binding map at the moment of sending — the same builder the
+    // desktop uses, keyed on the same `machineId` field. [wave-2 Lane D]
+    windowsHeldFor: (deviceId) => heldRowsFor(deviceId, describeThisMachine().name),
+    /*
+     * And the frame arriving the other way, which on this host is the one that
+     * actually carries something.
+     *
+     * Nothing in this build ever calls `attach()` — there is no renderer here to
+     * put a `WebContentsView` beside a pty — so the answer above is honestly
+     * empty on every server this ships to. The interesting direction is the
+     * mirror: Asad's Mac pairs with this box, attaches one of *its* browser
+     * windows to a session running here, and until this line existed the agent in
+     * that session was never told. It is the case this whole lane is about, and it
+     * is the case the office PC is in.
+     *
+     * There is no `windows` desk here to route the verb through, so a session on
+     * this host still cannot *drive* the window — `noVerbsLine` says so, in the
+     * same answer, for the same session. Telling it the window exists is not half
+     * a feature: it is the difference between an agent that says "the page is
+     * open on your Mac, here is what to click" and one that goes looking for a
+     * CDP port.
+     */
+    onWindowsHeld: (peer, held) => recordRemoteHolds(peer, held),
     broadcast,
   })
 

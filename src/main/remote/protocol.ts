@@ -55,6 +55,21 @@
  * kind of wrong.
  */
 
+/*
+ * The one import in this file, and it obeys every rule the header above sets.
+ *
+ * `shared/held-window.ts` is plain TypeScript with no node built-in and no DOM
+ * API in it, so the pwa client that imports this file still compiles; and it is
+ * inside `src/shared/`, which `tsconfig.node.json`, `tsconfig.web.json` and
+ * `pwa/tsconfig.json` all include, so it crosses none of the project boundaries
+ * that made `pwa/src/protocol-client.ts` un-shareable.
+ *
+ * It is here because the rows inside `window.holds` are read on this wire and
+ * *printed into an agent's turn* three files away, and a cap or a sanitiser with
+ * two copies is neither. See that file's header.
+ */
+import { type HeldSession, readHeldWindows } from '../../shared/held-window'
+
 /** Bumped only for a breaking change; the server refuses a mismatch. */
 export const PROTOCOL_VERSION = 1
 
@@ -979,13 +994,55 @@ export const MAX_ANNOUNCED_SESSIONS = 128
  * hundred and twenty-ninth entry would cost a machine over a fact nobody can act
  * on.
  *
- * Not a permission and not a claim. The end that receives it does nothing with
- * it but *address* a verb it was going to send anyway, and that verb is resolved
- * over there inside the named session's own binding — so a peer that names a
- * session it holds no window for has arranged for its own asks to come back
- * refused.
+ * Not a permission and not a claim. The end that receives it does two things
+ * with it and neither is a decision: it *addresses* a verb it was going to send
+ * anyway, and it *tells* the session named that the window is there (see
+ * {@link WindowHoldsFrame.held}). The verb is still resolved over on the far side
+ * inside that session's own binding, so a peer that names a session it holds no
+ * window for has arranged for its own asks to come back refused — and the words
+ * it supplies for the telling are trimmed and flattened on the way in, because
+ * they are printed into somebody's turn.
  */
-export type WindowHoldsFrame = { t: 'window.holds'; sessions: string[] }
+export type WindowHoldsFrame = {
+  t: 'window.holds'
+  sessions: string[]
+  /**
+   * The same set again, with enough of each window to *name* it.
+   *
+   * ## Why the ids alone were not enough
+   *
+   * `sessions` addresses a verb and that is all it was ever built to do: the
+   * receiving end pairs an id with a device and can then send a `window.call`
+   * about it. It cannot say a word about the window to anybody, because it does
+   * not know one — not the slot number, not the title, not the URL. So a session
+   * on Asad's PC with a browser window attached to it from his Mac could be
+   * driven by an agent that had no way to find out the window existed, which is
+   * the same thing as not having it: the fact reached the router and never
+   * reached the person's agent. `browser-binding.ts` announces a window attached
+   * *here* into that session's very next turn; this is what lets the machine with
+   * the pty do the same for one attached over there.
+   *
+   * ## Why it is beside `sessions` rather than instead of it
+   *
+   * A build shipped before tonight reads `sessions` and ignores every other key
+   * on the object, so this field is additive in the only sense that matters on a
+   * wire nobody can update in step: an old peer keeps working, a new peer told
+   * nothing new falls back to exactly the behaviour it had. There is no
+   * capability for it and there must not be — a capability would gate the *frame*,
+   * and the frame is unchanged.
+   *
+   * The two are not two sources of truth. Every sender builds `sessions` **from**
+   * these rows, so a session named here and missing there cannot happen; a reader
+   * that sees the reverse — a row for a session not in `sessions` — drops the row,
+   * because `sessions` is what the router acts on and a window it will never
+   * address is a line an agent cannot use.
+   *
+   * Absent, not empty, on a build that has nothing to say: `[]` here would mean
+   * "these sessions have no windows", which contradicts their presence in
+   * `sessions` and would make a reader delete a window it should have kept.
+   */
+  held?: HeldSession[]
+}
 
 /**
  * A browser verb, on its way to the end that holds the window.
@@ -4231,7 +4288,41 @@ function readWindowHolds(parsed: Record<string, unknown>): WindowRead<WindowHold
     const session = id(entry)
     if (session !== null) sessions.push(session)
   }
-  return { ok: true, message: { t: 'window.holds', sessions } }
+  /*
+   * And the detail, when the peer is new enough to have sent any.
+   *
+   * Read against `sessions` rather than on its own: a row naming a session that
+   * did not survive the loop above — a bad id, or the hundred and twenty-ninth —
+   * is dropped, so the two halves of this frame cannot disagree by the time
+   * anything reads them. Same rule one level up as `readHeldWindows` applies one
+   * level down, and the same reason: this frame is a peer describing its own
+   * screen, so a row that cannot be used is dropped and the link stays up.
+   *
+   * A duplicate session is taken once, from its first row. Nothing legitimate
+   * sends two — every sender builds this by walking its binding map, which is
+   * keyed by session — and "last wins" would let a second row silently replace a
+   * first that a reader had already been told about.
+   */
+  const held: HeldSession[] = []
+  if (Array.isArray(parsed.held)) {
+    const wanted = new Set(sessions)
+    for (const entry of parsed.held) {
+      if (typeof entry !== 'object' || entry === null) continue
+      const row = entry as Record<string, unknown>
+      const session = id(row.session)
+      if (session === null || !wanted.has(session)) continue
+      wanted.delete(session)
+      held.push({ session, windows: readHeldWindows(row.windows) })
+    }
+  }
+  return {
+    ok: true,
+    /*
+     * Omitted rather than sent empty when the peer said nothing, because the two
+     * mean opposite things to a reader — see {@link WindowHoldsFrame.held}.
+     */
+    message: { t: 'window.holds', sessions, ...(held.length === 0 ? {} : { held }) },
+  }
 }
 
 function readWindowCall(parsed: Record<string, unknown>): WindowRead<WindowCallFrame> {
