@@ -53,6 +53,11 @@ import { join } from 'node:path'
 import { fingerprint, generateStatic, type StaticKeyPair } from '../../../shared/sealed'
 import { isHostId } from '../../../shared/relay-wire'
 import { protectSecretFile, writeSecretFile } from '../secret-file'
+import {
+  MACHINE_WINDOW_DENIES_FILE,
+  WindowDenies,
+  applyWindowDenies,
+} from '../window-denies'
 
 export const MACHINES_FILE = 'machines.json'
 
@@ -130,6 +135,16 @@ export interface Machine {
    * person added; the closed default lives on where it belongs, in
    * `window-grants.ts`, for the one peer nobody at this keyboard vouched for —
    * a device approved as a guest.
+   *
+   * ## Which is why the `false` is also kept somewhere 0.9.1 cannot reach
+   *
+   * With an open default the refusal is the *presence* of a key, so anything
+   * that drops the key hands the capability back. 0.9.1 drops it:
+   * `asStoredMachine` there rebuilds this record from a field list that
+   * predates `drivesWindows`, and `commit` rewrites the whole file on any
+   * change — a machine sending one `welcome` is enough. `window-denies.ts`
+   * keeps the durable copy in a file 0.9.1 neither reads nor writes, and
+   * `load` folds it back in. See `downgrade-to-0-9-1.test.ts`.
    */
   drivesWindows: boolean
 }
@@ -285,12 +300,27 @@ export class MachineStore {
   private readonly now: () => number
   private readonly freshKeys: () => StaticKeyPair
   private machines: StoredMachine[] = []
+  /**
+   * The refusals, in the one place an older build cannot rewrite them.
+   *
+   * `asStoredMachine` in 0.9.1 reconstructs this record from a fixed field set
+   * that does not include `drivesWindows`, and `commit` rewrites the whole list
+   * on any change — so one rename under 0.9.1 erases every stored `false` on
+   * the machine, and absent means on. This file is the copy that survives it.
+   * See `window-denies.ts` for why it is a sidecar and not a version number.
+   */
+  private readonly denies: WindowDenies
 
   constructor(storageDir: string, options: MachineStoreOptions = {}) {
     this.dir = storageDir
     this.file = join(storageDir, MACHINES_FILE)
     this.now = options.now ?? Date.now
     this.freshKeys = options.freshKeys ?? generateStatic
+    // Before `load`, which reads it. Its own file rather than a section of
+    // `remote-windows.json` next door: that one is keyed on *device* ids and
+    // this one on host ids, and `WindowGrants`'s header says why one table
+    // across two id spaces is a typo away from answering the wrong question.
+    this.denies = new WindowDenies(storageDir, MACHINE_WINDOW_DENIES_FILE)
     this.load()
   }
 
@@ -371,6 +401,13 @@ export class MachineStore {
     const next = this.machines.filter((existing) => existing.id !== machine.id)
     if (next.length >= MAX_MACHINES) throw new Error('there is no room for another machine')
     next.push(machine)
+    // Before the row lands, so the row and the sidecar never both exist saying
+    // opposite things. Pairing is the authorizing act — a person read a code
+    // off that machine's screen and typed it here — and it is a *fresh* one, so
+    // it clears a refusal recorded about the same host id before. Without this,
+    // re-pairing a machine somebody had once refused would silently come back
+    // unable to drive, because the id is the host id and never changes.
+    this.denies.forget(machine.id)
     this.commit(next)
     return toPublic(machine)
   }
@@ -380,6 +417,14 @@ export class MachineStore {
     const next = this.machines.filter((machine) => machine.id !== id)
     if (next.length === this.machines.length) return false
     this.commit(next)
+    // After the row is gone, so a failed commit leaves the refusal standing
+    // over a machine that is still paired. Unlike a server's, this id is a host
+    // id and **is** reissued — the same computer paired again is the same key —
+    // so leaving the entry would mean a deliberate re-pairing came back unable
+    // to drive a window with nothing on screen to explain it. `remember` clears
+    // it too, for the pairing that replaces a row rather than following a
+    // forget.
+    this.denies.forget(id)
     return true
   }
 
@@ -420,6 +465,14 @@ export class MachineStore {
     const next = structuredClone(this.machines)
     const machine = next.find((candidate) => candidate.id === id)
     if (!machine) return false
+    // The durable copy first, and outside the early return below: a row whose
+    // field already says the right thing can still be missing its refusal on
+    // disk — that is exactly the state a downgrade leaves behind once `load`
+    // has healed the in-memory value — and pressing the switch again has to be
+    // able to put it back. If the record write then fails, the refusal stands
+    // and the reader resolves the disagreement closed, which is the only
+    // direction a half-finished "no" may fail in.
+    this.denies.set(id, !allowed)
     if (machine.drivesWindows === allowed) return allowed
     machine.drivesWindows = allowed
     this.commit(next)
@@ -515,7 +568,12 @@ export class MachineStore {
       seen.add(machine.id)
       machines.push(machine)
     }
-    this.machines = machines
+    // Folded in here rather than at every reader, so `list`, `drivesWindows`
+    // and every `commit` built on this array all see one answer — and so the
+    // next write for any reason puts the stripped field back into the record by
+    // itself, without this read path having to write anything. See
+    // `applyWindowDenies`.
+    this.machines = applyWindowDenies(machines, this.denies, 'machine')
   }
 
   /**
