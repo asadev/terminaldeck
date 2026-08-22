@@ -121,6 +121,8 @@ function corpus(except: readonly string[] = []): string {
 
 /** Unreachable on purpose, each with the reason it is not a lie. */
 const KNOWN_UNREACHABLE: Record<string, string> = {
+  'src/main/browser-chromium-launch.ts':
+    'unreachable until wave-2 Lane B lands: it spawns chrome-for-testing over --remote-debugging-pipe and hands back fds 3/4, but the CDP codec that consumes those fds (`browser-cdp-pipe.ts`) is not built yet. It lives in src/ so tsc checks the launch flags and the fd stdio shape against the pipe adapter it will feed. REMOVE THIS ENTRY when Lane B wires it — a stale allowlist entry is its own lie.',
   'src/main/browser-extension-zip.fixture.ts':
     'unreachable on purpose: it builds the zip archives `browser-extension-unzip.test.ts` reads, ' +
     'including the malformed ones — path traversal, symlinks, a lying size, zip64 — that no real ' +
