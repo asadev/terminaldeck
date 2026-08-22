@@ -733,12 +733,22 @@ final class CopilotLink {
 
     func apply(state next: CopilotState) {
         implemented()
+        /*
+         * Whether there **was** a run, read before the new state replaces it.
+         *
+         * This used to be `chatRun != nil` alone, and that is a narrower question
+         * than the one being asked: `chatRun` is set by the first chat frame, so
+         * a phone that started a run, sent a message and had the run die before
+         * anything came back kept the bubble it had drawn for that message —
+         * orphaned above whatever came next. Caught by a test, not by a screen.
+         */
+        let hadRun = state?.run != nil || chatRun != nil
         state = next
         // A run that has gone takes its conversation with it. The desktop stops
         // a run whose device has been away past the grace window, and the next
         // thing this phone would otherwise show is a composer under somebody
         // else's answer to a question that is over.
-        if next.run == nil && chatRun != nil {
+        if next.run == nil && hadRun {
             timeline = timeline.filter { entry in
                 if case .message = entry { return false }
                 // And a message this phone sent that was never echoed. It
