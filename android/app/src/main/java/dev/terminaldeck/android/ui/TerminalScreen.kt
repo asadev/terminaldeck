@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.Keyboard
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -65,6 +66,7 @@ import com.termux.view.TerminalViewClient
 import dev.terminaldeck.android.session.RemoteSessionBinding
 import dev.terminaldeck.android.transfer.UploadPhase
 import dev.terminaldeck.android.transfer.UploadView
+import dev.terminaldeck.android.store.TerminalTextSize
 import dev.terminaldeck.android.transport.TransportState
 import dev.terminaldeck.android.transport.detail
 import dev.terminaldeck.android.transport.isOnline
@@ -140,11 +142,25 @@ fun TerminalScreen(
      * worked. Found by tapping Copy on a real emulator and watching nothing happen.
      */
     notice: String? = null,
+    /**
+     * Whether this session has a control cluster worth opening.
+     *
+     * Absent, not disabled: a machine that does not serve `controls`, and a session that is a plain
+     * shell rather than an agent, both get a terminal that is exactly what it was rather than a
+     * button that opens onto an explanation. The desktop's own cluster withdraws itself over
+     * `/bin/zsh` for the same reason.
+     */
+    hasControls: Boolean = false,
+    onControls: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(notice) { notice?.let { snackbar.showSnackbar(it) } }
-    val client = remember(binding) { DeckTerminalViewClient() }
+    // Read once, when the screen is built. A session already open picks up a change made in Settings
+    // the next time it is opened — setting the font resizes the *remote* terminal, so doing it under
+    // somebody's fingers while they read output is the wrong moment.
+    val storedTextSize = remember { TerminalTextSize.load(context) }
+    val client = remember(binding) { DeckTerminalViewClient(storedTextSize) { size -> TerminalTextSize.save(context, size) } }
     var ctrlArmed by remember(binding) { mutableStateOf(false) }
     var attachOpen by remember { mutableStateOf(false) }
 
@@ -152,7 +168,7 @@ fun TerminalScreen(
         TerminalView(context, null).apply {
             setTerminalViewClient(client)
             // setTextSize builds the renderer; setTypeface dereferences it. Order matters.
-            setTextSize(TEXT_SIZE_PX)
+            setTextSize(storedTextSize)
             setTypeface(Typeface.MONOSPACE)
             isFocusable = true
             isFocusableInTouchMode = true
@@ -282,6 +298,15 @@ fun TerminalScreen(
                                     },
                                 )
                             }
+                        }
+                    }
+                    if (hasControls) {
+                        IconButton(onClick = onControls) {
+                            Icon(
+                                Icons.Filled.Tune,
+                                contentDescription = "Model, effort, fast mode and permission for this session",
+                                tint = MaterialTheme.colorScheme.onBackground,
+                            )
                         }
                     }
                     IconButton(onClick = {
@@ -460,7 +485,12 @@ private fun KeyRow(
  * lives in the UI layer rather than next to the protocol: none of it is a fact about the session,
  * and all of it would be answered differently on a tablet with a keyboard case.
  */
-private class DeckTerminalViewClient : TerminalViewClient {
+private class DeckTerminalViewClient(
+    /** The stored size this terminal was built at, so a pinch steps from it rather than from 28. */
+    private val startingTextSizePx: Int,
+    /** Where a pinch's new size is written. See [TerminalTextSize]. */
+    private val onTextSize: (Int) -> Unit,
+) : TerminalViewClient {
 
     /**
      * Set once, immediately after construction.
@@ -484,7 +514,7 @@ private class DeckTerminalViewClient : TerminalViewClient {
      */
     var consumeCtrl: () -> Unit = {}
 
-    private var textSizePx = TEXT_SIZE_PX
+    private var textSizePx = startingTextSizePx
 
     /**
      * Pinch to zoom.
@@ -496,13 +526,19 @@ private class DeckTerminalViewClient : TerminalViewClient {
      */
     override fun onScale(scale: Float): Float {
         if (scale < 0.9f || scale > 1.1f) {
-            val next = (if (scale > 1f) textSizePx + 2 else textSizePx - 2)
-                .coerceIn(MIN_TEXT_SIZE_PX, MAX_TEXT_SIZE_PX)
+            val next = if (scale > 1f) {
+                TerminalTextSize.larger(textSizePx)
+            } else {
+                TerminalTextSize.smaller(textSizePx)
+            }
             if (next != textSizePx) {
                 textSizePx = next
                 // This reflows the emulator, which reports a new size, which becomes a `resize`
                 // frame. Zooming on the phone genuinely changes the width of the remote terminal.
                 view?.setTextSize(next)
+                // And it is remembered, so the next launch draws at the size the last pinch chose
+                // rather than back at the default — which is also the number the Settings row reads.
+                onTextSize(next)
             }
             return 1f
         }
@@ -595,8 +631,8 @@ private class DeckTerminalViewClient : TerminalViewClient {
  * setting would mean two phones side by side reporting different terminal widths for the same
  * screen — so the size is fixed and pinch-to-zoom is the way to change it.
  */
-private const val TEXT_SIZE_PX = 28
-private const val MIN_TEXT_SIZE_PX = 14
-private const val MAX_TEXT_SIZE_PX = 64
+// The size, its bounds and its step now live in [TerminalTextSize], because the pinch is no longer
+// the only thing that sets them: the Settings row writes the same number, and two copies of a bound
+// is how a stepper and a gesture end up disagreeing about the maximum.
 
 private const val TERMINAL_BACKGROUND = 0xFF0B0D10.toInt()

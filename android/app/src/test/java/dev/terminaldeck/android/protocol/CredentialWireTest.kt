@@ -45,14 +45,28 @@ class CredentialWireTest {
                 capabilities = Capability.CLAIMED,
             )
         )
-        assertTrue("the field must reach the wire: $json", json.contains("\"capabilities\":[\"credential\"]"))
+        assertTrue(
+            "the field must reach the wire: $json",
+            json.contains("\"capabilities\":[\"credential\",\"devices\",\"settings\",\"watch\"]"),
+        )
     }
 
     @Test
-    fun `the claimed list is only what runs desktop to phone`() {
+    fun `the claimed list is only what the desktop pushes at this phone`() {
         // `create`, `localhost` and `upload` are things this phone asks for and are gated on the
-        // desktop having advertised them, so claiming them here would say nothing at all.
-        assertEquals(listOf(Capability.CREDENTIAL), Capability.CLAIMED)
+        // desktop having advertised them, so claiming them here would say nothing at all. The four
+        // that are here each have a frame the desktop *pushes* — `credential.request`,
+        // `devices.changed`, `settings.changed`, `browser.frame` — and `server.ts` skips every
+        // connection that did not claim the name before pushing one.
+        //
+        // Word for word `CLAIMED_CAPABILITIES` in `pwa/src/protocol-client.ts` and
+        // `WireCapability.claimed` on iOS. The order is theirs too, because it is what reaches the
+        // wire and three clients disagreeing about it is three different hellos.
+        assertEquals(
+            listOf(Capability.CREDENTIAL, Capability.DEVICES, Capability.SETTINGS, Capability.WATCH),
+            Capability.CLAIMED,
+        )
+        assertEquals(listOf("credential", "devices", "settings", "watch"), Capability.CLAIMED)
     }
 
     /* ------------------------------------------------------------ the answers -- */

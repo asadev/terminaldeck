@@ -25,6 +25,7 @@ import dev.terminaldeck.android.protocol.ClientMessage
 import dev.terminaldeck.android.protocol.HostPlatform
 import dev.terminaldeck.android.protocol.HostVersion
 import dev.terminaldeck.android.protocol.Protocol
+import dev.terminaldeck.android.protocol.ControlName
 import dev.terminaldeck.android.protocol.ServerSettingKey
 import dev.terminaldeck.android.protocol.pasteRefusal
 import dev.terminaldeck.android.protocol.RemoteSessionView
@@ -303,6 +304,17 @@ class DeckViewModel(
             expiry = coroutineExpiry(viewModelScope),
             onChange = { publish() },
         )
+        link.controls = SessionControlsController(
+            send = { link.transport.send(it) },
+            capabilities = { link.capabilities },
+            expiry = coroutineExpiry(viewModelScope),
+            onChange = { publish() },
+        )
+        link.watch = WatchController(
+            send = { link.transport.send(it) },
+            capabilities = { link.capabilities },
+            onChange = { publish() },
+        )
         // Collected per machine, with the link captured, so a frame cannot arrive without the
         // answer to "which computer said this" already in hand.
         viewModelScope.launch { link.transport.state.collect { onState(link, it) } }
@@ -347,6 +359,10 @@ class DeckViewModel(
             // against a socket that will never answer is exactly the lie this client is written not
             // to tell. The machine deletes its half-written file when the socket closes.
             link.upload?.connectionLost(next.detail)
+            // A reading is a claim about now, and nothing over a dead channel will correct it. The
+            // cast stops with it: the host is holding a screencast for a socket that has gone.
+            link.controls?.dropped()
+            link.watch?.renew()
         }
         publish()
     }
@@ -366,6 +382,11 @@ class DeckViewModel(
              */
             is ServerMessage.Output -> {
                 link.binding?.takeIf { it.sessionId == message.id }?.feed(message.data)
+                // The one thing output changes outside the emulator: the control cluster re-reads
+                // once the session has gone quiet, because the model line, the effort confirmation
+                // and the permission footer are all read from what the far pty writes. A timer, not
+                // a read per frame — see [SessionControlsController.noteOutput].
+                link.controls?.noteOutput()
                 return
             }
 
@@ -409,6 +430,12 @@ class DeckViewModel(
                 // after that first read without a poll.
                 link.devices?.renew()
                 link.settings?.renew()
+                // The controls cluster is about a *session*, so a welcome does not re-read it — the
+                // terminal screen calls `follow` and that is the only thing that knows which session
+                // is on screen. What a welcome does is drop what the last connection said, for the
+                // reason `dropped` gives: a reading is a claim about now.
+                link.controls?.dropped()
+                link.watch?.renew()
                 link.loaded = message.sessions.isNotEmpty() || link.loaded
                 link.live = true
             }
@@ -532,6 +559,28 @@ class DeckViewModel(
             is ServerMessage.SettingsChanged,
             -> {
                 link.settings?.receive(message)
+            }
+
+            is ServerMessage.ControlsReading,
+            is ServerMessage.ControlsApplied,
+            -> {
+                link.controls?.receive(message)
+            }
+
+            is ServerMessage.BrowserSurfacesRows -> {
+                link.watch?.receive(message)
+            }
+
+            /*
+             * A screencast frame goes straight to the viewer and returns before the fold, for the
+             * reason `output` does: it is the chattiest thing on this socket — one per drawn frame
+             * of a live page — and it changes nothing any screen reads off [DeckUiState]. Refolding
+             * every machine's summary per frame would rebuild the world to arrive at a state that
+             * compares equal to the one already there.
+             */
+            is ServerMessage.BrowserFrame -> {
+                link.watch?.receive(message)
+                return
             }
         }
         publish()
@@ -1046,6 +1095,54 @@ class DeckViewModel(
         selected?.settings?.apply(key, value)
     }
 
+    /* ---------------------------------------------------------------- controls -- */
+
+    /**
+     * The terminal screen opened a session — read its control cluster.
+     *
+     * Called after the attach, because the question it asks is about a session this socket has been
+     * told is on screen. A no-op over a machine that does not advertise `controls`, so an older
+     * desktop simply never grows the button.
+     */
+    fun followControls(hostId: String, sessionId: String) {
+        links[hostId]?.controls?.follow(sessionId)
+    }
+
+    /** The terminal screen went. Nothing about that session is worth holding once nobody is looking. */
+    fun forgetControls(hostId: String) {
+        links[hostId]?.controls?.forget()
+    }
+
+    /** Change one control on the session the terminal screen is showing. */
+    fun applyControl(hostId: String, control: ControlName, value: String) {
+        links[hostId]?.controls?.apply(control, value)
+    }
+
+    fun dismissControlsNotice(hostId: String) {
+        links[hostId]?.controls?.dismissNotice()
+    }
+
+    /* ------------------------------------------------------------------- watch -- */
+
+    /** Ask the machine on screen for its watchable windows, once, when the strip is opened. */
+    fun openWatch() {
+        selected?.watch?.ensureRead()
+    }
+
+    /** The user pulled to refresh the strip. */
+    fun refreshWatch() {
+        selected?.watch?.refresh()
+    }
+
+    /**
+     * The viewer's sink for frames of the machine on screen.
+     *
+     * Handed the controller rather than a copy of it, because the viewer needs the object it can
+     * ack and send gestures through — one live cast, one canvas. Null when the machine on screen
+     * offers no watching, which is the same test the strip draws off.
+     */
+    fun watcher(): WatchController? = selected?.watch?.takeIf { it.offered() }
+
     /** Type text into the session open on one machine: the key bar, and paste. */
     fun type(hostId: String, text: String) {
         val link = links[hostId] ?: return
@@ -1279,6 +1376,18 @@ class DeckViewModel(
             hostKind = current?.hostKind,
             devices = current?.devices?.view(),
             serverSettings = current?.settings?.view(),
+            /*
+             * The control cluster of whichever machine has a session on screen — not of the selected
+             * one.
+             *
+             * They are the same machine almost always, and are not the same on a phone with a Mac
+             * and a PC where a terminal was opened on one and the switcher then moved to the other.
+             * `view()` answers null unless that link is actually following a session, and only one
+             * terminal is ever open, so the first non-null is the right one by construction rather
+             * than by remembering to keep a second id in step.
+             */
+            controls = links.values.firstNotNullOfOrNull { it.controls?.view() },
+            watch = current?.watch?.view(),
             addServer = if (addingServer) {
                 AddServerView(working = serverSignInWorking, error = serverSignInError)
             } else {
@@ -1427,6 +1536,16 @@ data class DeckUiState(
     val devices: DeviceRosterView? = null,
     /** The two server-owned settings of the machine on screen, or null when it does not serve them. */
     val serverSettings: ServerSettingsView? = null,
+    /**
+     * The control cluster of the session on screen, or null.
+     *
+     * Null covers three different absences at once — the machine never advertised `controls`, no
+     * session is being followed, or nothing has been read yet — and the terminal screen has one test
+     * for whether the Controls button exists rather than three.
+     */
+    val controls: SessionControlsView? = null,
+    /** The watchable browser windows of the machine on screen, or null when it does not offer any. */
+    val watch: WatchView? = null,
     /**
      * The Add-a-server screen, or null when it is not up. Null is the normal state.
      *

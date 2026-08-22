@@ -28,16 +28,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Dns
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -63,9 +56,9 @@ import dev.terminaldeck.android.transport.TransportState
 import dev.terminaldeck.android.transport.detail
 
 /**
- * Every machine this phone is paired with, and the four things that can be done to one.
+ * Which machine am I looking at — and nothing else.
  *
- * ## Why it is a list of live machines rather than a picker
+ * ## Why it is a list of live machines rather than a plain picker
  *
  * The reason to pair a phone with two computers is to know which of them is busy without walking to
  * either. So every row carries that machine's *own* connection — green only when its socket is up
@@ -76,55 +69,25 @@ import dev.terminaldeck.android.transport.detail
  * A session count appears only while the machine is live. A number left over from the last
  * connection under a green dot would be the one thing this sheet exists to show, being wrong.
  *
- * ## Why one machine still opens it
+ * ## What used to be here, and where it went
  *
- * It is not a picker — it is where machines are managed. With one paired there is nothing to switch
- * to, but renaming it, forgetting it and adding a second are all here and nowhere else, so a sheet
- * that hid itself below two machines would leave the first user with no way to reach any of them.
+ * Pairing another machine, adding a server, GitHub, Devices, This-server and the rename/forget menu
+ * were all on this sheet, which made it nine items deep and made the session list's title the door
+ * to every feature in the app. They are on the **Settings** tab now, and the three about a machine
+ * are on **Machines** inside it — the arrangement iOS settled on, and for its reason: this sheet
+ * answers *which machine am I typing into*, which is worth one tap from the session list; adding one
+ * is management, and management is a screen.
+ *
+ * Which is also why the title stops being a control when only one machine is paired. There is
+ * nothing to switch to, and every verb that used to justify opening it anyway now lives somewhere a
+ * person can find without knowing that a title was tappable. See [SessionListScreen].
  */
 @Composable
 fun HostSwitcherSheet(
     hosts: List<HostSummary>,
     onSelect: (String) -> Unit,
-    onRename: (String, String?) -> Unit,
-    onForget: (String) -> Unit,
-    onAddHost: () -> Unit,
-    /**
-     * Add a server: an address and a login, rather than a code somebody reads off a screen.
-     *
-     * A second row rather than a second mode of the first, because the two ceremonies have nothing
-     * in common but the list they end up in — see `SERVERS-DESIGN.md`. Defaulted so that a caller
-     * which has not been taught about servers draws the sheet it always drew, rather than a row that
-     * leads nowhere.
-     */
-    onAddServer: () -> Unit = {},
-    /**
-     * The GitHub account this phone holds, or null when none is connected.
-     *
-     * It lives on this sheet rather than on a settings screen because this sheet is already "the
-     * things that are about the phone rather than about what is on screen", and because a GitHub
-     * account is exactly that: **one**, phone-wide, answering every machine in the list above.
-     */
-    gitHubLogin: String? = null,
-    onGitHub: () -> Unit = {},
-    /**
-     * The selected machine's label, its device roster, its two server-owned settings, and the one
-     * sentence to say when this app is newer than it.
-     *
-     * These four are about the machine on screen rather than the phone, so — unlike GitHub — the
-     * rows are drawn only when that machine advertised the capability behind them. A row that only
-     * ever led to a screen the machine refuses would be the fake control the design forbids.
-     */
-    selectedLabel: String = "",
-    devicesOffered: Boolean = false,
-    onDevices: () -> Unit = {},
-    serverSettingsOffered: Boolean = false,
-    onServerSettings: () -> Unit = {},
-    serverBehindSentence: String? = null,
     onDismiss: () -> Unit,
 ) {
-    var renaming by remember { mutableStateOf<HostSummary?>(null) }
-    var forgetting by remember { mutableStateOf<HostSummary?>(null) }
     var shown by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { shown = true }
 
@@ -203,205 +166,10 @@ fun HostSwitcherSheet(
                             onSelect(host.hostId)
                             onDismiss()
                         },
-                        onRename = { renaming = host },
-                        onForget = { forgetting = host },
-                    )
-                }
-
-                HorizontalDivider(
-                    color = MaterialTheme.colorScheme.outline,
-                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
-                )
-
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 56.dp)
-                        .clickable {
-                            onDismiss()
-                            onAddHost()
-                        }
-                        .padding(horizontal = 20.dp, vertical = 12.dp),
-                ) {
-                    Icon(
-                        Icons.Filled.Add,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(20.dp),
-                    )
-                    Spacer(Modifier.width(14.dp))
-                    Column {
-                        Text(
-                            text = "Pair another machine",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                        // Said here because it is the sentence that stops somebody worrying about it.
-                        Text(
-                            text = if (hosts.size == 1) {
-                                "The one above stays paired and stays connected."
-                            } else {
-                                "The ones above stay paired and stay connected."
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-
-                /*
-                 * The other kind of machine, and it has to be visible here.
-                 *
-                 * This sheet is where machines are managed, so a person looking for "how do I add my
-                 * server" looks here first and finds a row about codes. One row about pairing was
-                 * the whole of it in 0.10.0, which is why the feature Asad asked for most was
-                 * unreachable in a build that had every piece of its wire.
-                 *
-                 * No divider between the two: they are one pair of choices about the same question,
-                 * and a rule between them would read as one being a different kind of thing from the
-                 * row above.
-                 */
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 56.dp)
-                        .clickable {
-                            onDismiss()
-                            onAddServer()
-                        }
-                        .padding(horizontal = 20.dp, vertical = 12.dp),
-                ) {
-                    Icon(
-                        Icons.Filled.Dns,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(20.dp),
-                    )
-                    Spacer(Modifier.width(14.dp))
-                    Column {
-                        Text(
-                            text = "Add a server",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                        Text(
-                            // Says what it needs before the tap, because the answer to "have I got
-                            // what this asks for" is what decides whether somebody taps it.
-                            text = "Sign in with its address and your login. No desktop needed.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-
-                HorizontalDivider(
-                    color = MaterialTheme.colorScheme.outline,
-                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
-                )
-
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 56.dp)
-                        .clickable {
-                            onDismiss()
-                            onGitHub()
-                        }
-                        .padding(horizontal = 20.dp, vertical = 12.dp),
-                ) {
-                    Column {
-                        Text(
-                            text = "GitHub",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurface,
-                        )
-                        Text(
-                            // "Not connected" is said plainly rather than left blank: a row with no
-                            // second line reads as a feature with nothing behind it.
-                            //
-                            // The login asks for mono, because a login is data — a thing somebody
-                            // checks character by character. It is stated even though `bodySmall`
-                            // in this app's theme is *already* monospace, so today the two branches
-                            // look identical on screen: the day that style stops being mono, this
-                            // line is the one that should not follow it.
-                            text = gitHubLogin?.let { "@$it" } ?: "Not connected",
-                            style = MaterialTheme.typography.bodySmall,
-                            fontFamily = if (gitHubLogin != null) FontFamily.Monospace else null,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-
-                // Devices and This server act on the machine on screen, so each is drawn only when
-                // that machine advertised the capability behind it. An older machine, or a guest,
-                // sees neither — exactly the surface it had before, not a row explaining a gap.
-                if (devicesOffered) {
-                    HorizontalDivider(
-                        color = MaterialTheme.colorScheme.outline,
-                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
-                    )
-                    SwitcherActionRow(
-                        title = "Devices",
-                        subtitle = "Every device signed in to $selectedLabel",
-                    ) {
-                        onDismiss()
-                        onDevices()
-                    }
-                }
-
-                if (serverSettingsOffered) {
-                    HorizontalDivider(
-                        color = MaterialTheme.colorScheme.outline,
-                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
-                    )
-                    SwitcherActionRow(
-                        title = "This server",
-                        subtitle = "Settings $selectedLabel owns, not this phone",
-                    ) {
-                        onDismiss()
-                        onServerSettings()
-                    }
-                }
-
-                // The one sentence about being behind, and only when this app is genuinely ahead of
-                // the machine — default-closed in [DeckUiState.serverBehindSentence]. No button: the
-                // wire carries no update verb, so this is a fact, not an action.
-                serverBehindSentence?.let { sentence ->
-                    Text(
-                        text = sentence,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 12.dp),
                     )
                 }
             }
         }
-    }
-
-    renaming?.let { host ->
-        RenameDialog(
-            host = host,
-            onDone = { name ->
-                onRename(host.hostId, name)
-                renaming = null
-            },
-            onCancel = { renaming = null },
-        )
-    }
-
-    forgetting?.let { host ->
-        ForgetDialog(
-            host = host,
-            lastOne = hosts.size == 1,
-            onConfirm = {
-                forgetting = null
-                onForget(host.hostId)
-            },
-            onCancel = { forgetting = null },
-        )
     }
 }
 
@@ -409,10 +177,7 @@ fun HostSwitcherSheet(
 private fun HostRow(
     host: HostSummary,
     onClick: () -> Unit,
-    onRename: () -> Unit,
-    onForget: () -> Unit,
 ) {
-    var menu by remember { mutableStateOf(false) }
     val tint = connectionTint(host.connection)
 
     Row(
@@ -497,62 +262,6 @@ private fun HostRow(
             )
         }
 
-        Box {
-            IconButton(onClick = { menu = true }) {
-                Icon(
-                    Icons.Filled.MoreVert,
-                    contentDescription = "More for ${host.label}",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                DropdownMenuItem(
-                    text = { Text(if (host.nickname == null) "Name this machine" else "Rename") },
-                    onClick = {
-                        menu = false
-                        onRename()
-                    },
-                )
-                DropdownMenuItem(
-                    text = { Text("Forget", color = MaterialTheme.colorScheme.error) },
-                    onClick = {
-                        menu = false
-                        onForget()
-                    },
-                )
-            }
-        }
-    }
-}
-
-/**
- * One tappable row of the sheet's lower section — a title and a sentence under it — in the same shape
- * as the GitHub and "Pair another machine" rows, so the three read as one list.
- */
-@Composable
-private fun SwitcherActionRow(title: String, subtitle: String, onClick: () -> Unit) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = 56.dp)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 20.dp, vertical = 12.dp),
-    ) {
-        Column {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Text(
-                text = subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
     }
 }
 
@@ -564,7 +273,7 @@ private fun SwitcherActionRow(title: String, subtitle: String, onClick: () -> Un
  * out of a list by — and picking the right machine out of a list is the whole of multi-host.
  */
 @Composable
-private fun RenameDialog(host: HostSummary, onDone: (String?) -> Unit, onCancel: () -> Unit) {
+fun RenameDialog(host: HostSummary, onDone: (String?) -> Unit, onCancel: () -> Unit) {
     var name by remember(host.hostId) { mutableStateOf(host.nickname.orEmpty()) }
 
     AlertDialog(
@@ -614,7 +323,7 @@ private fun RenameDialog(host: HostSummary, onDone: (String?) -> Unit, onCancel:
  * out otherwise standing in a different room from the computer.
  */
 @Composable
-private fun ForgetDialog(
+fun ForgetDialog(
     host: HostSummary,
     lastOne: Boolean,
     onConfirm: () -> Unit,

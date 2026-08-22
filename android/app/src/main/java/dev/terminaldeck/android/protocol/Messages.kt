@@ -479,6 +479,112 @@ sealed interface ClientMessage {
         val value: String,
     ) : ClientMessage
 
+    /* ---- capability `controls`. One session's model, effort, fast mode and permission. --- */
+
+    /**
+     * Read the control cluster of one session.
+     *
+     * Sent only when `welcome.capabilities` named [Capability.CONTROLS]. [rid] names *this* question
+     * so two screens over one machine cannot resolve each other's reads, and [id] is checked again
+     * on the way back — another session's model landing on this chip would be this phone typing a
+     * model change at the wrong terminal. Answered with `controls.reading`.
+     *
+     * Asked on attach and again whenever the session prints and goes quiet: the model line, the
+     * effort confirmation and the permission footer are all read from what the far pty writes, so
+     * output settling is the event every chip changes on.
+     */
+    @Serializable
+    @SerialName("controls.read")
+    data class ControlsRead(val rid: String, val id: String) : ClientMessage
+
+    /**
+     * Change one control on one session, over there.
+     *
+     * [control] is narrowed to [ControlName] by construction, so a frame naming any other control is
+     * unrepresentable here rather than merely refused. [value] is stringly — a model alias, an
+     * effort id, `"on"`/`"off"`, a permission mode — and comes from [ControlCatalog], which is this
+     * app's copy of the desktop's own list, because the value ends up typed at a real `claude`
+     * binary. The outcome comes back as `controls.applied`, carrying the far end's **re-read** of
+     * that one control rather than the value that was pressed, which is what makes a refused apply
+     * revert by construction.
+     */
+    @Serializable
+    @SerialName("controls.apply")
+    data class ControlsApply(
+        val rid: String,
+        val id: String,
+        val control: ControlName,
+        val value: String,
+    ) : ClientMessage
+
+    /* ---- capability `watch`. Watching, and driving, a browser window over there. ---------- */
+
+    /**
+     * Start — or renegotiate — the cast of one browser surface to this phone.
+     *
+     * [window] is `""` for the front tab or a slot name. Idempotent on the host, which is how a
+     * rotation renegotiates: the same frame with a new [maxWidth] replaces the running cast rather
+     * than starting a second one. Both numbers are clamped into the host's range by
+     * [WatchMath.watchWidth] and [WatchMath.watchQuality] before they are sent, so what arrives is
+     * what was asked for instead of what the host quietly reduced it to.
+     */
+    @Serializable
+    @SerialName("browser.watch")
+    data class BrowserWatch(
+        val window: String,
+        val maxWidth: Int,
+        val quality: Int,
+    ) : ClientMessage
+
+    /** Stop the cast of one surface. Sent when the viewer closes — never left running behind a back. */
+    @Serializable
+    @SerialName("browser.unwatch")
+    data class BrowserUnwatch(val window: String) : ClientMessage
+
+    /**
+     * Drawn — send the next frame.
+     *
+     * The one-in-flight backpressure: the host holds one un-acked frame per watcher, so this is sent
+     * from the paint callback and never on receipt. Acking early asks a machine for frames faster
+     * than a phone can draw them, which spends a radio on pixels that are stale before they land.
+     */
+    @Serializable
+    @SerialName("browser.frame.ack")
+    data class BrowserFrameAck(val window: String, val seq: Int) : ClientMessage
+
+    /**
+     * One gesture aimed at the frame named by [seq].
+     *
+     * Exactly one of [mouse], [key], [touch] and [paste] is set, because each rides a different CDP
+     * method on the far side and a frame naming two could not have been one gesture. `explicitNulls
+     * = false` keeps the other three off the wire entirely rather than as nulls the desktop's parser
+     * would have to forgive.
+     *
+     * [seq] names the frame the coordinates were measured against, so a scroll landing mid-gesture
+     * cannot desync the mapping: the host inverts *that* frame's transform, not whatever the page
+     * has moved to since.
+     */
+    @Serializable
+    @SerialName("browser.input")
+    data class BrowserInput(
+        val window: String,
+        val seq: Int,
+        val mouse: BrowserMouseWire? = null,
+        val key: BrowserKeyWire? = null,
+        val touch: BrowserTouchWire? = null,
+        val paste: String? = null,
+    ) : ClientMessage
+
+    /**
+     * Ask for the tab strip — every surface this machine says is watchable.
+     *
+     * Asked once when the screen opens; the unsolicited `browser.surfaces.rows` push keeps it fresh
+     * after that without a poll.
+     */
+    @Serializable
+    @SerialName("browser.surfaces")
+    data class BrowserSurfaces(val rid: String) : ClientMessage
+
     companion object {
         /**
          * Attach with a size when there is one, without when there is not.
@@ -893,6 +999,111 @@ sealed interface ServerMessage {
     @SerialName("settings.changed")
     data class SettingsChanged(
         val settings: kotlin.collections.List<ServerSettingWire> = emptyList(),
+    ) : ServerMessage
+
+    /* ---- capability `controls` ------------------------------------------------------------- */
+
+    /**
+     * The answer to one `controls.read`: the whole cluster, as the far machine read it this instant.
+     *
+     * [id] is echoed as well as [rid] and both are checked, because a reading is a claim about one
+     * session and this screen may have moved to another between the ask and the answer.
+     */
+    @Serializable
+    @SerialName("controls.reading")
+    data class ControlsReading(
+        val rid: String,
+        val id: String,
+        val reading: ControlsReadingWire = ControlsReadingWire(),
+    ) : ServerMessage
+
+    /**
+     * What happened to one `controls.apply`, in the machine's own words.
+     *
+     * [message] is the sentence to show either way and is never composed on this side. [reading] is
+     * the far end's **re-read** of the one control that was pressed, so the row that ticks is the
+     * one the session is actually on: a refused apply reverts by construction rather than by this
+     * phone remembering to undo something.
+     */
+    @Serializable
+    @SerialName("controls.applied")
+    data class ControlsApplied(
+        val rid: String,
+        val id: String,
+        val ok: Boolean = false,
+        val message: String = "",
+        val reading: ControlReadingWire = ControlReadingWire.EMPTY,
+    ) : ServerMessage
+
+    /* ---- capability `watch` ---------------------------------------------------------------- */
+
+    /**
+     * One screencast frame of a browser window the machine is holding.
+     *
+     * Flat on the wire — `t` and the geometry in one object — so it is declared here rather than
+     * wrapping a payload type. [data] is a base64 JPEG and the only large field, which is why this
+     * is the single frame allowed past [Protocol.MAX_MESSAGE_BYTES]; see [ServerFrames.parse].
+     * [w]/[h] are the image's own pixels and [dw]/[dh] the CSS viewport they cover.
+     *
+     * [masked] is the handover curtain: the pixels never crossed the wire, [data] is empty, and the
+     * viewer draws its own lock card under [prompt]. A curtain takes no taps.
+     *
+     * [seq] is this frame's name. A gesture measured against it is sent with *this* number, and the
+     * ack that asks for the next frame carries it too.
+     */
+    @Serializable
+    @SerialName("browser.frame")
+    data class BrowserFrame(
+        val window: String,
+        val seq: Int,
+        val w: Int,
+        val h: Int,
+        val dw: Int = 0,
+        val dh: Int = 0,
+        val scale: Double = 1.0,
+        val offsetTop: Double = 0.0,
+        val pageScale: Double = 1.0,
+        val scrollX: Double = 0.0,
+        val scrollY: Double = 0.0,
+        val masked: Boolean = false,
+        val prompt: String? = null,
+        val data: String = "",
+    ) : ServerMessage {
+
+        /** The curtain's sentence, bounded, or the default when the host sent none. */
+        val curtain: String
+            get() = prompt?.take(Protocol.MAX_WATCH_PROMPT_LENGTH)?.takeIf { it.isNotBlank() }
+                ?: DEFAULT_CURTAIN_PROMPT
+
+        /**
+         * The decoded JPEG, or null.
+         *
+         * Null for a masked frame — there are no pixels — and null for a frame whose base64 will not
+         * decode, which the painter treats as a frame it could not draw rather than as a reason to
+         * stall: a bad frame is still acked, or one of them stops the whole cast.
+         */
+        fun bytes(): ByteArray? {
+            if (masked || data.isEmpty()) return null
+            return try {
+                java.util.Base64.getDecoder().decode(data)
+            } catch (e: IllegalArgumentException) {
+                null
+            }
+        }
+    }
+
+    /**
+     * The tab strip: every surface this machine says is watchable.
+     *
+     * Arrives as the answer to one `browser.surfaces` **and** unsolicited when the strip moves, so
+     * [rid] is optional and is not matched — the list is the whole truth either way and there is
+     * nothing to resolve.
+     */
+    @Serializable
+    @SerialName("browser.surfaces.rows")
+    data class BrowserSurfacesRows(
+        val rid: String? = null,
+        val surfaces: kotlin.collections.List<BrowserSurfaceWire> = emptyList(),
     ) : ServerMessage
 }
 

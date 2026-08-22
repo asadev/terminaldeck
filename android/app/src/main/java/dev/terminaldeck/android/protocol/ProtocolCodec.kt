@@ -86,9 +86,27 @@ object ServerFrames {
         data class Bad(val reason: String) : Result
     }
 
+    /**
+     * The type-aware cap, transcribed from `parseServerMessage`.
+     *
+     * Measured cheaply first: a message inside the ordinary text cap takes the ordinary path — one
+     * size check, one parse, byte for byte what it was before a screencast frame existed. Only a
+     * message *over* that cap pays the second check, and the one message allowed past it is a
+     * `browser.frame`, whose base64 JPEG is by design larger than the text cap. Anything larger, or
+     * anything that size which is not a frame, is refused: the frame's bigger allowance is never
+     * borrowed by another message.
+     */
     fun parse(raw: String): Result {
         if (Protocol.overBytes(raw, Protocol.MAX_MESSAGE_BYTES)) {
-            return Result.Bad("frame over the message limit")
+            if (Protocol.overBytes(raw, Protocol.MAX_FRAME_MESSAGE_BYTES)) {
+                return Result.Bad("frame over the message limit")
+            }
+            // Sniffed on the raw text rather than by decoding first, because decoding is what the
+            // cap is protecting against: this asks "is it a frame" of a string that has already been
+            // measured, and only then hands it to the serializer.
+            if (!looksLikeFrame(raw)) {
+                return Result.Bad("frame over the message limit")
+            }
         }
         val decoded = try {
             ProtocolJson.decodeFromString<ServerMessage>(raw)
@@ -99,6 +117,17 @@ object ServerFrames {
         }
         return narrow(decoded)
     }
+
+    /**
+     * Whether an over-cap message claims to be a `browser.frame`.
+     *
+     * A substring test rather than a parse, and deliberately loose: something that says it is a
+     * frame and is not fails the serializer a line later, which is the check that matters. What this
+     * decides is only whether a 90 KB string is worth handing to the parser at all, and a discriminator
+     * this app writes and reads is enough to answer that.
+     */
+    private fun looksLikeFrame(raw: String): Boolean =
+        raw.contains("\"t\":\"browser.frame\"") || raw.contains("\"t\": \"browser.frame\"")
 
     /**
      * The checks the serializer cannot express, applied after it has done the shape.
