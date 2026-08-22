@@ -104,12 +104,22 @@ targets:
         # The stamp already on Apple's side, 2608161932, is a local-clock one;
         # both compare correctly against it, and the convention is worth keeping.
         #
+        # Refreshed again on 2026-08-22. This one was not drift, it was a
+        # collision: 2608221001 has already been uploaded under 0.10.0, and the
+        # number sitting here — 2608220959 — was *two minutes earlier* than the
+        # build already on Apple's side. A hand-run archive from this file would
+        # have exported cleanly, validated cleanly, and been refused at the
+        # upload with "The build number must be higher than the previously
+        # uploaded build", after the four minutes were already spent. The clock
+        # stamp release.sh generates is later than both; this line only has to
+        # not be a trap for the hand-run path.
+        #
         # Refreshed on 2026-08-20 with the move to 0.8.1. It had drifted again —
         # the desktop tagged 0.8.0 and then 0.8.1 while this file still said
         # 0.7.0 — which is the state `preflight.sh` fails on, so an iOS release
         # cut today would have stopped before it archived. Found by reading the
         # About row on a simulator, which said 0.7.0 next to a 0.8.1 desktop.
-        CURRENT_PROJECT_VERSION: "2608220959"
+        CURRENT_PROJECT_VERSION: "2608221311"
         # 1 = iPhone only, and the asymmetry in Apple's rules is the whole
         # reason. A device family can be *added* to a shipped app whenever the
         # layout is ready for it; it cannot be taken away — App Store Connect
