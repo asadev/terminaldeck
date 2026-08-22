@@ -9,6 +9,7 @@ import {
   type McpStoreRow as Row,
 } from './mcp-store-bridge'
 import { StoreLinkOut } from '../store/StoreLinkOut'
+import { StoreRowName } from '../store/StoreRowName'
 
 /**
  * One row of the MCP store.
@@ -92,13 +93,31 @@ interface Props {
   onValue(key: string, value: string): void
   onAct(verb: 'install' | 'remove'): void
   onArm(on: boolean): void
+  /**
+   * Open this server on its own, where there is a page that can show it.
+   *
+   * Absent everywhere there is not — see `store/StoreRowName.tsx`. It adds a
+   * way to look at one row and removes nothing from this one: the command that
+   * will be written, what it needs and where it comes from are all still here.
+   */
+  onOpen?: () => void
 }
 
 function fieldType(input: McpStoreInput): string {
   return input.kind === 'secret' ? 'password' : 'text'
 }
 
-export function McpStoreRow({ row, busy, values, said, arming, onValue, onAct, onArm }: Props) {
+export function McpStoreRow({
+  row,
+  busy,
+  values,
+  said,
+  arming,
+  onValue,
+  onAct,
+  onArm,
+  onOpen,
+}: Props) {
   const missing = unfilled(row, values)
   const verb = actionVerb(row)
   const blocked = missing.length > 0
@@ -109,7 +128,7 @@ export function McpStoreRow({ row, busy, values, said, arming, onValue, onAct, o
   return (
     <li className="mcp-store-row" data-state={row.state}>
       <div className="mcp-store-head">
-        <span className="mcp-store-name">{row.name}</span>
+        <StoreRowName name={row.name} className="mcp-store-name" onOpen={onOpen} />
         <span className="mcp-tag">{ORIGIN_WORDS[row.origin]}</span>
         <span className="mcp-tag">{row.licence}</span>
         <span className="mcp-store-version">{row.version}</span>

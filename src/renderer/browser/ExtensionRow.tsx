@@ -9,6 +9,7 @@ import {
   type StoreExtension,
 } from './extensions-bridge'
 import { StoreLinkOut } from '../store/StoreLinkOut'
+import { StoreRowName } from '../store/StoreRowName'
 
 /**
  * One row of the store's download half — an open-source browser extension.
@@ -65,6 +66,16 @@ interface RowProps {
   onEnable(on: boolean): void
   onOpenPopup(): void
   onOpenOptions(): void
+  /**
+   * Open this extension on its own, when there is a page that can show it.
+   *
+   * Absent everywhere there is not — see `store/StoreRowName.tsx`. It adds a
+   * way to *look at* one row and takes nothing off this one: every fact below,
+   * the download URL and the fingerprint included, is drawn here whether or not
+   * anybody presses it. `StorePanel.test.tsx` pins that, and it is the reason a
+   * detail view was refused the first time it was proposed.
+   */
+  onOpen?: () => void
 }
 
 /**
@@ -85,6 +96,7 @@ export function ExtensionRow({
   onEnable,
   onOpenPopup,
   onOpenOptions,
+  onOpen,
 }: RowProps) {
   const actionable = canAct(extension)
   const isInstalled = extension.state === 'installed'
@@ -94,7 +106,7 @@ export function ExtensionRow({
   return (
     <li className="bw-store-row">
       <div className="bw-store-head">
-        <span className="bw-store-name">{extension.name}</span>
+        <StoreRowName name={extension.name} className="bw-store-name" onOpen={onOpen} />
         {/* A version only when there is a release this app has actually got
             hold of. A number under a name this app has never run would be one
             more true-looking thing that is not a measurement. */}

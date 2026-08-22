@@ -7,6 +7,7 @@ import { GitPanel, type GitFileGroup } from '../components/GitPanel'
 import { GitHubPanel } from '../components/GitHubPanel'
 import { ReadinessPanel } from '../components/ReadinessPanel'
 import { McpInspector } from '../components/McpInspector'
+import { StorePage } from '../store/StorePage'
 import { HooksPanel } from '../components/HooksPanel'
 import { PageEmpty } from '../components/PageEmpty'
 import { PageScope } from '../components/PageScope'
@@ -35,6 +36,17 @@ interface Props {
    * covering all ten would put every panel's internals in this file.
    */
   focus?: string | null
+  /**
+   * Send the window to another view.
+   *
+   * Not a per-view prop, which is what the note further down refuses: it is how
+   * *any* page hands the reader to another one, and it exists because the store
+   * stopped being two dialogs. The MCP page had a Store tab and the browser had
+   * a Store row in its three-dot menu; both now open the Store **page**, so
+   * there is one implementation of the store and three doors into it rather
+   * than two implementations and two doors. See `store/StorePage.tsx`.
+   */
+  onShowPanel(id: PanelId): void
   /*
    * There was a `showInsights` and an `onAlertAction` here, and both left with
    * the Alerts page: *"notifications should be a pop-up just like settings,
@@ -299,6 +311,7 @@ export function PanelView({
   openFile,
   onOpenFile,
   focus,
+  onShowPanel,
   dashboard,
 }: Props) {
   const spec = panelSpec(panel)
@@ -322,7 +335,20 @@ export function PanelView({
       case 'hooks':
         return <HooksPanel />
       case 'mcp':
-        return <McpInspector projectPath={projectPath} />
+        return <McpInspector projectPath={projectPath} onOpenStore={() => onShowPanel('store')} />
+      /*
+       * Above the project gate, with `hooks`, `mcp` and `remote`.
+       *
+       * A store does not become browsable because you opened a folder. It is
+       * most worth reading on a fresh install where nothing has been opened
+       * yet — which is exactly when somebody is deciding whether this app can
+       * do the thing they came for — so gating it would hide the shop at the
+       * one moment it matters most. The folder is still *passed*, because one
+       * department can install a server for **this project** and needs to know
+       * whether there is one.
+       */
+      case 'store':
+        return <StorePage projectPath={projectPath} />
       /*
        * Above the project gate, deliberately — like `hooks` and `mcp`.
        *

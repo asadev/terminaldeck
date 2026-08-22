@@ -29,8 +29,26 @@ import { ANY, type FacetControl, type StoreFacet, type StoreFilter } from './sto
  */
 
 interface Props {
-  /** What the search box is labelled and what it suggests. Each store's own. */
-  placeholder: string
+  /**
+   * What the search box suggests. Each store's own — and optional, because a bar
+   * drawn with `search` off has no box to put it in and a placeholder for a
+   * control that is not there is a string nobody will ever read.
+   */
+  placeholder?: string
+  /**
+   * Whether this bar draws the search box.
+   *
+   * `false` on the store page, where **one** box searches both departments and
+   * each department draws only its own chips. Two boxes on one screen is worse
+   * than one in a way that is easy to underrate: the second one looks like it
+   * searches the store and searches half of it, and whichever half a person
+   * happens to type into decides what they conclude the store contains.
+   *
+   * The count and the Clear button stay either way. They are per-department
+   * truths — *6 of 24* under **Browser extensions** means something the page's
+   * own total cannot say — and Clear is the way out of a filter this bar set.
+   */
+  search?: boolean
   filter: StoreFilter
   /** Every facet worth drawing, from `facetControls`. */
   controls: readonly FacetControl[]
@@ -48,7 +66,8 @@ interface Props {
 }
 
 export function StoreFilterBar({
-  placeholder,
+  placeholder = '',
+  search = true,
   filter,
   controls,
   showing,
@@ -60,21 +79,34 @@ export function StoreFilterBar({
   active,
 }: Props) {
   const searchId = `${idPrefix}-storefront-search`
+  /*
+   * A bar with nothing in it is not drawn at all.
+   *
+   * It can genuinely happen now that the store page carries the search box and
+   * the shelves: a department with two rows that agree about everything has no
+   * facet worth a chip, nothing typed and nothing filtered, and what was left
+   * here was an empty flex container with a gap under a heading. That is the
+   * same "control that does nothing" the whole bar is built around avoiding,
+   * just spelled as furniture instead of as a button.
+   */
+  if (!search && controls.length === 0 && !active) return null
   return (
     <div className="storefront">
-      <div className="storefront-top">
-        <label className="storefront-search" htmlFor={searchId}>
-          <span className="storefront-search-label">Search</span>
-          <input
-            id={searchId}
-            type="search"
-            value={filter.query}
-            placeholder={placeholder}
-            autoComplete="off"
-            spellCheck={false}
-            onChange={(event) => onQuery(event.target.value)}
-          />
-        </label>
+      <div className="storefront-top" data-searchless={search ? undefined : true}>
+        {search && (
+          <label className="storefront-search" htmlFor={searchId}>
+            <span className="storefront-search-label">Search</span>
+            <input
+              id={searchId}
+              type="search"
+              value={filter.query}
+              placeholder={placeholder}
+              autoComplete="off"
+              spellCheck={false}
+              onChange={(event) => onQuery(event.target.value)}
+            />
+          </label>
+        )}
         {/*
           The count, and the way out. Both only once something is filtered: a
           store that says "24 of 24" before anybody has touched it is noise, and

@@ -1,4 +1,5 @@
 import { GRANT_WORDS, originWords, type StoreTool } from './store-bridge'
+import { StoreRowName } from '../store/StoreRowName'
 
 /**
  * One row of the store's built-in half — a page-reading tool.
@@ -58,6 +59,8 @@ interface RowProps {
   /** The sentence the last press on this row produced. */
   said: string
   onAct(verb: 'install' | 'remove'): void
+  /** Open this tool on its own, where there is a page that can show it. */
+  onOpen?: () => void
 }
 
 /**
@@ -67,13 +70,13 @@ interface RowProps {
  * test setup, so a dialog's first paint under SSR is an empty shell and the row
  * is where everything worth asserting lives.
  */
-export function ToolRow({ tool, busy, said, onAct }: RowProps) {
+export function ToolRow({ tool, busy, said, onAct, onOpen }: RowProps) {
   const verb = actionVerb(tool)
   const installed = tool.state === 'installed'
   return (
     <li className="bw-store-row">
       <div className="bw-store-head">
-        <span className="bw-store-name">{tool.name}</span>
+        <StoreRowName name={tool.name} className="bw-store-name" onOpen={onOpen} />
         <span className="bw-store-version">{tool.version}</span>
         {/* The state, said rather than implied by which button is drawn — in
             the unified store the built-in section is one list, so a row carries

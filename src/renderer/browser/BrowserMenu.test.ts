@@ -100,19 +100,19 @@ describe('the everyday rows he named, and only the ones that exist', () => {
     expect(onScreen).toContain('{onPasswords && (')
   })
 
-  it('draws one Tools store row, because the store is one place', () => {
+  it('draws one Store row, because the store is one place', () => {
     // His ask was one store — "a tools store for extensions to this browser
     // with all open source best tools in the market … which tools will not be
     // here only when they download". Two doors (Tools with nothing that
     // downloads, Extensions with the downloads) was that ask inverted, so the
     // menu carries exactly one door and no separate Extensions row.
     expect(onScreen).toContain('onTools')
-    expect(onScreen).toMatch(/>\s*Tools store\s*</)
+    expect(onScreen).toMatch(/>\s*Store\s*</)
     expect(onScreen).not.toContain('onExtensions')
     expect(onScreen).not.toMatch(/>\s*Extensions\s*</)
   })
 
-  it('leaves the Tools store out entirely on a build whose preload cannot answer', () => {
+  it('leaves the Store row out entirely on a build whose preload cannot answer', () => {
     // Absent, not disabled — the same bargain History and Settings make.
     // `store-bridge.ts` and `extensions-bridge.ts` say what counts as wired for
     // each half; either half alone earns the row, and the dialog behind it

@@ -120,6 +120,34 @@
   background: var(--fill-secondary);
 }
 
+/* The way to the store, which used to be the second half of a two-segment
+   switch on this page.
+
+   It is a link and not a button-shaped thing, because it *leaves*: the store is
+   a page of its own now, holding this catalogue beside the browser's
+   extensions. A filled control here would read as "do something to what you are
+   looking at", and the chevron plus the accent colour is the app's own way of
+   saying "somewhere else". Left-aligned above the page's own content, where the
+   switch sat, so nobody who knew where the store was has to go looking. */
+.mcp-to-store {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  align-self: flex-start;
+  height: var(--control-h);
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+  font-family: inherit;
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.mcp-to-store:hover {
+  background: var(--fill-tertiary);
+}
+
 /* The second press of Remove, in the colour of what it does.
 
    The same two states `CloseSessionConfirm.css` gives Delete, and for the same

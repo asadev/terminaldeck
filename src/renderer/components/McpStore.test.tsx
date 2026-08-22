@@ -180,14 +180,25 @@ describe('installed', () => {
     expect(heading('Installed')).toBeLessThan(heading('Databases'))
   })
 
-  it('puts the search and the filters above everything they govern', () => {
+  it('puts the filters above everything they govern', () => {
     // Including the Installed section: choosing "Not configured" has to be able
     // to empty it, and a control that filters what is above it reads as broken.
     const view = { ...VIEW, rows: [row({ state: 'installed', scope: 'user' }), POSTGRES] }
     const markup = render({ view })
-    expect(markup.indexOf('storefront-search')).toBeLessThan(
+    expect(markup.indexOf('storefront-facet')).toBeGreaterThan(-1)
+    expect(markup.indexOf('storefront-facet')).toBeLessThan(
       markup.indexOf('mcp-store-heading">Installed<'),
     )
+  })
+
+  it('draws no search box of its own, because the page above carries one', () => {
+    /*
+     * This body is one **department** of the store page now, and the page has a
+     * single box that searches both it and the browser's extensions. A second
+     * box under this heading would search half a store while looking like it
+     * searched all of it — see `store/StorePage.tsx`.
+     */
+    expect(render()).not.toContain('storefront-search')
   })
 
   it('says everything is configured rather than showing an empty browse area', () => {

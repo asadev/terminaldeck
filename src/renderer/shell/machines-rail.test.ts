@@ -56,6 +56,12 @@ describe('Machines in the rail', () => {
       'files',
       'artifacts',
       'git',
+      // `store` is the one row added to this rail since, and it is not a
+      // counter-example to the requirement above — it *removed* two surfaces
+      // rather than adding one. The store was a modal inside the browser and a
+      // tab on the MCP page; it is one page now, and both of those are gone.
+      // See the note beside `store` in `shell/panels.ts`.
+      'store',
       'github',
       'readiness',
       'mcp',

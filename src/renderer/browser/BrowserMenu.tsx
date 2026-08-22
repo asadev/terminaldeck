@@ -99,14 +99,20 @@ interface Props {
    */
   onDownloads?: () => void
   /**
-   * Open the tools store — one dialog holding both the open-source extension
-   * downloads and the built-in page-reading tools, `StorePanel.tsx`.
+   * Go to the Store — the page holding this browser's extensions beside the MCP
+   * catalogue, `store/StorePage.tsx`.
+   *
+   * It used to open a dialog over this browser. *"Store must be like a proper
+   * store with full page not just popup."* So this row **navigates**, and the
+   * name it wears is the name of the place it leads to, which is the same word
+   * on the sidebar row and in the window's own bar. "Tools store" was a third
+   * spelling of one thing.
    *
    * Absent when the preload can wire neither half — see `storeAvailable` and
-   * `extensionsAvailable`; either half alone earns the row, and the panel
-   * draws only what is wired. Absent rather than disabled, for the reason
-   * `onHistory` gives above: disabled says *"not now"*, and the truth in that
-   * build is *"not at all"*.
+   * `extensionsAvailable`; either half alone earns the row, and the page draws
+   * only what is wired. Absent rather than disabled, for the reason `onHistory`
+   * gives above: disabled says *"not now"*, and the truth in that build is
+   * *"not at all"*.
    */
   onTools?: () => void
   onClose(): void
@@ -255,17 +261,18 @@ export function BrowserMenu({
           One row where there were two. Tools held six built-in recipes and
           Extensions held the open-source downloads, which was his one ask split
           so that the surface called the tools store contained nothing that
-          downloads. The store is one dialog now — `StorePanel.tsx` — and the
+          downloads. The store is one place now — `store/StorePage.tsx` — and the
           real difference the second row used to carry (a tool is selectors this
-          app runs; an extension is a program somebody else wrote) is drawn by
-          that dialog's sections, on the rows themselves, where it is beside the
-          Install it qualifies rather than out here as two doors.
+          app runs; an extension is a program somebody else wrote) is drawn on
+          the rows themselves, where it is beside the Install it qualifies rather
+          than out here as two doors.
 
           Beside Downloads because it is the same kind of row — about this browser
-          rather than about this page — and it is the **only** door to the store,
-          which is why it is a standing row rather than a button that appears once
-          something is installed. A store nobody can find is a store with nothing
-          in it.
+          rather than about this page. It is no longer the *only* door: the store
+          has a row in the sidebar and a row in the command palette, which is the
+          whole of what this round changed. It stays here anyway, because this is
+          where somebody standing in the browser goes looking for it, and the one
+          rule a store has to obey is that people can find it.
         */}
         {onTools && (
           <button
@@ -276,7 +283,7 @@ export function BrowserMenu({
               onClose()
             }}
           >
-            Tools store
+            Store
           </button>
         )}
 

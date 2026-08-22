@@ -60,6 +60,61 @@
  * remembered id would fill the window at the next launch with a page nothing
  * renders.
  */
+/**
+ * There **is** a `store` here, and it is the first id added to this union in a
+ * long time — so it owes the three absences above an argument rather than a
+ * shrug.
+ *
+ * The store was two surfaces: a modal dialog inside the browser chrome, and the
+ * second tab of the MCP servers page. Asad, on finding it:
+ *
+ *   > *"store must be like a proper store with full page not just popup, and
+ *   > should allow custom tools and store, and maybe some other tools paid ones
+ *   > too not just open source, with logos, and also all other regular tools too
+ *   > like google's ones or like this"*
+ *
+ * ## It passes the test each absence above failed
+ *
+ * `alerts` left because it is a **pop-up** — something you open over where you
+ * already are, glance at, and dismiss. `copilot` left because it is a
+ * **window** — a real session with a pty behind it. `machines` left because it
+ * was a **second screen about one subject**, and the two drifted.
+ *
+ * A store is none of those three. It is a place you **go**, browse, come back
+ * to, and leave with something installed — the same category of thing as Files
+ * or Source control, and the thing every other surface in this app that people
+ * *look for* has become. It was a dialog for exactly the reason
+ * `browser/StorePanel.tsx` gave: the browser chrome has no page to put one on.
+ * That argument stopped applying the moment the store stopped being only the
+ * browser's.
+ *
+ * And it fixes a `machines`-shaped problem rather than creating one. There were
+ * **two** stores — browser extensions behind a three-dot menu, MCP servers
+ * behind a tab — with one shared search model between them and no single place
+ * that held both. That is the *"they should be one"* complaint in its original
+ * form. This entry is the one place; the two old doors now navigate here, and
+ * neither draws a store of its own any more.
+ *
+ * ## What being in this union costs, and why it is paid
+ *
+ * Being here makes the store a route the window can be **restored into** at the
+ * next launch, which is what the note on `alerts` warns about. That is correct
+ * for a store and wrong for a dialog: coming back to the app where you left it
+ * — mid-browse, mid-search — is what a page is for, and the page needs nothing
+ * from any other screen to draw itself.
+ *
+ * `reachable.test.ts` requires a member of this union to have a case in
+ * `PanelView` that renders. It has one: `store/StorePage.tsx`.
+ *
+ * It is owned by **no feature** in `features/registry.ts`, and that is
+ * deliberate rather than an omission. A panel can be owned by one feature, and
+ * this page has two departments belonging to two different ones — uninstalling
+ * the browser pane would take the MCP half of the store with it, which is the
+ * *"empty section"* failure that table exists to prevent. So the page is core
+ * and each **department** asks the registry for itself: with the browser pane
+ * uninstalled the extensions half is absent, not disabled, and the store is
+ * still a store.
+ */
 export type PanelId =
   | 'overview'
   | 'files'
@@ -67,6 +122,7 @@ export type PanelId =
   | 'git'
   | 'github'
   | 'readiness'
+  | 'store'
   | 'mcp'
   | 'hooks'
   | 'remote'
@@ -223,6 +279,32 @@ export const PANELS: PanelSpec[] = [
     group: 'project',
     command: 'view.git',
     icon: 'M7 5.5v8.2a3 3 0 0 0 3 3h4.5M7 19.5a2.4 2.4 0 1 0 0-4.8 2.4 2.4 0 0 0 0 4.8zM7 8.3a2.4 2.4 0 1 0 0-4.8 2.4 2.4 0 0 0 0 4.8zM17 19.1a2.4 2.4 0 1 0 0-4.8 2.4 2.4 0 0 0 0 4.8z',
+  },
+  {
+    /*
+     * First in the run, and above GitHub, because it is the door the rest of
+     * this group comes through.
+     *
+     * Every other row under Integrations is *a connection this app already has*
+     * — a remote on GitHub, the tool servers your agents can reach, the agent
+     * CLIs, a computer across the room. This row is where those come from, and
+     * the one complaint that produced it was that nobody could find it: it was a
+     * row in a three-dot menu inside the browser, and a tab on a page you had to
+     * already be on. A store nobody can find is a store with nothing in it.
+     *
+     * The glyph is a shopping bag rather than a grid or a plug. It is the one
+     * drawing in the rail that says *you leave here with something*, which is
+     * true of no other row, and it stays right now that the catalogue is not
+     * only free software.
+     *
+     * No `command`: the palette opens it by name (`view.store`), the way it
+     * opens MCP servers and Hooks, and inventing a chord for a page nobody
+     * visits twice an hour would spend one of the few left.
+     */
+    id: 'store',
+    label: 'Store',
+    group: 'integrations',
+    icon: 'M5.5 8h13l-1 11.5h-11zM9 8V6.2a3 3 0 0 1 6 0V8',
   },
   {
     id: 'github',

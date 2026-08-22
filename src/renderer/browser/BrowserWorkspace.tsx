@@ -15,7 +15,6 @@ import { DrawPanel } from './DrawPanel'
 import { RecorderPanel } from './RecorderPanel'
 import { ScreenshotPopup } from './ScreenshotPopup'
 import { HistoryPanel } from './HistoryPanel'
-import { StorePanel } from './StorePanel'
 import { ProfileSettings } from './ProfileSettings'
 import { ScrapingPanel } from './ScrapingPanel'
 import { SessionModal } from './SessionModal'
@@ -335,6 +334,19 @@ export interface BrowserWorkspaceProps {
    */
   onSettings?: () => void
   /**
+   * Take the window to the Store page.
+   *
+   * The store used to be a modal drawn by this panel, and it is not any more —
+   * *"store must be like a proper store with full page not just popup"* — so
+   * the three-dot row navigates instead of opening something. Exactly the same
+   * shape as `onSettings` above and for the same reason: the panel does not know
+   * how a page in this app is opened, because it is a page *inside* one.
+   *
+   * Absent on a host that has no rail to send anybody to — the harness, an
+   * embedder — and then the row is simply not drawn.
+   */
+  onOpenStore?: () => void
+  /**
    * Kept for hosts that still pass it; nothing in this panel calls it.
    *
    * It used to be the only route out of the browser, and it went to
@@ -587,6 +599,7 @@ export function BrowserWorkspace({
   initialMachineId = '',
   onStartUrl,
   onSettings,
+  onOpenStore,
   bridge,
   sessionBridge,
   serverShells,
@@ -786,16 +799,17 @@ export function BrowserWorkspace({
   const [downloadsOpen, setDownloadsOpen] = useState(false)
 
   /*
-   * The tools store.
+   * The two store bridges, resolved once and asked for nothing at all.
    *
-   * Resolved once and asked for nothing until the panel opens — a store has no
-   * badge, no push and nothing to say while it is shut, so reading it at mount
-   * would be a disk read per browser panel for a dialog most sessions never
-   * open. The panel loads its own list, the way `HistoryPanel` does.
+   * Nothing here reads them any more — the store is a page and it does its own
+   * reading. They are still resolved because the three-dot row is gated on
+   * them: a build whose preload can list neither extensions nor built-in tools
+   * has no store to send anybody to, and the row is absent rather than leading
+   * to an empty shop. `storeAvailable` and `extensionsAvailable` are pure
+   * lookups on the preload object, so this costs nothing.
    */
   const store = useMemo(() => resolveStoreApi(), [])
   const extensions = useMemo(() => resolveExtensionsApi(), [])
-  const [storeOpen, setStoreOpen] = useState(false)
 
   /*
    * ---------------------------------------------------------------------------
@@ -3436,14 +3450,25 @@ export function BrowserWorkspace({
               ? () => openAt(menuButtonRef.current, () => setDownloadsOpen(true))
               : undefined
           }
-          /* The only door to the store, so it goes with the thing behind it:
-             absent on a preload that can wire neither half, rather than a row
-             that opens a panel whose buttons could never work. Either half
-             alone earns the row — the panel draws only the half that is wired,
-             absent-not-disabled section by section. */
+          /*
+             The way to the store — which is a **page** now, not a dialog over
+             this browser.
+             *"store must be like a proper store with full page not just
+             popup."* So this row navigates: it closes the menu and sends the
+             window to the Store, where the extensions this browser can load sit
+             beside the servers your agents can reach, under one search box.
+
+             Still gated on the same two bridges, and for the same reason: a row
+             that leads to a store neither half of which this build can list is a
+             row that leads nowhere. And still gated on the window having given
+             us somewhere to go — a `BrowserWorkspace` mounted without
+             `onOpenStore` draws no row rather than a dead one. */
           onTools={
-            storeAvailable(store) || extensionsAvailable(extensions)
-              ? () => openAt(null, () => setStoreOpen(true))
+            onOpenStore !== undefined && (storeAvailable(store) || extensionsAvailable(extensions))
+              ? () => {
+                  setMenuOpen(false)
+                  onOpenStore()
+                }
               : undefined
           }
           onClose={() => setMenuOpen(false)}
@@ -3568,20 +3593,22 @@ export function BrowserWorkspace({
       />
 
       {/*
-        The one store — downloads and built-ins in one dialog, the distinction
-        drawn by its sections. It opens on the profile the browser is actually
-        in, so the first thing its download half says — what is installed
-        *here* — is about the pages in front of the person rather than about
-        whichever profile came first in a list. `browser-extensions.ts` has the
-        argument for why an extension is never a global fact.
+        There was a `<StorePanel>` here — the store as a modal over this browser
+        — and it is gone rather than moved.
+
+        It was a dialog for a good reason: this workspace is a chrome with tabs
+        in it and there was no page to put a store on. There is one now
+        (`store/StorePage.tsx`), holding this browser's extensions *and* the MCP
+        catalogue under one search box, so a dialog here would be the second copy
+        of a store, which is the thing that made the store unfindable in the
+        first place. The three-dot row above navigates to it.
+
+        The profile is the one thing that did not travel, and it did not need to:
+        `browser-extension:list` answers with whichever profile is current when
+        it is asked for one it does not recognise, and it says which that was —
+        so the page settles on the same profile this browser is in, without the
+        page having to know a browser exists.
       */}
-      <StorePanel
-        open={storeOpen}
-        store={store}
-        extensions={extensions}
-        profileId={activeProfileId}
-        onClose={() => setStoreOpen(false)}
-      />
     </div>
   )
 }

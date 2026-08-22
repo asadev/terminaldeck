@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Modal } from '../components/Modal'
 import {
   readStoreResult,
   readStoreView,
   storeAvailable,
   type StoreApi,
+  type StoreTool,
   type StoreView,
 } from './store-bridge'
 import {
@@ -22,20 +22,44 @@ import {
 import { ToolRow } from './ToolRow'
 import { ExtensionRow } from './ExtensionRow'
 import { StoreFilterBar } from '../store/StoreFilterBar'
+import { StoreDetail } from '../store/StoreDetail'
+import { withoutShelf } from '../store/store-nav'
 import {
+  ANY,
   facetControls,
   filtering as anyFilter,
   matchesFilter,
+  matchesQuery,
   NO_FILTER,
   shelve,
   withFacet,
   type StoreFacet,
+  type StoreFacets,
   type StoreFilter,
 } from '../store/storefront'
 
 /**
- * The tools store. One door, one dialog, both kinds of thing — with the line
- * between them drawn on screen.
+ * The browser half of the store: extensions and the built-in page-reading tools,
+ * with the line between them drawn on screen.
+ *
+ * ## The file is still called `StorePanel.tsx`, and that is deliberate
+ *
+ * There is no panel in it any more. The name is kept because three other lanes
+ * were editing this file the week it changed, and renaming a file is the one
+ * edit that turns every one of their diffs into a conflict for no gain. What a
+ * reader needs is this paragraph, not a different filename.
+ *
+ * ## It was a dialog and it is a department
+ *
+ * This was a modal over the browser chrome — *"the browser has no page to put
+ * one on"* — and that argument stopped applying when the store got a page of its
+ * own. Asad: *"store must be like a proper store with full page not just
+ * popup."* So the `<Modal>` is gone and what is left is a **section**, mounted
+ * by `store/StorePage.tsx` beside the MCP department, with the search box and
+ * the shelf rail owned by the page above it. Everything below that line — what a
+ * row may claim, which rows get an Install, where the bytes come from — is
+ * unchanged, and deliberately so: it was never about the surface it was drawn
+ * on.
  *
  *   > *"i think we can have a tools store for extensions to this browser with
  *   > all open source best tools in the market so people can use the tool of
@@ -112,12 +136,43 @@ import {
  */
 
 interface Props {
-  open: boolean
   store: StoreApi
   extensions: ExtensionsApi
-  /** The profile the browser is on, so the extension half opens on the right one. */
-  profileId: string
-  onClose(): void
+  /**
+   * What the store page is searching and filtering for.
+   *
+   * Controlled from above rather than kept here, and that is the whole point of
+   * there being a page: **one** search box searches the whole store, and this
+   * department is handed whatever it produced with its own shelf applied. See
+   * `store/store-nav.ts` for why the shelf cannot simply live in this value for
+   * both departments at once.
+   */
+  filter: StoreFilter
+  onFilter(next: StoreFilter): void
+  /**
+   * The one row being looked at on its own, or `''`.
+   *
+   * A row id, not a key: the page has already decided this department owns it.
+   * When it is set, this draws that row and nothing else — see
+   * {@link StoreDetail}, and note that the row itself is the *same component*
+   * the shelves draw, so a detail view cannot end up saying less than the list
+   * it came from. `StorePanel.test.tsx` pins that: the download URL and the
+   * fingerprint are on the browsing screen, not hidden behind a click.
+   */
+  detail: string
+  onDetail(key: string): void
+  /**
+   * What this department loaded, as the shared storefront model sees it.
+   *
+   * The page's rail counts every shelf across both departments, and it cannot
+   * count what it has not read. Rather than hoist two catalogues' worth of
+   * loading, network handling and per-row failure into the page — which would
+   * make the page the thing that has to know about `.crx` signatures and
+   * `npx` — each department reports the one projection they already both share.
+   * `store/store-nav.ts` takes {@link StoreFacets} and nothing else, so the rail
+   * has no idea which half of the store it is counting.
+   */
+  onRows(rows: StoreFacets[]): void
 }
 
 const EMPTY_TOOLS: StoreView = { tools: [], folder: '', orphans: [] }
@@ -132,7 +187,15 @@ const EMPTY_EXTENSIONS: ExtensionsView = {
   limits: [],
 }
 
-export function StorePanel({ open, store, extensions, profileId, onClose }: Props) {
+export function BrowserStoreDepartment({
+  store,
+  extensions,
+  filter,
+  onFilter,
+  detail,
+  onDetail,
+  onRows,
+}: Props) {
   const toolsWired = storeAvailable(store)
   const extensionsWired = extensionsAvailable(extensions)
 
@@ -141,25 +204,22 @@ export function StorePanel({ open, store, extensions, profileId, onClose }: Prop
   const [ext, setExt] = useState<ExtensionsView>(EMPTY_EXTENSIONS)
   const [extProblem, setExtProblem] = useState('')
   const [loaded, setLoaded] = useState(false)
-  /** Which profile the extension half is showing. Starts at the browser's own. */
-  const [showing, setShowing] = useState(profileId)
+  /**
+   * Which profile the extension half is showing.
+   *
+   * `''` until the first list comes back, and then whatever that list says it
+   * read. This used to be handed in by the browser, because the store only ever
+   * opened from inside one; the page can be reached with no browser open at all,
+   * so the answer has to come from the same place the rows do. `''` is not a
+   * guess sent down the wire either — `browser-extension:list` answers an
+   * unrecognisable id with the profile that is actually current, and says which
+   * one that was, which is the value this then settles on.
+   */
+  const [showing, setShowing] = useState('')
   /** Prefixed row key → the sentence the last action on that row produced. */
   const [said, setSaid] = useState<Record<string, string>>({})
   /** The row with something in flight, so its button can say so. */
   const [busy, setBusy] = useState('')
-  /**
-   * What is being searched and filtered for, as one value.
-   *
-   * One piece of state rather than five, and it is the same shape the MCP store
-   * keeps — `store/storefront.ts` owns every decision made from it, so the two
-   * stores cannot end up disagreeing about what a partial word is or when a chip
-   * should be drawn.
-   */
-  const [filter, setFilter] = useState<StoreFilter>(NO_FILTER)
-
-  useEffect(() => {
-    if (open) setShowing(profileId)
-  }, [open, profileId])
 
   const loadTools = useCallback(async () => {
     if (!store.browserStore) return
@@ -175,7 +235,13 @@ export function StorePanel({ open, store, extensions, profileId, onClose }: Prop
   const loadExtensions = useCallback(async () => {
     if (!extensions.browserExtensions) return
     try {
-      setExt(readExtensionsView(await extensions.browserExtensions(showing)))
+      const view = readExtensionsView(await extensions.browserExtensions(showing))
+      setExt(view)
+      // The profile this page is talking about, settled off the answer rather
+      // than assumed — see `showing` above. Only ever from `''`: once somebody
+      // has chosen a profile in the picker, a reload must not drag them back to
+      // whichever one the browser happens to be on.
+      setShowing((was) => (was === '' ? view.profileId : was))
       setExtProblem('')
     } catch (error) {
       setExt(EMPTY_EXTENSIONS)
@@ -184,9 +250,20 @@ export function StorePanel({ open, store, extensions, profileId, onClose }: Prop
   }, [extensions, showing])
 
   useEffect(() => {
-    if (!open) return
     void Promise.all([loadTools(), loadExtensions()]).then(() => setLoaded(true))
-  }, [open, loadTools, loadExtensions])
+  }, [loadTools, loadExtensions])
+
+  /*
+   * Tell the page what is on the shelves, whenever that changes.
+   *
+   * Keyed on the two loaded views rather than on a derived array, so this fires
+   * once per read and not once per render — a fresh array in the dependency list
+   * would be a new value every time and the page would re-render this component
+   * for ever.
+   */
+  useEffect(() => {
+    onRows([...ext.extensions.map(extensionFacets), ...tools.tools.map(builtInFacets)])
+  }, [ext, tools, onRows])
 
   const actTool = useCallback(
     async (id: string, verb: 'install' | 'remove') => {
@@ -317,37 +394,146 @@ export function StorePanel({ open, store, extensions, profileId, onClose }: Prop
     [extensions, showing, loadExtensions],
   )
 
+  if (!loaded) return null
+
+  /*
+   * One row, on its own, when the page has been sent to one.
+   *
+   * Resolved out of the same two views the shelves are drawn from, so a detail
+   * view cannot outlive the row it names: an extension removed from the
+   * catalogue by an update, or a tool that was uninstalled in another window,
+   * finds nothing here and the page falls back to the shelves rather than
+   * drawing a frame around an empty space.
+   */
+  const openExtension = ext.extensions.find((one) => `e:${one.id}` === detail)
+  const openTool = tools.tools.find((one) => `t:${one.id}` === detail)
+  if (openExtension) {
+    return (
+      <StoreDetail
+        backTo={CATEGORY_NAMES[openExtension.category] ?? 'the store'}
+        onBack={() => onDetail('')}
+      >
+        <ul className="bw-store-list">
+          <ExtensionRow
+            extension={openExtension}
+            busy={busy === `e:${openExtension.id}`}
+            said={said[`e:${openExtension.id}`] ?? ''}
+            canOpenPopup={typeof extensions.browserExtensionPopup === 'function'}
+            canOpenOptions={typeof extensions.browserExtensionOptions === 'function'}
+            onAct={(verb) => void actExtension(openExtension.id, verb)}
+            onEnable={(on) => void setEnabled(openExtension.id, on)}
+            onOpenPopup={() => void openPopup(openExtension.id)}
+            onOpenOptions={() => void openOptions(openExtension.id)}
+          />
+        </ul>
+      </StoreDetail>
+    )
+  }
+  if (openTool) {
+    return (
+      <StoreDetail
+        backTo="Built into this app"
+        onBack={() => onDetail('')}
+      >
+        <ul className="bw-store-list">
+          <ToolRow
+            tool={openTool}
+            busy={busy === `t:${openTool.id}`}
+            said={said[`t:${openTool.id}`] ?? ''}
+            onAct={(verb) => void actTool(openTool.id, verb)}
+          />
+        </ul>
+      </StoreDetail>
+    )
+  }
+
   return (
-    <Modal open={open} title="Tools store" onClose={onClose} size="lg">
-      {!loaded ? null : (
-        <StoreBody
-          toolsWired={toolsWired}
-          extensionsWired={extensionsWired}
-          tools={tools}
-          toolsProblem={toolsProblem}
-          ext={ext}
-          extProblem={extProblem}
-          showing={showing}
-          busy={busy}
-          said={said}
-          canOpenPopup={typeof extensions.browserExtensionPopup === 'function'}
-          canOpenOptions={typeof extensions.browserExtensionOptions === 'function'}
-          canAddFolder={typeof extensions.browserExtensionAddFolder === 'function'}
-          canAddCrx={typeof extensions.browserExtensionAddCrx === 'function'}
-          filter={filter}
-          onShowProfile={setShowing}
-          onFilter={setFilter}
-          onTool={(id, verb) => void actTool(id, verb)}
-          onExtension={(id, verb) => void actExtension(id, verb)}
-          onEnable={(id, on) => void setEnabled(id, on)}
-          onOpenPopup={(id) => void openPopup(id)}
-          onOpenOptions={(id) => void openOptions(id)}
-          onAddOwn={(kind) => void addOwn(kind)}
-        />
-      )}
-    </Modal>
+    <StoreBody
+      toolsWired={toolsWired}
+      extensionsWired={extensionsWired}
+      tools={tools}
+      toolsProblem={toolsProblem}
+      ext={ext}
+      extProblem={extProblem}
+      showing={showing}
+      busy={busy}
+      said={said}
+      canOpenPopup={typeof extensions.browserExtensionPopup === 'function'}
+      canOpenOptions={typeof extensions.browserExtensionOptions === 'function'}
+      canAddFolder={typeof extensions.browserExtensionAddFolder === 'function'}
+      canAddCrx={typeof extensions.browserExtensionAddCrx === 'function'}
+      filter={filter}
+      onShowProfile={setShowing}
+      onFilter={onFilter}
+      onOpenRow={onDetail}
+      onTool={(id, verb) => void actTool(id, verb)}
+      onExtension={(id, verb) => void actExtension(id, verb)}
+      onEnable={(id, on) => void setEnabled(id, on)}
+      onOpenPopup={(id) => void openPopup(id)}
+      onOpenOptions={(id) => void openOptions(id)}
+      onAddOwn={(kind) => void addOwn(kind)}
+    />
   )
 }
+
+/* ------------------------------------------------------------ the shelves -- */
+
+/**
+ * The shelf the six built-in page-reading tools sit on.
+ *
+ * They were a *section* and never a shelf — the store's model has always seen
+ * extensions and nothing else, so `Built into this app` was drawn below whatever
+ * the filter left and was not affected by it. In a dialog that was merely
+ * untidy. On a page with one search box across the whole store it is a lie:
+ * typing `postgres` would print *"Nothing in the store matches that"* directly
+ * above six rows that were still sitting there.
+ *
+ * So it is a shelf now, in the rail, with a count like every other. The id is
+ * deliberately not one of `ExtensionCategory` — nothing can install an extension
+ * onto it by accident, and an extension row can never match it.
+ */
+export const BUILT_IN_SHELF = 'built-in'
+
+/**
+ * A built-in tool, as the storefront model sees it.
+ *
+ * Only what is true of a thing that ships in the app's own bytes. `compat` is
+ * `works` because this app wrote it and runs it in its own engine — that is a
+ * measurement, not a hope — and `source` is its own word so it can never be
+ * confused with a release somebody else published.
+ */
+export function builtInFacets(tool: StoreTool): StoreFacets {
+  return {
+    id: tool.id,
+    name: tool.name,
+    summary: tool.summary,
+    category: BUILT_IN_SHELF,
+    categoryName: BUILT_IN_NAME,
+    tags: [],
+    compat: 'works',
+    installed: tool.state === 'installed',
+    source: BUILT_IN_SHELF,
+    needs: [],
+  }
+}
+
+export const BUILT_IN_NAME = 'Built into this app'
+
+/**
+ * Every shelf this department has, in the order it draws them — the extension
+ * shelves, then the built-ins.
+ *
+ * Exported for the page's rail, so the rail and the sections cannot come to two
+ * different lists. `store/store-nav.ts` drops any of them that is empty.
+ */
+export const BROWSER_SHELVES: readonly { id: string; name: string }[] = [
+  ...CATEGORY_ORDER.map((id) => ({ id, name: CATEGORY_NAMES[id] })),
+  { id: BUILT_IN_SHELF, name: BUILT_IN_NAME },
+]
+
+/* ----------------------------------------------------------------- detail -- */
+
+
 
 /* ------------------------------------------------------------------- body -- */
 
@@ -373,6 +559,16 @@ export interface StoreBodyProps {
   filter: StoreFilter
   onShowProfile(id: string): void
   onFilter(next: StoreFilter): void
+  /**
+   * Open one row on its own — the key, prefixed the way `busy` and `said` are.
+   *
+   * Optional, and the rows draw no way in without it. That is the standing
+   * absent-not-disabled rule doing real work here rather than ceremony: this
+   * body is also what `StorePanel.test.tsx` renders on its own, and a name that
+   * looked pressable in a test fixture with nowhere to go would be exactly the
+   * dead control the whole surface is written against.
+   */
+  onOpenRow?(key: string): void
   onTool(id: string, verb: 'install' | 'remove'): void
   onExtension(id: string, verb: 'install' | 'remove'): void
   onEnable(id: string, on: boolean): void
@@ -406,6 +602,7 @@ export function StoreBody({
   filter,
   onShowProfile,
   onFilter,
+  onOpenRow,
   onTool,
   onExtension,
   onEnable,
@@ -434,6 +631,7 @@ export function StoreBody({
       said={said[`e:${extension.id}`] ?? ''}
       canOpenPopup={canOpenPopup}
       canOpenOptions={canOpenOptions}
+      onOpen={onOpenRow === undefined ? undefined : () => onOpenRow(`e:${extension.id}`)}
       onAct={(verb) => onExtension(extension.id, verb)}
       onEnable={(on) => onEnable(extension.id, on)}
       onOpenPopup={() => onOpenPopup(extension.id)}
@@ -465,14 +663,45 @@ export function StoreBody({
     facetsOf,
     (one) => rank[one.state] ?? 0,
   )
-  const controls = facetControls([...facets.values()], filter, EXTENSION_FACETS)
+  /*
+   * Every facet except the shelf.
+   *
+   * The shelves are the store page's left rail now — with a count on every one,
+   * across both departments — and a second row of chips saying the same thing
+   * under this heading would be two controls for one choice, which is the
+   * duplication this app keeps having to undo. `category` is still a *filter*:
+   * the rail sets it, `matchesFilter` applies it, and every count below
+   * cross-filters against it exactly as before. Only the chips are gone.
+   */
+  const controls = facetControls([...facets.values()], filter, withoutShelf(EXTENSION_FACETS))
   const isFiltering = anyFilter(filter)
 
-  /* Installed first, so "do I have this" is answered by order as well as by
-     the chip on the row — the built-in half is one list, not two sections. */
-  const builtIn = [...tools.tools].sort(
-    (a, b) => Number(b.state !== 'available') - Number(a.state !== 'available'),
-  )
+  /*
+   * The built-ins, searched like everything else and on their own shelf.
+   *
+   * This list used to ignore the filter entirely, because the storefront model
+   * only ever saw extensions. In a dialog that was untidy; under one search box
+   * spanning the whole store it is a lie — typing `postgres` printed *"Nothing
+   * in the store matches that"* directly above six rows still sitting there.
+   *
+   * They answer to the **search** and to the **shelf**, and not to the chips.
+   * That is deliberate rather than half a job: the chips are counted over the
+   * extension catalogue — *Where it comes from*, *In this browser* — and their
+   * vocabulary has no word that is true of a thing that ships in the app's own
+   * bytes. Giving them one would mean inventing a measurement. Search and shelf
+   * are the two controls whose meaning is the same for both kinds of row, so
+   * they are the two that apply.
+   *
+   * Installed first, so "do I have this" is answered by order as well as by the
+   * chip on the row.
+   */
+  const builtIn = tools.tools
+    .filter(
+      (tool) =>
+        (filter.category === ANY || filter.category === BUILT_IN_SHELF) &&
+        matchesQuery(builtInFacets(tool), filter.query),
+    )
+    .sort((a, b) => Number(b.state !== 'available') - Number(a.state !== 'available'))
 
   return (
     <>
@@ -536,7 +765,11 @@ export function StoreBody({
           <section className="bw-store-section bw-store-browse">
             <StoreFilterBar
               idPrefix="bw-ext"
-              placeholder="blocker, dark, password, youtube…"
+              /* The page carries the one search box, over both departments —
+                 see `store/StorePage.tsx`. A second box under this heading
+                 would search half a store while looking like it searched all
+                 of it. */
+              search={false}
               filter={filter}
               controls={controls}
               showing={kept.length}
@@ -655,9 +888,12 @@ export function StoreBody({
       )}
 
       {toolsWired && toolsProblem !== '' && <p className="bw-error">{toolsProblem}</p>}
-      {toolsWired && toolsProblem === '' && (
+      {/* The heading goes with its rows. A section title over nothing is the
+          empty-section rule, and with a search across the whole store it now
+          genuinely happens. */}
+      {toolsWired && toolsProblem === '' && builtIn.length > 0 && (
         <section className="bw-store-section">
-          <h3 className="bw-store-heading">Built into this app</h3>
+          <h3 className="bw-store-heading">{BUILT_IN_NAME}</h3>
           {/*
             The other side of the same seam. These six are this app's own work
             and no download will be pretended for them: the honest words for a
@@ -676,6 +912,7 @@ export function StoreBody({
                 tool={tool}
                 busy={busy === `t:${tool.id}`}
                 said={said[`t:${tool.id}`] ?? ''}
+                onOpen={onOpenRow === undefined ? undefined : () => onOpenRow(`t:${tool.id}`)}
                 onAct={(verb) => onTool(tool.id, verb)}
               />
             ))}

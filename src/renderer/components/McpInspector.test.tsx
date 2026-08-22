@@ -308,38 +308,58 @@ describe('<McpInspector>', () => {
    * assert the app has not quietly stopped saying what it cannot do.
    */
   /**
-   * The Store tab, and the build that has no store.
+   * The way to the store, and the two builds that must not offer one.
    *
-   * The store's methods are resolved separately from `BRIDGE_METHODS` above —
-   * see `mcp-store-bridge.ts` — precisely so a preload older than the feature
-   * costs this page one tab rather than the whole window. These two are that
-   * promise, in both directions.
+   * This was a **tab** on this page — *Your servers* / *Store* — and it is a
+   * door now, because the store became a page holding this catalogue beside the
+   * browser's extensions: *"store must be like a proper store with full page not
+   * just popup."* See `store/StorePage.tsx`.
+   *
+   * The gate is unchanged and is still worth two tests. The store's methods are
+   * resolved separately from `BRIDGE_METHODS` above — see `mcp-store-bridge.ts`
+   * — precisely so a preload older than the feature costs this page a control
+   * rather than the whole window. What is new is the *second* gate: a host that
+   * gave this page nowhere to send anybody draws nothing either, which is the
+   * same absent-not-disabled rule and the reason the harness does not grow a
+   * dead button.
    */
-  it('draws no tab switch at all when the preload has no store', () => {
-    // His most repeated note, applied to a tab: *"a dropdown only when some
-    // exist. Hide it when empty."* A Store button that opened an apology is
-    // worse than no Store button.
-    const html = renderToStaticMarkup(<McpInspector bridge={bridge} projectPath="/work/app" />)
-    expect(html).not.toContain('Which view of MCP servers to show')
+  const STORE_BRIDGE = {
+    mcpStore: async () => ({ rows: [], runtimes: [], writer: { found: true, path: '/c' } }),
+    mcpStoreInstall: async () => ({ ok: true, message: 'Added.' }),
+    removeMcpServer: async () => ({ ok: true, message: 'Removed.' }),
+    addMcpServer: async () => ({ ok: true, message: 'Added.' }),
+  }
+
+  it('draws no way to the store at all when the preload has no store', () => {
+    // His most repeated note: *"a dropdown only when some exist. Hide it when
+    // empty."* A Store button that opened an apology is worse than none.
+    const html = renderToStaticMarkup(
+      <McpInspector bridge={bridge} projectPath="/work/app" onOpenStore={() => {}} />,
+    )
+    expect(html).not.toContain('Browse the store')
   })
 
-  it('offers the store beside the list when the preload carries it', () => {
-    const store = {
-      mcpStore: async () => ({ rows: [], runtimes: [], writer: { found: true, path: '/c' } }),
-      mcpStoreInstall: async () => ({ ok: true, message: 'Added.' }),
-      removeMcpServer: async () => ({ ok: true, message: 'Removed.' }),
-      addMcpServer: async () => ({ ok: true, message: 'Added.' }),
-    }
+  it('draws none either when the window gave it nowhere to go', () => {
     const html = renderToStaticMarkup(
-      <McpInspector bridge={bridge} store={store} projectPath="/work/app" />,
+      <McpInspector bridge={bridge} store={STORE_BRIDGE} projectPath="/work/app" />,
     )
-    expect(html).toContain('Which view of MCP servers to show')
-    expect(html).toContain('Your servers')
-    expect(html).toContain('>Store<')
-    // The list is still the tab that is on: a page that opened into a catalogue
-    // when somebody navigated to "MCP servers" would be answering a question
-    // they did not ask.
-    expect(html).toContain('aria-pressed="true"')
+    expect(html).not.toContain('Browse the store')
+  })
+
+  it('offers the way to the store when both are there', () => {
+    const html = renderToStaticMarkup(
+      <McpInspector
+        bridge={bridge}
+        store={STORE_BRIDGE}
+        projectPath="/work/app"
+        onOpenStore={() => {}}
+      />,
+    )
+    expect(html).toContain('Browse the store')
+    // And this page is still this page. Navigating to "MCP servers" and landing
+    // in a catalogue would be answering a question nobody asked, which is what
+    // the tab could do and a link cannot.
+    expect(html).not.toContain('storefront')
   })
 
   it('puts the two surviving facts behind the information dot, not on the page', () => {

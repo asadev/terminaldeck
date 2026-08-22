@@ -4091,6 +4091,12 @@ function Workspace() {
         run: () => showPanel('readiness'),
       },
       {
+        id: 'view.store',
+        title: 'Store',
+        group: 'View',
+        run: () => showPanel('store'),
+      },
+      {
         id: 'view.mcp',
         title: 'MCP servers',
         group: 'View',
@@ -4587,6 +4593,9 @@ function Workspace() {
           // Source control, so the click did nothing you could see.
           onOpenFile={showFile}
           focus={panelFocus}
+          /* How a page sends the window to another one. The MCP page's Store
+             control uses it, so there is one store and several doors into it. */
+          onShowPanel={showPanel}
           /* There was a `copilot` object here. It went with the copilot's page:
              the copilot is a window now, rendered beside the other sessions'
              terminals further down this file, because that is where a session is
@@ -6607,6 +6616,13 @@ function Workspace() {
                 }}
                 // The other mount site, and the same door. See the split one.
                 onSettings={() => openSettings('browser')}
+                /* The store's three-dot row. It navigates now rather than
+                   opening a dialog — the store is a page holding this browser's
+                   extensions beside the MCP catalogue, under one search box.
+                   Same shape as `onSettings` above: the panel does not know how
+                   a page in this app is opened, because it is a page inside
+                   one. */
+                onOpenStore={() => showPanel('store')}
                 // Otherwise every browser row in the sidebar reads "New tab".
                 onTitle={(title) => renameBrowserTab(tab.id, title)}
                 onSendToAgent={(context) => {

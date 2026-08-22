@@ -14,6 +14,12 @@
  * judged; three fixtures would have shown a bar with no work to do.
  *
  * `?store=browser|mcp` draws one; the default stacks both.
+ *
+ * Since 2026-08-23 these two are **departments of the store page** rather than a
+ * dialog and a tab, so neither draws a search box of its own any more — the page
+ * carries one, over both of them, and `.harness/storepage.tsx` is where that is
+ * looked at. This file is still the way to judge one department's shelves and
+ * chips on their own, at full width, without the rail beside them.
  */
 import './stub'
 import { StrictMode, useState } from 'react'

@@ -18,6 +18,8 @@ import {
   type McpStoreView,
 } from './mcp-store-bridge'
 import { StoreFilterBar } from '../store/StoreFilterBar'
+import { StoreDetail } from '../store/StoreDetail'
+import { withoutShelf } from '../store/store-nav'
 import {
   facetControls,
   filtering as anyFilter,
@@ -26,32 +28,28 @@ import {
   shelve,
   withFacet,
   type StoreFacet,
+  type StoreFacets,
   type StoreFilter,
 } from '../store/storefront'
 
 /**
  * The MCP store: a catalogue of servers, and a form for anything not in it.
  *
- * ## Where this lives, and why it is a tab rather than a page or a dialog
+ * ## Where this lives, and why it stopped being a tab
  *
- * It is the **second tab of the MCP servers page**, beside the list of what is
- * configured. Three placements were possible and the other two are worse for
- * reasons worth writing down, because the next person will reach for one of
- * them:
+ * It was the **second tab of the MCP servers page**, and the argument for that
+ * was a good one: browsing servers and seeing which you have are two views of
+ * one subject, and a new rail row would have been the *Machines vs Remote* split
+ * he already made us undo. What that argument missed is that there was a second
+ * store — the browser's, behind a three-dot menu — and the two of them are also
+ * one subject. Asad: *"store must be like a proper store with full page not just
+ * popup."*
  *
- *  - **A new rail entry.** `shell/panels.ts` argues at length against growing
- *    that union — every member is a route the window can be restored into, and
- *    two rail rows about MCP servers is the *Machines vs Remote* split he
- *    already made us undo: *"they should be one."* Browsing servers and seeing
- *    which you have are two views of one subject, not two subjects.
- *  - **A modal, like the browser's tools store.** That store is a dialog because
- *    the browser has no page to put it on — it is a chrome with tabs in it, and
- *    a dialog is the only surface there is. The MCP page exists, so a dialog
- *    over it would be a second window over a screen that was already about this.
- *
- * A tab keeps one place, one heading in the rail, and one answer to *do I have
- * this* — the store reads the same `loadServers` the list does, so a row cannot
- * claim "not installed" about something the other tab is showing.
+ * So this is a **department** now, mounted by `store/StorePage.tsx` beside the
+ * browser's, and the MCP page keeps one door to it rather than a copy of it. The
+ * old argument still holds where it applied: there is exactly one place that
+ * browses servers, and it reads the same catalogue the list next door does, so a
+ * row cannot claim "not installed" about something the other screen is showing.
  *
  * ## Add your own is first, and that is the point
  *
@@ -100,6 +98,25 @@ interface Props {
   here: string
   /** Re-read the servers list next door after anything is written. */
   onChanged(): void
+  /**
+   * What the store page is searching and filtering for.
+   *
+   * Controlled from above, because one search box searching the whole store is
+   * the thing a page can do that two dialogs could not. The shelf inside it
+   * belongs to this department alone — `store/store-nav.ts` says why the two
+   * catalogues cannot share one.
+   */
+  filter: StoreFilter
+  onFilter(next: StoreFilter): void
+  /** The one row being looked at on its own, or `''`. A row id, not a key. */
+  detail: string
+  onDetail(key: string): void
+  /**
+   * What this department loaded, as the shared storefront model sees it, so the
+   * page's rail can count its shelves. See the same prop on the browser
+   * department for why the loading stays down here.
+   */
+  onRows(rows: StoreFacets[]): void
 }
 
 /**
@@ -118,7 +135,17 @@ const RANK: Readonly<Record<Row['state'], number>> = {
   unavailable: 2,
 }
 
-export function McpStore({ api, projectPath, here, onChanged }: Props) {
+export function McpStore({
+  api,
+  projectPath,
+  here,
+  onChanged,
+  filter,
+  onFilter,
+  detail,
+  onDetail,
+  onRows,
+}: Props) {
   const [view, setView] = useState<McpStoreView>(EMPTY_STORE_VIEW)
   const [problem, setProblem] = useState('')
   const [loading, setLoading] = useState(true)
@@ -130,15 +157,6 @@ export function McpStore({ api, projectPath, here, onChanged }: Props) {
   const [said, setSaid] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState('')
   const [arming, setArming] = useState('')
-  /**
-   * What is being searched and filtered for, as one value.
-   *
-   * The same shape the browser's store keeps, and every decision made from it
-   * lives in `store/storefront.ts` — so a change to how search treats a partial
-   * word lands on both stores at once, which is the only way two stores stay one
-   * product.
-   */
-  const [filter, setFilter] = useState<StoreFilter>(NO_FILTER)
 
   const scopes = useMemo(() => scopeChoices(projectPath), [projectPath])
 
@@ -166,6 +184,12 @@ export function McpStore({ api, projectPath, here, onChanged }: Props) {
   useEffect(() => {
     void load()
   }, [load])
+
+  /* What is on these shelves, for the page's rail. Keyed on the loaded view
+     rather than on a derived array, so it fires once per read. */
+  useEffect(() => {
+    onRows(view.rows.map(mcpFacets))
+  }, [view, onRows])
 
   const act = useCallback(
     async (row: Row, verb: 'install' | 'remove') => {
@@ -218,6 +242,21 @@ export function McpStore({ api, projectPath, here, onChanged }: Props) {
     )
   }
 
+  /*
+   * One server, on its own, when the page has been sent to one.
+   *
+   * Resolved out of the same `view` the shelves are drawn from, so a row that
+   * left the catalogue between reads cannot leave a detail view framing nothing:
+   * it is simply not found, and the shelves come back.
+   *
+   * The header stays above it — the scope picker, the runtime report, Add your
+   * own. Every one of those is a fact about *this machine* that the Install
+   * button on the row below depends on, and hiding the report while showing the
+   * row that refers to it would leave the sentence *"docker is not on this
+   * machine"* pointing at nothing.
+   */
+  const open = view.rows.find((row) => row.id === detail)
+
   return (
     <div className="mcp-store">
       <StoreHeader
@@ -260,21 +299,46 @@ export function McpStore({ api, projectPath, here, onChanged }: Props) {
         </p>
       )}
 
-      <StoreBody
-        view={view}
-        busy={busy}
-        values={values}
-        said={said}
-        arming={arming}
-        filter={filter}
-        onFilter={setFilter}
-        onValue={setValue}
-        onAct={(row, verb) => void act(row, verb)}
-        onArm={(id, on) => setArming(on ? id : '')}
-      />
+      {open ? (
+        <StoreDetail
+          backTo={MCP_CATEGORY_NAMES[open.category] ?? 'the store'}
+          onBack={() => onDetail('')}
+        >
+          <ul className="mcp-store-list">
+            <McpStoreRow
+              row={open}
+              busy={busy === open.id}
+              values={values[open.id] ?? {}}
+              said={said[open.id] ?? ''}
+              arming={arming === open.id}
+              onValue={(key, value) => setValue(open.id, key, value)}
+              onAct={(verb) => void act(open, verb)}
+              onArm={(on) => setArming(on ? open.id : '')}
+            />
+          </ul>
+        </StoreDetail>
+      ) : (
+        <StoreBody
+          view={view}
+          busy={busy}
+          values={values}
+          said={said}
+          arming={arming}
+          filter={filter}
+          onFilter={onFilter}
+          onOpenRow={onDetail}
+          onValue={setValue}
+          onAct={(row, verb) => void act(row, verb)}
+          onArm={(id, on) => setArming(on ? id : '')}
+        />
+      )}
     </div>
   )
 }
+
+/* --------------------------------------------------------------- detail -- */
+
+
 
 /* ----------------------------------------------------------------- body -- */
 
@@ -290,6 +354,11 @@ export interface StoreBodyProps {
   arming: string
   filter: StoreFilter
   onFilter(next: StoreFilter): void
+  /**
+   * Open one row on its own. Optional, and the rows draw no way in without it —
+   * see `store/StoreRowName.tsx` for why that is absent rather than disabled.
+   */
+  onOpenRow?(id: string): void
   onValue(id: string, key: string, value: string): void
   onAct(row: Row, verb: 'install' | 'remove'): void
   onArm(id: string, on: boolean): void
@@ -312,6 +381,7 @@ export function StoreBody({
   arming,
   filter,
   onFilter,
+  onOpenRow,
   onValue,
   onAct,
   onArm,
@@ -333,7 +403,11 @@ export function StoreBody({
     facetsOf,
     (row) => RANK[row.state],
   )
-  const controls = facetControls([...facets.values()], filter, MCP_FACETS)
+  /* Every facet except the shelf: the store page's left rail owns the shelves
+     now, with a count on each and across both departments, and a second row of
+     chips saying the same thing would be two controls for one choice. The
+     category is still applied as a filter — only its chips are gone. */
+  const controls = facetControls([...facets.values()], filter, withoutShelf(MCP_FACETS))
   const isFiltering = anyFilter(filter)
 
   const line = (row: Row) => (
@@ -347,6 +421,7 @@ export function StoreBody({
       onValue={(key, value) => onValue(row.id, key, value)}
       onAct={(verb) => onAct(row, verb)}
       onArm={(on) => onArm(row.id, on)}
+      onOpen={onOpenRow === undefined ? undefined : () => onOpenRow(row.id)}
     />
   )
 
@@ -369,6 +444,8 @@ export function StoreBody({
         <StoreFilterBar
           idPrefix="mcp"
           placeholder="files, search, postgres, github…"
+          /* The store page carries the one search box, over both departments. */
+          search={false}
           filter={filter}
           controls={controls}
           showing={kept.length}

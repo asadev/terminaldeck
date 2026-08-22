@@ -358,13 +358,46 @@ describe('the honesty that must not regress', () => {
     expect(markup).toContain('Nothing in the store matches that')
   })
 
-  it('puts the search and the filters above everything they govern', () => {
+  it('puts the filters above everything they govern', () => {
     // Including the Installed section: choosing "Not installed" has to be able
     // to empty it, and a control that filters what is above it reads as broken.
     const markup = render({
-      ext: { ...EXT, extensions: [extension({ state: 'installed', enabled: true })] },
+      ext: {
+        ...EXT,
+        extensions: [
+          extension({ state: 'installed', enabled: true }),
+          extension({ id: 'vimium', name: 'Vimium', category: 'scripting' }),
+        ],
+      },
     })
-    expect(markup.indexOf('storefront-search')).toBeLessThan(markup.indexOf('Installed in Default'))
+    expect(markup.indexOf('storefront-facet')).toBeGreaterThan(-1)
+    expect(markup.indexOf('storefront-facet')).toBeLessThan(markup.indexOf('Installed in Default'))
+  })
+
+  it('draws no search box of its own, because the page above carries one', () => {
+    /*
+     * Not cosmetic. This body is one **department** of the store page now, and
+     * the page has a single box that searches both of them — see
+     * `store/StorePage.tsx`. A second box under this heading would search half
+     * a store while looking like it searched all of it, and whichever one a
+     * person happened to type into would decide what they concluded the store
+     * contained.
+     */
+    expect(render()).not.toContain('storefront-search')
+  })
+
+  it('leaves the shelves to the page rail rather than drawing a second set of chips', () => {
+    // Two controls for one choice is the duplication this window keeps having
+    // to undo. The category is still filtered by — the rail sets it — and only
+    // its chips are gone from here.
+    const markup = render({
+      ext: {
+        ...EXT,
+        extensions: [extension(), extension({ id: 'stylus', name: 'Stylus', category: 'appearance' })],
+      },
+    })
+    expect(markup).not.toContain('storefront-facet-label" id="bw-ext-facet-category"')
+    expect(markup).not.toContain('Blocking ads and trackers</button>')
   })
 
   it('does not say nothing matched when what matched is installed and shown above', () => {

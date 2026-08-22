@@ -90,6 +90,7 @@ export const PANEL_HELP: Record<PanelId, string> = {
   artifacts: 'Every file your agents wrote or changed here, with the diff of each change. Searching past transcripts moved to the command palette — type ? in it.',
   git: 'Working-tree status and diffs for the project, refreshed as the agent edits files.',
   github: 'Pull requests, issues and checks. Needs the GitHub CLI installed, signed in, and a GitHub remote on the repo.',
+  store: 'One store for everything you can add to the app: extensions for the built-in browser, and the MCP servers your agents can reach. One search box covers both; the rail on the left is every shelf, with how much is on it.',
   readiness: 'How ready this repo is for an agent to work in — instructions, tests, structure — with a fix offered where one is safe.',
   // No `alerts` line. Alerts is not a view any more — it is a pop-up over
   // whatever you are doing, opened by the bell beside Settings — so it is
