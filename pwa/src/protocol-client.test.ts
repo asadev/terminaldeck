@@ -285,6 +285,30 @@ describe('one parser, not two', () => {
     JSON.stringify({ t: 'detached', id: 'a' }),
     JSON.stringify({ t: 'error', code: 'unauthorized', message: 'no' }),
     JSON.stringify({ t: 'pong' }),
+    // The watch frames a host casts. Kept small here on purpose — a full
+    // `browser.frame` is larger than the text cap and rides the object path, but
+    // a small one goes through the same shared parser and must read identically.
+    JSON.stringify({
+      t: 'browser.frame',
+      window: 'B2',
+      seq: 1,
+      w: 800,
+      h: 1600,
+      dw: 400,
+      dh: 800,
+      scale: 2,
+      offsetTop: 0,
+      pageScale: 1,
+      scrollX: 0,
+      scrollY: 0,
+      data: 'AAAA',
+    }),
+    JSON.stringify({
+      t: 'browser.surfaces.rows',
+      rid: 'srf-1',
+      surfaces: [{ window: '', url: 'https://x.example/', title: 'X', live: true }],
+    }),
+    JSON.stringify({ t: 'browser.surfaces.rows', surfaces: [] }),
     '{"t":"nope"}',
     'not json at all',
   ]
@@ -412,7 +436,7 @@ describe('what the client sends', () => {
     // it. `create`, `localhost` and `upload` are things this client asks *for*
     // and are gated on what the desktop advertised, so claiming them says
     // nothing.
-    expect(CLAIMED_CAPABILITIES).toEqual(['credential', 'devices', 'settings'])
+    expect(CLAIMED_CAPABILITIES).toEqual(['credential', 'devices', 'settings', 'watch'])
   })
 })
 
