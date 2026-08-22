@@ -34,6 +34,14 @@ const calls = vi.hoisted(() => ({
    * `stdout` on the rejection is where the answer actually was.
    */
   wslFails: false,
+  /**
+   * Make the login-shell PATH probe fail the way a busy machine's does.
+   *
+   * `execFile`'s timeout rejects, which is the shape this produces. It is a
+   * flag rather than a one-off mock because the point of the tests using it is
+   * what happens on the call *after* the failure.
+   */
+  loginShellFails: false,
 }))
 
 vi.mock('node:child_process', () => {
@@ -47,7 +55,12 @@ vi.mock('node:child_process', () => {
     // string here would hide the very difference being exercised.
   ): Promise<{ stdout: string | Buffer; stderr: string }> => {
     calls.ran.push({ file, args })
-    if (file === '/bin/zsh') return { stdout: '/opt/homebrew/bin:/usr/bin\n', stderr: '' }
+    if (file === '/bin/zsh') {
+      if (calls.loginShellFails) {
+        throw Object.assign(new Error('Command failed: /bin/zsh'), { killed: true, signal: 'SIGTERM' })
+      }
+      return { stdout: '/opt/homebrew/bin:/usr/bin\n', stderr: '' }
+    }
     if (file === 'which') return { stdout: `/opt/homebrew/bin/${args[0]}\n`, stderr: '' }
     if (file === 'where.exe') return { stdout: `C:\\npm\\${args[0]}.cmd\r\n`, stderr: '' }
     // The in-distro probe. A Buffer rather than a string because that is what
@@ -85,6 +98,7 @@ vi.mock('node:child_process', () => {
 beforeEach(() => {
   calls.ran = []
   calls.wslFails = false
+  calls.loginShellFails = false
   resetLoginPathCache()
   // `detectProviders` now runs each agent once to prove it starts, and that
   // answer is memoised for twenty seconds. Without this, the second test to ask
@@ -185,6 +199,64 @@ describe('the PATH a spawned CLI gets', () => {
   it('asks the login shell on macOS', async () => {
     expect(await loginPath('darwin')).toBe('/opt/homebrew/bin:/usr/bin')
     expect(calls.ran).toEqual([{ file: '/bin/zsh', args: ['-lic', 'echo -n "$PATH"'] }])
+  })
+
+  it('asks once however many sessions come back at the same time', async () => {
+    /*
+     * Restore starts every session at once and each one asks for the PATH
+     * before the first answer is back. Three login shells were seen sitting on
+     * one machine at the same time because of it, and what is being spawned
+     * reads the whole of somebody's rc file.
+     */
+    const answers = await Promise.all([
+      loginPath('darwin'),
+      loginPath('darwin'),
+      loginPath('darwin'),
+    ])
+    expect(answers).toEqual([
+      '/opt/homebrew/bin:/usr/bin',
+      '/opt/homebrew/bin:/usr/bin',
+      '/opt/homebrew/bin:/usr/bin',
+    ])
+    expect(calls.ran.filter((call) => call.file === '/bin/zsh')).toHaveLength(1)
+  })
+
+  it('remembers a real answer, so an ordinary run asks once', async () => {
+    await loginPath('darwin')
+    await loginPath('darwin')
+    expect(calls.ran.filter((call) => call.file === '/bin/zsh')).toHaveLength(1)
+  })
+
+  it('does not remember the fallback, so the next ask gets a real answer', async () => {
+    /*
+     * The failure this is about, from this machine's own log: the probe missed
+     * once at boot, and because the fallback was memoised every lookup for the
+     * rest of the run answered "Claude Code could not be found on this
+     * machine" — including the two Retry presses three minutes later, which
+     * made Retry a button that could not possibly work. The CLI it could not
+     * find is at `~/.local/bin/claude`, which the minimal PATH a GUI app
+     * inherits cannot see, so the fallback is never the right answer on macOS.
+     *
+     * Five seconds is generous on a warm machine and not generous at all on
+     * the launch straight after an update swap — which is precisely when
+     * restore runs.
+     */
+    calls.loginShellFails = true
+    const fallback = await loginPath('darwin')
+    expect(fallback).not.toBe('/opt/homebrew/bin:/usr/bin')
+
+    calls.loginShellFails = false
+    expect(await loginPath('darwin')).toBe('/opt/homebrew/bin:/usr/bin')
+    expect(calls.ran.filter((call) => call.file === '/bin/zsh')).toHaveLength(2)
+  })
+
+  it('does not remember an empty answer either', async () => {
+    // A shell that printed nothing has not answered. Treated as the miss it is
+    // rather than stored as "this user has no PATH".
+    process.env.SHELL = '/bin/does-not-answer'
+    await loginPath('darwin')
+    process.env.SHELL = '/bin/zsh'
+    expect(await loginPath('darwin')).toBe('/opt/homebrew/bin:/usr/bin')
   })
 
   it('spawns nothing on Windows and takes the environment’s own PATH', async () => {
