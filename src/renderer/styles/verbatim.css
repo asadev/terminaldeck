@@ -420,6 +420,11 @@
    the difference between a code that works and one that does not. */
 .servers-setup-code-value,
 .servers-host-code-value,
+/* The server address a host prints, added 2026-08-22. Not read aloud — it is
+   a hundred and eighty characters — but it is compared by eye against what a
+   phone shows, and a ligature welding two characters into one glyph is exactly
+   the difference somebody would be looking for. */
+.servers-host-address-value,
 .servers-host-status pre {
   font-variant-ligatures: none;
 }

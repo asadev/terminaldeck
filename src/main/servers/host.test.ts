@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { formatServerAddress } from '../../shared/server-address'
 import {
   HOST_PROBE,
   ServerHosts,
@@ -10,6 +11,7 @@ import {
   readHostProbe,
   relayState,
   removeConsequence,
+  serverAddressOf,
   removeScript,
   serviceScript,
   usableNode,
@@ -1077,6 +1079,61 @@ describe('linking this computer', () => {
     // Every write went to that shell, and the code came off it.
     expect(it_.typed.length).toBeGreaterThan(0)
     expect(it_.redeemed).toEqual(['904021'])
+  })
+})
+
+/**
+ * The same box, running a build that prints a server address.
+ *
+ * `RUNNING` above is output captured from a host that predates the address, and
+ * it is left exactly as it was: it is the fixture that proves this panel does
+ * something sensible with a server nobody has upgraded yet.
+ */
+const WITH_ADDRESS = (() => {
+  const address = formatServerAddress({
+    url: 'wss://relay.terminaldeck.dev',
+    hostId: 'P5PCNBABHBBVFDBZZ2ECELNAZ7',
+    hostKey: Buffer.alloc(32, 7).toString('base64url'),
+  })
+  if (address === null) throw new Error('fixture did not format')
+  return {
+    address,
+    out: RUNNING.replace(
+      '  fingerprint    A3PL-DGAB-3N6W-RK3Y-V4VS-MMHP\n',
+      ['  fingerprint    A3PL-DGAB-3N6W-RK3Y-V4VS-MMHP', '', 'Server address', `  ${address}`, ''].join('\n'),
+    ),
+  }
+})()
+
+describe('reading the server address off a host', () => {
+  it('reads the token a host prints under its own heading', () => {
+    expect(serverAddressOf(readHostProbe(WITH_ADDRESS.out).host.status)).toBe(WITH_ADDRESS.address)
+    // And it reaches the renderer through the probe, which is the whole path.
+    expect(readHostProbe(WITH_ADDRESS.out).host.address).toBe(WITH_ADDRESS.address)
+  })
+
+  it('answers nothing for a host too old to print one', () => {
+    // Not a relay problem and not an error: that build has no such block, and
+    // the panel says so in words that name upgrading.
+    expect(serverAddressOf(readHostProbe(RUNNING).host.status)).toBe('')
+    expect(readHostProbe(RUNNING).host.address).toBe('')
+  })
+
+  it('answers nothing when the host says it has none', () => {
+    const none = ['Server address', '  none — This host is not dialling out to a relay.'].join('\n')
+    expect(serverAddressOf(none)).toBe('')
+  })
+
+  it('refuses a line that is not a usable address rather than passing it on', () => {
+    // What crosses to the renderer either works when it is pasted or is empty.
+    // A truncated token decodes to *something*, so the parser is what catches it.
+    const cut = WITH_ADDRESS.out.replace(WITH_ADDRESS.address, WITH_ADDRESS.address.slice(0, -6))
+    expect(serverAddressOf(readHostProbe(cut).host.status)).toBe('')
+  })
+
+  it('reads only its own block, never a token loose in the output', () => {
+    expect(serverAddressOf(`Some session printed ${WITH_ADDRESS.address} once.`)).toBe('')
+    expect(serverAddressOf('')).toBe('')
   })
 })
 

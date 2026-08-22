@@ -3,9 +3,13 @@ import { BRAND } from '../shared/brand'
 import type { Device } from '../main/remote/device-auth'
 import type { DeviceKindRecord } from '../main/remote/device-kind'
 import type { DeviceFolderGrant } from '../main/remote/folder-grants'
+import { serverAddressOf } from '../main/servers/host'
+import { formatServerAddress, parseServerAddress } from '../shared/server-address'
 import {
   duration,
   NO_COPILOT_HERE,
+  PASTE_IT,
+  addressAnswer,
   parseArgs,
   pickDevice,
   renderApproved,
@@ -13,6 +17,8 @@ import {
   renderFolders,
   renderKindQuestion,
   renderNewDevice,
+  renderAddress,
+  renderAddressNote,
   renderNotApproved,
   renderPairCode,
   renderStatus,
@@ -20,6 +26,19 @@ import {
   wrap,
 } from './cli'
 import type { HostStatus } from './host'
+
+/**
+ * The relay's alphabet, 26 characters — see `shared/pairing-link.ts`.
+ *
+ * Not the alphabet in order, which is what this was: a run of it contains the
+ * letters `QR`, and `renderPairCode`'s test asserts the pairing screen never
+ * says "QR". A fixture that fails an unrelated assertion by spelling a word is
+ * worth ten seconds of care once.
+ */
+const HOST_ID = 'A2B3C4D5E6F7G8H9JKLMNPQSTU'
+
+/** Thirty-two bytes, base64url, which is how `RelayState` spells a public key. */
+const HOST_KEY = Buffer.alloc(32, 7).toString('base64url')
 
 const device = (patch: Partial<Device> = {}): Device => ({
   id: '11111111-1111-4111-8111-111111111111',
@@ -38,6 +57,10 @@ describe('parseArgs', () => {
     // `deviceKind: null` is "nobody has said", which is what makes `main.ts` ask.
     expect(parseArgs(['pair'])).toEqual({ kind: 'pair', deviceKind: null })
     expect(parseArgs(['status'])).toEqual({ kind: 'status' })
+    expect(parseArgs(['address'])).toEqual({ kind: 'address' })
+    // Nothing to say to it, so anything after it is a mistake rather than an
+    // option nobody documented.
+    expect(parseArgs(['address', '--json']).kind).toBe('error')
     expect(parseArgs(['devices'])).toEqual({ kind: 'devices' })
     expect(parseArgs(['folders'])).toEqual({ kind: 'folders' })
     expect(parseArgs(['stop'])).toEqual({ kind: 'stop' })
@@ -243,7 +266,7 @@ describe('renderPairCode', () => {
     const text = renderPairCode('482913', 60_000, 0, relay)
     expect(text).not.toContain('QR')
     expect(text).toContain('type the code')
-    expect(text).toContain('host id      host-abc')
+    expect(text).toContain(`host id      ${HOST_ID}`)
     expect(text).toContain('fingerprint  AAAA-BBBB')
   })
 
@@ -371,8 +394,19 @@ const status = (patch: Partial<HostStatus> = {}): HostStatus => ({
     directReason: 'This machine is not signed in to Tailscale.',
     relay: {
       url: 'wss://relay.terminaldeck.dev',
-      hostId: 'host-abc',
-      publicKey: 'k',
+      /*
+       * A host id and a key in the shapes the real ones have, rather than the
+       * placeholders that were here.
+       *
+       * `host-abc` and `k` were fine while nothing read them, and stopped being
+       * fine the moment `status` started printing a **server address** built out
+       * of exactly these three fields: a fixture whose facts no client would
+       * accept renders the "this host cannot describe itself" branch, so every
+       * assertion about the ordinary case would have been made against the
+       * broken one.
+       */
+      hostId: HOST_ID,
+      publicKey: HOST_KEY,
       fingerprint: 'AAAA-BBBB',
       connected: true,
       channels: 0,
@@ -523,6 +557,114 @@ describe('renderStatus', () => {
   })
 })
 
+describe('the server address', () => {
+  const relay = () => status().remote.relay
+
+  it('round-trips through the parser every client uses', () => {
+    const answer = addressAnswer(relay())
+    expect(answer.ok).toBe(true)
+    // The property that matters is not "a string came out" — it is that the
+    // string decodes back into the three facts a first connection needs, through
+    // the same parser a phone runs.
+    expect(parseServerAddress(answer.ok ? answer.address : '')).toEqual({
+      kind: 'relay',
+      url: 'wss://relay.terminaldeck.dev',
+      hostId: HOST_ID,
+      hostKey: HOST_KEY,
+    })
+  })
+
+  it('is the address the shared formatter would build from the same relay', () => {
+    const answer = addressAnswer(relay())
+    expect(answer.ok && answer.address).toBe(
+      formatServerAddress({ url: 'wss://relay.terminaldeck.dev', hostId: HOST_ID, hostKey: HOST_KEY }),
+    )
+  })
+
+  it('prints it under its own heading, on a line of its own', () => {
+    const text = renderStatus(status(), 0)
+    expect(text).toContain('Server address')
+    const answer = addressAnswer(relay())
+    const line = text.split('\n').find((row) => row.trim().startsWith('srv1.'))
+    // Selecting the line has to select the address: nothing else on it.
+    expect(line?.trim()).toBe(answer.ok ? answer.address : '')
+  })
+
+  it('says what to do with it, and that it is not a secret', () => {
+    const text = renderStatus(status(), 0)
+    expect(text).toContain('Add a server')
+    expect(text).toContain('not a secret')
+  })
+
+  it('is still printed while the relay link is down, because it has not changed', () => {
+    // The three facts are properties of this machine and its configuration, not
+    // of a socket. Withholding the address while the link retries would fail
+    // exactly the person whose machine is having trouble.
+    const base = status()
+    const text = renderStatus(
+      status({
+        remote: {
+          ...base.remote,
+          relay: { ...base.remote.relay!, connected: false, reason: 'No network.', retryAt: null },
+        },
+      }),
+      0,
+    )
+    expect(text).toContain('not connected  No network.')
+    expect(text).toContain('srv1.')
+  })
+
+  it('says so instead of printing a broken address when there is no relay', () => {
+    const base = status()
+    const text = renderStatus(status({ remote: { ...base.remote, relay: null } }), 0)
+    expect(text).toContain('Server address')
+    expect(text).toContain('none — This host is not dialling out to a relay')
+    // The thing this test is really for: nothing on screen that anybody could
+    // mistake for something to paste.
+    expect(text).not.toContain('srv1.')
+    expect(addressAnswer(null).ok).toBe(false)
+  })
+
+  it('sends a reader of a malformed identity somewhere different', () => {
+    const base = status()
+    const broken = { ...base.remote.relay!, hostId: 'not-a-host-id' }
+    const lines = renderAddress(broken).join('\n')
+    expect(lines).toContain('could not describe itself')
+    expect(lines).not.toContain('srv1.')
+  })
+
+  /*
+   * The seam between this output and the desktop that reads it over SSH.
+   *
+   * `servers/host.ts` runs `terminaldeck status` on a server and parses the
+   * address back out of the text — two files, one format, and the kind of pair
+   * that is safe only when something fails on the drift. Re-indent this block,
+   * rename the heading, or put anything else on the token's line, and this is
+   * what says so.
+   */
+  it('is readable again by the desktop that fetches this output over SSH', () => {
+    const text = renderStatus(status(), 0)
+    const answer = addressAnswer(relay())
+    expect(serverAddressOf(text)).toBe(answer.ok ? answer.address : '')
+  })
+
+  it('is inside the first sixty lines, which is all that desktop fetches', () => {
+    // `HOST_PROBE` pipes this through `head -n 60`. The block sits directly
+    // under Relay for exactly this reason, and a status that grew a long
+    // paragraph above it would silently stop being readable from the desktop.
+    const head = renderStatus(status(), 0).split('\n').slice(0, 60).join('\n')
+    expect(serverAddressOf(head)).not.toBe('')
+  })
+
+  it('keeps the note and the address apart, because one of them is piped', () => {
+    // `${BRAND.id} address` writes the token to stdout and this to stderr, so
+    // `A=$(… address)` is an address and not an address with prose stuck to it.
+    const note = renderAddressNote()
+    expect(note).toContain(PASTE_IT)
+    expect(note).not.toContain('srv1.')
+  })
+})
+
 describe('formatting', () => {
   it('gives a duration one unit and rounds down', () => {
     expect(duration(0)).toBe('0s')
@@ -546,7 +688,7 @@ describe('formatting', () => {
 describe('usage', () => {
   it('offers the four commands and the host binary, and nothing more', () => {
     const text = usage()
-    for (const command of ['pair', 'status', 'folders', 'stop']) {
+    for (const command of ['address', 'pair', 'status', 'folders', 'stop']) {
       expect(text).toContain(`${BRAND.id} ${command}`)
     }
     expect(text).toContain(`${BRAND.id}-host`)

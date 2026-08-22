@@ -1,12 +1,17 @@
 /**
  * The whole user interface, because there is no window.
  *
- * A small, closed set of commands — `pair`, `status`, `devices`, `revoke`,
- * `browser`, `folders`, `stop`. `HEADLESS.md` says why the set stays small:
+ * A small, closed set of commands — `address`, `pair`, `status`, `devices`,
+ * `revoke`, `browser`, `folders`, `stop`. `HEADLESS.md` says why the set stays
+ * small:
  * *"Keep it to those. A headless build that grows a config file nobody can find
  * is how these become unmaintainable."* Everything a person needs to do to a
  * host with no screen is one of these, and anything that does not fit into them
- * is a sign the host is doing something it should not. `devices` and `revoke`
+ * is a sign the host is doing something it should not. `address` is the newest
+ * and now the first: it prints the one string a phone that has never met this
+ * machine can act on, which is a thing this build previously had no way to hand
+ * out at all — a host id and a fingerprint are both one-way hashes, so neither
+ * can begin the IK handshake a first connection is. `devices` and `revoke`
  * are the roster half — list who is signed in, and take one away — the same
  * cascade the desktop's Settings and a phone over the wire run, reached here
  * over the control socket rather than as its own copy.
@@ -27,6 +32,7 @@
  */
 
 import { BRAND } from '../shared/brand'
+import { ADDRESS_IS_NOT_A_SECRET, formatServerAddress } from '../shared/server-address'
 import type { Device } from '../main/remote/device-auth'
 import { asDeviceKind, type DeviceKind, type DeviceKindRecord } from '../main/remote/device-kind'
 import type { DeviceFolderGrant } from '../main/remote/folder-grants'
@@ -56,6 +62,22 @@ export type Command =
   | { kind: 'help' }
   | { kind: 'version' }
   | { kind: 'status' }
+  /**
+   * `address` — the one string a phone needs before it has ever met this
+   * machine, printed on its own so it can be piped.
+   *
+   * Its own command rather than a flag on `status`, and the reason is what each
+   * of the two is for. `status` is a paragraph a person reads; this is a value a
+   * person *moves* — into a phone, into a chat with themselves, into a
+   * provisioning script — and the shape that serves that is one token on stdout
+   * and nothing else. `main.ts` keeps that promise by putting every sentence it
+   * has, including the one about having started the host, on stderr.
+   *
+   * `status` prints it too, in a labelled block, because somebody looking for
+   * "what do I paste" will look there first and must not be told to run a
+   * different command.
+   */
+  | { kind: 'address' }
   /**
    * `deviceKind` is the answer to "is this one of mine or somebody else's",
    * given on the command line, and **null means it has not been answered** —
@@ -99,6 +121,7 @@ export function parseArgs(argv: readonly string[]): Command {
   if (first === '-h' || first === '--help' || first === 'help') return { kind: 'help' }
   if (first === '-v' || first === '--version' || first === 'version') return { kind: 'version' }
   if (first === 'status') return extra(args) ?? { kind: 'status' }
+  if (first === 'address') return extra(args) ?? { kind: 'address' }
   if (first === 'pair') return pairCommand(args)
   if (first === 'stop') return extra(args) ?? { kind: 'stop' }
   if (first === 'browser') return browserCommand(args)
@@ -107,7 +130,7 @@ export function parseArgs(argv: readonly string[]): Command {
   if (first !== 'folders') {
     return {
       kind: 'error',
-      message: `Unknown command "${first}". This host understands pair, status, devices, revoke, browser, folders and stop.`,
+      message: `Unknown command "${first}". This host understands address, pair, status, devices, revoke, browser, folders and stop.`,
     }
   }
 
@@ -335,6 +358,7 @@ export function usage(): string {
     'This is the host with no window. It runs sessions, joins the relay, and is',
     'driven from a phone or from another machine.',
     '',
+    `  ${BRAND.id} address                     the server address — paste it into a phone`,
     `  ${BRAND.id} pair                        show a pairing code, then approve the device`,
     `  ${BRAND.id} pair --kind mine|guest      the same, without being asked which it is`,
     `  ${BRAND.id} status                      running? reachable? what is it holding open?`,
@@ -362,6 +386,133 @@ export function renderNotRunning(stateDir: string): string {
     '',
     `Start it with "${BRAND.id}-host", or run "${BRAND.id} pair", which starts it for you.`,
   ].join('\n')
+}
+
+/* -------------------------------------------------------- server address -- */
+
+/**
+ * This machine's address, out of the relay link, or null.
+ *
+ * The only place in this build that turns a `RelayState` into an address, so
+ * that `status`, the `address` command and anything that later wants one all
+ * agree by construction. Null in exactly two situations, and both of them are
+ * honest answers rather than failures: the relay link is off or unconfigured, so
+ * there is no slot for a phone to find this machine in; or the link exists and
+ * one of the three facts is not usable, which `formatServerAddress` refuses
+ * rather than papering over.
+ *
+ * Note what is **not** a reason to withhold it: the link being down right now.
+ * The url, the host id and the public key are all properties of this machine and
+ * its configuration, not of a socket — `RelayState` reports them whether or not
+ * it is connected. An address printed while the link is retrying is still the
+ * correct address, and refusing to print one until a socket came up would make
+ * this command fail for exactly the person whose machine is having trouble.
+ */
+export function addressOf(relay: HostStatus['remote']['relay']): string | null {
+  if (relay === null) return null
+  return formatServerAddress({ url: relay.url, hostId: relay.hostId, hostKey: relay.publicKey })
+}
+
+/**
+ * Why there is no address, in a sentence somebody can act on.
+ *
+ * Two of them, because there are genuinely two states and they have different
+ * remedies. Written here rather than at the call sites because both are printed
+ * to somebody who has just asked for the one thing this host cannot give them,
+ * and the useful part is never "no" — it is which state this is and what changes
+ * it.
+ */
+export const NO_RELAY_NO_ADDRESS =
+  'This host is not dialling out to a relay, so it has no address to hand out: there is no ' +
+  `slot for a phone to find it in. Run "${BRAND.id} status" — the Relay block says whether ` +
+  'the link is off or unconfigured.'
+
+/**
+ * The relay link is there and one of the three facts is not usable.
+ *
+ * Not reachable on a healthy machine: `host-identity.ts` mints the host id from
+ * the secret it just wrote and verifies the key pair through a real handshake
+ * before anything is handed this. It is printed rather than folded into the
+ * sentence above because the two send a reader to opposite places — that one to
+ * the relay configuration, this one to the identity file — and a wrong signpost
+ * costs more than a sentence nobody ever reads.
+ */
+export const RELAY_FACTS_UNUSABLE =
+  'This host is on a relay and could not describe itself: its own relay URL, host id or ' +
+  'public key is not in a form a client could dial. Nothing can be pasted into a phone until ' +
+  `that is fixed — "${BRAND.id} status" prints all three under Relay.`
+
+/**
+ * The address, or the reason there is not one. Never both, never neither.
+ *
+ * A discriminated answer rather than `string | null`, because a null would leave
+ * every caller re-deciding *which* of the two sentences above applies — from the
+ * same `relay` value, in three places, with nothing keeping them in agreement.
+ */
+export type AddressAnswer = { ok: true; address: string } | { ok: false; why: string }
+
+export function addressAnswer(relay: HostStatus['remote']['relay']): AddressAnswer {
+  if (relay === null) return { ok: false, why: NO_RELAY_NO_ADDRESS }
+  const address = addressOf(relay)
+  return address === null ? { ok: false, why: RELAY_FACTS_UNUSABLE } : { ok: true, address }
+}
+
+/**
+ * The `Server address` block `status` prints, as lines.
+ *
+ * Its own block rather than another row inside `Relay`, because it is not a fact
+ * about the relay link — it is the answer to the question most people open this
+ * output to ask, and burying it under three diagnostic rows is how somebody
+ * concludes the feature is missing. Which is precisely what happened: the wire
+ * for signing in from a phone shipped complete, and the address never got
+ * printed anywhere, so there was nothing valid anybody could type into a phone.
+ *
+ * The token is on a line of its own with nothing after it, so that selecting the
+ * line selects the address — a trailing comment on the same line is a paste that
+ * fails validation for a reason nobody can see.
+ */
+export function renderAddress(relay: HostStatus['remote']['relay']): string[] {
+  const answer = addressAnswer(relay)
+  const out = ['Server address']
+  if (!answer.ok) {
+    const [first, ...rest] = wrap(answer.why, 72)
+    out.push(`  none — ${first}`)
+    for (const line of rest) out.push(`         ${line}`)
+    return out
+  }
+  out.push(`  ${answer.address}`)
+  out.push('')
+  for (const line of wrap(PASTE_IT, 72)) out.push(`  ${line}`)
+  // A blank line between them, because they answer different questions — what
+  // to do with it, and what it is safe to do with it — and run together they
+  // read as one paragraph nobody finishes.
+  out.push('')
+  for (const line of wrap(ADDRESS_IS_NOT_A_SECRET, 72)) out.push(`  ${line}`)
+  return out
+}
+
+/**
+ * What to do with the address, said where the address is.
+ *
+ * Named as a step in the app rather than as a concept, because the complaint
+ * this whole change answers was *"i dont see any option there to pair it with
+ * server"* — somebody holding a phone, looking for a screen. A sentence that
+ * explains what an address *is* helps nobody find that screen.
+ */
+export const PASTE_IT =
+  'Paste it into the app on a phone or another computer: Add a server, then sign in with a ' +
+  'username and password or key this machine already accepts.'
+
+/**
+ * Everything `${BRAND.id} address` says that is not the address.
+ *
+ * Printed to **stderr** by `main.ts`, which is the whole reason this is separate
+ * from {@link renderAddress}: stdout is one token, so `X=$(terminaldeck address)`
+ * puts an address in a variable and nothing else. A person at a terminal sees
+ * both streams and cannot tell they were split; a script sees only the value.
+ */
+export function renderAddressNote(): string {
+  return ['', PASTE_IT, '', ADDRESS_IS_NOT_A_SECRET, ''].join('\n')
 }
 
 /**
@@ -661,6 +812,17 @@ export function renderStatus(status: HostStatus, now: number): string {
     out.push(`  not connected  ${relay.reason ?? 'no reason given'}`)
     if (relay.retryAt !== null) out.push(`  retrying in    ${duration(relay.retryAt - now)}`)
   }
+  out.push('')
+
+  /*
+   * The address, directly under the relay block it is derived from.
+   *
+   * High in the output on purpose. `servers/host.ts` reads this output over SSH
+   * with `head -n 60`, and — more to the point — a person scrolling for the one
+   * string they can act on should not have to pass the idle report, the session
+   * list and the device roster to reach it.
+   */
+  for (const line of renderAddress(relay)) out.push(line)
   out.push('')
 
   /*

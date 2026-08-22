@@ -621,8 +621,59 @@ fi
 say ""
 say "Next:"
 say ""
-say "    terminaldeck pair      # show a code, type it into your phone, approve it"
+say "    terminaldeck address   # the address to paste into the app on your phone"
+say "    terminaldeck pair      # show a code instead, and approve the device here"
 say "    terminaldeck status    # what this machine needs to stay reachable"
+say ""
+
+# The address itself, not the name of the command that would print it.
+#
+# This is the last thing between a fresh server and a phone, and until now it
+# was missing entirely: the host printed a host id and a fingerprint, both of
+# them one-way hashes, so there was nothing a person could type into a phone to
+# reach a machine it had never met. `terminaldeck address` prints the one string
+# that can start that handshake, and an installer that ends by naming a command
+# instead of running it is an installer that ends one step early — on a rented
+# box, in an SSH window somebody is about to close.
+#
+# It starts the host, deliberately, exactly as `terminaldeck pair` has always
+# done. The address is derived from the relay link and the relay link only
+# exists inside a running host, so there is no version of this that both prints
+# an address and leaves nothing running. The alternative is the failure this
+# script's own header names: "a host installed and never started is
+# indistinguishable from a broken one when you are looking at a phone in another
+# country."
+#
+# `2>/dev/null` because that command puts the address on stdout and every
+# sentence it has — including "Starting the host…" — on stderr, so this captures
+# an address or an empty string and never a mixture. A failure is not fatal
+# here: the install itself succeeded, and the fallback names the two commands
+# that explain why there is nothing to paste yet.
+address=""
+if [ -x "${bin_dir}/${PACKAGE}" ]; then
+  say "Starting the host and asking it for this server's address…"
+  address=$("${bin_dir}/${PACKAGE}" address 2>/dev/null || printf '')
+fi
+
+if [ -n "$address" ]; then
+  say ""
+  say "This server's address:"
+  say ""
+  say "    ${address}"
+  say ""
+  say "Paste it into the app on your phone or another computer: Add a server, then"
+  say "sign in with a username and password or key this machine already accepts."
+  say ""
+  say "That address is NOT a secret. It carries a public key and a public name at a"
+  say "relay, and it grants nothing on its own — the login is the gate. Copy it to"
+  say "yourself however is convenient."
+else
+  say ""
+  say "No address yet — this host is not on the relay, so there is no slot for a phone"
+  say "to find it in. \`${PACKAGE} status\` says why, and \`${PACKAGE} address\` prints"
+  say "the address once it is up."
+fi
+
 say ""
 say "Read the status output before you rely on this from somewhere else. On a"
 say "server it usually says there is nothing to do. Inside WSL it does not: Windows"

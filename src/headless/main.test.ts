@@ -25,7 +25,8 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { BRAND } from '../shared/brand'
 import { nodePaths } from '../main/platform/paths'
-import { RECORD_FILE } from './control'
+import { formatServerAddress, parseServerAddress } from '../shared/server-address'
+import { RECORD_FILE, controlPaths, serveControl, writeDaemonRecord, type ControlServer } from './control'
 import { run } from './main'
 
 /**
@@ -73,17 +74,29 @@ function staleRecord(): void {
 }
 
 let written = ''
+let complained = ''
 const real = process.stdout.write.bind(process.stdout)
+const realError = process.stderr.write.bind(process.stderr)
 function capture(): void {
   written = ''
+  complained = ''
   process.stdout.write = ((chunk: string | Uint8Array): boolean => {
     written += typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8')
     return true
   }) as typeof process.stdout.write
+  // Captured separately, and that separation is the point of one of the tests
+  // below rather than a convenience: `address` promises that stdout is the token
+  // and nothing else, and a harness that merged the two streams could not tell
+  // whether it kept that promise.
+  process.stderr.write = ((chunk: string | Uint8Array): boolean => {
+    complained += typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8')
+    return true
+  }) as typeof process.stderr.write
 }
 
 afterEach(() => {
   process.stdout.write = real
+  process.stderr.write = realError
 })
 
 describe('a record whose pid has been reused', () => {
@@ -164,5 +177,91 @@ describe('a state directory with no record at all', () => {
     expect(code).toBe(0)
     expect(written).toContain('not running')
     expect(written).toContain(STATE_DIR)
+  })
+})
+
+/**
+ * `terminaldeck address`, over a real control socket.
+ *
+ * A stand-in host rather than the real daemon, because what is under test here
+ * is the *command* — which stream each half goes to, and what the exit code says
+ * — and the address itself is derived by `addressOf` from the relay state this
+ * socket hands back. `address-live.test.ts` is the other half: a genuine host
+ * identity, minted for real, parsing back into its own three facts.
+ */
+const ADDRESS = formatServerAddress({
+  url: 'wss://relay.terminaldeck.dev',
+  hostId: 'A2B3C4D5E6F7G8H9JKLMNPQSTU',
+  hostKey: Buffer.alloc(32, 7).toString('base64url'),
+}) as string
+
+async function hostAnswering(relay: unknown): Promise<ControlServer> {
+  noRecord()
+  const { socket } = controlPaths(STATE_DIR, 'linux')
+  const token = 'a-token'
+  const control = await serveControl({
+    socket,
+    token,
+    platform: 'linux',
+    handle: async (cmd) => {
+      if (cmd !== 'status') throw new Error(`this stand-in only answers status, not ${cmd}`)
+      return { remote: { relay } }
+    },
+  })
+  writeDaemonRecord(STATE_DIR, {
+    pid: process.pid,
+    socket,
+    token,
+    startedAt: Date.now(),
+    version: '0.0.0-test',
+  })
+  return control
+}
+
+describe('the address command', () => {
+  it('puts the address on stdout and every sentence it has on stderr', async () => {
+    const control = await hostAnswering({
+      url: 'wss://relay.terminaldeck.dev',
+      hostId: 'A2B3C4D5E6F7G8H9JKLMNPQSTU',
+      publicKey: Buffer.alloc(32, 7).toString('base64url'),
+      fingerprint: 'AAAA-BBBB',
+      connected: true,
+      channels: 0,
+      reason: null,
+      retryAt: null,
+    })
+    capture()
+
+    try {
+      const code = await run(['address'], PATHS)
+
+      expect(code).toBe(0)
+      // The promise `install-headless.sh` relies on: `A=$(… address)` is an
+      // address, not an address with prose stuck to it.
+      expect(written.trim()).toBe(ADDRESS)
+      expect(parseServerAddress(written)).not.toBeNull()
+      expect(complained).toContain('Add a server')
+      expect(complained).toContain('not a secret')
+      expect(complained).not.toContain(ADDRESS)
+    } finally {
+      await control.close()
+    }
+  })
+
+  it('writes nothing to stdout and exits 1 when there is no address to give', async () => {
+    const control = await hostAnswering(null)
+    capture()
+
+    try {
+      const code = await run(['address'], PATHS)
+
+      // Nothing shaped like an address, so nothing to paste and then wonder
+      // about minutes later at a handshake.
+      expect(code).toBe(1)
+      expect(written).toBe('')
+      expect(complained).toContain('not dialling out to a relay')
+    } finally {
+      await control.close()
+    }
   })
 })

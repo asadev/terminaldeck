@@ -6,17 +6,34 @@
  * Everything it prints is rendered by `cli.ts`, which has no process in it;
  * everything it decides about *reaching* the host is here.
  *
- * ## Why `pair` may start the host and `status` may not
+ * ## Why `pair` and `address` may start the host and `status` may not
  *
  * `pair` is the whole onboarding — "run it, read the code off the screen, type
  * it into the phone" — and an onboarding command that refuses because a service
  * is not installed yet is an onboarding command that fails on its first use. So
  * it starts the host if one is not running, and says that it did.
  *
+ * `address` is the *other* onboarding, and now the main one: a phone signing in
+ * to this server directly needs the string this command prints, and there is no
+ * other way to get it. The argument above is the same argument word for word —
+ * and there is a second one that only applies here. The address is derived from
+ * the relay link, and the relay link exists only inside a running host, so
+ * "install it, then ask it what to paste" cannot be a two-step ceremony without
+ * the second step being "and first start a service you have not heard of". The
+ * installer ends by asking for the address for exactly this reason.
+ *
  * `status` must never start anything, for the opposite reason: its entire job is
  * to answer whether this machine is reachable, and a `status` that quietly made
  * the answer true could never report the one state a person actually needs to
  * see — the host is not running, and here is what to do about it.
+ *
+ * ## `address` writes the address to stdout and everything else to stderr
+ *
+ * Including "Starting the host…", which is why the line below is not simply
+ * `process.stdout.write`. The contract is that stdout is one token: an installer
+ * or a provisioning script does `A=$(… address)` and gets an address, not an
+ * address with a progress line stuck to the front of it. A person at a terminal
+ * sees both streams interleaved and cannot tell they were ever separated.
  */
 
 import { spawn } from 'node:child_process'
@@ -43,6 +60,7 @@ import {
 import {
   KIND_PROMPT,
   NO_COPILOT_HERE,
+  addressAnswer,
   parseArgs,
   pickDevice,
   renderApproved,
@@ -50,6 +68,7 @@ import {
   renderFolders,
   renderKindQuestion,
   renderNewDevice,
+  renderAddressNote,
   renderNotApproved,
   renderNotRunning,
   renderPairCode,
@@ -171,7 +190,7 @@ async function connected(command: Command): Promise<number> {
     }
   }
 
-  if (command.kind !== 'pair') {
+  if (command.kind !== 'pair' && command.kind !== 'address') {
     process.stdout.write(`${renderNotRunning(stateDir)}\n`)
     // Not an error. "Not running" is a true and complete answer to `status`,
     // and a non-zero exit would make a health check report a failure for a
@@ -179,7 +198,9 @@ async function connected(command: Command): Promise<number> {
     return command.kind === 'status' ? 0 : 1
   }
 
-  process.stdout.write(`Starting the ${BRAND.name} host…\n`)
+  // stderr for `address`, whose stdout is reserved for the address itself.
+  const chatter = command.kind === 'address' ? process.stderr : process.stdout
+  chatter.write(`Starting the ${BRAND.name} host…\n`)
   const started = await startHost(stateDir)
   if (started !== null) {
     process.stderr.write(`${started}\n`)
@@ -197,6 +218,8 @@ async function dispatch(record: DaemonRecord, command: Command): Promise<number>
   switch (command.kind) {
     case 'status':
       return await showStatus(record)
+    case 'address':
+      return await showAddress(record)
     case 'pair':
       return await pair(record, command)
     case 'devices':
@@ -222,6 +245,29 @@ async function showStatus(record: DaemonRecord): Promise<number> {
   const answer = await ask(record, 'status')
   if (!answer.ok) return fail(answer)
   process.stdout.write(`${renderStatus(answer.value as HostStatus, Date.now())}\n`)
+  return 0
+}
+
+/**
+ * `terminaldeck address` — the one string a phone needs to reach this machine.
+ *
+ * Exit 1 with the reason on stderr and **nothing on stdout** when there is no
+ * address, rather than printing something shaped like one. A caller that
+ * captured stdout gets an empty string it can test for, and a person gets the
+ * sentence that says which state this is. The failure this avoids is a token
+ * that looks right, is pasted into a phone, and dies at a handshake minutes
+ * later with nothing pointing back at the paste.
+ */
+async function showAddress(record: DaemonRecord): Promise<number> {
+  const answer = await ask(record, 'status')
+  if (!answer.ok) return fail(answer)
+  const address = addressAnswer((answer.value as HostStatus).remote.relay)
+  if (!address.ok) {
+    process.stderr.write(`${address.why}\n`)
+    return 1
+  }
+  process.stdout.write(`${address.address}\n`)
+  process.stderr.write(renderAddressNote())
   return 0
 }
 

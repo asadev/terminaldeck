@@ -76,6 +76,7 @@
  */
 
 import { BRAND } from '../../shared/brand'
+import { SERVER_ADDRESS_PREFIX, parseServerAddress } from '../../shared/server-address'
 import type { HostPackage } from './host-package'
 
 /* --------------------------------------------------------- what it needs -- */
@@ -259,6 +260,22 @@ export interface HostOnServer {
   running: HostRunning
   /** The host's own `status` output, verbatim. Empty when there is nothing to ask. */
   status: string
+  /**
+   * The pasteable **server address** that host printed, or `''`.
+   *
+   * The one string a phone that has never met that machine can act on, and the
+   * reason this field exists at all: a host id is `BASE32(SHA-256(secret))` and
+   * a fingerprint is a digest of the public key, so neither can start the Noise
+   * IK handshake a first connection is. Everything this panel could show before
+   * was one of those two.
+   *
+   * Read out of the status this screen already fetches rather than asked for
+   * separately — one round trip already carries it, and a second command over
+   * SSH to re-derive a value that is on screen is a second thing to be out of
+   * date. Empty when that host is not on a relay, which is a state the panel
+   * says out loud rather than a blank.
+   */
+  address: string
   /** `active`, `inactive`, `failed`, or `''` when there is no unit of ours. */
   unit: string
   /**
@@ -441,6 +458,33 @@ export function hostIdOf(status: string): string {
 }
 
 /**
+ * The pasteable server address out of that host's own `status`, or `''`.
+ *
+ * Anchored on the block `renderStatus` writes — heading `Server address`, then
+ * the token on a line of its own — rather than scanning the whole output for
+ * anything beginning `srv1.`. The scan would very probably be correct, because
+ * the format is strict enough that a false positive is not really available; the
+ * anchor is here for the same reason {@link relayState} has one, which is that
+ * "very probably correct" over somebody else's machine's output is how a panel
+ * ends up displaying a line from a session transcript.
+ *
+ * Validated with the real parser before it is returned, so what crosses to the
+ * renderer either works when it is pasted or is empty. A host running a build
+ * older than the address prints no such block and answers `''`, which the panel
+ * draws as the sentence about upgrading rather than as a missing control.
+ */
+const ADDRESS_HEADING = 'Server address'
+
+export function serverAddressOf(status: string): string {
+  const lines = status.split('\n')
+  const at = lines.findIndex((line) => line.trim() === ADDRESS_HEADING)
+  if (at === -1) return ''
+  const said = (lines[at + 1] ?? '').trim()
+  if (!said.startsWith(SERVER_ADDRESS_PREFIX)) return ''
+  return parseServerAddress(said) === null ? '' : said
+}
+
+/**
  * How many clients that host has open on the relay right now, or null when it
  * will not say.
  *
@@ -499,6 +543,7 @@ export function readHostProbe(out: string): HostLook {
       version: value('version'),
       running,
       status,
+      address: serverAddressOf(status),
       unit: value('unit'),
       linger: value('linger') === 'yes',
       data: value('state') === 'yes',

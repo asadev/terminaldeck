@@ -291,6 +291,30 @@ describe('the shape of the script itself', () => {
   it('still says what to do next, which on a server is the part people get wrong', () => {
     expect(script).toContain('terminaldeck pair')
     expect(script).toContain('terminaldeck status')
+    expect(script).toContain('terminaldeck address')
+  })
+
+  it('ends by printing the address, not by naming the command that would', () => {
+    // The gap this closes: a host id and a fingerprint are one-way hashes, so
+    // until `address` existed there was nothing a fresh server could print that
+    // a phone could type. An installer that stops at "now run this" stops one
+    // step short of the only string that works, in an SSH window somebody is
+    // about to close.
+    expect(script).toMatch(/address=\$\("\$\{bin_dir\}\/\$\{PACKAGE\}" address/)
+    // stdout is the address and stderr is everything else, which is what makes
+    // the capture an address rather than an address with a progress line on it.
+    expect(script).toContain('address 2>/dev/null')
+  })
+
+  it('says the address is not a secret, where it prints it', () => {
+    // A long random-looking token gets treated as a credential unless it says
+    // otherwise, and somebody who will not paste it cannot use the feature.
+    expect(script).toContain('NOT a secret')
+    expect(script).toMatch(/grants nothing on its own/)
+  })
+
+  it('has a sentence for a host with no relay instead of a broken address', () => {
+    expect(script).toContain('No address yet')
   })
 
   it('does not claim success when npm installed something with no command in it', () => {

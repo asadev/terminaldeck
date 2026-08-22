@@ -917,6 +917,48 @@ a.settings-btn {
   user-select: text;
 }
 
+/*
+ * The server address.
+ *
+ * The pairing code above is six characters somebody reads aloud while typing;
+ * this is a hundred and eighty characters nobody will ever type, so the two do
+ * not share a treatment. Small, dense, and wrapped on any character — an address
+ * has no spaces in it, so without `anywhere` a single unbreakable token would
+ * push this whole panel sideways the way the relay fingerprint used to.
+ *
+ * Selectable for the same reason the code is: Copy is a permission that can be
+ * refused, and selecting the text is the route that cannot fail.
+ */
+.servers-host-address {
+  margin-top: var(--sp-3);
+  padding: var(--sp-3);
+  border-radius: var(--radius-lg);
+  background: var(--bg-sunken);
+}
+
+.servers-host-address-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.servers-host-address-label {
+  font-size: var(--t-callout);
+  font-weight: var(--w-semibold);
+  color: var(--text-primary);
+}
+
+.servers-host-address-value {
+  margin: var(--sp-2) 0 0;
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
 .servers-host-also {
   display: flex;
   align-items: center;

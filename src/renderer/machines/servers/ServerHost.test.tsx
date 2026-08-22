@@ -1,6 +1,16 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { NO_COPILOT, PairingCode, awayLine, hostControls, linkedLine } from './ServerHost'
+import {
+  ADDRESS_HOW,
+  NO_COPILOT,
+  PairingCode,
+  ServerAddress,
+  awayLine,
+  hostControls,
+  linkedLine,
+  noAddressLine,
+} from './ServerHost'
+import { formatServerAddress } from '../../../shared/server-address'
 import { asHostOffer } from './types'
 import type { HostOffer } from './types'
 
@@ -20,12 +30,26 @@ import type { HostOffer } from './types'
  * code. Check the digits"* to somebody who had never typed a digit.
  */
 
+/**
+ * A real address, not a placeholder.
+ *
+ * Built by the shared formatter rather than typed out, so that a change to the
+ * format shows up here as a changed fixture instead of as a screen displaying a
+ * string no client would accept.
+ */
+const ADDRESS = formatServerAddress({
+  url: 'wss://relay.terminaldeck.dev',
+  hostId: 'A2B3C4D5E6F7G8H9JKLMNPQSTU',
+  hostKey: Buffer.alloc(32, 7).toString('base64url'),
+}) as string
+
 const NOW_OFFER = {
   host: {
     command: '/home/me/.local/bin/terminaldeck',
     version: '0.9.1',
     running: 'yes',
     status: 'Terminal Deck host 0.9.1 — running, idle',
+    address: ADDRESS,
     unit: 'active',
     linger: true,
     data: true,
@@ -53,7 +77,15 @@ function offer(over: Record<string, unknown> = {}): HostOffer {
 /** A server with nothing on it, which is where the Install button lives. */
 function empty(over: Record<string, unknown> = {}): HostOffer {
   return offer({
-    host: { ...NOW_OFFER.host, command: '', version: '', running: 'unknown', status: '', unit: '' },
+    host: {
+      ...NOW_OFFER.host,
+      command: '',
+      version: '',
+      running: 'unknown',
+      status: '',
+      address: '',
+      unit: '',
+    },
     canInstall: true,
     why: null,
     ...over,
@@ -222,6 +254,62 @@ describe('the pairing code', () => {
     const html = renderToStaticMarkup(<PairingCode code="904021" />)
     expect(html).toContain('fingerprint')
     expect(html).toContain('about a minute')
+  })
+})
+
+describe('the address for a phone', () => {
+  /*
+   * The screen that was missing, and the reason the whole feature was
+   * unreachable in the shipped build. `enroll` and its whole wire were there;
+   * nothing printed the one string a phone that has never met this machine can
+   * act on, because a host id and a fingerprint are both one-way hashes.
+   */
+  it('shows the address, in full, without anything to press first', () => {
+    const html = renderToStaticMarkup(<ServerAddress address={ADDRESS} running="yes" />)
+    expect(html).toContain(ADDRESS)
+    expect(html).toContain('Address for a phone')
+  })
+
+  it('says what to do with it, in the steps of the app rather than as a concept', () => {
+    const html = renderToStaticMarkup(<ServerAddress address={ADDRESS} running="yes" />)
+    expect(html).toContain('Add a server')
+    expect(html).toContain('sign in')
+  })
+
+  it('says it is not a secret, because it will be treated as one otherwise', () => {
+    const html = renderToStaticMarkup(<ServerAddress address={ADDRESS} running="yes" />)
+    expect(html).toContain('not a secret')
+    expect(html).toContain('the login is the gate')
+  })
+
+  it('offers exactly one control, and it copies', () => {
+    const html = renderToStaticMarkup(<ServerAddress address={ADDRESS} running="yes" />)
+    expect(html.match(/<button/g)?.length).toBe(1)
+    expect(html).toContain('Copy')
+  })
+
+  /*
+   * Never a blank where a control would be. A missing address on a panel that
+   * otherwise looks finished reads as this app failing rather than as that
+   * machine having nothing to say — and the three states have three remedies.
+   */
+  it('draws no address and no button when that server has none, and says why', () => {
+    const html = renderToStaticMarkup(<ServerAddress address="" running="yes" />)
+    expect(html).not.toContain('<button')
+    expect(html).not.toContain('srv1.')
+    expect(html).toContain('not on a relay')
+  })
+
+  it('names the remedy that matches the state the host is in', () => {
+    expect(noAddressLine('no')).toContain('not running')
+    expect(noAddressLine('unknown')).toContain('did not say')
+    // The one that catches a host older than this feature, which prints no
+    // address block at all and would otherwise look like a relay problem.
+    expect(noAddressLine('yes')).toContain('upgrading')
+  })
+
+  it('keeps the instructions with the address rather than in this test', () => {
+    expect(ADDRESS_HOW).toContain('Add a server')
   })
 })
 

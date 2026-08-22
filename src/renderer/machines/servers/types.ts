@@ -1114,6 +1114,16 @@ export interface HostOnServer {
   running: HostRunning
   /** The host's own status output, verbatim, or empty when there is none to ask. */
   status: string
+  /**
+   * The pasteable server address that host printed, or `''`.
+   *
+   * What a phone needs before it has ever met that machine — see the field of
+   * the same name in `src/main/servers/host.ts`, which is where it is read out
+   * of the status above and validated. Empty for a host with no relay link, and
+   * empty for a host running a build older than the address; the panel says
+   * which rather than drawing a blank.
+   */
+  address: string
   unit: string
   linger: boolean
   data: boolean
@@ -1204,6 +1214,10 @@ export function asHostOffer(value: unknown): HostOffer | null {
       version: text(host.version),
       running: running === 'yes' ? 'yes' : running === 'no' ? 'no' : 'unknown',
       status: text(host.status),
+      // Unreadable is "no address", which draws the sentence rather than a
+      // control — the same direction every other field here is read in, and the
+      // safe one: a half-read address is a paste that fails at a handshake.
+      address: text(host.address),
       unit: text(host.unit),
       linger: host.linger === true,
       data: host.data === true,

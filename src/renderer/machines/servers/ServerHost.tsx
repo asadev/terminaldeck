@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Button } from '../../settings/controls'
 import { ServerTerminal } from './ServerTerminal'
 import { asHostOffer, asHostState, succeeded } from './types'
-import type { HostOffer, HostState, Server, ServersBridge } from './types'
+import type { HostOffer, HostRunning, HostState, Server, ServersBridge } from './types'
 
 /**
  * Running sessions **on** this server, from the page that is already looking at
@@ -225,6 +225,22 @@ export function ServerHost({
           {controls.away ? awayLine(controls.linkedAs) : linkedLine(controls.linkedAs)}
         </p>
       )}
+      {/*
+        The address for a phone.
+
+        Drawn rather than hidden behind a press, because unlike the pairing code
+        below it there is nothing to mint: this value came back with the same
+        `servers:host:look` that drew this panel, and a button that reveals data
+        already in hand is ceremony that hides the one thing somebody came here
+        for. His complaint about the shipped build was, exactly, *"i dont see any
+        option there to pair it with server"* — so the answer is not another
+        control to find.
+
+        Above the pairing code and above the terminal, because it is now the
+        ordinary route and the code is the fallback.
+      */}
+      {here && <ServerAddress address={offer.host.address} running={offer.host.running} />}
+
       {here && <p className="servers-card-why">{NO_COPILOT}</p>}
 
       {/* Every step that has finished, in order, each already a sentence. This
@@ -346,6 +362,124 @@ export function ServerHost({
         </details>
       )}
     </section>
+  )
+}
+
+/**
+ * The address of that server, for a device that has never met it.
+ *
+ * ## Why this is the screen that was missing
+ *
+ * The wire for signing in to a server from a phone shipped complete — `enroll`,
+ * the SSH verification, the credential, the roster — and no client had a screen
+ * that could start it, because there was nothing valid to put in the form. A
+ * first connection is a Noise IK handshake and IK needs the machine's X25519
+ * **public key** up front; the two strings a host printed were a host id and a
+ * fingerprint, and both are one-way hashes. This is the value that closes that,
+ * and this panel is where somebody standing in front of a server they just
+ * installed will look for it.
+ *
+ * ## Copyable, and selectable whether or not the copy works
+ *
+ * The value is a hundred and eighty characters, so reading it aloud is not a
+ * route and Copy is the only real affordance. But a Copy button that fails
+ * silently is the dead control §4.1 forbids, and `navigator.clipboard` is a
+ * permission and a `Promise` rather than a certainty — so a refusal says so, and
+ * the text is `user-select: text` underneath, which is the route that cannot
+ * fail.
+ *
+ * ## And it says it is not a secret
+ *
+ * A long random-looking token gets treated as a credential unless it says
+ * otherwise, and somebody who will not paste a thing into a chat with themselves
+ * cannot use this feature. It carries a public key, a public name at a relay,
+ * and the URL of a service this product assumes is hostile; the gate is the SSH
+ * login `enroll` checks against that server's own sshd.
+ */
+export function ServerAddress({ address, running }: { address: string; running: HostRunning }) {
+  const [said, setSaid] = useState<'' | 'copied' | 'refused'>('')
+
+  // Cleared on a timer so the button goes back to offering the thing it does,
+  // and cleared on unmount so a panel that closed mid-copy does not set state on
+  // a component that is gone.
+  useEffect(() => {
+    if (said === '') return
+    const timer = setTimeout(() => setSaid(''), 4000)
+    return () => clearTimeout(timer)
+  }, [said])
+
+  const copy = useCallback(() => {
+    const clipboard = typeof navigator === 'undefined' ? undefined : navigator.clipboard
+    if (!clipboard?.writeText) {
+      setSaid('refused')
+      return
+    }
+    void clipboard.writeText(address).then(
+      () => setSaid('copied'),
+      () => setSaid('refused'),
+    )
+  }, [address])
+
+  if (address === '') return <p className="servers-card-why">{noAddressLine(running)}</p>
+
+  return (
+    <div className="servers-host-address">
+      <div className="servers-host-address-top">
+        <span className="servers-host-address-label">Address for a phone</span>
+        <Button onClick={copy}>{said === 'copied' ? 'Copied' : 'Copy'}</Button>
+      </div>
+      <p className="servers-host-address-value">{address}</p>
+      {said === 'refused' && (
+        <p className="servers-card-why">
+          This window could not reach the clipboard. Select the address above and copy it.
+        </p>
+      )}
+      <p className="servers-card-why">{ADDRESS_HOW}</p>
+      <p className="servers-card-why">{ADDRESS_NOT_A_SECRET}</p>
+    </div>
+  )
+}
+
+/** What to do with it, named as a step in the app rather than as a concept. */
+export const ADDRESS_HOW =
+  'Paste it into the app on your phone or another computer: Add a server, then sign in with a ' +
+  'username and password or key this server already accepts.'
+
+/**
+ * Said here rather than left to be assumed, because the assumption is expensive
+ * in both directions: somebody who thinks this is a credential will not paste it
+ * to themselves, and somebody who later finds one in a chat log should not spend
+ * an afternoon rotating keys over it.
+ */
+export const ADDRESS_NOT_A_SECRET =
+  'This address is not a secret. It holds a public key and this server’s public name at a relay, ' +
+  'and it grants nothing on its own — the login is the gate.'
+
+/**
+ * Why there is no address, in that server's terms.
+ *
+ * Three states and never a blank, because a missing address on a panel that
+ * otherwise looks finished reads as this app failing rather than as that machine
+ * having nothing to say. The remedies differ: start the host, wait for or fix
+ * the relay link, or upgrade a host too old to print one.
+ */
+export function noAddressLine(running: HostRunning): string {
+  if (running === 'no') {
+    return (
+      'There is no address for a phone while the host on this server is not running. Start it, ' +
+      'and this panel will show the address to paste.'
+    )
+  }
+  if (running === 'unknown') {
+    return (
+      'This server did not say whether its host is running, so there is no address to show. ' +
+      'What it says about itself, below, is the whole of what it answered.'
+    )
+  }
+  return (
+    'This server has no address to hand out: its host is running and is not on a relay, so ' +
+    'there is no slot for a phone to find it in. What it says about itself, below, says why — ' +
+    'and a host older than this feature prints no address at all, which upgrading it fixes.'
   )
 }
 

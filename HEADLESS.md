@@ -25,16 +25,47 @@ are all just machines you can open a session on.
 There is no window, so the UI is the terminal it is installed from.
 
 ```
+$ terminaldeck address     # the server address — paste it into the app on a phone
 $ terminaldeck pair        # prints a short code + a QR, waits, confirms
 $ terminaldeck status      # running? paired to what? sessions? relay reachable?
 $ terminaldeck folders     # list / add / remove the folders a device may use
 $ terminaldeck stop
 ```
 
-`pair` is the whole onboarding: run it, read the code off the screen, type it
+`address` is the onboarding a server actually wants, because it needs nobody at
+this keyboard: it prints one pasteable token carrying the relay URL, this host's
+id and its **X25519 public key**, and a phone that has it can open a first
+connection and sign in with a login this machine already accepts (`enroll`, then
+`hello`, on the same socket).
+
+That third fact is why the token has to exist at all. A first connection is a
+Noise **IK** handshake, so the client must know the responder's public key before
+it says anything; a host id is `BASE32(SHA-256(secret))` and a fingerprint is a
+digest of the key, and neither can start one. Until this command there was
+literally nothing a person could type into a phone to reach a machine it had
+never met — which is why no client shipped an add-a-server screen.
+
+**The address is not a secret.** It carries a public key, a public name at a
+relay, and the URL of a service this design assumes is hostile. It grants
+nothing on its own: the gate is the SSH login `enroll` verifies against this
+machine's own sshd, and the credential the host mints afterwards. Everything that
+prints it says so, because a long random-looking token gets treated as a
+credential otherwise — and somebody who will not paste it cannot use the feature.
+
+Two mechanics worth knowing. `address` **starts the host** if one is not running,
+exactly as `pair` does and for the same reason — the address is derived from the
+relay link and the relay link only exists inside a running host, so there is no
+version of "ask it what to paste" that leaves nothing running. And its **stdout
+is the token and nothing else**; every sentence it has, including "Starting the
+host…", goes to stderr, so `A=$(terminaldeck address)` is an address rather than
+an address with a progress line stuck to it. `scripts/install-headless.sh` ends
+by doing exactly that.
+
+`pair` is the other onboarding: run it, read the code off the screen, type it
 into the phone or the other machine. Same short-code scheme as PC-to-PC pairing
 (`CREDENTIAL-PROXY.md` and the pairing notes) — one mechanism everywhere, not a
-second one for headless.
+second one for headless. It stays because it needs no login on this machine at
+all, which is the case `address` cannot serve.
 
 Keep it to those. A headless build that grows a config file nobody can find is
 how these become unmaintainable.
