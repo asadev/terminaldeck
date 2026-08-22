@@ -41,6 +41,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -222,7 +223,20 @@ fun CopilotScreen(
      * text growing, which is the thing it actually is.
      */
     LaunchedEffect(tail) {
-        if (view.entries.isNotEmpty() && following) listState.scrollToItem(view.entries.size)
+        if (view.entries.isEmpty() || !following) return@LaunchedEffect
+        listState.scrollToItem(view.entries.size)
+        /*
+         * And again on the next frame, because the first one scrolled a layout that did not yet
+         * contain the row this effect was woken by.
+         *
+         * `LaunchedEffect` runs as the composition is applied, before the new row has been measured,
+         * so the clamp at the end of the list is computed against the old height and lands short —
+         * on an emulator, just far enough short to hide a message that had *just* been sent, which
+         * is the one row a person is looking for. One extra frame is imperceptible and costs a
+         * single suspension.
+         */
+        withFrameNanos {}
+        listState.scrollToItem(view.entries.size)
     }
 
     Scaffold(
