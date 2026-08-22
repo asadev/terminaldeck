@@ -402,14 +402,17 @@ describe('what the client sends', () => {
     expect(JSON.parse(encode(hello))).toEqual(hello)
   })
 
-  it('claims `credential`, and claims nothing it merely wants to ask for', () => {
+  it('claims `credential` and `devices`, and claims nothing it merely wants to ask for', () => {
     // Load bearing rather than informational: a desktop that does not see
     // `credential` here never sends `credential.request`, so a push from a
     // folder this browser was granted fails with "your device isn't reachable"
-    // about a tab that is open and connected. `create`, `localhost` and `upload`
-    // are things this client asks *for* and are gated on what the desktop
-    // advertised, so claiming them would say nothing.
-    expect(CLAIMED_CAPABILITIES).toEqual(['credential'])
+    // about a tab that is open and connected. `devices` is here for the same
+    // shape of reason — the host sends `devices.changed` only to a connection
+    // that named it, so a client that wants the roster to stay live must claim
+    // it. `create`, `localhost` and `upload` are things this client asks *for*
+    // and are gated on what the desktop advertised, so claiming them says
+    // nothing.
+    expect(CLAIMED_CAPABILITIES).toEqual(['credential', 'devices'])
   })
 })
 

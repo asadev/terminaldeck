@@ -2124,6 +2124,109 @@ a.browse__go {
   background: var(--bg-active);
 }
 
+/* --------------------------------------------------------------- devices -- */
+
+/* The device roster, cards like the machines list and for the same reason: a
+   row is four lines — name, standing, when it was last here, fingerprint — and
+   sometimes six with the Remove confirm open, and at that height a gapless list
+   reads as one block of text. */
+.devices {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.device {
+  margin-bottom: 10px;
+  padding: 12px 12px 12px 14px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+}
+
+.device__line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* The dot is the live socket, filled only for a device connected right now and
+   an outline otherwise — the same honesty rule the machine dot follows: a solid
+   dot on a device nobody is talking to would be a claim this client cannot back. */
+.device__dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--status-idle);
+}
+.device__dot--live {
+  background: var(--status-completed);
+  box-shadow: none;
+}
+
+.device__name {
+  min-width: 0;
+  flex: 1;
+  font-size: 16px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The "This device" tag, quiet and tinted so it reads as a label on the row
+   rather than a second name. */
+.device__tag {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.device__standing {
+  margin: 6px 0 0 19px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.device__state {
+  margin: 3px 0 0 19px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+/* Mono, because it is a value to be compared character by character against the
+   one the device itself shows — the same treatment a host id gets. */
+.device__print {
+  margin: 3px 0 0 19px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.device__remove {
+  width: auto;
+  margin: 10px 0 0 19px;
+}
+
+/* The confirm and its Cancel, side by side. Always rendered together — the
+   screen swaps the single Remove for this pair rather than hiding one — so there
+   is no [hidden] state on this flex row to declare. */
+.device__actions {
+  display: flex;
+  gap: 8px;
+  margin: 10px 0 0 19px;
+}
+.device__confirm,
+.device__cancel {
+  width: auto;
+}
+
 /* ---------------------------------------------------------------- toast -- */
 
 /* One sentence, said and then not said. The only floating thing in this client.

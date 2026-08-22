@@ -46,6 +46,7 @@ import {
   parseArgs,
   pickDevice,
   renderApproved,
+  renderDevices,
   renderFolders,
   renderKindQuestion,
   renderNewDevice,
@@ -198,6 +199,10 @@ async function dispatch(record: DaemonRecord, command: Command): Promise<number>
       return await showStatus(record)
     case 'pair':
       return await pair(record, command)
+    case 'devices':
+      return await showDevices(record)
+    case 'revoke':
+      return await revokeDevice(record, command.device)
     case 'stop':
       return await stop(record)
     case 'folders':
@@ -217,6 +222,54 @@ async function showStatus(record: DaemonRecord): Promise<number> {
   const answer = await ask(record, 'status')
   if (!answer.ok) return fail(answer)
   process.stdout.write(`${renderStatus(answer.value as HostStatus, Date.now())}\n`)
+  return 0
+}
+
+/**
+ * `terminaldeck devices` — who is signed in here.
+ *
+ * The roster and the kinds are two reads, because they are two channels: the
+ * trust store keeps the devices and `device-kind.ts` keeps whether each is one
+ * of the owner's own. `renderDevices` folds them together the way `status` does
+ * its own device block, and for the same reason both are read here rather than
+ * one derived from the other — a kind for a device the roster does not list is a
+ * row nobody would print.
+ */
+async function showDevices(record: DaemonRecord): Promise<number> {
+  const roster = await devices(record)
+  if (!roster.ok) return fail(roster.answer)
+  const kinds = await ask(record, 'remote:kinds')
+  if (!kinds.ok) return fail(kinds)
+  process.stdout.write(`${renderDevices(roster.devices, kinds.value as DeviceKindRecord[], Date.now())}\n`)
+  return 0
+}
+
+/**
+ * `terminaldeck revoke <device>` — take one device away, now.
+ *
+ * The name is resolved against the roster with `pickDevice`, the same matcher a
+ * `folders` command uses: a name or an id, by prefix, and nothing at all when a
+ * single device is paired. An ambiguous name is refused rather than guessed —
+ * removing the wrong one is not a mistake worth making quietly.
+ *
+ * The revoke itself goes through `remote:device:revoke`, which runs the one
+ * cascade `device-roster.ts` owns — the same one the desktop's Settings and a
+ * phone over the wire run. It answers with the roster after the fact; the device
+ * just named has dropped out of the non-revoked rows, which is the confirmation.
+ */
+async function revokeDevice(record: DaemonRecord, query: string | null): Promise<number> {
+  const roster = await devices(record)
+  if (!roster.ok) return fail(roster.answer)
+  const pick = pickDevice(roster.devices, query)
+  if (!pick.ok) {
+    process.stderr.write(`${pick.message}\n`)
+    return 1
+  }
+  const answer = await ask(record, 'remote:device:revoke', pick.device.id)
+  if (!answer.ok) return fail(answer)
+  const remaining = (answer.value as Device[]).filter((device) => !device.revoked)
+  const left = remaining.length === 1 ? '1 device' : `${remaining.length} devices`
+  process.stdout.write(`${pick.device.name} was removed. ${left} still signed in.\n`)
   return 0
 }
 

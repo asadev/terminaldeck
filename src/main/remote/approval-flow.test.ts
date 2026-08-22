@@ -139,6 +139,14 @@ function harness(): {
     accountGrants: watchedAccounts,
     kinds: watchedKinds,
     windowGrants: windows,
+    // The store half of a revoke, wired to the same watched stores so a revoke
+    // exercised here would clear them in the one place `device-roster.ts` calls.
+    forgetDevice: (id: string) => {
+      watchedGrants.forget(id)
+      watchedAccounts.forget(id)
+      watchedKinds.forget(id)
+      windows.forget(id)
+    },
     webRoot: join(dir, 'nowhere'),
     storageDir: dir,
     broadcast: () => {},

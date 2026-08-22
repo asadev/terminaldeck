@@ -118,6 +118,8 @@ async function harness(options: { port?: number } = {}): Promise<Harness> {
     sessions: fakeSessions(),
     folders: new FolderGrants(dir),
     kinds: new DeviceKinds(dir),
+    // Nothing here revokes, so the store half of the cascade is a no-op stand-in.
+    forgetDevice: () => {},
     webRoot: join(dir, 'nowhere'),
     storageDir: dir,
     port,

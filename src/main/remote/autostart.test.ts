@@ -95,6 +95,8 @@ function register(overrides: Partial<RemoteIpcDeps> = {}): {
     // Likewise, and for the same reason: nothing in this file approves a
     // device, so the store is constructed and never written.
     kinds: new DeviceKinds(mkdtempSync(join(tmpdir(), 'td-autostart-kinds-'))),
+    // Nothing here revokes, so the store half of the cascade is a no-op stand-in.
+    forgetDevice: () => {},
     webRoot: join(mkdtempSync(join(tmpdir(), 'td-autostart-')), 'nowhere'),
     storageDir: mkdtempSync(join(tmpdir(), 'td-autostart-store-')),
     broadcast: () => {},

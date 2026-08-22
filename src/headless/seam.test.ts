@@ -165,6 +165,7 @@ describe('the headless build never reaches Electron', () => {
     expect(files.length).toBeGreaterThan(30)
     expect(files).toContain('src/main/host-core.ts')
     expect(files).toContain('src/main/remote/server.ts')
+    expect(files).toContain('src/main/remote/device-roster.ts')
     expect(files).toContain('src/main/pty-manager.ts')
     expect(files).toContain('src/shared/sealed.ts')
     // Sign-in rides the headless host too, so the loopback probe and its mint

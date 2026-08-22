@@ -573,6 +573,17 @@ export interface HostCore {
    */
   kinds: DeviceKinds
   /**
+   * The store half of revocation: every per-device row this core owns, gone.
+   *
+   * The five forgets a revoke has always run — folders, session ticks, account
+   * ticks, window grants, kind — in one place, so the desktop's Settings, the
+   * headless CLI and a phone over the wire all reach the *same* cascade rather
+   * than three copies that drift. It clears only the stores; dropping the live
+   * socket and revoking the credential belong to the server, which is what calls
+   * this — see `device-roster.ts`.
+   */
+  forgetDevice(deviceId: string): void
+  /**
    * The agents this machine has added.
    *
    * On the core rather than owned by a shell, because `startSession` reads it —
@@ -2341,6 +2352,23 @@ export function createHostCore(options: HostCoreOptions): HostCore {
     return (PROVIDERS[provider]?.resumeArgs.length ?? 0) > 0
   }
 
+  /**
+   * The store half of revocation, in one place. See {@link HostCore.forgetDevice}.
+   *
+   * Every store keyed on a device id forgets it, and no more than that. Because a
+   * revoked device id is never issued again — revocation is permanent, a
+   * returning device pairs afresh and is minted a new one — a row left in any of
+   * these could never be reached, which is why forgetting is safe and why
+   * leaving one behind would be a permission with nobody to hold it.
+   */
+  function forgetDevice(deviceId: string): void {
+    grants.forget(deviceId)
+    sessionGrants.forget(deviceId)
+    accountGrants.forget(deviceId)
+    windowGrants.forget(deviceId)
+    kinds.forget(deviceId)
+  }
+
   return {
     ptys,
     controlAccess,
@@ -2351,6 +2379,7 @@ export function createHostCore(options: HostCoreOptions): HostCore {
     accountGrants,
     windowGrants,
     kinds,
+    forgetDevice,
     agents,
     credentials,
     ledger,

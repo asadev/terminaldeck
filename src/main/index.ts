@@ -2411,6 +2411,10 @@ function registerIpc(): void {
     // this is present, so a build without it says nothing rather than offering a
     // button that answers `unauthorized`.
     devServers,
+    // The store half of revocation, wired to the one core the settings panels
+    // write. `device-roster.ts` runs it as part of the cascade behind the wire,
+    // the CLI and this window's own Remove button alike.
+    forgetDevice: (id) => core.forgetDevice(id),
     autoStart: storedValue(REMOTE_ENABLED_KEY) !== false,
     onEnabledChange: (on) => {
       patchStoredSettings({ [REMOTE_ENABLED_KEY]: on })

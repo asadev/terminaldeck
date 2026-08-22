@@ -90,6 +90,7 @@ import {
   type DevServerStatus,
   type DeviceDescriptor,
   type HostKind,
+  type DeviceRosterRow,
   type LocalPort,
   type ProtocolErrorCode,
   type RemoteSession,
@@ -113,6 +114,7 @@ export type {
   DevServerStatus,
   DeviceDescriptor,
   HostKind,
+  DeviceRosterRow,
   LocalPort,
   ProtocolErrorCode,
   RemoteSession,
@@ -140,8 +142,15 @@ export {
  * "your device isn't reachable", about a browser tab that is open and connected,
  * where an advertised one gets an acknowledgement and then a refusal that names
  * the real problem.
+ *
+ * `devices` is here for a different, sharper reason: the host sends
+ * `devices.changed` unsolicited, and it sends it **only** to a connection that
+ * named `devices` in its hello — because a build that never heard of the frame
+ * would close the channel on the first one. This client does handle it (the
+ * device screen), so naming it is honest and is what makes the roster on that
+ * screen live rather than stale until the next visit.
  */
-export const CLAIMED_CAPABILITIES: string[] = [CAPABILITY.credential]
+export const CLAIMED_CAPABILITIES: string[] = [CAPABILITY.credential, CAPABILITY.devices]
 
 /**
  * One session row, or null — the desktop's `parseSession`, under the name this

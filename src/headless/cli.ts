@@ -1,11 +1,15 @@
 /**
  * The whole user interface, because there is no window.
  *
- * Four commands and no more — `pair`, `status`, `folders`, `stop`. `HEADLESS.md`
- * says why: *"Keep it to those. A headless build that grows a config file nobody
- * can find is how these become unmaintainable."* Everything a person needs to do
- * to a host with no screen is one of those four, and anything that does not fit
- * into them is a sign the host is doing something it should not.
+ * A small, closed set of commands — `pair`, `status`, `devices`, `revoke`,
+ * `browser`, `folders`, `stop`. `HEADLESS.md` says why the set stays small:
+ * *"Keep it to those. A headless build that grows a config file nobody can find
+ * is how these become unmaintainable."* Everything a person needs to do to a
+ * host with no screen is one of these, and anything that does not fit into them
+ * is a sign the host is doing something it should not. `devices` and `revoke`
+ * are the roster half — list who is signed in, and take one away — the same
+ * cascade the desktop's Settings and a phone over the wire run, reached here
+ * over the control socket rather than as its own copy.
  *
  * Nothing in this file talks to anything. Parsing is a function of argv and
  * rendering is a function of the status the daemon sent back, so every sentence
@@ -24,7 +28,7 @@
 
 import { BRAND } from '../shared/brand'
 import type { Device } from '../main/remote/device-auth'
-import { asDeviceKind, type DeviceKind } from '../main/remote/device-kind'
+import { asDeviceKind, type DeviceKind, type DeviceKindRecord } from '../main/remote/device-kind'
 import type { DeviceFolderGrant } from '../main/remote/folder-grants'
 import type { HostStatus } from './host'
 
@@ -59,6 +63,15 @@ export type Command =
    * `device-kind.ts` writes the answer once and cannot be told again.
    */
   | { kind: 'pair'; deviceKind: DeviceKind | null }
+  /** List every device signed in here — name, kind, status, last seen, key. */
+  | { kind: 'devices' }
+  /**
+   * Remove one device: revoke its credential, drop its sockets, forget its
+   * grants — the one cascade the wire and the desktop also run. `device` is a
+   * name or id, matched like `folders --device`; null is allowed only when a
+   * single device is paired, since naming the only one is a ceremony.
+   */
+  | { kind: 'revoke'; device: string | null }
   | { kind: 'stop' }
   /**
    * Fetch and unpack the standalone Chromium this host drives — see
@@ -89,10 +102,12 @@ export function parseArgs(argv: readonly string[]): Command {
   if (first === 'pair') return pairCommand(args)
   if (first === 'stop') return extra(args) ?? { kind: 'stop' }
   if (first === 'browser') return browserCommand(args)
+  if (first === 'devices') return extra(args) ?? { kind: 'devices' }
+  if (first === 'revoke') return revokeCommand(args)
   if (first !== 'folders') {
     return {
       kind: 'error',
-      message: `Unknown command "${first}". This host understands pair, status, browser, folders and stop.`,
+      message: `Unknown command "${first}". This host understands pair, status, devices, revoke, browser, folders and stop.`,
     }
   }
 
@@ -207,6 +222,49 @@ function browserCommand(args: readonly string[]): Command {
   return extra(rest) ?? { kind: 'browser-install' }
 }
 
+/**
+ * `revoke`, and the one device it is about.
+ *
+ * A name or an id, given as a bare argument or after `--device` — the same two
+ * spellings `folders` takes, so the flag a person already knows still works and
+ * the shorter form reads the way the command does: `terminaldeck revoke iPhone`.
+ * Naming it both ways at once is refused rather than guessed, and so is naming
+ * two. The device may be omitted only when a single one is paired, which
+ * `pickDevice` decides against the roster; here it is simply carried as null.
+ */
+function revokeCommand(args: readonly string[]): Command {
+  const rest = [...args]
+  let device: string | null = null
+  const positional: string[] = []
+  while (rest.length > 0) {
+    const arg = rest.shift() as string
+    if (arg === '--device' || arg === '-d') {
+      const value = rest.shift()
+      if (value === undefined) return { kind: 'error', message: '--device needs a device name or id after it.' }
+      if (device !== null) return { kind: 'error', message: 'Name the device once, not twice.' }
+      device = value
+      continue
+    }
+    positional.push(arg)
+  }
+  if (positional.length > 1) {
+    // Not silently joined, for the reason `folders` gives about a path with a
+    // space: two arguments where one was meant is a quoting mistake, and
+    // guessing at it is how the wrong device gets removed.
+    return {
+      kind: 'error',
+      message: `Expected one device and got ${positional.length}. Quote a name that has a space in it.`,
+    }
+  }
+  if (positional.length === 1) {
+    if (device !== null) {
+      return { kind: 'error', message: 'Name the device once, as an argument or with --device, not both.' }
+    }
+    device = positional[0]
+  }
+  return { kind: 'revoke', device }
+}
+
 function extra(args: readonly string[]): Command | null {
   if (args.length === 0) return null
   return { kind: 'error', message: `That command takes no arguments, and got "${args[0]}".` }
@@ -280,13 +338,16 @@ export function usage(): string {
     `  ${BRAND.id} pair                        show a pairing code, then approve the device`,
     `  ${BRAND.id} pair --kind mine|guest      the same, without being asked which it is`,
     `  ${BRAND.id} status                      running? reachable? what is it holding open?`,
+    `  ${BRAND.id} devices                     which devices are signed in here`,
+    `  ${BRAND.id} revoke <device>             remove a device and drop it now`,
     `  ${BRAND.id} browser install             fetch the Chromium this host drives`,
     `  ${BRAND.id} folders                     which folders each device may use`,
     `  ${BRAND.id} folders add <path>          let a device start sessions there`,
     `  ${BRAND.id} folders remove <path>       take it away`,
     `  ${BRAND.id} stop                        stop the host and every session in it`,
     '',
-    'Add --device <name> to a folders command when more than one device is paired.',
+    'Name a device by name or id, in full or by prefix. Add --device <name> to a folders',
+    'command, or pass it to revoke, when more than one device is paired.',
     '',
     `The host itself runs as ${BRAND.id}-host. "${BRAND.id} status" prints how to make`,
     'it start on its own on this machine.',
@@ -486,6 +547,47 @@ export function renderNotApproved(device: Device, wanted: DeviceKind, recorded: 
     )
   }
   return lines.join('\n')
+}
+
+/**
+ * The device roster, for `devices`.
+ *
+ * Every non-revoked device, newest first — the order `listDevices` already
+ * returns. Each row leads with the name and then the three facts that decide
+ * what it can do and whether it should still be here: its kind, its status, and
+ * when it was last seen. The fingerprint is on its own line, mono-ish and
+ * indented, because it is the value a person compares against the one the device
+ * shows — and the id below it is what `revoke` takes when two devices share a
+ * name.
+ *
+ * "undecided" is not a third kind: `kindOf` folds an unrecorded device into
+ * `guest` and that is what is enforced. It is printed for a device paired by a
+ * build older than device kinds, because "nobody chose" has a remedy the word
+ * "guest" would hide — revoke it and pair again.
+ *
+ * Live connections are deliberately not here: whether a socket is open right now
+ * is what `status` reports, and a roster that changed every time a phone woke or
+ * slept would be a different screen. This one is who may sign in, not who is on.
+ */
+export function renderDevices(
+  devices: readonly Device[],
+  kinds: readonly DeviceKindRecord[],
+  now: number,
+): string {
+  const live = devices.filter((device) => !device.revoked)
+  if (live.length === 0) return `No devices are signed in. Run "${BRAND.id} pair" to add one.`
+
+  const lines: string[] = []
+  for (const device of live) {
+    const recorded = kinds.find((row) => row.deviceId === device.id)
+    const kind = recorded === undefined ? 'undecided, enforced as guest' : recorded.kind
+    const seen = device.lastSeenAt === null ? 'never seen' : `last seen ${duration(now - device.lastSeenAt)} ago`
+    lines.push(`${device.name}  —  ${kind}, ${device.status}, ${seen}`)
+    lines.push(`  fingerprint  ${device.fingerprint ?? '(none — paired before there were keys)'}`)
+    lines.push(`  id           ${device.id}`)
+    lines.push('')
+  }
+  return lines.join('\n').trimEnd()
 }
 
 export function renderFolders(
