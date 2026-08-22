@@ -252,10 +252,16 @@ export function writeAppContext(input: AppContextInput): AppContext {
  * here would be the same fact twice in two consecutive lines.
  */
 export function mapText(input: { version: string; machineName: string; dir: string }): string {
+  // The index sits in `dir`, and `dir` may name a folder on *another* machine —
+  // a server session's drive context is `/tmp/td-drive-XXXXXX/context`, a Linux
+  // path this app never touches with `fs`. So the separator follows the dir's
+  // own: a Windows dir (`C:\…\context`) keeps its backslashes, a server dir its
+  // slashes, rather than this host's `path.join` rewriting a remote path.
+  const sep = input.dir.includes('\\') ? '\\' : '/'
   return [
     `It is version ${input.version}, running on ${input.machineName}.`,
     'What else is true of this app is written in files on this machine.',
-    `${join(input.dir, INDEX_FILE)} is a short index naming which of them answers what — read it when a question about this app comes up, and not before.`,
+    `${input.dir}${sep}${INDEX_FILE} is a short index naming which of them answers what — read it when a question about this app comes up, and not before.`,
   ].join(' ')
 }
 

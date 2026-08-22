@@ -224,8 +224,13 @@ describe('installing Chromium end to end', () => {
     expect(result.path).toBe(join(root, VERSION, 'chrome-linux64', 'chrome'))
     expect(existsSync(result.path)).toBe(true)
     // The exec bit `unzip` drops has been put back on the binary and the helper.
-    expect(statSync(result.path).mode & 0o111).not.toBe(0)
-    expect(statSync(join(root, VERSION, 'chrome-linux64', 'chrome_crashpad_handler')).mode & 0o111).not.toBe(0)
+    // NTFS carries no Unix exec bit, so the check is only meaningful off Windows;
+    // the install itself (a linux64 Chromium unpacked on any host) is exercised
+    // on every platform, just not this one Unix-permission property.
+    if (process.platform !== 'win32') {
+      expect(statSync(result.path).mode & 0o111).not.toBe(0)
+      expect(statSync(join(root, VERSION, 'chrome-linux64', 'chrome_crashpad_handler')).mode & 0o111).not.toBe(0)
+    }
     // The record was written so a second install can reuse it.
     expect(existsSync(join(root, VERSION, 'installed.json'))).toBe(true)
   })

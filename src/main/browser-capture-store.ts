@@ -1,6 +1,10 @@
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { posix } from 'node:path'
 import { writeFileAtomic } from './atomic-write'
+
+// Capture paths are server paths and manifest keys — a run recorded on a Linux
+// box, read back by key elsewhere — so they are joined with `/` on every host.
+const { join } = posix
 
 /**
  * Where a page's background traffic is written down, and the rule that nothing

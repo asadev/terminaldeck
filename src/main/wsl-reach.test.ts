@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
 import { readFileSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { ActionLog } from './deck-control/action-log'
 import { ConsentBroker } from './deck-control/consent'
@@ -457,7 +457,9 @@ describe('what a session inside the distribution is launched with', () => {
      * into the distribution would be moving a bearer token onto a filesystem
      * with different rules — and only the *name* on the command line crosses.
      */
-    const prepared = tools.prepare({ argPath: (file) => `/mnt/c/over-there/${file.split('/').pop()}` })
+    // `file` is a real path on *this* machine, so its name is taken with the host
+    // `basename` — `split('/')` would keep a whole Windows path as one segment.
+    const prepared = tools.prepare({ argPath: (file) => `/mnt/c/over-there/${basename(file)}` })
     expect(prepared).not.toBeNull()
     expect(prepared?.args[0]).toBe('--mcp-config')
     expect(prepared?.args[1]).toBe('/mnt/c/over-there/deck-control.json')

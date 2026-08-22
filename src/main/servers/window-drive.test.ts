@@ -78,7 +78,9 @@ function fakeClaude(): string {
   const path = join(dir, 'claude')
   writeFileSync(path, '#!/bin/sh\nfor a in "$@"; do printf \'%s\\n\' "$a"; done\n', 'utf8')
   chmodSync(path, 0o755)
-  return path
+  // Forward slashes: `sh` execs this from inside the wrapper, and Git Bash
+  // runs a `/`-spelled Windows path where a `\\`-spelled one is fragile.
+  return path.replace(/\\/g, '/')
 }
 
 /** Run one script on this machine's own `sh`, the way the far end would. */
@@ -124,7 +126,10 @@ function arm(
 
 /** Invoke the wrapper the way a shell with it first on PATH would. */
 function callWrapper(dir: string, args: readonly string[]): string[] {
-  return execFileSync(join(dir, 'bin', 'claude'), args, { encoding: 'utf8' })
+  // Through `sh`, the way `run()` and the far end do. The wrapper is a #!/bin/sh
+  // script inside a `/tmp` folder `sh` itself made: this host's node cannot exec
+  // it directly on Windows (no shebang) nor resolve `/tmp` to where `sh` put it.
+  return execFileSync('sh', [`${dir}/bin/claude`, ...args], { encoding: 'utf8' })
     .split('\n')
     .filter((line) => line !== '')
 }
@@ -162,14 +167,14 @@ describe('what the server’s own help says', () => {
 describe('the wrapper, run', () => {
   it('adds the flag to a bare invocation', () => {
     const dir = arm(fakeClaude())
-    expect(callWrapper(dir, [])).toEqual([MCP_FLAG, join(dir, 'deck-control.json')])
+    expect(callWrapper(dir, [])).toEqual([MCP_FLAG, `${dir}/deck-control.json`])
   })
 
   it('adds it to a prompt, and keeps the prompt one argument', () => {
     const dir = arm(fakeClaude())
     expect(callWrapper(dir, ['fix the build please'])).toEqual([
       MCP_FLAG,
-      join(dir, 'deck-control.json'),
+      `${dir}/deck-control.json`,
       'fix the build please',
     ])
   })
@@ -178,7 +183,7 @@ describe('the wrapper, run', () => {
     const dir = arm(fakeClaude())
     expect(callWrapper(dir, ['-p', 'hello'])).toEqual([
       MCP_FLAG,
-      join(dir, 'deck-control.json'),
+      `${dir}/deck-control.json`,
       '-p',
       'hello',
     ])
@@ -197,7 +202,7 @@ describe('the wrapper, run', () => {
     const dir = arm(fakeClaude())
     expect(callWrapper(dir, ['deploy'])).toEqual([
       MCP_FLAG,
-      join(dir, 'deck-control.json'),
+      `${dir}/deck-control.json`,
       'deploy',
     ])
   })
@@ -208,8 +213,8 @@ describe('the wrapper, run', () => {
     const path = join(dir, 'claude')
     writeFileSync(path, '#!/bin/sh\nprintf ok\n', 'utf8')
     chmodSync(path, 0o755)
-    const armed = arm(path)
-    expect(execFileSync(join(armed, 'bin', 'claude'), [], { encoding: 'utf8' })).toBe('ok')
+    const armed = arm(path.replace(/\\/g, '/'))
+    expect(execFileSync('sh', [`${armed}/bin/claude`], { encoding: 'utf8' })).toBe('ok')
   })
 })
 
@@ -217,13 +222,18 @@ describe('what it leaves on the server', () => {
   it('writes the config where the wrapper names it, and only for this account', () => {
     const dir = arm(fakeClaude(), { config: '{"mcpServers":{"deck-control":{"type":"http"}}}' })
     expect(dir.startsWith(SCRATCH_PREFIX)).toBe(true)
-    expect(JSON.parse(readFileSync(join(dir, 'deck-control.json'), 'utf8'))).toEqual({
+    // Read back through `sh` for the same reason the wrapper runs there: the
+    // folder lives in `sh`'s `/tmp`, not this host's.
+    expect(JSON.parse(run(`cat '${dir}/deck-control.json'`))).toEqual({
       mcpServers: { 'deck-control': { type: 'http' } },
     })
     // 0700 on the folder and 0600 on the token file, from `umask 077` rather
-    // than from a chmod that runs after the bytes are already readable.
-    expect(statSync(dir).mode & 0o777).toBe(0o700)
-    expect(statSync(join(dir, 'deck-control.json')).mode & 0o777).toBe(0o600)
+    // than from a chmod that runs after the bytes are already readable. A Unix
+    // mode is meaningless on NTFS, so this one property is checked off Windows.
+    if (process.platform !== 'win32') {
+      expect(statSync(dir).mode & 0o777).toBe(0o700)
+      expect(statSync(join(dir, 'deck-control.json')).mode & 0o777).toBe(0o600)
+    }
   })
 
   it('answers with this machine’s own programs, absolutely, and never a bare word', () => {
@@ -550,7 +560,7 @@ describe('taking it away', () => {
 describe('what a server session is told about where it is', () => {
   it('adds the settings flag only when there is a settings file', () => {
     const bare = arm(fakeClaude())
-    expect(callWrapper(bare, [])).toEqual([MCP_FLAG, join(bare, 'deck-control.json')])
+    expect(callWrapper(bare, [])).toEqual([MCP_FLAG, `${bare}/deck-control.json`])
 
     const dir = arm(fakeClaude(), {
       settings: `${SCRATCH_PREFIX}placeholder/${SETTINGS_FILE}`,
@@ -558,7 +568,7 @@ describe('what a server session is told about where it is', () => {
     })
     // The wrapper was written naming a file that is not there, which is the one
     // shape that would stop `claude` starting — so it tests before it uses it.
-    expect(callWrapper(dir, [])).toEqual([MCP_FLAG, join(dir, 'deck-control.json')])
+    expect(callWrapper(dir, [])).toEqual([MCP_FLAG, `${dir}/deck-control.json`])
 
     const real = arm(fakeClaude(), {
       settings: undefined,
@@ -590,9 +600,9 @@ describe('what a server session is told about where it is', () => {
     )
     expect(callWrapper(dir, ['-p', 'hi'])).toEqual([
       MCP_FLAG,
-      join(dir, 'deck-control.json'),
+      `${dir}/deck-control.json`,
       SETTINGS_FLAG,
-      join(dir, SETTINGS_FILE),
+      `${dir}/${SETTINGS_FILE}`,
       '-p',
       'hi',
     ])

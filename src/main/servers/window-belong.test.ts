@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { HOOK_MARKER } from '../hooks'
@@ -41,7 +42,10 @@ afterEach(() => {
 
 /** A scratch folder shaped like the one a server would have made. */
 function scratch(): string {
-  const dir = mkdtempSync('/tmp/td-belong-')
+  // Forward-slash spelling: this dir is interpolated into #!/bin/sh scripts and
+  // handed to `sh`; Git Bash reads a `/`-path cleanly, and node's fs still does
+  // too. mktemp under the host temp dir, never a hardcoded `/tmp` node may lack.
+  const dir = mkdtempSync(join(tmpdir(), 'td-belong-')).replace(/\\/g, '/')
   made.push(dir)
   mkdirSync(join(dir, 'bin'), { recursive: true })
   return dir
@@ -68,7 +72,7 @@ cat '${dir}/reply'
     'utf8',
   )
   chmodSync(path, 0o755)
-  return path
+  return path.replace(/\\/g, '/')
 }
 
 /** A real opener that says it ran and repeats its arguments. */
@@ -76,7 +80,7 @@ function fakeOpener(dir: string): string {
   const path = join(dir, 'real-opener')
   writeFileSync(path, '#!/bin/sh\nprintf \'REAL\\n\'\nfor a in "$@"; do printf \'%s\\n\' "$a"; done\n', 'utf8')
   chmodSync(path, 0o755)
-  return path
+  return path.replace(/\\/g, '/')
 }
 
 function input(dir: string, over: Partial<BelongInput> = {}): BelongInput {
@@ -112,7 +116,11 @@ function call(
   stdin = '',
 ): { out: string; err: string; status: number } {
   try {
-    const out = execFileSync(file, args, { encoding: 'utf8', input: stdin, stdio: 'pipe' })
+    const out = execFileSync('sh', [file.replace(/\\/g, '/'), ...args], {
+      encoding: 'utf8',
+      input: stdin,
+      stdio: 'pipe',
+    })
     return { out, err: '', status: 0 }
   } catch (error) {
     const failure = error as { stdout?: string; stderr?: string; status?: number }
@@ -222,7 +230,8 @@ describe('the script the hooks run', () => {
     const argv = readFileSync(join(dir, 'argv'), 'utf8')
     expect(argv).toContain('http://127.0.0.1:40405/hook/claude/SessionStart')
     expect(argv).toContain('server-1 shell-9')
-    expect(argv).toContain(join(dir, HOOK_CONFIG_FILE))
+    // The wrapper names the config with `/` on the server; argv carries it verbatim.
+    expect(argv).toContain(`${dir}/${HOOK_CONFIG_FILE}`)
   })
 
   it('is silent and successful when nothing answers', () => {

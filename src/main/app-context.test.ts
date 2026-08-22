@@ -92,10 +92,9 @@ describe('the injection is a map and not the context itself', () => {
     expect(prose.length).toBeLessThan(300)
     // And exactly one path in it. The directory and the index inside it are the
     // same fact twice, and the second one has a filename on the end.
-    // Counted as the joined path rather than as the literal `/d`: `mapText`
-    // builds it with `join`, which is `\\d\\INDEX.md` on Windows, and a test
-    // that splits on a forward slash there counts zero and calls it a bug.
-    expect(prose.split(join('/d', INDEX_FILE)).length - 1).toBe(1)
+    // A posix `dir` keeps its slashes on every host — the separator follows the
+    // dir, not this machine — so the joined path is spelled with `/` here too.
+    expect(prose.split(`/d/${INDEX_FILE}`).length - 1).toBe(1)
   })
 
   it('does not name the app again, because the line above it already did', () => {

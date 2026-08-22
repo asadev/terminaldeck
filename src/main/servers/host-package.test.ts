@@ -1,3 +1,4 @@
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { HOST_INSTALLER, HOST_TARBALL, NO_PACKAGE, findHostPackage } from './host-package'
 
@@ -19,28 +20,26 @@ function tree(...present: string[]): (path: string) => boolean {
 
 describe('finding the package this build carries', () => {
   it('finds both files under a packaged app’s resources', () => {
+    // These name files on *this* machine — the app's own resources — so they are
+    // spelled with the host separator, `join`, exactly as `findHostPackage` does.
+    const dir = join('/App/Contents/Resources', 'headless')
     const found = findHostPackage('0.9.1', {
       resources: '/App/Contents/Resources',
       tree: null,
-      exists: tree(
-        `/App/Contents/Resources/headless/${HOST_TARBALL}`,
-        `/App/Contents/Resources/headless/${HOST_INSTALLER}`,
-      ),
+      exists: tree(join(dir, HOST_TARBALL), join(dir, HOST_INSTALLER)),
     })
-    expect(found?.tarball).toBe(`/App/Contents/Resources/headless/${HOST_TARBALL}`)
+    expect(found?.tarball).toBe(join(dir, HOST_TARBALL))
     expect(found?.version).toBe('0.9.1')
   })
 
   it('finds them under out/ when running from a checkout', () => {
+    const dir = join('/repo', 'out', 'headless-package')
     const found = findHostPackage('0.9.1', {
       resources: null,
       tree: '/repo',
-      exists: tree(
-        `/repo/out/headless-package/${HOST_TARBALL}`,
-        `/repo/out/headless-package/${HOST_INSTALLER}`,
-      ),
+      exists: tree(join(dir, HOST_TARBALL), join(dir, HOST_INSTALLER)),
     })
-    expect(found?.installer).toBe(`/repo/out/headless-package/${HOST_INSTALLER}`)
+    expect(found?.installer).toBe(join(dir, HOST_INSTALLER))
   })
 
   /*
