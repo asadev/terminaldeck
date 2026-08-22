@@ -531,8 +531,10 @@ export const CAPABILITY = {
    *
    * Not a grant. A host that advertises this is saying it speaks the frames, not
    * that this device may move its browser — that decision is per device, read
-   * per call on the serving end, and it defaults closed. See `window-grants.ts`,
-   * and `MachineStore.drivesWindows` for the same axis pointing the other way.
+   * per call on the serving end, and its default is the peer's standing there:
+   * open for a machine the person paired or a device approved as their own,
+   * closed for a guest. See `window-grants.ts`, and `MachineStore.drivesWindows`
+   * for the same axis pointing the other way.
    */
   hostWindows: 'hostwindows',
 } as const

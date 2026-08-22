@@ -6576,12 +6576,30 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
    * the next connection. That is the property `TokenGrant.caller` argues for and
    * it is the one that makes a switch over somebody's browser worth having.
    */
-  ipcMain.handle('remote:windows', (): string[] => deps.windowGrants?.list() ?? [])
+  /*
+   * The channel answers the **effective** set — every paired device for which
+   * `drives` says yes — rather than the store's raw yes list. The two stopped
+   * being the same sentence when the default became the kind's: a device
+   * approved as one of the owner's own drives with no row in the file at all,
+   * and a panel reading the raw list would draw it unticked while its verbs
+   * landed — a control showing a state nothing behind it holds, the defect
+   * this round is about. Devices the roster no longer knows are not named
+   * either way; `forget` already clears their rows.
+   */
+  const effectiveWindowGrants = (): string[] => {
+    const store = deps.windowGrants
+    if (!store) return []
+    return auth
+      .listDevices()
+      .map((device) => device.id)
+      .filter((id) => store.drives(id))
+  }
+  ipcMain.handle('remote:windows', (): string[] => effectiveWindowGrants())
   ipcMain.handle('remote:windows:set', (_event, id: unknown, allowed: unknown): string[] => {
     const store = deps.windowGrants
     if (!store) return []
     store.set(id, allowed === true)
-    return store.list()
+    return effectiveWindowGrants()
   })
 
   ipcMain.handle('remote:sessions', (): DeviceSessionGrant[] => deps.sessionGrants?.list() ?? [])

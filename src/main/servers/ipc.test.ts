@@ -32,6 +32,7 @@ import {
   type ServersIpcDeps,
 } from './ipc'
 import { ServerProblem, type ServerShell } from './connection'
+import { ServerStore } from './store'
 import { factNo, factYes, type ServerFacts } from './facts'
 import { cmd } from './test-fixtures'
 
@@ -365,7 +366,10 @@ describe('a terminal that can drive the browser window attached to it', () => {
     expect(scripts.some((script) => script.includes('command -v ss'))).toBe(true)
   })
 
-  it('costs a server nobody ticked nothing at all', async () => {
+  it('costs a server somebody unticked nothing at all', async () => {
+    // The switch is an off-switch now — a server drives by default, and `false`
+    // here is a person having said no about this one server. Their no has to
+    // hold the whole chain shut, from the first probe to the last verb.
     const { call, written, scripts, ran, ipc } = drivingHarness(false)
 
     const opened = (await call('servers:shell:open', 's1', 100, 40)) as { ok: true; shellId: string }
@@ -377,7 +381,7 @@ describe('a terminal that can drive the browser window attached to it', () => {
     expect(scripts).toEqual([])
     // And the row in the browser's connect menu says so rather than attaching
     // and quietly doing nothing.
-    expect(ipc.whyNotDrive(opened.shellId)).toContain('not allowed')
+    expect(ipc.whyNotDrive(opened.shellId)).toContain('turned off')
   })
 
   it('opens the terminal anyway when the verbs cannot be given', async () => {
@@ -421,7 +425,7 @@ describe('a terminal that can drive the browser window attached to it', () => {
     // The token is off the table now, not merely refused on the next call —
     // `ServerGrants` argues for both, and this is the half that reaches a
     // terminal somebody is in the middle of using.
-    expect(ipc.whyNotDrive(opened.shellId)).toContain('not allowed')
+    expect(ipc.whyNotDrive(opened.shellId)).toContain('turned off')
   })
 
   it('says nothing about a shell it has never heard of', async () => {
@@ -492,6 +496,80 @@ describe('a terminal that can drive the browser window attached to it', () => {
       opensInApp: true,
     })
     expect(ipc.belongingOf('a shell nobody opened')).toBeNull()
+  })
+
+  it('arms everything for a servers.json row with no drivesWindows key — his own file', async () => {
+    /*
+     * His real `servers.json` holds "Office PC", written before the field
+     * existed, so the row has no `drivesWindows` key at all. For one release
+     * that read as closed, and the whole chain below was dark on the machine
+     * he tests against — the ninety-second reproduction of his filmed
+     * complaint. T30's accepted rule is that the connection IS the
+     * authorization, so this walks the person's path end to end: the real
+     * store reading that file, the real `servers:shell:open` registration, and
+     * every stage of the arm.
+     */
+    const dir = mkdtempSync(join(tmpdir(), 'td-his-servers-'))
+    writeFileSync(
+      join(dir, 'servers.json'),
+      JSON.stringify({
+        version: 1,
+        servers: [
+          {
+            id: 's1',
+            name: 'Office PC',
+            address: '100.69.56.25',
+            port: 2222,
+            username: 'asad',
+            credential: 'password',
+            hostKey: null,
+            addedAt: 1,
+            lastConnectedAt: null,
+          },
+        ],
+      }),
+    )
+    const store = new ServerStore(dir)
+    const grants: Array<{ allowed(): boolean }> = []
+    const { call, written, scripts, ipc } = belongingHarness({
+      store,
+      mintSessionTools: (grant) => {
+        grants.push(grant)
+        return {
+          configFor: (url: string) => JSON.stringify({ url }),
+          started: () => undefined,
+          drop: () => undefined,
+        }
+      },
+    })
+
+    const opened = (await call('servers:shell:open', 's1', 100, 40)) as { ok: true; shellId: string }
+    expect(opened.ok).toBe(true)
+
+    // The verbs were given, and the row in the connect menu has nothing to
+    // explain away.
+    expect(ipc.whyNotDrive(opened.shellId)).toBeNull()
+    // The PATH line reached the terminal, so the wrapper is the first `claude`.
+    expect(written.find((text) => text.startsWith('export PATH='))).toBeDefined()
+    // The `open` shim went onto the server beside the wrapper.
+    const armed = scripts.find((script) => script.includes('bin/claude')) ?? ''
+    expect(armed).toContain('bin/open')
+    // The boot context says the session opens pages in this app — the true
+    // sentence, not the hoped one.
+    expect(ipc.belongingOf(opened.shellId)).toEqual({
+      map: 'read /tmp/td-drive-abc123/context/INDEX.md',
+      opensInApp: true,
+    })
+    // And the minted grant — the gate `deck-control` asks per call before any
+    // `browser.open` from that terminal lands in this app — answers yes,
+    // reading the same store his file was read into.
+    expect(grants).toHaveLength(1)
+    expect(grants[0].allowed()).toBe(true)
+
+    // The Advanced switch is the off-switch, and the person's no still holds
+    // the very next call shut — the same read, per call, no reconnection.
+    store.setDrivesWindows('s1', false)
+    expect(grants[0].allowed()).toBe(false)
   })
 
   it('still opens the terminal, and claims none of it, on a server with no curl', async () => {

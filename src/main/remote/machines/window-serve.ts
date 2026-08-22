@@ -42,12 +42,12 @@
  * ## The two questions, in this order
  *
  *  1. **May that computer ask at all?** {@link WindowServeDeps.allowed}, read
- *     per call. A computer paired here, whose folders and sessions this desktop
- *     can reach, has not thereby been handed the browser on this screen — see
- *     `MachineStore.drivesWindows` for why windows are their own axis and why
- *     that axis defaults closed, and `window-grants.ts` for the same axis
- *     pointing at a device that dialled in rather than a machine this desktop
- *     dialled out to.
+ *     per call. Windows are their own axis, and since T30 its default is the
+ *     peer's standing: a machine the person paired with their own hands drives
+ *     unless they unticked it — the connection is the authorization, see
+ *     `MachineStore.drivesWindows` — and `window-grants.ts` answers the same
+ *     axis for a device that dialled in, open for one approved as the owner's
+ *     own and closed for a guest until ticked.
  *  2. **Is that verb one this caller may name?** {@link ELSEWHERE_TOOLS}, which
  *     is the positive list a session on this machine holds on its own token
  *     minus the family whose answers are files *here* — see `session-tools.ts`,

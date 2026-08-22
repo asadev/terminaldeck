@@ -240,11 +240,20 @@ export function ServerCopilotGrant({
  * machine and is right to run out; this is bounded by what the person attached,
  * window by window, with their own hands.
  *
+ * ## Why it starts on, and what the switch is for
+ *
+ * T30: *"the connection IS the authorization."* The person added this server
+ * with their own sign-in, and that act is the allowing — the same reading
+ * `StoredServer.drivesWindows` makes at the store. So this switch is the
+ * **off**-switch for one server, not the gate a feature hides behind, and the
+ * words on it say what is actually handed out: opening browser windows here,
+ * and acting on the ones the person attaches.
+ *
  * ## Why it is a component of its own
  *
  * So it can be rendered by a test. Everything else on this screen is inside a
- * section that starts collapsed, and a control nobody has proved draws unticked
- * is a control whose closed default is a comment rather than a fact.
+ * section that starts collapsed, and a control nobody has proved draws ticked
+ * is a control whose open default is a comment rather than a fact.
  */
 export function ServerDrivesWindows({
   server,
@@ -262,29 +271,27 @@ export function ServerDrivesWindows({
   if (onChange === undefined) return null
   return (
     <>
-      <h4 className="settings-group-title">Let its terminals act on browser windows here</h4>
+      <h4 className="settings-group-title">Its terminals can open and drive browser windows here</h4>
       {/*
-        What this actually hands out, in the terms the person will recognise: a
-        window they attached, and only that. Deliberately not "let this server
-        control your browser" — the reach is bounded by the attaching, window by
-        window, and overstating it would make the honest answer sound like the
-        reckless one.
+        What this actually hands out, in the terms the person will recognise:
+        opening a window here, and a window they attached — only that.
+        Deliberately not "let this server control your browser" — the reach is
+        bounded by the opening and the attaching, window by window, and
+        overstating it would make the honest answer sound like the reckless one.
 
-        Split in two when this control reached a second screen. It was 63 words
-        in one block, over the settings window's 55-word ceiling for a standing
-        paragraph, and the break is where the subject already changed: what the
-        permission hands out, and then which agent can use it. Same words, same
-        order — `ServerHost` does the same thing to the sentences the main
-        process sends it, for the same reason.
+        "On, because you added this server yourself" is the sentence that
+        carries the default. Connecting a server with your own sign-in is the
+        allowing (T30), so the paragraph says why it is already on and the tick
+        below is plainly the way to say no.
       */}
       <p className="settings-prose">
-        Off unless you turn it on. With it on, an agent in a terminal on this server can read and act
-        on the browser windows <em>you</em> attach to that terminal — nothing else in the browser,
+        On, because you added this server yourself. An agent in a terminal on this server can open
+        browser windows here and act on the ones <em>you</em> attach — nothing else in the browser,
         and nothing you did not hand it.
       </p>
       <p className="settings-prose">
-        It works with Claude Code; Codex and Gemini have no setting this app can add to a command you
-        type yourself.
+        Untick it to keep this server’s terminals out of the browser here. It works with Claude Code;
+        Codex and Gemini have no setting this app can add to a command you type yourself.
       </p>
       <div className="servers-drive">
         <label className="servers-drive-row">

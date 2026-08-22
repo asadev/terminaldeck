@@ -499,8 +499,8 @@ function singleQuote(value: string): string {
  */
 export const WHY_NOT = Object.freeze({
   'not-allowed':
-    'sessions on this server are not allowed to act on browser windows here. You can turn that on for ' +
-    'this one server under Advanced on its page.',
+    'acting on browser windows here has been turned off for this server. The switch is under ' +
+    'Advanced on its page — it is on for every server you add unless somebody unticks it.',
   agent:
     'this app can only add its browser verbs to Claude Code, and this server has no `claude` this ' +
     'sign-in can run. Codex and Gemini have no per-run setting that could be added to a command line ' +

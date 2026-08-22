@@ -310,12 +310,13 @@ export interface Server {
   /**
    * May sessions on this server act on browser windows in this app?
    *
-   * Its own axis, and it starts closed — the same shape and the same argument
-   * `Machine.drivesWindows` carries for a paired computer, one machine over.
-   * Attaching a window to a terminal and letting the agent in that terminal
-   * *act* on it are two different things, and the second is not implied by the
-   * first. See `StoredServer.drivesWindows` in the main process, which is where
-   * the answer actually lives.
+   * Its own axis, and it starts **on** — the person added this server with
+   * their own sign-in, and the connection is the authorization (T30); the
+   * switch under Advanced is the off-switch. The same shape and the same
+   * reading `Machine.drivesWindows` carries for a paired computer, one machine
+   * over. See `StoredServer.drivesWindows` in the main process, which is where
+   * the answer actually lives — the main process always sends the resolved
+   * boolean, so absence here means only an older build that never said.
    */
   drivesWindows?: boolean
 }

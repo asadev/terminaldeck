@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -951,34 +951,68 @@ describe('waking', () => {
 })
 
 describe('letting a machine act on browser windows here', () => {
-  it('starts closed, is written through the one store, and answers the whole view', async () => {
+  it('starts open because pairing was the allowing, and the switch is the way to say no', async () => {
     /*
-     * The fourth grant axis. Folders, sessions and coding logins are the other
-     * three, and none of them says anything about the browser on *this* screen —
-     * a machine whose sessions this desktop can start and read has not thereby
-     * been handed the pages holding this account's logins.
+     * The fourth grant axis, and since T30 it follows the rule the person
+     * accepted: the connection IS the authorization. Every machine in this
+     * store was paired by the person at this keyboard with their own hands, so
+     * its sessions drive by default and the switch on the card is the
+     * off-switch — written through the one store, answered as the whole view.
      */
     const dir = tempDir()
     const hostId = paired(dir)
     const app = rig({ dir })
 
     const before = ((await app.invoke('machines:list')) as MachinesView)
-    expect(before.machines[0].drivesWindows).toBe(false)
+    expect(before.machines[0].drivesWindows).toBe(true)
 
-    const after = ((await app.invoke('machines:drive-windows', hostId, true)) as MachinesView)
+    const after = ((await app.invoke('machines:drive-windows', hostId, false)) as MachinesView)
     // The answer is the view, so the panel redraws from what was stored rather
     // than from what it thinks it just set.
-    expect(after.machines[0].drivesWindows).toBe(true)
+    expect(after.machines[0].drivesWindows).toBe(false)
     // Read from disk rather than from the rig's own copy, which was built
-    // before the write: the grant has to survive the process, because it is a
+    // before the write: the untick has to survive the process, because it is a
     // decision rather than a session.
-    expect(new MachineStore(dir).drivesWindows(hostId)).toBe(true)
+    expect(new MachineStore(dir).drivesWindows(hostId)).toBe(false)
 
-    // Only the literal `true`. A grant is not a thing to infer from a truthy
-    // value arriving over a bridge.
+    // Only a literal boolean is a person pressing the switch. A garbled value
+    // over the bridge changes nothing — in either direction.
     expect(
       ((await app.invoke('machines:drive-windows', hostId, 'yes')) as MachinesView).machines[0].drivesWindows,
     ).toBe(false)
+    expect(
+      ((await app.invoke('machines:drive-windows', hostId, true)) as MachinesView).machines[0].drivesWindows,
+    ).toBe(true)
+    expect(
+      ((await app.invoke('machines:drive-windows', hostId, 0)) as MachinesView).machines[0].drivesWindows,
+    ).toBe(true)
+  })
+
+  it('reads his machines.json — a row with no drivesWindows key — as allowed, at the seam the dispatcher asks', async () => {
+    /*
+     * DESKTOP-DDGMNCV in his real file predates the field, and for one release
+     * that read as closed: every forwarded cross-machine window verb refused,
+     * on the machine he tests against. `index.ts` wires the serve half's
+     * `allowed` to exactly this seam — `machinesIpc.drivesWindows` — so what
+     * is pinned is the person's path: the real file shape, the real
+     * registration, the read the dispatcher makes per call.
+     */
+    const dir = tempDir()
+    const hostId = paired(dir)
+    const parsed = JSON.parse(readFileSync(join(dir, 'machines.json'), 'utf8')) as {
+      machines: Record<string, unknown>[]
+    }
+    delete parsed.machines[0].drivesWindows
+    writeFileSync(join(dir, 'machines.json'), JSON.stringify(parsed))
+
+    const app = rig({ dir })
+    expect(app.ipc.drivesWindows(hostId)).toBe(true)
+    expect(((await app.invoke('machines:list')) as MachinesView).machines[0].drivesWindows).toBe(true)
+
+    // The switch is the off-switch, and the untick lands on the same seam the
+    // next inbound verb is checked against — per call, no reconnection.
+    await app.invoke('machines:drive-windows', hostId, false)
+    expect(app.ipc.drivesWindows(hostId)).toBe(false)
   })
 
   it('hands an inbound browser verb to whatever the app wired, with the machine on it', async () => {
