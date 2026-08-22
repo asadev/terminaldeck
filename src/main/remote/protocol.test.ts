@@ -110,6 +110,8 @@ const CLIENT_TYPES: Record<ClientMessage['t'], true> = {
   'account.switch': true,
   'logins.read': true,
   'logins.signin': true,
+  'settings.read': true,
+  'settings.apply': true,
   'chat.read': true,
   'window.result': true,
   'window.holds': true,
@@ -160,6 +162,9 @@ const SERVER_TYPES: Record<ServerMessage['t'], true> = {
   'account.switched': true,
   'logins.state': true,
   'logins.signedin': true,
+  'settings.state': true,
+  'settings.applied': true,
+  'settings.changed': true,
   'session.sent': true,
   'chat.rows': true,
   'window.call': true,
@@ -289,6 +294,10 @@ const VALID_CLIENT: ClientMessage[] = [
   // signing one of those logins in over there.
   { t: 'logins.read', rid: 'lgn-1' },
   { t: 'logins.signin', rid: 'lgn-2', accountId: 'system:codex' },
+  // The two server-owned settings — read the whole set, and change one of them.
+  { t: 'settings.read', rid: 'set-1' },
+  { t: 'settings.apply', rid: 'set-2', key: 'agents.defaultProvider', value: 'codex' },
+  { t: 'settings.apply', rid: 'set-3', key: 'general.restoreSessions', value: 'false' },
   // The conversation, and the same view asking what has changed since.
   { t: 'chat.read', rid: 'cht-1', id: SESSION_ID, tail: false },
   { t: 'chat.read', rid: 'cht-2', id: SESSION_ID, tail: true },
@@ -691,6 +700,31 @@ const VALID_SERVER: ServerMessage[] = [
     ok: true,
     message: 'A terminal is open on that machine; finish the login in it.',
     session: '9a2f77d7-c0a1-4b3e-8f1d-4f1c2ae08f1d',
+  },
+  // The machine's two server-owned settings, the chooser carrying its options.
+  {
+    t: 'settings.state',
+    rid: 'set-1',
+    settings: [
+      { key: 'agents.defaultProvider', value: 'claude', options: ['claude', 'codex', 'gemini', 'shell'] },
+      { key: 'general.restoreSessions', value: 'true' },
+    ],
+  },
+  // The outcome of one apply, with the row as it stands now.
+  {
+    t: 'settings.applied',
+    rid: 'set-2',
+    ok: true,
+    message: 'Default coding tool set to Codex CLI.',
+    setting: { key: 'agents.defaultProvider', value: 'codex', options: ['claude', 'codex', 'gemini', 'shell'] },
+  },
+  // The unsolicited push when a server-owned setting changed here.
+  {
+    t: 'settings.changed',
+    settings: [
+      { key: 'agents.defaultProvider', value: 'codex', options: ['claude', 'codex', 'gemini', 'shell'] },
+      { key: 'general.restoreSessions', value: 'true' },
+    ],
   },
 ]
 

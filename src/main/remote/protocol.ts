@@ -472,6 +472,23 @@ export const CAPABILITY = {
    */
   chat: 'chat',
   /**
+   * The two settings this machine owns rather than each device.
+   *
+   * Almost every choice in the settings window is the device's own — a theme, a
+   * density, which fonts — and those never touch this wire; they live in the app
+   * a person is looking at. Two do not: the coding tool a fresh session starts
+   * with, and whether the last layout is restored at launch. Those are facts
+   * about *this machine*, the same on every device that reaches it, so a phone
+   * changing them is changing the server rather than its own copy of it. See
+   * `SERVER_SETTINGS` — the closed allowlist is the whole reason `remote.*` and
+   * `advanced.debugMode` are unrepresentable here rather than merely refused.
+   *
+   * Withheld from a guest in `capabilitiesFor`, for the reason `logins` is:
+   * managing the machine is the owner's, and there is no push frame that could
+   * correct a welcome later.
+   */
+  settings: 'settings',
+  /**
    * A session on **this** machine driving a browser window in the app of the
    * device that started it.
    *
@@ -564,6 +581,7 @@ export const CAPABILITIES: string[] = [
   CAPABILITY.account,
   CAPABILITY.logins,
   CAPABILITY.chat,
+  CAPABILITY.settings,
   CAPABILITY.windows,
   CAPABILITY.hostWindows,
 ]
@@ -1520,6 +1538,78 @@ export const CONTROL_IDS = ['model', 'effort', 'fast', 'permission'] as const
 
 export type ControlName = (typeof CONTROL_IDS)[number]
 
+/**
+ * The settings this machine owns, rather than each device — named on the wire.
+ *
+ * A **closed allowlist**, and that is the whole of its security value. The
+ * settings window offers dozens of choices and all but these two are the
+ * device's own: a theme, a density, which fonts, whether the browser tab keeps
+ * its cookies. Those never touch this wire — they live in the app a person is
+ * looking at. These two are facts about the *machine*, identical on every device
+ * that reaches it: which coding tool a fresh session starts with, and whether
+ * the previous layout is restored at launch.
+ *
+ * Because the list is closed, `parseClientMessage` can admit a `settings.apply`
+ * only when its key is one of these — so `remote.enabled`, any `remote.*` and
+ * `advanced.debugMode` are *unrepresentable* on this wire, refused at the parser
+ * rather than carried inward to be compared against a table three files away.
+ * That is a structural property, not a policy one, and `settings.state` /
+ * `settings.changed` build their rows only from this list so no frame can ever
+ * carry one of those keys out either.
+ */
+export const SERVER_SETTINGS = ['agents.defaultProvider', 'general.restoreSessions'] as const
+
+export type ServerSettingKey = (typeof SERVER_SETTINGS)[number]
+
+/** The longest a server setting's value may be. A provider id is the long one. */
+export const MAX_SERVER_SETTING_VALUE_LENGTH = 64
+
+/** The most options a chooser may carry, so a garbled frame cannot be a list bomb. */
+export const MAX_SERVER_SETTING_OPTIONS = 64
+
+/**
+ * One server-owned setting, on the wire.
+ *
+ * `value` is stringly, like `controls.apply` — `'true'` / `'false'` for the
+ * boolean, a provider id for the chooser. `options` is present only for a
+ * chooser and holds the provider ids this host can actually start, so the
+ * default-tool picker offers what will run rather than a fixed four that then
+ * fail after the tap.
+ */
+export interface ServerSettingWire {
+  key: ServerSettingKey
+  value: string
+  options?: string[]
+}
+
+/**
+ * Read one {@link ServerSettingWire} off an inbound frame, or null.
+ *
+ * A row whose key is not in {@link SERVER_SETTINGS} is dropped rather than
+ * carried inward — the same closed allowlist the parser admits on the way in,
+ * asserted again on the way out, so no `settings.state` or `settings.changed`
+ * can name a `remote.*` or `advanced.*` row even if the far end sent one. The
+ * value is bounded and the options list is clipped, for the reason every reader
+ * here bounds what it reads: the socket's own cap is not a per-field one.
+ */
+export function serverSettingWire(raw: unknown): ServerSettingWire | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const row = raw as Record<string, unknown>
+  const key = SERVER_SETTINGS.find((name) => name === row.key)
+  if (key === undefined) return null
+  const value = typeof row.value === 'string' ? row.value.slice(0, MAX_SERVER_SETTING_VALUE_LENGTH) : ''
+  const wire: ServerSettingWire = { key, value }
+  if (Array.isArray(row.options)) {
+    const options: string[] = []
+    for (const option of row.options) {
+      if (options.length >= MAX_SERVER_SETTING_OPTIONS) break
+      if (typeof option === 'string') options.push(option.slice(0, MAX_SERVER_SETTING_VALUE_LENGTH))
+    }
+    wire.options = options
+  }
+  return wire
+}
+
 /** The longest a control's value may be. A model name is the long one. */
 export const MAX_CONTROL_VALUE_LENGTH = 64
 
@@ -2443,6 +2533,28 @@ export type ClientMessage =
    * the answer before the person has typed anything.
    */
   | { t: 'logins.signin'; rid: string; accountId: string }
+  /* ---- capability `settings` --------------------------------------------- */
+  /**
+   * Read this machine's two server-owned settings.
+   *
+   * No key: this is the whole small set, answered as `settings.state`. `rid`
+   * names the ask, for the reason `controls.read`'s does — a phone can have the
+   * settings pane and a session's chip open at once, and an answer with no `rid`
+   * would land in whichever was listening.
+   */
+  | { t: 'settings.read'; rid: string }
+  /**
+   * Change one of this machine's server-owned settings, over there.
+   *
+   * `key` is narrowed to {@link SERVER_SETTINGS} at the parser — a frame naming
+   * any other key is refused as `bad-message` and never reaches a handler, which
+   * is what makes `remote.enabled` and `advanced.debugMode` unrepresentable here
+   * rather than merely rejected. `value` is stringly, like `controls.apply`:
+   * `'true'` / `'false'` for the boolean, a provider id for the chooser. The
+   * outcome comes back as `settings.applied`, and every eligible connection that
+   * asked to hear about it gets a `settings.changed` push.
+   */
+  | { t: 'settings.apply'; rid: string; key: ServerSettingKey; value: string }
   /* ---- capability `send`. Refused when it is not advertised. ------------- */
   /**
    * Put text into that session **without subscribing to it**.
@@ -3026,6 +3138,39 @@ export type ServerMessage =
    * one place to look for the outcome.
    */
   | { t: 'logins.signedin'; rid: string; ok: boolean; message: string; session: string | null }
+  /* ---- capability `settings` --------------------------------------------- */
+  /**
+   * The answer to one `settings.read`, and only ever to one.
+   *
+   * `settings` is the whole server-owned set — exactly the {@link SERVER_SETTINGS}
+   * rows, each built from this machine's own store, never a wider one. The
+   * chooser row carries its `options`, the provider ids this host can start, so
+   * the picker offers what will run.
+   */
+  | { t: 'settings.state'; rid: string; settings: ServerSettingWire[] }
+  /**
+   * What happened to one `settings.apply`, in the machine's own words.
+   *
+   * `ok` says whether the write took; `message` is the sentence to show either
+   * way — a refused provider id comes back here with `ok: false` and the reason,
+   * never a silent swap. `setting` is the row as it stands now, so the pane can
+   * settle on the machine's truth rather than on what was pressed. There is no
+   * `settings.failed`, for the reason `logins.signedin` has none: the asking
+   * side has one place to look for the outcome.
+   */
+  | { t: 'settings.applied'; rid: string; ok: boolean; message: string; setting: ServerSettingWire }
+  /**
+   * A server-owned setting changed here — pushed, unsolicited, to every device
+   * that may hear it.
+   *
+   * Sent only to a connection whose device is one of the owner's own **and**
+   * whose hello named `settings`, computed per connection at send time — the
+   * same rule `sessions` and every other push here follows, and the reason a
+   * demoted device stops receiving them the instant it is demoted. A build that
+   * never asked for the capability never sees the frame, and would close on one
+   * it does not know.
+   */
+  | { t: 'settings.changed'; settings: ServerSettingWire[] }
   /**
    * The answer to one `chat.read`, and only ever to one.
    *
@@ -3913,6 +4058,48 @@ export function parseClientMessage(raw: unknown): ParseResult {
       // computer. One rule for both frames rather than two that can drift.
       if (!/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(accountId)) return bad('logins.signin with an unusable account id')
       return { ok: true, message: { t: 'logins.signin', rid: requestId, accountId } }
+    }
+
+    /* ---- capability `settings` ------------------------------------------- */
+    // Shape and the closed key allowlist, and nothing else. Whether this host
+    // serves settings at all, and whether this device is one of the owner's own,
+    // are the server's questions — it is the only thing that knows which device
+    // the socket belongs to.
+    case 'settings.read': {
+      const requestId = id(parsed.rid)
+      if (!requestId) return bad('settings.read without a request id')
+      // No key, deliberately: this is the machine's whole small set, answered as
+      // `settings.state`.
+      return { ok: true, message: { t: 'settings.read', rid: requestId } }
+    }
+    case 'settings.apply': {
+      const requestId = id(parsed.rid)
+      if (!requestId) return bad('settings.apply without a request id')
+      // Against the list rather than against a shape, exactly as `controls.apply`
+      // checks its control name. This is the line that makes `remote.enabled`,
+      // any `remote.*` and `advanced.debugMode` *unrepresentable* on this wire: a
+      // key that is not one of the two this machine owns has nowhere honest to
+      // go, and a parser that let one through would be relying on a `return` in
+      // `ServerSettingsAccess.apply` three files away to be the thing that stops
+      // it. The reason never echoes the value — the refused key is not repeated
+      // back — for the rule at the top of this file.
+      const key = SERVER_SETTINGS.find((name) => name === parsed.key)
+      if (key === undefined) return bad('settings.apply naming a key this machine does not own')
+      // Read once into a local, for the reason spelled out on `controls.apply`:
+      // on the object path a property can be a getter, and the string that is
+      // measured has to be the string that is forwarded.
+      const rawValue = parsed.value
+      if (typeof rawValue !== 'string' || rawValue === '') return bad('settings.apply without a value')
+      if (rawValue.length > MAX_SERVER_SETTING_VALUE_LENGTH) {
+        return tooLarge('settings.apply with a value over the length limit')
+      }
+      // The values these two keys take are a boolean word and a provider id, and
+      // both live inside this class. A control byte — which could carry a second
+      // line into a store write — is refused outright rather than stripped, the
+      // same call `controls.apply` makes about a value bound for a terminal:
+      // stripping turns a hostile value into a different legal-looking one.
+      if (!/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(rawValue)) return bad('settings.apply with an unusable value')
+      return { ok: true, message: { t: 'settings.apply', rid: requestId, key, value: rawValue } }
     }
 
     /* ---- capability `chat` ----------------------------------------------- */
@@ -5504,6 +5691,60 @@ export function parseServerFrame(parsed: unknown): ServerParse {
           session: id(parsed.session),
         },
       }
+    }
+    /* ---- capability `settings` --------------------------------------------- */
+    /*
+     * This machine's server-owned set, read totally and clipped rather than
+     * rejected — every row through `serverSettingWire`, the same closed allowlist
+     * the parser admits on the way in, so a row naming a key this machine does
+     * not own is dropped rather than drawn on somebody's phone.
+     */
+    case 'settings.state': {
+      const requestId = id(parsed.rid)
+      if (requestId === null) return { ok: false, reason: 'settings.state without a request id' }
+      if (!Array.isArray(parsed.settings)) return { ok: false, reason: 'settings.state without a list' }
+      const settings: ServerSettingWire[] = []
+      for (const row of parsed.settings) {
+        const wire = serverSettingWire(row)
+        if (wire !== null) settings.push(wire)
+      }
+      return { ok: true, message: { t: 'settings.state', rid: requestId, settings } }
+    }
+    /*
+     * The outcome of one apply. `ok` must be the literal `true` and nothing else
+     * is read as success, for the reason `logins.signedin`'s must: a garbled
+     * frame read as success is a pane showing a change that never landed. And
+     * `setting` must read as a real row or the whole frame is refused — an
+     * `applied` with no legible setting is nothing a pane can settle on.
+     */
+    case 'settings.applied': {
+      const requestId = id(parsed.rid)
+      if (requestId === null) return { ok: false, reason: 'settings.applied without a request id' }
+      const setting = serverSettingWire(parsed.setting)
+      if (setting === null) return { ok: false, reason: 'settings.applied without a legible setting' }
+      return {
+        ok: true,
+        message: {
+          t: 'settings.applied',
+          rid: requestId,
+          ok: parsed.ok === true,
+          message: typeof parsed.message === 'string' ? parsed.message : '',
+          setting,
+        },
+      }
+    }
+    /*
+     * An unsolicited push. No `rid`, because it answers no ask. Read the same way
+     * as `settings.state`, and dropped rows are dropped for the same reason.
+     */
+    case 'settings.changed': {
+      if (!Array.isArray(parsed.settings)) return { ok: false, reason: 'settings.changed without a list' }
+      const settings: ServerSettingWire[] = []
+      for (const row of parsed.settings) {
+        const wire = serverSettingWire(row)
+        if (wire !== null) settings.push(wire)
+      }
+      return { ok: true, message: { t: 'settings.changed', settings } }
     }
     /* ---- capability `chat` ------------------------------------------------- */
     /*

@@ -1537,6 +1537,27 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
          */
         uploads.receive(message)
         return
+      case 'settings.state':
+      case 'settings.applied':
+        /*
+         * The answer to one `settings.read` or `settings.apply` this end asked,
+         * routed by `rid` to whoever asked — the same handling the readings above
+         * get, in its own block because the settle-group's shared case-label list
+         * is not appended to across lanes. An answer with no waiting request falls
+         * on the floor in `settle`, which is the right place for it.
+         */
+        settle(message.rid, message)
+        return
+      case 'settings.changed':
+        /*
+         * An unsolicited push of the server's own settings. Ignored on this
+         * desktop client, deliberately: this link watches another machine's
+         * *sessions*, and the server-settings pane lives on the phone clients, not
+         * here. Named rather than dropped through a default so that a desktop
+         * surface for it later fails the build here instead of going quietly
+         * missing — the same rule this switch follows throughout.
+         */
+        return
       case 'attached':
       case 'detached':
       case 'pong':

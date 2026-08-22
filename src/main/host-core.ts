@@ -70,6 +70,7 @@ import {
   withLaunchArgs,
 } from './providers'
 import { CustomAgentStore, lookupCommand } from './custom-agents'
+import { SERVER_SETTINGS, type ServerSettingKey, type ServerSettingWire } from './remote/protocol'
 import { AGENT_CATALOG } from '../shared/agent-catalog'
 import { isCustomProviderId, type CustomAgent } from '../shared/custom-agents'
 import { currentPlatform, type Platform } from './platform/host'
@@ -507,6 +508,127 @@ export interface HostCoreOptions {
   platform?: Platform
 }
 
+/**
+ * The two settings this machine owns rather than each device — the store side of
+ * the `settings` capability, reachable from a phone through `settings.read` and
+ * `settings.apply`.
+ *
+ * There is no second copy of the truth here: the values live in `store.ts`'s
+ * `Preferences.defaultProvider` and `.restoreSessions`, exactly where the
+ * settings pane at this desk writes them and where a session start reads them.
+ * This is the one reader/writer both a window and a phone go through, so the two
+ * cannot disagree about what the machine's default tool is. See the drift rule
+ * `settings-extra.ts` states at length.
+ */
+export interface ServerSettingsAccess {
+  /** Exactly the {@link SERVER_SETTINGS} rows, built from this machine's store. */
+  read(): ServerSettingWire[]
+  /**
+   * Write one of them through `store().setPreferences`, or refuse it in a
+   * sentence. A provider id this host cannot offer is refused, never swapped for
+   * a working one silently — the `create` rule. Membership in
+   * {@link SERVER_SETTINGS} is asserted again here, under the parser, because a
+   * caller reaching this in-process is not bounded by the wire.
+   */
+  apply(key: ServerSettingKey, value: string): { ok: boolean; message: string; setting: ServerSettingWire }
+  /** Fire the change listeners after any out-of-band write to these two prefs. */
+  noteChanged(): void
+  /** Subscribe once; fires on {@link apply} and {@link noteChanged}. Returns an unsubscribe. */
+  onChanged(listener: () => void): () => void
+}
+
+/**
+ * Build the {@link ServerSettingsAccess} for this machine.
+ *
+ * A free function rather than a method on the core so a test can exercise the
+ * allowlist, the refusal and the round-trip against a temp store without
+ * assembling a whole host.
+ */
+export function createServerSettingsAccess(): ServerSettingsAccess {
+  const listeners = new Set<() => void>()
+
+  function fire(): void {
+    for (const listener of [...listeners]) {
+      try {
+        listener()
+      } catch (error) {
+        console.error('[host-core] a server-settings listener threw:', error)
+      }
+    }
+  }
+
+  /**
+   * The provider ids this host offers for the default-tool picker.
+   *
+   * Read from the same table a session start reads — `providersFor` — so the
+   * picker names what this build can run rather than a list that drifts from it.
+   * A value outside this set is what {@link apply} refuses.
+   */
+  function providerTable(): Record<ProviderId, { label: string }> {
+    return providersFor(currentPlatform(), process.env)
+  }
+
+  function rowFor(key: ServerSettingKey): ServerSettingWire {
+    const prefs = store().getPreferences()
+    if (key === 'agents.defaultProvider') {
+      return { key, value: prefs.defaultProvider, options: Object.keys(providerTable()) }
+    }
+    // `general.restoreSessions` — the only other member, a boolean stringly on
+    // the wire the way `controls.apply` carries `on`/`off`.
+    return { key, value: prefs.restoreSessions ? 'true' : 'false' }
+  }
+
+  return {
+    read() {
+      // Built only from the allowlist, so no row can ever name a `remote.*` or
+      // `advanced.*` key even if one were somehow in the store.
+      return SERVER_SETTINGS.map((key) => rowFor(key))
+    },
+    apply(key, value) {
+      if (!SERVER_SETTINGS.includes(key)) {
+        // Unreachable over the wire — the parser refused it — but a caller
+        // in-process is not bounded by that, so the store is not touched.
+        return { ok: false, message: 'That is not a setting this machine owns.', setting: { key, value: '' } }
+      }
+      if (key === 'agents.defaultProvider') {
+        const table = providerTable()
+        const spec = table[value as ProviderId]
+        if (!spec) {
+          // Refused with a sentence, never swapped for a working id silently.
+          return {
+            ok: false,
+            message: 'That is not a coding tool this machine can start.',
+            setting: rowFor(key),
+          }
+        }
+        store().setPreferences({ defaultProvider: value as ProviderId })
+        fire()
+        return { ok: true, message: `Default coding tool set to ${spec.label}.`, setting: rowFor(key) }
+      }
+      // `general.restoreSessions`: a boolean word and nothing else.
+      if (value !== 'true' && value !== 'false') {
+        return { ok: false, message: 'That setting is on or off.', setting: rowFor(key) }
+      }
+      store().setPreferences({ restoreSessions: value === 'true' })
+      fire()
+      return {
+        ok: true,
+        message: value === 'true' ? 'The last layout will be restored at launch.' : 'A fresh start each launch.',
+        setting: rowFor(key),
+      }
+    },
+    noteChanged() {
+      fire()
+    },
+    onChanged(listener) {
+      listeners.add(listener)
+      return () => {
+        listeners.delete(listener)
+      }
+    },
+  }
+}
+
 export interface HostCore {
   ptys: PtyManager
   /**
@@ -580,6 +702,15 @@ export interface HostCore {
    * against this instance; a shell that does not still starts the same sessions.
    */
   agents: CustomAgentStore
+  /**
+   * The two settings this machine owns, reachable over the `settings` capability.
+   *
+   * On the core rather than a shell for the reason `agents` is: both shells
+   * register the wire against this instance, and the values live in the one
+   * store the session start reads — so a phone changing the default tool and a
+   * window changing it are two callers of one truth.
+   */
+  serverSettings: ServerSettingsAccess
   credentials: CredentialProxy
   ledger: OpenSessionLedger
   /**
@@ -797,6 +928,7 @@ export function createHostCore(options: HostCoreOptions): HostCore {
    * shell.
    */
   const agents = new CustomAgentStore(options.userData)
+  const serverSettings = createServerSettingsAccess()
 
   /**
    * The GitHub credential proxy: their account, from their device, never held
@@ -2352,6 +2484,7 @@ export function createHostCore(options: HostCoreOptions): HostCore {
     windowGrants,
     kinds,
     agents,
+    serverSettings,
     credentials,
     ledger,
     startSession,
