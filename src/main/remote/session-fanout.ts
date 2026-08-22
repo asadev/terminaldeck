@@ -6,6 +6,7 @@ import type {
   RemoteControlsAccess,
   RemoteAccountAccess,
   RemoteChatAccess,
+  RemoteLoginsAccess,
   RemoteUsageAccess,
   SessionAccess,
   SessionHandle,
@@ -139,6 +140,20 @@ export interface PtySource {
    * told otherwise draws a chip whose every row is refused after the press.
    */
   account?: RemoteAccountAccess
+  /**
+   * This machine's logins with no session in the question, and starting a
+   * sign-in here. Absent when the shell cannot open a terminal for a person to
+   * finish a login in.
+   *
+   * Its absence is what stops the host advertising the `logins` capability —
+   * `remote/server.ts` reads it off this fanout — and until 2026-08-22 it was
+   * absent *everywhere*: `host-core.ts` built `createLoginsServe` and spread it
+   * into this constructor, but the field was never declared here and never
+   * re-exposed on the class, so the wire read `undefined` off every host and
+   * refused every `logins.read` while the assembly looked fully wired. A spread
+   * bypasses excess-property checking, which is how the drop was silent.
+   */
+  logins?: RemoteLoginsAccess
   /**
    * That session's conversation, as bubbles. Absent when this host has no
    * transcript reader to ask.
@@ -373,6 +388,14 @@ export class SessionFanout implements SessionAccess {
   readonly account?: RemoteAccountAccess
 
   /**
+   * Present exactly when the source can list this machine's logins and start a
+   * sign-in — the machine-scoped half of the account surface, with no session
+   * in the question and therefore no hidden-session wrapper. See the note on
+   * {@link PtySource.logins} for the silent drop this field's absence was.
+   */
+  readonly logins?: RemoteLoginsAccess
+
+  /**
    * Present exactly when the source can read a session's conversation, assigned
    * for the reason {@link create} is.
    *
@@ -478,6 +501,14 @@ export class SessionFanout implements SessionAccess {
             : account.switch(id, accountId),
       }
     }
+
+    /*
+     * Passed through without a wrapper, deliberately: these two verbs carry no
+     * session id, so there is nothing for the hidden-session rule to hide. Who
+     * may ask at all is decided per device in `remote/server.ts` (`ownDevice`),
+     * which is the door that owns that question.
+     */
+    this.logins = ptys.logins
 
     const chat = ptys.chat
     if (chat) {

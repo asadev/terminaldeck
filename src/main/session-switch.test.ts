@@ -300,9 +300,12 @@ describe('the two passes the handler makes', () => {
    * screenshot.
    */
   it('asks the cheap question with switchRefusal, never with planSwitch', () => {
-    const handler = readFileSync(join(__dirname, 'index.ts'), 'utf8')
-    const subject = handler.slice(handler.indexOf('const switchSubject = async'))
-    const body = subject.slice(0, subject.indexOf('ipcMain.handle(SESSION_SWITCH_PLAN_CHANNEL'))
+    // The subject moved out of `index.ts` on 2026-08-22 so the headless build
+    // could hand the same switch to its core — the pinned ordering moved with
+    // it, and this reads the module both shells now share.
+    const handler = readFileSync(join(__dirname, 'session-switch-run.ts'), 'utf8')
+    const subject = handler.slice(handler.indexOf('const subject = async'))
+    const body = subject.slice(0, subject.indexOf('const perform = async'))
     expect(body).toContain('switchRefusal({ meta, saved, target })')
     // And the plan is asked for exactly once afterwards, with a real decision.
     expect(body).toContain('await planSaved([switched])')

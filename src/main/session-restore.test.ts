@@ -761,7 +761,19 @@ describe('restoring is wired to launch', () => {
     // A generous window rather than brace matching. The definition is one
     // expression with three long comments in it, and a regex that counts braces
     // through comments containing braces is a worse bet than reading too much.
-    return at === -1 ? '' : index.slice(at, at + 3000)
+    const definition = at === -1 ? '' : index.slice(at, at + 3000)
+    /*
+     * Followed one hop further since 2026-08-22: the composition moved to
+     * `session-switch-run.ts` as `savedPlanner`, so the launch restore, the
+     * held retry and the account switch all ask the identical questions — and
+     * this test follows the delegation for the same reason it followed the
+     * name, rather than passing on a one-line alias it never read.
+     */
+    const delegated = /^const \w+ = (\w+)\(core\)/.exec(definition.split('\n')[0] ?? '')
+    if (delegated === null) return definition
+    const shared = readFileSync(join(ROOT, 'src/main/session-switch-run.ts'), 'utf8')
+    const declared = shared.indexOf(`export function ${delegated[1]}(`)
+    return declared === -1 ? '' : shared.slice(declared, declared + 3000)
   })()
 
   it('hands the restore a plan that exists', () => {

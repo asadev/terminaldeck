@@ -95,6 +95,7 @@ describe('a server tab', () => {
     shellKey: 'key-3',
     status: 'idle',
     startIn: null,
+    run: null,
   }
 
   it('carries the far end’s id once there is one', () => {

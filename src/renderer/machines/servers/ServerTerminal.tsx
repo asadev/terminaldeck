@@ -137,6 +137,21 @@ interface Props {
    * every test of it does.
    */
   startIn?: string | null
+  /**
+   * A command to type into the shell once it opens, or null for a plain prompt.
+   *
+   * The account chip on the server bar promises *"New terminal running Claude
+   * Code"*, and this is the whole of how that promise is kept: the command is
+   * written into the far shell exactly as typing it would be, Enter included,
+   * so what happens next is what would have happened — the agent starts, or the
+   * shell's own `command not found` says the truth on the screen the person is
+   * already looking at.
+   *
+   * Read once, at the moment the shell answers its open, and never again — the
+   * same once-only rule `startIn` above states, for the same reason: a change
+   * to it must not tear down a live terminal.
+   */
+  runCommand?: string | null
   bridge: ServersBridge
   fontSize?: number
   fontFamily?: string
@@ -206,6 +221,7 @@ function token(name: string, fallback: string): string {
 export function ServerTerminal({
   serverId,
   startIn = null,
+  runCommand = null,
   bridge,
   fontSize = DEFAULT_SERVER_FONT_SIZE,
   fontFamily = '',
@@ -434,6 +450,16 @@ export function ServerTerminal({
         // arrived, and nothing that belonged to a different shell.
         const missed = frames.settled(opened)
         if (missed !== '') term.write(missed)
+        /*
+         * The command this terminal was opened to run, typed as a person would
+         * type it. Written to the far end rather than to xterm: the shell's
+         * echo draws it, and the pty queues the bytes if the prompt is not up
+         * yet — the same thing typing fast into a fresh SSH login does. `\r`
+         * is Enter, exactly what `term.onData` sends for the key.
+         */
+        if (runCommand !== null && runCommand !== '') {
+          void bridge.writeToServerShell(opened, `${runCommand}\r`)
+        }
       },
       () => {
         frames.give()
@@ -462,10 +488,11 @@ export function ServerTerminal({
       termRef.current = null
       fitRef.current = null
     }
-    // `startIn` is deliberately absent from the dependencies. It is read once,
-    // when the shell is opened, and a change to it must not tear down a live
-    // terminal and dial a second one — which is what putting it here would do
-    // if the window ever re-rendered this pane with a different folder.
+    // `startIn` and `runCommand` are deliberately absent from the
+    // dependencies. Both are read once, when the shell is opened, and a change
+    // to either must not tear down a live terminal and dial a second one —
+    // which is what putting them here would do if the window ever re-rendered
+    // this pane with a different folder or command.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [serverId, bridge, attachFind])
 

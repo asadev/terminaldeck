@@ -46,6 +46,7 @@ export function ServerSessionPane({
   serverId,
   shellKey,
   startIn,
+  run,
   bridge,
   box,
   visible,
@@ -72,6 +73,15 @@ export function ServerSessionPane({
    * moment. See `ServerFolderPicker` for where the answer comes from.
    */
   startIn: string | null
+  /**
+   * A command to type once the shell opens, or null for a plain prompt.
+   *
+   * Passed through for the reason `startIn` is: the terminal is what opens the
+   * shell, and this is the second of the two facts that have to be in hand at
+   * that moment. See `ServerSession.run` for who mints it — the account chip's
+   * "New terminal running …" rows.
+   */
+  run: string | null
   bridge: ServersBridge
   /**
    * Where in the pane area to draw, when one pane of a split is holding this
@@ -124,6 +134,7 @@ export function ServerSessionPane({
       <ServerTerminal
         serverId={serverId}
         startIn={startIn}
+        runCommand={run}
         bridge={bridge}
         fontSize={fontSize}
         fontFamily={fontFamily}

@@ -334,32 +334,40 @@ describe('the controls a shell can reach, and the ones it cannot', () => {
     expect(heading).toContain('tabLabel(openServerTab, openTabs)')
   })
 
-  it('says which login that server account signs in as, as a word and not a control', () => {
+  it('puts the account chip on the row, with the two verbs a server really has', () => {
     /*
-     * The other half of the same decision. There is no per-session account here
-     * and there is one true neighbouring fact — the sign-in of the agent in the
-     * home the shell landed in, which is what a `claude` started in that
-     * terminal will run as — so the bar states that, as what it is.
+     * This assertion used to pin the opposite — "a `span`, not a button" — on
+     * the argument that a menu here would have nothing to act on. Asad, inside
+     * this exact bar: *"when I am inside the server, I cannot even change the
+     * accounts."* The argument mistook one impossible verb for all of them, and
+     * `ServerAccountChip` carries the corrected model: switching *this*
+     * terminal's agent stays off the menu and is said to be off it, and the
+     * rows do the two things that are real — a new terminal on that server
+     * with a signed-in agent running, and the road to where sign-ins change.
      *
-     * Three things are pinned, and each of them is a way this could go wrong:
+     * What is pinned, and each is a way this could go wrong:
      *
-     *  - it is drawn only when there is one, so a server that has never been
-     *    reached shows nothing rather than an empty chip;
-     *  - it carries the subtitle with it, because `meta` *replaces* the subtitle
-     *    and losing which computer a session is on is worse than losing this;
-     *  - it is a `span`, not a button and not `AccountChip`. On this bar
-     *    anything that looks pressable is pressable.
+     *  - it is drawn only when the probe has answered, so a server that has
+     *    never been reached shows nothing rather than an empty chip;
+     *  - it carries the subtitle with it, because `meta` *replaces* the
+     *    subtitle and losing which computer a session is on is worse;
+     *  - it is `ServerAccountChip`, never `AccountChip` — every row of that one
+     *    acts on a login this app controls, which none of these are;
+     *  - a picked agent opens a terminal on *that* server, with the agent's
+     *    own command, not a session on this Mac.
      */
     const row =
-      /\) : headingServerTabId !== null && serverWords !== null \? \([\s\S]*?\n {20}<\/div>/.exec(
+      /\) : headingServerTabId !== null && serverSignIn !== null && headingServer !== null \? \([\s\S]*?\n {20}<\/div>/.exec(
         APP,
       )?.[0] ?? ''
-    expect(row, 'the server sign-in row has changed shape').not.toBe('')
-    expect(row).toContain('className="toolbar-signin"')
+    expect(row, 'the server account row has changed shape').not.toBe('')
+    expect(row).toContain('<ServerAccountChip')
     expect(row).toContain('className="toolbar-subtitle"')
     expect(row).not.toContain('<AccountChip')
-    expect(row).not.toContain('<button')
-    expect(row).not.toContain('onClick')
+    expect(row).toContain(
+      'openServerShell(headingServer.id, headingServer.name, null, agentCommand(agentId))',
+    )
+    expect(row).toContain("onManage={() => openSettings('profiles')}")
     // And the fact itself is read from the main process rather than composed
     // out of anything this window happens to know about the server.
     expect(APP).toContain('const serverSignIn = useServerSignIn(')

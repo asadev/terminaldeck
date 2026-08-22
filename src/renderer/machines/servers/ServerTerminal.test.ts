@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { MOST_HELD_BYTES, ShellFrames } from './ServerTerminal'
 
@@ -73,5 +75,32 @@ describe('when the name never arrives', () => {
 
   it('has a cap large enough for anything a shell says while starting', () => {
     expect(MOST_HELD_BYTES).toBeGreaterThan(64 * 1024)
+  })
+})
+
+describe('a terminal opened to run an agent', () => {
+  /*
+   * Source assertions, because the promise is a wiring one: the account chip's
+   * row says "New terminal running Claude Code", and the only thing that can
+   * regress is whether the command actually reaches the far shell — after the
+   * open answers, to the server rather than to the local xterm, and Enter
+   * included. A render test cannot see any of that without a live bridge.
+   */
+  const source = readFileSync(join(__dirname, 'ServerTerminal.tsx'), 'utf8')
+
+  it('types the command into the far shell, never into the local emulator', () => {
+    expect(source).toContain('void bridge.writeToServerShell(opened, `${runCommand}\\r`)')
+    // And only when there is one: a plain terminal stays a plain prompt.
+    expect(source).toContain("if (runCommand !== null && runCommand !== '')")
+  })
+
+  it('types it once, when the open answers — never on a re-render', () => {
+    // The same once-only rule `startIn` carries: a change to the prop must not
+    // tear down a live terminal or type into one twice.
+    const write = source.indexOf('void bridge.writeToServerShell(opened, `${runCommand}\\r`)')
+    const settled = source.indexOf('frames.settled(opened)')
+    expect(settled).toBeGreaterThan(-1)
+    // After the held backlog is drained, so the prompt precedes the echo.
+    expect(write).toBeGreaterThan(settled)
   })
 })
