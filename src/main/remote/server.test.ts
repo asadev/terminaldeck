@@ -14,6 +14,8 @@ import {
   type CopilotGrantWire,
   type RemoteSession,
   type ServerMessage,
+  type ServerSettingKey,
+  type ServerSettingWire,
 } from './protocol'
 import type { DevServerState, DevServers } from '../dev-server'
 import type { TailnetReady } from './tailnet'
@@ -947,6 +949,206 @@ describe('sending to a session without attaching to it', () => {
     const error = await client.until((m) => m.t === 'error', 'the refusal')
     expect(error.t === 'error' && error.code).toBe('unavailable')
     expect(harness.sessions.written).toEqual([])
+  })
+})
+
+/**
+ * The two settings this machine owns rather than each device, over the wire.
+ *
+ * The gate is the same shape as `logins`: withheld from a guest in the welcome
+ * *and* refused at serve time, because there is no push frame that could correct
+ * a welcome later. The refusal is `unauthorized` rather than the `unavailable`
+ * its neighbour uses -- every machine has settings, so naming it leaks nothing --
+ * and a host built without the store answers `unavailable`, because the device
+ * may ask and this build cannot. The change push is per connection, read at send
+ * time, so a device demoted between the change and the send hears nothing.
+ */
+describe('the two settings this machine owns', () => {
+  const GUEST_CREDENTIAL = 'device-guest.Z3Vlc3Q='
+  // Two devices, so `ownDevice` can tell an owner's own from a guest -- the real
+  // gate keys on the device id, not the connection.
+  const twoDevices: RemoteAuthenticator = {
+    async authenticate(token) {
+      if (token === CREDENTIAL) return { ok: true, deviceId: 'device-1', deviceName: 'Owner', credential: null }
+      if (token === GUEST_CREDENTIAL) return { ok: true, deviceId: 'device-guest', deviceName: 'Guest', credential: null }
+      return { ok: false, message: 'This device is not allowed in.' }
+    },
+  }
+  const GUEST_HELLO = { ...HELLO, token: GUEST_CREDENTIAL }
+
+  interface FakeServerSettings {
+    reads: number
+    applied: Array<{ key: string; value: string }>
+    read(): ServerSettingWire[]
+    apply(key: ServerSettingKey, value: string): { ok: boolean; message: string; setting: ServerSettingWire }
+    noteChanged(): void
+    onChanged(listener: () => void): () => void
+    fire(): void
+  }
+
+  function fakeServerSettings(): FakeServerSettings {
+    const listeners = new Set<() => void>()
+    const rows: ServerSettingWire[] = [
+      { key: 'agents.defaultProvider', value: 'claude', options: ['claude', 'codex', 'gemini', 'shell'] },
+      { key: 'general.restoreSessions', value: 'true' },
+    ]
+    return {
+      reads: 0,
+      applied: [],
+      read() {
+        this.reads += 1
+        return rows.map((row) => ({ ...row }))
+      },
+      apply(key, value) {
+        this.applied.push({ key, value })
+        return { ok: true, message: `set ${key}`, setting: { key, value } }
+      },
+      noteChanged() {
+        for (const listener of [...listeners]) listener()
+      },
+      onChanged(listener) {
+        listeners.add(listener)
+        return () => listeners.delete(listener)
+      },
+      fire() {
+        for (const listener of [...listeners]) listener()
+      },
+    }
+  }
+
+  it('is advertised to an owner and withheld from a guest', async () => {
+    const harness = await serve({
+      auth: twoDevices,
+      serverSettings: fakeServerSettings(),
+      ownDevice: (id) => id === 'device-1',
+    })
+
+    const owner = await connect(harness.port)
+    owner.send(HELLO)
+    const ownerWelcome = await owner.until((m) => m.t === 'welcome', 'the welcome')
+    expect(ownerWelcome.t === 'welcome' && ownerWelcome.capabilities).toContain(CAPABILITY.settings)
+
+    const guest = await connect(harness.port)
+    guest.send(GUEST_HELLO)
+    const guestWelcome = await guest.until((m) => m.t === 'welcome', 'the welcome')
+    expect(guestWelcome.t === 'welcome' && guestWelcome.capabilities).not.toContain(CAPABILITY.settings)
+  })
+
+  it('is not advertised by a host that was built without the store', async () => {
+    const harness = await serve({ auth: twoDevices })
+    const owner = await connect(harness.port)
+    owner.send(HELLO)
+    const welcome = await owner.until((m) => m.t === 'welcome', 'the welcome')
+    expect(welcome.t === 'welcome' && welcome.capabilities).not.toContain(CAPABILITY.settings)
+  })
+
+  it('answers an owner read and apply', async () => {
+    const settings = fakeServerSettings()
+    const harness = await serve({ auth: twoDevices, serverSettings: settings, ownDevice: () => true })
+    const owner = await connect(harness.port)
+    owner.send(HELLO)
+    await owner.until((m) => m.t === 'welcome', 'the welcome')
+
+    owner.send({ t: 'settings.read', rid: 'set-1' })
+    const state = await owner.until((m) => m.t === 'settings.state', 'the state')
+    expect(state.t === 'settings.state' && state.settings.map((row) => row.key)).toEqual([
+      'agents.defaultProvider',
+      'general.restoreSessions',
+    ])
+
+    owner.send({ t: 'settings.apply', rid: 'set-2', key: 'agents.defaultProvider', value: 'codex' })
+    const applied = await owner.until((m) => m.t === 'settings.applied', 'the outcome')
+    expect(applied).toMatchObject({ t: 'settings.applied', rid: 'set-2', ok: true })
+    expect(applied.t === 'settings.applied' && applied.setting.value).toBe('codex')
+    expect(settings.applied).toEqual([{ key: 'agents.defaultProvider', value: 'codex' }])
+  })
+
+  it('refuses a guest with unauthorized and touches nothing', async () => {
+    const settings = fakeServerSettings()
+    const harness = await serve({ auth: twoDevices, serverSettings: settings, ownDevice: (id) => id === 'device-1' })
+    const guest = await connect(harness.port)
+    guest.send(GUEST_HELLO)
+    await guest.until((m) => m.t === 'welcome', 'the welcome')
+
+    guest.send({ t: 'settings.read', rid: 'g-1' })
+    const readErr = await guest.until((m) => m.t === 'error', 'the read refusal')
+    expect(readErr).toMatchObject({ t: 'error', code: 'unauthorized' })
+
+    guest.send({ t: 'settings.apply', rid: 'g-2', key: 'general.restoreSessions', value: 'false' })
+    const applyErr = await guest.until((m) => m.t === 'error', 'the apply refusal')
+    expect(applyErr).toMatchObject({ t: 'error', code: 'unauthorized' })
+
+    // No side effect: the store was neither read nor written for the guest.
+    expect(settings.reads).toBe(0)
+    expect(settings.applied).toEqual([])
+    // And the connection survives, like every other refused request here.
+    guest.send({ t: 'ping' })
+    await guest.until((m) => m.t === 'pong', 'the pong')
+  })
+
+  it('answers unavailable, not unauthorized, when the host does not serve settings', async () => {
+    const harness = await serve({ auth: twoDevices })
+    const owner = await connect(harness.port)
+    owner.send(HELLO)
+    await owner.until((m) => m.t === 'welcome', 'the welcome')
+
+    owner.send({ t: 'settings.read', rid: 'set-1' })
+    const error = await owner.until((m) => m.t === 'error', 'the refusal')
+    expect(error.t === 'error' && error.code).toBe('unavailable')
+  })
+
+  it('pushes a change only to an owner device that asked to hear it', async () => {
+    const settings = fakeServerSettings()
+    const harness = await serve({ auth: twoDevices, serverSettings: settings, ownDevice: (id) => id === 'device-1' })
+
+    const mineWithCap = await connect(harness.port)
+    mineWithCap.send({ ...HELLO, capabilities: [CAPABILITY.settings] })
+    await mineWithCap.until((m) => m.t === 'welcome', 'the welcome')
+
+    const mineNoCap = await connect(harness.port)
+    mineNoCap.send(HELLO)
+    await mineNoCap.until((m) => m.t === 'welcome', 'the welcome')
+
+    const guest = await connect(harness.port)
+    guest.send({ ...GUEST_HELLO, capabilities: [CAPABILITY.settings] })
+    await guest.until((m) => m.t === 'welcome', 'the welcome')
+
+    settings.fire()
+
+    const changed = await mineWithCap.until((m) => m.t === 'settings.changed', 'the push')
+    expect(changed.t === 'settings.changed' && changed.settings.map((row) => row.key)).toEqual([
+      'agents.defaultProvider',
+      'general.restoreSessions',
+    ])
+
+    // A ping/pong barrier: any push that was going to arrive would have arrived
+    // before the pong, so the absence below is real rather than merely early.
+    mineNoCap.send({ t: 'ping' })
+    await mineNoCap.until((m) => m.t === 'pong', 'the pong')
+    guest.send({ t: 'ping' })
+    await guest.until((m) => m.t === 'pong', 'the pong')
+
+    expect(mineNoCap.received.some((m) => m.t === 'settings.changed')).toBe(false)
+    expect(guest.received.some((m) => m.t === 'settings.changed')).toBe(false)
+  })
+
+  it('stops pushing to a device demoted between the change and the send', async () => {
+    const settings = fakeServerSettings()
+    let owner = true
+    const harness = await serve({ auth: twoDevices, serverSettings: settings, ownDevice: () => owner })
+
+    const client = await connect(harness.port)
+    client.send({ ...HELLO, capabilities: [CAPABILITY.settings] })
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    // Demoted after the welcome, before the change. `ownDevice` is read inside the
+    // push loop at send time, so the frame is never composed for this socket.
+    owner = false
+    settings.fire()
+
+    client.send({ t: 'ping' })
+    await client.until((m) => m.t === 'pong', 'the pong')
+    expect(client.received.some((m) => m.t === 'settings.changed')).toBe(false)
   })
 })
 
