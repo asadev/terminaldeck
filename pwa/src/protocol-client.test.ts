@@ -412,7 +412,7 @@ describe('what the client sends', () => {
     // it. `create`, `localhost` and `upload` are things this client asks *for*
     // and are gated on what the desktop advertised, so claiming them says
     // nothing.
-    expect(CLAIMED_CAPABILITIES).toEqual(['credential', 'devices'])
+    expect(CLAIMED_CAPABILITIES).toEqual(['credential', 'devices', 'settings'])
   })
 })
 

@@ -2023,6 +2023,89 @@ a.browse__go {
   border: none;
 }
 
+/* ------------------------------------------------------------ this server -- */
+
+/* The two settings the machine owns, on the Settings screen. Its own section
+   rather than a plain group because the provider picker is a row of choices, not
+   a single value — it does not fit the one-line `.setting` shape the rows above
+   it use. Drawn only when the host advertised `settings`, so nothing here is
+   ever an empty box. */
+.srvset {
+  display: block;
+}
+
+/* The default-tool picker: its label on one line, the choices wrapping under it.
+   Padded like a `.setting` so it sits flush with the toggle in the same group. */
+.srvset__row {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+}
+
+.srvset__title {
+  color: var(--text-primary);
+  font-size: 16px;
+}
+
+.srvset__options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* One coding tool. A chip rather than a radio dot, because the touch target has
+   to be a finger wide and the label ("Claude Code") is the value. */
+.srvset__option {
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 14px;
+}
+.srvset__option:active {
+  background: var(--bg-active);
+}
+
+/* The one in force: accent-filled and disabled, because pressing the current
+   choice again would be a no-op apply and should not invite the press. */
+.srvset__option--on {
+  border-color: transparent;
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+.srvset__option:disabled {
+  opacity: 0.5;
+}
+.srvset__option--on:disabled {
+  opacity: 1;
+}
+
+/* While an apply is in flight. Named rather than a spinner: two writes never
+   race into one store, so the other control is locked and this says why. */
+.srvset__working {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+/* The restore-sessions toggle reuses the one-line `.setting` shape; its value
+   ("On" / "Off") is its state, like every other value on this screen. */
+.srvset__toggle:active {
+  background: var(--bg-hover);
+}
+
+/* The machine's own sentence about an apply — muted for a confirmation, critical
+   for a refusal. The far end's words, never composed here. */
+.srvset__notice {
+  margin: 8px 2px 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.srvset__notice--bad {
+  color: var(--color-critical);
+}
+
 /* ------------------------------------------------------------- machines -- */
 
 .machines {

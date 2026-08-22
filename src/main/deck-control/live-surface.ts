@@ -79,6 +79,20 @@ export interface LiveSurfaceDeps {
    * no window is a real state rather than a broken one.
    */
   tellWindow?(channel: string, payload: unknown): boolean
+  /**
+   * Tell the machine's server-owned settings they changed out of band.
+   *
+   * Two of the four preferences — the default coding tool and whether the last
+   * layout is restored — are reachable from a phone over the `settings`
+   * capability, so a copilot write of either has to reach a device watching this
+   * machine the same way the window's own `prefs:set` does. `src/main/index.ts`
+   * passes `core.serverSettings.noteChanged`, which fans a `settings.changed` out
+   * to every eligible connection.
+   *
+   * Optional, for the reason `tellWindow` is: a surface built for the read-only
+   * pieces in a test has no core behind it.
+   */
+  noteServerSettingsChanged?(): void
 }
 
 export function createLiveSurface(deps: LiveSurfaceDeps): DeckSurface {
@@ -205,7 +219,16 @@ export function createLiveSurface(deps: LiveSurfaceDeps): DeckSurface {
      * the renderer's `prefs:set` has always had — `setPreferences` merges a
      * partial without validating it, and has done since it was written.
      */
-    writePreferences: (patch) => ({ ...store().setPreferences(patch) }),
+    writePreferences: (patch) => {
+      const next = { ...store().setPreferences(patch) }
+      // Two of these preferences are server-owned, so a copilot write of either
+      // has to reach a phone watching this machine — the same push `prefs:set`
+      // fires from the window. Fired for any pref write here, not only for the
+      // two, for the reason `index.ts` gives: the patch is partial and "did a
+      // server setting change" has a wrong answer available.
+      deps.noteServerSettingsChanged?.()
+      return next
+    },
 
     /*
      * Saving and applying, kept as two steps on purpose.

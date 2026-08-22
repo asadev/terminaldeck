@@ -150,7 +150,7 @@ export {
  * device screen), so naming it is honest and is what makes the roster on that
  * screen live rather than stale until the next visit.
  */
-export const CLAIMED_CAPABILITIES: string[] = [CAPABILITY.credential, CAPABILITY.devices]
+export const CLAIMED_CAPABILITIES: string[] = [CAPABILITY.credential, CAPABILITY.devices, CAPABILITY.settings]
 
 /**
  * One session row, or null — the desktop's `parseSession`, under the name this

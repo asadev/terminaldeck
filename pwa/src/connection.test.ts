@@ -178,7 +178,7 @@ describe('the handshake', () => {
       // "your device isn't reachable" about a tab that is open and connected.
       // `devices` is named for the same shape of reason: the host sends
       // `devices.changed` only to a connection that claimed it.
-      capabilities: ['credential', 'devices'],
+      capabilities: ['credential', 'devices', 'settings'],
     })
   })
 

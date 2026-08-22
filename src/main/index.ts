@@ -1971,6 +1971,13 @@ function registerIpc(): void {
   ipcMain.handle('prefs:get', () => store().getPreferences())
   ipcMain.handle('prefs:set', (_e, patch: Partial<Preferences>) => {
     const preferences = store().setPreferences(patch)
+    // Two of these preferences are server-owned — the default coding tool and
+    // whether the last layout is restored — so a change here has to reach a phone
+    // watching this machine's settings. Fired unconditionally for the same reason
+    // `syncTitleBarOverlay` below is: the patch is a partial and the renderer
+    // sometimes writes the whole object back, so "did a server setting change" has
+    // a wrong answer available; one extra push of two unchanged rows costs nothing.
+    core.serverSettings.noteChanged()
     /*
      * The theme switch cannot reach the window buttons on its own.
      *
@@ -2331,6 +2338,10 @@ function registerIpc(): void {
   // has to be paired and approved before a byte moves.
   const remote = registerRemoteIpc(ipcMain, {
     sessions: remoteSessions,
+    // The two settings this machine owns, reachable from a phone. One store, the
+    // same one the settings pane at this desk writes — see `prefs:set`, which
+    // calls `noteChanged` so a change here reaches a connected phone too.
+    serverSettings: core.serverSettings,
     /*
      * The desk this machine's sessions ask a device through.
      *
@@ -4189,6 +4200,10 @@ app.whenReady().then(() => {
      * value it saved is on the screen, because `send` answers that.
      */
     tellWindow: (channel, payload) => send(channel, payload),
+    // A copilot write of a server-owned preference has to reach a phone watching
+    // this machine, exactly as `prefs:set` above makes the window's own write do.
+    // One store, one push, whichever surface changed it.
+    noteServerSettingsChanged: () => core.serverSettings.noteChanged(),
     /*
      * Exactly one window may answer a confirmation, and it is this app's own.
      *

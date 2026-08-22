@@ -468,6 +468,11 @@ export async function createHeadlessHost(
 
   const remote = registerRemoteIpc(desk, {
     sessions: core.sessions,
+    // The two settings this machine owns, served over the wire like everything
+    // else here. The headless daemon manages its default coding tool and its
+    // restore-sessions choice from a phone the same way a desktop does — one
+    // store, the same one a session start reads.
+    serverSettings: core.serverSettings,
     folders: core.grants,
     /*
      * And the same login-choice store the endpoint's account filter closes over.

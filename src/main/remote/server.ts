@@ -113,6 +113,9 @@ import {
   type ServerMessage,
   type UsageAnswerWire,
 } from './protocol'
+// Type-only, so no runtime cycle: `host-core.ts` value-imports nothing from
+// here, and this reaches it only for the `settings` capability's store shape.
+import type { ServerSettingsAccess } from '../host-core'
 // The one comparison this app has for "are these two paths the same folder",
 // borrowed rather than restated. A second idea of folder equality here would be
 // a device granted `/Users/asad/proj` being refused `/Users/asad/proj/`, and on
@@ -968,6 +971,16 @@ export interface RemoteEndpointOptions {
     shares(deviceId: string, accountId: string): boolean
     any(deviceId: string): boolean
   }
+  /**
+   * The two settings this machine owns, read and written over the wire.
+   *
+   * **Optional, and absent is the switch** — the same negotiation `credentials`,
+   * `devServers` and `copilot` get. A host that was built without it never
+   * advertises `settings`, so a phone talking to it draws no "This server"
+   * section rather than one that is refused after the tap. Both shells supply
+   * `core.serverSettings`; the demo box's `offer` ceiling drops it anyway.
+   */
+  serverSettings?: ServerSettingsAccess
   /**
    * Is this device one of the owner's own, rather than a guest?
    *
@@ -2011,6 +2024,16 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
      */
     if (name === CAPABILITY.chat) return options.sessions.chat !== undefined
     /*
+     * And once more for the two server-owned settings, gated on the object that
+     * makes them possible — the same rule as `logins` and `chat`. A host built
+     * without it does not advertise the capability, so a phone draws no "This
+     * server" section rather than one that is refused after the tap. Who among
+     * the owner's devices may reach it is `ownDevice`, stripped per device in
+     * `capabilitiesFor` — a capability says what the machine can do, a grant says
+     * who may ask, and there is no push frame that could correct a welcome later.
+     */
+    if (name === CAPABILITY.settings) return options.serverSettings !== undefined
+    /*
      * `send` is deliberately not in the list above, and the absence is the
      * decision rather than an omission.
      *
@@ -2149,6 +2172,11 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     // because no push frame could correct a welcome later — a guest must never
     // be told the capability exists.
     if (!ownDevice(deviceId)) withheld.push(CAPABILITY.devices)
+    // And `settings` with it, and for the same reason `logins` is stripped here:
+    // the two settings this machine owns are the owner's to change, and there is
+    // no push frame that could correct a welcome later, so a guest must never be
+    // told the capability exists.
+    if (!ownDevice(deviceId)) withheld.push(CAPABILITY.settings)
     const narrowed = withheld.length === 0 ? advertised : advertised.filter((name) => !withheld.includes(name))
     if (copilotEligible(deviceId)) return narrowed
     // `web` goes with it, and for the same reason: opening a page puts a window
@@ -2187,6 +2215,30 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
         }
         if (!watching) continue
         send(connection, { t: 'dev.state', state: devReport(state) })
+      }
+    }) ?? null
+
+  /**
+   * Push a server-owned setting's new value to every connection that may hear it.
+   *
+   * Subscribed once for the endpoint, and the gate is read **per connection at
+   * send time**: a device demoted to a guest, or one that never named `settings`
+   * in its hello, gets nothing — the same per-connection recomputation
+   * `tellSessions` does, and the reason a push cannot outlive the grant that
+   * earned it. The payload is read inside the loop rather than fanned out as one
+   * precomputed list, so there is a single place — here — that decides what
+   * crosses, and an old client that would close on an unknown frame never gets
+   * one.
+   */
+  const stopSettingsWatch =
+    options.serverSettings?.onChanged(() => {
+      const settings = options.serverSettings
+      if (!settings) return
+      for (const connection of live.values()) {
+        if (!connection.deviceId) continue
+        if (!ownDevice(connection.deviceId)) continue
+        if (!connection.capabilities.includes(CAPABILITY.settings)) continue
+        send(connection, { t: 'settings.changed', settings: settings.read() })
       }
     }) ?? null
 
@@ -4036,6 +4088,71 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     })
   }
 
+  /**
+   * Serve one `settings.read` or `settings.apply`.
+   *
+   * ## The same door as `loginsServe`, and it is the machine's own
+   *
+   * These verbs carry no session id: they are about the **machine** — the two
+   * settings it owns — so there is no session to authorise against and the
+   * question becomes *whose device is asking*. The answer is `ownDevice`, the
+   * same fact that gates `logins`, and a guest is refused here as well as never
+   * being told the capability exists.
+   *
+   * The guest refusal is `unauthorized`, not the `unavailable` its neighbour
+   * uses, and the difference is deliberate. `loginsServe` collapses three states
+   * into one sentence so a guest cannot learn a machine keeps logins; but every
+   * machine has settings — that is not a secret about somebody's computer — so
+   * naming the refusal for what it is leaks nothing and does not send a device
+   * that may not ask to the pairing screen the way `unavailable` would.
+   */
+  async function settingsServe(
+    connection: LiveConnection,
+    deviceId: string,
+    message: Extract<ClientMessage, { t: 'settings.read' | 'settings.apply' }>,
+  ): Promise<void> {
+    const settings = options.serverSettings
+    if (!settings || !advertised.includes(CAPABILITY.settings)) {
+      // Not served here at all — an older host, or one built without it. Named
+      // `unavailable`, not `unauthorized`: the device may ask, this build cannot
+      // answer, and the two have different remedies.
+      send(connection, {
+        t: 'error',
+        code: 'unavailable',
+        message: `This ${machineNoun(currentPlatform())} does not manage its settings from here.`,
+      })
+      return
+    }
+    if (!ownDevice(deviceId)) {
+      send(connection, {
+        t: 'error',
+        code: 'unauthorized',
+        message: 'Only this machine’s own devices manage its settings.',
+      })
+      return
+    }
+
+    if (message.t === 'settings.read') {
+      send(connection, { t: 'settings.state', rid: message.rid, settings: settings.read() })
+      return
+    }
+
+    // `settings.apply` — a store write, not a spawn, so there is no await across
+    // which the connection could vanish and the answer goes out now. A refused
+    // provider id comes back here with `ok: false`, never a silent swap; the
+    // `settings.changed` push to every other eligible connection is the store's
+    // own `onChanged`, wired beside `stopDevWatch`.
+    const result = settings.apply(message.key, message.value)
+    send(connection, {
+      t: 'settings.applied',
+      rid: message.rid,
+      ok: result.ok,
+      // The machine's own sentence about its own store, passed through as written.
+      message: result.message,
+      setting: result.setting,
+    })
+  }
+
   async function chatServe(
     connection: LiveConnection,
     deviceId: string,
@@ -4680,6 +4797,21 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
           })
         })
         return
+      case 'settings.read':
+      case 'settings.apply':
+        // Not awaited, for the reason the logins frames above are not: this reads
+        // or writes a store on this machine, and a socket that stopped reading
+        // would freeze every session on the connection while it did.
+        void settingsServe(connection, connection.deviceId, message).catch((error) => {
+          console.error('[remote] a settings request failed:', error)
+          if (!live.has(connection.id)) return
+          send(connection, {
+            t: 'error',
+            code: 'unavailable',
+            message: 'This machine’s settings could not be reached.',
+          })
+        })
+        return
       case 'chat.read':
         // Not awaited, for the reason the readings above are not: this is a file
         // read on this machine and a socket that stopped reading would freeze
@@ -5261,6 +5393,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
       // Before the sockets, so a state change that lands mid-teardown cannot try
       // to send on a wire that is going away.
       stopDevWatch?.()
+      stopSettingsWatch?.()
       for (const connection of [...live.values()]) connection.wire.close(CLOSE.goingAway, 'server stopping')
     },
   }
@@ -5982,6 +6115,15 @@ export interface RemoteIpcDeps {
    */
   sessionGrants?: SessionGrants
   /**
+   * The two settings this machine owns, reached over the `settings` capability.
+   *
+   * **Optional, and its absence is the switch**, like `credentials` and
+   * `devServers`: a host that passes none advertises no `settings` capability
+   * and answers the verb with nothing. Both shells pass `core.serverSettings`,
+   * which is the one store a window and a phone both write through.
+   */
+  serverSettings?: ServerSettingsAccess
+  /**
    * Which of this machine's logins each device may use — the third axis.
    *
    * Passed in for exactly the reason `folders` and `sessionGrants` are: the
@@ -6599,6 +6741,12 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
           },
         }
       : {}),
+    /*
+     * The two settings this machine owns, spread on the same rule: absent means
+     * this host does not advertise `settings`, so a phone talking to it draws no
+     * "This server" section rather than one that is refused after the tap.
+     */
+    ...(deps.serverSettings ? { serverSettings: deps.serverSettings } : {}),
     /*
      * And whether a device is one of his own, which decides whether it may
      * manage this machine's logins at all.

@@ -155,6 +155,7 @@ import { ChatComposer, ChatView } from './chat-view'
 import { infoDot } from './info-dot'
 import { SessionBar } from './session-bar'
 import { SessionControls } from './session-controls'
+import { ServerSettings } from './server-settings'
 import { watchPhysicalKeyboard, type KeyBarFit, type MatchMedia } from './physical-keyboard'
 import {
   clearPairing,
@@ -769,6 +770,16 @@ class Deck {
    */
   private hostAppVersion = ''
   private hostKind: HostKind | null = null
+   * The "This server" section of the Settings screen — the two settings this
+   * machine owns rather than this browser. Built once and app-global (it is a
+   * screen section, not a per-session cluster), it reads the socket and the
+   * capability list lazily, so constructing it before the connection exists is
+   * fine. It draws nothing over a machine whose welcome did not name `settings`.
+   */
+  private readonly serverSettings = new ServerSettings({
+    send: (message) => this.connection?.send(message) === true,
+    capabilities: () => this.capabilities,
+  })
   /**
    * The folders this device may start a session in, or null when the desktop
    * has never said.
@@ -1927,6 +1938,8 @@ class Deck {
      * a case for none of, routed the same way and for the same reason.
      */
     if (this.sessionControls?.receive(message)) return
+    // The two server-owned settings, and the unsolicited push when one changes.
+    if (this.serverSettings.receive(message)) return
     /*
      * And the conversation, routed by `rid` for the reason the transfer and the
      * bar above are: an answer belongs to the request that asked for it, and a
@@ -1957,6 +1970,11 @@ class Deck {
         // "not said" and draws nothing for rather than guessing a number.
         this.hostAppVersion = message.appVersion ?? ''
         this.hostKind = message.hostKind ?? null
+        // The machine on the other end can change on a welcome — a re-pair, a
+        // switch between two paired hosts — so forget what the last one said and
+        // re-read on the next visit to Settings, or now if that is where we are.
+        this.serverSettings.renew()
+        if (this.screen === 'settings') this.serverSettings.ensureRead()
         {
           // The machine that just said hello, which during a second pairing is
           // not the one on screen. See `dialledId`.
@@ -4004,6 +4022,14 @@ class Deck {
       devicesRow.addEventListener('click', () => this.goTo('devices'))
       devices.append(devicesRow)
       screen.append(devices)
+    // The two settings this machine owns, over the `settings` capability. Drawn
+    // only when the host advertised it (an owner's own device, a host new enough
+    // to serve it); a guest or an older desktop gets nothing here rather than a
+    // section explaining what it is missing. `ensureRead` asks once per
+    // connection; the `settings.changed` push keeps it fresh without a poll.
+    if (this.serverSettings.offered()) {
+      this.serverSettings.ensureRead()
+      screen.append(this.serverSettings.element)
     }
 
     screen.append(element('p', 'caption', 'Terminal'))
