@@ -158,6 +158,15 @@ export interface WindowAskDesk {
    * idempotent: a link that dropped and came back sends its set again and the
    * two ends agree, with nothing to reconcile and no way to drift. It is also
    * how a *detach* arrives — the session simply stops being on the list.
+   *
+   * ## Ids only, deliberately, even though the frame now carries more
+   *
+   * `window.holds` also carries what each of those windows *is* — the slot name,
+   * the title, the URL — and none of it belongs here. This desk answers one
+   * question, *where does a verb for this session go*, and a description is not
+   * part of that answer; a second copy of it here would be a second thing to keep
+   * in step with the map that is actually printed from. The rows go to
+   * `browser-binding.ts`, off the same frame, through a dep of their own.
    */
   held(deviceId: string, sessions: readonly string[]): void
   /**

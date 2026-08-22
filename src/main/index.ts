@@ -166,14 +166,15 @@ import {
 } from './browser-binding-ipc'
 import { registerSessionRowMenuIpc } from './session-row-menu'
 import {
+  heldRowsFor,
   hookContext,
   hostReset,
   MID_TURN_EVENTS,
+  recordRemoteHolds,
   sessionExited,
   sessionRemoved,
   subscribe as subscribeToBindings,
   takeAnnouncement,
-  view as bindingView,
   windowsOf,
 } from './browser-binding'
 import { noVerbsLine } from './session-verbs'
@@ -2412,10 +2413,19 @@ function registerIpc(): void {
      * the day a window can be attached to a device's session, this is already
      * the right answer and there is nothing here to remember to change.
      */
-    windowsHeldFor: (deviceId) =>
-      bindingView()
-        .sessions.filter((binding) => binding.machineId === deviceId && binding.windows.length > 0)
-        .map((binding) => binding.sessionId),
+    windowsHeldFor: (deviceId) => heldRowsFor(deviceId, describeThisMachine().name),
+    /*
+     * And the same frame arriving: that device saying which windows **it** holds
+     * for sessions running here.
+     *
+     * The desk one line up (`windows: windowAsks`) is what makes a browser verb
+     * from such a session reach that device. This is what makes the session
+     * *know*, which until tonight nothing did: a window attached over there was
+     * drivable by an agent that had no way to find out it existed, and an agent
+     * in that state does not conclude it has a window somewhere — it concludes it
+     * has none, and offers to print a link.
+     */
+    onWindowsHeld: (peer, held) => recordRemoteHolds(peer, held),
     // The same tracker the window uses, so a dev server started from the phone
     // and one started from the desktop are one thing rather than two views that
     // can disagree. `server.ts` only advertises the `devserver` capability when
@@ -2610,10 +2620,7 @@ function registerIpc(): void {
      * See `MachinesIpcDeps.windowsHeld`, and `window.holds` in `protocol.ts` for
      * why the whole set travels rather than a change.
      */
-    windowsHeld: (machineId) =>
-      bindingView()
-        .sessions.filter((binding) => binding.machineId === machineId && binding.windows.length > 0)
-        .map((binding) => binding.sessionId),
+    windowsHeld: (machineId) => heldRowsFor(machineId, describeThisMachine().name),
     /*
      * And the mirror of that fact, which is what makes the *fourth* arrangement
      * possible at all: what is running **here**, told to every machine this
@@ -2670,6 +2677,15 @@ function registerIpc(): void {
      * difference between the two instances is the wire below.
      */
     windowsHeldThere: (machineId, sessions) => machineWindowAsks.held(machineId, sessions),
+    /*
+     * And the half of that frame the desk has no use for: what those windows
+     * *are*, so the session here can be told it has one.
+     *
+     * The mirror of `onWindowsHeld` on the device side, into the same map and
+     * through the same function — there is one place a peer's claim is written
+     * down and one place it is read, whichever wire it came in on.
+     */
+    onWindowsHeld: (peer, held) => recordRemoteHolds(peer, held),
     windowAnswered: (result) =>
       machineWindowAsks.answer(result.id, { ok: result.ok, body: result.body }),
     windowsUnreachable: (machineId) => machineWindowAsks.gone(machineId),

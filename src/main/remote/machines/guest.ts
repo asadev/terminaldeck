@@ -77,6 +77,7 @@ import { thisMachineName } from '../../platform/host'
 import type { LocalhostMessage } from '../tunnel'
 import { dialMachine, type GuestChannel, type DialRequest } from './dial'
 import { overPasteCap } from '../../../shared/paste-cap'
+import type { HeldSession } from '../../../shared/held-window'
 import type { MachineSecrets } from './store'
 import { createUploadSender, type SendFileOutcome, type UploadProgress } from './upload-send'
 
@@ -742,8 +743,14 @@ export interface MachineLinkOptions {
    * answer changes every time somebody attaches or detaches a window and the two
    * moments this is sent — a welcome, and a change — are both "say what is true
    * now".
+   *
+   * Rows rather than bare ids since the far machine started *announcing* these
+   * windows to the agents whose sessions they are attached to, which needs a
+   * name, a title and a URL for each — see `WindowHoldsFrame.held`. The ids the
+   * router acts on are derived from these rows here rather than asked for
+   * separately, so the two halves of the frame cannot disagree.
    */
-  windowsHeld?(): readonly string[]
+  windowsHeld?(): readonly HeldSession[]
   /**
    * What is running on **this** machine, asked whenever it has to be said.
    *
@@ -778,7 +785,7 @@ export interface MachineLinkOptions {
    * build cannot ask, so it never claims the capability, so the far machine never
    * sends the frame. See {@link MachineLink.askWindow}.
    */
-  onWindowHolds?(sessions: readonly string[]): void
+  onWindowHolds?(sessions: readonly string[], held?: readonly HeldSession[]): void
   /**
    * That machine has answered a browser verb this app asked it to run.
    *
@@ -959,7 +966,22 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
   function announceWindows(): boolean {
     if (options.windowsHeld === undefined) return false
     if (!current.capabilities.includes(CAPABILITY.windows)) return false
-    return send({ t: 'window.holds', sessions: [...options.windowsHeld()] })
+    /*
+     * The ids come out of the rows, never from a second question.
+     *
+     * A machine older than this build reads `sessions` and ignores `held`, so
+     * both travel; what must never happen is the two describing different sets,
+     * because the far end routes on one and prints the other. One read of one
+     * map is what makes that impossible. `held` is left off entirely when there
+     * is nothing in it — see `WindowHoldsFrame.held` for why an empty array
+     * would mean the opposite of nothing.
+     */
+    const held = [...options.windowsHeld()]
+    return send({
+      t: 'window.holds',
+      sessions: held.map((row) => row.session),
+      ...(held.length === 0 ? {} : { held }),
+    })
   }
 
   /**
@@ -1354,7 +1376,7 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
          * machine sending it anyway is one that ignored the negotiation, and
          * closing a working link over that would cost more than the frame does.
          */
-        options.onWindowHolds?.([...message.sessions])
+        options.onWindowHolds?.([...message.sessions], message.held ?? [])
         return
       }
       case 'window.result': {

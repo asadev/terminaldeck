@@ -70,6 +70,12 @@
  */
 
 import { BRAND } from '../shared/brand'
+import {
+  heldLabel,
+  type HeldSession,
+  type HeldWindow,
+  sameHeldWindows,
+} from '../shared/held-window'
 
 /* ------------------------------------------------------------------ types -- */
 
@@ -211,6 +217,63 @@ type Listener = (view: BindingView) => void
  * either half.
  */
 const bindings = new Map<string, SessionBinding>()
+
+/**
+ * The windows **another computer** says it is holding for sessions running
+ * here: `sessionId` → the peer that said so → what it said.
+ *
+ * ## Why it is a second map and not more rows in the first
+ *
+ * Everything in `bindings` is a `WebContentsView` in *this* process. The whole
+ * app leans on that: `view()` pushes it to the renderer, which draws a strip
+ * row and a menu item per window; `resolve()` navigates the lowest-numbered one;
+ * `windowNamed` is the permission check for driving one. A row describing a
+ * window on somebody else's screen put into that map would light up every one of
+ * those — a strip entry that focuses nothing, a menu item that closes nothing, a
+ * `browser.open` that navigates a window that is not here. That is exactly the
+ * control that looks like it works and does not, which is the one thing this app
+ * does not ship.
+ *
+ * It would also loop. `heldRowsFor` builds the frame that goes back out by
+ * walking `bindings`, so a window recorded there from a peer would be announced
+ * *to* that peer as a window this machine holds for it.
+ *
+ * So the two facts stay apart, and exactly two functions read this one:
+ * {@link hookContext} and {@link takeAnnouncement}, which are the sentences an
+ * agent reads. Reachability is not affected either way — a verb for a session
+ * with no window here is already routed to the peer that claimed it, by
+ * `window-owner.ts`, off the ids in the same frame. This map is only how the
+ * agent gets to *know*.
+ *
+ * ## Keyed by bare session id
+ *
+ * Not `keyOf`, because there is only one machine a peer may name sessions on: a
+ * `window.holds` frame means *"windows I hold for sessions of **yours**"*, and
+ * this machine's own sessions are the ones with an empty machine id. A reader
+ * that arrives with a non-empty one is asking about a session on a third
+ * computer, which no peer has ever claimed and which this map deliberately
+ * cannot answer for.
+ *
+ * ## Nothing here expires
+ *
+ * An entry lives until the peer that wrote it says otherwise, and a peer that
+ * disconnects is not saying otherwise — `WindowAskDesk`'s `holders` map makes the
+ * same argument for the routing half, and it is the same one: a laptop that
+ * closed its lid still has the window attached to it, and *"that computer is not
+ * connected right now"* is a true sentence composed per call, while forgetting
+ * would answer *"no browser window is attached to this session"*, which is false.
+ * The set is bounded by what the peer itself will claim — `MAX_WINDOW_HOLDS`
+ * sessions of that — and it is replaced wholesale on that peer's next welcome.
+ */
+const remoteHeld = new Map<string, Map<string, RemoteHold>>()
+
+/** One peer's claim about one session. See {@link remoteHeld}. */
+interface RemoteHold {
+  /** What to call the computer the window is on, in a sentence. Never empty. */
+  at: string
+  /** Non-empty: a claim with no windows in it is not recorded at all. */
+  windows: HeldWindow[]
+}
 
 /** Every window, by shell tab id, so a tab id resolves without a scan. */
 const windowOwner = new Map<string, string>()
@@ -868,11 +931,238 @@ export const MID_TURN_EVENTS: ReadonlySet<string> = new Set(['PostToolUse', 'Aft
  * this computer" is what every other line here already implies.
  */
 function windowLine(window: BoundWindow): string {
+  return heldLine({
+    n: window.n,
+    title: window.title,
+    url: window.url,
+    host: window.hostMachineId === '' ? '' : window.hostMachineName || window.hostMachineId,
+  })
+}
+
+/**
+ * The same line for a window on **another** computer, from the row that
+ * travelled.
+ *
+ * One builder for both, because the local answer and the far one describe the
+ * same thing to the same reader and two builders is how one of them comes to
+ * name a machine the other does not — which is the argument `hookContext`
+ * already makes about itself and `takeAnnouncement`.
+ *
+ * `at` is the one clause a local window never has, and it is the whole of Asad's
+ * rule for this feature: *"we always need a truth. So we will not know the truth
+ * if we remove from inside where it is exactly running."* A window an agent can
+ * drive but cannot see is still a window on somebody else's screen, and an agent
+ * that says "I have opened it in front of you" about a page on a computer in
+ * another room has told the person something false.
+ *
+ * It sits before `served by` because the two answer different questions in the
+ * order they are asked — *where is the window* and then *where is the page* —
+ * and because for the ordinary case (a window over there showing a page over
+ * there) `host` is empty and only this clause prints.
+ */
+function heldLine(window: HeldWindow, at = ''): string {
   const parts = [slotName(window.n), window.title, window.url].filter((part) => part !== '')
-  const line = parts.join(' — ')
-  return window.hostMachineId === ''
-    ? line
-    : `${line} — served by ${window.hostMachineName || window.hostMachineId}`
+  let line = parts.join(' — ')
+  if (at !== '') line += ` — on ${at}`
+  if (window.host !== '') line += ` — served by ${window.host}`
+  return line
+}
+
+/**
+ * The single computer holding windows for this session, or null.
+ *
+ * ## Why one and not all of them
+ *
+ * `routeWindowVerb` refuses a session two computers have both claimed — there is
+ * no order that would be right, so a verb with two destinations is a sentence
+ * rather than a guess. Naming `B1` and `B1` from two machines in the same list
+ * would therefore be printing two names that both refuse, on a screen where the
+ * agent cannot tell which it asked for. Silence is the honest answer, and the
+ * refusal it will get if it tries anyway is composed where the decision is made.
+ *
+ * ## And why a window here beats every claim from over there
+ *
+ * The same order `routeWindowVerb` applies, for the same reason: a verb from a
+ * session with a window in this app is served in this app, so a peer's `B1`
+ * cannot be reached at all while a local `B1` exists. Printing it would name a
+ * window that every verb in the list would silently resolve somewhere else.
+ */
+function soleRemoteHold(sessionId: string, machineId: string): RemoteHold | null {
+  if (machineId !== '') return null
+  const claims = remoteHeld.get(sessionId)
+  if (claims === undefined || claims.size !== 1) return null
+  return [...claims.values()][0]
+}
+
+/**
+ * The windows this session is to be told it has, wherever they are.
+ *
+ * The one place the local-first order and the far-machine fallback are decided,
+ * so that the standing answer and the mid-turn announcement cannot come to
+ * disagree about which windows a session has — they are the same two callers
+ * `windowLine` already exists for.
+ */
+function shownWindows(sessionId: string, machineId: string): { lines: string[]; first: number } {
+  const local = bindings.get(keyOf(sessionId, machineId))?.windows ?? []
+  if (local.length > 0) return { lines: local.map((window) => windowLine(window)), first: local[0].n }
+  const remote = soleRemoteHold(sessionId, machineId)
+  if (remote === null) return { lines: [], first: 0 }
+  return {
+    lines: remote.windows.map((window) => heldLine(window, remote.at)),
+    first: remote.windows[0].n,
+  }
+}
+
+/**
+ * What this app is holding for one peer's sessions, in the shape that travels.
+ *
+ * The other half of {@link recordRemoteHolds}, one machine over: this is what a
+ * `window.holds` frame is built from, and building it here rather than at the
+ * three call sites is what stops the three from disagreeing about a translation
+ * that is easy to get backwards.
+ *
+ * ## The translation, which is the only interesting line in it
+ *
+ * `BoundWindow.hostMachineId` is *"empty means this computer"* — this one, the
+ * one the map is on. Sent unchanged it would arrive somewhere else, where empty
+ * means a different computer, and a page served by this Mac would be described
+ * to his PC as a page served by his PC. So each window's host is restated from
+ * the reader's side before it leaves:
+ *
+ *  - served here → the reader is told this machine's name,
+ *  - served on the machine being told → empty, which is what that reader already
+ *    reads as "this computer",
+ *  - served on a third machine → its name, which means the same thing to both.
+ *
+ * `selfName` is passed in rather than read, because this module has no Electron
+ * and no network in it and is not about to grow either to answer what the
+ * hostname is. `index.ts` and `headless/host.ts` both have
+ * `describeThisMachine()` already.
+ *
+ * Every string goes through `heldLabel` on the way out as well as on the way in.
+ * A cap applied only by the receiver is a cap that a peer running an older build
+ * does not have, and a page title is not this app's to trust in either
+ * direction.
+ */
+export function heldRowsFor(peerId: string, selfName: string): HeldSession[] {
+  if (peerId === '') return []
+  const rows: HeldSession[] = []
+  for (const binding of bindings.values()) {
+    if (binding.machineId !== peerId || binding.windows.length === 0) continue
+    rows.push({
+      session: binding.sessionId,
+      windows: binding.windows.map((window) => ({
+        n: window.n,
+        title: heldLabel(window.title),
+        url: heldLabel(window.url),
+        host: heldLabel(
+          window.hostMachineId === ''
+            ? selfName
+            : window.hostMachineId === peerId
+              ? ''
+              : window.hostMachineName || window.hostMachineId,
+        ),
+      })),
+    })
+  }
+  return rows
+}
+
+/**
+ * That computer says it is holding these browser windows for sessions here.
+ * Its whole answer, replacing whatever it said last.
+ *
+ * ## What this is for
+ *
+ * It is the missing half of a feature that already worked. A window attached in
+ * this app to a session on a paired machine could be *driven* from over there —
+ * the ids in the same frame are what `window-owner.ts` routes on — and could
+ * never be *mentioned* to the agent that was supposed to drive it. So the
+ * capability existed for a window the session had no way to learn about, which
+ * is the same thing as not existing: measured, an agent in that state does not
+ * conclude it has a browser window somewhere, it concludes it has none.
+ *
+ * ## Replacement, not a delta
+ *
+ * The frame is the peer's whole set every time — see `WindowHoldsFrame` — so
+ * this is too. A session that was in the last answer and is not in this one has
+ * been detached over there, and it is dropped here, which is the only way a
+ * detach could ever arrive. Nothing has to remember what was said before, and a
+ * link that dropped and came back is correct simply by arriving.
+ *
+ * Rows with no windows in them are not recorded. A peer that names a session in
+ * `sessions` and sends no window for it is one that knows how to route but not
+ * how to describe — an older build — and an empty entry would be printed as a
+ * session that has windows nobody can name.
+ *
+ * ## Why only a real change announces
+ *
+ * A welcome re-sends the set, and a link on a flaky network welcomes often. If
+ * arriving were enough to mark a session unannounced, every reconnection would
+ * put the whole window list into the next tool call of every agent on this
+ * machine — the one cost this channel was designed around, spent on nothing new.
+ * So the peer's answer is compared with what it last said and only a difference
+ * knocks.
+ *
+ * And only for a session whose *printed* answer would change: a session with a
+ * window in this app is told about that window and never about a peer's — see
+ * {@link shownWindows} — so a peer attaching a second window to it changes
+ * nothing anybody would read.
+ */
+export function recordRemoteHolds(
+  peer: { id: string; name: string },
+  held: readonly HeldSession[],
+): void {
+  if (peer.id === '') return
+  /*
+   * Never empty, because it is printed. A peer whose name this machine does not
+   * know is described rather than identified: its id is a fingerprint or a uuid,
+   * which is a string an agent can neither act on nor say out loud to the person
+   * sitting in front of it.
+   */
+  const at = heldLabel(peer.name) || 'another computer'
+  const changed: string[] = []
+  const seen = new Set<string>()
+
+  for (const row of held) {
+    if (row.session === '' || row.windows.length === 0) continue
+    seen.add(row.session)
+    const claims = remoteHeld.get(row.session) ?? new Map<string, RemoteHold>()
+    const before = claims.get(peer.id)
+    if (before !== undefined && before.at === at && sameHeldWindows(before.windows, row.windows)) {
+      continue
+    }
+    claims.set(peer.id, { at, windows: [...row.windows] })
+    remoteHeld.set(row.session, claims)
+    changed.push(row.session)
+  }
+
+  // And everything this peer used to claim and no longer does. Collected first,
+  // because the loop deletes out of the map it is walking.
+  for (const [sessionId, claims] of [...remoteHeld]) {
+    if (seen.has(sessionId) || !claims.has(peer.id)) continue
+    claims.delete(peer.id)
+    if (claims.size === 0) remoteHeld.delete(sessionId)
+    changed.push(sessionId)
+  }
+
+  for (const sessionId of changed) {
+    // See the header: a session with a window in this app reads its own list, so
+    // nothing a peer says about it is worth a turn's context.
+    if ((bindings.get(keyOf(sessionId, ''))?.windows.length ?? 0) > 0) continue
+    unannounced.add(keyOf(sessionId, ''))
+  }
+}
+
+/**
+ * Test seam, and the honest name for it: what a peer has claimed, unfiltered by
+ * the local-first rule the two answers apply.
+ */
+export function remoteHoldsFor(sessionId: string): { at: string; windows: HeldWindow[] }[] {
+  return [...(remoteHeld.get(sessionId)?.values() ?? [])].map((hold) => ({
+    at: hold.at,
+    windows: hold.windows.map((window) => ({ ...window })),
+  }))
 }
 
 /**
@@ -897,15 +1187,20 @@ export function takeAnnouncement(
   const key = keyOf(sessionId, machineId)
   if (!unannounced.has(key)) return null
   unannounced.delete(key)
-  const binding = bindings.get(key)
-  const windows = binding?.windows ?? []
-  if (windows.length === 0) {
+  /*
+   * Windows here **or** on the computer that said it holds one, in that order.
+   * See {@link shownWindows}: an attach that happened in another app's renderer
+   * is the same event to this session as one that happened in this one, and it
+   * arrives by the same door.
+   */
+  const shown = shownWindows(sessionId, machineId)
+  if (shown.lines.length === 0) {
     return 'No browser window is attached to this session now.'
   }
   return [
     'Browser windows attached to this session (this just changed):',
-    ...windows.map(windowLine),
-    `"the browser" means ${slotName(windows[0].n)}.`,
+    ...shown.lines,
+    `"the browser" means ${slotName(shown.first)}.`,
     /*
      * And whether it may touch them — here as well as in the standing answer,
      * for a sharper reason than the one {@link DISCRETION} gets.
@@ -1057,8 +1352,18 @@ export function hookContext(
    * simply required: the renderer only ever attaches a window to a session this
    * app is running, so a binding with windows in it answers the same question
    * from the other side.
+   *
+   * **Only a window in this app's own map counts as that proof**, and a peer's
+   * claim deliberately does not. The hook is installed globally, so it fires for
+   * the `claude` Asad runs in his own terminal outside this app, and the whole
+   * of what keeps that one untouched is this line answering null. A paired
+   * machine naming session ids it has windows for could otherwise walk this open
+   * simply by guessing — and the frame is not even an assertion about this
+   * machine, so there is nothing here to check it against. `known` is answered by
+   * the pty manager, which is the only thing that knows.
    */
   if (input.known !== true && windows.length === 0) return null
+  const shown = shownWindows(sessionId, machineId)
 
   const lines = [
     `You are running inside ${BRAND.name}, a terminal app with browser windows of its own.`,
@@ -1069,12 +1374,12 @@ export function hookContext(
   // beside the sentence that says where "here" is.
   if (input.map) lines.push(input.map)
 
-  if (windows.length > 0) {
+  if (shown.lines.length > 0) {
     lines.push('Browser windows attached to this session:')
-    // `windowLine` rather than a second spelling of it: the standing answer and
+    // `shownWindows` rather than a second spelling of it: the standing answer and
     // the change announcement describe the same windows, and two builders is how
     // one of them comes to name a machine the other does not.
-    for (const window of windows) lines.push(windowLine(window))
+    for (const line of shown.lines) lines.push(line)
     /*
      * And the pending announcement is settled here, because this **is** the
      * announcement.
@@ -1095,7 +1400,7 @@ export function hookContext(
      * holding `B1` that `B1` is gone.
      */
     unannounced.delete(keyOf(sessionId, machineId))
-    const first = slotName(windows[0].n)
+    const first = slotName(shown.first)
     /*
      * The naming half is worth its words even where the shim is not installed,
      * because it is what lets him say "look at B2" and be understood; only the
@@ -1125,6 +1430,7 @@ export function hookContext(
 /** Test seam. Nothing in the app calls this; every real reset is an event. */
 export function resetForTests(): void {
   bindings.clear()
+  remoteHeld.clear()
   windowOwner.clear()
   unannounced.clear()
   reservedAt.clear()
