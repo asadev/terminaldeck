@@ -51,6 +51,18 @@ struct PairingView: View {
     @State private var typed = ""
     @FocusState private var typing: Bool
 
+    /**
+     * Whether the **Add a server** sheet is up over this one.
+     *
+     * Presented from here rather than from `RootView`, and that is the point: on
+     * a phone with no machines this screen *is* the window, and on a phone
+     * adding one it is itself a sheet. A flag on the model would have to swap
+     * one root-level sheet for another in the same update, which SwiftUI drops
+     * about as often as it honours. A sheet raised from inside the sheet that is
+     * already up is one presentation and always lands.
+     */
+    @State private var signingIn = false
+
     var body: some View {
         ZStack {
             Theme.background.ignoresSafeArea()
@@ -65,6 +77,7 @@ struct PairingView: View {
                     }
 
                     codeEntry
+                    serverDoor
                     deviceKind
                     identity
                 }
@@ -89,6 +102,58 @@ struct PairingView: View {
         // The keypad is up before the person has to ask for it. This screen has
         // exactly one thing to do and typing is it.
         .onAppear { typing = true }
+        .sheet(isPresented: $signingIn) {
+            AddServerView(model: model) { added in
+                signingIn = false
+                // A machine arrived, so this screen has nothing left to ask for.
+                // On a first run `RootView` swaps it out on its own; in the
+                // "pair another machine" sheet it has to be told.
+                if added { close?() }
+            }
+        }
+    }
+
+    /**
+     * The other door.
+     *
+     * Six digits are read off a machine **somebody is standing at**. A server is
+     * a machine nobody is standing at, which is the entire point of one: no
+     * screen to show a code on, nobody to press Approve. Until this shipped, a
+     * phone in front of this screen with only a server to connect to had no way
+     * forward at all — which is exactly what he opened TestFlight and did not
+     * find.
+     *
+     * It is a line under the code field rather than a tab or a segmented
+     * control, because it is not an equal choice: most people pairing a phone
+     * are standing at their own Mac, and putting a fork in front of them would
+     * make them pick before they know which one they are. Whoever has a server
+     * knows they have a server.
+     */
+    private var serverDoor: some View {
+        HStack(spacing: 6) {
+            Button {
+                typing = false
+                signingIn = true
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: "server.rack")
+                        .font(.system(size: 13))
+                    Text("Add a server instead")
+                        .font(.system(size: 15, weight: .medium))
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Theme.accent)
+            .accessibilityIdentifier("pairing.addServer")
+
+            InfoDot(about: "adding a server",
+                    text: "A server has no screen to show a code on and nobody standing at it to "
+                        + "approve this phone. So you sign in to it instead, with the username and "
+                        + "password or key that machine already trusts — it checks them against its "
+                        + "own SSH and issues this phone a credential of its own.")
+            Spacer(minLength: 0)
+        }
     }
 
     /**

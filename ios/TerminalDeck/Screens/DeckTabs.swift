@@ -308,6 +308,17 @@ private struct CopilotTabScreen: View {
 struct MachinesView: View {
     let model: DeckModel
 
+    /**
+     * Whether the **Add a server** sheet is up.
+     *
+     * Local rather than on the model, because this screen is the only thing that
+     * raises it from here and a flag on the model would be a second way to
+     * present the same sheet from two places at once. The *flow* underneath it
+     * is on the model — see `DeckModel.serverSignIn` — so closing this screen
+     * mid-sign-in does not end it.
+     */
+    @State private var addingServer = false
+
     var body: some View {
         ZStack {
             Theme.background.ignoresSafeArea()
@@ -348,6 +359,48 @@ struct MachinesView: View {
                     .padding(.top, 6)
                     .accessibilityIdentifier("machines.add")
 
+                    /*
+                     * The second door, beside the first rather than behind it.
+                     *
+                     * A code is read off a machine somebody is standing at. A
+                     * server is a machine nobody is standing at — that is what
+                     * makes it a server — so it has no screen to show a code on
+                     * and nobody to press Approve. Both doors end in a row on
+                     * this list, so both belong at the bottom of this list;
+                     * putting the server one behind a `…` would be hiding the
+                     * only way in for the machines this product is named after.
+                     */
+                    Button {
+                        addingServer = true
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "server.rack")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(Theme.accent)
+                                .frame(width: 18)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Add a server")
+                                    .font(.system(size: 16, weight: .medium))
+                                    .foregroundStyle(Theme.accent)
+                                // The one line on this row, and it earns it: it
+                                // is the whole difference between the two doors,
+                                // and somebody who reads "add a server" without
+                                // it will go looking for a code that no server
+                                // will ever show them.
+                                Text("Sign in with the login that server already trusts")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(Theme.faint)
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(RowButtonStyle())
+                    .accessibilityIdentifier("machines.addServer")
+
                     if let error = model.lastError {
                         Text(error)
                             .font(.system(size: 12))
@@ -382,6 +435,9 @@ struct MachinesView: View {
         }
         .navigationTitle("Machines")
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $addingServer) {
+            AddServerView(model: model) { _ in addingServer = false }
+        }
     }
 }
 
