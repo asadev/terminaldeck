@@ -42,6 +42,8 @@ function link(over: Partial<MachineLinkState> = {}): MachineLinkState {
     copilot: null,
     ports: [],
     hostPlatform: 'win32',
+    hostVersion: '',
+    hostKind: null,
     retryAt: null,
     ...over,
   }

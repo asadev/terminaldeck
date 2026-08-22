@@ -342,6 +342,12 @@ const VALID_SERVER: ServerMessage[] = [
     token: null,
     sessions: [SESSION],
     capabilities: CAPABILITIES,
+    // Additive, optional, display-only. The behavioural coverage — a welcome
+    // with and without these, the bound, the dropped hostKind — is in
+    // `protocol.version.test.ts`; this carries them through the shape the
+    // serializer has to round-trip.
+    appVersion: '0.10.0',
+    hostKind: 'desktop',
   },
   { t: 'sessions', sessions: [] },
   { t: 'ports', ports: [{ port: 3000, process: 'node', guessed: false }] },

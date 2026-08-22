@@ -127,6 +127,20 @@ export interface MachineLinkState {
    */
   ports: RemotePort[]
   hostPlatform: string
+  /**
+   * That machine's own build version, as its last `welcome` said, or empty.
+   *
+   * Empty for a machine that has not connected and for one on a build from
+   * before the field — the neutral both `hostPlatform` and the fallback name
+   * mean. Display text; the panel reads it and nothing else.
+   */
+  hostVersion: string
+  /**
+   * Which shell serves over there — a desktop app or a headless server — or
+   * null when it never said (every build older than the field). Null reads as a
+   * plain machine rather than a guessed kind.
+   */
+  hostKind: 'desktop' | 'headless' | null
   retryAt: number | null
 }
 
@@ -406,6 +420,13 @@ function asLink(value: unknown): MachineLinkState | null {
       : [],
     copilot: asCopilotLink(value.copilot),
     hostPlatform: text(value.hostPlatform),
+    hostVersion: text(value.hostVersion),
+    // The two literals or null — never a guess. A value that is neither is
+    // dropped to null, the same direction the wire parser drops an unknown kind,
+    // so a build the panel has not heard of reads as a plain machine rather than
+    // as the wrong one.
+    hostKind:
+      value.hostKind === 'desktop' || value.hostKind === 'headless' ? value.hostKind : null,
     retryAt: whole(value.retryAt),
   }
 }

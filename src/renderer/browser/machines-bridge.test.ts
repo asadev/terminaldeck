@@ -59,6 +59,8 @@ function view(over: Partial<MachinesView['links'][number]> = {}): MachinesView {
         ],
         copilot: null,
         hostPlatform: 'win32',
+        hostVersion: '',
+        hostKind: null,
         retryAt: null,
         ...over,
       },

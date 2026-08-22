@@ -131,6 +131,8 @@ function rig(options: { online: boolean }): Rig {
         ports: [],
         copilot: null,
         hostPlatform: 'win32',
+        hostVersion: '',
+        hostKind: null,
         retryAt: null,
       }
       return {

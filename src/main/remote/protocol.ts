@@ -1073,6 +1073,17 @@ export const MAX_CAPABILITY_LENGTH = 32
 export const MAX_HOST_NAME_LENGTH = 64
 
 /**
+ * The longest version string a `welcome` may carry in `appVersion`.
+ *
+ * Display text like {@link welcome.hostName}, and bounded for the same reason:
+ * it lands on a screen beside terminal output, so it is stripped and clipped on
+ * arrival rather than trusted for length. A real version is a handful of
+ * characters — `0.10.0`, `1.2.3-rc.1` — and thirty-two is generous room for one
+ * without letting a host make a chip out of a paragraph.
+ */
+export const MAX_APP_VERSION_LENGTH = 32
+
+/**
  * Longest username and secret a device may answer a credential request with.
  *
  * Generous rather than tight, because what is on the other end of these fields
@@ -2493,6 +2504,19 @@ export type ClientMessage =
    */
   | { t: 'chat.read'; rid: string; id: string; tail: boolean }
 
+/**
+ * Which shell is serving this connection: the Electron desktop, or the
+ * headless host a person installed on a server.
+ *
+ * Carried on {@link welcome} beside {@link welcome.appVersion} so a client can
+ * say *server* where it would otherwise have guessed *desktop*, and so the one
+ * sentence the clients render about being behind — *update this server from a
+ * desktop* — names the right kind of machine. Display text, exactly the two
+ * literals; a `welcome` carrying anything else drops the field rather than
+ * guessing, the same rule {@link welcome.hostPlatform} keeps.
+ */
+export type HostKind = 'desktop' | 'headless'
+
 export type ServerMessage =
   | {
       t: 'welcome'
@@ -2548,6 +2572,37 @@ export type ServerMessage =
        * output, so it is stripped and bounded on arrival.
        */
       hostName?: string
+      /**
+       * What build this host is running, e.g. `'0.10.0'`. **Absent means older.**
+       *
+       * Optional and additive for the reason {@link hostPlatform} and
+       * {@link hostName} are: a desktop from before this field is one a current
+       * client still has to talk to, and a client that reads nothing here shows
+       * something neutral rather than a guess. It is display text and nothing
+       * else — never an identity, never a thing to act on — so it is stripped and
+       * bounded to {@link MAX_APP_VERSION_LENGTH} on arrival, the same treatment
+       * {@link hostName} gets, because it renders on a chip beside terminal
+       * output.
+       *
+       * There is deliberately no update verb anywhere on this wire to pair it
+       * with. Replacing a host stays on the SSH and desktop plane — the desktop
+       * connector already installs and updates the host package — so what this
+       * field buys a client is the one sentence it can honestly say when its own
+       * build is ahead: *update this server from a desktop*. A sentence, not a
+       * button; there is nothing here to press.
+       */
+      appVersion?: string
+      /**
+       * Which shell is serving — {@link HostKind}. **Absent means older.**
+       *
+       * Additive and optional like the two fields above, and read exactly as
+       * strictly: a `welcome` whose `hostKind` is neither literal is one this
+       * field is dropped from rather than guessed at, the same rule
+       * {@link hostPlatform} keeps for a platform noun it does not recognise. It
+       * exists so a client can name a *server* where it would otherwise have said
+       * *desktop*, and so the behind-sentence names the right kind of box.
+       */
+      hostKind?: HostKind
       /**
        * Folders this device may start a session in, most relevant first.
        *
@@ -5062,6 +5117,34 @@ export function parseServerFrame(parsed: unknown): ServerParse {
           .trim()
           .slice(0, MAX_HOST_NAME_LENGTH)
         if (hostName !== '') message.hostName = hostName
+      }
+      /*
+       * The host's own build version, cleaned exactly as `hostName` above is and
+       * for the same reason: it is display text from the far end of an
+       * authenticated-but-not-trusted channel that lands on a chip beside
+       * terminal output, so control characters go and the length is bounded. An
+       * empty result is absent — a host that sent a version made only of control
+       * characters said nothing, and a client that stored the empty string would
+       * have overwritten a good number with it. A host older than the field
+       * sends nothing, which is the neutral state every reader already handles.
+       */
+      const rawAppVersion = asString(parsed.appVersion)
+      if (rawAppVersion !== null) {
+        const appVersion = rawAppVersion
+          .replace(/[\u0000-\u001f\u007f]/g, '')
+          .trim()
+          .slice(0, MAX_APP_VERSION_LENGTH)
+        if (appVersion !== '') message.appVersion = appVersion
+      }
+      /*
+       * And which shell is serving, admitted only when it is one of the two
+       * literals. Anything else is dropped rather than guessed — the same rule
+       * `hostPlatform` keeps for an unknown platform noun — so a client never
+       * calls a machine a `desktop` on the strength of a value it did not
+       * recognise. A host older than the field sends nothing here either.
+       */
+      if (parsed.hostKind === 'desktop' || parsed.hostKind === 'headless') {
+        message.hostKind = parsed.hostKind
       }
       const folders = stringList(parsed.folders, MAX_CWD_BYTES)
       if (folders !== null) message.folders = folders

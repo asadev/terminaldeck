@@ -153,6 +153,16 @@
   user-select: text;
 }
 
+/* The build the far machine is running, and whether it is a desktop or a
+   server. A fact to read, not a control — quiet, one line, no chevron — because
+   there is nothing on this wire to press: a host is replaced on the SSH and
+   desktop plane, never from here. */
+.machines-version {
+  margin: 0;
+  font-size: var(--t-footnote);
+  color: var(--text-muted);
+}
+
 /* ------------------------------------------------------------ sessions -- */
 
 .machines-sessions {

@@ -478,6 +478,8 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
             // copilot with this desktop is something only its `welcome` says.
             copilot: null,
             hostPlatform: machine.platform,
+            hostVersion: '',
+            hostKind: null,
             retryAt: null,
           },
       ),
