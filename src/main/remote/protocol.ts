@@ -5123,11 +5123,13 @@ export function parseClientMessage(raw: unknown): ParseResult {
     case 'devices.revoke': {
       const requestId = id(parsed.rid)
       if (!requestId) return bad('devices.revoke without a request id')
-      // A device id is a `randomUUID` from the trust store, so it satisfies the
-      // same `ID_RE` a session id does. Anything else is refused here rather
-      // than passed to the store, which would treat an unknown string as a
-      // no-op and answer `ok: false` — a truthful answer, but one earned after a
-      // lookup this refusal saves. The value is never echoed into the reason.
+      // A device id is minted by `device-auth.ts` to satisfy this same `ID_RE`
+      // (`newDeviceId` resamples the base64url that would lead with `-`/`_`, the
+      // two characters the leading class here rejects) — so a real id always
+      // parses, and anything that does not is refused here rather than passed to
+      // the store, which would treat an unknown string as a no-op and answer
+      // `ok: false` — a truthful answer, but one earned after a lookup this
+      // refusal saves. The value is never echoed into the reason.
       const device = id(parsed.device)
       if (!device) return bad('devices.revoke without a device id')
       return { ok: true, message: { t: 'devices.revoke', rid: requestId, device } }

@@ -6,11 +6,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   LOCKOUT_MS,
   MAX_FAILED_ATTEMPTS,
+  newDeviceId,
   PAIRING_TTL_MS,
   REMOTE_AUTH_FILE,
   RemoteAuth,
   type Device,
 } from './device-auth'
+import { parseClientMessage } from './protocol'
 import { isCode } from '../../shared/short-code'
 
 /**
@@ -98,6 +100,23 @@ describe('the constants the code length is arguing against', () => {
 
   it('locks a source out for fifteen minutes once it has spent them', () => {
     expect(LOCKOUT_MS).toBe(15 * 60_000)
+  })
+})
+
+describe('device ids', () => {
+  it('always mints one the wire will accept in a devices.revoke', () => {
+    // The bug this guards: `randomBytes(...).toString('base64url')` leads with
+    // `-` or `_` about one time in thirty, and `ID_RE` in protocol.ts refuses
+    // that leading character — so before `newDeviceId` resampled it, ~3% of
+    // paired devices had an id that stored, signed in, and then could never be
+    // named in a `devices.revoke`: the frame was refused as "without a device
+    // id" before it reached the gate. A correct generator passes this every
+    // time; a reverted one fails it with a probability no run escapes.
+    for (let i = 0; i < 3000; i += 1) {
+      const device = newDeviceId()
+      const parsed = parseClientMessage(JSON.stringify({ t: 'devices.revoke', rid: 'r', device }))
+      expect(parsed.ok, device).toBe(true)
+    }
   })
 })
 

@@ -381,7 +381,11 @@ describe('devices over the wire', () => {
     const h = await serveRoster()
     const guest = await greet(h.port, h.guest.credential, [CAPABILITY.devices])
     guest.send({ t: 'devices.list', rid: 'g1' })
-    const error = await guest.until((m) => m.t === 'error', 'the refusal')
+    // Specific to the refusal: an `error` frame carries no `rid`, so the only
+    // way to be sure this is the gate's answer and not some earlier or transient
+    // error on the socket is its `code`. Waiting on the bare `t === 'error'`
+    // grabbed whatever error arrived first.
+    const error = await guest.until((m) => m.t === 'error' && m.code === 'unauthorized', 'the refusal')
     expect(error).toMatchObject({ t: 'error', code: 'unauthorized' })
     // No roster came back on the guest socket.
     expect(guest.received.some((m) => m.t === 'devices.rows')).toBe(false)
@@ -391,7 +395,12 @@ describe('devices over the wire', () => {
     const h = await serveRoster()
     const guest = await greet(h.port, h.guest.credential, [CAPABILITY.devices])
     guest.send({ t: 'devices.revoke', rid: 'g2', device: h.mine.device.id })
-    const error = await guest.until((m) => m.t === 'error', 'the refusal')
+    // By `code`, not the bare `t === 'error'`: error frames carry no `rid`, so a
+    // wait on any error would settle on an earlier or transient one. This once
+    // masked a real bug — a device id leading with `-`/`_` was refused as
+    // "without a device id" before the gate ran, and `newDeviceId` now prevents
+    // that class of id — but the specific wait is correct on its own terms.
+    const error = await guest.until((m) => m.t === 'error' && m.code === 'unauthorized', 'the refusal')
     expect(error).toMatchObject({ t: 'error', code: 'unauthorized' })
     // The cascade never ran: nothing was forgotten and the target is still here.
     expect(h.forget).not.toHaveBeenCalled()

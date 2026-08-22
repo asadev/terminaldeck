@@ -296,6 +296,30 @@ function sha256(value: string): Buffer {
   return createHash('sha256').update(value, 'utf8').digest()
 }
 
+/**
+ * A fresh device id, in the one alphabet this module mints and safe to put on
+ * the wire.
+ *
+ * base64url is `[A-Za-z0-9_-]`, but the wire's `ID_RE` in `protocol.ts` — the
+ * check a `devices.revoke` frame runs its `device` id through, the one wire verb
+ * that carries a device id rather than reading it off the socket — additionally
+ * requires the first character to be `[A-Za-z0-9]`. A raw
+ * base64url id leads with `-` or `_` about one time in thirty, and such an id
+ * parses on this side, stores, signs in, and then cannot be named in a
+ * `devices.revoke` at all: the frame is refused as "without a device id" before
+ * it ever reaches the gate, so ~3% of paired devices were unrevokable from a
+ * phone. Resampled rather than mangled, so the id stays a clean 96 bits of the
+ * same alphabet a credential's second half is. The rule is spelled out here
+ * rather than imported: this module owns what its ids look like and `protocol.ts`
+ * owns what it will accept, and the point is to keep the two agreeing.
+ */
+export function newDeviceId(): string {
+  for (;;) {
+    const id = randomBytes(DEVICE_ID_BYTES).toString('base64url')
+    if (/^[A-Za-z0-9]/.test(id)) return id
+  }
+}
+
 function scrypt(secret: Buffer, salt: Buffer, params: ScryptParams): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     scryptCallback(
@@ -601,7 +625,7 @@ export class RemoteAuth {
     if (name === null) return { ok: false, reason: 'bad-name' }
     if (this.rosterWithRoom().length >= MAX_DEVICES) return { ok: false, reason: 'too-many-devices' }
 
-    const id = randomBytes(DEVICE_ID_BYTES).toString('base64url')
+    const id = newDeviceId()
     const secret = randomBytes(CREDENTIAL_BYTES)
     const salt = randomBytes(SALT_BYTES)
     const hash = await scrypt(secret, salt, SCRYPT)
@@ -773,7 +797,7 @@ export class RemoteAuth {
     if (cleaned === null) return { ok: false, reason: 'bad-name' }
     if (this.rosterWithRoom().length >= MAX_DEVICES) return { ok: false, reason: 'too-many-devices' }
 
-    const id = randomBytes(DEVICE_ID_BYTES).toString('base64url')
+    const id = newDeviceId()
     const secret = randomBytes(CREDENTIAL_BYTES)
     const salt = randomBytes(SALT_BYTES)
     const hash = await scrypt(secret, salt, SCRYPT)
