@@ -234,6 +234,81 @@ describe('closing the pipe', () => {
   })
 })
 
+/* ------------------------------------------------ writing into a dead pipe -- */
+
+/**
+ * The write end of a pipe onto a browser that has died.
+ *
+ * A Node stream with no `'error'` listener re-raises the error as an uncaught
+ * exception and takes the process down. Measured on Ubuntu 24.04 on 2026-08-22
+ * against a Chromium that aborted at startup: writing one `Browser.getVersion`
+ * frame into its fd 3 produced `throw er; // Unhandled 'error' event` and killed
+ * Node. On a headless host that process is the daemon — the sessions, the
+ * pairing and the relay connection all go with it, and the only trace left is a
+ * V8 stack trace in a log.
+ */
+class DyingOut implements WritableLike {
+  private handler: ((error: Error) => void) | null = null
+  /** True once something subscribed — the assertion that the listener exists. */
+  subscribed = false
+
+  write(): boolean {
+    // EPIPE arrives asynchronously, the way a real stream delivers it.
+    setImmediate(() => this.handler?.(Object.assign(new Error('write EPIPE'), { code: 'EPIPE' })))
+    return true
+  }
+
+  once(_event: 'drain', _listener: () => void): this {
+    return this
+  }
+
+  on(_event: 'error', listener: (error: Error) => void): this {
+    this.subscribed = true
+    this.handler = listener
+    return this
+  }
+}
+
+/** A write end that is already destroyed, so `write` throws instead of emitting. */
+class DestroyedOut implements WritableLike {
+  write(): boolean {
+    throw Object.assign(new Error('Cannot call write after a stream was destroyed'), {
+      code: 'ERR_STREAM_DESTROYED',
+    })
+  }
+  once(_event: 'drain', _listener: () => void): this {
+    return this
+  }
+  on(_event: 'error', _listener: (error: Error) => void): this {
+    return this
+  }
+}
+
+describe('the browser died while a command was in flight', () => {
+  it('subscribes to the write side, and turns EPIPE into a rejection', async () => {
+    const out = new DyingOut()
+    const pipe = new CdpPipe(out, new FakeIn())
+    expect(out.subscribed).toBe(true)
+
+    const closed: (Error | undefined)[] = []
+    pipe.onClose((error) => closed.push(error))
+    const inFlight = pipe.command({ method: 'Browser.getVersion' })
+
+    await expect(inFlight).rejects.toThrow('EPIPE')
+    expect(closed).toHaveLength(1)
+    // Nothing is left waiting for a reply that cannot come.
+    expect(pipe.inFlight).toBe(0)
+  })
+
+  it('turns a write onto a destroyed stream into a rejection too', async () => {
+    const pipe = new CdpPipe(new DestroyedOut(), new FakeIn())
+    await expect(pipe.command({ method: 'Browser.getVersion' })).rejects.toThrow(
+      'Cannot call write after a stream was destroyed',
+    )
+    expect(pipe.inFlight).toBe(0)
+  })
+})
+
 describe('the module is a single send door and carries no Electron', () => {
   const src = readFileSync(join(__dirname, 'browser-cdp-pipe.ts'), 'utf8')
 

@@ -2,7 +2,12 @@ import { createHash, timingSafeEqual } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { chromiumLibraryHint } from './browser-chromium-launch'
+import {
+  chromiumLibraryHint,
+  detectPackageFamily,
+  launchChromium,
+  type PackageFamily,
+} from './browser-chromium-launch'
 import { unzip } from './browser-extension-unzip'
 import { currentPlatform, type Platform } from './platform/host'
 import { userDataDir } from './platform/paths'
@@ -569,6 +574,7 @@ export function linkageProblem(
   exePath: string,
   platform: CftPlatform,
   read: ReadLinkage = defaultReadLinkage,
+  family: PackageFamily = detectPackageFamily(),
 ): string | null {
   if (platform !== 'linux64') return null
   const output = read(exePath)
@@ -578,10 +584,94 @@ export function linkageProblem(
   return (
     `Chromium was downloaded and verified, but it cannot run on this machine yet: ` +
     `${missing.length} shared ${missing.length === 1 ? 'library it needs is' : 'libraries it needs are'} ` +
-    `missing (${missing.slice(0, 4).join(', ')}${missing.length > 4 ? `, and ${missing.length - 4} more` : ''}). ` +
+    `missing — ${missing.join(', ')}. ` +
     'A downloaded Chromium links the system graphics, font and accessibility libraries, and a minimal ' +
-    `server image ships almost none of them. On Debian or Ubuntu: ${chromiumLibraryHint()}`
+    `server image ships almost none of them. Install them with:\n\n    ${chromiumLibraryHint(family)}\n`
   )
+}
+
+/* --------------------------------------------------- can it actually start -- */
+
+/**
+ * Start the browser and require it to answer, or say why it did not.
+ *
+ * ## Why `ldd` is not enough, measured
+ *
+ * The linkage check above catches the failure that was actually shipped, and it
+ * catches it with the best possible message — the names of the libraries. What
+ * it cannot do is prove the opposite. On the Hetzner Ubuntu 24.04 box on
+ * 2026-08-22, with every one of the thirteen missing packages installed:
+ *
+ *  - `ldd chrome` printed no unresolved entry, and
+ *  - `chrome --version` printed `Google Chrome for Testing 146.0.7680.165` and
+ *    exited **0**, and
+ *  - a real headless start died on `SIGABRT` — `FATAL: posix_spawn
+ *    .../chrome_crashpad_handler: Permission denied (13)` — because one helper
+ *    binary in the archive had not come out executable.
+ *
+ * Two green checks over a browser that cannot run. `--version` is not a launch:
+ * it prints a string and exits before Chromium has started a zygote, a crashpad
+ * handler, a sandbox or a renderer. Neither is `ldd`, which reads a header.
+ *
+ * The one-shot CLI modes are not the answer either — `--headless=new --dump-dom`
+ * and `--screenshot` were each measured hanging past **45 s** on that box and
+ * had to be killed. What answers is the thing this product actually does:
+ * `--remote-debugging-pipe` plus one `Browser.getVersion`, which came back in
+ * **285 ms**.
+ *
+ * So the verification *is* a launch — the same `launchChromium` a drive uses,
+ * with the same sandbox decision — and the browser is stopped again immediately.
+ * It costs a third of a second at the end of a 183 MB download, and it is the
+ * difference between an install that reports the truth and one that does not.
+ */
+export type RunProbe = (exePath: string) => Promise<string | null>
+
+/** How long the verification waits for the browser to finish quitting. */
+const PROFILE_CLEANUP_MS = 3_000
+
+/** Where the verification launch keeps its throwaway profile. */
+export function verifyProfileDir(root?: string): string {
+  return join(chromiumRoot(root), 'verify-profile')
+}
+
+function defaultRunProbe(root?: string): RunProbe {
+  return async (exePath) => {
+    const profile = verifyProfileDir(root)
+    // A stale profile from a previous verification would make Chromium restore
+    // whatever that run left behind, which is not what is being tested.
+    try {
+      rmSync(profile, { recursive: true, force: true })
+      mkdirSync(profile, { recursive: true })
+    } catch (error) {
+      return `Chromium could not be verified: ${error instanceof Error ? error.message : 'its profile directory could not be made'}`
+    }
+    const launched = await launchChromium({ executablePath: exePath, userDataDir: profile })
+    if (!launched.ok) return launched.why
+    launched.transport.close()
+    launched.handle.close()
+
+    /*
+     * Wait for it to actually be gone before deleting its profile.
+     *
+     * `close()` sends a signal; Chromium then flushes caches and preference
+     * files on its way out. Deleting the directory in the same tick left 1.7 MB
+     * of profile behind on the reference server — measured — because the browser
+     * recreated what had just been removed. Bounded, and the removal happens
+     * either way: a stale profile is untidy, and the next verification clears it
+     * on the way in, so this is tidiness with a ceiling rather than a wait
+     * anything depends on.
+     */
+    await Promise.race([
+      launched.handle.whenGone,
+      new Promise((resolve) => setTimeout(resolve, PROFILE_CLEANUP_MS)),
+    ])
+    try {
+      rmSync(profile, { recursive: true, force: true })
+    } catch {
+      /* A left-behind profile is untidy, not a failed install. */
+    }
+    return null
+  }
 }
 
 /* --------------------------------------------------------------- install -- */
@@ -611,6 +701,36 @@ export interface InstallOptions {
    * and no linux64 Chromium — see {@link linkageProblem}.
    */
   readLinkage?: ReadLinkage
+  /**
+   * How hard to prove the installed browser works.
+   *
+   * `'linkage'` — the default — reads `ldd` and nothing else. It is what the
+   * fetch-on-first-drive path wants, because the very next thing that happens
+   * there is a real confirmed launch, and starting a browser twice to prove one
+   * browser starts is waste.
+   *
+   * `'run'` actually starts it and requires a CDP answer. `terminaldeck browser
+   * install` passes it, because that command's whole output is a claim that the
+   * browser is installed, and it is the one moment nothing else is about to
+   * check. See {@link RunProbe} for why `ldd` and `--version` are both green
+   * over a browser that cannot start.
+   */
+  verify?: 'linkage' | 'run'
+  /**
+   * Start the browser and require an answer. Defaults to a real launch.
+   *
+   * A seam for the same reason `readLinkage` is one: the tests run on a Mac
+   * holding a fixture archive whose `chrome` is a few bytes of text, and the
+   * point of those tests is the resolve/verify/unpack path, not the spawn.
+   */
+  probeRun?: RunProbe
+  /**
+   * The package manager whose names to print. Defaults to this machine's.
+   *
+   * A parameter because the sentence has to be pinnable for every family from
+   * one machine — the same argument `cftPlatformFor` makes about platforms.
+   */
+  packageFamily?: PackageFamily
 }
 
 export type InstallResult =
@@ -650,6 +770,12 @@ export async function installChromium(options: InstallOptions = {}): Promise<Ins
         why: `${CHROMIUM_PATH_ENV} points at ${path}, which does not exist`,
       }
     }
+    if (options.verify === 'run') {
+      // A side-loaded binary is the *most* worth starting, not the least: it is
+      // the one nothing in this program chose, checksummed or unpacked.
+      const ran = await (options.probeRun ?? defaultRunProbe(options.root))(path)
+      if (ran !== null) return { ok: false, why: `${CHROMIUM_PATH_ENV} points at ${path}, and ${ran}` }
+    }
     return { ok: true, path, version: 'sideloaded', platform: 'linux64', reused: true, sideloaded: true }
   }
 
@@ -673,8 +799,12 @@ export async function installChromium(options: InstallOptions = {}): Promise<Ins
     // Re-checked on reuse, not only after unpacking: the libraries live on the
     // machine, not in the install, so a copy that ran yesterday is not proof
     // about today. It is one `ldd` — a few milliseconds against a launch.
-    const problem = linkageProblem(exePath, platform, options.readLinkage)
+    const problem = linkageProblem(exePath, platform, options.readLinkage, options.packageFamily)
     if (problem !== null) return { ok: false, why: problem }
+    if (options.verify === 'run') {
+      const ran = await (options.probeRun ?? defaultRunProbe(options.root))(exePath)
+      if (ran !== null) return { ok: false, why: ran }
+    }
     return { ok: true, path: exePath, version, platform, reused: true, sideloaded: false }
   }
 
@@ -746,8 +876,12 @@ export async function installChromium(options: InstallOptions = {}): Promise<Ins
     }
   }
 
-  const problem = linkageProblem(exePath, platform, options.readLinkage)
+  const problem = linkageProblem(exePath, platform, options.readLinkage, options.packageFamily)
   if (problem !== null) return { ok: false, why: problem }
+  if (options.verify === 'run') {
+    const ran = await (options.probeRun ?? defaultRunProbe(options.root))(exePath)
+    if (ran !== null) return { ok: false, why: ran }
+  }
 
   return { ok: true, path: exePath, version, platform, reused: false, sideloaded: false }
 }

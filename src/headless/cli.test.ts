@@ -103,6 +103,23 @@ describe('parseArgs', () => {
     expect(parseArgs(['status', '--json']).kind).toBe('error')
   })
 
+  /*
+   * `--with-deps` is opt-in and stays opt-in. It runs the machine's package
+   * manager under sudo, which is not a thing a command may decide for somebody
+   * — `install-headless.sh` names the packages it needs and stops, and this
+   * keeps that contract while offering the one-word way past it.
+   */
+  it('reads browser install, with and without --with-deps', () => {
+    expect(parseArgs(['browser', 'install'])).toEqual({ kind: 'browser-install', withDeps: false })
+    expect(parseArgs(['browser', 'install', '--with-deps'])).toEqual({
+      kind: 'browser-install',
+      withDeps: true,
+    })
+    expect(parseArgs(['browser', 'install', '--yes']).kind).toBe('error')
+    expect(parseArgs(['browser']).kind).toBe('error')
+    expect(parseArgs(['browser', 'update']).kind).toBe('error')
+  })
+
   it('reads folders add and remove, with and without a device', () => {
     expect(parseArgs(['folders', 'add', '/home/asad/app'])).toEqual({
       kind: 'folders-add',

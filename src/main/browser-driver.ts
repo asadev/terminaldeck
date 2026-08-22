@@ -411,6 +411,22 @@ export interface DriveHost {
    * does not invent a tab.
    */
   openTab(input: { url: string; isolate: boolean }): Promise<string | null>
+  /**
+   * Why the last {@link openTab} produced nothing, when the host knows.
+   *
+   * Optional, and the desktop does not implement it: there, `null` means the
+   * window declined, and the sentence below about Settings → Tools is the true
+   * one. A **headless host** is the case that needed this. Its `openTab` returns
+   * `null` for a completely different family of reason — most of them about a
+   * Chromium that could not start on that machine — and the desktop's sentence
+   * sends somebody to a Settings pane on a server that has no window, no
+   * Settings and no Tools, while the real answer ("it needs these fifteen
+   * packages, here is the command") went to a banner the agent never sees.
+   *
+   * So the host that knows why gets to say so, and the fixed sentence stays the
+   * fallback for the host that genuinely does not.
+   */
+  whyNoTab?(): string | null
   /** The live page of a tab this app opened, or null once it has gone. */
   contentsFor(tabId: string): DrivenPage | null
   /** Tell the window the drive's state changed, so the banner can redraw. */
@@ -880,6 +896,22 @@ export class BrowserDrive {
     if (!page) {
       const id = await this.host.openTab({ url: normalized.url, isolate: input.isolate })
       if (id === null) {
+        /*
+         * The host was asked to open a browser page and did not produce one.
+         *
+         * When it knows why — a headless host does, because its browser is a
+         * process it started and watched fail — that reason is what the copilot
+         * is told, verbatim. It is already a sentence somebody can act on:
+         * `browser-chromium-install.ts` and `browser-chromium-launch.ts` build
+         * these to name the libraries and print the command.
+         */
+        const known = this.host.whyNoTab?.() ?? null
+        if (known !== null && known !== '') {
+          throw new DriveRefused(
+            `the browser on that machine could not be started, so there is nothing to drive. ${known} ` +
+              'Tell the person that, as it is written here — it is the whole fix.',
+          )
+        }
         /*
          * The window was asked to install a browser page and still did not
          * produce one — see `browser-drive-ipc.ts`, which does that asking.

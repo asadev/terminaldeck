@@ -36,7 +36,7 @@
  * sees both streams interleaved and cannot tell they were ever separated.
  */
 
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { existsSync, realpathSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
@@ -49,7 +49,13 @@ import type { DeviceFolderGrant } from '../main/remote/folder-grants'
 import type { PairingToken } from '../main/remote/device-auth'
 import { currentPlatform } from '../main/platform/host'
 import { CHROMIUM_PATH_ENV, installChromium } from '../main/browser-chromium-install'
-import { readSandboxFacts, sandboxDecision } from '../main/browser-chromium-launch'
+import {
+  chromiumLibraryCommand,
+  chromiumLibraryHint,
+  detectPackageFamily,
+  readSandboxFacts,
+  sandboxDecision,
+} from '../main/browser-chromium-launch'
 import {
   callControl,
   clearDaemonRecord,
@@ -122,7 +128,7 @@ export async function run(
     case 'browser-install':
       // No daemon needed: this only downloads and unpacks. Paths are already
       // installed above, so `installChromium` can find `<userData>/chromium`.
-      return await browserInstall()
+      return await browserInstall(command.withDeps)
     default:
       return await connected(command)
   }
@@ -135,10 +141,36 @@ export async function run(
  * the whole reason `installChromium` returns a sentence rather than throwing.
  * Exit 1 on failure so a provisioning script can tell.
  */
-async function browserInstall(): Promise<number> {
-  const result = await installChromium()
+async function browserInstall(withDeps: boolean): Promise<number> {
+  let result = await installChromium({ verify: 'run' })
+
+  /*
+   * The one place this command is allowed to change the machine, and only when
+   * asked in as many words.
+   *
+   * The retry is after the failure rather than before the attempt on purpose: a
+   * box that already has the libraries should not have `apt-get` run across it
+   * because somebody typed a flag, and a box that does not, needs it once. The
+   * command is printed before it runs, in full, so what happened to the machine
+   * is on the screen — the same contract `install-headless.sh` keeps when it
+   * names `python3 make g++` and stops.
+   */
+  if (!result.ok && withDeps && needsSystemLibraries(result.why)) {
+    const installed = installSystemLibraries()
+    if (installed !== null) {
+      process.stderr.write(`${result.why}\n\n${installed}\n`)
+      return 1
+    }
+    result = await installChromium({ verify: 'run' })
+  }
+
   if (!result.ok) {
     process.stderr.write(`${result.why}\n`)
+    if (!withDeps && needsSystemLibraries(result.why)) {
+      process.stderr.write(
+        `\nRun "${BRAND.id} browser install --with-deps" to install them, or paste the line above yourself.\n`,
+      )
+    }
     return 1
   }
   const how = result.sideloaded
@@ -896,4 +928,45 @@ if (invokedDirectly()) {
       process.exitCode = 1
     },
   )
+}
+
+
+/**
+ * Is this failure the one that a package manager can fix?
+ *
+ * Matched on the sentences this program builds rather than on anything Chromium
+ * or the linker said — `linkageProblem` and `describeExit` are both the same two
+ * modules away, and both end in the hint. A download that 404'd or a checksum
+ * that did not match is not a missing library and must not trigger a `sudo`.
+ */
+function needsSystemLibraries(why: string): boolean {
+  return why.includes('shared librar') || why.includes(chromiumLibraryHint())
+}
+
+/**
+ * Run the machine's package manager over the library list. `null` on success,
+ * or the sentence saying why it could not be done.
+ *
+ * `sudo` is prepended only when this is not already root, because on the rented
+ * servers this host is ordinarily installed on there is no `sudo` binary at all
+ * and asking for one would fail for the wrong reason.
+ */
+function installSystemLibraries(): string | null {
+  const family = detectPackageFamily()
+  const wanted = chromiumLibraryCommand(family)
+  if (wanted === null) {
+    return `There is no package that fixes this here. ${chromiumLibraryHint(family)}`
+  }
+  const root = typeof process.getuid === 'function' && process.getuid() === 0
+  const command = root ? wanted.command : 'sudo'
+  const args = root ? wanted.args : [wanted.command, ...wanted.args]
+  process.stdout.write(`Installing the libraries Chromium needs:\n\n    ${command} ${args.join(' ')}\n\n`)
+  const run = spawnSync(command, args, { stdio: 'inherit' })
+  if (run.error !== undefined) {
+    return `${command} could not be run: ${run.error.message}`
+  }
+  if (run.status !== 0) {
+    return `${command} exited ${run.status ?? 'on a signal'}; nothing else was changed.`
+  }
+  return null
 }

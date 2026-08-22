@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -302,10 +302,29 @@ describe('reading which libraries the machine is missing', () => {
   })
 
   it('is a sentence naming the libraries and the packages that supply them', () => {
-    const problem = linkageProblem('/x/chrome', 'linux64', () => LDD_MISSING)
+    const problem = linkageProblem('/x/chrome', 'linux64', () => LDD_MISSING, 'apt')
     expect(problem).not.toBeNull()
     expect(problem).toContain('libatk-1.0.so.0')
     expect(problem).toContain('apt-get install -y')
+  })
+
+  /*
+   * Every missing library, by name — not the first four and "and 9 more", which
+   * is what shipped. The person reading this is about to decide whether their
+   * box is missing something the package list does not cover, and they cannot
+   * do that from a count.
+   */
+  it('names all of them, not a sample', () => {
+    const problem = linkageProblem('/x/chrome', 'linux64', () => LDD_MISSING, 'apt') ?? ''
+    for (const library of missingLibraries(LDD_MISSING)) expect(problem).toContain(library)
+    expect(problem).not.toContain('more')
+  })
+
+  it('prints the command for the family the machine actually has', () => {
+    expect(linkageProblem('/x/chrome', 'linux64', () => LDD_MISSING, 'dnf')).toContain('dnf install -y')
+    expect(linkageProblem('/x/chrome', 'linux64', () => LDD_MISSING, 'musl')).toContain(
+      'TERMINALDECK_CHROMIUM_PATH',
+    )
   })
 
   it('is silent for a build that runs, for a non-Linux build, and where ldd cannot be asked', () => {
@@ -567,5 +586,125 @@ describe('installing Chromium end to end', () => {
     expect(second.ok).toBe(false)
     if (second.ok) return
     expect(second.why).toContain('libgbm.so.1')
+  })
+})
+
+/* ------------------------------------------------ can it actually start up -- */
+
+describe('proving the installed browser actually starts', () => {
+  const zip = fakeChromeZip()
+  const base = () => ({
+    root,
+    platform: 'linux64' as const,
+    version: UNPINNED_VERSION,
+    env: {},
+    fetchJson: fetchJsonReturning(versionsIndex(UNPINNED_VERSION)),
+    fetchZip: fetchZipReturning(zip, md5Base64(zip)),
+    readLinkage: () => LDD_COMPLETE,
+  })
+
+  /*
+   * The whole lane, in one assertion.
+   *
+   * On the reference server every cheap check was green over a browser that
+   * could not run: `ldd` resolved everything, and `chrome --version` printed the
+   * version and exited 0. Only starting it found the abort. So an install asked
+   * to verify by running has to fail when the run fails, and the sentence it
+   * fails with has to be the run's sentence, not a summary of it.
+   */
+  it('is a failure, not a success, when the binary cannot start', async () => {
+    const result = await installChromium({
+      ...base(),
+      verify: 'run',
+      probeRun: async () =>
+        'Chromium could not start: it needs libatk-1.0.so.0, which is not installed on this machine.',
+    })
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.why).toContain('libatk-1.0.so.0')
+  })
+
+  it('does not start the browser on the default path, where a real launch follows anyway', async () => {
+    let started = 0
+    const result = await installChromium({
+      ...base(),
+      probeRun: async () => {
+        started += 1
+        return null
+      },
+    })
+    expect(result.ok).toBe(true)
+    expect(started).toBe(0)
+  })
+
+  it('starts it on reuse too, because a machine changes and an install does not', async () => {
+    const first = await installChromium({ ...base(), verify: 'run', probeRun: async () => null })
+    expect(first.ok).toBe(true)
+    const second = await installChromium({
+      ...base(),
+      verify: 'run',
+      probeRun: async () => 'Chromium exited with code 127',
+    })
+    expect(second.ok).toBe(false)
+    if (!second.ok) expect(second.why).toContain('code 127')
+  })
+
+  /*
+   * The side-load door is the one binary this program did not choose, download
+   * or checksum — `TERMINALDECK_CHROMIUM_PATH` points at whatever an operator
+   * put there. Checking that it exists was never the same as checking that it
+   * runs.
+   */
+  it('checks a side-loaded binary hardest of all', async () => {
+    const stand_in = join(root, 'sideloaded-chrome')
+    writeFileSync(stand_in, 'not really a browser')
+    const result = await installChromium({
+      root,
+      env: { [CHROMIUM_PATH_ENV]: stand_in },
+      verify: 'run',
+      probeRun: async () => 'Chromium exited with code 126',
+    })
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.why).toContain(stand_in)
+    expect(result.why).toContain('code 126')
+  })
+})
+
+/* --------------------------------------------------- a binary that is real -- */
+
+/**
+ * The refusal, driven through the real launcher against a real process.
+ *
+ * The lane asked for "a binary that exits non-zero on `--version`". This is one
+ * better and for a measured reason: on the reference box `--version` exited
+ * **0** over a Chromium that aborted on every real start, so an install that
+ * trusted `--version` would still have reported success. What is faked here is
+ * the binary; what is real is the spawn, the death, the stderr and the sentence.
+ *
+ * Skipped on Windows, which has no `/bin/sh` and none of this failure mode.
+ */
+describe.skipIf(process.platform === 'win32')('an install pointed at a binary that dies', () => {
+  it('refuses, and names the packages that would fix it', async () => {
+    const fake = join(root, 'chrome')
+    writeFileSync(
+      fake,
+      '#!/bin/sh\n' +
+        'echo "$0: error while loading shared libraries: libgbm.so.1: cannot open shared object file: No such file or directory" >&2\n' +
+        'exit 127\n',
+    )
+    chmodSync(fake, 0o755)
+
+    const result = await installChromium({
+      root,
+      env: { [CHROMIUM_PATH_ENV]: fake },
+      verify: 'run',
+    })
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.why).toContain('libgbm.so.1')
+    // The packages, not a linker error for somebody to decode.
+    expect(result.why).toContain('libgbm1')
+    expect(result.why).toContain('install')
   })
 })

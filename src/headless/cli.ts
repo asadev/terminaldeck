@@ -100,7 +100,20 @@ export type Command =
    * `browser-chromium-install.ts`. It needs no running daemon, so `main.ts`
    * runs it straight from {@link run} rather than through {@link dispatch}.
    */
-  | { kind: 'browser-install' }
+  | {
+      kind: 'browser-install'
+      /**
+       * Install the system libraries Chromium needs, if it turns out it cannot
+       * start without them.
+       *
+       * A flag rather than a prompt, and off rather than on: this runs the
+       * machine's package manager under `sudo`, which is not something a command
+       * may decide for somebody. Without it the install prints the exact line to
+       * paste and stops. `install-headless.sh` sets the precedent by naming the
+       * packages and refusing rather than installing them behind your back.
+       */
+      withDeps: boolean
+    }
   | { kind: 'folders' }
   | { kind: 'folders-add'; folder: string; device: string | null }
   | { kind: 'folders-remove'; folder: string; device: string | null }
@@ -242,7 +255,13 @@ function browserCommand(args: readonly string[]): Command {
   if (verb !== 'install') {
     return { kind: 'error', message: `Unknown browser command "${verb}". It is "browser install".` }
   }
-  return extra(rest) ?? { kind: 'browser-install' }
+  let withDeps = false
+  const unknown: string[] = []
+  for (const arg of rest) {
+    if (arg === '--with-deps') withDeps = true
+    else unknown.push(arg)
+  }
+  return extra(unknown) ?? { kind: 'browser-install', withDeps }
 }
 
 /**
@@ -369,7 +388,8 @@ export function usage(): string {
     `  ${BRAND.id} status                      running? reachable? what is it holding open?`,
     `  ${BRAND.id} devices                     which devices are signed in here`,
     `  ${BRAND.id} revoke <device>             remove a device and drop it now`,
-    `  ${BRAND.id} browser install             fetch the Chromium this host drives`,
+    `  ${BRAND.id} browser install             fetch the Chromium this host drives, and prove it starts`,
+    `  ${BRAND.id} browser install --with-deps  the same, and install the system libraries it needs`,
     `  ${BRAND.id} folders                     which folders each device may use`,
     `  ${BRAND.id} folders add <path>          let a device start sessions there`,
     `  ${BRAND.id} folders remove <path>       take it away`,

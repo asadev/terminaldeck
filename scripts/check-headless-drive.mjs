@@ -17,7 +17,9 @@
  *     because a bare server has none of the ~13 shared libraries Chromium links.
  *  2. `launchChromium` returned `ok: true` for a process that was dead 30 ms
  *     later with exit 127 — pid present, `exitCode` still `null` at the moment
- *     it was read, both pipe fds open onto a corpse.
+ *     it was read, both pipe fds open onto a corpse. (It is now async and does
+ *     not answer until the browser has; `spawnChromium` is the old synchronous
+ *     half, and nothing outside that module holds its result.)
  *  3. Stock Ubuntu 24.04 cannot start Chromium with the flags that shipped, as
  *     *any* user: as root it refuses outright, and as a normal user
  *     `apparmor_restrict_unprivileged_userns=1` leaves it with no usable sandbox.
@@ -38,8 +40,10 @@
  *     digest authority was used, app-owned sha256 or the server's md5.
  *  2. The binary's dynamic libraries are all present, named individually when
  *     they are not, before anything tries to run it.
- *  3. `launchChromium()` starts a process that is *still alive* a moment later,
- *     and `Browser.getVersion` over the pipe agrees with the pinned version.
+ *  3. Every binary in the archive that has to *run* came out executable — the
+ *     failure `ldd` and `chrome --version` are both green over.
+ *  4. `launchChromium()` starts a process that answers `Browser.getVersion`
+ *     over the pipe, and the version agrees with the pinned one.
  *  4. A real static page loads and its title and text read back.
  *  5. A real **JavaScript-rendered** page loads, and text is proven absent from
  *     the raw HTML and present in the rendered DOM — the difference is the whole
@@ -113,7 +117,7 @@ function ENTRY_SOURCE(root) {
   return `
 import { execFileSync } from 'node:child_process'
 import { createServer } from 'node:http'
-import { readFileSync, readdirSync, writeFileSync, mkdirSync } from 'node:fs'
+import { readFileSync, readdirSync, statSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
@@ -251,6 +255,26 @@ async function main() {
   } catch { info('ldd', 'not available here; skipped') }
   if (missing.length === 0) ok('ldd', 'every library resolves')
   else bad('ldd', \`\${missing.length} missing: \${missing.join(', ')}\`)
+
+  /*
+   * The exec bits, which ldd and --version are both blind to.
+   *
+   * browser-extension-unzip.ts drops a zip entry's mode bits on purpose — an
+   * extension is read, never run — so browser-chromium-install.ts chmods the
+   * binaries back. Measured on the reference server, 2026-08-22: with
+   * chrome_crashpad_handler left non-executable, ldd was clean and
+   * chrome --version printed the version and exited 0, and every real start
+   * died on SIGABRT with "posix_spawn ...: Permission denied (13)".
+   */
+  const binDir = join(install.path, '..')
+  for (const name of ['chrome_crashpad_handler', 'chrome_sandbox']) {
+    const file = join(binDir, name)
+    try {
+      const mode = statSync(file).mode
+      if ((mode & 0o111) !== 0) ok(name, 'executable')
+      else bad(name, \`present but not executable (mode \${(mode & 0o777).toString(8)})\`)
+    } catch { info(name, 'not in this build') }
+  }
 
   /* -- 3. the sandbox, and the launch ----------------------------------- */
   console.log('\\n3. the sandbox this machine can give it')

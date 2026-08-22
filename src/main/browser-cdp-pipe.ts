@@ -64,6 +64,13 @@
 export interface WritableLike {
   write(chunk: Buffer): boolean
   once(event: 'drain', listener: () => void): unknown
+  /**
+   * Subscribe to the write side's failures.
+   *
+   * Optional so a test can still hand this two methods, and subscribed to
+   * whenever it is there — see the constructor for why that is not a nicety.
+   */
+  on?(event: 'error', listener: (error: Error) => void): unknown
 }
 
 /**
@@ -137,6 +144,28 @@ export class CdpPipe {
     incoming.on('end', () => this.close())
     incoming.on('close', () => this.close())
     incoming.on('error', (error) => this.close(error))
+
+    /*
+     * The write side needs a listener too, and this one is not symmetry.
+     *
+     * A Node stream with no `'error'` listener **throws** when it errors —
+     * `events` re-raises it as an uncaught exception — and the write end of a
+     * pipe onto a dead Chromium errors with `EPIPE` the moment anything is
+     * written to it. Measured on Ubuntu 24.04 on 2026-08-22, against a real
+     * Chromium that aborted at startup: writing one `Browser.getVersion` frame
+     * into its fd 3 produced `throw er; // Unhandled 'error' event` and took the
+     * whole Node process down. On a headless host that process is the daemon,
+     * so a browser that failed to start would kill the sessions, the pairing and
+     * the relay connection along with it — and the operator's only clue would be
+     * a V8 stack trace in a log.
+     *
+     * So it is caught and turned into the same close every other end-of-pipe
+     * goes through: everything in flight rejects with a named error, the close
+     * listeners fire, and `browser-headless-host.ts` reports a sentence.
+     */
+    if (typeof out.on === 'function') {
+      out.on('error', (error) => this.close(error))
+    }
   }
 
   /**
@@ -228,7 +257,18 @@ export class CdpPipe {
     if (this.paused || this.closed) return
     while (this.queue.length > 0) {
       const frame = this.queue.shift() as Buffer
-      const ok = this.out.write(frame)
+      let ok: boolean
+      try {
+        ok = this.out.write(frame)
+      } catch (error) {
+        // A stream that has already been destroyed throws here rather than
+        // emitting — `ERR_STREAM_DESTROYED` — which is the other half of the
+        // dead-browser case the constructor's `'error'` listener covers. Same
+        // answer: the pipe is closed with a named reason, and nothing in flight
+        // is left waiting for a reply that cannot come.
+        this.close(error instanceof Error ? error : new Error('the debugger pipe could not be written to'))
+        return
+      }
       if (!ok) {
         this.paused = true
         this.out.once('drain', () => {

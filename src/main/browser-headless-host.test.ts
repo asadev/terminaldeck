@@ -211,6 +211,34 @@ describe('the headless tab authority', () => {
     expect(publish.mock.calls[0]?.[0].step).toContain('chrome is not installed')
   })
 
+  /*
+   * The banner is what a person watching a device sees. The copilot sees
+   * `openTab` return null, and before this it was handed a fixed sentence about
+   * Settings → Tools — a pane that does not exist on a machine with no window,
+   * while the real reason was fifteen package names it never got.
+   */
+  it('hands the copilot the same reason the banner got', async () => {
+    const why =
+      'Chromium was downloaded and verified, but it cannot run on this machine yet: ' +
+      '13 shared libraries it needs are missing — libatk-1.0.so.0'
+    const launch: LaunchBrowser = async () => ({ ok: false, why })
+    const host = new HeadlessDriveHost({ userData, launch })
+
+    expect(await host.openTab({ url: 'https://example.com', isolate: false })).toBeNull()
+    const said = host.whyNoTab()
+    expect(said).toContain('libatk-1.0.so.0')
+    // Cleared on read: a stale reason attached to a later, unrelated null is a
+    // worse answer than none.
+    expect(host.whyNoTab()).toBeNull()
+  })
+
+  it('has no reason to give before anything has failed', async () => {
+    const host = new HeadlessDriveHost({ userData, launch: fakeLaunch().launch })
+    expect(host.whyNoTab()).toBeNull()
+    await host.openTab({ url: 'https://example.com', isolate: false })
+    expect(host.whyNoTab()).toBeNull()
+  })
+
   it('retries a failed launch rather than remembering it as broken', async () => {
     let attempt = 0
     const good = fakeLaunch()

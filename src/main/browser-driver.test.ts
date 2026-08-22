@@ -219,3 +219,51 @@ describe('the driver casts a page and curtains it on handover', () => {
     expect(curtain.prompt).toContain('password')
   })
 })
+
+/* --------------------------------------- when there is no page, say why not -- */
+
+/**
+ * The sentence a copilot is handed when `openTab` came back null.
+ *
+ * `openTab` returning null means two completely different things depending on
+ * which host answered. On the desktop it means the window declined, and the
+ * fixed sentence about Settings → Tools is true. On a **headless host** it
+ * usually means Chromium could not start on that machine — and that sentence
+ * then sends somebody to a Settings pane on a server with no window, while the
+ * real answer, a list of missing packages and the command that installs them,
+ * went to a banner the copilot never sees.
+ */
+describe('refusing to drive, with a reason', () => {
+  const base = {
+    contentsFor: () => null,
+    publish: () => undefined,
+    now: () => 1_000,
+  }
+
+  it('repeats the host reason verbatim when the host has one', async () => {
+    const why =
+      'Chromium was downloaded and verified, but it cannot run on this machine yet: 13 shared ' +
+      'libraries it needs are missing — libatk-1.0.so.0. Install them with: sudo apt-get install -y libatk1.0-0t64'
+    const drive = new BrowserDrive({ ...base, openTab: async () => null, whyNoTab: () => why })
+    await expect(drive.open({ url: 'https://example.com', isolate: false })).rejects.toThrow(
+      /libatk1\.0-0t64/,
+    )
+    await expect(drive.open({ url: 'https://example.com', isolate: false })).rejects.toThrow(
+      /could not be started/,
+    )
+  })
+
+  it('keeps the window sentence for a host that does not know why', async () => {
+    const drive = new BrowserDrive({ ...base, openTab: async () => null })
+    await expect(drive.open({ url: 'https://example.com', isolate: false })).rejects.toThrow(
+      /Settings → Tools/,
+    )
+  })
+
+  it('keeps it too when the host has nothing to say this time', async () => {
+    const drive = new BrowserDrive({ ...base, openTab: async () => null, whyNoTab: () => null })
+    await expect(drive.open({ url: 'https://example.com', isolate: false })).rejects.toThrow(
+      /Settings → Tools/,
+    )
+  })
+})
