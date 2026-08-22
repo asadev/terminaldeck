@@ -39,7 +39,25 @@
  *     handed the process. Nothing can be more direct than the app's own record
  *     of what it did, so this stops here and never probes.
  *
- *  2. **The process's own environment.** A session with no profile — a plain
+ *  2. **The agent's own report, through its hooks.** The hook command runs as a
+ *     child of the agent, so it inherits — *is* — the agent's environment, and
+ *     the Windows hook client reads the config-directory variables out of its
+ *     own process and sends them with every event (`hook-server.ts`,
+ *     {@link AgentEnvReport}). This is the only honest channel on Windows,
+ *     where nothing unelevated can read another process's environment, and it
+ *     is evidence of exactly the same kind rung 3 gathers with `ps`: the
+ *     variable as the agent's process actually has it, or its absence with the
+ *     rest of the environment as proof. Kept per session while the agent keeps
+ *     firing events; dropped on `SessionEnd` and when the pty goes.
+ *
+ *     This rung is what answers for **Run Claude** as well as for a typed-in
+ *     agent, on Windows: that button does not spawn — `AccountChip.tsx` writes
+ *     `claude\r` into the existing shell pty — so those sessions carry no
+ *     spawn record, and Claude fires `SessionStart` at CLI startup, which
+ *     means the report lands the moment the agent starts rather than a turn
+ *     later.
+ *
+ *  3. **The process's own environment.** A session with no profile — a plain
  *     shell with an agent typed into it, which is the case above — is a real pty
  *     with a real pid, and the agent is a descendant of it. On macOS and Linux
  *     `ps eww -p <pid>` prints a process's whole environment, so the store that
@@ -72,7 +90,7 @@
  *     a default store is `$HOME/.claude` and another `HOME` is another store
  *     this app has no record of.
  *
- *  3. **Nothing else, and this was checked rather than assumed.** The obvious
+ *  4. **Nothing else, and this was checked rather than assumed.** The obvious
  *     third rung is the transcript, and it does not exist: every line of all 542
  *     transcripts under `~/.claude/projects` was parsed looking for a structural
  *     field named `emailAddress`, `accountUuid`, `organizationName`,
@@ -101,11 +119,12 @@
 import { execFile } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { basename, join, resolve } from 'node:path'
+import { basename, join, resolve, win32 } from 'node:path'
 import { promisify } from 'node:util'
 import type { IpcMain, IpcMainInvokeEvent } from 'electron'
 import { AGENT_CATALOG } from '../shared/agent-catalog'
 import type { ProviderId, SessionMeta } from '../shared/types'
+import { onHookEvent, type AgentEnvReport, type HookEvent } from './hook-server'
 import { currentPlatform, isWindows, type Platform } from './platform/host'
 import { findProfile, getState, supportsProfiles, systemConfigDir, systemProfileFor } from './profiles'
 
@@ -113,8 +132,14 @@ const run = promisify(execFile)
 
 /* ------------------------------------------------------------------ model -- */
 
-/** How the answer was arrived at, so a screen can show its working. */
-export type SessionAccountSource = 'spawn' | 'process'
+/**
+ * How the answer was arrived at, so a screen can show its working.
+ *
+ * `spawn` — this app's own record of what it started. `hook` — the agent's own
+ * hook reported the environment it is running with. `process` — read from the
+ * process table with `ps eww`.
+ */
+export type SessionAccountSource = 'spawn' | 'hook' | 'process'
 
 export interface KnownSessionAccount {
   kind: 'known'
@@ -151,8 +176,16 @@ const UNREADABLE =
   'This session was started outside the app and its account could not be read, so no account is named rather than this computer’s default being shown.'
 const FOREIGN_HOME =
   'The agent in this session is running under a different home directory, so its login is one this app has no record of.'
+/**
+ * The Windows last resort, reworded when the hook rung was added. It used to
+ * declare the whole question unanswerable — "Windows does not let one process
+ * read another's environment" — which was true of the `ps` rung and false of
+ * the app: an agent's own hooks answer it from inside the process. So the
+ * sentence now says what is actually missing (no report yet) and what a person
+ * can do about it (install the hooks; the agent reports from its next event).
+ */
 const WINDOWS =
-  'Windows does not let one process read another’s environment, so the account of an agent this app did not start cannot be established here.'
+  'No agent in this session has reported its login yet. Windows does not let this app read another process’s environment, so an agent started at this prompt names its own account through its hooks — from its next turn, once hooks are installed in Setup.'
 
 /* ----------------------------------------------------------- process table -- */
 
@@ -265,6 +298,12 @@ export interface SessionAccountDeps {
   pidOf(sessionId: string): number | null
   describeSession(sessionId: string): SessionMeta | null
   platform?: Platform
+  /**
+   * This account's home directory, for the foreign-home comparison against a
+   * hook report. Defaults to `homedir()`; a parameter so a test can hold both
+   * sides of the comparison rather than depending on the runner's account.
+   */
+  home?: string
   /** Injected for tests. Resolves with stdout; rejects the way `execFile` does. */
   exec?(command: string, args: readonly string[]): Promise<string>
 }
@@ -277,10 +316,21 @@ export interface SessionAccountDeps {
  */
 let deps: SessionAccountDeps | null = null
 
+/** The live hook subscription, so a reconfigure never stacks a second one. */
+let unhook: (() => void) | null = null
+
 export function configureSessionAccounts(next: SessionAccountDeps | null): void {
   deps = next
   answers.clear()
   inFlight.clear()
+  hookReports.clear()
+  unhook?.()
+  // Subscribed here rather than wired in `index.ts`, for the same reason the
+  // registration is module-level: a subscription a shell has to remember to
+  // install is one the other shell forgets. The listener set in
+  // `hook-server.ts` survives the server not being up yet, so order with
+  // `startHookServer` does not matter.
+  unhook = next === null ? null : onHookEvent(noteHookEvent)
 }
 
 async function shell(command: string, args: readonly string[]): Promise<string> {
@@ -319,8 +369,102 @@ export function dropSessionAccount(sessionId?: string): void {
   if (sessionId === undefined) {
     answers.clear()
     inFlight.clear()
+    hookReports.clear()
     return
   }
+  answers.delete(sessionId)
+  inFlight.delete(sessionId)
+  hookReports.delete(sessionId)
+}
+
+/* ------------------------------------------------------------ hook reports -- */
+
+/** One session's latest report from inside its agent, and who sent it. */
+interface HeldReport {
+  provider: ProviderId
+  /** The variable that decides this agent's store, from the catalog. */
+  configEnv: string
+  report: AgentEnvReport
+  receivedAt: number
+}
+
+/**
+ * The latest report per session. One entry, not a history: every hook event
+ * carries the same environment for the life of the agent process, and the one
+ * that matters is the one describing the agent that is running now.
+ *
+ * Dropped in three places, each of which is an "the agent this describes is
+ * gone": the provider's `SessionEnd` event, `dropSessionAccount` when the pty
+ * exits, and `configureSessionAccounts` when the wiring itself is replaced.
+ * What that leaves uncovered is stated in {@link noteHookEvent}.
+ */
+const hookReports = new Map<string, HeldReport>()
+
+/** The catalog entry for a hook's provider segment, when it can hold a login. */
+function agentSpec(provider: string): { provider: ProviderId; configEnv: string } | null {
+  for (const entry of Object.values(AGENT_CATALOG)) {
+    if (entry.id === provider && entry.configEnv !== null) {
+      return { provider: entry.id, configEnv: entry.configEnv }
+    }
+  }
+  return null
+}
+
+/**
+ * Fold one hook event into the report store.
+ *
+ * Exported for tests; wired through `onHookEvent` in
+ * {@link configureSessionAccounts} for the app.
+ *
+ * `SessionEnd` is the drop: an account name that outlives the process it
+ * describes is the class of claim this module exists to end, and both CLIs
+ * that report environments here (Claude, Gemini — Codex has no `SessionEnd`
+ * hook installed) fire it on exit. What this does not cover is an agent killed
+ * too hard to run its own hooks — that report stands until the pty dies. On
+ * POSIX the `ps` rung never reaches this store, so the staleness window exists
+ * only where the alternative was no answer at all.
+ *
+ * A cached *probed* answer is invalidated when the evidence changes, so the
+ * next read re-climbs the ladder; a spawn answer is this app's own record and
+ * outranks anything a hook says, so it is never touched.
+ */
+export function noteHookEvent(event: HookEvent): void {
+  const sessionId = event.sessionId
+  if (sessionId === null) return
+  if (event.event === 'SessionEnd') {
+    if (hookReports.delete(sessionId)) dropProbedAnswer(sessionId)
+    return
+  }
+  if (event.agentEnv === null) return
+  const spec = agentSpec(event.provider)
+  if (spec === null) return
+  const held = hookReports.get(sessionId)
+  hookReports.set(sessionId, {
+    provider: spec.provider,
+    configEnv: spec.configEnv,
+    report: event.agentEnv,
+    receivedAt: event.receivedAt,
+  })
+  const changed =
+    held === undefined ||
+    held.provider !== spec.provider ||
+    held.report.envRead !== event.agentEnv.envRead ||
+    held.report.home !== event.agentEnv.home ||
+    (held.report.vars[held.configEnv] ?? null) !== (event.agentEnv.vars[spec.configEnv] ?? null)
+  if (changed) dropProbedAnswer(sessionId)
+}
+
+/**
+ * Drop a cached answer that new evidence has overtaken — unless it is a spawn
+ * answer, which is this app's own record and no hook's to move.
+ *
+ * The in-flight probe is detached too: a probe that started before the report
+ * arrived would otherwise cache the pre-report answer *after* it, and a
+ * withheld reading would sit on screen for a TTL it no longer deserves.
+ */
+function dropProbedAnswer(sessionId: string): void {
+  const cached = answers.get(sessionId)
+  if (cached && cached.answer.kind === 'known' && cached.answer.source === 'spawn') return
   answers.delete(sessionId)
   inFlight.delete(sessionId)
 }
@@ -364,6 +508,71 @@ function fromSpawn(session: SessionMeta): KnownSessionAccount | null {
     profileId: profile.id,
     profileName: profile.name,
     source: 'spawn',
+  }
+}
+
+/** Two spellings of one directory? Windows compares case-folded, POSIX exact. */
+function sameDir(a: string, b: string, platform: Platform): boolean {
+  if (isWindows(platform)) return win32.resolve(a).toLowerCase() === win32.resolve(b).toLowerCase()
+  return resolve(a) === resolve(b)
+}
+
+/**
+ * The hook rung: what the agent's own hook read out of its own environment.
+ *
+ * The same three-way reading as the `ps` rung below, because it is the same
+ * evidence gathered by a witness that is *closer* — the hook process inherits
+ * the agent's environment rather than parsing it out of a process dump:
+ *
+ *  - the variable is set → that directory, looked up like any other;
+ *  - absent, in an environment that provably arrived (`envRead`) but under a
+ *    different home → withheld, a login this app has no record of;
+ *  - absent, same home → the agent's own default store, asked with `{}` for
+ *    the reason the process rung documents at length.
+ *
+ * Null when there is nothing here to answer with — no report, a report whose
+ * environment never provably arrived — and the ladder continues. Only the
+ * Windows client sends reports today; on POSIX this rung is always empty and
+ * the `ps` probe below answers as it always has.
+ */
+function fromHookReport(sessionId: string, wiring: SessionAccountDeps): SessionAccountAnswer | null {
+  const held = hookReports.get(sessionId)
+  if (held === undefined) return null
+
+  const declared = held.report.vars[held.configEnv] ?? null
+  if (declared !== null) {
+    const found = profileForDir(held.provider, declared)
+    return {
+      kind: 'known',
+      provider: held.provider,
+      configDir: declared,
+      profileId: found?.id ?? null,
+      profileName: found?.name ?? null,
+      source: 'hook',
+    }
+  }
+
+  // An absence is believed only when the environment provably arrived — the
+  // same rule `environmentWasRead` applies to a SIP-scrubbed `ps` dump.
+  if (!held.report.envRead) return null
+
+  const platform = wiring.platform ?? currentPlatform()
+  const home = held.report.home
+  if (home !== null && !sameDir(home, wiring.home ?? homedir(), platform)) {
+    return { kind: 'withheld', reason: FOREIGN_HOME }
+  }
+
+  // The agent's own default store, asked with an empty environment — see the
+  // process rung below for why `{}` and not this app's inherited one.
+  const configDir = systemConfigDir(held.provider, {})
+  const found = profileForDir(held.provider, configDir)
+  return {
+    kind: 'known',
+    provider: held.provider,
+    configDir,
+    profileId: found?.id ?? null,
+    profileName: found?.name ?? null,
+    source: 'hook',
   }
 }
 
@@ -469,19 +678,26 @@ export function sessionAccount(sessionId: string): Promise<SessionAccountAnswer>
 
   const work = establish(sessionId, wiring, pid)
     .then((answer) => {
-      answers.set(sessionId, {
-        answer,
-        pid,
-        // A spawn answer is this app's own record and does not go stale.
-        expiresAt:
-          answer.kind === 'known' && answer.source === 'spawn'
-            ? Number.POSITIVE_INFINITY
-            : Date.now() + PROBE_TTL_MS,
-      })
+      // Only while this is still the registered probe: a hook report that
+      // arrived mid-flight detached it (`dropProbedAnswer`), and caching then
+      // would stamp a pre-report answer with a post-report TTL.
+      if (inFlight.get(sessionId) === work) {
+        answers.set(sessionId, {
+          answer,
+          pid,
+          // A spawn answer is this app's own record and does not go stale.
+          expiresAt:
+            answer.kind === 'known' && answer.source === 'spawn'
+              ? Number.POSITIVE_INFINITY
+              : Date.now() + PROBE_TTL_MS,
+        })
+      }
       return answer
     })
     .finally(() => {
-      inFlight.delete(sessionId)
+      // Conditional for the same reason: an unconditional delete here would
+      // remove whichever *newer* probe replaced this one.
+      if (inFlight.get(sessionId) === work) inFlight.delete(sessionId)
     })
   inFlight.set(sessionId, work)
   return work
@@ -498,7 +714,15 @@ async function establish(
   const spawned = fromSpawn(session)
   if (spawned !== null) return spawned
 
+  // The agent's own report outranks a probe — it is the same environment, read
+  // from inside rather than parsed out of `ps` — and it is the only rung that
+  // can answer for a typed-in agent on Windows.
+  const reported = fromHookReport(sessionId, wiring)
+  if (reported !== null) return reported
+
   if (isWindows(wiring.platform ?? currentPlatform())) {
+    // Not "unanswerable" any more — the sentence says what is missing and what
+    // installs the channel that answers it. See {@link WINDOWS}.
     return { kind: 'withheld', reason: WINDOWS }
   }
   if (pid === null) return { kind: 'withheld', reason: NO_SESSION }

@@ -13,9 +13,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { afterEach, describe, expect, it } from 'vitest'
+import { AGENT_CATALOG } from '../shared/agent-catalog'
 import { BRAND } from '../shared/brand'
 import { ownPorts, resetOwnPortsForTests } from './own-ports'
 import {
+  AGENT_ENV_HEADER,
   CONFIG_FILE,
   SESSION_HEADER,
   TOKEN_HEADER,
@@ -28,6 +30,7 @@ import {
   hookConfigPath,
   hostIsLocal,
   onHookEvent,
+  parseAgentEnv,
   parseHookPath,
   readBody,
   startHookServer,
@@ -88,6 +91,8 @@ interface PostOptions {
   path?: string
   body?: string
   sessionId?: string
+  /** The base64 report the Windows client sends. See {@link AGENT_ENV_HEADER}. */
+  agentEnv?: string
 }
 
 /**
@@ -100,6 +105,7 @@ function post(endpoint: HookEndpoint, options: PostOptions = {}): Promise<number
   const headers: Record<string, string> = { 'content-type': 'application/json' }
   headers[TOKEN_HEADER] = options.token ?? endpoint.token
   if (options.sessionId) headers[SESSION_HEADER] = options.sessionId
+  if (options.agentEnv) headers[AGENT_ENV_HEADER] = options.agentEnv
   if (options.host) headers.host = options.host
 
   return new Promise((resolve, reject) => {
@@ -159,6 +165,69 @@ describe('toHookEvent', () => {
     expect(event.event).toBe('Stop')
     expect(event.payload).toEqual({})
     expect(event.cliSessionId).toBe(null)
+  })
+
+  it('carries no environment report unless one was sent', () => {
+    // Every POSIX hook is this case: curl sends no such header, and an absent
+    // report must read as "nothing was said", never as "nothing is set".
+    expect(toHookEvent('claude', 'Stop', 's-1', '{}').agentEnv).toBe(null)
+  })
+})
+
+/**
+ * The report the Windows hook client sends — decoded the way the client
+ * encodes it, because `session-account.ts` names a session's login off this
+ * and a permissive parser here is a wrong account name there.
+ *
+ * The fixture is built with the same three steps the PowerShell in
+ * {@link windowsClientScript} performs: a JSON object, UTF-8 bytes, base64 —
+ * so what is pinned is the wire format itself, not a TypeScript convenience.
+ */
+describe('parseAgentEnv', () => {
+  /** Exactly what `ConvertTo-Json -Compress | …ToBase64String` produces. */
+  function wire(report: unknown): string {
+    return Buffer.from(JSON.stringify(report), 'utf8').toString('base64')
+  }
+
+  it('decodes the variables, the home and the PATH proof', () => {
+    const report = parseAgentEnv(
+      wire({
+        vars: { CLAUDE_CONFIG_DIR: 'C:\\Users\\asad\\.claude-work' },
+        path: true,
+        home: 'C:\\Users\\asad',
+      }),
+    )
+    expect(report).toEqual({
+      vars: { CLAUDE_CONFIG_DIR: 'C:\\Users\\asad\\.claude-work' },
+      envRead: true,
+      home: 'C:\\Users\\asad',
+    })
+  })
+
+  it('survives a path under a non-ASCII account name, which base64 exists for', () => {
+    const report = parseAgentEnv(wire({ vars: {}, path: true, home: 'C:\\Users\\Иван' }))
+    expect(report?.home).toBe('C:\\Users\\Иван')
+  })
+
+  it('reports an unread environment as unread, never as empty', () => {
+    // `path: false` is the Windows spelling of the SIP-scrubbed `ps` dump: an
+    // agent ran a hook, and nothing about its environment may be believed.
+    const report = parseAgentEnv(wire({ vars: {}, path: false, home: null }))
+    expect(report).toEqual({ vars: {}, envRead: false, home: null })
+  })
+
+  it('refuses everything that is not a report', () => {
+    expect(parseAgentEnv(undefined)).toBe(null)
+    expect(parseAgentEnv('')).toBe(null)
+    expect(parseAgentEnv('not base64 json at all')).toBe(null)
+    expect(parseAgentEnv(wire('a string, not an object'))).toBe(null)
+    expect(parseAgentEnv(wire([1, 2, 3]))).toBe(null)
+    // A number where a path should be is dropped, not stringified into one.
+    expect(parseAgentEnv(wire({ vars: { CLAUDE_CONFIG_DIR: 7 }, path: true }))).toEqual({
+      vars: {},
+      envRead: true,
+      home: null,
+    })
   })
 })
 
@@ -321,6 +390,35 @@ describe('the Windows client', () => {
     // not there. Measured, once, the hard way.
     expect(script).toContain('NamedPipeClientStream')
     expect(script).toContain('-replace')
+  })
+
+  /*
+   * The fifth job, added with the Windows account rung: this script is the one
+   * process on Windows that can honestly read the agent's environment, because
+   * the CLI spawned it and it *inherited* that environment. Without the report
+   * the app withholds the account of every agent typed at a Windows prompt —
+   * which is what the usage bar naming nobody on his PC was.
+   */
+  it('reports every agent’s config variable, with home and the PATH proof', () => {
+    for (const entry of Object.values(AGENT_CATALOG)) {
+      if (entry.configEnv !== null) expect(script).toContain(`'${entry.configEnv}'`)
+    }
+    expect(script).toContain(`${AGENT_ENV_HEADER}: $agentEnv`)
+    // The two halves of "an absence may be believed": the environment provably
+    // arrived (PATH), and it is this account's own home (USERPROFILE).
+    expect(script).toContain('[bool]$env:PATH')
+    expect(script).toContain('$env:USERPROFILE')
+    // Base64, because the values are paths under an account name that is
+    // legally non-ASCII and the header is not.
+    expect(script).toContain('ToBase64String')
+  })
+
+  it('builds the report inside the try, so a failure there is still a silent hook', () => {
+    const guard = script.indexOf('try {')
+    const report = script.indexOf('$agentReport')
+    const rescue = script.indexOf('} catch {')
+    expect(report).toBeGreaterThan(guard)
+    expect(report).toBeLessThan(rescue)
   })
 })
 
@@ -506,6 +604,37 @@ describe('the endpoint', () => {
       cliSessionId: 'cli-9',
       toolName: 'Bash',
     })
+  })
+
+  it('hands listeners the agent’s environment report when the client sent one', async () => {
+    const seen: HookEvent[] = []
+    const endpoint = await start((event) => seen.push(event))
+
+    // The exact bytes the Windows client puts on the wire: JSON, UTF-8, base64.
+    const report = Buffer.from(
+      JSON.stringify({
+        vars: { CLAUDE_CONFIG_DIR: 'C:\\Users\\asad\\.claude-work' },
+        path: true,
+        home: 'C:\\Users\\asad',
+      }),
+      'utf8',
+    ).toString('base64')
+    await post(endpoint, {
+      path: '/hook/claude/SessionStart',
+      sessionId: 'session-8',
+      agentEnv: report,
+    })
+    // And one with a header nobody could parse, which must not lose the event.
+    await post(endpoint, { path: '/hook/claude/Stop', sessionId: 'session-8', agentEnv: '!!' })
+    await settle()
+
+    expect(seen).toHaveLength(2)
+    expect(seen[0]?.agentEnv).toEqual({
+      vars: { CLAUDE_CONFIG_DIR: 'C:\\Users\\asad\\.claude-work' },
+      envRead: true,
+      home: 'C:\\Users\\asad',
+    })
+    expect(seen[1]?.agentEnv).toBe(null)
   })
 
   it('rejects a request with no token, a wrong token, or a token of another length', async () => {

@@ -1473,8 +1473,11 @@ export type SessionAccountView =
       profileName: string | null
       /** The address signed into that directory, read from the file the CLI wrote. */
       email: string | null
-      /** `spawn` — this app started it. `process` — read from the agent's environment. */
-      source: 'spawn' | 'process'
+      /**
+       * `spawn` — this app started it. `hook` — the agent's own hook reported
+       * its environment. `process` — read from the process table.
+       */
+      source: 'spawn' | 'hook' | 'process'
     }
   | { kind: 'withheld'; reason: string }
 
@@ -1508,7 +1511,7 @@ export function parseSessionAccount(value: unknown): SessionAccountView {
     profileId: typeof record.profileId === 'string' ? record.profileId : null,
     profileName: typeof record.profileName === 'string' ? record.profileName : null,
     email: typeof record.email === 'string' && record.email.trim() !== '' ? record.email : null,
-    source: record.source === 'process' ? 'process' : 'spawn',
+    source: record.source === 'process' ? 'process' : record.source === 'hook' ? 'hook' : 'spawn',
   }
 }
 

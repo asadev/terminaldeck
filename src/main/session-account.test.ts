@@ -1,16 +1,28 @@
-import { mkdirSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { request } from 'node:http'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import type { SessionMeta } from '../shared/types'
+import {
+  AGENT_ENV_HEADER,
+  SESSION_HEADER,
+  TOKEN_HEADER,
+  parseAgentEnv,
+  startHookServer,
+  stopHookServer,
+  toHookEvent,
+} from './hook-server'
 import { installPaths, resetPaths } from './platform/paths'
-import { resetProfilesCache, systemProfileId } from './profiles'
+import { resetProfilesCache, systemConfigDir, systemProfileId } from './profiles'
 import {
   agentUnder,
   configureSessionAccounts,
+  dropSessionAccount,
   environmentValue,
   environmentWasRead,
   establishedConfigDir,
+  noteHookEvent,
   parseProcessTable,
   sessionAccount,
   type SessionAccountDeps,
@@ -334,5 +346,252 @@ describe('the config directory one session’s files should be read from', () =>
     configureSessionAccounts(on('/tmp/work-store'))
     await sessionAccount('sess-files')
     expect(establishedConfigDir('sess-files', 'codex')).toBeNull()
+  })
+})
+
+/**
+ * The Windows ladder — the rung T34 never built.
+ *
+ * `ps eww` is POSIX, so every agent typed at a Windows prompt used to fall to
+ * a blanket withholding: "never print Default" satisfied by printing nobody,
+ * on exactly the session type his PC mostly has. Windows offers no honest way
+ * for an unelevated process to read another's environment — but the hook
+ * command runs *inside* the agent's process tree and inherits its environment,
+ * so the Windows hook client reports the config variables itself and this
+ * module treats that as the evidence it is.
+ *
+ * Every fixture is built with the real wire encoding (`wire()` below is the
+ * PowerShell client's JSON→UTF-8→base64, byte for byte) and decoded by the
+ * real `parseAgentEnv`, so what is exercised is the channel, not a shape typed
+ * into the test. Paths are Windows-shaped strings compared by the module's own
+ * platform rules — nothing here touches the runner's filesystem, which is the
+ * discipline that keeps this suite green on both CI hosts.
+ */
+describe('the Windows ladder, fed by the agent’s own hooks', () => {
+  const USER_DATA = join(tmpdir(), `terminaldeck-windows-ladder-${process.pid}`)
+  const realConfigDir = process.env.CLAUDE_CONFIG_DIR
+  const SESSION = 'sess-win'
+  const HOME = 'C:\\Users\\asad'
+
+  beforeEach(() => {
+    resetPaths()
+    installPaths({
+      userData: () => USER_DATA,
+      home: () => USER_DATA,
+      downloads: () => USER_DATA,
+      appRoot: () => USER_DATA,
+    })
+    rmSync(USER_DATA, { recursive: true, force: true })
+    mkdirSync(USER_DATA, { recursive: true })
+    resetProfilesCache()
+    configureSessionAccounts(null)
+    delete process.env.CLAUDE_CONFIG_DIR
+  })
+
+  afterAll(async () => {
+    await stopHookServer()
+    resetPaths()
+    configureSessionAccounts(null)
+    if (realConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = realConfigDir
+    rmSync(USER_DATA, { recursive: true, force: true })
+  })
+
+  function meta(over: Partial<SessionMeta> = {}): SessionMeta {
+    return {
+      id: SESSION,
+      title: 'powershell',
+      cwd: 'C:\\Users\\asad\\Projects\\demo',
+      provider: 'shell',
+      exitCode: null,
+      createdAt: 1,
+      ...over,
+    }
+  }
+
+  /** A Windows Deck. `exec` throws because no rung there may ever spawn `ps`. */
+  function windowsDeps(session = meta()): SessionAccountDeps {
+    return {
+      pidOf: () => 4242,
+      describeSession: () => session,
+      platform: 'win32',
+      home: HOME,
+      exec: () => Promise.reject(new Error('there is no ps to run on Windows')),
+    }
+  }
+
+  /** The client’s exact wire format: JSON, UTF-8 bytes, base64. */
+  function wire(report: unknown): string {
+    return Buffer.from(JSON.stringify(report), 'utf8').toString('base64')
+  }
+
+  /** One hook event as the endpoint would emit it, through the real parsers. */
+  function hookEvent(
+    report: unknown | null,
+    over: { provider?: string; event?: string; sessionId?: string } = {},
+  ): void {
+    noteHookEvent(
+      toHookEvent(
+        over.provider ?? 'claude',
+        over.event ?? 'SessionStart',
+        over.sessionId ?? SESSION,
+        '{}',
+        report === null ? null : parseAgentEnv(wire(report)),
+      ),
+    )
+  }
+
+  it('answers a session this app spawned from the spawn record, exactly as on a Mac', async () => {
+    // A Run-Claude launch writes the resolved profile onto the session at
+    // spawn, on every platform — so rung one never needed `ps` and never
+    // deserved the Windows withholding it was sitting behind.
+    configureSessionAccounts(
+      windowsDeps(meta({ provider: 'claude', profileId: systemProfileId('claude') })),
+    )
+    const answer = await sessionAccount(SESSION)
+    expect(answer).toMatchObject({
+      kind: 'known',
+      profileId: systemProfileId('claude'),
+      source: 'spawn',
+    })
+  })
+
+  it('withholds with the sentence that says what would answer, while nothing has reported', async () => {
+    configureSessionAccounts(windowsDeps())
+    const answer = await sessionAccount(SESSION)
+    expect(answer.kind).toBe('withheld')
+    if (answer.kind !== 'withheld') return
+    // The old sentence declared the question unanswerable. The new one has to
+    // name the channel that answers it and what a person does to get it.
+    expect(answer.reason).toContain('hooks')
+    expect(answer.reason).not.toContain('cannot be established')
+  })
+
+  it('names the declared store once the agent’s own hook has reported it', async () => {
+    configureSessionAccounts(windowsDeps())
+    // The withholding lands first — and must not stand once evidence arrives.
+    expect((await sessionAccount(SESSION)).kind).toBe('withheld')
+
+    hookEvent({
+      vars: { CLAUDE_CONFIG_DIR: 'C:\\Users\\asad\\.claude-work' },
+      path: true,
+      home: HOME,
+    })
+    const answer = await sessionAccount(SESSION)
+    expect(answer).toMatchObject({
+      kind: 'known',
+      provider: 'claude',
+      configDir: 'C:\\Users\\asad\\.claude-work',
+      source: 'hook',
+    })
+  })
+
+  it('names the default store for an absent variable in an environment that provably arrived', async () => {
+    configureSessionAccounts(windowsDeps())
+    // Case-folded home: Windows says one directory in as many spellings as
+    // there are shortcuts, and `C:\USERS\ASAD` is not a foreign login.
+    hookEvent({ vars: {}, path: true, home: 'c:\\USERS\\ASAD' })
+    const answer = await sessionAccount(SESSION)
+    expect(answer).toMatchObject({
+      kind: 'known',
+      provider: 'claude',
+      configDir: systemConfigDir('claude', {}),
+      source: 'hook',
+    })
+  })
+
+  it('believes nothing from a report whose environment never provably arrived', async () => {
+    configureSessionAccounts(windowsDeps())
+    // `path: false` is the Windows spelling of the SIP-scrubbed dump: an agent
+    // ran a hook, and that is all this proves. Falling through to the
+    // withholding is the answer that cannot be wrong.
+    hookEvent({ vars: {}, path: false, home: HOME })
+    expect((await sessionAccount(SESSION)).kind).toBe('withheld')
+  })
+
+  it('withholds a login under somebody else’s home rather than naming this machine’s', async () => {
+    configureSessionAccounts(windowsDeps())
+    hookEvent({ vars: {}, path: true, home: 'C:\\Users\\somebody-else' })
+    const answer = await sessionAccount(SESSION)
+    expect(answer.kind).toBe('withheld')
+    if (answer.kind !== 'withheld') return
+    expect(answer.reason).toContain('different home')
+  })
+
+  it('lets the name die with the agent: SessionEnd drops the report and the answer', async () => {
+    configureSessionAccounts(windowsDeps())
+    hookEvent({ vars: { CLAUDE_CONFIG_DIR: 'C:\\store' }, path: true, home: HOME })
+    expect((await sessionAccount(SESSION)).kind).toBe('known')
+
+    hookEvent(null, { event: 'SessionEnd' })
+    // An account name that outlives the process it describes is the exact
+    // claim this module exists to end, one platform along.
+    expect((await sessionAccount(SESSION)).kind).toBe('withheld')
+  })
+
+  it('forgets the report when the pty goes, with everything else about the session', async () => {
+    configureSessionAccounts(windowsDeps())
+    hookEvent({ vars: { CLAUDE_CONFIG_DIR: 'C:\\store' }, path: true, home: HOME })
+    expect((await sessionAccount(SESSION)).kind).toBe('known')
+    dropSessionAccount(SESSION)
+    expect((await sessionAccount(SESSION)).kind).toBe('withheld')
+  })
+
+  it('ignores a report from a provider that has no login to tell apart', async () => {
+    configureSessionAccounts(windowsDeps())
+    hookEvent({ vars: {}, path: true, home: HOME }, { provider: 'shell' })
+    expect((await sessionAccount(SESSION)).kind).toBe('withheld')
+  })
+
+  it('carries the whole channel: a posted hook event becomes the session’s account', async () => {
+    /*
+     * The person's path, minus only PowerShell itself: the event enters through
+     * the real endpoint on this platform's real address, the real header
+     * parser, the real subscription `configureSessionAccounts` installs, and
+     * comes out of `sessionAccount` as a name. Every prior test drives the
+     * store directly; this one proves the store is actually plumbed.
+     */
+    const dir = mkdtempSync(join(tmpdir(), 'td-account-hook-'))
+    try {
+      configureSessionAccounts(windowsDeps())
+      const endpoint = await startHookServer({ dir })
+      await new Promise<void>((resolvePost, rejectPost) => {
+        const req = request(
+          {
+            socketPath: endpoint.socketPath,
+            method: 'POST',
+            path: '/hook/claude/SessionStart',
+            headers: {
+              'content-type': 'application/json',
+              [TOKEN_HEADER]: endpoint.token,
+              [SESSION_HEADER]: SESSION,
+              [AGENT_ENV_HEADER]: wire({
+                vars: { CLAUDE_CONFIG_DIR: 'C:\\Users\\asad\\.claude-work' },
+                path: true,
+                home: HOME,
+              }),
+            },
+          },
+          (res) => {
+            res.resume()
+            res.on('end', () => resolvePost())
+          },
+        )
+        req.on('error', rejectPost)
+        req.end('{}')
+      })
+      // The emit is synchronous with the response, but give it the same tick
+      // the endpoint's own tests do rather than racing it.
+      await new Promise((tick) => setTimeout(tick, 10))
+      const answer = await sessionAccount(SESSION)
+      expect(answer).toMatchObject({
+        kind: 'known',
+        configDir: 'C:\\Users\\asad\\.claude-work',
+        source: 'hook',
+      })
+    } finally {
+      await stopHookServer()
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
