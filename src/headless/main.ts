@@ -31,6 +31,7 @@ import { asDeviceKind, type DeviceKind, type DeviceKindRecord } from '../main/re
 import type { DeviceFolderGrant } from '../main/remote/folder-grants'
 import type { PairingToken } from '../main/remote/device-auth'
 import { currentPlatform } from '../main/platform/host'
+import { CHROMIUM_PATH_ENV, installChromium } from '../main/browser-chromium-install'
 import {
   callControl,
   clearDaemonRecord,
@@ -97,9 +98,35 @@ export async function run(
     case 'error':
       process.stderr.write(`${command.message}\n`)
       return 2
+    case 'browser-install':
+      // No daemon needed: this only downloads and unpacks. Paths are already
+      // installed above, so `installChromium` can find `<userData>/chromium`.
+      return await browserInstall()
     default:
       return await connected(command)
   }
+}
+
+/**
+ * `terminaldeck browser install`.
+ *
+ * Prints the resolved `chrome` path on success and the named error on failure —
+ * the whole reason `installChromium` returns a sentence rather than throwing.
+ * Exit 1 on failure so a provisioning script can tell.
+ */
+async function browserInstall(): Promise<number> {
+  const result = await installChromium()
+  if (!result.ok) {
+    process.stderr.write(`${result.why}\n`)
+    return 1
+  }
+  const how = result.sideloaded
+    ? ` (side-loaded via ${CHROMIUM_PATH_ENV})`
+    : result.reused
+      ? ' (already installed)'
+      : ''
+  process.stdout.write(`Chromium ${result.version}${how}\n${result.path}\n`)
+  return 0
 }
 
 /**

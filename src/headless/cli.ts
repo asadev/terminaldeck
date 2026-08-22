@@ -60,6 +60,12 @@ export type Command =
    */
   | { kind: 'pair'; deviceKind: DeviceKind | null }
   | { kind: 'stop' }
+  /**
+   * Fetch and unpack the standalone Chromium this host drives — see
+   * `browser-chromium-install.ts`. It needs no running daemon, so `main.ts`
+   * runs it straight from {@link run} rather than through {@link dispatch}.
+   */
+  | { kind: 'browser-install' }
   | { kind: 'folders' }
   | { kind: 'folders-add'; folder: string; device: string | null }
   | { kind: 'folders-remove'; folder: string; device: string | null }
@@ -82,10 +88,11 @@ export function parseArgs(argv: readonly string[]): Command {
   if (first === 'status') return extra(args) ?? { kind: 'status' }
   if (first === 'pair') return pairCommand(args)
   if (first === 'stop') return extra(args) ?? { kind: 'stop' }
+  if (first === 'browser') return browserCommand(args)
   if (first !== 'folders') {
     return {
       kind: 'error',
-      message: `Unknown command "${first}". This host understands pair, status, folders and stop.`,
+      message: `Unknown command "${first}". This host understands pair, status, browser, folders and stop.`,
     }
   }
 
@@ -178,6 +185,28 @@ function pairCommand(args: readonly string[]): Command {
   return { kind: 'pair', deviceKind }
 }
 
+/**
+ * `browser`, and its one subcommand.
+ *
+ * A verb rather than a bare `browser` because this is the anchor a headless host
+ * grows browser operations under — install today, and whatever the drivable
+ * browser needs later. An unknown verb names the one that exists rather than
+ * falling back to it, for the reason the rest of this file gives: a command that
+ * runs the wrong thing when it did not understand you is worse than one that says
+ * so.
+ */
+function browserCommand(args: readonly string[]): Command {
+  const rest = [...args]
+  const verb = rest.shift()
+  if (verb === undefined) {
+    return { kind: 'error', message: `"browser" needs a subcommand. The only one is "browser install".` }
+  }
+  if (verb !== 'install') {
+    return { kind: 'error', message: `Unknown browser command "${verb}". It is "browser install".` }
+  }
+  return extra(rest) ?? { kind: 'browser-install' }
+}
+
 function extra(args: readonly string[]): Command | null {
   if (args.length === 0) return null
   return { kind: 'error', message: `That command takes no arguments, and got "${args[0]}".` }
@@ -251,6 +280,7 @@ export function usage(): string {
     `  ${BRAND.id} pair                        show a pairing code, then approve the device`,
     `  ${BRAND.id} pair --kind mine|guest      the same, without being asked which it is`,
     `  ${BRAND.id} status                      running? reachable? what is it holding open?`,
+    `  ${BRAND.id} browser install             fetch the Chromium this host drives`,
     `  ${BRAND.id} folders                     which folders each device may use`,
     `  ${BRAND.id} folders add <path>          let a device start sessions there`,
     `  ${BRAND.id} folders remove <path>       take it away`,
