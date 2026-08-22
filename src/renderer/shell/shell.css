@@ -2217,10 +2217,25 @@
   white-space: nowrap;
   /* The tail of a path is the half that identifies it — two checkouts of the
      same project differ in their last segment, not their first — so a path too
-     long for the line loses its head. `direction` flips the truncation; the
-     isolate keeps the characters themselves in reading order. */
+     long for the line loses its head. `direction` flips the truncation. */
   direction: rtl;
-  unicode-bidi: isolate;
+}
+
+/*
+  And exactly one element forced back to left-to-right, which is what actually
+  keeps the characters in reading order.
+
+  `unicode-bidi: isolate` used to sit on the rule above and was believed to do
+  this job. Measured in this app's own renderer against `/srv/www/deep/nested`,
+  rtl-with-isolate puts the first character — the leading `/` — at the far
+  right, exactly as bare rtl does; only an inner LTR run moves it back. So a
+  Project page reporting on `/Users/apple/Projects/x` was captioning it
+  `Users/apple/Projects/x/`. Same wrapper, same reason, as
+  `.artifact-row-dir-text` and `.palette-dir-text`.
+*/
+.page-scope-path-text {
+  direction: ltr;
+  unicode-bidi: embed;
 }
 
 /* A dot rather than a character in the markup, so nothing reads it out. */

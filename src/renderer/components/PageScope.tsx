@@ -77,7 +77,8 @@ export function PageScope({ path, machine, detail }: Props) {
            and countable. Truncated from the left in CSS, since the last two
            segments are the half that tells two checkouts apart. */
         <span className="page-scope-path" title={path}>
-          {path}
+          {/* The inner wrapper is load-bearing — see `.page-scope-path-text`. */}
+          <span className="page-scope-path-text">{path}</span>
         </span>
       )}
       {path !== null && <span className="page-scope-sep" aria-hidden="true" />}

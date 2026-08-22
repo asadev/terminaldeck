@@ -271,7 +271,8 @@ export function ServerFolderPicker({ serverId, serverName, bridge, path, onChoos
     <div className="srvpick">
       <div className="srvpick-chosen">
         <span className="srvpick-path" title={line.shown}>
-          {line.shown}
+          {/* The inner wrapper is load-bearing — see `.srvpick-path-text`. */}
+          <span className="srvpick-path-text">{line.shown}</span>
         </span>
         {/* The same word the local half of this dialog uses, because it is the
             same question about a different machine. Anything else here — and
@@ -578,7 +579,8 @@ function FolderWindow({
             *Use this folder* will give, which is why it is printed rather than
             left to be inferred from a highlighted row. */}
         <p className="srvpick-window-path" title={held ?? DEFAULT_FOLDER}>
-          {held ?? DEFAULT_FOLDER}
+          {/* The inner wrapper is load-bearing — see `.srvpick-path-text`. */}
+          <span className="srvpick-path-text">{held ?? DEFAULT_FOLDER}</span>
         </p>
 
         <div className="srvpick-list">

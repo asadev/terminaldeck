@@ -46,8 +46,15 @@ const profile = (id: string, name: string): BrowserProfile => ({
 })
 
 describe('a number nobody measured', () => {
-  it('says so, and is never a zero', () => {
-    expect(countLine(null, 'response', 'responses')).toBe(NOT_MEASURED)
+  it('says so, keeps the unit, and is never a zero', () => {
+    /*
+     * The unit is the half that says *what* was not counted. Without it the
+     * assets line rendered `… · not measured · not measured · …` on every fresh
+     * profile, because `upgraded` and `fellBack` carry their whole label in the
+     * plural noun this function is handed. Screenshotted on 2026-08-22.
+     */
+    expect(countLine(null, 'response', 'responses')).toBe(`${NOT_MEASURED} (responses)`)
+    expect(countLine(null, 'response', 'responses')).toContain(NOT_MEASURED)
     expect(countLine(null, 'response', 'responses')).not.toContain('0')
   })
 

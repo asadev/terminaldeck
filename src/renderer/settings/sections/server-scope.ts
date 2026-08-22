@@ -209,7 +209,7 @@ export const SERVER_CONTROLS: readonly ServerControlEntry[] = [
     local: 'Primary account',
     mirrors: [],
     verdict: 'cannot',
-    say: 'This app hands a shell on a server no account, so a session runs as whichever login that server’s own home already holds.',
+    say: 'This app hands a shell on a server no account of its own, so a session runs as whichever login that server’s own home already holds.',
     traced: { file: 'src/main/profiles.ts', says: 'export function supportsProfiles' },
     group: 'coding',
   },

@@ -48,7 +48,23 @@ export const NOT_MEASURED = 'not measured'
  * only come from an engine that counted.
  */
 export function countLine(value: number | null, one: string, many: string): string {
-  if (value === null) return NOT_MEASURED
+  /*
+   * Unmeasured keeps the unit. `NOT_MEASURED` alone dropped the only word that
+   * said *what* had not been counted, and on a fresh profile — which is every
+   * profile, once — the assets line rendered as
+   *
+   *     not measured fetched · not measured skipped by the ledger ·
+   *     not measured · not measured · not measured in the ledger
+   *
+   * where the middle two are `upgraded` and `fellBack`, whose entire label was
+   * the plural noun this function had just thrown away. Screenshotted on
+   * 2026-08-22. Saying "not measured (upgrades)" costs two characters and is
+   * the difference between a sentence and a row of placeholders.
+   *
+   * Still never a number: the parenthesis names the unit, and `NOT_MEASURED`
+   * goes on carrying the whole of the claim about counting.
+   */
+  if (value === null) return `${NOT_MEASURED} (${many})`
   return `${value.toLocaleString()} ${value === 1 ? one : many}`
 }
 
