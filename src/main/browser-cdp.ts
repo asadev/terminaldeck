@@ -128,6 +128,22 @@ import { isNavigationAllowed } from './browser-url'
  */
 export type DriveState = 'idle' | 'agent' | 'human'
 
+/**
+ * Which channel is carrying the command, and therefore which table screens it.
+ *
+ * `electron` is the desktop: the driver holds a `WebContents` and reads through
+ * `executeJavaScriptInIsolatedWorld` and screenshots through `capturePage()`,
+ * so the protocol it sends is tiny and the allow-list below is tiny with it.
+ * `cdp` is the headless server: there is no Electron and no renderer, the
+ * `--remote-debugging-pipe` is the only door, and so the reads, the screenshot,
+ * the navigation and the target lifecycle all have to travel the protocol —
+ * which is what {@link CDP_ALLOWED_METHODS} adds, each addition bought with an
+ * argument check rather than a widening. The axis is passed rather than sensed,
+ * so the module stays a pure function of its inputs and a test drives both
+ * transports without a browser of either kind.
+ */
+export type Transport = 'electron' | 'cdp'
+
 /* ------------------------------------------------------------ the tables -- */
 
 /**
@@ -310,6 +326,159 @@ export const DENIED_METHODS: readonly string[] = [
 const ALLOWED = new Set(ALLOWED_METHODS)
 const DENIED = new Set(DENIED_METHODS)
 
+/* ------------------------------------------------ the tables, for the pipe -- */
+
+/**
+ * The same decisions, retold for the transport that has no Electron under it.
+ *
+ * On the desktop the driver reads a page through
+ * `executeJavaScriptInIsolatedWorld` and screenshots it through `capturePage()`
+ * — both Electron APIs, not protocol calls — so the electron tables above can
+ * DENY `Runtime.evaluate`, `Page.captureScreenshot` and the whole `Target.*`
+ * domain and lose nothing. On a headless server there is no Electron and no
+ * renderer: the `--remote-debugging-pipe` is the only door, so the reads, the
+ * screenshot, the navigation and the target lifecycle all have to travel the
+ * protocol. This second table says yes to exactly those, and to nothing the
+ * desktop would not also have wanted, and every new "yes" that carries a
+ * capability in its arguments — navigate, evaluate, download, create-target,
+ * cookie-read — is bought with an argument check in {@link screenCommand}
+ * rather than a shrug. A method absent from both tables is refused by default:
+ * the same allow-list-first discipline as the desktop.
+ */
+export const CDP_ALLOWED_METHODS: readonly string[] = [
+  // Everything the desktop channel sends travels the pipe unchanged.
+  ...ALLOWED_METHODS,
+  /*
+   * Navigation is the ONLY door on the server — there is no `loadURL`, because
+   * there is no `WebContents`. It is still argument-checked by
+   * `isNavigationAllowed` (via `NAVIGATING_METHODS`), which is the whole of the
+   * `file://` protection here, exactly as the header describes for the desktop:
+   * a browser-initiated navigate walks past `will-navigate`, so this check is
+   * not belt-and-braces, it is the only guard there is.
+   *
+   * `Page.navigateToHistoryEntry` is deliberately NOT here. It carries an
+   * `entryId`, not a URL, so there is no address for `isNavigationAllowed` to
+   * screen — a method the allow-list could not honestly argument-check the way
+   * the design requires. No `DrivenPage` touchpoint needs back/forward, so it
+   * stays on the deny-list below rather than sitting on the allow-list unable to
+   * be sent.
+   */
+  'Page.navigate',
+  /*
+   * Reading the page. An isolated world, made once per frame, then evaluation
+   * inside it — never the main world, enforced by {@link screenEvaluate}. The
+   * desktop's "no path from a model's string to page JS" property is upheld by
+   * the seam contract: only `browser-drive-script.ts` strings reach the driver's
+   * one isolated-world call, and its arguments are JSON.
+   */
+  'Page.createIsolatedWorld',
+  'Runtime.evaluate',
+  'Runtime.callFunctionOn',
+  /*
+   * The screenshot, over the wire. It was never denied on the desktop, only
+   * unneeded — `capturePage()` did it, and `Page.captureScreenshot` was measured
+   * to hang forever on a non-composited `WebContentsView`. A headless target
+   * always composites, so the hang cannot happen here and this is the read path.
+   */
+  'Page.captureScreenshot',
+  /*
+   * The target and context lifecycle. Denied on the desktop because "a tab is
+   * created and closed by a person, through the app" — but on a server there is
+   * no person and no tab strip, and the DriveHost IS the tab authority. Targets
+   * and contexts are made only inside the host's own named contexts and torn
+   * down only by the host lifecycle; `Target.createTarget`'s URL is screened by
+   * {@link screenCreateTarget}.
+   */
+  'Target.createTarget',
+  'Target.closeTarget',
+  'Target.attachToTarget',
+  'Target.setAutoAttach',
+  'Target.createBrowserContext',
+  'Target.disposeBrowserContext',
+  /*
+   * Downloads, into the host's own directory and no other. Denied on the desktop
+   * because the caller could name the directory — the concrete escalation from
+   * "drive a page" to "write files anywhere". Here {@link screenDownloadBehavior}
+   * pins `behavior:'allowAndName'` and requires the path to equal the
+   * host-configured downloads dir, which the app supplies and the agent never
+   * does.
+   */
+  'Browser.setDownloadBehavior',
+  /*
+   * Host preload delivery. There is no preload mechanism over CDP, so the guest
+   * preload is delivered as a script that runs before every document, plus one
+   * host-named binding. The script is the repository's own preload and the
+   * binding name is fixed by the host — the same construction guarantee as the
+   * evaluation path, not an open door to arbitrary injection.
+   */
+  'Page.addScriptToEvaluateOnNewDocument',
+  'Runtime.addBinding',
+  /*
+   * The one genuine relaxation over the desktop deny-list: a SINGLE URL's
+   * cookies, read to replay onto one asset request so a server scrape fetches
+   * the logged-in copy rather than the logged-out one — "the jar is the whole
+   * point of this browser". Scoped to exactly one http(s) URL in
+   * {@link screenCommand}; the whole-jar `Network.getAllCookies` and the
+   * context-wide `Storage.getCookies` stay on the deny-list below.
+   */
+  'Network.getCookies',
+]
+
+/**
+ * Refused under CDP too, whatever the allow-list says.
+ *
+ * The desktop deny-list minus the entries a server legitimately needs, and
+ * nothing added back that a server does not. The reasons that still hold, in one
+ * breath: closing the browser is the instability he described; the whole-jar and
+ * context-wide cookie reads are the literal credentials; a caller-named download
+ * path writes files anywhere; `setFileInputFiles` reads his disk into a website;
+ * the permission grants re-arm camera and microphone; `setExtraHTTPHeaders`
+ * composes what his logged-in session sends; and response-stage interception and
+ * HTTP auth are the larger powers the header refuses by construction. The
+ * entries that LEFT this list relative to the desktop — navigate, evaluate,
+ * capture, the target lifecycle, the host download behaviour, the single-URL
+ * cookie read — each moved to {@link CDP_ALLOWED_METHODS} with an argument
+ * check, never a bare allow.
+ */
+export const CDP_DENIED_METHODS: readonly string[] = [
+  'Browser.close',
+  /*
+   * The credentials, in bulk. `Network.getCookies` for one URL is allowed above;
+   * these two are the whole jar and the whole context, which is the dump.
+   */
+  'Network.getAllCookies',
+  'Storage.getCookies',
+  'Storage.getStorageKeyForFrame',
+  'Storage.clearDataForOrigin',
+  'Storage.getUsageAndQuota',
+  /* The deprecated, caller-named download door; the screened one is allowed. */
+  'Page.setDownloadBehavior',
+  'DOM.setFileInputFiles',
+  'Browser.grantPermissions',
+  'Browser.setPermission',
+  'Browser.resetPermissions',
+  'Page.bringToFront',
+  'Browser.setWindowBounds',
+  'Page.printToPDF',
+  'Page.setInterceptFileChooserDialog',
+  'Fetch.continueWithAuth',
+  'Fetch.getResponseBody',
+  'Network.setRequestInterception',
+  'Network.setExtraHTTPHeaders',
+  'Emulation.setDeviceMetricsOverride',
+  'Runtime.compileScript',
+  /*
+   * Back/forward. Allowed in principle — it only revisits an already-screened
+   * entry — but its `entryId` argument cannot be run through `isNavigationAllowed`
+   * the way a real address is, and nothing on the server drives it, so it stays
+   * denied rather than allow-listed without the argument check the design wants.
+   */
+  'Page.navigateToHistoryEntry',
+]
+
+const CDP_ALLOWED = new Set(CDP_ALLOWED_METHODS)
+const CDP_DENIED = new Set(CDP_DENIED_METHODS)
+
 /**
  * Methods whose arguments carry a destination.
  *
@@ -487,6 +656,117 @@ function screenFulfil(params: Record<string, unknown>): Screening {
   return { ok: true }
 }
 
+/* ---------------------------------------------- the CDP argument checkers -- */
+
+/**
+ * A context identifier that is actually present.
+ *
+ * A number is present when it is finite (a real execution-context id); a string
+ * when it is non-empty (a `uniqueContextId` or an `objectId`). Everything else —
+ * `undefined`, `null`, `''`, `NaN` — is absent, and absence is the main world.
+ */
+function namesAContext(value: unknown): boolean {
+  if (typeof value === 'number') return Number.isFinite(value)
+  if (typeof value === 'string') return value.length > 0
+  return false
+}
+
+/**
+ * `Runtime.evaluate` / `Runtime.callFunctionOn`, which must never touch the main
+ * world.
+ *
+ * The main world is where the page's own scripts and its `window` live, and it
+ * is the DEFAULT: an evaluation with no context named runs there. So the check
+ * is not "which world" but "a world was named at all" — require an isolated
+ * context id and the main world is refused by the same stroke. The id must name
+ * a world made by `Page.createIsolatedWorld`; that it does is upheld by the seam
+ * contract (the driver memoises exactly that id and reaches this call from
+ * nowhere else), which is the same by-construction guarantee the desktop's
+ * `executeJavaScriptInIsolatedWorld` gives — this is its protocol spelling.
+ *
+ * `Runtime.evaluate` names its world with `contextId` or `uniqueContextId`.
+ * `Runtime.callFunctionOn` names it with `executionContextId`, `uniqueContextId`
+ * or an `objectId` (a handle that already lives in a world). Each method is held
+ * to the identifiers it actually accepts, so an `objectId` smuggled onto an
+ * `evaluate` — which Chromium would ignore, dropping the call back to the main
+ * world — does not pass.
+ */
+function screenEvaluate(method: string, params: Record<string, unknown>): Screening {
+  const named =
+    method === 'Runtime.callFunctionOn'
+      ? namesAContext(params.executionContextId) ||
+        namesAContext(params.uniqueContextId) ||
+        namesAContext(params.objectId)
+      : namesAContext(params.contextId) || namesAContext(params.uniqueContextId)
+  if (!named) {
+    return {
+      ok: false,
+      reason:
+        'a page may only be evaluated inside an isolated world named by its context id, never the main ' +
+        'world where the page’s own scripts and window live',
+    }
+  }
+  return { ok: true }
+}
+
+/**
+ * `Browser.setDownloadBehavior`, whose whole danger is the directory.
+ *
+ * The desktop denied this outright because the caller could name where the file
+ * lands — "write files anywhere". Here it is allowed, and the escalation is
+ * closed by pinning both arguments in the screening rather than trusting the
+ * caller: the behaviour must be `allowAndName` (accept and keep the download,
+ * the only mode the ledger understands) and the path must equal the
+ * host-configured downloads directory, which the app supplies and the agent
+ * never does. With no configured directory there is nothing to pin the path to,
+ * so the call is refused rather than defaulted — the same discipline
+ * `platform/paths.ts` takes when nothing installed a path.
+ */
+function screenDownloadBehavior(
+  params: Record<string, unknown>,
+  downloadsDir: string | undefined,
+): Screening {
+  if (typeof downloadsDir !== 'string' || downloadsDir.length === 0) {
+    return {
+      ok: false,
+      reason: 'this host has no configured downloads directory, so a download behaviour cannot be pinned to one',
+    }
+  }
+  if (params.behavior !== 'allowAndName') {
+    return {
+      ok: false,
+      reason: "downloads are only ever accepted with behavior 'allowAndName', so the ledger keeps every file",
+    }
+  }
+  if (params.downloadPath !== downloadsDir) {
+    return {
+      ok: false,
+      reason: 'a download may only be written to this host’s downloads directory, which the app supplies rather than the caller',
+    }
+  }
+  return { ok: true }
+}
+
+/**
+ * `Target.createTarget`, which opens a page at a URL.
+ *
+ * A new target starts at a URL, and a URL is a `file://` reach exactly as a
+ * navigation is — so it is screened by the same allow-list, `isNavigationAllowed`,
+ * which permits http, https and `about:blank` (the ordinary first page) and
+ * nothing else. The target and browser-context lifecycle is otherwise the
+ * host's to run; what a caller could smuggle in is the opening address, and this
+ * is where that is refused.
+ */
+function screenCreateTarget(params: Record<string, unknown>): Screening {
+  if (!isNavigationAllowed(params.url)) {
+    return {
+      ok: false,
+      reason: 'a new page may only be opened at an http or https address, or about:blank',
+    }
+  }
+  return { ok: true }
+}
+
 /* ------------------------------------------------------------ the verdict -- */
 
 export type Screening =
@@ -503,19 +783,29 @@ export type Screening =
  *     a *person* rather than about the call. During `human` the agent is shut
  *     out of reads as well as writes, and a refusal that arrived after the
  *     method check would have to be repeated in every future method table.
- *  2. **The allow-list**, which is the real gate.
+ *  2. **The allow-list**, which is the real gate — {@link ALLOWED_METHODS} on
+ *     the desktop, {@link CDP_ALLOWED_METHODS} on the server, chosen by
+ *     `transport`.
  *  3. **The deny-list**, second so that widening (2) cannot silently unlock (3).
- *  4. **The arguments**, for the methods that carry a destination.
+ *  4. **The arguments**, for the methods that carry a destination or a
+ *     capability — the navigation URL, the fetch pattern, the fulfilled headers,
+ *     and (server only) the evaluation world, the download path, the new
+ *     target's URL and the single-URL cookie read.
  *
- * `state` is passed rather than read, so the module has no ambient state and a
- * test can drive all three values without an app.
+ * `state` and `transport` are passed rather than read, so the module has no
+ * ambient state and a test can drive every value on either transport without an
+ * app of either kind. `transport` defaults to `electron`, so every existing
+ * caller and every existing test keeps the desktop tables unchanged.
  */
 export function screenCommand(input: {
+  transport?: Transport
   state: DriveState
   method: unknown
   params?: unknown
+  downloadsDir?: string
 }): Screening {
   const { state, method } = input
+  const transport: Transport = input.transport ?? 'electron'
 
   if (typeof method !== 'string' || method.length === 0) {
     return { ok: false, reason: 'a debugger command needs a method name' }
@@ -542,15 +832,19 @@ export function screenCommand(input: {
     return { ok: false, reason: 'nothing is being driven, so there is no page to send this to' }
   }
 
-  if (!ALLOWED.has(method)) {
+  const allowed = transport === 'cdp' ? CDP_ALLOWED : ALLOWED
+  const denied = transport === 'cdp' ? CDP_DENIED : DENIED
+
+  if (!allowed.has(method)) {
     return {
       ok: false,
       reason: `${method} is not one of the commands this app will send to a page`,
     }
   }
-  if (DENIED.has(method)) {
-    // Unreachable while the two tables are disjoint, which `browser-cdp.test.ts`
-    // asserts. It is here for the edit that makes them overlap.
+  if (denied.has(method)) {
+    // Unreachable while the chosen pair of tables is disjoint, which
+    // `browser-cdp.test.ts` asserts for both transports. It is here for the edit
+    // that makes them overlap.
     return { ok: false, reason: `${method} is refused for every caller at every time` }
   }
 
@@ -585,6 +879,42 @@ export function screenCommand(input: {
    * the request did not happen — there is no spelling of it that reaches
    * anything outside that page.
    */
+
+  /*
+   * The CDP-only argument checks. Every method below is absent from the electron
+   * allow-list, so on the desktop it is already refused by the allow-list check
+   * above; reaching here therefore means `transport === 'cdp'`, and the checks
+   * screen the capability each one carries in its arguments.
+   */
+  if (method === 'Runtime.evaluate' || method === 'Runtime.callFunctionOn') {
+    return screenEvaluate(method, params)
+  }
+  if (method === 'Browser.setDownloadBehavior') {
+    return screenDownloadBehavior(params, input.downloadsDir)
+  }
+  if (method === 'Target.createTarget') {
+    return screenCreateTarget(params)
+  }
+  if (method === 'Network.getCookies') {
+    /*
+     * The one genuine relaxation over the desktop deny-list, screened inline
+     * with the same URL allow-list the navigation path uses. Exactly one http(s)
+     * URL: a read of "the cookie for this image" so a server scrape fetches the
+     * logged-in copy, never the whole-jar dump that `Network.getAllCookies`
+     * would be. The values it returns are replayed onto one asset request and
+     * never written to a capture file, a tool result or the action log — that
+     * discipline lives in `browser-asset-session-cdp.ts` and is asserted there,
+     * the same way `browser-session.ts` keeps cookie values out of the renderer.
+     */
+    const urls = params.urls
+    if (!Array.isArray(urls) || urls.length !== 1 || !isNavigationAllowed(urls[0])) {
+      return {
+        ok: false,
+        reason: 'cookies may be read for exactly one http or https URL at a time, never the whole jar',
+      }
+    }
+    return { ok: true }
+  }
 
   return { ok: true }
 }
