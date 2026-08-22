@@ -241,26 +241,57 @@ export class WindowDenies {
 }
 
 /**
- * Fold the durable refusals into a freshly-read list, and say so in the log.
+ * Reconcile a freshly-read list with the durable refusals, in both directions.
  *
  * Shared by both stores because both do the identical thing at the identical
- * moment, and because the log line is the only place a downgrade is ever
- * *visible*: a row whose field says on while this file says no can only have
- * got that way one way — an older build rewrote the record and dropped the key.
- * That is a precise detector, and it costs nothing, but it is a report and not
- * the repair. The repair is the returned value.
+ * moment. There are two halves and the second is easy to leave out:
  *
- * Nothing is written here. The corrected value goes into the store's in-memory
- * list, so the *next* write the store makes for any reason puts the field back
- * into the record by itself — self-healing without a write on the read path,
- * which would otherwise mean every launch writing two files before the window
- * has drawn, on a profile that may be read-only.
+ * **A refusal the file has and the record does not** is restored. That can only
+ * have happened one way — an older build rewrote the record and dropped a key
+ * it has never heard of — so it is also a precise detector, and the log line is
+ * the only place a downgrade is ever *visible*. But detection is a report; the
+ * repair is the returned value.
+ *
+ * **A refusal the record has and the file does not** is backfilled, and this is
+ * the half that decides whether the fix reaches anybody who is already running.
+ * Every `drivesWindows: false` written by the shipped 0.10.0 lives *only* in
+ * the record. Without this, installing the build that carries this module would
+ * protect nothing a person had already refused — the sidecar would stay empty
+ * until they went back into Advanced and pressed a switch they had already
+ * pressed, and a downgrade before that would take the answer anyway. So the
+ * first launch after the upgrade copies those refusals across.
+ *
+ * That backfill is the **only** write on a read path in either store, and it
+ * happens once: a profile already in agreement writes nothing, which is every
+ * launch after the first. It cannot fail the launch either — a read-only or
+ * full disk logs and carries on with the answers it read, because a store that
+ * refused to open over a preferences file would be a worse defect than the one
+ * being closed.
+ *
+ * Nothing writes the *record* here. The corrected value goes into the store's
+ * in-memory list, so the next write the store makes for any reason puts the
+ * stripped field back by itself.
  */
 export function applyWindowDenies<T extends { id: string; drivesWindows?: boolean }>(
   rows: T[],
   denies: WindowDenies,
   subject: string,
 ): T[] {
+  // The record's own refusals, made durable. Guarded so an untouched profile —
+  // the overwhelming majority of launches — does not open the file to write it.
+  const missing = rows.filter((row) => row.drivesWindows === false && !denies.has(row.id))
+  if (missing.length > 0) {
+    try {
+      for (const row of missing) denies.set(row.id, true)
+    } catch (error) {
+      console.error(
+        `[window-denies] ${missing.length} ${subject} refusal(s) could not be written to ` +
+          `${denies.file}; they still hold, but an older build could erase them:`,
+        error,
+      )
+    }
+  }
+
   if (denies.size === 0) return rows
   let stripped = 0
   const out = rows.map((row) => {

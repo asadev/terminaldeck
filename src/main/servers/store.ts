@@ -351,11 +351,12 @@ export class ServerStore {
         this.cache = []
         return this.cache
       }
-      // The sidecar is folded in here rather than at every reader, so `list`,
-      // `get`, `drivesWindows` and every `persist` built on this cache all see
-      // one answer. Nothing is written on this path: the corrected value sits
-      // in the cache, so the next write for any reason puts the field back into
-      // the record by itself. See `applyWindowDenies`.
+      // Reconciled here rather than at every reader, so `list`, `get`,
+      // `drivesWindows` and every `persist` built on this cache all see one
+      // answer. It goes both ways — a refusal only the sidecar has is restored
+      // into the cache, and a refusal only the record has is copied out to the
+      // sidecar, which is the one write on this path and happens once per
+      // profile. See `applyWindowDenies` for both halves.
       this.cache = applyWindowDenies(
         readServers(JSON.parse(readFileSync(this.path, 'utf8')) as unknown),
         this.denies,

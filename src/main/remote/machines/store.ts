@@ -568,11 +568,11 @@ export class MachineStore {
       seen.add(machine.id)
       machines.push(machine)
     }
-    // Folded in here rather than at every reader, so `list`, `drivesWindows`
-    // and every `commit` built on this array all see one answer — and so the
-    // next write for any reason puts the stripped field back into the record by
-    // itself, without this read path having to write anything. See
-    // `applyWindowDenies`.
+    // Reconciled here rather than at every reader, so `list`, `drivesWindows`
+    // and every `commit` built on this array all see one answer — and it goes
+    // both ways: a refusal only the sidecar has is restored, and one only the
+    // record has is copied out to the sidecar, which is the single write on
+    // this path and happens once per profile. See `applyWindowDenies`.
     this.machines = applyWindowDenies(machines, this.denies, 'machine')
   }
 

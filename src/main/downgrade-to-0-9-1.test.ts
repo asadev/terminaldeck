@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -342,6 +342,78 @@ describe('0.10.0 → 0.9.1 → 0.10.0, the filmed reproduction', () => {
     expect(healed.machines.find((row) => row.id === ids.neverAskedMachine)?.drivesWindows).toBe(
       true,
     )
+  })
+})
+
+/* ------------------------------- the refusal that was made before this build */
+
+describe('a refusal made by the shipped 0.10.0, before the sidecar existed', () => {
+  /**
+   * The half that decides whether this fix reaches anybody already running.
+   *
+   * Every `drivesWindows: false` on disk today lives only in the record. If the
+   * sidecar only ever filled up from the switch, installing this build would
+   * protect nothing a person had already refused — and a downgrade before they
+   * next opened Advanced would take the answer anyway.
+   */
+  function aProfileFromTheShippedBuild(): { refused: string; neverAsked: string } {
+    const ids = aProfileWithFourRefusals()
+    // Rewind to what the shipped build leaves behind: the records, and no
+    // sidecar at all.
+    rmSync(join(serversDir, SERVER_WINDOW_DENIES_FILE))
+    rmSync(join(remoteDir, MACHINE_WINDOW_DENIES_FILE))
+    return { refused: ids.refusedServers[0], neverAsked: ids.neverAskedServer }
+  }
+
+  it('is copied into the sidecar on the first launch of this one', () => {
+    const ids = aProfileFromTheShippedBuild()
+    expect(new ServerStore(serversDir).drivesWindows(ids.refused)).toBe(false)
+
+    const denies = new WindowDenies(serversDir, SERVER_WINDOW_DENIES_FILE)
+    expect(denies.has(ids.refused)).toBe(true)
+    // And nothing else. A row nobody was asked about is not an answer.
+    expect(denies.has(ids.neverAsked)).toBe(false)
+    expect(denies.list()).toHaveLength(2)
+  })
+
+  it('therefore survives a downgrade that happens after the upgrade', () => {
+    const ids = aProfileFromTheShippedBuild()
+    // The upgrade: one launch, which is all the backfill needs.
+    new ServerStore(serversDir).list()
+    new MachineStore(remoteDir).list()
+
+    oldBuildRuns({ servers: serversDir, remote: remoteDir })
+
+    expect(new ServerStore(serversDir).drivesWindows(ids.refused)).toBe(false)
+    expect(new ServerStore(serversDir).drivesWindows(ids.neverAsked)).toBe(true)
+  })
+
+  it('writes nothing on a launch where the two already agree', () => {
+    aProfileWithFourRefusals()
+    const before = readFileSync(join(serversDir, SERVER_WINDOW_DENIES_FILE), 'utf8')
+    const stamp = statSync(join(serversDir, SERVER_WINDOW_DENIES_FILE)).mtimeMs
+    for (let i = 0; i < 3; i += 1) new ServerStore(serversDir).list()
+    expect(readFileSync(join(serversDir, SERVER_WINDOW_DENIES_FILE), 'utf8')).toBe(before)
+    expect(statSync(join(serversDir, SERVER_WINDOW_DENIES_FILE)).mtimeMs).toBe(stamp)
+  })
+
+  it('opens the store anyway when the backfill cannot be written', () => {
+    /*
+     * A read-only profile, a full disk. The answers that were read still hold
+     * for this run — they are in the record — and the store must not refuse to
+     * open over a preferences file it could not update.
+     */
+    const ids = aProfileFromTheShippedBuild()
+    const failing = vi
+      .spyOn(WindowDenies.prototype, 'set')
+      .mockImplementation(() => {
+        throw new Error('EROFS: read-only file system')
+      })
+    const servers = new ServerStore(serversDir)
+    expect(servers.list()).toHaveLength(3)
+    expect(servers.drivesWindows(ids.refused)).toBe(false)
+    expect(servers.drivesWindows(ids.neverAsked)).toBe(true)
+    failing.mockRestore()
   })
 })
 
