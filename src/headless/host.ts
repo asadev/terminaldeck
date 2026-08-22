@@ -408,6 +408,31 @@ export async function createHeadlessHost(
      */
     onSessionStarted: () => tellDevices?.(),
     /*
+     * The other half of the same push, and the half that was missing: a session
+     * *gone* from this host has to leave every attached device's list too, not
+     * sit there pointing at a pty this process has already dropped. Without it a
+     * session ended on the server — by another device's verb, by the copilot's
+     * `sessions_stop`, by the process being killed — stayed in a phone's sidebar
+     * until it reconnected. `onSessionStarted` above already pushes the appear
+     * side; this closes the disappear side so "delete it on the server and it
+     * vanishes from both apps" is finally true on a headless host.
+     *
+     * `replaced` is filtered here for the same reason and on the same side that
+     * knows it as the desktop (see `index.ts`): a `replaced` removal is the
+     * account switch stopping one process and starting another *in the same
+     * tab*, and `onSessionStarted` fires for the replacement — so pushing on the
+     * removal too would be a flicker to an empty-then-full list, never a change.
+     * The push itself is `remote.server.sessionsChanged()`, per-connection and
+     * per-device — see the `tellDevices` declaration and `tellSessions` in
+     * `remote/server.ts`; there is no machines fan-out here because a headless
+     * host never dials out, so its `links` map — and thus `announceSessions` —
+     * is always empty, which is why `onSessionStarted` omits it too.
+     */
+    onSessionRemoved: (_id, reason) => {
+      if (reason === 'replaced') return
+      tellDevices?.()
+    },
+    /*
      * The two verbs whose absence was the whole defect. `createHostCore`
      * advertises `account` and `logins` exactly when a shell supplies these —
      * see `SessionAccess.account` — so this host used to be a machine whose
