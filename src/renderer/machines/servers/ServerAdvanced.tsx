@@ -269,6 +269,7 @@ export function ServerDrivesWindows({
   // show a state nothing behind it holds, which is the defect this round is
   // about. `MachineRow` makes the same call for the same reason.
   if (onChange === undefined) return null
+  const allowed = server.drivesWindows === true
   return (
     <>
       <h4 className="settings-group-title">Its terminals can open and drive browser windows here</h4>
@@ -283,14 +284,30 @@ export function ServerDrivesWindows({
         carries the default. Connecting a server with your own sign-in is the
         allowing (T30), so the paragraph says why it is already on and the tick
         below is plainly the way to say no.
+
+        And it says *"Off"* once it is off. Both paragraphs used to be written
+        for the default and printed whatever the tick said, so a server somebody
+        had switched off read "On, because you added this server yourself" above
+        an empty box and "Untick it" under one already unticked — the screen
+        arguing with its own control, which is the same defect as a control that
+        does not do what it says, one layer up. Walked and screenshotted on
+        2026-08-22 with a stored server at `drivesWindows: false`.
       */}
+      {allowed ? (
+        <p className="settings-prose">
+          On, because you added this server yourself. An agent in a terminal on this server can open
+          browser windows here and act on the ones <em>you</em> attach — nothing else in the browser,
+          and nothing you did not hand it.
+        </p>
+      ) : (
+        <p className="settings-prose">
+          Off, because you turned it off. Terminals on this server cannot open a browser window here
+          or act on one you attach, and nothing on this machine asks them to.
+        </p>
+      )}
       <p className="settings-prose">
-        On, because you added this server yourself. An agent in a terminal on this server can open
-        browser windows here and act on the ones <em>you</em> attach — nothing else in the browser,
-        and nothing you did not hand it.
-      </p>
-      <p className="settings-prose">
-        Untick it to keep this server’s terminals out of the browser here. It works with Claude Code;
+        {allowed ? 'Untick it' : 'Tick it'} to {allowed ? 'keep' : 'let'} this server’s terminals{' '}
+        {allowed ? 'out of the browser here' : 'into the browser here'}. It works with Claude Code;
         Codex and Gemini have no setting this app can add to a command you type yourself.
       </p>
       <div className="servers-drive">

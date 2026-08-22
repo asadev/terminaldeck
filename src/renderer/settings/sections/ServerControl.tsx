@@ -333,7 +333,26 @@ export function ServerControlView({
         onScope={onScope}
       />
 
-      {failure !== null && <Notice tone="error">{failure}</Notice>}
+      {/*
+        Once, not twice.
+
+        `failure` and `lookOf` are built from the same `room.problem`, so a
+        server that would not answer printed the identical sentence in two
+        error notices a hundred pixels apart — the pane's own, and the login
+        list's inside **Accounts on …**. Walked and screenshotted on
+        2026-08-22: *"There is no sign-in stored for this server yet. Add the
+        password or key and try again."*, in full, twice on one screen.
+
+        The list's copy is the one that stays, because it sits against the thing
+        the failure stopped working. The pane's is drawn only for a failure the
+        list is not about to say itself — a sentence that differs, or a list
+        that is still looking. `ServerAccounts` is untouched: the Coding AI
+        pane's servers scope draws it with no notice above it and still needs
+        its own sentence.
+      */}
+      {failure !== null && !(look?.state === 'failed' && look.problem === failure) && (
+        <Notice tone="error">{failure}</Notice>
+      )}
 
       <Group title={`Accounts on ${chosen.name}`}>
         <ServerLogins name={chosen.name} look={look} />

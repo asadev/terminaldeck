@@ -415,6 +415,35 @@
   color: var(--text-primary);
 }
 
+/*
+  A block that ends a thought, followed by a control in the same group.
+
+  Both `.settings-absent` and `.settings-explain-body` carry `margin-bottom: 0`
+  — right when they are the last thing in a group, wrong the moment something
+  follows them, because every control that can follow starts with a
+  `margin-top: 0` label. Walked and screenshotted on 2026-08-22:
+
+    Servers  "A server never runs a copilot, even with our host installed on
+             it. …" sat flush against **Let the copilot use this server**;
+    Copilot  "Whether it takes you along when it looks through your sessions,
+             or works quietly and answers." sat flush against **Show me what
+             it is looking at**.
+
+  Both read as one run of text with a bold line in it rather than as a
+  paragraph and then a control. Measured 0px in the rendered window, against
+  12px between prose paragraphs and 40px between groups — so the answer is the
+  step in between, and it is written as *the space after these two blocks*
+  rather than as a top margin on every possible control, which would be a rule
+  that has to be remembered for whatever gets added next.
+
+  Direct children only: nested prose inside a control's own body is that
+  control's spacing to answer.
+*/
+.settings-group > .settings-absent:not(:last-child),
+.settings-group > .settings-explain-body:not(:last-child) {
+  margin-bottom: var(--sp-4);
+}
+
 /* ------------------------------------------------------------------ rows -- */
 
 /* A run of rows is a run of rows: no fill, no radius, no rule — a gap.

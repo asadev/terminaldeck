@@ -58,7 +58,7 @@ describe('letting a server’s terminals act on browser windows here', () => {
   })
 
   it('names the feature and the default, and does not overstate the reach', () => {
-    const drawn = html(SERVER, () => {})
+    const drawn = html({ ...SERVER, drivesWindows: true }, () => {})
     // The heading names what is handed out — the audit found the old words
     // never mentioned opening or driving a browser at all.
     expect(drawn).toContain('open and drive browser windows here')
@@ -71,6 +71,32 @@ describe('letting a server’s terminals act on browser windows here', () => {
     // And it names the one agent this can reach, rather than implying all three.
     expect(drawn).toContain('Claude Code')
     expect(drawn).toContain('Codex and Gemini')
+  })
+
+  it('does not go on saying "On" over a box somebody unticked', () => {
+    /*
+     * Both paragraphs used to be written for the default and printed whatever
+     * the tick said. Walked in the packaged app on 2026-08-22 against a stored
+     * server at `drivesWindows: false`: the screen read *"On, because you added
+     * this server yourself"* over an empty box, and told the reader to *"Untick
+     * it"* — a screen arguing with its own control, which is the same defect as
+     * a control that does not do what it says, one layer up.
+     *
+     * Asserted in both directions and against each other's words, because the
+     * failure this catches is not a missing sentence, it is the wrong one being
+     * present.
+     */
+    const off = html({ ...SERVER, drivesWindows: false }, () => {})
+    expect(off).toContain('Off, because you turned it off')
+    expect(off).toContain('Tick it')
+    expect(off).not.toContain('On, because you added this server yourself')
+    expect(off).not.toContain('Untick it')
+
+    const on = html({ ...SERVER, drivesWindows: true }, () => {})
+    expect(on).not.toContain('Off, because you turned it off')
+    // `Untick it` contains `Tick it`, so the on direction is checked by the
+    // sentence that only the on copy has.
+    expect(on).toContain('Untick it')
   })
 
   it('names the server, so two of them in a list are two switches', () => {

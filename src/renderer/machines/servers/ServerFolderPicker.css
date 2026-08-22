@@ -152,6 +152,25 @@
   text-align: left;
 }
 
+/*
+  Exactly one element, forced back to left-to-right — the same wrapper
+  `.artifact-row-dir-text` and `.palette-dir-text` carry, and for the identical
+  reason. A bare text node under `direction: rtl` has its leading `/` reordered
+  to the visual end: `/srv/www` was rendered on screen as `srv/www/`, which
+  reads as a relative path and, on a screen whose whole subject is which folder
+  a session starts in, is simply a different folder. `unicode-bidi: isolate`
+  does not fix it — measured in this app's own renderer, the first character
+  still lands rightmost. Only an inner LTR run does.
+
+  `ProviderPicker.css` records the same trap and answers it by giving up the
+  head-truncation; here the head is genuinely the part worth losing, so the
+  wrapper is what pays for keeping both.
+*/
+.srvpick-path-text {
+  direction: ltr;
+  unicode-bidi: embed;
+}
+
 .srvpick-up {
   flex-shrink: 0;
   padding: var(--sp-05) var(--sp-2);
