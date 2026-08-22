@@ -120,10 +120,15 @@ describe('the layout decisions that cannot be seen from a test', () => {
     // `CAPABILITY.usage`, a session nothing has answered for yet, an account that
     // could not be established. Empty it would still be a 1px rule across the top
     // of the terminal, so it is hidden, so it needs the hatch.
-    const hidden = ['.tabs', '.ask', '.dock', '.sheet', '.sbar']
+    // `.sctl` is the session's control cluster — model, effort, fast mode,
+    // permission — and it is hidden in the same situations `.sbar` is empty: a
+    // desktop that predates `CAPABILITY.controls`, a session nothing has
+    // answered for yet, a plain shell with no agent to control. Same 1px-rule
+    // failure, same hatch.
+    const hidden = ['.tabs', '.ask', '.dock', '.sheet', '.sbar', '.sctl']
     for (const selector of hidden) {
       expect(flexBlocks, `${selector} should still be a flex container`).toContain(selector)
-      expect(styles, `${selector} is hidden by main.ts and needs a [hidden] rule`).toContain(`${selector}[hidden] {`)
+      expect(styles, `${selector} is hidden and needs a [hidden] rule`).toContain(`${selector}[hidden] {`)
     }
 
     // Everything else that is flex is never hidden. If this list has to grow,

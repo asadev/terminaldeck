@@ -153,6 +153,7 @@ import {
 import { ChatComposer, ChatView } from './chat-view'
 import { infoDot } from './info-dot'
 import { SessionBar } from './session-bar'
+import { SessionControls } from './session-controls'
 import { watchPhysicalKeyboard, type KeyBarFit, type MatchMedia } from './physical-keyboard'
 import {
   clearPairing,
@@ -689,6 +690,14 @@ class Deck {
    * `destroyTerminal`. See `session-bar.ts` for why nothing new is on the wire.
    */
   private sessionBar: SessionBar | null = null
+  /**
+   * The session's control cluster — model, effort, fast mode, permission.
+   *
+   * Same lifecycle as the bar above for the same reasons, and the same finding
+   * behind it: the frames (`controls.read` / `controls.apply`) have been on the
+   * wire since 0.5.0 and this client never sent one. See `session-controls.ts`.
+   */
+  private sessionControls: SessionControls | null = null
   /**
    * The same session read as a conversation rather than as a screen.
    *
@@ -1864,6 +1873,11 @@ class Deck {
      */
     if (this.sessionBar?.receive(message)) return
     /*
+     * And the control cluster, which owns two frame types the switch below has
+     * a case for none of, routed the same way and for the same reason.
+     */
+    if (this.sessionControls?.receive(message)) return
+    /*
      * And the conversation, routed by `rid` for the reason the transfer and the
      * bar above are: an answer belongs to the request that asked for it, and a
      * router that matched on `t` alone would hand a reply to whichever surface
@@ -2041,6 +2055,9 @@ class Deck {
         // The context window moves when the agent writes, so the bar is asked
         // when the writing stops rather than on a clock. See `noteOutput`.
         if (message.replay !== true) this.sessionBar?.noteOutput()
+        // And the controls, on the same event: the model line, the effort
+        // confirmation and the permission footer only move when the pty writes.
+        if (message.replay !== true) this.sessionControls?.noteOutput()
         // And the conversation, on the same event and only while it is the pane
         // on screen. A transcript grows when the agent writes, which is exactly
         // what this frame is.
@@ -5279,6 +5296,9 @@ class Deck {
     // authorised by the same per-device reach every keystroke is, and asking for
     // a session this connection has not been given is answered `unknown-session`.
     if (this.attachSent) this.sessionBar?.start()
+    // Gated the same way for the same reason: `controls.read` goes through the
+    // per-device reach every keystroke does.
+    if (this.attachSent) this.sessionControls?.start()
   }
 
   private leaveTerminal(): void {
@@ -5338,6 +5358,20 @@ class Deck {
     this.sessionBar = bar
 
     /*
+     * And the session's controls, under the bar — the phone's copy of the
+     * cluster the desktop wears on every pane. It draws nothing until a
+     * `controls.reading` answers, nothing over a machine that does not
+     * advertise `controls`, and nothing over a plain shell, so an older desktop
+     * or a bare zsh gets a pane that is exactly what it was.
+     */
+    const controls = new SessionControls({
+      send: (message) => this.connection?.send(message) === true,
+      capabilities: () => this.capabilities,
+      sessionId: () => this.attachedId,
+    })
+    this.sessionControls = controls
+
+    /*
      * The same session as a conversation, built beside the terminal rather than
      * instead of it.
      *
@@ -5363,7 +5397,7 @@ class Deck {
     this.chatMode = false
 
     const screen = element('div', 'terminal-screen')
-    screen.append(bar.element, terminal.element, dock)
+    screen.append(bar.element, controls.element, terminal.element, dock)
 
     /*
      * A file dragged onto the terminal, in a browser on a computer.
@@ -5436,11 +5470,15 @@ class Deck {
      * the mode changes.
      */
     const bar = this.sessionBar?.element
+    // The control cluster follows the same rule for the same reason: the model
+    // a session runs is a fact about the session, whichever way it is read.
+    const controls = this.sessionControls?.element
     if (this.chatMode) {
       const composer = this.chatComposer
       composer?.render()
       this.terminalScreen.replaceChildren(
         ...(bar ? [bar] : []),
+        ...(controls ? [controls] : []),
         chat.element,
         ...(composer ? [composer.element] : []),
       )
@@ -5458,6 +5496,7 @@ class Deck {
       const dock = this.keybarDock
       this.terminalScreen.replaceChildren(
         ...(bar ? [bar] : []),
+        ...(controls ? [controls] : []),
         ...(terminal ? [terminal] : []),
         ...(dock ? [dock] : []),
       )
@@ -5658,6 +5697,9 @@ class Deck {
     // is attached to.
     this.sessionBar?.destroy()
     this.sessionBar = null
+    // For the same reason, and in the same breath: it owns timers of its own.
+    this.sessionControls?.destroy()
+    this.sessionControls = null
     this.chatView = null
     this.chatMode = false
     this.chatAsked.clear()

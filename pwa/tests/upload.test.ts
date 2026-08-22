@@ -152,6 +152,16 @@ describe('the files app.terminaldeck.dev is built from', () => {
       // than keeping a second one to go stale. `mentions.ts` has no imports of
       // its own, so what crosses is the two functions and nothing else.
       'src/renderer/chat/attach/mentions.ts',
+      // The control vocabulary — the model rows, the seven efforts, the five
+      // permission modes, and the words each is called by. The phone's control
+      // cluster (`pwa/src/session-controls.ts`) sends `controls.apply` values a
+      // far machine will type into somebody's pty, so the list it offers must
+      // be the list the desktop offers, spelled identically — *"the same
+      // identical options"* is the stated requirement, and a browser copy of
+      // this file is how a phone comes to offer a permission mode the far end
+      // refuses. `catalog.ts` is plain TypeScript whose only import is
+      // `shared/model-catalog.ts`, which crosses with it below.
+      'src/renderer/chat/controls/catalog.ts',
       // The hold that keeps a session's replay off the screen while it is being
       // written. Written for the desktop, imported here rather than copied, for
       // the reason this fixture exists to make somebody state: the policy is a
@@ -162,6 +172,11 @@ describe('the files app.terminaldeck.dev is built from', () => {
       // test here rather than a deploy.
       'src/renderer/components/terminal-backfill.ts',
       'src/shared/brand.ts',
+      // The CLI's own model picker, captured — what `catalog.ts` above builds
+      // the model rows from. In `shared/` because the main process fills it by
+      // reading the real `/model` dialog and every surface offers what it read;
+      // it imports nothing, so what crosses is the tables and the fold.
+      'src/shared/model-catalog.ts',
       'src/shared/pairing-link.ts',
       'src/shared/relay-wire.ts',
       // The playhead for the copilot's scan, and the clearest case this fixture

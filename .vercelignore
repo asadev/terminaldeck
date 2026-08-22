@@ -60,6 +60,27 @@
 /src/renderer/components/*
 !/src/renderer/components/terminal-backfill.ts
 
+# Two more single files from the renderer, each the product's one copy of a
+# thing the phone must not restate. `mentions.ts` is the two-write rule for
+# submitting a line to an agent CLI — a measurement of how the CLI classifies a
+# stdin chunk, owned by the desktop composer. `controls/catalog.ts` is the
+# control vocabulary — the model rows, the seven efforts, the five permission
+# modes, the words each is called by — which the phone's control cluster
+# (`pwa/src/session-controls.ts`) draws from the same file the desktop's
+# cluster reads, so the two surfaces cannot come to offer different options for
+# one session. (`catalog.ts` reaches only `src/shared/model-catalog.ts`, which
+# the `!/src/shared` block above already carries.) The directories are opened
+# level by level because a negation cannot resurrect a file whose parent
+# directory is ignored — the same dance `/src/main/remote` does above.
+!/src/renderer/chat
+/src/renderer/chat/*
+!/src/renderer/chat/attach
+/src/renderer/chat/attach/*
+!/src/renderer/chat/attach/mentions.ts
+!/src/renderer/chat/controls
+/src/renderer/chat/controls/*
+!/src/renderer/chat/controls/catalog.ts
+
 # Built and installed by Vercel from pwa/package-lock.json. Uploading either
 # would ship this Mac's copy — the wrong architecture for the build container in
 # the first case, and in the second a `dist/` that predates the sources beside

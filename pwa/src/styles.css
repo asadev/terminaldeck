@@ -3129,6 +3129,247 @@ a.browse__go {
 }
 
 /* ------------------------------------------------------------------------ */
+/* The session's control cluster — model, effort, fast mode, permission.    */
+/*                                                                          */
+/* The phone's copy of the cluster the desktop wears on every pane, fed by  */
+/* the same `controls.read` / `controls.apply` frames. Values only, never a */
+/* control's name on a chip; the sheets carry the desktop's own option      */
+/* vocabulary. See `session-controls.ts`.                                   */
+/* ------------------------------------------------------------------------ */
+.sctl {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* A flex container ignores `hidden` outright — the escape hatch `.sbar` and
+   every hidden flex block here carry, held to by `tests/layout.test.ts`. The
+   row is hidden whenever there is nothing honest to draw: no reading yet, a
+   machine without `controls`, a plain shell. */
+.sctl[hidden] {
+  display: none;
+}
+
+.sctl__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  min-height: 28px;
+  max-width: 40%;
+  cursor: pointer;
+}
+
+.sctl__chip > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sctl__chip:active {
+  background: var(--bg-active);
+}
+
+.sctl__chip[data-busy='yes'] {
+  opacity: 0.55;
+}
+
+/* Barred by the far end — its own sentence is behind the press, so the chip is
+   drawn back but stays pressable: a menu that opens onto the reason, never a
+   dead one. */
+.sctl__chip[data-blocked='yes'] {
+  opacity: 0.45;
+}
+
+/* Genuinely waiting its turn while another control is mid-change. */
+.sctl__chip:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.sctl__caret {
+  display: inline-flex;
+  color: var(--text-muted);
+  flex: none;
+}
+
+/* Anchored under the row and clamped to the pane, like the account sheet
+   above — a popover with no room check is the defect this bar was reviewed
+   for twice. */
+.sctl__sheet {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 8px;
+  right: auto;
+  z-index: 40;
+  min-width: 220px;
+  max-width: calc(100vw - 24px);
+  max-height: 55vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.sctl__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sctl__row:active {
+  background: var(--bg-active);
+}
+
+.sctl__row[data-chosen='yes'] {
+  background: var(--accent-soft);
+}
+
+/* The tick column keeps the labels aligned whether or not a row carries one. */
+.sctl__tick {
+  width: 14px;
+  flex: none;
+  font-style: normal;
+  color: var(--accent);
+}
+
+.sctl__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.sctl__text > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A tag, not a description — "your account's default", "this session only",
+   "off if you switch model". The desktop's rule, kept: a fact the row cannot
+   state about itself, never prose. */
+.sctl__hint {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* "Earlier models" — the caption that separates what the account is offered
+   today from what the CLI will still parse and may refuse. */
+.sctl__group {
+  margin: 6px 4px 2px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+/* The far end's own sentence for a control that is barred, printed where the
+   rows would be. */
+.sctl__blocked {
+  margin: 4px;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  background: var(--bg-active);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+/* The fast-mode switch at the end of the model sheet. */
+.sctl__switch .sctl__text {
+  flex: 1;
+}
+
+.sctl__track {
+  position: relative;
+  width: 32px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--border);
+  flex: none;
+  transition: background 120ms ease;
+}
+
+.sctl__track[data-on='yes'] {
+  background: var(--accent);
+}
+
+.sctl__knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: var(--bg-secondary);
+  transition: left 120ms ease;
+}
+
+.sctl__track[data-on='yes'] .sctl__knob {
+  left: 16px;
+}
+
+/* What the session said about the last change — the CLI's own words. A
+   confirmation clears itself; a failure stays until dismissed, because an
+   error that tidies itself away is an error nobody read. */
+.sctl__notice {
+  flex-basis: 100%;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 2px 0 4px;
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  background: var(--bg-active);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.sctl__notice[data-bad='yes'] {
+  color: var(--color-critical);
+}
+
+.sctl__notice > span {
+  flex: 1;
+  min-width: 0;
+}
+
+.sctl__close {
+  border: 0;
+  padding: 0 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+/* ------------------------------------------------------------------------ */
 /* The chat view.                                                            */
 /*                                                                           */
 /* "my message should start from the right… the left side will be the agent…  */
