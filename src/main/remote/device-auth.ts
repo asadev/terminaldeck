@@ -180,6 +180,33 @@ const MAX_CREDENTIAL_LENGTH = 512
 const BASE64URL = /^[A-Za-z0-9_-]+$/
 
 /**
+ * The device ids the wire can carry — and therefore the ids a device can be
+ * revoked by.
+ *
+ * The same rule as `DEVICE_ID_RE` in `protocol.ts`, restated here rather than
+ * imported because that file imports nothing and this one owns what its ids look
+ * like; `device-auth.test.ts` runs both a minted id and a stored one through the
+ * real `parseClientMessage`, so the two cannot drift apart without a red test.
+ *
+ * It is enforced on the way *in* from disk, in {@link asStoredDevice}, and that
+ * is the point of having it at all. A stored device whose id this refuses could
+ * never be named in a `devices.revoke` — the frame is refused at the parser — so
+ * keeping the record would put a row on the device screen with a Remove button
+ * beside it that cannot work. Dropped instead: a record whose shape cannot be
+ * read is already dropped rather than repaired in this file, a dropped record is
+ * a device that cannot attach (nothing matches its id), and "cannot attach" is
+ * the safe direction for a record nothing can take away. In practice it refuses
+ * nothing this app has ever minted — device ids have been base64url since the
+ * first version of this file — it refuses a hand-edited or damaged one.
+ */
+const WIRE_DEVICE_ID = /^[A-Za-z0-9_-]{1,64}$/
+
+/** Whether the wire can name this id in a `devices.revoke`. See {@link WIRE_DEVICE_ID}. */
+export function isWireDeviceId(value: unknown): value is string {
+  return typeof value === 'string' && WIRE_DEVICE_ID.test(value)
+}
+
+/**
  * Cap on limiter bookkeeping. An attacker who can forge this many source
  * addresses has already escaped the per-address limiter by definition — that is
  * what the per-device limiter is for — so this cap protects memory rather than
@@ -297,21 +324,36 @@ function sha256(value: string): Buffer {
 }
 
 /**
- * A fresh device id, in the one alphabet this module mints and safe to put on
- * the wire.
+ * A fresh device id, in the one alphabet this module mints, and never one that
+ * begins with a dash.
  *
- * base64url is `[A-Za-z0-9_-]`, but the wire's `ID_RE` in `protocol.ts` — the
- * check a `devices.revoke` frame runs its `device` id through, the one wire verb
- * that carries a device id rather than reading it off the socket — additionally
- * requires the first character to be `[A-Za-z0-9]`. A raw
- * base64url id leads with `-` or `_` about one time in thirty, and such an id
- * parses on this side, stores, signs in, and then cannot be named in a
- * `devices.revoke` at all: the frame is refused as "without a device id" before
- * it ever reaches the gate, so ~3% of paired devices were unrevokable from a
- * phone. Resampled rather than mangled, so the id stays a clean 96 bits of the
- * same alphabet a credential's second half is. The rule is spelled out here
- * rather than imported: this module owns what its ids look like and `protocol.ts`
- * owns what it will accept, and the point is to keep the two agreeing.
+ * ## What this used to be load bearing for
+ *
+ * base64url is `[A-Za-z0-9_-]`, and `protocol.ts`'s shared `ID_RE` — which
+ * `devices.revoke`, the one wire verb carrying a device id rather than reading it
+ * off the socket, used to run that id through — additionally requires the first
+ * character to be `[A-Za-z0-9]`. A raw base64url id leads with `-` or `_` about
+ * one time in thirty, and such an id parsed on this side, stored, signed in, and
+ * then could not be named in a `devices.revoke` at all: the frame was refused as
+ * "without a device id" before it ever reached the gate — and a refused frame
+ * closes the asking socket, so Remove knocked the *asking* phone off and left the
+ * target signed in. ~3% of paired devices were unrevokable from a phone.
+ *
+ * Resampling here fixed that for new devices and could never fix it for the ones
+ * already on disk, so `protocol.ts` grew a `DEVICE_ID_RE` for that one field —
+ * the full base64url alphabet — and {@link isWireDeviceId} states the same rule
+ * from this side. Every stored device is nameable now, whatever it was minted
+ * with.
+ *
+ * ## Why it stays anyway
+ *
+ * A different reason, and a smaller one: these ids are printed by `terminaldeck
+ * devices` and typed back into `terminaldeck revoke <id>`, and a value beginning
+ * with a dash is a value that reads as a flag in most argument parsers. This
+ * host's own parser takes it as a positional and `cli.test.ts` holds it to that,
+ * but not every parser an id is ever pasted into will. Resampled rather than
+ * mangled, so the id stays a clean 96 bits of the same alphabet a credential's
+ * second half is.
  */
 export function newDeviceId(): string {
   for (;;) {
@@ -446,7 +488,11 @@ function asStoredDevice(value: unknown): StoredDevice | null {
   const credential = asStoredCredential(value.credential)
   if (!credential) return null
   const name = cleanName(value.name)
-  if (typeof value.id !== 'string' || value.id === '' || name === null) return null
+  // The id is held to the shape the wire can name — see {@link WIRE_DEVICE_ID}.
+  // A record that fails it is one no `devices.revoke` could ever reach, which
+  // means a device that could not be taken away; it is dropped rather than
+  // trusted-but-unremovable.
+  if (!isWireDeviceId(value.id) || name === null) return null
   if (typeof value.addedAt !== 'number') return null
   const lastSeenAt = typeof value.lastSeenAt === 'number' ? value.lastSeenAt : null
   const publicKey =

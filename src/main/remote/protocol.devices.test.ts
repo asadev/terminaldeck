@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import { createServer, request, type Server } from 'node:http'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AddressInfo, Socket } from 'node:net'
@@ -20,7 +20,7 @@ import {
   type RemoteEndpoint,
   type SessionAccess,
 } from './server'
-import { RemoteAuth, type Device } from './device-auth'
+import { REMOTE_AUTH_FILE, RemoteAuth, type Device } from './device-auth'
 import { DeviceKinds } from './device-kind'
 import { createDeviceRoster } from './device-roster'
 
@@ -54,6 +54,49 @@ describe('the devices frames narrow from JSON', () => {
     // A device id that is not an id is refused rather than passed to the store.
     const bad = parseClientMessage(JSON.stringify({ t: 'devices.revoke', rid: 'dev-4', device: 'no spaces allowed' }))
     expect(bad.ok).toBe(false)
+  })
+
+  it('names a device id that leads with the two characters base64url starts with', () => {
+    // The hole: `randomBytes(12).toString('base64url')` leads with `-` or `_`
+    // 3.1% of the time, and the shared `ID_RE` refuses that leading character.
+    // Those devices paired, were approved and signed in — and then this frame,
+    // the only one that can take a device away, was refused before it reached the
+    // gate. `newDeviceId` stopped minting them; the ones already on disk are what
+    // this accepts.
+    for (const device of ['-Nx7Qa2bLm9zRt4V', '_Nx7Qa2bLm9zRt4V', 'aNx7Qa2bLm9zRt4V', '9-_-9']) {
+      const parsed = parseClientMessage(JSON.stringify({ t: 'devices.revoke', rid: 'dev-5', device }))
+      expect(parsed, device).toEqual({ ok: true, message: { t: 'devices.revoke', rid: 'dev-5', device } })
+    }
+    // Widened to base64url and no further: the alphabet and the 64-character
+    // bound are both still checked, so nothing reaches the store that this app
+    // could not have minted.
+    for (const device of ['', 'a+b', 'a/b', 'a=', 'a.b', 'über', 'x'.repeat(65)]) {
+      expect(parseClientMessage(JSON.stringify({ t: 'devices.revoke', rid: 'dev-6', device })).ok, device).toBe(false)
+    }
+  })
+
+  it('leaves every other id field on the shared rule, leading character included', () => {
+    // The blast radius of the fix above, pinned. `ID_RE` guards session, request,
+    // tunnel, channel, upload and cursor ids across dozens of fields; the device
+    // id got its own rule precisely so relaxing one field could not relax those.
+    // `__proto__` is the sharpest case — it is refused today for the sole reason
+    // that it begins with `_`, and it must stay refused everywhere a value ends
+    // up as a key.
+    const refused = [
+      { t: 'attach', id: '-session' },
+      { t: 'attach', id: '__proto__' },
+      { t: 'input', id: '_session', data: 'x' },
+      { t: 'resize', id: '__proto__', cols: 80, rows: 24 },
+      { t: 'devices.list', rid: '-dev-1' },
+      { t: 'devices.revoke', rid: '__proto__', device: 'aNx7Qa2bLm9zRt4V' },
+    ]
+    for (const frame of refused) {
+      expect(parseClientMessage(JSON.stringify(frame)).ok, JSON.stringify(frame)).toBe(false)
+    }
+    // And the same frames with an ordinary leading character still parse, so the
+    // assertions above are about the leading class and not about the frames.
+    expect(parseClientMessage(JSON.stringify({ t: 'attach', id: 'session' })).ok).toBe(true)
+    expect(parseClientMessage(JSON.stringify({ t: 'devices.list', rid: 'dev-1' })).ok).toBe(true)
   })
 
   it('never echoes the refused device id into the reason', () => {
@@ -272,20 +315,56 @@ interface RosterHarness {
   forget: ReturnType<typeof vi.fn>
   mine: { device: Device; credential: string }
   guest: { device: Device; credential: string }
+  /** Only with `{ stuck: true }`. See {@link serveRoster}. */
+  stuck: { device: Device; credential: string } | null
+}
+
+/**
+ * Rewrite one paired device's id on disk to the shape 3% of real ones have.
+ *
+ * A device minted before `newDeviceId` resampled leads with `-` or `_`, and the
+ * only way to have one in a test is to make one: the record is written by a real
+ * pairing and then its `id` is edited in `remote-auth.json`, which is exactly the
+ * row a 0.9.x pairing left behind. The credential survives the edit because it is
+ * `<id>.<secret>` and only the secret half is hashed — so the returned credential
+ * still signs this device in, under the rewritten id.
+ */
+function stick(dir: string, seeded: { device: Device; credential: string }): { device: Device; credential: string } {
+  const id = `-${seeded.device.id.slice(1)}`
+  const file = join(dir, REMOTE_AUTH_FILE)
+  const state = JSON.parse(readFileSync(file, 'utf8')) as { devices: { id: string }[] }
+  const row = state.devices.find((device) => device.id === seeded.device.id)
+  if (!row) throw new Error('the seeded device is not in the trust file')
+  row.id = id
+  writeFileSync(file, JSON.stringify(state))
+  return {
+    device: { ...seeded.device, id },
+    credential: `${id}.${seeded.credential.slice(seeded.credential.indexOf('.') + 1)}`,
+  }
 }
 
 /**
  * An endpoint serving `devices`, with one device claimed `mine` and one left a
  * guest. The authenticator maps each device's real credential to its id, so the
  * roster the endpoint lists and the device a hello admits are the same device.
+ *
+ * With `{ stuck: true }` a third device is paired and its stored id is rewritten
+ * to lead with `-` — the class of id that could be paired, approved and signed in
+ * and then never revoked. The trust store is re-read from disk afterwards, so the
+ * roster below serves the rewritten row rather than the one this process minted.
  */
-async function serveRoster(): Promise<RosterHarness> {
-  const auth = new RemoteAuth(tempDir('td-wire-auth-'))
+async function serveRoster(options: { stuck?: boolean } = {}): Promise<RosterHarness> {
+  const authDir = tempDir('td-wire-auth-')
+  const minted = new RemoteAuth(authDir)
+  const mine = await paired(minted, 'My phone')
+  const guest = await paired(minted, 'Guest phone')
+  const seeded = options.stuck === true ? await paired(minted, 'Old phone') : null
+  const stuck = seeded === null ? null : stick(authDir, seeded)
+  const auth = new RemoteAuth(authDir)
   const kinds = new DeviceKinds(tempDir('td-wire-kinds-'))
-  const mine = await paired(auth, 'My phone')
-  const guest = await paired(auth, 'Guest phone')
   kinds.claim(mine.device.id, 'mine')
   kinds.claim(guest.device.id, 'guest')
+  if (stuck !== null) kinds.claim(stuck.device.id, 'guest')
 
   const forget = vi.fn()
   let endpoint: RemoteEndpoint | null = null
@@ -309,6 +388,9 @@ async function serveRoster(): Promise<RosterHarness> {
       }
       if (token === guest.credential) {
         return { ok: true, deviceId: guest.device.id, deviceName: guest.device.name, credential: null }
+      }
+      if (stuck !== null && token === stuck.credential) {
+        return { ok: true, deviceId: stuck.device.id, deviceName: stuck.device.name, credential: null }
       }
       return { ok: false, message: 'This device is not allowed in.' }
     },
@@ -337,6 +419,7 @@ async function serveRoster(): Promise<RosterHarness> {
     forget,
     mine,
     guest,
+    stuck,
   }
 }
 
@@ -451,6 +534,60 @@ describe('devices over the wire', () => {
     // The cascade ran and the guest's own socket was dropped.
     expect(h.forget).toHaveBeenCalledWith(h.guest.device.id)
     await expect(guest.closed).resolves.toBeGreaterThan(0)
+  })
+
+  it('revokes a device already on disk with an id that leads with `-`', async () => {
+    const h = await serveRoster({ stuck: true })
+    const stuck = h.stuck
+    if (stuck === null) throw new Error('the harness seeded no stuck device')
+    // It is a real device, not a row: it signs in and holds a socket on this
+    // desktop. That is what made this a security hole rather than a cosmetic
+    // one — the person whose phone this is cannot be cut off.
+    const old = await greet(h.port, stuck.credential, [])
+    const mine = await greet(h.port, h.mine.credential, [CAPABILITY.devices])
+    mine.send({ t: 'devices.list', rid: 'stuck-1' })
+    const rows = await mine.until((m) => m.t === 'devices.rows', 'the roster')
+    if (rows.t !== 'devices.rows') throw new Error('wrong frame')
+    // Listed with a Remove beside it — the roster never checked the id's shape,
+    // which is why the button looked like it worked.
+    expect(rows.devices.find((d) => d.id === stuck.device.id)).toMatchObject({ connected: true })
+
+    mine.send({ t: 'devices.revoke', rid: 'stuck-2', device: stuck.device.id })
+    // Before the fix this never arrived: the frame was refused at the parser and
+    // the *asking* socket was closed with a protocol error, so Remove knocked
+    // this phone off and left the other one signed in.
+    const answer = await mine.until((m) => m.t === 'devices.revoked', 'the answer')
+    if (answer.t !== 'devices.revoked') throw new Error('wrong frame')
+    expect(answer.ok).toBe(true)
+    expect(answer.devices.some((d) => d.id === stuck.device.id)).toBe(false)
+    // The whole cascade ran: stores forgotten, live socket dropped, record out.
+    expect(h.forget).toHaveBeenCalledWith(stuck.device.id)
+    await expect(old.closed).resolves.toBeGreaterThan(0)
+    expect(h.auth.listDevices().find((d) => d.id === stuck.device.id)?.revoked).toBe(true)
+    // And the credential that phone is holding opens nothing from now on. It is
+    // told `revoked` rather than `denied`, which is the store confirming it
+    // matched the secret — proof the record was reached by its rewritten id and
+    // not merely absent.
+    await expect(h.auth.verifyCredential(stuck.credential, '203.0.113.9')).resolves.toMatchObject({
+      ok: false,
+      reason: 'revoked',
+    })
+  })
+
+  it('offers Remove on nothing it cannot remove: every listed row is nameable', async () => {
+    // The invariant behind the fix, stated once against the real roster: if a
+    // device is on this list it has a working Remove, whatever its id looks like.
+    // A roster row that could not be named in the frame is a button that lies.
+    const h = await serveRoster({ stuck: true })
+    const mine = await greet(h.port, h.mine.credential, [CAPABILITY.devices])
+    mine.send({ t: 'devices.list', rid: 'every-1' })
+    const rows = await mine.until((m) => m.t === 'devices.rows', 'the roster')
+    if (rows.t !== 'devices.rows') throw new Error('wrong frame')
+    expect(rows.devices.length).toBe(3)
+    for (const row of rows.devices) {
+      const frame = parseClientMessage(JSON.stringify({ t: 'devices.revoke', rid: 'every-2', device: row.id }))
+      expect(frame.ok, row.id).toBe(true)
+    }
   })
 
   it('treats self-revoke as sign-out: the asker loses its own socket', async () => {

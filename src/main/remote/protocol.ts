@@ -3926,6 +3926,60 @@ function id(value: unknown): string | null {
 }
 
 /**
+ * A device id, which is base64url and is allowed to lead with any character in
+ * that alphabet — including the `-` and `_` that {@link ID_RE} refuses.
+ *
+ * ## The hole this closes
+ *
+ * `device-auth.ts` mints device ids as `randomBytes(12).toString('base64url')`,
+ * and two of the sixty-four possible leading characters are `-` and `_`: 3.1% of
+ * them. Such an id pairs, stores, is approved by a human and signs in — and then
+ * the one frame that can ever take that device away, `devices.revoke`, was
+ * refused right here as "without a device id" before it reached the gate. A
+ * refused frame is not a quiet no-op either: `server.ts` answers a parse failure
+ * with `refuse(..., CLOSE.protocolError)`, so pressing Remove beside one of those
+ * devices closed the *asking* phone's socket and left the target signed in. A
+ * person who lost a phone could not cut it off from another phone at all.
+ *
+ * `newDeviceId` resamples now, so no *new* id lands in that class, and it keeps
+ * resampling after this change for a separate and smaller reason of its own: an
+ * id leading with `-` reads as a flag in most argument parsers it is pasted
+ * into, and these ids are printed to be pasted. But the ids
+ * already on disk keep the leading character they were minted with, and a stored
+ * device that cannot be revoked is a security hole for as long as it is stored.
+ *
+ * ## Why the wire moved and the stored ids did not
+ *
+ * A device id is a foreign key. `folder-grants.ts`, `account-grants.ts`,
+ * `session-grants.ts`, `window-grants.ts` and `device-kind.ts` each key their own
+ * file by it — five separate, non-transactional writes — and an *absent* row in
+ * the first of them does not fail closed: an unlisted device falls back to
+ * "wherever this desktop happens to be offering", which is exactly the wide
+ * behaviour that file was written to replace. So a migration that re-minted a
+ * stuck id and missed one store would *widen* that device's access in the act of
+ * fixing its revoke. And the credential the phone holds is literally
+ * `<id>.<secret>`, so re-minting also un-pairs the phone: 3% of devices would go
+ * dead in the field, with the person holding the phone and the fix at the Mac.
+ *
+ * ## Why this is its own rule and not a relaxation of `ID_RE`
+ *
+ * `ID_RE` guards session, request, tunnel, channel, upload, answer and roster
+ * cursor ids — dozens of fields on both directions of this protocol. Dropping its
+ * leading class to fix the device roster would admit `__proto__` (refused today
+ * for the sole reason that it starts with `_`) and leading-`-` values into every
+ * one of them. This rule is named for the one field that carries a device id, it
+ * keeps `ID_RE`'s 64-character bound, and its alphabet is exactly the one
+ * `device-auth.ts` mints and stores in — `isWireDeviceId` over there states the
+ * same rule from the store's side, and `device-auth.test.ts` holds the two to
+ * each other so they cannot drift apart again.
+ */
+const DEVICE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/
+
+function deviceId(value: unknown): string | null {
+  return typeof value === 'string' && DEVICE_ID_RE.test(value) ? value : null
+}
+
+/**
  * Standard base64, checked before anything decodes it.
  *
  * `Buffer.from(x, 'base64')` never throws: it skips what it does not recognise
@@ -5214,14 +5268,16 @@ export function parseClientMessage(raw: unknown): ParseResult {
     case 'devices.revoke': {
       const requestId = id(parsed.rid)
       if (!requestId) return bad('devices.revoke without a request id')
-      // A device id is minted by `device-auth.ts` to satisfy this same `ID_RE`
-      // (`newDeviceId` resamples the base64url that would lead with `-`/`_`, the
-      // two characters the leading class here rejects) — so a real id always
-      // parses, and anything that does not is refused here rather than passed to
-      // the store, which would treat an unknown string as a no-op and answer
-      // `ok: false` — a truthful answer, but one earned after a lookup this
-      // refusal saves. The value is never echoed into the reason.
-      const device = id(parsed.device)
+      // `deviceId`, not `id`: a device id is base64url and 3% of the ones already
+      // on disk lead with `-` or `_`, which `ID_RE`'s leading class refuses — and
+      // being refused here meant those devices could never be revoked from a
+      // phone at all. See {@link DEVICE_ID_RE} for why the rule is its own and
+      // why the stored ids were not re-minted instead. Anything outside that
+      // alphabet is still refused here rather than passed to the store, which
+      // would treat an unknown string as a no-op and answer `ok: false` — a
+      // truthful answer, but one earned after a lookup this refusal saves. The
+      // value is never echoed into the reason.
+      const device = deviceId(parsed.device)
       if (!device) return bad('devices.revoke without a device id')
       return { ok: true, message: { t: 'devices.revoke', rid: requestId, device } }
     }

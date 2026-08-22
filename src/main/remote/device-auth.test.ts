@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  isWireDeviceId,
   LOCKOUT_MS,
   MAX_FAILED_ATTEMPTS,
   newDeviceId,
@@ -117,6 +118,89 @@ describe('device ids', () => {
       const parsed = parseClientMessage(JSON.stringify({ t: 'devices.revoke', rid: 'r', device }))
       expect(parsed.ok, device).toBe(true)
     }
+  })
+
+  it('agrees with the wire about which ids can be named, both ways', () => {
+    // `isWireDeviceId` here and `DEVICE_ID_RE` over in protocol.ts are the same
+    // rule written twice — that file imports nothing, so the second copy is the
+    // price of the header rule. This is what keeps them from drifting: the store
+    // deciding an id is fine while the wire refuses it is the whole bug, and the
+    // reverse would let a record on to disk that no `devices.revoke` can reach.
+    const ids = [
+      '-Nx7Qa2bLm9zRt4V',
+      '_Nx7Qa2bLm9zRt4V',
+      'aNx7Qa2bLm9zRt4V',
+      '____',
+      'x'.repeat(64),
+      'x'.repeat(65),
+      '',
+      'a b',
+      'a+b',
+      'a/b',
+      'a=',
+      'a.b',
+      'über',
+      '__proto__',
+    ]
+    for (const id of ids) {
+      const named = parseClientMessage(JSON.stringify({ t: 'devices.revoke', rid: 'r', device: id })).ok
+      expect(isWireDeviceId(id), id).toBe(named)
+    }
+    expect(isWireDeviceId(undefined)).toBe(false)
+    expect(isWireDeviceId(12)).toBe(false)
+  })
+
+  it('keeps a stored id that leads with `-` or `_`, so the device stays revokable', async () => {
+    // The population this is about: ~3% of devices paired before `newDeviceId`
+    // resampled have one of these on disk. The record must survive a reload
+    // unchanged — re-minting it would orphan the folder, account, session and
+    // window grants that key on the id, and un-pair the phone whose credential is
+    // `<id>.<secret>` — and it must still be nameable in a revoke.
+    const dir = tempDir()
+    const seeded = await paired(new RemoteAuth(dir), 'Old phone')
+    const stuckId = `_${seeded.device.id.slice(1)}`
+    const file = join(dir, REMOTE_AUTH_FILE)
+    const state = JSON.parse(readFileSync(file, 'utf8')) as { devices: { id: string }[] }
+    state.devices[0].id = stuckId
+    writeFileSync(file, JSON.stringify(state))
+
+    const auth = new RemoteAuth(dir)
+    expect(auth.listDevices().map((device) => device.id)).toEqual([stuckId])
+    // Still the same device: the credential's secret half is what was hashed, so
+    // it signs in under the id on disk.
+    const credential = `${stuckId}.${seeded.credential.slice(seeded.credential.indexOf('.') + 1)}`
+    await expect(auth.verifyCredential(credential, ADDRESS)).resolves.toMatchObject({ ok: true })
+    // And the wire can name it, which is the whole point.
+    const frame = parseClientMessage(JSON.stringify({ t: 'devices.revoke', rid: 'r', device: stuckId }))
+    expect(frame.ok).toBe(true)
+    expect(auth.revokeDevice(stuckId)).toBe(true)
+    await expect(auth.verifyCredential(credential, ADDRESS)).resolves.toMatchObject({ ok: false, reason: 'revoked' })
+  })
+
+  it('drops a stored device whose id no revoke could ever name', async () => {
+    // A hand-edited or damaged record with an id outside the alphabet this module
+    // mints. It cannot attach — `parseCredential` refuses the id half — and it
+    // cannot be revoked, so keeping it would only draw a Remove button that
+    // cannot work. Dropped, and the readable device beside it is untouched.
+    silenceErrors()
+    const dir = tempDir()
+    const seedAuth = new RemoteAuth(dir)
+    const broken = await paired(seedAuth, 'Bad id')
+    const good = await paired(seedAuth, 'Good id')
+    const file = join(dir, REMOTE_AUTH_FILE)
+    const state = JSON.parse(readFileSync(file, 'utf8')) as { devices: { id: string }[] }
+    const row = state.devices.find((device) => device.id === broken.device.id)
+    if (!row) throw new Error('the seeded device is not in the trust file')
+    row.id = 'not a device id'
+    // And the other half of the rule: base64url, but longer than any frame can
+    // carry. It would have loaded, attached and been unrevokable exactly as a
+    // leading `-` was.
+    state.devices.push({ ...row, id: 'x'.repeat(65) })
+    writeFileSync(file, JSON.stringify(state))
+
+    const auth = new RemoteAuth(dir)
+    expect(auth.listDevices().map((device) => device.id)).toEqual([good.device.id])
+    await expect(auth.verifyCredential(`${good.credential}`, ADDRESS)).resolves.toMatchObject({ ok: true })
   })
 })
 
