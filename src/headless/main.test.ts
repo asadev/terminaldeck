@@ -24,10 +24,32 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { BRAND } from '../shared/brand'
+import { currentPlatform, type Platform } from '../main/platform/host'
 import { nodePaths } from '../main/platform/paths'
 import { formatServerAddress, parseServerAddress } from '../shared/server-address'
 import { RECORD_FILE, controlPaths, serveControl, writeDaemonRecord, type ControlServer } from './control'
 import { run } from './main'
+
+/**
+ * The platform this file is RUNNING on, because half of it opens a real channel.
+ *
+ * Everything else in this folder pins a platform as a value and asserts the
+ * string that comes back, which is the right shape for a pure function. The
+ * `address` tests below are not that: `hostAnswering` genuinely binds, and a
+ * socket is not a value. A POSIX path pinned on a Windows runner is not a Unix
+ * socket there — Windows has no such thing — it is a filename, and libuv maps
+ * `listen(path)` to a named pipe, so the runner answered
+ *
+ *     EACCES … \Temp\td-cli-rLLZpM/.local/share/terminaldeck/host.sock
+ *
+ * on all four of them, faithfully doing what this file told it to. The control
+ * channel already has a Windows answer — a named pipe, `\\.\pipe\<brand>-<tag>`,
+ * which `controlPaths` picks from exactly this argument — so the fix is to hand
+ * it the machine rather than a guess. `hook-server.test.ts` had the identical
+ * bug for the identical reason and was fixed the identical way; its header says
+ * so. Nothing in `src/headless/control.ts` needed changing.
+ */
+const PLATFORM: Platform = currentPlatform()
 
 /**
  * A state directory that is not this developer's own — built once for the file.
@@ -38,15 +60,54 @@ import { run } from './main'
  * would read and then delete the record of whatever host is running on the
  * machine running the tests.
  *
+ * The platform handed to `nodePaths` is the SHAPE OF THE DIRECTORY, which is a
+ * different question from {@link PLATFORM} above and gets a different answer on
+ * a Mac. macOS's own `<home>/Library/Application Support/<id>` is 41 characters,
+ * and under a `mkdtemp` home — `/var/folders/…/T/td-cli-XXXXXX`, 61 — appending
+ * `/host.sock` lands at 112, past the 104 `sockaddr_un` holds
+ * (`MAX_SOCKET_PATH`). `bind` would refuse it with `EINVAL`. The POSIX branch's
+ * `<home>/<id>` is 13 and fits with room to spare, so POSIX hosts take the
+ * XDG shape and only the *channel* follows the real platform. Windows has
+ * neither that directory nor that limit — a pipe name is not a path — so there
+ * it is the real one.
+ *
+ * The env is picked the same way: `nodePaths` reads `APPDATA` on Windows and
+ * `XDG_DATA_HOME` everywhere else, and by the XDG rule a `C:\…` value is not
+ * absolute and is therefore ignored. That is precisely how this file used to
+ * produce `C:\…\Temp\td-cli-rLLZpM/.local/share/terminaldeck` — one path with
+ * both separators in it, the fallback branch joined with `posix.join`.
+ *
  * One directory for the whole file, and not by preference: `installPaths`
  * refuses a second, different set in one process, because one process is one
  * shell. So the fixture is the record inside this directory, which each test
  * writes for itself.
  */
 const HOME = mkdtempSync(join(tmpdir(), 'td-cli-'))
-const PATHS = nodePaths({ platform: 'linux', env: { XDG_DATA_HOME: HOME }, home: HOME, appRoot: HOME })
+const PATHS = nodePaths({
+  platform: PLATFORM === 'win32' ? 'win32' : 'linux',
+  env: PLATFORM === 'win32' ? { APPDATA: HOME } : { XDG_DATA_HOME: HOME },
+  home: HOME,
+  appRoot: HOME,
+})
 const STATE_DIR = PATHS.userData()
 mkdirSync(STATE_DIR, { recursive: true })
+
+/**
+ * The channel this machine would really name for this state directory.
+ *
+ * Written through `controlPaths` rather than as `join(STATE_DIR, 'host.sock')`
+ * so that the stale-record cases reach "nothing is listening there" the way
+ * production reaches it — a named pipe nobody has created on Windows, a socket
+ * file that is not on disk on POSIX, both answering `ENOENT`, which is the code
+ * `callControl` turns into `no-listener` and the code those cases are about.
+ *
+ * A hand-spelled `…/host.sock` happens to answer `ENOENT` on Windows too, since
+ * libuv reads it as a pipe name that was never created. That is the accident
+ * that let three of these tests pass on the runner while the four that BOUND one
+ * failed: the same string is harmless to connect to and impossible to listen on.
+ * Asking `controlPaths` removes the accident from both halves.
+ */
+const SOCKET = controlPaths(STATE_DIR, PLATFORM).socket
 
 function noRecord(): void {
   rmSync(join(STATE_DIR, RECORD_FILE), { force: true })
@@ -64,7 +125,7 @@ function staleRecord(): void {
     join(STATE_DIR, RECORD_FILE),
     JSON.stringify({
       pid: process.pid,
-      socket: join(STATE_DIR, 'host.sock'),
+      socket: SOCKET,
       token: 'not-the-token',
       startedAt: 1,
       version: '0.0.0-test',
@@ -151,7 +212,7 @@ describe('a record for a pid that is simply gone', () => {
       join(STATE_DIR, RECORD_FILE),
       JSON.stringify({
         pid: 0x7fffffff,
-        socket: join(STATE_DIR, 'host.sock'),
+        socket: SOCKET,
         token: 't',
         startedAt: 1,
         version: '0.0.0-test',
@@ -195,7 +256,20 @@ const ADDRESS = formatServerAddress({
   hostKey: Buffer.alloc(32, 7).toString('base64url'),
 }) as string
 
-async function hostAnswering(relay: unknown, extra: Record<string, unknown> = {}): Promise<ControlServer> {
+/**
+ * A stand-in, plus the one thing about it worth asserting: how often it was asked.
+ *
+ * The call count is what tells "gave up at once" from "stood there polling", and
+ * it is used instead of a wall clock on purpose. Timing this from outside would
+ * be a measurement of the runner: `vitest.config.ts` documents a **25x** spread
+ * on identical bytes on `windows-latest`, with tests that touch ten files taking
+ * seven seconds. A budget tight enough to catch a ten-second wait would be a
+ * budget that runner fails at random, and a budget loose enough to survive it
+ * would no longer catch the wait.
+ */
+type StandIn = ControlServer & { calls(): number }
+
+async function hostAnswering(relay: unknown, extra: Record<string, unknown> = {}): Promise<StandIn> {
   return hostAnsweringEach(() => relay, extra)
 }
 
@@ -210,15 +284,23 @@ async function hostAnswering(relay: unknown, extra: Record<string, unknown> = {}
 async function hostAnsweringEach(
   relayFor: (call: number) => unknown,
   extra: Record<string, unknown> = {},
-): Promise<ControlServer> {
+): Promise<StandIn> {
   noRecord()
-  const { socket } = controlPaths(STATE_DIR, 'linux')
   const token = 'a-token'
   let calls = 0
   const control = await serveControl({
-    socket,
+    // The machine's own channel and the machine's own platform, because this
+    // line opens a real listener and the two platforms do not have the same
+    // kind of thing to open.
+    //
+    // Every stand-in in this file reuses the one name, exactly as a host
+    // restarting on one machine does. That is safe only because each is awaited
+    // to `close()` in a `finally` — and if one ever is not, Windows says so
+    // rather than hiding it: `FILE_FLAG_FIRST_PIPE_INSTANCE` turns a second bind
+    // on a live pipe name into EADDRINUSE instead of quietly stealing it.
+    socket: SOCKET,
     token,
-    platform: 'linux',
+    platform: PLATFORM,
     handle: async (cmd) => {
       if (cmd !== 'status') throw new Error(`this stand-in only answers status, not ${cmd}`)
       calls += 1
@@ -227,12 +309,12 @@ async function hostAnsweringEach(
   })
   writeDaemonRecord(STATE_DIR, {
     pid: process.pid,
-    socket,
+    socket: SOCKET,
     token,
     startedAt: Date.now(),
     version: '0.0.0-test',
   })
-  return control
+  return { close: () => control.close(), calls: () => calls }
 }
 
 const CONNECTED_RELAY = {
@@ -313,6 +395,9 @@ describe('the address command', () => {
       const code = await run(['address'], PATHS)
       expect(code).toBe(0)
       expect(written.trim()).toBe(ADDRESS)
+      // It asked again rather than believing the first "no relay yet", which is
+      // the whole of the fix and the half a passing address alone cannot prove.
+      expect(control.calls()).toBe(3)
     } finally {
       await control.close()
     }
@@ -327,12 +412,16 @@ describe('the address command', () => {
     const control = await hostAnswering(null, { startedAt: Date.now() - 60 * 60 * 1000 })
     capture()
 
-    const began = Date.now()
     try {
       const code = await run(['address'], PATHS)
       expect(code).toBe(1)
       expect(written).toBe('')
-      expect(Date.now() - began).toBeLessThan(2_000)
+      // Asked once, and that is the assertion — not a stopwatch. See {@link
+      // StandIn}: on `windows-latest` a wall-clock budget measures the runner's
+      // luck rather than this command's behaviour, and the two things it would
+      // have to tell apart are one round trip and one round trip plus
+      // `ADDRESS_WAIT_MS`.
+      expect(control.calls()).toBe(1)
     } finally {
       await control.close()
     }

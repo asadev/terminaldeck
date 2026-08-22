@@ -199,7 +199,7 @@ describe('the bridge', () => {
     expect(bridge.chooseWslDistro).toBeUndefined()
   })
 
-  it('calls through the host rather than copying the function off it', () => {
+  it('calls through the host rather than copying the function off it', async () => {
     // A preload whose methods sit on a prototype throws on `this` the first time
     // a button is pressed, and only in a packaged build.
     const host = {
@@ -209,7 +209,12 @@ describe('the bridge', () => {
       },
       chooseWslDistro: () => Promise.resolve(null),
     }
-    expect(resolveWslBridge(host).wslStatus?.()).resolves.toBe('Ubuntu')
+    // Awaited, and the test is `async` so that it can be. `.resolves` returns a
+    // promise; unawaited it asserts nothing at all — this case would have gone
+    // on passing if `resolveWslBridge` had started copying the function off the
+    // host and losing `this`, which is the one thing it exists to catch. vitest
+    // warns about it today and fails on it in the next major.
+    await expect(resolveWslBridge(host).wslStatus?.()).resolves.toBe('Ubuntu')
   })
 
   it('answers empty for a host that is not there at all', () => {
