@@ -1091,6 +1091,31 @@ export const MAX_CREDENTIAL_USERNAME_LENGTH = 128
 export const MAX_CREDENTIAL_SECRET_LENGTH = 4096
 
 /**
+ * The bounds on an `enroll` frame's login fields.
+ *
+ * A username is a genuine SSH login and neither is long, so it is capped tight
+ * and control characters are refused rather than stripped — a login is not
+ * display text. The secret is capped by **bytes** rather than code units,
+ * because a `key` sign-in carries a private-key PEM: an RSA-4096 key is a few
+ * kilobytes of base64 with real newlines in it, so the cap is generous and the
+ * one thing not refused there is the line break a PEM cannot do without. The
+ * cap's job is to stop a hostile client posting a megabyte into a login check,
+ * not to describe what a key looks like.
+ */
+export const MAX_ENROLL_USERNAME_LENGTH = 64
+export const MAX_ENROLL_SECRET_BYTES = 16384
+
+/**
+ * The longest credential an `enrolled` frame may carry back.
+ *
+ * A minted credential is `<deviceId>.<secret>` — a dozen base64url characters, a
+ * dot, and forty-three more — so this is generous headroom, not a description.
+ * It matches `device-auth.ts`'s own `MAX_CREDENTIAL_LENGTH`, and it exists so a
+ * hostile host cannot answer sign-in with a megabyte for the client to store.
+ */
+export const MAX_ENROLL_CREDENTIAL_LENGTH = 512
+
+/**
  * Longest `host` and `repo` on a credential request.
  *
  * A hostname cannot exceed 253 characters and a GitHub `owner/name` cannot come
@@ -1815,6 +1840,36 @@ export type ClientMessage =
    * except frames it will then have to ignore.
    */
   | { t: 'hello'; protocol: number; token: string; device: DeviceDescriptor; capabilities?: string[] }
+  /**
+   * Sign in with an account this machine already trusts, instead of a pairing code.
+   *
+   * Pre-authentication, like `hello`, and the only other frame a connection may
+   * send before it has one. The host verifies the `username`+`secret` by logging
+   * in to its own sshd on loopback; on success it mints a pre-approved device
+   * bound to this connection's handshake key and answers `enrolled` with a
+   * credential, which the client stores and then presents in an ordinary `hello`
+   * on the same socket. `enroll` never authenticates the socket itself.
+   *
+   * `secret` is a password when `method` is `'password'` and a private-key PEM
+   * when it is `'key'`; the host chooses nothing from it, it only offers it to
+   * sshd. `capabilities` mirrors `hello`'s — a client may name what it can do so
+   * the follow-up `hello` need not renegotiate — and is advisory in exactly the
+   * same way: it grants nothing.
+   *
+   * There is no capability guarding this frame because there is nothing to
+   * advertise before a welcome. A host too old to know it hits `parseClientMessage`'s
+   * default case, refuses `bad-message` and closes — which the client reads as
+   * "this host is too old for sign-in; update it or use a pairing code".
+   */
+  | {
+      t: 'enroll'
+      protocol: number
+      device: DeviceDescriptor
+      username: string
+      secret: string
+      method: 'password' | 'key'
+      capabilities?: string[]
+    }
   | { t: 'list' }
   /**
    * `cols`/`rows` are the phone's viewport, and they travel with the attach so
@@ -2589,6 +2644,22 @@ export type ServerMessage =
        */
       copilot?: CopilotLinkWire
     }
+  /**
+   * The device that was just signed in, with the credential to reconnect as.
+   *
+   * The answer to `enroll`, sent exactly once, pre-authentication, over the
+   * sealed channel only. `credential` is the plaintext bearer secret — shown to
+   * no person, unlike a pairing code — and the client's job is to store it and
+   * immediately send a normal `hello` carrying it on the *same* socket. The host
+   * does not special-case that hello: the credential's own device row is already
+   * approved and already bound to this connection's key, so it authenticates
+   * through the ordinary door.
+   *
+   * A refused sign-in is the existing `error` frame instead — `unauthorized` for
+   * a bad login or a rate-limited address (collapsed to one sentence), or
+   * `unavailable` when this machine cannot offer sign-in at all.
+   */
+  | { t: 'enrolled'; deviceId: string; deviceName: string; credential: string }
   | { t: 'sessions'; sessions: RemoteSession[] }
   | { t: 'attached'; id: string }
   | { t: 'detached'; id: string }
@@ -3376,6 +3447,42 @@ function credentialValue(value: unknown, max: number): string | null {
 }
 
 /**
+ * The SSH username on an `enroll` frame.
+ *
+ * A genuine login rather than display text, so control characters are **refused**
+ * — the same reason `credentialValue` gives — and it is trimmed, because a space
+ * a phone's keyboard added to the end of a field is not part of a username.
+ * Empty after trimming is no username at all.
+ */
+function enrollUsername(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  if (trimmed === '' || trimmed.length > MAX_ENROLL_USERNAME_LENGTH) return null
+  return CONTROL_CHARS.test(trimmed) ? null : trimmed
+}
+
+/**
+ * The secret on an `enroll` frame — a password, or a private-key PEM.
+ *
+ * Bounded by UTF-8 **bytes** rather than code units, because a key is measured
+ * in bytes and can be several kilobytes. Control characters are deliberately
+ * **not** refused here, the one place in this file that allows them: a PEM's
+ * base64 body is wrapped at real newlines, so the rule that guards
+ * `credentialValue` would reject every key sign-in. The value never touches
+ * git's key=value protocol — it goes to sshd as one opaque credential — so the
+ * newline injection that rule exists for is not on this path.
+ */
+function enrollSecret(value: unknown): string | null {
+  if (typeof value !== 'string' || value === '') return null
+  return overBytes(value, MAX_ENROLL_SECRET_BYTES) ? null : value
+}
+
+/** The two sign-in methods, narrowed by comparison rather than by a cast. */
+function enrollMethod(value: unknown): 'password' | 'key' | null {
+  return value === 'password' || value === 'key' ? value : null
+}
+
+/**
  * A denial code, narrowed by comparison rather than by a cast.
  *
  * The comparison returns the entry out of {@link CREDENTIAL_DENIALS}, so the
@@ -3575,6 +3682,42 @@ export function parseClientMessage(raw: unknown): ParseResult {
       if (claimed !== undefined) {
         const cleaned = capabilities(claimed)
         if (cleaned === null) return bad('hello with an unusable capability list')
+        message.capabilities = cleaned
+      }
+      return { ok: true, message }
+    }
+    case 'enroll': {
+      // Pre-auth, like hello, and the version is mirrored rather than judged: an
+      // old host never reaches this case, so the number is carried through for
+      // the server to compare.
+      const protocol = whole(parsed.protocol, 0, 65535)
+      if (protocol === null) return bad('enroll without a protocol version')
+      const device = descriptor(parsed.device)
+      if (device === null) return bad('enroll without a device descriptor')
+      // Read once each, for the reason spelled out on `input.data`: the check and
+      // the value that is kept must be the same read.
+      const username = enrollUsername(parsed.username)
+      if (username === null) return bad('enroll without a usable username')
+      const secret = enrollSecret(parsed.secret)
+      // The reason never says what the secret was — it is a password or a private
+      // key, and this reason is logged.
+      if (secret === null) return bad('enroll without a usable secret')
+      const method = enrollMethod(parsed.method)
+      if (method === null) return bad('enroll without a known method')
+      const message: Extract<ClientMessage, { t: 'enroll' }> = {
+        t: 'enroll',
+        protocol,
+        device,
+        username,
+        secret,
+        method,
+      }
+      // Assigned only when present, exactly as hello does: absent stays absent so
+      // the shape a client sent is the shape a log shows.
+      const claimed = parsed.capabilities
+      if (claimed !== undefined) {
+        const cleaned = capabilities(claimed)
+        if (cleaned === null) return bad('enroll with an unusable capability list')
         message.capabilities = cleaned
       }
       return { ok: true, message }
@@ -5087,6 +5230,23 @@ export function parseServerFrame(parsed: unknown): ServerParse {
       const copilot = copilotLink(parsed.copilot)
       if (copilot !== null) message.copilot = copilot
       return { ok: true, message }
+    }
+    case 'enrolled': {
+      // All three fields are required. A minted device with no id or no
+      // credential is not one the client can reconnect as, so a frame missing
+      // either is refused rather than stored half-formed. The credential is
+      // bounded so a hostile host cannot hand the client a megabyte to keep; the
+      // real ones are `<id>.<secret>`, well under a hundred characters.
+      const deviceId = nonEmpty(parsed.deviceId)
+      const deviceName = nonEmpty(parsed.deviceName)
+      const credential = nonEmpty(parsed.credential)
+      if (deviceId === null || deviceName === null || credential === null) {
+        return { ok: false, reason: 'incomplete enrolled' }
+      }
+      if (credential.length > MAX_ENROLL_CREDENTIAL_LENGTH) {
+        return { ok: false, reason: 'enrolled with an oversized credential' }
+      }
+      return { ok: true, message: { t: 'enrolled', deviceId, deviceName, credential } }
     }
     case 'sessions': {
       const sessions = sessionRows(parsed.sessions)

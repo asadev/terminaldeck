@@ -1254,6 +1254,13 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
         announceSessions()
         return
       }
+      case 'enrolled':
+        // A desktop-as-guest signs in to another machine by pairing, never by
+        // `enroll` — that frame is the phones' road, over a sealed relay channel
+        // this link does not use — so an `enrolled` here is a host answering a
+        // question this end never asked. Dropped rather than acted on, and never
+        // fatal: the exhaustive switch just needs the branch to exist.
+        return
       case 'window.call': {
         /*
          * A browser verb, from a session on that machine, for a window here.

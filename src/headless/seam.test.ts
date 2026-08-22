@@ -167,6 +167,11 @@ describe('the headless build never reaches Electron', () => {
     expect(files).toContain('src/main/remote/server.ts')
     expect(files).toContain('src/main/pty-manager.ts')
     expect(files).toContain('src/shared/sealed.ts')
+    // Sign-in rides the headless host too, so the loopback probe and its mint
+    // are in this graph and are checked for the Electron edge like everything
+    // else — `ssh2` is a plain Node dependency, and neither file may reach past it.
+    expect(files).toContain('src/main/remote/enroll.ts')
+    expect(files).toContain('src/main/remote/ssh-verify.ts')
   })
 
   it('imports nothing from electron at runtime', () => {

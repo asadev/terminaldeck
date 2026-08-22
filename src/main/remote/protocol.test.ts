@@ -64,6 +64,7 @@ const TOKEN = 'a'.repeat(64)
 /** Adding a client frame without a round-trip case fails to compile here. */
 const CLIENT_TYPES: Record<ClientMessage['t'], true> = {
   hello: true,
+  enroll: true,
   list: true,
   attach: true,
   detach: true,
@@ -120,6 +121,7 @@ const CLIENT_TYPES: Record<ClientMessage['t'], true> = {
 /** Same guard for the other direction. */
 const SERVER_TYPES: Record<ServerMessage['t'], true> = {
   welcome: true,
+  enrolled: true,
   sessions: true,
   attached: true,
   detached: true,
@@ -169,6 +171,19 @@ const SERVER_TYPES: Record<ServerMessage['t'], true> = {
 
 const VALID_CLIENT: ClientMessage[] = [
   { t: 'hello', protocol: PROTOCOL_VERSION, token: TOKEN, device: DEVICE },
+  // Sign-in, both ways round: a password and a key, one claiming a capability so
+  // the follow-up hello need not renegotiate. Usernames are already trimmed so
+  // the parser leaves them unchanged and the round-trip holds.
+  { t: 'enroll', protocol: PROTOCOL_VERSION, device: DEVICE, username: 'asad', secret: 'hunter2', method: 'password' },
+  {
+    t: 'enroll',
+    protocol: PROTOCOL_VERSION,
+    device: DEVICE,
+    username: 'asad',
+    secret: '-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaA==\n-----END OPENSSH PRIVATE KEY-----',
+    method: 'key',
+    capabilities: ['controls'],
+  },
   { t: 'list' },
   { t: 'attach', id: SESSION_ID },
   { t: 'attach', id: SESSION_ID, cols: 80, rows: 24 },
@@ -343,6 +358,7 @@ const VALID_SERVER: ServerMessage[] = [
     sessions: [SESSION],
     capabilities: CAPABILITIES,
   },
+  { t: 'enrolled', deviceId: 'dev-1', deviceName: 'iPhone', credential: 'dev-1.c2VjcmV0' },
   { t: 'sessions', sessions: [] },
   { t: 'ports', ports: [{ port: 3000, process: 'node', guessed: false }] },
   { t: 'tunnel.opened', id: 'tun-1', port: 3000 },
