@@ -126,6 +126,27 @@ const awaits = async <T extends ServerMessage['t']>(kind: T): Promise<void> => {
   }
 }
 
+/**
+ * Wait until the upload directory holds nothing, or give up loudly-enough that
+ * the assertion after it still reads.
+ *
+ * Every failure path deletes its `.part` from a `discard()` the desk fires and
+ * does **not** await — `closeAll` and `fail` both return before the stream's
+ * `close` and the `unlink` after it have landed. A fixed `settle` covered that
+ * gap on this laptop and not on a loaded runner, where the `.part` was still on
+ * disk when a synchronous `readdirSync` ran (`['big.mov.part']` instead of
+ * `[]`). So the tests that assert an *absence* wait for the directory to empty —
+ * the real post-condition — rather than for a fixed number of turns, and only
+ * then assert, so a `.part` that never goes away still fails the run.
+ */
+const emptied = async (ms = 2000): Promise<void> => {
+  const deadline = Date.now() + ms
+  while (readdirSync(dir).length > 0) {
+    if (Date.now() > deadline) return
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+}
+
 describe('a file that arrives', () => {
   it('lands at the path the phone was promised, with the bytes it sent', async () => {
     const bytes = randomBytes(4096)
@@ -197,16 +218,27 @@ describe('a file that does not arrive', () => {
 
     await awaits('upload.failed')
     expect(last('upload.failed')?.message).toMatch(/cancel/i)
+    await emptied()
     expect(readdirSync(dir), 'not even a .part file').toEqual([])
   })
 
   it('leaves nothing behind when the socket drops mid-upload', async () => {
     desk.handle({ t: 'upload.begin', id: 'up-1', name: 'big.mov', size: 1_000_000 })
-    await settle()
+    await waitFor('ready', () => of('upload.ready').some((f) => f.id === 'up-1') || ended('up-1'))
     desk.handle({ t: 'upload.data', id: 'up-1', data: randomBytes(512).toString('base64') })
-    await settle()
+    // Wait for the bytes to be acknowledged — the ack fires from the write
+    // callback, so a `.part` with bytes in it is now genuinely on disk. Asserted,
+    // so the emptying below is proving a real file was removed rather than a race
+    // that never wrote one.
+    await waitFor('an ack', () => ackedBytes('up-1') > 0 || ended('up-1'))
+    expect(readdirSync(dir)).toEqual(['big.mov.part'])
+
     desk.closeAll()
-    await settle()
+    // `closeAll` fires `discard()` and returns without awaiting it: the stream is
+    // ended and the `.part` unlinked on its `close`, off the connection's
+    // teardown. So the wait is for the real post-condition — the file gone — not
+    // a fixed settle, which is what left `['big.mov.part']` on a loaded runner.
+    await emptied()
     // The failure the header is about: a half-written video wearing a real name,
     // found weeks later by whatever cannot open it.
     expect(readdirSync(dir)).toEqual([])
@@ -224,6 +256,7 @@ describe('a file that does not arrive', () => {
     await awaits('upload.failed')
     expect(last('upload.failed')?.message).toMatch(/corrupt/i)
     expect(of('upload.done')).toHaveLength(0)
+    await emptied()
     expect(readdirSync(dir)).toEqual([])
   })
 
@@ -235,6 +268,7 @@ describe('a file that does not arrive', () => {
 
     await awaits('upload.failed')
     expect(last('upload.failed')?.message).toMatch(/more bytes/i)
+    await emptied()
     expect(readdirSync(dir)).toEqual([])
   })
 
@@ -248,6 +282,7 @@ describe('a file that does not arrive', () => {
 
     await awaits('upload.failed')
     expect(last('upload.failed')?.message).toContain('40 of 100')
+    await emptied()
     expect(readdirSync(dir)).toEqual([])
   })
 
@@ -276,6 +311,7 @@ describe('a file that does not arrive', () => {
 
     expect(last('upload.failed')?.message).toMatch(/cancel/i)
     expect(of('upload.ready')).toHaveLength(0)
+    await emptied()
     expect(readdirSync(dir)).toEqual([])
   })
 
