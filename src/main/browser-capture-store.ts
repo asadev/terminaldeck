@@ -1,10 +1,12 @@
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs'
-import { posix } from 'node:path'
+import { join, posix } from 'node:path'
 import { writeFileAtomic } from './atomic-write'
 
-// Capture paths are server paths and manifest keys — a run recorded on a Linux
-// box, read back by key elsewhere — so they are joined with `/` on every host.
-const { join } = posix
+// Two separator regimes live here. Absolute filesystem paths — the run folder,
+// its manifest, the body files, the summary — are real files on the host that
+// runs the capture (a Windows desktop or a Linux server), so they use the host
+// `join`. The one exception is the relative `bodyPath` stored inside the manifest:
+// it is a portable key read back elsewhere, so it stays posix (`/`).
 
 /**
  * Where a page's background traffic is written down, and the rule that nothing
@@ -420,7 +422,7 @@ export class CaptureStore {
           const write =
             this.deps.write ?? ((file: string, data: Buffer | string) => void writeFileSync(file, data))
           write(join(this.bodiesDir, name), body)
-          bodyPath = join('bodies', name)
+          bodyPath = posix.join('bodies', name)
           bytes = body.length
         } catch (error) {
           state = 'lost'

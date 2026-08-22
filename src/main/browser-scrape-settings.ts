@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
-import { dirname, join, posix } from 'node:path'
+import { dirname, join } from 'node:path'
 import { writeFileAtomic } from './atomic-write'
 import {
   DEFAULT_MAX_BODY_BYTES,
@@ -268,9 +268,10 @@ export function mergeScrapeSettings(current: ScrapeSettings, patch: unknown): Sc
 
 /** This profile's capture folder: the parent of every run `captureDir` makes. */
 export function captureFolderFor(userData: string, profileId: string): string {
-  // A server capture folder, keyed the same way `captureDir` keys it: `/` on
-  // every host, so a run filed on a Linux box is named the same from Windows.
-  return posix.join(captureRoot(userData), safeSegment(profileId === '' ? 'isolated' : profileId))
+  // The parent of every run `captureDir` writes, keyed exactly as `captureDir`
+  // keys it: a real folder on the host that captures, joined with the host
+  // separator so the two can never disagree on Windows.
+  return join(captureRoot(userData), safeSegment(profileId === '' ? 'isolated' : profileId))
 }
 
 /** The stored rules, or `null` when this profile has set none. */

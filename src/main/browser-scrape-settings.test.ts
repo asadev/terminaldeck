@@ -211,10 +211,10 @@ describe('reading a file somebody else wrote', () => {
 
 describe('the capture folder', () => {
   it('is the parent of every run this profile writes, and cannot be escaped', () => {
-    expect(captureFolderFor('/data', 'work')).toBe('/data/browser-captures/work')
-    expect(captureFolderFor('/data', '../../etc')).toBe('/data/browser-captures/etc')
+    expect(captureFolderFor('/data', 'work')).toBe(join('/data', 'browser-captures', 'work'))
+    expect(captureFolderFor('/data', '../../etc')).toBe(join('/data', 'browser-captures', 'etc'))
     // A tab with no profile files under one name rather than at the root.
-    expect(captureFolderFor('/data', '')).toBe('/data/browser-captures/isolated')
+    expect(captureFolderFor('/data', '')).toBe(join('/data', 'browser-captures', 'isolated'))
   })
 })
 

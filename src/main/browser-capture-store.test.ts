@@ -1,3 +1,4 @@
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   bodyFileName,
@@ -45,8 +46,8 @@ function harness(over: Partial<CaptureBounds> = {}) {
 
 describe('where a run is filed', () => {
   it('goes under the app’s own data directory, one folder per profile', () => {
-    expect(captureRoot('/u')).toBe('/u/browser-captures')
-    expect(captureDir('/u', 'abc', 'run-7')).toBe('/u/browser-captures/abc/run-7')
+    expect(captureRoot('/u')).toBe(join('/u', 'browser-captures'))
+    expect(captureDir('/u', 'abc', 'run-7')).toBe(join('/u', 'browser-captures', 'abc', 'run-7'))
   })
 
   it('cannot be talked out of the folder it was given', () => {
@@ -230,7 +231,9 @@ describe('the summary a caller reads to decide whether the run is usable', () =>
       stoppedUrl: 'https://x.example/list?p=4',
       title: 'Listings — page 4',
     })
-    expect(String(files.get('/data/captures/p1/run-1/capture-summary.json'))).toContain('list?p=4')
+    expect(String(files.get(join('/data/captures/p1/run-1', 'capture-summary.json')))).toContain(
+      'list?p=4',
+    )
   })
 
   it('is not incomplete when nothing was dropped', () => {
@@ -251,7 +254,7 @@ describe('the summary a caller reads to decide whether the run is usable', () =>
     expect(summary.entries).toBe(1)
     expect(summary.empty).toBe(false)
     expect(summary.emptyReason).toBe('')
-    expect(files.has('/data/captures/p1/run-1/capture-summary.json')).toBe(true)
+    expect(files.has(join('/data/captures/p1/run-1', 'capture-summary.json'))).toBe(true)
   })
 
   it('says in words that a run which recorded nothing is not a small success', () => {
@@ -265,7 +268,7 @@ describe('the summary a caller reads to decide whether the run is usable', () =>
     const summary = store.close()
     expect(summary.empty).toBe(true)
     expect(summary.emptyReason).toContain('recorded nothing')
-    expect(String(files.get('/data/captures/p1/run-1/capture-summary.json'))).toContain(
+    expect(String(files.get(join('/data/captures/p1/run-1', 'capture-summary.json')))).toContain(
       'recorded nothing',
     )
   })
