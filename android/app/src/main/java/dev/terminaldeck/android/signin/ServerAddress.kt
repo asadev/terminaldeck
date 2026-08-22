@@ -41,8 +41,13 @@ import dev.terminaldeck.android.pairing.PairingCodes
  * A server prints an address; a person copies it out of a terminal, an email or a message. What
  * arrives has been through line wrapping, quote marks, a leading `$`, smart-quote substitution and
  * whatever else sits between the two. So this reads every shape those three facts plausibly arrive
- * in — a labelled block, a single line, a URL, the JSON a browser client stores — and then applies
- * **one** validator to whatever it found.
+ * in — the `srv1.` token a server prints, a labelled block, a single line, a URL, the JSON a browser
+ * client stores — and then applies **one** validator to whatever it found.
+ *
+ * The first of those is the format and the rest are tolerances around it. That ordering is worth
+ * stating because it was once the other way round in this file: every tolerance was implemented and
+ * the format itself was not, so the screen refused the only string a server ever prints. See
+ * [Companion.announced].
  *
  * What it will not do is guess. A missing key is not filled in from anywhere, a host id with one
  * wrong character is refused rather than corrected (the alphabet has no confusable glyphs in it, so
@@ -84,17 +89,30 @@ data class ServerAddress(
         const val MAX_INPUT_CHARS = 8 * 1024
 
         /**
-         * The canonical single line, and what a server should print.
+         * Which spelling of a server address this build reads.
          *
-         * `td1` names the shape so that a reader who has never seen one can tell it is a Terminal
-         * Deck address and not a URL somebody mangled, and so a future shape can be told from this
-         * one rather than silently misread as it. The key is base64url with no padding, because the
-         * line is copied out of terminals and `+`, `/` and `=` are the three characters most likely
-         * to be broken by whatever it is copied through.
+         * `SERVER_ADDRESS_VERSION` in `src/shared/server-address.ts`, restated because Kotlin
+         * cannot import a TypeScript constant. It is not left to drift:
+         * `ServerAddressFixture.kt` beside the tests is generated from the real encoder, and
+         * `src/shared/server-address-fixture.test.ts` fails on every `vitest run` the moment that
+         * generated string stops matching what a host prints — so a format bump reaches this file
+         * as a red test rather than as a phone that refuses every address.
+         */
+        const val VERSION = 1
+
+        /**
+         * A readable line this client can write, which is **not** the format a server prints.
          *
-         * Written by this client only in tests and in the "copy this address" affordances; the
-         * source of a real one is the server. It is here because a format with exactly one writer
-         * and several readers drifts, and the writer is the shortest way to pin it.
+         * That distinction cost the feature once and is worth stating plainly. A server prints
+         * `srv1.` followed by base64url of the endpoint object — see `formatServerAddress` in
+         * `src/shared/server-address.ts` — and for a while this parser did not know that string
+         * existed, because it was written in parallel with the encoder and nothing fed one into the
+         * other. `td1` is a spelling for the *loose* shape below: three space-separated facts a
+         * person can read at a glance and this client can put on a clipboard.
+         *
+         * The key is base64url with no padding, because the line is copied out of terminals and
+         * `+`, `/` and `=` are the three characters most likely to be broken by whatever it is
+         * copied through.
          */
         fun format(address: ServerAddress): String =
             "td1 ${address.relayUrl} ${address.hostId} ${encodeKey(address.hostKey)}"
@@ -122,13 +140,94 @@ data class ServerAddress(
             val text = raw.take(MAX_INPUT_CHARS).trim().trim('"', '\'', '`', '<', '>')
             if (text.isEmpty()) return Result.Bad(EMPTY)
 
+            // The token a server actually prints, first: it is the only shape that says out loud
+            // what it is, and it is the one this parser could not read until the seam was tested.
+            val tokens = announced(text)
+            for (token in tokens) {
+                if (token.version != VERSION) continue
+                val json = decodeBase64Url(token.body)?.toString(Charsets.UTF_8)?.trim() ?: continue
+                // Both ends, and then all three facts. [fromJson] reads fields with a regex rather
+                // than a parser — deliberately, because a paste carries more than it needs — so it
+                // answers a `Found` for a *fragment* of the object too, and a fragment is exactly
+                // what the first line of a wrapped token decodes to: `srv1.` and seventy-five
+                // characters of body is 56 bytes of JSON that begins `{"kind":"relay","url":"wss…`
+                // and stops mid-field. Committing to that candidate returns "there is no host id in
+                // that" about a paste whose next candidate is the whole, valid address.
+                if (!json.startsWith("{") || !json.endsWith("}")) continue
+                val decoded = fromJson(json) ?: continue
+                if (decoded.relayUrl == null || decoded.hostId == null || decoded.hostKey == null) continue
+                // Straight to `validate` once a token has decoded to a complete object: a real
+                // address with one bad field in it deserves that field's sentence rather than
+                // "that does not look like a server address".
+                return validate(decoded)
+            }
+
             val found = fromJson(text)
                 ?: fromBase64Json(text)
                 ?: fromUrl(text)
                 ?: fromLooseText(text)
-                ?: return Result.Bad(NOTHING_IN_IT)
 
-            return validate(found)
+            if (found != null) return validate(found)
+
+            // Last, and only once nothing in the paste worked: a token announcing a format this
+            // build does not read is the *reason* nothing worked, and it is a different sentence
+            // from "that is not an address" — the fix is a software update rather than another trip
+            // to the clipboard. A paste that also held something readable was never a version
+            // problem, which is why this is here rather than at the top.
+            val foreign = tokens.firstOrNull { it.version != VERSION }
+            return if (foreign == null) Result.Bad(NOTHING_IN_IT) else Result.Bad(wrongVersion(foreign.version))
+        }
+
+        /* ------------------------------------------------------- the versioned token -- */
+
+        /** A token that named a format, and the format it named. */
+        private data class Announced(val version: Int, val body: String)
+
+        /**
+         * `srv1.<base64url>`, wherever in a paste it sits.
+         *
+         * ## The bug this exists to have not shipped
+         *
+         * `formatServerAddress` writes a version prefix in front of the base64 and nothing here
+         * knew about it. `fromBase64Json` strips `td1:` and `terminaldeck:` — two labels this
+         * product has never printed — and the real separator is a `.`, which `Base64.getDecoder()`
+         * throws on. Every shape then failed in turn and the screen said "that does not look like a
+         * server address" about the only string a server emits. Green suite, dead feature.
+         *
+         * ## Why it is looked for rather than required at the front
+         *
+         * Because of what a server prints around it: `renderAddress` in `src/headless/cli.ts` puts
+         * a `Server address` heading above the token and two sentences below it, and a finger
+         * selecting that on a phone takes the heading and at least one sentence. That is the paste
+         * [fromLooseText] exists for, and the token has to be findable in it.
+         *
+         * So each whitespace-separated chunk is tested on its own, and the whole paste with its
+         * whitespace removed is tested last — the other thing a clipboard does to one long token,
+         * a terminal wrapping it at eighty columns. Every candidate is kept rather than the first,
+         * because a wrapped token puts `srv1.` and seventy-five characters of body on a line of
+         * their own: that chunk is a token by every rule here and decodes to nothing, and stopping
+         * at it would refuse the joined candidate that follows.
+         *
+         * The body is held to base64url and to a length no accident reaches. "Your app is too old",
+         * told to somebody who pasted the wrong thing, is worse than no sentence at all.
+         */
+        private val TOKEN =
+            Regex("""^[<"'`(\[]*srv([0-9]{1,4})\.([A-Za-z0-9_-]{16,})[)\]>"'`,;.]*${'$'}""", RegexOption.IGNORE_CASE)
+
+        private fun announced(text: String): List<Announced> {
+            val chunks = text.split(' ', '\t', '\n', '\r') + text.filterNot { it.isWhitespace() }
+            return chunks.mapNotNull { chunk ->
+                val match = TOKEN.find(chunk) ?: return@mapNotNull null
+                val version = match.groupValues[1].toIntOrNull() ?: return@mapNotNull null
+                Announced(version, match.groupValues[2])
+            }
+        }
+
+        /** base64url or standard base64, folded and padded, or null. The same fold as [decodeKey]. */
+        private fun decodeBase64Url(text: String): ByteArray? = try {
+            java.util.Base64.getDecoder().decode(text.replace('-', '+').replace('_', '/').padded())
+        } catch (e: IllegalArgumentException) {
+            null
         }
 
         /** The three fields as they were found, before any of them is believed. */
@@ -317,6 +416,22 @@ data class ServerAddress(
 
         private const val NO_HOST_ID =
             "There is no host id in that — 26 characters, no 0, O, 1 or I. $MADE_OF"
+
+        /**
+         * The refusal for an address this build is simply too old (or too new) to read.
+         *
+         * Both directions are written because the sentence has to name the half that is behind.
+         * Only one of them can happen today — version 1 is the first there has been — and writing
+         * the pair costs a branch and means the wrong one can never be printed the day there is a
+         * second.
+         */
+        private fun wrongVersion(announced: Int): String = if (announced > VERSION) {
+            "That address is version $announced and this app reads version $VERSION, so this app is " +
+                "older than that server. Update the app on this phone, then paste the address again."
+        } else {
+            "That address is version $announced and this app reads version $VERSION, so that server " +
+                "is older than this app. Update the server, then copy its address again."
+        }
 
         private const val NO_KEY =
             "There is no server key in that, or it is not 32 bytes. Copy the whole address: without " +

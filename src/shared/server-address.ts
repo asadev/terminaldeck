@@ -74,6 +74,26 @@
 import { isHostId, isRelayUrl } from './pairing-link'
 
 /**
+ * Which spelling of these three facts this build writes and reads.
+ *
+ * A number rather than a character inside {@link SERVER_ADDRESS_PREFIX},
+ * because every client has to answer two different questions about a pasted
+ * token — *is this the shape I read* and *is this a version I know* — and the
+ * second is only answerable if the version is something that can be compared.
+ * A client that can only test `startsWith('srv1.')` has exactly one answer for
+ * a `srv2.` address and for a line of prose, and they are not the same
+ * situation: one is a person who needs to update their app and the other is a
+ * person who copied the wrong thing.
+ *
+ * `pwa/src/server-address.ts` imports this and derives its whole version rule
+ * from it, so the browser client cannot drift from the encoder at all. Swift and
+ * Kotlin cannot import a TypeScript constant, so they restate the number and are
+ * pinned to it by `server-address-fixture.test.ts`, which fails the moment this
+ * encoder's real output stops matching the fixture those two suites read.
+ */
+export const SERVER_ADDRESS_VERSION = 1
+
+/**
  * How the token announces itself, and why it is not the product's name.
  *
  * A version and a separator. The version is here so a future format is
@@ -82,11 +102,15 @@ import { isHostId, isRelayUrl } from './pairing-link'
  * characters **not** in the base64url alphabet, so splitting on the first one is
  * unambiguous — `-` and `_` are both body characters and would not be.
  *
+ * Built from {@link SERVER_ADDRESS_VERSION} rather than spelled beside it, so a
+ * bump cannot leave a client accepting one version while its refusal names
+ * another.
+ *
  * Not `terminaldeck…`: the product's name lives in `shared/brand.ts` and
  * nowhere else, and a wire format that embeds it is a rename that breaks every
  * address ever printed.
  */
-export const SERVER_ADDRESS_PREFIX = 'srv1.'
+export const SERVER_ADDRESS_PREFIX = `srv${SERVER_ADDRESS_VERSION}.`
 
 /**
  * The sentence that travels with the address, everywhere it is shown.

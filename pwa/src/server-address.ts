@@ -41,11 +41,18 @@
  * of base64 — or because somebody's copy took the surrounding quotes with it —
  * is a dead form with a correct-looking validator behind it. So this reads:
  *
+ *   - **the token a machine actually prints** — `srv1.` and then base64url of
+ *     that object — found wherever it sits in the block printed around it;
  *   - the object as JSON, printed plainly;
  *   - the object as base64 or base64url, with or without a `scheme:` in front
  *     of it, and with any whitespace a line wrap introduced;
  *   - a query string, `…?r=…&h=…&k=…` or the long spellings, which is the shape
  *     a link has if one is ever printed as one.
+ *
+ * The first of those is the one that matters and the one that was missing: it
+ * is what `formatServerAddress` writes and what `terminaldeck address` prints,
+ * and until it was read here every paste of a real address was refused. The
+ * rest are tolerances around it.
  *
  * Field names are folded the same way: `url`/`relayUrl`/`relay`/`r`,
  * `hostId`/`host`/`h`, `hostKey`/`publicKey`/`key`/`k`. The last of those
@@ -65,6 +72,11 @@
  * password manager.
  */
 
+import {
+  SERVER_ADDRESS_PREFIX,
+  SERVER_ADDRESS_VERSION,
+  parseServerAddress,
+} from '../../src/shared/server-address'
 import { asEndpoint, type RelayEndpoint } from './endpoint'
 
 /**
@@ -81,13 +93,21 @@ export const MAX_ADDRESS_LENGTH = 4 * 1024
 /**
  * Why an address could not be read.
  *
- * Two, not one, because the sentences differ and the reader's next action does
- * too: `empty` is a field nobody has filled in and wants no error styling at
- * all, while `unreadable` is something that was pasted and is not an address.
+ * Three, not one, because the sentences differ and so does the reader's next
+ * action. `empty` is a field nobody has filled in and wants no error styling at
+ * all. `unreadable` is something that was pasted and is not an address, and the
+ * fix is to copy the block again. `version` is the one that is *definitely* an
+ * address and still cannot be used — the fix for that is a software update, and
+ * saying `unreadable` about it would send somebody back to their clipboard
+ * forever over a perfectly good paste.
  */
-export type AddressFault = 'empty' | 'unreadable'
+export type AddressFault = 'empty' | 'unreadable' | 'version'
 
-export type ReadAddress = { ok: true; endpoint: RelayEndpoint } | { ok: false; fault: AddressFault }
+export type ReadAddress =
+  | { ok: true; endpoint: RelayEndpoint }
+  | { ok: false; fault: 'empty' | 'unreadable' }
+  /** What the token announced itself as, so the sentence can say which two builds disagree. */
+  | { ok: false; fault: 'version'; version: number }
 
 /** The spellings each of the three facts arrives under. Most specific first. */
 const URL_KEYS = ['url', 'relayUrl', 'relay', 'r'] as const
@@ -175,6 +195,70 @@ function fromBlob(text: string): unknown {
   return fromJson(decoded.trim())
 }
 
+/* --------------------------------------------------- the versioned token -- */
+
+/**
+ * `srv1.<base64url>` — the shape a machine actually prints, which is the one
+ * this file did not read.
+ *
+ * ## The bug this exists to have not shipped
+ *
+ * The three readers below were written against the *object*, which is the right
+ * contract and is genuinely what every one of them decodes to. What none of them
+ * had ever seen is the string a host puts on a console, because the encoder and
+ * the three client screens were built in parallel and nothing fed one into the
+ * other. `formatServerAddress` writes a version prefix in front of the base64 —
+ * `srv1.` — and `fromBlob` drops a leading `scheme:` and nothing else, so the
+ * `.` survived into the decoder, `Buffer` ignored the character it did not
+ * recognise, and the JSON came out shifted and unparseable. Every phone would
+ * have refused the address on paste: the whole feature, dead, with a green
+ * suite behind it. `server-address-seam.test.ts` now feeds this reader the real
+ * encoder's real output so that cannot recur.
+ *
+ * ## Why the token is looked for rather than required at the front
+ *
+ * Because of what `renderAddress` in `src/headless/cli.ts` prints: a `Server
+ * address` heading, the token indented under it, then two sentences about what
+ * to do with it and that it is not a secret. Somebody selecting that on a phone
+ * gets the heading and at least one of the sentences, and refusing that paste
+ * teaches them to trim a selection rather than to use the app. So each
+ * whitespace-separated chunk is tested on its own, and the token is accepted
+ * wherever in the block it sits.
+ *
+ * The last candidate is the whole paste with its whitespace removed, which
+ * covers the other thing a clipboard does to one long token: a terminal that
+ * wrapped it at eighty columns, or a chat app that inserted a newline.
+ *
+ * The body is held to base64url and to a length no accident reaches, so a `.`
+ * in ordinary prose cannot be read as a version announcement — the difference
+ * between "that is not an address" and "your app is too old" is a sentence
+ * somebody acts on, and it has to be right.
+ */
+const VERSIONED_TOKEN = /^[<"'`([]*srv([0-9]{1,4})\.([A-Za-z0-9_-]{16,})[)\]>"'`,;.]*$/i
+
+/** A token that named a format, and the format it named. */
+interface Announced {
+  version: number
+  body: string
+}
+
+/**
+ * Every candidate, not the first one — because the first one is often wrong.
+ *
+ * A wrapped address puts `srv1.` at the head of a line and the rest of the body
+ * on the two lines below it, so the leading chunk is a token by every rule here
+ * and decodes to nothing. Returning it and stopping would refuse the exact paste
+ * the whitespace-joined candidate at the end of this list exists to catch.
+ */
+function announced(text: string): Announced[] {
+  const out: Announced[] = []
+  for (const chunk of [...text.split(/\s+/), text.replace(/\s+/g, '')]) {
+    const found = VERSIONED_TOKEN.exec(chunk)
+    if (found !== null) out.push({ version: Number(found[1]), body: found[2] })
+  }
+  return out
+}
+
 /**
  * Read a pasted address, or say which way it failed.
  *
@@ -191,9 +275,29 @@ export function readServerAddress(raw: string): ReadAddress {
   if (text === '') return { ok: false, fault: 'empty' }
   if (text.length > MAX_ADDRESS_LENGTH) return { ok: false, fault: 'unreadable' }
 
+  // First, because it is the only shape that says out loud what it is, and
+  // because it is the shape a machine actually prints.
+  const tokens = announced(text)
+  for (const token of tokens) {
+    if (token.version !== SERVER_ADDRESS_VERSION) continue
+    // Decoded by the encoder's own reader rather than by a second decoder
+    // written here: one implementation of the token, one place the base64url
+    // fold lives, and `asEndpoint` still makes this client's own decision about
+    // whether what came out is dialable.
+    const endpoint = asEndpoint(parseServerAddress(`${SERVER_ADDRESS_PREFIX}${token.body}`))
+    if (endpoint.kind === 'relay') return { ok: true, endpoint }
+  }
+
   for (const read of [fromJson, fromQuery, fromBlob]) {
     const endpoint = asEndpoint(asRelayShape(read(text)))
     if (endpoint.kind === 'relay') return { ok: true, endpoint }
   }
+
+  // Last, and only once nothing in the paste worked: a token announcing a
+  // format this build does not read is the *reason* nothing worked, and it is a
+  // different sentence from "that is not an address" — but a paste that also
+  // contained something readable was never a version problem.
+  const foreign = tokens.find((token) => token.version !== SERVER_ADDRESS_VERSION)
+  if (foreign !== undefined) return { ok: false, fault: 'version', version: foreign.version }
   return { ok: false, fault: 'unreadable' }
 }

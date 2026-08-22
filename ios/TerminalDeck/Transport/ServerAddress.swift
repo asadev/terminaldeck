@@ -32,18 +32,23 @@
  * `pwa/src/endpoint.ts`'s `asEndpoint` reads one exact shape, because it reads
  * back what that client itself wrote to storage. This reads what a **person**
  * pasted, which is a different problem: it has been through a clipboard, a
- * terminal that soft-wrapped it, and very often a messaging app. So four shapes
- * are accepted and all four produce the same `DeckEndpoint`:
+ * terminal that soft-wrapped it, and very often a messaging app. So five shapes
+ * are accepted and all five produce the same `DeckEndpoint`:
  *
- *  1. **The JSON object** `{"kind":"relay","url":…,"hostId":…,"hostKey":…}` —
+ *  1. **The token a host actually prints** — `srv1.` and then base64url of that
+ *     JSON. This is the format; the four below it are tolerances around it, and
+ *     that ordering is worth stating because it was once the other way round in
+ *     this file. Every tolerance was implemented and the format itself was not,
+ *     so the screen refused the only string a server ever emits. See `announced`.
+ *  2. **The JSON object** `{"kind":"relay","url":…,"hostId":…,"hostKey":…}` —
  *     `asEndpoint`'s own shape, and the rendezvous offer's field names
  *     (`relayUrl`/`publicKey`) as aliases, because those are the two spellings
  *     this product already has for the same three facts.
- *  2. **That JSON base64'd** into one unbroken token, with or without a scheme
+ *  3. **That JSON base64'd** into one unbroken token, with or without a scheme
  *     prefix. A single line survives a paste; four lines of JSON do not.
- *  3. **A URL** — `terminaldeck://server?r=…&h=…&k=…` — the shape the deleted
+ *  4. **A URL** — `terminaldeck://server?r=…&h=…&k=…` — the shape the deleted
  *     pairing link had, minus the token that made it dangerous.
- *  4. **Anything containing all three**, found by scanning. A server that prints
+ *  5. **Anything containing all three**, found by scanning. A server that prints
  *     a labelled block with a heading and three rows is a server whose output a
  *     person will select a bit too much of, and refusing that paste teaches
  *     nothing.
@@ -56,10 +61,12 @@
  *
  * ## Every refusal names the fix
  *
- * `notAnAddress` is the only one that means "this is not it". The other three
- * mean "this is an address and *this field* is wrong", which is a different
- * sentence for a person holding a blob they believe is right — most often a
- * paste that stopped one line short.
+ * `notAnAddress` is the only one that means "this is not it". Three of the
+ * others mean "this is an address and *this field* is wrong", which is a
+ * different sentence for a person holding a blob they believe is right — most
+ * often a paste that stopped one line short. `wrongVersion` is the fourth and it
+ * is different again: the address is fine and this app is the thing that is
+ * behind, so the fix is an update rather than another trip to the clipboard.
  */
 
 import Foundation
@@ -67,6 +74,8 @@ import Foundation
 enum ServerAddressError: Error, Equatable {
     case empty
     case notAnAddress
+    /// A token that announced a format this build does not read, and the one it named.
+    case wrongVersion(Int)
     case relay
     case hostId
     case hostKey
@@ -81,6 +90,24 @@ enum ServerAddressError: Error, Equatable {
             return "That is not a server address. One carries three things — a relay address, a "
                 + "26-character host id, and the server's key — so copy the whole block rather than "
                 + "one line of it."
+        case let .wrongVersion(announced):
+            // Deliberately not `.notAnAddress`. This *is* an address; it is a
+            // newer spelling of one, and the fix is a software update rather
+            // than another trip to the clipboard. Told the wrong sentence,
+            // somebody re-copies a perfectly good block forever.
+            //
+            // Both directions are written because the sentence has to name the
+            // half that is behind. Only one of them can happen today — version 1
+            // is the first there has been — and writing the pair costs a clause
+            // and means the wrong one can never be printed the day there is a
+            // second.
+            return announced > ServerAddress.version
+                ? "That address is version \(announced) and this app reads version "
+                    + "\(ServerAddress.version), so this app is older than that server. Update the app "
+                    + "on this phone, then paste the address again."
+                : "That address is version \(announced) and this app reads version "
+                    + "\(ServerAddress.version), so that server is older than this app. Update the "
+                    + "server, then copy its address again."
         case .relay:
             return "The relay address in that block is not a WebSocket address. Copy the whole block again."
         case .hostId:
@@ -111,12 +138,130 @@ enum ServerAddress {
         guard !trimmed.isEmpty else { return .failure(.empty) }
         guard trimmed.utf8.count <= maxBytes else { return .failure(.notAnAddress) }
 
-        // The exact shapes first, the scan last: only the exact shapes can tell
+        // The token a machine actually prints, first — it is the only shape that
+        // says out loud what it is, and it is the one this parser could not read
+        // until the seam was tested. See `announced` below.
+        let tokens = announced(trimmed)
+        for token in tokens where token.version == version {
+            guard let data = base64Bytes(token.body),
+                  let json = String(data: data, encoding: .utf8),
+                  let parts = fromJSON(json.trimmingCharacters(in: .whitespacesAndNewlines))
+            else { continue }
+            // Not `continue` on a failure here: a token that decoded to the
+            // right object with a bad field in it deserves that field's sentence
+            // — "the key is short" — rather than "that is not an address".
+            return build(parts)
+        }
+
+        // The exact shapes next, the scan last: only the exact shapes can tell
         // which of two addresses in one paste was meant.
         if let parts = fromJSON(trimmed) ?? fromJSON(unwrapped(trimmed) ?? "") { return build(parts) }
         if let parts = fromURL(trimmed) { return build(parts) }
         if let parts = byScanning(trimmed) { return build(parts) }
+
+        // Last, and only once nothing in the paste worked: a token announcing a
+        // format this build does not read is the *reason* nothing worked. A
+        // paste that also held something readable was never a version problem,
+        // which is why this is here rather than at the top.
+        if let foreign = tokens.first(where: { $0.version != version }) {
+            return .failure(.wrongVersion(foreign.version))
+        }
         return .failure(.notAnAddress)
+    }
+
+    /* ------------------------------------------------ the versioned token -- */
+
+    /**
+     * Which spelling of a server address this build reads.
+     *
+     * `SERVER_ADDRESS_VERSION` in `src/shared/server-address.ts`, restated
+     * because Swift cannot import a TypeScript constant. It is not left to drift:
+     * `ServerAddressFixture.swift` beside the tests is generated from the real
+     * encoder, and `src/shared/server-address-fixture.test.ts` fails on every
+     * `vitest run` the moment that generated string stops matching what a host
+     * prints — so a format bump reaches this file as a red test rather than as a
+     * phone that refuses every address.
+     */
+    static let version = 1
+
+    /**
+     * `srv1.<base64url>`, wherever in a paste it sits — the bug this file shipped.
+     *
+     * ## What was wrong
+     *
+     * `formatServerAddress` writes a version prefix in front of the base64, and
+     * nothing here knew about it. `unwrapped` drops a `label:` prefix and the
+     * separator is a `.`, so `srv1.` survived into `Data(base64Encoded:)`, which
+     * refuses the string outright because `.` is not in the alphabet. Every
+     * shape below then failed in turn and the screen said "that is not a server
+     * address" about the only string a server ever prints. The encoder and this
+     * parser were written in parallel and nothing had ever fed one into the
+     * other; the suite was green throughout.
+     *
+     * ## Why the token is looked for rather than required at the front
+     *
+     * Because of what a host prints around it. `renderAddress` in
+     * `src/headless/cli.ts` puts a `Server address` heading above the token and
+     * two sentences below it, and a finger selecting that on a phone takes the
+     * heading and at least one sentence. That is the paste this file's whole
+     * scanning section exists for, and the token has to be found in it.
+     *
+     * So each whitespace-separated chunk is tested on its own, and the whole
+     * paste with its whitespace removed is tested last — which is the other
+     * thing a clipboard does to one long token, a terminal wrapping it at eighty
+     * columns. Every candidate is returned rather than the first, because a
+     * wrapped token puts `srv1.` and the first seventy-five characters of body
+     * on a line of their own: that chunk is a token by every rule here and
+     * decodes to nothing, and stopping at it would refuse the joined candidate
+     * that follows.
+     *
+     * The body is held to base64url and to a length no accident reaches. The
+     * difference between "that is not an address" and "your app is too old" is a
+     * sentence somebody acts on, so a full stop in ordinary prose must not be
+     * read as a version announcement.
+     */
+    private struct Announced {
+        let version: Int
+        let body: String
+    }
+
+    private static let tokenPattern =
+        "^[<\"'`(\\[]*srv([0-9]{1,4})\\.([A-Za-z0-9_-]{16,})[)\\]>\"'`,;.]*$"
+
+    private static func announced(_ text: String) -> [Announced] {
+        guard let regex = try? NSRegularExpression(pattern: tokenPattern, options: [.caseInsensitive]) else {
+            return []
+        }
+        var chunks = text.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        chunks.append(text.filter { !$0.isWhitespace })
+
+        var out: [Announced] = []
+        for chunk in chunks {
+            let whole = NSRange(chunk.startIndex..<chunk.endIndex, in: chunk)
+            guard let match = regex.firstMatch(in: chunk, options: [], range: whole),
+                  let announcedRange = Range(match.range(at: 1), in: chunk),
+                  let bodyRange = Range(match.range(at: 2), in: chunk),
+                  let announced = Int(chunk[announcedRange])
+            else { continue }
+            out.append(Announced(version: announced, body: String(chunk[bodyRange])))
+        }
+        return out
+    }
+
+    /**
+     * base64 or base64url, folded and padded, or nil.
+     *
+     * One implementation for the token body and for the one-line blob, because
+     * they are the same decode and two copies of it are two places for the
+     * alphabet fold to be wrong. The two alphabets differ in exactly two
+     * characters, so they are folded rather than selected between, and the
+     * padding a terminal drops first is put back.
+     */
+    private static func base64Bytes(_ text: String) -> Data? {
+        var folded = text.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        let remainder = folded.count % 4
+        if remainder > 0 { folded.append(String(repeating: "=", count: 4 - remainder)) }
+        return Data(base64Encoded: folded)
     }
 
     /// The three facts as they were written down, before any of them is believed.
@@ -254,10 +399,7 @@ enum ServerAddress {
         }
         body.removeAll { $0.isWhitespace }
         guard !body.isEmpty, body.count <= maxBytes else { return nil }
-        var folded = body.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
-        let remainder = folded.count % 4
-        if remainder > 0 { folded.append(String(repeating: "=", count: 4 - remainder)) }
-        guard let data = Data(base64Encoded: folded), let decoded = String(data: data, encoding: .utf8) else {
+        guard let data = base64Bytes(body), let decoded = String(data: data, encoding: .utf8) else {
             return nil
         }
         return decoded.trimmingCharacters(in: .whitespacesAndNewlines)
