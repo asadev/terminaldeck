@@ -551,6 +551,15 @@ describe('what a public host offers', () => {
        * visitor has ever been ticked — but the offer list is the decision.
        */
       CAPABILITY.hostWindows,
+      /*
+       * `watch` is withheld: it streams a live picture of this machine's own
+       * browser and takes input back into it. On a box handed to a stranger
+       * for review, casting the owner's signed-in pages — or letting a guest
+       * drive them — is the sharpest form of the act every entry here refuses.
+       * The demo box serves no screencast anyway (no options.screencast), so
+       * this is load-bearing and belt-and-braces at once.
+       */
+      CAPABILITY.watch,
     ])
   })
 })
