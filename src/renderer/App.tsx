@@ -21,6 +21,7 @@ import { SessionInspector } from './components/SessionInspector'
 import { AlertsWindow, withInsights } from './components/AlertsPanel'
 import { useProjectAlerts } from './alerts-feed'
 import { openLinkExternally } from './link'
+import { sendToTerminal } from './chat/attach/mentions'
 import { markSeen, readSeen, unreadCount, writeSeen, type SeenAlerts } from './alerts-unread'
 import {
   canResumeProvider,
@@ -5034,6 +5035,12 @@ function Workspace() {
                   session={{
                     startedAt: session.createdAt,
                     resumed: session.resumed,
+                    // And, where this app named the conversation itself, the
+                    // name — which turns the attribution from a deduction about
+                    // clocks into a file lookup. See `SessionScope`.
+                    ...(session.agentSessionId === undefined
+                      ? {}
+                      : { agentSessionId: session.agentSessionId }),
                   }}
                   // Without this the controls row and the usage strip both
                   // render in their "no session focused" state: model, effort
@@ -5046,7 +5053,17 @@ function Workspace() {
                     // Written to the session's own terminal: chat mode is a
                     // different view of the same session, not a second channel,
                     // so a reply typed here also appears in the terminal view.
-                    window.deck.writeToSession(session.id, `${text}\r`)
+                    //
+                    // Through `sendToTerminal`, and never as one write with a
+                    // `\r` on the end. The CLI classifies a stdin chunk of 64
+                    // bytes or more as pasted text, where a carriage return is a
+                    // newline rather than submit — so the single-write form put
+                    // every message longer than half a line into the agent's
+                    // input box and left it there. Measured in the packed app on
+                    // 2026-08-22 and photographed; see `mentions.ts`.
+                    void sendToTerminal(text, (data) =>
+                      window.deck.writeToSession(session.id, data),
+                    )
                   }}
                 />
               ) : null}
@@ -7001,6 +7018,9 @@ function Workspace() {
                 ? {
                     startedAt: focusedSession.createdAt,
                     resumed: focusedSession.resumed,
+                    ...(focusedSession.agentSessionId === undefined
+                      ? {}
+                      : { agentSessionId: focusedSession.agentSessionId }),
                   }
                 : null
             }

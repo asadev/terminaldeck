@@ -387,6 +387,8 @@ function summarizeStandalone(
   return {
     cwd,
     transcriptDir: transcriptDir(cwd),
+    // No watcher was made for this answer, so nothing will follow it.
+    watching: false,
     sessions: ordered,
     usage: total.usage,
     usageByModel: total.usageByModel,

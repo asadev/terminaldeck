@@ -329,3 +329,85 @@ describe('sameLookup', () => {
     expect(sameLookup(alone, ready('/p/a.jsonl'))).toBe(false)
   })
 })
+
+/* ---------------------------------------------- a conversation with a name -- */
+
+describe('a conversation this app named itself', () => {
+  /**
+   * The app spawns `claude --session-id <uuid>` and the CLI files the
+   * conversation at `<store>/<encoded cwd>/<that uuid>.jsonl`. Verified in the
+   * packed app on 2026-08-22: a session whose `SessionMeta.agentSessionId` was
+   * `fb248514-5664-4d5c-9919-9e37be5ca10e` had its transcript at
+   * `…/-private-tmp-td-chat-proj/fb248514-5664-4d5c-9919-9e37be5ca10e.jsonl`
+   * and nothing else in the directory.
+   *
+   * `context-window.ts` has read the file by that name since 2026-08-19. The
+   * chat pane went on deducing from birth times beside it, which cost a
+   * four-second empty page on every first message and a blank apology whenever
+   * two tabs shared a folder.
+   */
+  const NAMED: TranscriptFileView = {
+    path: '/p/fb248514.jsonl',
+    sessionId: 'fb248514',
+    createdAt: at('17:20:00'),
+    modifiedAt: at('17:21:00'),
+  }
+
+  it('takes the file with that name, whatever the clocks say', () => {
+    // FOREIGN is newer, busier, and began before the tab — every reason the
+    // deduction below exists. None of it matters against a name.
+    const verdict = attributeTranscript([FOREIGN, OWN, NAMED], {
+      ...TAB,
+      agentSessionId: 'fb248514',
+    })
+    expect(verdict.kind).toBe('choice')
+    expect(verdict.kind === 'choice' && verdict.choice.sessionId).toBe('fb248514')
+    expect(verdict.kind === 'choice' && verdict.choice.attribution).toBe('declared')
+  })
+
+  it('takes it even when a sibling tab makes every deduction ambiguous', () => {
+    /*
+     * Two tabs opened in one folder before either has spoken is the whole of
+     * the `ambiguous` verdict, and it is what a chat pane showed as *"Cannot
+     * tell which conversation is this session's"* — a blank page with an
+     * apology, for the life of the session. A named conversation cannot be
+     * confused with another one, so the question does not arise.
+     */
+    const siblingStartedAfter = at('17:15:00')
+    const verdict = attributeTranscript([NAMED], { ...TAB, agentSessionId: 'fb248514' }, [
+      siblingStartedAfter,
+    ])
+    expect(verdict.kind).toBe('choice')
+  })
+
+  it('says nothing yet — never ambiguous — while the file does not exist', () => {
+    // A session that has not been typed into has no transcript. That state ends
+    // by itself, and it is not the same as "I cannot tell which of these is
+    // yours", which does not.
+    const verdict = attributeTranscript([FOREIGN, OWN], { ...TAB, agentSessionId: 'fb248514' })
+    expect(verdict).toEqual({ kind: 'none' })
+  })
+
+  it('falls back to the deduction when the app named nothing', () => {
+    // A resumed session, another agent, a session this app did not start. Those
+    // keep the inference, and it is still labelled as an inference.
+    expect(attributeTranscript([FOREIGN, OWN], TAB).kind).toBe('choice')
+    expect(
+      attributeTranscript([FOREIGN, OWN], { ...TAB, agentSessionId: '' }).kind === 'choice',
+    ).toBe(true)
+    const inferred = pickSessionTranscript([FOREIGN, OWN], { ...TAB, agentSessionId: '' })
+    expect(inferred?.attribution).toBe('session')
+  })
+
+  it('beats the resumed branch, which would have picked an older file', () => {
+    // A resume that *named* a conversation carries both flags, and the name is
+    // the stronger fact: `--continue` takes the folder's newest, which is the
+    // same thing right up until it is not.
+    const verdict = attributeTranscript([FOREIGN, NAMED], {
+      ...TAB,
+      resumed: true,
+      agentSessionId: 'fb248514',
+    })
+    expect(verdict.kind === 'choice' && verdict.choice.sessionId).toBe('fb248514')
+  })
+})

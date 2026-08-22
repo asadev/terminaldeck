@@ -17,6 +17,7 @@ import {
   relativeTo,
   removeAttachment,
   samePath,
+  sendToTerminal,
   shellQuote,
   SUBMIT_GAP_MS,
   terminalPayload,
@@ -665,5 +666,58 @@ describe('a Windows path', () => {
         foldersFrom(['src\\main\\index.ts', 'src\\main\\git.ts', 'src\\renderer\\App.tsx', 'README.md']),
       ).toEqual(['src', 'src\\main', 'src\\renderer'])
     })
+  })
+})
+
+/* ------------------------------------------------------ actually sending -- */
+
+describe('sending a chat message into a session', () => {
+  /**
+   * The defect this closes, measured in the packed app on 2026-08-22 and
+   * photographed: a 145-character message typed into chat mode arrived in Claude
+   * Code's input box, the carriage return was read as a newline, the cursor
+   * dropped to the next line and nothing was submitted. Both chat composers were
+   * doing `write(`${text}\r`)` in one call while this file's own
+   * `terminalWrites` had documented the rule for weeks.
+   */
+  it('writes the message and the return separately, never as one chunk', async () => {
+    const writes: string[] = []
+    await sendToTerminal('a'.repeat(200), (data) => {
+      writes.push(data)
+    })
+    expect(writes).toHaveLength(2)
+    expect(writes[0]).toBe('a'.repeat(200))
+    expect(writes[1]).toBe('\r')
+    // The failing form, named so a future rewrite cannot reintroduce it.
+    expect(writes.some((chunk) => chunk.length >= 64 && chunk.endsWith('\r'))).toBe(false)
+  })
+
+  it('keeps the trailing space a mention needs, on the first write only', async () => {
+    const writes: string[] = []
+    await sendToTerminal('@"/p/a.ts" look', (data) => {
+      writes.push(data)
+    })
+    expect(writes[0]).toBe('@"/p/a.ts" look ')
+    expect(writes[1]).toBe('\r')
+  })
+
+  it('waits for an asynchronous write to land before sending the return', async () => {
+    // The server composer's write is an `invoke`, so the gap has to be between
+    // the writes *landing* rather than between the calls being made.
+    const order: string[] = []
+    await sendToTerminal('hello', async (data) => {
+      await new Promise((resolve) => setTimeout(resolve, 5))
+      order.push(`landed:${data === '\r' ? 'return' : 'text'}`)
+    })
+    expect(order).toEqual(['landed:text', 'landed:return'])
+  })
+
+  it('leaves a gap the CLI can tell two chunks apart across', async () => {
+    const at: number[] = []
+    const started = Date.now()
+    await sendToTerminal('short', () => {
+      at.push(Date.now() - started)
+    })
+    expect(at[1] - at[0]).toBeGreaterThanOrEqual(SUBMIT_GAP_MS - 5)
   })
 })

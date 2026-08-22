@@ -7,13 +7,20 @@ import {
   ChatColumn,
   ChatEmpty,
   ChatView,
+  EchoBubble,
+  ECHO_SLACK_MS,
   dayBreak,
+  forgetDrawn,
   formatTime,
   isoAt,
   markdown,
   mergeMessages,
+  recallDrawn,
+  rememberDrawn,
   renderMarkdown,
+  settleEchoes,
   type ChatMessage,
+  type PendingEcho,
 } from './ChatView'
 import { runningProvider } from '../shell/agent-presence'
 import { CHAT_SESSION_ATTR } from '../driving/where'
@@ -390,5 +397,140 @@ describe('the pane says which session it is a view of', () => {
      */
     const html = renderToStaticMarkup(<ChatView cwd="/tmp/x" />)
     expect(html).not.toContain(CHAT_SESSION_ATTR)
+  })
+})
+
+/* ------------------------------------------------------------------ echo -- */
+
+describe('a message you send is on screen before the transcript has it', () => {
+  /**
+   * The measurement this exists for, taken in the packed app on 2026-08-22:
+   * pressing Return in chat mode and then watching the pane, the first message
+   * of a session took **3.78 seconds** to appear and every one after it took
+   * about a second and a half. For the whole of that window the pane looked
+   * exactly as it looks when nothing was sent — which is the report:
+   * *"when we send our message mostly it is page still stays blank."*
+   */
+  const sent = (text: string, at: number): PendingEcho => ({ id: `e:${at}`, text, at })
+
+  it('keeps waiting while nothing in the transcript matches', () => {
+    const pending = [sent('fix the header', 1000)]
+    expect(settleEchoes(pending, [])).toHaveLength(1)
+    expect(
+      settleEchoes(pending, [message({ id: 'a', role: 'agent', text: 'fix the header', at: 2000 })]),
+    ).toHaveLength(1)
+  })
+
+  it('retires it the moment its own line is recorded', () => {
+    const pending = [sent('fix the header', 1000)]
+    const recorded = [message({ id: 'u1', role: 'you', text: 'fix the header', at: 1400 })]
+    expect(settleEchoes(pending, recorded)).toEqual([])
+  })
+
+  it('matches through the whitespace the CLI trims and the mention it adds', () => {
+    const pending = [sent('  look at this  ', 1000)]
+    const recorded = [
+      message({ id: 'u1', role: 'you', text: '@"/p/a.ts" look at this', at: 1100 }),
+    ]
+    expect(settleEchoes(pending, recorded)).toEqual([])
+  })
+
+  it('will not let one recorded line clear two identical sends', () => {
+    // Sending the same sentence twice is a real thing to do, and taking the
+    // second bubble off the screen before its own line arrives would be the
+    // blank this whole change is about, in miniature.
+    const pending = [sent('again', 1000), sent('again', 1200)]
+    const recorded = [message({ id: 'u1', role: 'you', text: 'again', at: 1300 })]
+    expect(settleEchoes(pending, recorded)).toHaveLength(1)
+    expect(settleEchoes(pending, recorded)[0].at).toBe(1200)
+  })
+
+  it('does not let an older identical line settle a new send', () => {
+    // The same words said ten minutes ago are not evidence that the message
+    // just typed has been recorded.
+    const pending = [sent('again', 100_000)]
+    const stale = [message({ id: 'u1', role: 'you', text: 'again', at: 100_000 - ECHO_SLACK_MS - 1 })]
+    expect(settleEchoes(pending, stale)).toHaveLength(1)
+  })
+
+  it('returns the same array when nothing settled, so the pane does not re-render', () => {
+    const pending = [sent('x', 1000)]
+    expect(settleEchoes(pending, [])).toBe(pending)
+  })
+
+  it('says it is sending, and never shows a time it does not have', () => {
+    const html = renderToStaticMarkup(<EchoBubble echo={sent('hello', 1000)} now={1200} />)
+    expect(html).toContain('Sending…')
+    expect(html).toContain('hello')
+    expect(html).not.toContain('<time')
+    // No copy button: there is nothing in a file to copy yet.
+    expect(html).not.toContain('cv-copy')
+  })
+
+  it('changes the label rather than the message when the wait goes on', () => {
+    const slow = renderToStaticMarkup(<EchoBubble echo={sent('hello', 1000)} now={1000 + 60_000} />)
+    // The words stay — they really were written into the session, and the
+    // terminal one click away is showing them.
+    expect(slow).toContain('hello')
+    expect(slow).not.toContain('Sending…')
+    expect(slow).toContain('has not written it down yet')
+  })
+})
+
+/* ------------------------------------------------- coming back to a tab -- */
+
+describe('leaving a chat tab and coming back', () => {
+  /**
+   * `App.tsx` mounts this pane only while its session is in front, so every
+   * switch away unmounts it and every switch back re-reads the transcript from
+   * byte zero. Measured on 2026-08-22 the pane drew "Reading the transcript…"
+   * in between; on a large transcript that is seconds of blank over a
+   * conversation somebody was reading a moment earlier.
+   */
+  it('remembers what a pane was showing, keyed by its conversation', () => {
+    forgetDrawn()
+    const drawn = [message({ id: 'a', text: 'one' })]
+    rememberDrawn('/p/a.jsonl', drawn)
+    expect(recallDrawn('/p/a.jsonl')).toEqual(drawn)
+    expect(recallDrawn('/p/b.jsonl')).toEqual([])
+  })
+
+  it('hands back a copy, so the caller cannot mutate the cache', () => {
+    forgetDrawn()
+    rememberDrawn('/p/a.jsonl', [message({ id: 'a', text: 'one' })])
+    const first = recallDrawn('/p/a.jsonl')
+    first.push(message({ id: 'b', text: 'two' }))
+    expect(recallDrawn('/p/a.jsonl')).toHaveLength(1)
+  })
+
+  it('keeps a bounded number of panes rather than the whole folder', () => {
+    forgetDrawn()
+    for (let i = 0; i < 12; i += 1) rememberDrawn(`/p/${i}.jsonl`, [message({ id: `m${i}` })])
+    // The oldest are dropped; the newest are all still there.
+    expect(recallDrawn('/p/0.jsonl')).toEqual([])
+    expect(recallDrawn('/p/11.jsonl')).toHaveLength(1)
+  })
+
+  it('ignores a pane with no conversation to key on', () => {
+    forgetDrawn()
+    rememberDrawn('', [message({ id: 'a' })])
+    expect(recallDrawn('')).toEqual([])
+  })
+})
+
+/* --------------------------------------------------- where to type, said -- */
+
+describe('the empty state points at the box that is on screen', () => {
+  it('points at the composer when this pane has one', () => {
+    const html = renderToStaticMarkup(<ChatEmpty state="no-session-transcript" canType />)
+    expect(html).toContain('Type below')
+    expect(html).not.toContain('in the terminal')
+  })
+
+  it('still points at the terminal for a pane that is read-only', () => {
+    // Two callers render this for a transcript rather than for a session, and
+    // for them the old sentence is simply true.
+    const html = renderToStaticMarkup(<ChatEmpty state="no-session-transcript" />)
+    expect(html).toContain('in the terminal')
   })
 })

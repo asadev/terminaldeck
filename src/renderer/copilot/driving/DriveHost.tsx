@@ -8,6 +8,7 @@ import { DrivePanel } from './DrivePanel'
 import { setRailCopilot, setRailDrive } from './rail-panel'
 import { readTour } from './tour'
 import { playTour, type RunningTour, type TourCommand, type TourView } from './tour-player'
+import { sendToTerminal } from '../../chat/attach/mentions'
 
 /**
  * Driving mode, mounted once for the window.
@@ -286,8 +287,13 @@ export function DriveHost({ deck = bridge() }: { deck?: DriveBridge | null }) {
   const say = useCallback(
     (text: string) => {
       const id = copilotId.current
-      if (id === null || deck?.writeToSession === undefined) return
-      deck.writeToSession(id, `${text}\r`)
+      const write = deck?.writeToSession
+      if (id === null || write === undefined) return
+      // Two writes with a gap, never one with a `\r` on the end: the CLI reads a
+      // chunk of 64 bytes or more as a paste and the return becomes a newline,
+      // so anything longer than half a line was landing in the copilot's input
+      // box unsent. See `mentions.ts`.
+      void sendToTerminal(text, (data) => write(id, data))
     },
     [deck],
   )

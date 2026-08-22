@@ -122,6 +122,10 @@ export function readProjectSummary(raw: unknown): ProjectSummary | null {
     // build that predates the field is not "truncated", it simply does not know,
     // and the honest default is the one that claims less rather than more.
     truncated: raw.truncated === true,
+    // Same defensive reading, and the same direction: a payload from a build
+    // that predates the field is not promising a live feed, so the caller keeps
+    // whatever fallback it has.
+    watching: raw.watching === true,
     updatedAt: num(raw.updatedAt),
   }
 }

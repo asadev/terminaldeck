@@ -434,6 +434,41 @@ export function terminalWrites(message: string): [string, string] {
   return [terminalPayload(message), '\r']
 }
 
+/**
+ * Send one chat message into a session's terminal, correctly.
+ *
+ * {@link terminalWrites} has stated the rule since the attach menu was built,
+ * and stating it was not enough: on 2026-08-22 both chat composers in the app —
+ * the desktop one in `App.tsx` and the server one in `ServerChatPane` — were
+ * still doing `write(`${text}\r`)` in a single call, and it was measured
+ * failing in the packed app. A message of 145 characters typed into chat mode
+ * arrived in Claude Code's input box, the carriage return was taken as a
+ * newline, the cursor dropped to the next line and nothing was submitted. The
+ * chat pane then correctly showed nothing new, which is the whole of Asad's
+ * report: *"when we send our message mostly it is page still stays blank."*
+ * Mostly, because the CLI's threshold is 64 bytes and most real messages are
+ * longer than that — the two short ones sent while measuring went through and
+ * every long one did not.
+ *
+ * So the sequence lives here as something callable rather than as a paragraph
+ * two files away that a caller has to have read. It returns a promise for the
+ * benefit of tests and of the server path, whose write is itself async; nothing
+ * about correctness depends on awaiting it.
+ *
+ * `write` may be synchronous (`writeToSession` is a `send`) or return a promise
+ * (`writeToServerShell` is an `invoke`). Both are awaited, so the gap is a gap
+ * between the writes *landing* rather than between the calls being made.
+ */
+export async function sendToTerminal(
+  message: string,
+  write: (data: string) => void | Promise<unknown>,
+): Promise<void> {
+  const [typed, submit] = terminalWrites(message)
+  await write(typed)
+  await new Promise((resolve) => setTimeout(resolve, SUBMIT_GAP_MS))
+  await write(submit)
+}
+
 /* ------------------------------------------------------- shell command --- */
 
 /**

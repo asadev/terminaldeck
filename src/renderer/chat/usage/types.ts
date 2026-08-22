@@ -67,6 +67,13 @@ export interface ProjectSummary {
    * has to change with it.
    */
   truncated: boolean
+  /**
+   * True when a live watch is established over a transcript directory that
+   * exists, so a reader may rely on the push and switch its own re-read off.
+   * The field in `src/main/transcript.ts` says what makes it false and what that
+   * costs a pane that believes otherwise.
+   */
+  watching: boolean
   updatedAt: number
 }
 

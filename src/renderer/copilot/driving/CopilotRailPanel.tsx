@@ -241,7 +241,17 @@ export function CopilotRailPanel() {
         <div className="cr-chat">
           <ChatView
             cwd={local?.cwd ?? null}
-            session={local === null ? null : { startedAt: local.createdAt, resumed: local.resumed }}
+            session={
+              local === null
+                ? null
+                : {
+                    startedAt: local.createdAt,
+                    resumed: local.resumed,
+                    ...(local.agentSessionId === undefined
+                      ? {}
+                      : { agentSessionId: local.agentSessionId }),
+                  }
+            }
             sessionId={sessionId}
             // `submit`, because this is a chat box: a message that landed on
             // the agent's command line without being sent is a box that did

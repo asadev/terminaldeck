@@ -9,6 +9,7 @@ import { COPILOT_ICON } from './identity'
 import { useCopilotMachines } from './useCopilotMachines'
 import type { CopilotPane } from './copilot-model'
 import type { Copilot } from './useCopilot'
+import { sendToTerminal } from '../chat/attach/mentions'
 import './copilot.css'
 
 /**
@@ -286,7 +287,14 @@ export function CopilotView({
       // Typed into the copilot's own terminal, exactly as chat mode does for any
       // other session: this is a second view of one session, not a second
       // channel into it, so what is said here also appears in the terminal.
-      window.deck.writeToSession(id, `${text}\r`)
+      //
+      // Two writes, through `sendToTerminal`, and never one with a `\r` on the
+      // end. A stdin chunk of 64 bytes or more is pasted text to the CLI, where
+      // a carriage return is a newline rather than submit — so the single-write
+      // form left every message longer than half a line sitting in the copilot's
+      // input box. Measured in the packed app on 2026-08-22; `mentions.ts` holds
+      // the sequence and the photograph.
+      void sendToTerminal(text, (data) => window.deck.writeToSession(id, data))
     },
     [state?.sessionId],
   )
