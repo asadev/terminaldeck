@@ -128,6 +128,18 @@ struct CopilotView: View {
     @State private var showingActivity = false
     @State private var showingSessions = false
 
+    /// Whether the foot of the conversation is on screen. See the anchor in
+    /// `timeline`, and the scroll effect that reads this.
+    @State private var atBottom = true
+
+    /// What the scroll watches: how many rows there are, and what the last one
+    /// says. Both, because a streaming answer only ever moves the second.
+    private var tail: String {
+        let rows = link?.timeline ?? []
+        guard let last = rows.last else { return "0" }
+        return "\(rows.count):\(last.id):\(last.digest)"
+    }
+
     private var host: HostLink? { model.host(hostID) }
     private var link: CopilotLink? { model.host(hostID)?.copilot }
 
@@ -316,7 +328,27 @@ struct CopilotView: View {
             .accessibilityIdentifier("copilot.notOffered")
 
         case .connecting:
-            connectingScreen
+            /*
+             * **The conversation survives a reconnect.**
+             *
+             * `.connecting` is every socket blink — the hello has gone and has
+             * not been answered — and this used to replace the whole screen with
+             * a spinner. So a phone that lost its network for two seconds in a
+             * lift watched the entire conversation disappear and come back,
+             * which is the *"the chat blanks"* this pass exists to fix, and it
+             * is a lie on top of a flicker: what was said was still said, and a
+             * dropped socket does not unsay it.
+             *
+             * So the spinner is only for a phone that has nothing to show. With
+             * a conversation in hand the timeline stays exactly where it is and
+             * the reconnect is a strip above it — `reconnecting` — which is
+             * where a fact about *now* belongs.
+             */
+            if (link?.timeline.isEmpty ?? true) {
+                connectingScreen
+            } else {
+                timeline
+            }
 
         case .notGranted:
             notGranted
@@ -324,6 +356,26 @@ struct CopilotView: View {
         case .watch, .direct:
             timeline
         }
+    }
+
+    /// The socket is down or the hello is unanswered, said over a conversation
+    /// that is still on screen. A line rather than a screen, because nothing
+    /// here is lost — only paused.
+    private var reconnecting: some View {
+        HStack(spacing: 8) {
+            ProgressView().controlSize(.small).tint(Theme.faint)
+            Text(model.connection.isLive
+                 ? "Opening the copilot again\u{2026}"
+                 : "Waiting for \(host?.label ?? "that machine") to come back.")
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.faint)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.surface)
+        .accessibilityIdentifier("copilot.reconnecting")
     }
 
     /*
@@ -400,6 +452,8 @@ struct CopilotView: View {
                 LazyVStack(alignment: .leading, spacing: 10) {
                     stateCard
 
+                    if (host?.copilotAccess ?? .notOffered) == .connecting { reconnecting }
+
                     ForEach(link?.pending ?? []) { question in
                         CopilotQuestionCard(question: question,
                                             noun: host?.hostPlatform.noun ?? "desktop",
@@ -421,15 +475,28 @@ struct CopilotView: View {
                             CopilotBubble(message: message)
                         case let .action(action):
                             CopilotActionRow(action: action)
+                        case let .mine(outgoing):
+                            CopilotOutgoingBubble(outgoing: outgoing)
                         }
                     }
+
+                    if (link?.timeline.isEmpty ?? true) { nothingYet }
 
                     // An anchor rather than "scroll to the last row", because the
                     // last row changes identity as a streaming answer is
                     // replaced, and scrolling to a row that is being rebuilt
                     // fights the layout. A zero-height view at the foot has a
                     // stable id and always means "the bottom".
+                    //
+                    // It is also how this screen knows whether somebody is
+                    // reading the end of the conversation: a `LazyVStack` builds
+                    // and tears down its children as they cross the viewport, so
+                    // "is the anchor on screen" is exactly "are we at the
+                    // bottom" — and that is what stops the view yanking itself
+                    // down while a person is scrolled up reading.
                     Color.clear.frame(height: 1).id(Self.bottom)
+                        .onAppear { atBottom = true }
+                        .onDisappear { atBottom = false }
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
@@ -441,15 +508,45 @@ struct CopilotView: View {
                 host?.copilot.refresh()
                 try? await Task.sleep(for: .milliseconds(450))
             }
-            // Follows the conversation down as it grows. Keyed on the count
-            // rather than on the array so a message being *extended* — the
-            // normal shape of a streaming answer, same id, more text — also
-            // moves the view, which is the case a value-equality trigger would
-            // miss on every frame but the first.
-            .onChange(of: link?.timeline.count ?? 0) { _, _ in
-                withAnimation(.easeOut(duration: 0.2)) { scroll.scrollTo(Self.bottom, anchor: .bottom) }
+            /*
+             * Follows the conversation down as it **grows**, not only as it
+             * lengthens — and stops following when somebody has scrolled up.
+             *
+             * The comment that used to sit here claimed a count key catches a
+             * message being extended. It does not, and that is the exact case a
+             * streaming answer is: same id, more text, **same count**. So a
+             * reply longer than the screen was written entirely below the fold
+             * and the view sat still through all of it. The key is now a digest
+             * that moves on both — how many rows, and how long the last one is —
+             * which is one integer read per frame and no allocation per token.
+             *
+             * `atBottom` is the other half and it is not an optimisation: a
+             * timeline that jumps to the end on every frame is unusable while an
+             * agent is writing and somebody is scrolled up reading what it said
+             * a minute ago, which is precisely when a copilot is worth reading.
+             */
+            /*
+             * And **unanimated**, which is the third thing that had to be right.
+             *
+             * A 0.2s ease on every frame of a streaming answer is an animation
+             * restarted many times a second, each one interrupting the last a
+             * few milliseconds in; the net movement over a whole reply is close
+             * to nothing, which is a list that does not follow. Measured on the
+             * Android client, which had the identical construction and the
+             * identical symptom.
+             *
+             * Instant is also honest here: `atBottom` already guarantees the
+             * reader is at the end, and staying pinned to the end of text that
+             * is growing looks like text growing, because that is what it is.
+             */
+            .onChange(of: tail) { _, _ in
+                guard atBottom else { return }
+                scroll.scrollTo(Self.bottom, anchor: .bottom)
             }
-            .onAppear { scroll.scrollTo(Self.bottom, anchor: .bottom) }
+            .onAppear {
+                atBottom = true
+                scroll.scrollTo(Self.bottom, anchor: .bottom)
+            }
         }
     }
 
@@ -468,6 +565,47 @@ struct CopilotView: View {
     private func decision(for question: CopilotQuestion) -> CopilotConsentQuestion? {
         guard question.mine, link?.grant.canAnswer == true else { return nil }
         return link?.asked.first { $0.id == question.id }
+    }
+
+    /**
+     * An empty conversation, said out loud.
+     *
+     * There was nothing here at all: a state card, a composer, and a screen's
+     * height of black between them, which reads as a screen that failed to load
+     * rather than one with nothing to show. *"Empty states must say what is
+     * true."*
+     *
+     * Three sentences because there are three different truths, and picking one
+     * of them for all three would be the *"Watching"* mistake the Android client
+     * made in the same place: a run with nothing said in it is waiting for a
+     * question, a machine with no run is waiting for a tap on the button
+     * directly below, and a phone that may only watch is waiting for somebody
+     * else entirely.
+     *
+     * Deliberately short. He struck out the paragraph that used to sit under the
+     * Start button — *"we are not making this for the dumb people"* — and this
+     * is one line, saying the one thing the blackness does not.
+     */
+    private var nothingYet: some View {
+        Text(nothingYetLine)
+            .font(.system(size: 13))
+            .foregroundStyle(Theme.faint)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 24)
+            .accessibilityIdentifier("copilot.nothingYet")
+    }
+
+    private var nothingYetLine: String {
+        if link?.state == nil {
+            return "\(host?.label ?? "That machine") has not said what its copilot is doing yet."
+        }
+        if link?.hasRun == true {
+            return "Nothing said yet. What it says and what it does both land here, in the order they happen."
+        }
+        if host?.copilotAccess == .direct {
+            return "No conversation on this \(hostNoun) yet."
+        }
+        return "What the copilot says and what it does will land here, in the order they happen."
     }
 
     private static let bottom = "copilot.bottom"
@@ -975,6 +1113,12 @@ private struct CopilotBubble: View {
             if message.role == .you { Spacer(minLength: 40) }
 
             VStack(alignment: .leading, spacing: 6) {
+                // Already stripped of the escape sequences a shell writes into
+                // its own transcript — see `CopilotWire.prose`, which does it at
+                // the decoder because that is the only place the `ESC` that
+                // begins one still exists. Scrubbing here as well would be two
+                // regex passes per redraw over the row a streaming answer is
+                // extending, for nothing left to find.
                 Text(message.text)
                     .font(.system(size: 15))
                     .foregroundStyle(Theme.primary)
@@ -1005,6 +1149,57 @@ private struct CopilotBubble: View {
         .accessibilityElement(children: .combine)
         .accessibilityLabel(message.role == .you ? "You said: \(message.text)"
                                                  : "Copilot said: \(message.text)")
+    }
+}
+
+/**
+ * Something this phone said, before the machine has said it back.
+ *
+ * The **same bubble** as `CopilotBubble` on the same side in the same tint, plus
+ * one quiet line of status — because it is not a different message, it is this
+ * message drawn early. Anything that made it a visibly different kind of row
+ * would trade one confusion for another: a person would see their sentence
+ * twice, once faint and once solid, with nothing saying which counted.
+ *
+ * The second line says *sending* while the wait is running and, when it runs
+ * out, says the machine has not echoed it — **not** that it failed. The echo is
+ * the agent CLI having taken the turn, not a network acknowledgement, so silence
+ * means unaccounted for rather than lost, and the row must not claim a fact this
+ * end does not have. What it does claim is worth having on its own: the text is
+ * still on screen, selectable, so it can be copied or sent again.
+ */
+private struct CopilotOutgoingBubble: View {
+    let outgoing: CopilotOutgoing
+
+    var body: some View {
+        HStack {
+            Spacer(minLength: 40)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(outgoing.text)
+                    .font(.system(size: 15))
+                    .foregroundStyle(Theme.primary)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+
+                Text(outgoing.unacknowledged
+                     ? "That machine has not echoed this back."
+                     : "sending\u{2026}")
+                    .font(.system(size: 11))
+                    .foregroundStyle(outgoing.unacknowledged ? Theme.warning : Theme.faint)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
+            .background(Theme.accent.opacity(0.14),
+                        in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(outgoing.unacknowledged
+                            ? "You said, not acknowledged: \(outgoing.text)"
+                            : "You said, sending: \(outgoing.text)")
+        .accessibilityIdentifier("copilot.sending")
     }
 }
 

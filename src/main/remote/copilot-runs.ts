@@ -652,6 +652,29 @@ export class CopilotRuns implements CopilotRemote {
     hideSession(sessionId)
     this.runs.set(deviceId, run)
     run.unchat = this.deps.chat(sessionId, (update) => this.pushChat(deviceId, sessionId, update))
+    /*
+     * **Announce the run to everything already watching, with a `reset`.**
+     *
+     * `watch` sends this when a connection attaches to a run that already
+     * exists, and nothing sent it the other way round — for a connection that
+     * attached *before* the run and then started one, which is the ordinary
+     * order a phone does things in: open the tab, look, press Start. So the
+     * client was left holding no baseline for the run, and `copilot.chat`
+     * carries a `run` field precisely so a client can drop frames it has no
+     * baseline for. Every chat frame of that run was dropped, forever, and the
+     * phone's timeline stayed empty through a whole live conversation.
+     *
+     * Fixed on both sides on purpose. The clients now adopt a run they have
+     * nothing to splice onto, because a client must not depend on the machine
+     * being new enough; and the machine says it, because *"this is the whole
+     * conversation now"* is a fact only the machine has, and leaving a client to
+     * infer it is how the two ends drift again.
+     *
+     * After `runs.set` and after the reader is attached, so that a frame the
+     * reader produces immediately cannot land in front of the reset that is
+     * supposed to precede it.
+     */
+    this.pushChat(deviceId, sessionId, { messages: [], reset: true })
     this.pushState(deviceId)
     return { ok: true }
   }

@@ -5679,6 +5679,31 @@ class Deck {
 
     const tools = this.toolTrail()
     if (tools !== null) block.append(tools)
+
+    /*
+     * What this browser has said and the machine has not said back, at the foot
+     * of the conversation where it belongs.
+     *
+     * The composer reported *Sending…* on its button, which says something is
+     * happening and not **what**. The sentence itself was gone — out of the box
+     * and not yet in the conversation — for a full round trip through a pty and
+     * an agent CLI. So it is drawn here, immediately, and the machine's own row
+     * replaces it when it arrives; see `settle` in `copilot.ts`.
+     */
+    for (const row of this.copilot.outgoing) {
+      const bubble = element('div', 'chat__bubble chat__bubble--you chat__bubble--sending')
+      bubble.append(element('div', 'chat__text', plain(row.text)))
+      bubble.append(element(
+        'div',
+        row.unacknowledged ? 'chat__unsaid' : 'chat__more',
+        // Not "failed". The echo is the agent CLI having taken the turn rather
+        // than a network acknowledgement, so silence means unaccounted for —
+        // and the row says only that, with the text still there to copy or send
+        // again.
+        row.unacknowledged ? `The ${this.noun} has not echoed this back.` : 'sending…',
+      ))
+      block.append(bubble)
+    }
     return block
   }
 
@@ -5726,8 +5751,21 @@ class Deck {
     block.addEventListener('submit', (event) => {
       event.preventDefault()
       const text = this.composerText
-      this.composerText = ''
+      /*
+       * The box is emptied **only when a bubble appeared**.
+       *
+       * It used to be emptied first, unconditionally, and then the reducer
+       * decided whether to send anything — so a message refused for being too
+       * long, or sent while another was still unacknowledged, was wiped out of
+       * the textarea and out of the conversation at the same instant. There was
+       * nothing left on the screen to retype from. A row in `outgoing` is
+       * exactly the receipt for "this went onto the wire", so that is what is
+       * asked.
+       */
+      const before = this.copilot.outgoing.length
       this.copilotDo({ t: 'say', text })
+      if (this.copilot.outgoing.length > before) this.composerText = ''
+      this.render()
     })
 
     // Start is here rather than beside the desk's status, because it is what the

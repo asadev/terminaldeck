@@ -140,6 +140,9 @@ protocol CopilotWire: AnyObject {
 enum CopilotEntry: Identifiable, Equatable {
     case message(CopilotChatMessage)
     case action(CopilotAction)
+    /// Something **this phone** just said, before the machine has echoed it
+    /// back. See `CopilotOutgoing`.
+    case mine(CopilotOutgoing)
 
     /// Prefixed, because a chat id and an action id come from two different
     /// generators on the desktop and nothing makes them distinct from each
@@ -150,8 +153,58 @@ enum CopilotEntry: Identifiable, Equatable {
         switch self {
         case let .message(message): return "m:\(message.id)"
         case let .action(action): return "a:\(action.id)"
+        case let .mine(outgoing): return "o:\(outgoing.id)"
         }
     }
+
+    /// What this row currently *says*, as one number, for the one thing that has
+    /// to notice a message **growing** rather than a message arriving: the
+    /// scroll. See `CopilotView.timeline`.
+    ///
+    /// A hash rather than a character count, and the difference is not
+    /// theoretical: `chat-serve.ts` truncates a bubble at a cap, so a long
+    /// streaming answer reaches a **fixed** length and then goes on changing —
+    /// a count-based digest freezes there and the view stops following at
+    /// exactly the point a long answer needs it to. Measured against a harness
+    /// that sends the last 4000 characters of a session.
+    var digest: Int {
+        switch self {
+        case let .message(message): return message.text.hashValue
+        case let .action(action): return action.detail.hashValue
+        case let .mine(outgoing): return outgoing.text.hashValue
+        }
+    }
+}
+
+/**
+ * A message this phone has sent and the machine has not yet said back.
+ *
+ * Asad, on this screen: *"it should be a very smooth and clean process."* It was
+ * not, and this type is the fix. A `copilot.say` leaves this device, the
+ * composer clears, and the **only** bubble a person's own words ever get is the
+ * one the far machine sends back — which is a full round trip through a pty, an
+ * agent CLI and a transcript reader. Measured against `scripts/remote-host.sh`
+ * on 2026-08-22: about three seconds against a plain shell on this same Mac,
+ * and a real agent CLI is slower than a shell. What a person saw in that window
+ * was a message that had simply vanished.
+ *
+ * So the bubble is drawn immediately and the machine's own row **replaces** it
+ * when it arrives — `CopilotLink.settle`. It is not a second message and must
+ * never read as one: same side, same colour, same text, plus one quiet line
+ * saying what is actually known about it.
+ *
+ * A row is created **only when the frame went onto the socket**. A send this end
+ * refused — over length, or a dead socket — keeps the text in the composer and
+ * says why there instead, because a bubble above a full text field is one
+ * message shown twice.
+ */
+struct CopilotOutgoing: Identifiable, Equatable {
+    /// This device's own id for the row. Never sent anywhere.
+    let id: String
+    let text: String
+    let at: Date
+    /// Whether the wait has run out. Not *failed* — see `CopilotView`.
+    var unacknowledged = false
 }
 
 @MainActor
@@ -350,11 +403,19 @@ final class CopilotLink {
     /// about which is showing.
     var onError: ((String) -> Void)?
 
+    /// Counter behind a `.mine` row's id. Never leaves this device.
+    private var outgoing = 0
+
+    /// The waits on this phone's own messages, by local id, so one that is
+    /// echoed does not leave a sleeping task holding this object.
+    private var waits: [String: Task<Void, Never>] = [:]
+
     private let wire: CopilotWire
 
     init(wire: CopilotWire) {
         self.wire = wire
     }
+
 
     // MARK: - What may be drawn
 
@@ -550,6 +611,7 @@ final class CopilotLink {
     /// of his is a question somebody answers again at the machine. Nothing is
     /// carried across, and there is no secret left to drop.
     func forget() {
+        cancelWaits()
         grant = .none
         isOffered = false
         // And what this machine turned out to be. Unlike `connectionLost`, which
@@ -637,6 +699,7 @@ final class CopilotLink {
 
     /// What a device that may no longer watch must not still be showing.
     private func clearWatched() {
+        cancelWaits()
         state = nil
         timeline = []
         sessions = []
@@ -678,8 +741,13 @@ final class CopilotLink {
         if next.run == nil && chatRun != nil {
             timeline = timeline.filter { entry in
                 if case .message = entry { return false }
+                // And a message this phone sent that was never echoed. It
+                // belonged to the run that has just gone; leaving it would put
+                // an unanswered sentence above somebody else's next question.
+                if case .mine = entry { return false }
                 return true
             }
+            cancelWaits()
             chatRun = nil
         }
     }
@@ -713,12 +781,72 @@ final class CopilotLink {
                 if case .message = entry { return false }
                 return true
             }
+        } else if chatRun == nil {
+            /*
+             * **No baseline, and nothing to splice onto: adopt the run.**
+             *
+             * This branch did not exist, and its absence was the whole of *"the
+             * copilot chat on the phone shows nothing"*. The rule above it —
+             * *a non-reset frame for a run we have no baseline for is dropped* —
+             * is right about the case it was written for and wrong about the
+             * ordinary one, because the desktop **never sends a reset for a run
+             * this connection watched into existence**: `CopilotRuns.watch`
+             * emits `chat(sessionId, [], true)` only when a run already exists
+             * at the moment of attaching, and `start` emits none at all. So the
+             * ordinary sequence — open the tab, attach, press Start, type — left
+             * `chatRun` nil forever and every single chat frame for that run was
+             * dropped on this line. Photographed on a Simulator against the real
+             * desktop code on 2026-08-22: a message typed, sent, echoed by the
+             * far machine, and a timeline that stayed empty through all of it.
+             *
+             * Adopting is safe precisely because `chatRun` is nil, which means
+             * this phone holds no conversation: there is no earlier run's tail
+             * for the frame to be spliced onto, which is the only harm the drop
+             * was protecting against. The guard that matters — a **late** frame
+             * from a run that has been replaced — is the `chatRun != run` case
+             * below, and it is untouched.
+             */
+            chatRun = run
         } else if chatRun != run {
             return
         }
 
         for message in messages { merge(message) }
+        settle(against: messages)
         trim()
+    }
+
+    /**
+     * Take away the rows this phone drew early that the machine has now said
+     * itself.
+     *
+     * A `.mine` row is this device's own sentence, drawn before the round trip.
+     * The moment the same sentence comes back as a `you` message it **is** the
+     * machine's row — in the machine's order, with the machine's id — so the
+     * early one goes rather than sitting above it as a duplicate.
+     *
+     * Matched on the text, because there is no id to match on: a `copilot.say`
+     * carries no request id and the desktop mints the message id out of its own
+     * transcript. Compared after `CopilotText.display` and a trim, so an echo
+     * that came back wrapped in a shell's escape sequences still cancels the row
+     * it belongs to. One echo cancels one row, so a sentence somebody genuinely
+     * sent twice keeps the right count.
+     */
+    private func settle(against messages: [CopilotChatMessage]) {
+        var echoes = messages
+            .filter { $0.role == .you }
+            .map { CopilotText.display($0.text).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !echoes.isEmpty else { return }
+        timeline = timeline.filter { entry in
+            guard case let .mine(outgoing) = entry else { return true }
+            let text = outgoing.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let at = echoes.firstIndex(of: text) else { return true }
+            echoes.remove(at: at)
+            waits[outgoing.id]?.cancel()
+            waits[outgoing.id] = nil
+            return false
+        }
     }
 
     private func merge(_ message: CopilotChatMessage) {
@@ -926,7 +1054,49 @@ final class CopilotLink {
             onError?("Not connected — that was not sent.")
             return false
         }
+        /*
+         * The bubble, now, rather than after the round trip.
+         *
+         * Added **only on this branch** — the one where the frame is on the
+         * socket. Every refusal above keeps the text in the composer and says
+         * why there, because a bubble over a full text field is one message
+         * shown twice and nothing on the screen says which of the two counted.
+         */
+        outgoing += 1
+        let id = "\(outgoing)"
+        timeline.append(.mine(CopilotOutgoing(id: id, text: trimmed, at: Date())))
+        trim()
+        waits[id]?.cancel()
+        waits[id] = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(Copilot.echoWaitSeconds))
+            guard !Task.isCancelled else { return }
+            self?.markUnacknowledged(id)
+        }
         return true
+    }
+
+    /**
+     * Say that one of this phone's own messages has gone unechoed for too long.
+     *
+     * Not *failed*, and the wording on the row keeps that distinction: the echo
+     * is not a network acknowledgement, it is the agent CLI having taken the
+     * turn, so silence means *unaccounted for* rather than *lost*. The text
+     * stays on screen either way, which is the whole point — a person can copy
+     * it, or send it again, and they can see that they have to.
+     */
+    private func cancelWaits() {
+        for wait in waits.values { wait.cancel() }
+        waits = [:]
+    }
+
+    private func markUnacknowledged(_ id: String) {
+        waits[id] = nil
+        guard let at = timeline.firstIndex(where: { $0.id == "o:\(id)" }),
+              case let .mine(row) = timeline[at]
+        else { return }
+        var next = row
+        next.unacknowledged = true
+        timeline[at] = .mine(next)
     }
 
     /**

@@ -135,6 +135,29 @@ export const SAY_TIMEOUT_MS = 30_000
 /** Nothing here, nothing open, nothing granted. */
 export const NO_LINK: CopilotLinkWire = { linked: false, open: false, grant: NO_GRANT }
 
+/**
+ * A message this browser has sent and the machine has not yet said back.
+ *
+ * Kept as its own list rather than pushed into {@link CopilotState.chat},
+ * because the two are different claims. A row in `chat` is *the machine said
+ * this*; one of these is *this browser sent this and is waiting*. Folding them
+ * would put a sentence the far end has never confirmed into the record of the
+ * conversation, and the merge rules would then have to tell them apart by id —
+ * which is exactly what there is no id for.
+ */
+export interface CopilotOutgoing {
+  /** This browser's own id for the row. Never sent anywhere. */
+  readonly id: string
+  readonly text: string
+  readonly at: number
+  /**
+   * The wait ran out. Not *failed*: the echo is the agent CLI having taken the
+   * turn rather than a network acknowledgement, so silence means unaccounted
+   * for, and the row says only that. The text stays on screen either way.
+   */
+  readonly unacknowledged: boolean
+}
+
 export interface CopilotState {
   /**
    * Did this machine's welcome carry a copilot for *this* device.
@@ -196,6 +219,18 @@ export interface CopilotState {
   /** A `copilot.say` is on the wire and its bubble has not come back yet. */
   sending: boolean
   /**
+   * Messages this browser has sent that the machine has not echoed back.
+   *
+   * Drawn as bubbles immediately, and replaced by the machine's own rows when
+   * those arrive — see {@link settle}. The composer already reported *Sending…*
+   * on the button, which says a thing is happening and not **what**: the
+   * sentence itself was gone from the screen, out of the box and not yet in the
+   * conversation, for the length of a round trip through a pty and an agent CLI.
+   * Measured at about three seconds against a plain shell on the same machine,
+   * and a real agent CLI is slower.
+   */
+  outgoing: readonly CopilotOutgoing[]
+  /**
    * One sentence about the last thing that happened, or null.
    *
    * Never invented here when the desktop sent words of its own: a refusal is
@@ -217,6 +252,7 @@ export const NO_COPILOT: CopilotState = {
   pending: [],
   ask: null,
   sending: false,
+  outgoing: [],
   notice: null,
 }
 
@@ -354,7 +390,24 @@ export function copilotStep(state: CopilotState, action: CopilotAction): Copilot
         // paste; half a sentence to an agent is a different sentence.
         return still({ ...state, notice: 'That message is too long to send. Shorten it and try again.' })
       }
-      return { state: { ...state, sending: true, notice: null }, send: [{ t: 'copilot.say', text }] }
+      /*
+       * The bubble, now, rather than after the round trip.
+       *
+       * Added **only on this branch** — the one that puts a frame on the wire.
+       * Every refusal above leaves `outgoing` alone, and `main.ts` keeps the
+       * text in the box when no row appeared, because a bubble over a full
+       * textarea is one message shown twice with nothing saying which counted.
+       */
+      const row: CopilotOutgoing = {
+        id: `${state.outgoing.length}:${Date.now()}`,
+        text,
+        at: Date.now(),
+        unacknowledged: false,
+      }
+      return {
+        state: { ...state, sending: true, notice: null, outgoing: [...state.outgoing, row] },
+        send: [{ t: 'copilot.say', text }],
+      }
     }
 
     case 'say-timeout': {
@@ -370,7 +423,16 @@ export function copilotStep(state: CopilotState, action: CopilotAction): Copilot
        * already the state that draws Start instead of Send.
        */
       return {
-        state: { ...state, sending: false, notice: 'The copilot did not answer.' },
+        state: {
+          ...state,
+          sending: false,
+          notice: 'The copilot did not answer.',
+          // And the bubbles say so themselves, where the sentence they belong to
+          // is. A notice above the composer names the failure; the row names
+          // *which message* it happened to, which is the thing a person needs in
+          // order to send it again.
+          outgoing: state.outgoing.map((row) => ({ ...row, unacknowledged: true })),
+        },
         send: state.link.open && state.link.grant.read ? [{ t: 'copilot.state' }] : [],
       }
     }
@@ -437,7 +499,15 @@ function frame(state: CopilotState, message: ServerMessage): CopilotStep {
       // — takes the conversation with it. Leaving the bubbles up would be a
       // screen showing a copilot this browser can no longer reach.
       if (!message.link.open) {
-        return still({ ...next, chat: [], tools: [], ask: null, run: null, sending: false })
+        return still({
+          ...next,
+          chat: [],
+          tools: [],
+          ask: null,
+          run: null,
+          sending: false,
+          outgoing: [],
+        })
       }
       // Opening is where the watching starts, and only on the transition: a
       // regrant that arrives while already open must not re-ask for everything.
@@ -458,7 +528,13 @@ function frame(state: CopilotState, message: ServerMessage): CopilotStep {
       // landed, and waiting for the reply would leave the box dead for as long
       // as a turn takes.
       const echoed = message.messages.some((row) => row.role === 'you')
-      return still({ ...state, run: message.run, chat, sending: state.sending && !echoed })
+      return still({
+        ...state,
+        run: message.run,
+        chat,
+        sending: state.sending && !echoed,
+        outgoing: settle(state.outgoing, message.messages),
+      })
     }
 
     case 'copilot.tool': {
@@ -532,6 +608,41 @@ function openingFrames(link: CopilotLinkWire): ClientMessage[] {
  * a little longer. Replacing in place is what makes it read as one message being
  * written.
  */
+/**
+ * Take away the bubbles this browser drew early that the machine has now said
+ * itself.
+ *
+ * The moment a person's own sentence comes back as a `you` message it **is** the
+ * machine's row — in the machine's order, with the machine's id — so the early
+ * one goes rather than sitting above it as a duplicate.
+ *
+ * Matched on the text, because there is no id to match on: a `copilot.say`
+ * carries no request id and the desktop mints the message id out of its own
+ * transcript. One echo cancels one row, so a sentence somebody genuinely sent
+ * twice keeps the right count.
+ */
+export function settle(
+  held: readonly CopilotOutgoing[],
+  arriving: readonly CopilotChatMessage[],
+): readonly CopilotOutgoing[] {
+  if (held.length === 0) return held
+  const echoes = arriving
+    .filter((row) => row.role === 'you')
+    .map((row) => row.text.trim())
+    .filter((text) => text !== '')
+  if (echoes.length === 0) return held
+  const out: CopilotOutgoing[] = []
+  for (const row of held) {
+    const at = echoes.indexOf(row.text.trim())
+    if (at >= 0) {
+      echoes.splice(at, 1)
+      continue
+    }
+    out.push(row)
+  }
+  return out
+}
+
 export function mergeChat(
   held: readonly CopilotChatMessage[],
   arriving: readonly CopilotChatMessage[],

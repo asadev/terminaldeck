@@ -332,4 +332,52 @@ describe('a message that is never acknowledged', () => {
     expect(step.state.sending).toBe(false)
     expect(step.send).toEqual([])
   })
+
+  /**
+   * The bubble is drawn on the send, not on the echo.
+   *
+   * *Sending…* on the button says something is happening and not **what**: the
+   * sentence itself was out of the textarea and not yet in the conversation for
+   * a full round trip through a pty and an agent CLI.
+   */
+  it('draws the message straight away, and the machine\u2019s copy replaces it', () => {
+    const after = sent()
+    expect(after.outgoing.map((row) => row.text)).toEqual(['hello'])
+
+    const echoed = copilotStep(after, {
+      t: 'frame',
+      // No `reset` and no `truncated`: both are `true`-only on this wire, said
+      // in so many words or not said at all.
+      message: {
+        t: 'copilot.chat',
+        run: 'r1',
+        messages: [{ id: 'm1', role: 'you', text: 'hello', at: 1 }],
+      },
+    }).state
+    // Gone from `outgoing` — it is the machine's row now, in the machine's order.
+    expect(echoed.outgoing).toEqual([])
+    expect(echoed.chat.map((row) => row.text)).toEqual(['hello'])
+    expect(echoed.sending).toBe(false)
+  })
+
+  /** The row says the silence rather than vanishing into it. */
+  it('marks an unechoed message on the timeout, text and all', () => {
+    const step = copilotStep(sent(), { t: 'say-timeout' })
+    expect(step.state.outgoing).toEqual([
+      expect.objectContaining({ text: 'hello', unacknowledged: true }),
+    ])
+  })
+
+  /** A refusal writes no row, which is what tells `main.ts` to keep the draft. */
+  it('writes no row for a message it refused to send', () => {
+    const open = copilotStep(NO_COPILOT, { t: 'welcome', link: linked }).state
+    const granted = copilotStep(open, {
+      t: 'frame',
+      message: { t: 'copilot.grant', link: linked },
+    }).state
+    const tooLong = copilotStep(granted, { t: 'say', text: 'x'.repeat(64 * 1024) })
+    expect(tooLong.state.outgoing).toEqual([])
+    expect(tooLong.send).toEqual([])
+    expect(tooLong.state.notice).not.toBeNull()
+  })
 })

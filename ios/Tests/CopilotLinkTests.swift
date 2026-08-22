@@ -673,6 +673,105 @@ final class CopilotLinkTests: XCTestCase {
         XCTAssertEqual(link.chatRun, "r-1")
     }
 
+    /**
+     * A frame for a run this phone has **nothing to splice onto** is adopted.
+     *
+     * The counterpart to the test above, and the absence of this branch was the
+     * whole of *"the copilot chat on the phone shows nothing"*. The desktop
+     * never sends a reset for a run this connection watched into existence:
+     * `CopilotRuns.watch` emits one only when a run already exists at the moment
+     * of attaching, and `start` emitted none at all. So the ordinary sequence —
+     * open the tab, attach, press Start, type — left `chatRun` nil for ever, and
+     * every chat frame of that run was dropped by the rule above. Photographed
+     * on a Simulator against the real desktop code on 2026-08-22: a message
+     * typed, sent, echoed by the far machine, and a timeline that stayed empty
+     * through all of it.
+     *
+     * Adopting is safe exactly here, because a nil `chatRun` means no
+     * conversation is held: there is no earlier run's tail for the frame to be
+     * spliced onto, which is the only harm the drop protects against.
+     */
+    func testAFrameForARunWithNothingToSpliceOntoIsAdopted() {
+        connected()
+        link.apply(chat: "r-1", messages: [message("m1", "the answer")], reset: false)
+
+        XCTAssertEqual(link.chatRun, "r-1")
+        XCTAssertEqual(link.timeline.map(\.id), ["m:m1"])
+    }
+
+    /* ------------------------------------ a message, drawn before the round trip -- */
+
+    /**
+     * The bubble appears on the send, not on the echo.
+     *
+     * Asad, on this screen: *"it should be a very smooth and clean process."* It
+     * was not: the composer cleared, the frame went, and the timeline did not
+     * change until the machine had written the sentence into a pty, an agent CLI
+     * had taken the turn and a transcript reader had pushed it back. Measured at
+     * about three seconds against a plain shell on the same Mac.
+     */
+    func testASentMessageIsOnTheTimelineImmediately() {
+        connected()
+        XCTAssertTrue(link.say("what happened overnight"))
+
+        XCTAssertEqual(link.timeline.count, 1)
+        guard case let .mine(row) = link.timeline[0] else { return XCTFail("a message of ours") }
+        XCTAssertEqual(row.text, "what happened overnight")
+        XCTAssertFalse(row.unacknowledged)
+    }
+
+    /// The machine's own row replaces it, rather than sitting under a duplicate.
+    func testTheMachinesEchoSettlesTheRowThisPhoneDrew() {
+        connected()
+        link.say("what happened overnight")
+        link.apply(chat: "r-1",
+                   messages: [message("m1", "what happened overnight", role: .you)],
+                   reset: false)
+
+        XCTAssertEqual(link.timeline.map(\.id), ["m:m1"])
+    }
+
+    /**
+     * An echo wrapped in what a shell wrote still cancels the row it belongs to.
+     *
+     * The text on this wire is bytes an agent produced, and a restored-session
+     * banner arrives with an OSC 7 sequence around it. Comparing raw would leave
+     * the early bubble on screen for ever, directly above the machine's own copy
+     * of the same sentence.
+     */
+    func testAnEchoCarryingEscapeSequencesStillSettlesTheRow() {
+        connected()
+        link.say("hello")
+        link.apply(chat: "r-1",
+                   messages: [message("m1", "\u{1B}[32mhello\u{1B}[0m", role: .you)],
+                   reset: false)
+
+        XCTAssertEqual(link.timeline.count, 1)
+        guard case .message = link.timeline[0] else { return XCTFail("the machine's own row") }
+    }
+
+    /// A refusal writes no row: the text is still in the composer, and one
+    /// message shown twice is worse than one message shown once.
+    func testASendThatWasRefusedDrawsNoBubble() {
+        connected()
+        wire.accepts = false
+        XCTAssertFalse(link.say("into the void"))
+
+        XCTAssertTrue(link.timeline.isEmpty)
+        XCTAssertEqual(errors, ["Not connected — that was not sent."])
+    }
+
+    /// A run that has gone takes an unechoed message with it. Leaving it would
+    /// put an unanswered sentence above somebody else's next question.
+    func testARunThatEndsTakesAnUnechoedMessageWithIt() {
+        connected()
+        link.apply(state: state(run: "r-1"))
+        link.say("still going")
+        link.apply(state: state(run: nil))
+
+        XCTAssertTrue(link.timeline.isEmpty)
+    }
+
     /// A `reset` adopts the run and replaces the conversation — and leaves the
     /// tool rows alone, because the machinery either side of it happened
     /// whatever the chat says.

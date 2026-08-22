@@ -11,9 +11,14 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -35,10 +40,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.terminaldeck.android.CopilotView
 import dev.terminaldeck.android.protocol.ChatRole
@@ -48,6 +55,7 @@ import dev.terminaldeck.android.protocol.CopilotChatMessage
 import dev.terminaldeck.android.protocol.CopilotDesk
 import dev.terminaldeck.android.protocol.CopilotEntry
 import dev.terminaldeck.android.protocol.CopilotOutcome
+import dev.terminaldeck.android.protocol.CopilotSendState
 import dev.terminaldeck.android.protocol.CopilotText
 import dev.terminaldeck.android.ui.kit.DeckFootnote
 import dev.terminaldeck.android.ui.kit.DeckGroup
@@ -60,6 +68,7 @@ import dev.terminaldeck.android.ui.theme.DeckTheme
 import dev.terminaldeck.android.ui.theme.DeckType
 import dev.terminaldeck.android.ui.theme.Radius
 import dev.terminaldeck.android.ui.theme.Space
+import kotlinx.coroutines.flow.filter
 
 /**
  * The copilot, on a phone.
@@ -130,6 +139,32 @@ fun CopilotScreen(
     val listState = rememberLazyListState()
 
     /*
+     * Whether to keep following the conversation down.
+     *
+     * The whole of *"do not fight the reader"*. A timeline that jumps to the end on every frame is
+     * unusable while an agent is writing and somebody is scrolled up reading what it said a minute
+     * ago — which is exactly when a copilot is worth reading.
+     *
+     * Settled **when a scroll finishes**, not read live, and that ordering is the difference
+     * between working and not. Read live it answers about the layout the *new* frame has already
+     * produced: the row that just arrived pushes the foot of the list off the screen, so "is the
+     * bottom visible" is false at the exact instant the decision is being made, and the view never
+     * follows anything. Measured on an emulator — a reply arrived, went under the composer, and
+     * stayed there. Deciding at the end of each scroll instead means growth alone cannot change the
+     * answer; only a finger can, which is the property that was wanted.
+     */
+    var following by remember { mutableStateOf(true) }
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.isScrollInProgress }
+            .filter { !it }
+            .collect {
+                val info = listState.layoutInfo
+                val last = info.visibleItemsInfo.lastOrNull()
+                following = last == null || last.index >= info.totalItemsCount - 1
+            }
+    }
+
+    /*
      * Attach while the screen is up and detach on the way out.
      *
      * The attach is `read` and spends nothing, so it is safe to do on every visit; the detach is what
@@ -141,10 +176,53 @@ fun CopilotScreen(
         onDispose { onClosed() }
     }
 
-    // The newest bubble, whenever one arrives. `animateScrollToItem` rather than a jump: a
-    // conversation that teleported on every token would be unreadable while the agent is writing.
-    LaunchedEffect(view.entries.size) {
-        if (view.entries.isNotEmpty()) listState.animateScrollToItem(view.entries.lastIndex)
+    /*
+     * Follow the conversation down as it **grows**, not only as it lengthens.
+     *
+     * This was keyed on `entries.size`, and the shape of a streaming answer is the one case that
+     * key cannot see: the same message id arriving again with more text in it. So a reply longer
+     * than the screen was written entirely below the fold, and the view sat still through all of
+     * it. Photographed on an emulator on 2026-08-22 — the answer to a message ran off the bottom
+     * of the list and under the composer, and nothing moved.
+     *
+     * The key is a digest that changes on both: how many rows there are, and **what the last one
+     * says**. Length alone was the first attempt and it has a hole big enough to reproduce the
+     * original bug: a bounded tail — `chat-serve.ts` truncates a bubble, and the harness sends the
+     * last 4000 characters of a session — stops growing while its *content* keeps changing, so the
+     * digest freezes at the cap and the view stops following at exactly the point a long answer
+     * needs it most. A hash of the text costs one pass over the last row and has no such ceiling.
+     *
+     * Scrolling to [BOTTOM] rather than to the last row, and the difference matters for exactly the
+     * same case: `animateScrollToItem` puts an item's **top** at the top of the viewport, so a tall
+     * streaming answer would be scrolled to its first line. A one-pixel row after it means the
+     * bottom of the content lands at the bottom of the screen.
+     */
+    val tail = view.entries.lastOrNull()?.let { entry ->
+        val length = when (entry) {
+            is CopilotEntry.Said -> entry.message.text.hashCode()
+            is CopilotEntry.Did -> entry.row.detail.hashCode()
+            is CopilotEntry.Mine -> entry.text.hashCode()
+        }
+        "${view.entries.size}:${entry.id}:$length"
+    }
+    /*
+     * `scrollToItem`, not `animateScrollToItem`, and this is the third thing that had to be right
+     * before a streaming answer would follow.
+     *
+     * An animated scroll takes a few hundred milliseconds. A `LaunchedEffect` keyed on the digest
+     * is **cancelled and restarted** every time the digest moves, and while an agent is writing
+     * that is many times a second — so every animation was killed a few milliseconds in, the next
+     * one started from where the last one gave up, and the net movement over a whole reply was
+     * close to nothing. That is what the emulator kept showing: a reply growing steadily off the
+     * bottom of a list that never moved.
+     *
+     * An instant scroll finishes inside one frame, so there is nothing for the next frame to
+     * interrupt. It does not read as a jump either, because [following] already guarantees the
+     * bottom is where the reader is: staying pinned to the end of text that is growing looks like
+     * text growing, which is the thing it actually is.
+     */
+    LaunchedEffect(tail) {
+        if (view.entries.isNotEmpty() && following) listState.scrollToItem(view.entries.size)
     }
 
     Scaffold(
@@ -175,7 +253,17 @@ fun CopilotScreen(
             )
         },
     ) { padding ->
-        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+        /*
+         * The top inset here, the bottom one on the composer — never both.
+         *
+         * `Scaffold` hands back a padding that already reserves the navigation
+         * bar, and the composer reserved it a second time, so the bar sat a
+         * navigation bar's height above the bottom of the screen with a band of
+         * empty surface underneath it. Taking only the top means one owner for
+         * the bottom edge, which is also the only way the composer can swap that
+         * inset for the keyboard's when one appears.
+         */
+        Column(modifier = Modifier.fillMaxSize().padding(top = padding.calculateTopPadding())) {
             when (view.access) {
                 CopilotAccess.NotOffered -> Explanation(
                     title = "No copilot here",
@@ -213,17 +301,35 @@ fun CopilotScreen(
                              */
                             Explanation(
                                 title = when {
+                                    view.state == null -> "Asking $machineLabel"
                                     view.state?.hasRun == true -> "Nothing said yet"
-                                    view.canStart -> "Nothing yet"
-                                    else -> "Watching"
+                                    view.canStart -> "No conversation on this machine yet"
+                                    view.access == CopilotAccess.Watch -> "Watching"
+                                    else -> "Nothing to talk to yet"
                                 },
                                 detail = when {
+                                    /*
+                                     * A fourth empty, and it is the one that was a lie.
+                                     *
+                                     * With no `copilot.state` in hand this screen used to fall
+                                     * through to *"Watching"* — telling a phone that had been
+                                     * granted every tier that it was a spectator, over a composer
+                                     * that was not drawn. It is not watching; it has not been
+                                     * answered yet, and those are different facts.
+                                     */
+                                    view.state == null ->
+                                        "This phone has asked $machineLabel what its copilot is " +
+                                            "doing and has not been answered yet."
                                     view.state?.hasRun == true ->
                                         "Ask it something and what it says and what it does both " +
                                             "land here, in the order they happen."
                                     view.canStart ->
                                         "Start a run and what it says and what it does both land " +
                                             "here, in the order they happen."
+                                    view.access == CopilotAccess.Watch ->
+                                        "What the copilot says and what it does will land here, in " +
+                                            "the order they happen. This phone may watch it and " +
+                                            "nothing else."
                                     else ->
                                         "What the copilot says and what it does will land here, in " +
                                             "the order they happen."
@@ -245,8 +351,13 @@ fun CopilotScreen(
                                     when (entry) {
                                         is CopilotEntry.Said -> Bubble(entry.message, onCopy)
                                         is CopilotEntry.Did -> ToolRow(entry.row)
+                                        is CopilotEntry.Mine -> MineBubble(entry, onCopy)
                                     }
                                 }
+                                // The foot of the conversation, one pixel tall and stably keyed.
+                                // Everything above about following a *growing* answer down depends
+                                // on this row existing; see the scroll effect at the top of the file.
+                                item(key = BOTTOM) { Spacer(Modifier.height(Dp.Hairline)) }
                             }
                         }
                     }
@@ -294,7 +405,39 @@ fun CopilotScreen(
 @Composable
 private fun StateStrip(view: CopilotView, machineLabel: String) {
     val colors = DeckTheme.colors
-    val state = view.state ?: return
+    /*
+     * No state is a state, and it needs a line of its own.
+     *
+     * `dropped()` clears the state when the socket goes, which is right — a reading is a claim
+     * about now — but the screen then drew nothing at all: a conversation with no strip above it
+     * and, since the composer has nothing to offer either, no chrome whatsoever. A person watching
+     * that happen sees the app quietly lose half its screen and is told nothing. Reproduced by
+     * turning airplane mode on and off on an emulator.
+     *
+     * So the absence is said out loud, in the place the state would have been.
+     */
+    val state = view.state ?: run {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = Space.screen, vertical = Space.x2),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .clip(androidx.compose.foundation.shape.CircleShape)
+                    .background(colors.faint)
+            )
+            Spacer(Modifier.width(Space.x2))
+            Text(
+                text = "Waiting for $machineLabel to say what its copilot is doing",
+                style = DeckType.caption,
+                color = colors.faint,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        return
+    }
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier.fillMaxWidth().padding(horizontal = Space.screen, vertical = Space.x2),
@@ -374,12 +517,36 @@ private fun Composer(
     onStopRun: () -> Unit,
 ) {
     val colors = DeckTheme.colors
+    /*
+     * Nothing at all, rather than an empty bar.
+     *
+     * A `Column` with a surface colour and two paddings is a **visible block** even when every
+     * branch below draws nothing, and that is what a phone met on this screen: a dead grey strip
+     * across the bottom, the height of a control, with no control in it. Asked for on the same
+     * pass as the rest of this file — *"never a dead control"* — and the honest version of a bar
+     * with nothing to put on it is no bar.
+     */
+    val hasReason = view.unavailable != null
+    val hasControls = view.access.canAct && (view.canStart || view.state?.hasRun == true)
+    if (!hasReason && !hasControls) return
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .background(colors.surface)
-            .navigationBarsPadding()
-            .imePadding()
+            /*
+             * One inset, not two stacked.
+             *
+             * `navigationBarsPadding().imePadding()` adds both, and while the keyboard is up the
+             * IME inset **already covers** the navigation bar — so the composer floated a
+             * navigation bar's height above the keyboard with a band of empty surface under it.
+             * `union` takes the larger of the two, which is the whole of what is wanted here.
+             */
+            .windowInsetsPadding(
+                WindowInsets.navigationBars
+                    .union(WindowInsets.ime)
+                    .only(WindowInsetsSides.Bottom)
+            )
             .padding(horizontal = Space.screen, vertical = Space.x2),
     ) {
         view.unavailable?.let { reason ->
@@ -466,6 +633,48 @@ private fun Bubble(message: CopilotChatMessage, onCopy: (String) -> Unit) {
 }
 
 /**
+ * Something this phone said, before the machine has said it back.
+ *
+ * The **same bubble** as [Bubble] on the same side in the same colour, plus one quiet line of
+ * status — because it is not a different message, it is this message drawn early. Anything that
+ * made it look like a separate kind of row would trade one confusion for another: a person would
+ * see their sentence twice, once faint and once solid, and have to work out which one counted.
+ *
+ * [CopilotSendState.Sending] draws *"sending"*; the wait running out draws the machine's silence
+ * rather than a failure, because a message that has not been echoed has not necessarily been lost
+ * — the desktop may still be typing it into a prompt. What it definitely is, is unaccounted for,
+ * and the row says exactly that with the text still on screen to copy or retype.
+ */
+@Composable
+private fun MineBubble(entry: CopilotEntry.Mine, onCopy: (String) -> Unit) {
+    val colors = DeckTheme.colors
+    Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth(0.88f)
+                .clip(Radius.large)
+                .background(colors.accentSoft)
+                .clickable { onCopy(entry.text) }
+                .padding(horizontal = Space.x3, vertical = Space.x2),
+        ) {
+            Text(entry.text, style = DeckType.control, color = colors.primary)
+            Spacer(Modifier.height(Space.half))
+            Text(
+                text = when (entry.state) {
+                    CopilotSendState.Sending -> "sending\u2026"
+                    CopilotSendState.Unacknowledged -> "The machine has not echoed this back."
+                },
+                style = DeckType.caption,
+                color = when (entry.state) {
+                    CopilotSendState.Sending -> colors.faint
+                    CopilotSendState.Unacknowledged -> colors.warning
+                },
+            )
+        }
+    }
+}
+
+/**
  * One thing the copilot did.
  *
  * A refused call is drawn as a refusal **in the copilot's own words**: a gate that denies invisibly
@@ -525,6 +734,9 @@ private fun ToolRow(row: CopilotActionRow) {
         }
     }
 }
+
+/** The key of the one-pixel row at the foot of the timeline. See the scroll effect. */
+private const val BOTTOM = "copilot.bottom"
 
 /** A title and its paragraph, for the states that are a sentence rather than a list. */
 @Composable

@@ -4,10 +4,12 @@ import dev.terminaldeck.android.protocol.Capability
 import dev.terminaldeck.android.protocol.ClientMessage
 import dev.terminaldeck.android.protocol.CopilotAccess
 import dev.terminaldeck.android.protocol.CopilotActionRow
+import dev.terminaldeck.android.credential.Expiry
 import dev.terminaldeck.android.protocol.CopilotConsentQuestion
 import dev.terminaldeck.android.protocol.CopilotEntry
 import dev.terminaldeck.android.protocol.CopilotLinkWire
 import dev.terminaldeck.android.protocol.CopilotPendingRow
+import dev.terminaldeck.android.protocol.CopilotSendState
 import dev.terminaldeck.android.protocol.CopilotSessionRow
 import dev.terminaldeck.android.protocol.CopilotStateReport
 import dev.terminaldeck.android.protocol.CopilotTimeline
@@ -43,6 +45,8 @@ import dev.terminaldeck.android.protocol.ServerMessage
 class CopilotController(
     private val send: (ClientMessage) -> Boolean,
     private val capabilities: () -> Set<String>,
+    private val expiry: Expiry,
+    private val now: () -> Long = System::currentTimeMillis,
     private val onChange: () -> Unit,
 ) {
 
@@ -54,8 +58,28 @@ class CopilotController(
     private var question: CopilotConsentQuestion? = null
     private var notice: ActionNotice? = null
 
+    /**
+     * The screen is up and wants the stream.
+     *
+     * Separate from [attached], and the separation is a defect this class shipped. There was one
+     * flag for both, so a socket that dropped cleared it — and the `welcome` that followed found
+     * nothing to renew, because the thing it tested had been cleared by the drop three seconds
+     * earlier. The screen stayed exactly as it was, with a live composer over a stream that had
+     * gone, and nothing on it ever changed again. Measured on an emulator on 2026-08-22.
+     */
+    private var wanted = false
+
+    /** `copilot.hello` is on this socket. Cleared by a drop, because the next socket is a new one. */
+    private var helloed = false
+
     /** Whether the stream is open on this socket, so a re-attach is not sent on every visit. */
     private var attached = false
+
+    /** Counter behind the local id on a [CopilotEntry.Mine]. Never leaves this device. */
+    private var sent = 0L
+
+    /** Cancels for the waits on this phone's own messages, by local id. */
+    private val waits = mutableMapOf<String, () -> Unit>()
 
     /** True while a `copilot.log` is outstanding, so a second scroll does not ask twice. */
     private var readingLog = false
@@ -96,13 +120,50 @@ class CopilotController(
     /**
      * The tab opened.
      *
-     * `hello` then `attach`, and nothing else: both are `read`, so a machine that has granted this
-     * device only watching gets exactly the same two frames and exactly the same replay.
+     * **`hello` first, and `attach` only once it has been answered.** They used to go out together
+     * in one burst, and that was the bug a person met on their very first visit to this screen:
+     * `server.ts` refuses every `copilot.*` verb from a socket whose `copilotOpen` is still false,
+     * and `copilotOpen` is set by the *answer* to the hello. So the attach, the session list and
+     * the pending list were all three refused, no `copilot.state` ever came back, and the screen
+     * drew an empty grey bar under the word **"Watching"** — over a phone that had been granted
+     * every tier. Leaving the screen and coming back fixed it, because by then the hello had landed.
+     * Photographed on an emulator on 2026-08-22, against the real desktop code.
+     *
+     * The subscription now hangs off `copilot.grant` with `open: true`, which is what iOS's
+     * `CopilotLink` has always done and is the only ordering the desktop actually promises.
      */
     fun open() {
-        if (!offered() || attached) return
+        if (!offered()) return
+        wanted = true
+        /*
+         * The shortcut is gated on **this socket having said hello**, not on the grant.
+         *
+         * `dropped()` deliberately keeps the last grant — it is a fact about the machine, and
+         * throwing it away would take the screen down for the three seconds of a reconnect. But it
+         * is not a fact about the *new* socket, and reading it as one put the original defect
+         * straight back: after a reconnect this method saw `link.open == true`, skipped the hello
+         * and sent an attach that the desktop refused, so the screen kept a conversation it could
+         * no longer add to and lost its state strip and composer for good. Reproduced on an
+         * emulator by turning airplane mode on and off.
+         */
+        if (helloed) {
+            if (link?.open == true && !attached) subscribe()
+            return
+        }
         if (!send(ClientMessage.CopilotHello)) return
-        send(ClientMessage.CopilotAttach)
+        helloed = true
+        onChange()
+    }
+
+    /**
+     * Ask for the stream and for the two lists it does not replay.
+     *
+     * Every frame here is `read`, so a device granted only watching sends exactly these and gets
+     * exactly the same replay.
+     */
+    private fun subscribe() {
+        if (!offered() || attached) return
+        if (!send(ClientMessage.CopilotAttach)) return
         send(ClientMessage.CopilotSessions)
         send(ClientMessage.CopilotPending)
         attached = true
@@ -115,6 +176,7 @@ class CopilotController(
      * Detach rather than stop: leaving a screen is not asking for an agent to be killed mid-turn.
      */
     fun close() {
+        wanted = false
         if (!attached) return
         attached = false
         send(ClientMessage.CopilotDetach)
@@ -131,6 +193,7 @@ class CopilotController(
      */
     fun dropped() {
         attached = false
+        helloed = false
         readingLog = false
         state = null
         question = null
@@ -138,15 +201,25 @@ class CopilotController(
         onChange()
     }
 
-    /** The machine came back. Re-open if the tab is what is on screen. */
+    /**
+     * The machine came back. Say hello again if the tab is what is on screen.
+     *
+     * Keyed on [wanted] — *is this screen up* — rather than on [attached], which the drop has
+     * already cleared by the time this runs. The old version read the flag the drop had just
+     * cleared, concluded nothing had been attached, and returned: after **any** reconnect the
+     * copilot screen went permanently deaf, keeping a conversation that could no longer grow and a
+     * composer whose messages went into a stream nobody was serving.
+     */
     fun renew() {
-        val wasAttached = attached
         attached = false
-        if (wasAttached) open()
+        helloed = false
+        if (wanted) open()
     }
 
     fun stop() {
+        wanted = false
         attached = false
+        helloed = false
         link = null
         state = null
         entries = emptyList()
@@ -154,6 +227,8 @@ class CopilotController(
         pending = emptyList()
         question = null
         notice = null
+        for (cancel in waits.values) cancel()
+        waits.clear()
     }
 
     /* ---------------------------------------------------------------------- verbs -- */
@@ -186,6 +261,21 @@ class CopilotController(
     }
 
     /**
+     * A sentence about this end, put on screen.
+     *
+     * The `onChange()` is the whole of what was missing, and it made every one of these silent:
+     * *"Not connected, so that did not reach the machine"*, the length refusal and the control-
+     * character refusal were all composed correctly, stored on the field the screen draws, and
+     * never shown — because nothing told Compose to look again. A person pressing Send over a dead
+     * socket got a draft that stayed in the box for no stated reason, which reads as a button that
+     * has stopped working.
+     */
+    private fun say(ok: Boolean, text: String) {
+        notice = ActionNotice(ok, text)
+        onChange()
+    }
+
+    /**
      * Say something to it.
      *
      * Returns whether the composer may clear its draft. False keeps it in the box, which is the whole
@@ -214,6 +304,25 @@ class CopilotController(
         if (!send(ClientMessage.CopilotSay(trimmed))) {
             say(false, NOT_CONNECTED)
             return false
+        }
+        /*
+         * The bubble, now, rather than in three seconds' time.
+         *
+         * Drawn **only on this branch** — the one where the frame is on the socket. Every refusal
+         * above keeps the draft in the box and says why under the composer, because a bubble over a
+         * full text field is one message shown twice and the person cannot tell which one is real.
+         */
+        sent += 1
+        val localId = sent.toString()
+        entries = CopilotTimeline.appendMine(
+            entries,
+            CopilotEntry.Mine(localId = localId, text = trimmed, at = now()),
+        )
+        waits[localId] = expiry.after(ECHO_WAIT_MS) {
+            waits.remove(localId)
+            if (entries.none { it is CopilotEntry.Mine && it.localId == localId }) return@after
+            entries = CopilotTimeline.mark(entries, localId, CopilotSendState.Unacknowledged)
+            onChange()
         }
         notice = null
         onChange()
@@ -262,9 +371,17 @@ class CopilotController(
         when (message) {
             is ServerMessage.CopilotGrant -> {
                 link = message.link
-                // A grant that closed takes the stream with it: the far side has stopped serving this
-                // connection, and a client that kept `attached` would never re-open on the next visit.
-                if (!message.link.open) attached = false
+                // A grant that closed takes the stream **and the hello** with it: the far side has
+                // stopped serving this connection, so the next visit has to introduce itself again.
+                // A client that kept either flag would never re-open.
+                if (!message.link.open) {
+                    attached = false
+                    helloed = false
+                }
+                // And an *open* one is the answer to the hello — the moment the desktop starts
+                // serving `copilot.*` on this socket, and therefore the only moment an attach can
+                // succeed. See [open].
+                if (message.link.open && wanted && !attached) subscribe()
             }
 
             is ServerMessage.CopilotStateFrame -> {
@@ -294,6 +411,7 @@ class CopilotController(
                     return true
                 }
                 entries = CopilotTimeline.mergeChat(entries, message.messages, message.reset)
+                sweepWaits()
             }
 
             is ServerMessage.CopilotTool -> entries = CopilotTimeline.mergeTool(entries, message.row)
@@ -330,11 +448,32 @@ class CopilotController(
         return true
     }
 
-    private fun say(ok: Boolean, text: String) {
-        notice = ActionNotice(ok, text)
+    /**
+     * Drop the waits belonging to rows the machine has now echoed.
+     *
+     * A timer left running against a row that is no longer on the timeline would fire into nothing,
+     * which is harmless, and would hold a closure over this controller for half a minute, which is
+     * the kind of thing that outlives a machine being forgotten. Cheap to sweep, so it is swept.
+     */
+    private fun sweepWaits() {
+        if (waits.isEmpty()) return
+        val alive = entries.filterIsInstance<CopilotEntry.Mine>().map { it.localId }.toSet()
+        val gone = waits.keys.filterNot { alive.contains(it) }
+        for (id in gone) waits.remove(id)?.invoke()
     }
 
     companion object {
+        /**
+         * How long one of this phone's own messages may go unechoed before the row says so.
+         *
+         * The echo is not a network acknowledgement, and no shorter number would be honest: it comes
+         * back when the agent CLI has taken the turn, and the first message to a device starts the
+         * run — a cold CLI reading an MCP config, several seconds on this Mac and more on a slow
+         * one. Thirty is comfortably past that, and is the number `pwa/src/copilot.ts` reached for
+         * the same question from the same measurement.
+         */
+        const val ECHO_WAIT_MS = 30_000L
+
         const val NOT_CONNECTED = "Not connected, so that did not reach the machine."
         const val TOO_LONG = "That message is longer than the machine will take at once."
         const val UNUSABLE =
