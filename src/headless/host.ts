@@ -545,6 +545,15 @@ export async function createHeadlessHost(
     // static path rather than a failure to start: the native clients come in
     // through the relay and never ask for a file.
     webRoot: options.webRoot ?? '',
+    // What this build calls itself, and that it is a headless server rather than
+    // a desktop, onto the `welcome`. `hostVersion()` reads the number the
+    // packaging stamped beside the bundle (or `TERMINALDECK_VERSION`), so a
+    // phone paired to a server can say which build it is talking to — and,
+    // because `hostKind` says `server`, the client that is ahead of it says
+    // "update this server from a desktop", which is exactly the plane a headless
+    // host is replaced on. There is no update verb on the wire to pair it with.
+    appVersion: hostVersion(),
+    hostKind: 'headless',
     // Where a file sent from a phone lands. The user's downloads folder, in a
     // folder named after the app — somewhere a person already looks, rather than
     // the state directory, which they never do. Passing it is also what

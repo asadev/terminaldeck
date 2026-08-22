@@ -123,6 +123,8 @@ const STUDIO_LINK: MachineLinkState = {
   ports: [],
   copilot: null,
   hostPlatform: 'win32',
+  hostVersion: '',
+  hostKind: null,
   retryAt: null,
 }
 

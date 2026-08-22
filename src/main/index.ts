@@ -2422,6 +2422,13 @@ function registerIpc(): void {
     },
     webRoot: join(app.getAppPath(), 'pwa', 'dist'),
     storageDir: remoteStorageDir(),
+    // What this build calls itself, and that it is the desktop and not a
+    // headless server, onto the `welcome`. `app.getVersion()` is the packaged
+    // number — the same one the About pane and the updater read — so a phone
+    // paired here can say which build the machine at the other end is running,
+    // and the clients that are ahead of it can say so.
+    appVersion: app.getVersion(),
+    hostKind: 'desktop',
     // The same object the folder rule above closes over, never a second one:
     // the panel edits what `create` is checked against, or it edits a copy and
     // the phone keeps the folders the user just removed until the next launch.

@@ -65,6 +65,7 @@ import {
   type ControlsReadingWire,
   type CopilotLinkWire,
   type CopilotStateReport,
+  type HostKind,
   type LocalPort,
   type ProtocolErrorCode,
   type RemoteSession,
@@ -275,6 +276,26 @@ export interface MachineLinkState {
   copilot: CopilotLinkWire | null
   /** `darwin`, `win32`, `linux`, or empty. Never guessed. */
   hostPlatform: string
+  /**
+   * That machine's own build version, as its last `welcome` said, or empty.
+   *
+   * Empty is the answer for a machine that has not connected and for one running
+   * a build from before the field — the same neutral both `hostPlatform` and the
+   * fallback name mean, and the panel shows nothing rather than guessing a
+   * number. Display text off an authenticated-but-not-trusted channel, already
+   * stripped and bounded by the wire parser; nothing here trusts it for more
+   * than reading.
+   */
+  hostVersion: string
+  /**
+   * Which shell is serving over there — desktop or headless server — or null.
+   *
+   * Null is "it never said", which is every build older than the field; the
+   * panel calls it a machine rather than guessing a kind. It is what lets a
+   * server read as a *server* on this desktop's Machines panel, and what the
+   * behind-sentence names.
+   */
+  hostKind: HostKind | null
   /** When the next dial is due, epoch ms, or null when one is not scheduled. */
   retryAt: number | null
 }
@@ -899,6 +920,8 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
     ports: [],
     copilot: null,
     hostPlatform: '',
+    hostVersion: '',
+    hostKind: null,
     retryAt: null,
   }
 
@@ -1174,6 +1197,13 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
           // has since rebooted is a row that opens nothing.
           ports: [],
           hostPlatform: message.hostPlatform ?? '',
+          // The far machine's build and shell kind, off the same welcome. Absent
+          // reads as "never said" — empty for the version, null for the kind —
+          // which is what a build from before these fields sends and what the
+          // panel already renders neutrally. Already cleaned and bounded by the
+          // wire parser; this end only reads them.
+          hostVersion: message.appVersion ?? '',
+          hostKind: message.hostKind ?? null,
           // Spread rather than assigned, so "never said" survives as null. See
           // the field's own comment.
           ...(message.folders === undefined ? {} : { folders: message.folders }),

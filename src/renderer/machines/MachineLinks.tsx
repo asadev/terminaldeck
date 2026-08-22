@@ -289,6 +289,8 @@ export function linkFor(view: MachinesView, id: string): MachineLinkState {
       ports: [],
       copilot: null,
       hostPlatform: '',
+      hostVersion: '',
+      hostKind: null,
       retryAt: null,
     }
   )
@@ -363,6 +365,19 @@ export function MachineLinks({ half, platform }: { half: MachinesHalf; platform?
 
 /* ------------------------------------------------------------------- row -- */
 
+/**
+ * What to call the shell at the other end, in one word beside its version.
+ *
+ * `headless` is a `server` here because that is what a person installed and what
+ * they call it — the wire keeps the raw kind for the same reason `hostPlatform`
+ * keeps the raw platform, and the noun is the panel's to choose. Kept to the two
+ * links that `MachineLinkState.hostKind` narrows to; null never reaches this,
+ * the caller guards it.
+ */
+function hostKindNoun(kind: 'desktop' | 'headless'): string {
+  return kind === 'headless' ? 'server' : 'desktop'
+}
+
 export function MachineRow({
   machine,
   link,
@@ -385,6 +400,22 @@ export function MachineRow({
         <span className="machines-kind">{noun}</span>
         <span className="machines-state">{STATE_LABEL[link.state]}</span>
       </div>
+
+      {/*
+        What build the machine at the other end is running, and whether it is a
+        desktop or a headless server, off its last `welcome`. Shown only once it
+        has said so — a machine that never connected, or one on a build from
+        before the field, carries an empty version and gets no line rather than a
+        guessed number. It is display text: there is no update verb on this wire,
+        and replacing a host stays on the SSH and desktop plane this window
+        already is.
+      */}
+      {link.hostVersion !== '' && (
+        <p className="machines-version">
+          version {link.hostVersion}
+          {link.hostKind !== null && ` · ${hostKindNoun(link.hostKind)}`}
+        </p>
+      )}
 
       {/*
         The far machine's sentence, except for the one state where it is written

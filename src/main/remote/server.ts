@@ -106,6 +106,7 @@ import {
   type ControlsReadingWire,
   type DeviceDescriptor,
   type DevServerReport,
+  type HostKind,
   type ProtocolErrorCode,
   type RemoteSession,
   type ServerMessage,
@@ -725,6 +726,22 @@ export interface RemoteEndpointOptions {
   enroll?: EnrollAccess
   /** Directory holding the built PWA — `pwa/dist`. Injected, never derived here. */
   webRoot: string
+  /**
+   * This host's own build version, for the `welcome` — display text like
+   * `hostName`. **Absent is the switch**, exactly like `hostPlatform`: a build
+   * that does not pass it sends no `appVersion` key, which is what every host
+   * from before the field does and what a current client reads as "older, show
+   * something neutral". Assembled by the shell, which is the only half that
+   * knows the number: the Electron app from `app.getVersion()`, the daemon from
+   * `hostVersion()`.
+   */
+  appVersion?: string
+  /**
+   * Which shell is serving — {@link HostKind}. Absent is the switch, same as
+   * `appVersion` beside it, and set by each shell to what it is: the Electron
+   * app is `'desktop'`, the daemon is `'headless'`.
+   */
+  hostKind?: HostKind
   /**
    * Host headers to accept. Empty means "do not check", which is only safe
    * because the endpoint on its own does not know what it is bound to;
@@ -2784,6 +2801,15 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
       // learned this at pairing time has no name for a machine paired before
       // the field existed — see `welcome.hostName`.
       hostName: describeThisMachine().name,
+      // This host's own build and which shell is serving it, spread on the
+      // foldersFrame rule below: absent means the shell passed none, which is the
+      // shape every host from before these fields sends and which a current
+      // client reads as "older, say something neutral". Display text only —
+      // there is no update verb on this wire to pair them with; the client's own
+      // build decides whether it says "update this server from a desktop", and
+      // that sentence has nothing here to press.
+      ...(options.appVersion ? { appVersion: options.appVersion } : {}),
+      ...(options.hostKind ? { hostKind: options.hostKind } : {}),
       // Spread rather than sent as `undefined`, so a host that cannot start
       // sessions sends no key at all — the same shape a desktop from before this
       // field sends, which is what an older client is already correct about.
@@ -5868,6 +5894,15 @@ export interface RemoteIpcDeps {
   openUrl?(url: string): boolean
   /** Built PWA directory. */
   webRoot: string
+  /**
+   * This host's own build version and which shell is serving, forwarded onto the
+   * `welcome`. Optional and additive; each shell passes its own — the Electron
+   * app `app.getVersion()` + `'desktop'`, the daemon `hostVersion()` +
+   * `'headless'` — and a shell that passes neither sends a `welcome` from before
+   * the fields, which a current client reads as an older host.
+   */
+  appVersion?: string
+  hostKind?: HostKind
   /** Directory for the device trust file and the certificate pair, under userData. */
   storageDir: string
   /**
@@ -6320,6 +6355,11 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
     // box (signin === false) wants.
     ...(enroll ? { enroll } : {}),
     webRoot: deps.webRoot,
+    // The host's own version and shell kind, spread on the same switch rule as
+    // everything else here: absent means this shell passed none, and the
+    // `welcome` then carries no such key — the shape an older host sends.
+    ...(deps.appVersion ? { appVersion: deps.appVersion } : {}),
+    ...(deps.hostKind ? { hostKind: deps.hostKind } : {}),
     certDir: deps.storageDir,
     ...(deps.uploadsDir ? { uploadsDir: deps.uploadsDir } : {}),
     ...(deps.credentials ? { credentials: deps.credentials } : {}),

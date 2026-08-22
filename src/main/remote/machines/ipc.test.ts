@@ -174,6 +174,8 @@ function rig(
         ports: [],
         copilot: null,
         hostPlatform: '',
+        hostVersion: '',
+        hostKind: null,
         retryAt: null,
       }
       const record = {
@@ -876,6 +878,8 @@ describe('waking', () => {
             ports: [],
             copilot: null,
             hostPlatform: '',
+            hostVersion: '',
+            hostKind: null,
             retryAt: null,
           }
           return {
@@ -1150,6 +1154,8 @@ describe('acting on a browser window that machine holds', () => {
       ports: [],
       copilot: null,
       hostPlatform: '',
+      hostVersion: '',
+      hostKind: null,
       retryAt: null,
     })
     expect(gone).toEqual([hostId])

@@ -185,6 +185,7 @@ import {
   writeTextSize,
 } from './text-size'
 import { VERSION } from './version'
+import { clientIsAhead, hostKindNoun } from './host-version'
 import { normaliseCode } from '../../src/shared/short-code'
 import { asCodeField } from './code-field'
 import { browserStores, purgeRetired, type Remember } from './remember'
@@ -201,7 +202,7 @@ import { relaySocket } from './relay-socket'
  */
 import { holdUntilFilled, QUIET_MS, type Backfill } from '../../src/renderer/components/terminal-backfill'
 import { lookupMachine } from './rendezvous'
-import { chunkInput, type DevServerReport, type RemoteSession, type ServerMessage } from './protocol-client'
+import { chunkInput, type DevServerReport, type HostKind, type RemoteSession, type ServerMessage } from './protocol-client'
 import {
   closeOffered,
   closeQuestion,
@@ -751,6 +752,16 @@ class Deck {
    */
   private capabilities: string[] = []
   /**
+   * The build the connected host said it is running, and which shell serves it,
+   * from its last `welcome`. Connection-only, like {@link capabilities}: a
+   * version is a fact about the machine answering right now, not one to seed from
+   * storage and show stale before a socket is up. Empty and null are "not
+   * connected, or an older host that never said" — the Settings row draws
+   * nothing rather than a guess.
+   */
+  private hostAppVersion = ''
+  private hostKind: HostKind | null = null
+  /**
    * The folders this device may start a session in, or null when the desktop
    * has never said.
    *
@@ -1183,6 +1194,8 @@ class Deck {
     this.sessions = []
     this.activity.clear()
     this.capabilities = []
+    this.hostAppVersion = ''
+    this.hostKind = null
     this.folders = null
     this.picking = false
     this.awaitingCreate = false
@@ -1509,6 +1522,8 @@ class Deck {
       // recognises, and drawing a picker from it on the way back to the pair
       // screen would be offering somewhere to start that nothing will start in.
       this.capabilities = []
+      this.hostAppVersion = ''
+      this.hostKind = null
       this.folders = null
       this.picking = false
       // And what it was serving. A port list is a statement about a machine
@@ -1901,6 +1916,12 @@ class Deck {
         // than waiting for a socket.
         this.hostPlatform = readHostPlatform(message.hostPlatform)
         this.capabilities = message.capabilities
+        // The build the machine at the other end is running, and whether it is a
+        // desktop or a headless server. Already stripped and bounded by the wire
+        // parser; absent means an older host, which the Settings row reads as
+        // "not said" and draws nothing for rather than guessing a number.
+        this.hostAppVersion = message.appVersion ?? ''
+        this.hostKind = message.hostKind ?? null
         {
           // The machine that just said hello, which during a second pairing is
           // not the one on screen. See `dialledId`.
@@ -3890,6 +3911,14 @@ class Deck {
       ),
     )
 
+    // The machine at the other end, when it said what build it is. A host older
+    // than the `appVersion` field, or one this page has not reached, reports
+    // nothing and gets no group rather than a row with a blank in it.
+    if (this.hostAppVersion !== '') {
+      screen.append(element('p', 'caption', 'This server'))
+      screen.append(this.serverGroup())
+    }
+
     screen.append(element('p', 'caption', 'This browser'))
     const lifetime = this.lifetimeBlock()
     if (lifetime !== null) screen.append(lifetime)
@@ -3910,6 +3939,56 @@ class Deck {
   }
 
   /**
+   * Which build the machine at the other end is running, and whether it is a
+   * desktop or a headless server.
+   *
+   * The mirror of {@link aboutGroup} pointed the other way: that row is a fact
+   * about this page, this one is a fact about the machine answering it, and until
+   * `welcome` grew an `appVersion` there was no honest way to draw it — a browser
+   * cannot look at a file the way somebody can look at a downloaded desktop, and
+   * before the field it could not ask either. `version.ts` predicted this row in
+   * as many words: *"If a `welcome` frame ever grows an app version, that is a
+   * second line here and a deliberate one."*
+   *
+   * Static, and mono where the number is, for the reasons {@link aboutGroup}
+   * gives: there is nothing to press. A host is replaced from a desktop or over
+   * SSH, never from here, and this protocol carries no update verb to put under a
+   * button. The one thing this client says about the gap is the sentence below,
+   * and only when it is genuinely true — this page's build strictly ahead of the
+   * server's, decided by {@link clientIsAhead}, which stays silent on any pair of
+   * numbers it cannot compare rather than nudging on a guess.
+   */
+  private serverGroup(): HTMLElement {
+    const group = element('div', 'group')
+    const row = element('div', 'setting setting--static')
+    row.append(element('span', 'setting__title', this.machineName))
+    const noun = hostKindNoun(this.hostKind)
+    const value = noun === null ? this.hostAppVersion : `${this.hostAppVersion} · ${noun}`
+    // Mono on the number, like the client's own version and the machine
+    // addresses: a value to read character by character and compare, not prose.
+    row.append(element('span', 'setting__value setting__value--mono', value))
+    group.append(row)
+
+    // The one sentence the pair of versions earns, and only when this page is
+    // strictly ahead. Not a button: there is no update verb on this wire, and
+    // there is not meant to be — the plane a host is replaced on is a desktop
+    // app or an SSH session, not a phone. A sentence says what to do; a button
+    // that did nothing would be the fake feature this whole client refuses.
+    if (clientIsAhead(VERSION, this.hostAppVersion)) {
+      group.append(
+        element(
+          'p',
+          'note note--plain',
+          `This page is on ${VERSION} and this server is on ${this.hostAppVersion}. ` +
+            'Update this server from a desktop — there is no button here for it, and there is not ' +
+            'meant to be: a server is replaced from a desktop app or over SSH, never from a phone.',
+        ),
+      )
+    }
+    return group
+  }
+
+  /**
    * Which build of this client is on screen.
    *
    * The phone's Settings ends with the same group, for a reason that applies
@@ -3924,9 +4003,11 @@ class Deck {
    *
    * One row, two facts, and nothing that pretends to be more — see `version.ts`
    * for what this number is and, more importantly, the two things it is not. It
-   * is a fact about the page, never about the machine at the other end: this
-   * protocol carries no app version, so a browser paired with an older desktop
-   * cannot tell and this screen does not imply it can.
+   * is a fact about the page, never about the machine at the other end. The
+   * machine's own build is a different row — the "This server" group above,
+   * added once `welcome` grew an `appVersion` exactly as `version.ts` predicted —
+   * and the two are kept apart on purpose: this one updates when the page
+   * reloads, that one when somebody replaces the host from a desktop.
    *
    * Static, with no chevron. There is nowhere to go: an update arrives by
    * reloading, which is a thing browsers already have a button for, and a row
@@ -5809,6 +5890,8 @@ class Deck {
     // its noun makes the re-pair read correctly.
     this.hostPlatform = 'unknown'
     this.capabilities = []
+    this.hostAppVersion = ''
+    this.hostKind = null
     this.folders = null
     this.picking = false
     this.awaitingCreate = false
