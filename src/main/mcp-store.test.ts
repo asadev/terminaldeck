@@ -5,6 +5,7 @@ import {
   buildStoreView,
   installFromCatalogue,
   readEnvironmentNames,
+  readStoreFacts,
   resolveInstall,
   type ConfiguredServer,
   type McpRuntimeReport,
@@ -370,6 +371,35 @@ describe('installFromCatalogue', () => {
       ok: false,
       message: 'This build has no such server.',
     })
+  })
+})
+
+describe('readStoreFacts', () => {
+  it('measures this machine once per read, and re-asks the shell on the next one', async () => {
+    /*
+     * Deduplicated, not memoised. `loginPath` memoises for the life of the
+     * process, which is right for a PATH; this is the opposite question —
+     * *is my token exported yet* — and somebody who has just edited their
+     * `.zshrc` and pressed Reload has to be answered by a shell started after
+     * they saved it. Two reads racing share one spawn; a later read starts a
+     * new one.
+     */
+    let shells = 0
+    const counted: McpStoreDeps = {
+      platform: 'darwin',
+      path: async () => '/usr/bin',
+      exec: async (file, args) => {
+        if (file === 'which') return { stdout: `/usr/bin/${args[0]}\n`, stderr: '' }
+        shells += 1
+        return { stdout: 'HOME\n', stderr: '' }
+      },
+    }
+    const facts = await readStoreFacts(counted)
+    expect(facts.runtimes.map((one) => one.id)).toEqual(['node', 'python', 'docker'])
+    expect(facts.writer.found).toBe(true)
+    expect(shells).toBe(1)
+    await readStoreFacts(counted)
+    expect(shells).toBe(2)
   })
 })
 

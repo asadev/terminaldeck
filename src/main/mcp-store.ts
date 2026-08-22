@@ -610,9 +610,52 @@ export async function installFromCatalogue(
  * page. The alternative — probing per row — is nineteen spawns for the same
  * three answers.
  */
+/**
+ * The real probe currently in flight, or null.
+ *
+ * Only ever set on the unstubbed path — `deps.exec` present means a test, and a
+ * module-level promise shared between tests is a test that passes because
+ * another one ran first.
+ *
+ * Deduplicated rather than **memoised**, and the difference is the whole point.
+ * `loginPath` memoises for the life of the process because a PATH that changed
+ * after launch is not visible to this process anyway. This is the opposite: the
+ * question is *is my token exported yet*, and somebody who has just added a line
+ * to their `.zshrc` and pressed Reload has to be answered by a shell that was
+ * started after they saved it. So a second read always re-asks, and only two
+ * reads racing each other — a tab switch and an impatient Reload — share one
+ * spawn instead of starting two shells that each source a whole profile.
+ */
+let probeInFlight: Promise<{
+  runtimes: McpRuntimeReport[]
+  writer: { found: boolean; path: string }
+  environment: Set<string>
+  environmentSource: McpEnvironmentSource
+}> | null = null
+
 export async function readStoreFacts(
   deps: McpStoreDeps = {},
   catalogue: McpCatalogue = MCP_CATALOGUE,
+): Promise<{
+  runtimes: McpRuntimeReport[]
+  writer: { found: boolean; path: string }
+  environment: Set<string>
+  environmentSource: McpEnvironmentSource
+}> {
+  if (deps.exec === undefined && probeInFlight !== null) return probeInFlight
+  const started = probeFacts(deps, catalogue)
+  if (deps.exec !== undefined) return started
+  probeInFlight = started
+  try {
+    return await started
+  } finally {
+    probeInFlight = null
+  }
+}
+
+async function probeFacts(
+  deps: McpStoreDeps,
+  catalogue: McpCatalogue,
 ): Promise<{
   runtimes: McpRuntimeReport[]
   writer: { found: boolean; path: string }
