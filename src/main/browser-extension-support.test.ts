@@ -8,7 +8,9 @@ import {
   displayName,
   everywhere,
   loadability,
+  mayAskToReach,
   missingApis,
+  optionsPageOf,
   parseManifest,
   popupPage,
   reachOf,
@@ -119,6 +121,46 @@ describe('what an extension reaches', () => {
     expect(
       reachOf(manifest({ manifest_version: 2, permissions: ['storage', 'https://b.com/*'] })),
     ).toEqual(['https://b.com/*'])
+  })
+
+  it('counts a content script as reach, because it is', () => {
+    /*
+     * The false sentence this store printed until it was measured. A statically
+     * declared content script is injected on the pages it matches whether or
+     * not a host permission backs it — they are two separate grants — and only
+     * one of them was being read. Video Speed Controller declares no
+     * host_permissions at all and a content script on every page, and its row
+     * said *no pages of its own* about a program that reads all of them.
+     */
+    const vsc = manifest({
+      content_scripts: [{ matches: ['http://*/*', 'https://*/*', 'file:///*'], js: ['c.js'] }],
+    })
+    expect(reachOf(vsc)).toEqual(['file:///*', 'http://*/*', 'https://*/*'])
+    expect(everywhere(vsc)).toBe(true)
+  })
+
+  it('does not repeat a pattern that is in both places', () => {
+    const both = manifest({
+      host_permissions: ['<all_urls>'],
+      content_scripts: [{ matches: ['<all_urls>'], js: ['c.js'] }],
+    })
+    expect(reachOf(both)).toEqual(['<all_urls>'])
+  })
+
+  it('keeps what it may only ask for on a separate line', () => {
+    /*
+     * `optional_host_permissions` is not reach: the extension does not have it.
+     * Folding it in would over-state, and dropping it would hide that the thing
+     * expects to grow — so it is its own answer, with the sentence about this
+     * browser never granting one attached to it on the row.
+     */
+    const asks = manifest({
+      host_permissions: ['https://a.com/*'],
+      optional_host_permissions: ['*://*/*'],
+    })
+    expect(reachOf(asks)).toEqual(['https://a.com/*'])
+    expect(mayAskToReach(asks)).toEqual(['*://*/*'])
+    expect(everywhere(asks)).toBe(false)
   })
 
   it('knows the difference between one site and every page', () => {
@@ -298,5 +340,57 @@ describe('read against the full Chromium on the server', () => {
     }
     // The desktop default still spots it.
     expect(usesStaticRulesets(withRulesets)).toBe(true)
+  })
+})
+
+describe('the settings page', () => {
+  /*
+   * Read for the same reason the popup is, and it closed a dead end: an
+   * extension can declare an options page and no popup — Search by Image and
+   * Web Archives both do — and before this the store drew a door only for a
+   * popup, so such a thing installed, loaded, ran, and had no interface anybody
+   * could open.
+   */
+  it('reads options_ui.page, and the older options_page too', () => {
+    expect(optionsPageOf(manifest({ options_ui: { page: 'settings.html' } }))).toBe('settings.html')
+    expect(optionsPageOf(manifest({ options_page: 'old.html' }))).toBe('old.html')
+  })
+
+  it('prefers options_ui when a manifest carries both, as Chrome does', () => {
+    expect(
+      optionsPageOf(manifest({ options_ui: { page: 'new.html' }, options_page: 'old.html' })),
+    ).toBe('new.html')
+  })
+
+  it('strips a leading slash, so the extension URL does not gain a double one', () => {
+    expect(optionsPageOf(manifest({ options_page: '/deep/settings.html' }))).toBe(
+      'deep/settings.html',
+    )
+  })
+
+  it('answers empty when there is none, so no control is drawn', () => {
+    expect(optionsPageOf(manifest())).toBe('')
+    expect(optionsPageOf(manifest({ options_ui: {} }))).toBe('')
+  })
+})
+
+describe('the limits, after this round of measuring', () => {
+  it('names native messaging being off, because a password manager dies on it', () => {
+    /*
+     * Measured by connecting: `chrome.runtime.connectNative` exists and the
+     * port disconnects immediately with a message about a system administrator.
+     * It is the whole reason KeePassXC-Browser cannot work here, and no
+     * manifest check predicts it.
+     */
+    expect(EXTENSION_LIMITS.join(' ')).toContain('connectNative')
+  })
+
+  it('names the empty answer a panel gets when it asks which tab is in front', () => {
+    // Three of the extensions measured die on the next line.
+    expect(EXTENSION_LIMITS.join(' ')).toContain('currentWindow')
+  })
+
+  it('says an extension you added yourself was measured by nobody', () => {
+    expect(EXTENSION_LIMITS.join(' ')).toContain('no fingerprint is checked')
   })
 })

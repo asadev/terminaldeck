@@ -14,6 +14,7 @@ function installed(id: string, manifest: Partial<ExtensionManifest>): InstalledE
       homepage: 'https://example.com',
       licence: 'MIT',
       version: '1.0',
+      category: 'scripting',
       works: 'works',
       measured: 'Watched working.',
       reach: [],
@@ -179,6 +180,41 @@ describe('what the tool never offers', () => {
     const keys = Object.keys(tool.inputSchema.properties ?? {})
     expect(keys).toEqual(['extension', 'on', 'profile'])
     expect(tool.inputSchema.additionalProperties).toBe(false)
-    expect(tool.description.toLowerCase()).toContain('cannot install or remove')
+    expect(tool.description.toLowerCase()).toContain('cannot install, remove or drive one')
+  })
+})
+
+describe('a session asking', () => {
+  /*
+   * The narrowing that let this tool onto `SESSION_TOOLS` at all. A session
+   * resolves everything else — every window, every page — inside its own
+   * binding; a list of what is installed in every profile somebody keeps is a
+   * list of the separations they went to the trouble of making, and a shell on
+   * a server does not need it to read a page.
+   */
+  const SESSION = { caller: { kind: 'session', sessionId: 's1' } } as unknown as ToolContext
+
+  it('is refused when it names a profile, in words naming the call that works', async () => {
+    const [tool] = extensionTools(depsWith([installed('a', {})], new Set(['a'])))
+    await expect(tool.run({ profile: 'other-profile' }, SESSION)).rejects.toThrow(
+      'Call this tool with no profile',
+    )
+  })
+
+  it('gets the profile that is switched on when it names none', async () => {
+    const [tool] = extensionTools(depsWith([installed('a', {})], new Set(['a'])))
+    const out = (await tool.run({}, SESSION)).value as { profile: string; extensions: unknown[] }
+    expect(out.profile).toBe('default')
+    expect(out.extensions).toHaveLength(1)
+  })
+
+  it('still switches one in the profile it is driving', async () => {
+    const setEnabled = vi.fn<ExtensionToolDeps['setEnabled']>(async (): Promise<ExtensionResult> => ({
+      ok: true,
+      message: 'done',
+    }))
+    const [tool] = extensionTools(depsWith([installed('a', {})], new Set(['a']), setEnabled))
+    await tool.run({ extension: 'a', on: false }, SESSION)
+    expect(setEnabled).toHaveBeenCalledWith('default', 'a', false)
   })
 })

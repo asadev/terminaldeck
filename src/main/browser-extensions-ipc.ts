@@ -1,6 +1,6 @@
-import { BrowserWindow, type IpcMain, type Session } from 'electron'
+import { BrowserWindow, dialog, type IpcMain, type Session } from 'electron'
 import { BROWSER_EXTENSION_CATALOGUE } from './browser-extension-catalogue'
-import { EXTENSION_LIMITS, popupPage } from './browser-extension-support'
+import { EXTENSION_LIMITS, optionsPageOf, popupPage } from './browser-extension-support'
 import {
   createExtensionStore,
   orphanExtensionIds,
@@ -9,6 +9,7 @@ import {
   type ExtensionCatalogue,
   type ExtensionResult,
   type ExtensionStore,
+  sideloadId,
   type ExtensionStoreView,
   type FetchArchive,
   type InstalledExtension,
@@ -98,11 +99,25 @@ export interface BrowserExtensionDeps {
    */
   catalogue?: ExtensionCatalogue
   fetchArchive?: FetchArchive
+  /**
+   * How somebody picks a folder or a `.crx`. Replaced in tests.
+   *
+   * The dialog lives here rather than in the renderer, and that is a rule and
+   * not a convenience: a path chosen in the main process is a path a person
+   * pointed at, and a path arriving over IPC is a string a renderer composed.
+   * The second one is how an app ends up loading a directory nobody chose.
+   * Answering `null` means the dialog was cancelled, which is not a failure and
+   * does not produce an error on the row.
+   */
+  chooseFolder?(): Promise<string | null>
+  chooseCrx?(): Promise<string | null>
 }
 
 /** Build the store. Called once from `registerIpc()`, before any page opens. */
 export function installBrowserExtensions(deps: BrowserExtensionDeps): ExtensionStore {
   userDataDir = deps.userData()
+  chooseFolder = deps.chooseFolder ?? pickFolder
+  chooseCrx = deps.chooseCrx ?? pickCrx
   store = createExtensionStore({
     userData: userDataDir,
     catalogue: deps.catalogue ?? BROWSER_EXTENSION_CATALOGUE,
@@ -111,10 +126,36 @@ export function installBrowserExtensions(deps: BrowserExtensionDeps): ExtensionS
   return store
 }
 
+/** The real dialogs. Cancelled comes back as `null`, never as an error. */
+async function pickFolder(): Promise<string | null> {
+  const chosen = await dialog.showOpenDialog({
+    title: 'Choose an unpacked extension',
+    message: 'Pick the folder that has the manifest.json in it.',
+    properties: ['openDirectory'],
+    buttonLabel: 'Add to this profile',
+  })
+  return chosen.canceled ? null : (chosen.filePaths[0] ?? null)
+}
+
+async function pickCrx(): Promise<string | null> {
+  const chosen = await dialog.showOpenDialog({
+    title: 'Choose a .crx',
+    properties: ['openFile'],
+    filters: [{ name: 'Chrome extension', extensions: ['crx'] }],
+    buttonLabel: 'Add to this profile',
+  })
+  return chosen.canceled ? null : (chosen.filePaths[0] ?? null)
+}
+
+let chooseFolder: () => Promise<string | null> = pickFolder
+let chooseCrx: () => Promise<string | null> = pickCrx
+
 /** Test seam and shutdown: forget everything this run loaded. */
 export function resetBrowserExtensions(): void {
   store = null
   userDataDir = ''
+  chooseFolder = pickFolder
+  chooseCrx = pickCrx
   loaded.clear()
   loadFailures.clear()
 }
@@ -312,7 +353,11 @@ function viewFor(profileId: string): ExtensionStoreView {
  * asks {@link StoreExtension.popup} before it draws the control, so this refusal
  * is a second line rather than the only one.
  */
-async function openPopup(profileId: string, id: string): Promise<ExtensionResult> {
+async function openExtensionPage(
+  profileId: string,
+  id: string,
+  which: 'popup' | 'options',
+): Promise<ExtensionResult> {
   if (store === null) return NO_STORE
   const extension = store.installed(profileId).find((one) => one.entry.id === id)
   if (extension === undefined) return { ok: false, message: 'It is not installed in this profile.' }
@@ -320,9 +365,16 @@ async function openPopup(profileId: string, id: string): Promise<ExtensionResult
   if (electronId === undefined) {
     return { ok: false, message: `${extension.entry.name} is not switched on, so it has nothing open.` }
   }
-  const page = popupPage(extension.manifest)
+  const page =
+    which === 'popup' ? popupPage(extension.manifest) : optionsPageOf(extension.manifest)
   if (page === '') {
-    return { ok: false, message: `${extension.entry.name} has no panel of its own.` }
+    return {
+      ok: false,
+      message:
+        which === 'popup'
+          ? `${extension.entry.name} has no panel of its own.`
+          : `${extension.entry.name} has no settings page of its own.`,
+    }
   }
   const ses = sessionFor(profileId)
   if (ses === null) return { ok: false, message: 'That profile is not one this app knows.' }
@@ -364,6 +416,9 @@ async function openPopup(profileId: string, id: string): Promise<ExtensionResult
  * - `browser-extension:remove`  (invoke, profileId, id)      → `{ ok, message }`
  * - `browser-extension:enable`  (invoke, profileId, id, on)  → `{ ok, message }`
  * - `browser-extension:popup`   (invoke, profileId, id)      → `{ ok, message }`
+ * - `browser-extension:options` (invoke, profileId, id)      → `{ ok, message }`
+ * - `browser-extension:add-folder` (invoke, profileId)       → `{ ok, message }`
+ * - `browser-extension:add-crx`    (invoke, profileId)       → `{ ok, message }`
  *
  * Invokes and no push, for the reason `browser-store-ipc.ts` gives: a row moves
  * only when somebody presses something in this panel, so the panel re-reads, and
@@ -465,8 +520,74 @@ export function registerBrowserExtensionIpc(ipcMain: IpcMain): void {
 
   ipcMain.handle('browser-extension:popup', async (_event, profileId: unknown, id: unknown) => {
     if (store === null || typeof id !== 'string') return NO_STORE
-    return openPopup(profileOf(profileId), id)
+    return openExtensionPage(profileOf(profileId), id, 'popup')
   })
+
+  /*
+   * The settings page, which used to have no door at all.
+   *
+   * An extension can declare an options page and no `default_popup`, and two in
+   * the catalogue do. Before this channel they installed, loaded, ran — and had
+   * no interface anybody could open, because this browser draws no toolbar and
+   * the store offered only the popup. That is the dead control this app is
+   * written against, arrived at by omission rather than by a broken button.
+   */
+  ipcMain.handle('browser-extension:options', async (_event, profileId: unknown, id: unknown) => {
+    if (store === null || typeof id !== 'string') return NO_STORE
+    return openExtensionPage(profileOf(profileId), id, 'options')
+  })
+
+  const addOwn = async (
+    profileId: unknown,
+    kind: 'folder' | 'crx',
+  ): Promise<ExtensionResult> => {
+    if (store === null) return NO_STORE
+    const choose = kind === 'folder' ? chooseFolder : chooseCrx
+    let chosen: string | null
+    try {
+      chosen = await choose()
+    } catch (error) {
+      return {
+        ok: false,
+        message: `That could not be chosen: ${error instanceof Error ? error.message : 'the dialog did not open'}.`,
+      }
+    }
+    /*
+     * Cancelling is not an error and must not read as one. `ok: true` with an
+     * empty message: the panel prints nothing, the row does not turn red, and
+     * nobody is told something failed because they changed their mind.
+     */
+    if (chosen === null) return { ok: true, message: '' }
+    const profile = profileOf(profileId)
+    const result = kind === 'folder' ? store.addFolder(profile, chosen) : store.addCrx(profile, chosen)
+    if (!result.ok) return result
+    /*
+     * Loaded straight away, and the same order the catalogue install uses: the
+     * old copy is unloaded only after the new files are down, because adding the
+     * same folder again is a replace and anything running at this point is the
+     * previous build of it.
+     */
+    const id = sideloadId(kind, chosen)
+    unloadOne(profile, id)
+    const extension = store.installed(profile).find((one) => one.entry.id === id)
+    if (extension === undefined) return result
+    const electronId = await loadOne(profile, extension)
+    if (electronId === '') {
+      const why = loadFailures.get(profile)?.get(id) ?? 'the browser refused it'
+      return {
+        ok: false,
+        message: `${extension.entry.name} was copied in but the browser would not load it: ${why}. It is switched off.`,
+      }
+    }
+    return result
+  }
+
+  ipcMain.handle('browser-extension:add-folder', async (_event, profileId: unknown) =>
+    addOwn(profileId, 'folder'),
+  )
+  ipcMain.handle('browser-extension:add-crx', async (_event, profileId: unknown) =>
+    addOwn(profileId, 'crx'),
+  )
 }
 
 /** Where a profile's extensions live, for a sentence on a panel. */

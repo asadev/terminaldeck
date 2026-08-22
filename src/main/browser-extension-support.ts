@@ -39,8 +39,27 @@ import { COMPAT_PROVIDES } from './browser-extension-compat'
  *
  *  - `ses.extensions.loadExtension(dir)` takes an **unpacked directory**. A
  *    `.crx` is not unpacked and not even recognised — the error is *"Extension
- *    directory not found"*, which is why {@link CANNOT_INSTALL_CRX} is a rule the
- *    store enforces rather than a caveat in a paragraph.
+ *    directory not found"*, which is why nothing hands one to Electron. It is
+ *    `browser-extension-crx.ts` that opens a `.crx` — it is a signed header in
+ *    front of a zip — and only ever into a directory, which is the shape
+ *    Electron will take.
+ *  - **Native messaging is off.** `chrome.runtime.connectNative` exists and the
+ *    port disconnects immediately with *"Access to the native messaging host was
+ *    disabled by the system administrator."* Measured by connecting to
+ *    `org.keepassxc.keepassxc_browser` and reading `lastError`, not inferred. It
+ *    is why a password manager that reaches a desktop app cannot work here at
+ *    all, whatever else it does.
+ *  - **An extension page cannot find the tab you are looking at.**
+ *    `chrome.tabs.query({ active: true, currentWindow: true })` from a popup
+ *    opened in its own window answers `[]`, while `chrome.tabs.query({})` lists
+ *    every page including the popup. Three of the extensions measured die on the
+ *    next line — `Cannot read properties of undefined (reading 'url')` — which
+ *    is `tabs[0].url` on an empty array.
+ *  - **`chrome.tabs` is missing methods, not just namespaces.** `create`,
+ *    `getCurrent`, `remove` and `executeScript` are not on it here, and that is
+ *    invisible to every manifest check: `tabs` is present, granted, and answers
+ *    `query` and `update` perfectly well. Bitwarden's whole UI dies on
+ *    `chrome.tabs.getCurrent is not a function`.
  *  - Nothing is remembered across boots. Electron's own note: *"loadExtension
  *    must be called on every boot of your app"*. So the app's disk is the record
  *    and the load is replayed at launch.
@@ -346,16 +365,68 @@ export function missingApis(manifest: ExtensionManifest): string[] {
   )
 }
 
-/** What the extension may reach, in its own words: the host patterns it asks for. */
+/**
+ * The host patterns a manifest's **content scripts** are declared against.
+ *
+ * Folded into {@link reachOf} rather than reported separately, and the reason is
+ * a false sentence this store was printing until it was measured. A statically
+ * declared content script is injected on the pages it matches whether or not the
+ * extension holds a host permission for them — they are two different grants,
+ * and only one of them was being read. Video Speed Controller declares **no**
+ * `host_permissions` at all and a content script matching every http page, every
+ * https page and every local file; its row said *no pages of its own* about an
+ * extension that runs on every page you open.
+ *
+ * A row that under-states what a program reads is worse than one that overstates
+ * it: the whole point of printing `Reaches` before the Install button is that it
+ * is the one number somebody is actually agreeing to.
+ */
+export function contentScriptMatches(manifest: ExtensionManifest): string[] {
+  const list = Array.isArray(manifest.content_scripts) ? manifest.content_scripts : []
+  const out: string[] = []
+  for (const raw of list) {
+    for (const pattern of strings(record(raw).matches)) {
+      if (!out.includes(pattern)) out.push(pattern)
+    }
+  }
+  return out
+}
+
+/** What the extension may reach, in its own words: host permissions and content scripts. */
 export function reachOf(manifest: ExtensionManifest): string[] {
   const hosts = [
     ...strings(manifest.host_permissions),
     ...strings(manifest.permissions).filter(
       (raw) => raw === '<all_urls>' || raw.includes('://') || raw.startsWith('*.'),
     ),
+    ...contentScriptMatches(manifest),
   ]
   const out: string[] = []
   for (const host of hosts) if (!out.includes(host)) out.push(host)
+  return out.sort()
+}
+
+/**
+ * What it may **ask** for later, and never gets here.
+ *
+ * `optional_host_permissions` is a real part of a manifest and it is not part of
+ * {@link reachOf}, because an extension does not have it until somebody grants
+ * it. In this browser nobody ever can: there is no runtime permission prompt,
+ * and `browser-extension-compat.ts` answers `permissions.request()` with
+ * `false` — which is the truth rather than a stub. So this is reported on its
+ * own line, with that sentence attached, instead of being quietly folded into
+ * either the reach (which would over-state) or nothing (which would hide that
+ * the extension expects to grow).
+ */
+export function mayAskToReach(manifest: ExtensionManifest): string[] {
+  const asked = [
+    ...strings((manifest as Record<string, unknown>).optional_host_permissions),
+    ...strings(manifest.optional_permissions).filter(
+      (raw) => raw === '<all_urls>' || raw.includes('://') || raw.startsWith('*.'),
+    ),
+  ]
+  const out: string[] = []
+  for (const host of asked) if (!out.includes(host)) out.push(host)
   return out.sort()
 }
 
@@ -432,6 +503,27 @@ export function popupPage(manifest: ExtensionManifest): string {
 }
 
 /**
+ * Its own settings page, or `''` when it has none.
+ *
+ * Read for the same reason {@link popupPage} is, and it closes a gap that one
+ * left: an extension can declare an options page and no popup, and two in this
+ * catalogue do. Before this, such an extension installed, loaded, and had no
+ * interface anybody could open — the store drew a panel button only for a
+ * popup, and nothing anywhere drew the settings.
+ *
+ * `options_ui.page` and the older `options_page` are both read, because both are
+ * still written; a manifest that has both is answered with `options_ui`, which
+ * is what Chrome prefers.
+ */
+export function optionsPageOf(manifest: ExtensionManifest): string {
+  const raw =
+    record((manifest as Record<string, unknown>).options_ui).page ??
+    (manifest as Record<string, unknown>).options_page
+  if (typeof raw !== 'string' || raw.trim() === '') return ''
+  return raw.trim().replace(/^\/+/, '')
+}
+
+/**
  * The limits, in the words a person reads them in, once.
  *
  * Rewritten when `browser-extension-compat.ts` arrived, because three of these
@@ -460,10 +552,25 @@ export const EXTENSION_LIMITS: readonly string[] = [
   'Filter lists shipped as manifest declarativeNetRequest rulesets are not switched on when an ' +
     'extension loads. This app switches on the ones a manifest marks enabled, once, after ' +
     'installing, and leaves them alone after that.',
-  'Packed .crx files cannot be installed, and neither can an extension from the Chrome Web Store.',
+  'Native messaging is switched off. An extension that talks to a desktop app — a password ' +
+    'manager reaching its vault, say — gets “Access to the native messaging host was disabled by ' +
+    'the system administrator” from chrome.runtime.connectNative. That was measured by connecting, ' +
+    'not read off a manifest.',
+  'An extension’s own panel opens in a window of its own, and from there ' +
+    'chrome.tabs.query({ active: true, currentWindow: true }) answers with nothing. A panel that ' +
+    'acts on “the page you are looking at” therefore has no page to act on, and several of them ' +
+    'fail on exactly that line. The pages themselves are still listed, so a panel that shows all ' +
+    'tabs is fine.',
+  'An extension started from a folder or a .crx you chose yourself is yours, not this app’s. ' +
+    'Nothing was measured about it, no fingerprint is checked, and its row says so instead of ' +
+    'borrowing the confidence of the rows that were.',
+  'Packed .crx files from the Chrome Web Store cannot be installed. A .crx you have on disk can ' +
+    'be, through Add your own, which opens it and checks its own signature — see that row for ' +
+    'what that signature does and does not prove.',
 ]
 
 /** The store refuses these outright, and the sentence it refuses them with. */
 export const CANNOT_INSTALL_CRX =
-  'A .crx is a packed, signed Chrome extension and this browser cannot open one. Only an ' +
-  'unpacked extension, from a project’s own release, can be installed here.'
+  'A store row is a zip from a project’s own release page, fetched at a byte count and a ' +
+  'fingerprint pinned in this app. A .crx is neither of those, so no row may point at one. A .crx ' +
+  'you already have on your disk is a different question, and Add your own answers it.'

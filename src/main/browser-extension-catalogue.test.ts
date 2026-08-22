@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { BROWSER_EXTENSION_CATALOGUE } from './browser-extension-catalogue'
+import { EXTENSION_CATEGORIES } from './browser-extensions'
 
 /**
  * The catalogue's shape, held to the rules its own header states.
@@ -27,9 +28,35 @@ describe('every row', () => {
       expect(entry.name.trim(), entry.id).not.toBe('')
       expect(entry.summary.trim(), entry.id).not.toBe('')
       expect(entry.licence.trim(), entry.id).not.toBe('')
-      expect(entry.version.trim(), entry.id).not.toBe('')
       // The source is the row's claim that it is not this app's word for it.
       expect(entry.homepage, entry.id).toMatch(/^https:\/\//)
+    }
+  })
+
+  it('names a version for everything this app has actually got hold of', () => {
+    /*
+     * Not for every row. A version on a row this app pins is a version somebody
+     * ran; a version on a row whose project publishes nothing here would be a
+     * number copied off a web page, which is the kind of true-sounding detail
+     * that makes the rest of a catalogue less believable rather than more.
+     */
+    for (const entry of BROWSER_EXTENSION_CATALOGUE) {
+      if (entry.works === 'unmeasured') {
+        expect(entry.version, `${entry.id} names a version for a release nobody has`).toBe('')
+        continue
+      }
+      expect(entry.version.trim(), entry.id).not.toBe('')
+    }
+  })
+
+  it('sits in exactly one category, and one this app draws', () => {
+    const known = new Set(EXTENSION_CATEGORIES.map((category) => category.id))
+    for (const entry of BROWSER_EXTENSION_CATALOGUE) {
+      expect(known.has(entry.category), `${entry.id} is in ${entry.category}`).toBe(true)
+      // `your-own` is minted per install for something a person added and can
+      // never be a shelf in the shipped catalogue, or the section would draw a
+      // row nobody added.
+      expect(entry.category, entry.id).not.toBe('your-own')
     }
   })
 
@@ -154,6 +181,77 @@ describe('a row that says it works', () => {
        * that said "Watched blocking" and had the three-request table behind it.
        */
       expect(entry.measured, entry.id).toMatch(/^Watched \w+/)
+    }
+  })
+})
+
+describe('a row nothing was measured on', () => {
+  it('has no download, and says why there is none', () => {
+    /*
+     * The third answer to *where is Vimium*. It exists because the other two
+     * were both false for it: this app has not "never heard of it", and it did
+     * not "watch it fail" — there was nothing to run. A row in this state that
+     * carried a source would be claiming a fetch nobody can make; one with no
+     * `noRelease` would be a shrug.
+     */
+    const unmeasured = BROWSER_EXTENSION_CATALOGUE.filter((entry) => entry.works === 'unmeasured')
+    expect(unmeasured.length).toBeGreaterThan(0)
+    for (const entry of unmeasured) {
+      expect(entry.source, `${entry.id} was not measured and still offers a download`).toBeNull()
+      expect((entry.noRelease ?? '').length, `${entry.id} says nothing about why`).toBeGreaterThan(40)
+    }
+  })
+
+  it('never borrows the word a measured row earned', () => {
+    /*
+     * `Watched` is the word every working row starts with, and it is the whole
+     * currency of this file. A row nobody ran must not spend it.
+     */
+    for (const entry of BROWSER_EXTENSION_CATALOGUE) {
+      if (entry.works !== 'unmeasured') continue
+      expect(entry.measured, entry.id).not.toMatch(/^Watched/)
+      expect(entry.measured.toLowerCase(), entry.id).toContain('nothing was measured')
+    }
+  })
+
+  it('answers the famous names that have no release to pin', () => {
+    const ids = BROWSER_EXTENSION_CATALOGUE.map((entry) => entry.id)
+    for (const id of ['privacy-badger', 'singlefile', 'vimium']) expect(ids).toContain(id)
+  })
+})
+
+describe('the store as a whole', () => {
+  it('is a store rather than a shelf of refusals', () => {
+    /*
+     * A number rather than a feeling. Six rows here say *cannot work here* and
+     * every one of them is true, but a catalogue where that is most of it has
+     * stopped being a store — and the honest response to that would be to say
+     * so out loud rather than to soften the six.
+     */
+    const installable = BROWSER_EXTENSION_CATALOGUE.filter((entry) => entry.source !== null)
+    expect(installable.length).toBeGreaterThanOrEqual(BROWSER_EXTENSION_CATALOGUE.length / 2)
+  })
+
+  it('spreads across categories, so the sections are worth drawing', () => {
+    const used = new Set(BROWSER_EXTENSION_CATALOGUE.map((entry) => entry.category))
+    expect(used.size).toBeGreaterThanOrEqual(5)
+  })
+
+  it('states a reach that covers what each release actually declares', () => {
+    /*
+     * `reachOf` reads content scripts as well as host permissions, because a
+     * statically declared content script runs whether or not a host permission
+     * backs it. A row that named only the host permissions would under-state
+     * what the program reads — Video Speed Controller asks for no hosts at all
+     * and runs on every page — so a row is required either to say *everywhere*
+     * or to enumerate.
+     */
+    for (const entry of BROWSER_EXTENSION_CATALOGUE) {
+      if (entry.source === null) continue
+      const everywhere = entry.reach.some(
+        (pattern) => pattern === '<all_urls>' || /^(\*|https?):\/\/\*\/\*$/.test(pattern),
+      )
+      expect(everywhere || entry.reach.length > 0, entry.id).toBe(true)
     }
   })
 })

@@ -282,6 +282,28 @@ export const SESSION_TOOLS: ReadonlySet<string> = new Set([
   'browser.extract',
   'browser_extract',
   /*
+   * What is running in the browser the session is driving, and the switch for
+   * it. Added 2026-08-22, and it was a real hole rather than a nicety.
+   *
+   * A session's whole job here is reading pages. An extension with content
+   * scripts on every page changes what a page *contains* — a blocker removes
+   * elements, a dark-mode rewriter rewrites every computed colour, a URL
+   * cleaner strips the parameters off the link the session is about to click.
+   * A session that cannot ask what is loaded reports the extension's output as
+   * the site's, confidently and with no way to notice. The copilot has had this
+   * tool since it was written; the session doing the actual scraping did not,
+   * which is the capability in the wrong hands by exactly one seat.
+   *
+   * It reaches nothing new. `extension-tools.ts` refuses a session that names a
+   * `profile`: a session may ask about the browser that is switched on and may
+   * not go looking through the other profiles, which is the same boundary
+   * `boundOf` draws around windows. Installing and removing stay where they
+   * were — behind a person at the panel — for the reason that file gives at
+   * length.
+   */
+  'browser.extensions',
+  'browser_extensions',
+  /*
    * The meta-tool, and it has to be on the list rather than exempt from it.
    *
    * Eight of the fourteen above are held behind `tools.describe` — the workers,

@@ -34,8 +34,10 @@ function row(over: Partial<StoreExtension> = {}): StoreExtension {
     homepage: 'https://github.com/darkreader/darkreader',
     licence: 'MIT',
     version: '4.9.129',
+    category: 'appearance',
     works: 'works',
     measured: 'Watched working: a white page came back with background rgb(24, 26, 27).',
+    noRelease: '',
     url: 'https://example.com/a.zip',
     sha256: 'a'.repeat(64),
     bytes: 100,
@@ -44,12 +46,17 @@ function row(over: Partial<StoreExtension> = {}): StoreExtension {
     installedAt: 0,
     enabled: false,
     reach: [],
+    mayAsk: [],
     everywhere: false,
     missing: [],
     provides: [],
     inert: [],
     rulesetsSwitchedOn: 0,
     popup: '',
+    optionsPage: '',
+    sideloaded: false,
+    origin: '',
+    crxId: '',
     staticRulesets: false,
     message: '',
     ...over,
@@ -63,9 +70,11 @@ function render(over: Partial<StoreExtension> = {}, props: Partial<Parameters<ty
       busy={false}
       said=""
       canOpenPopup
+      canOpenOptions
       onAct={() => {}}
       onEnable={() => {}}
       onOpenPopup={() => {}}
+      onOpenOptions={() => {}}
       {...props}
     />,
   )
