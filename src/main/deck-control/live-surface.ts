@@ -21,7 +21,20 @@ import { userDataDir } from '../platform/paths'
 import { readFileDiff, readGitStatus, type GitFile, type GitStatusResult } from '../git'
 import { PREFS_CHANGED_CHANNEL, SETTINGS_CHANGED_CHANNEL } from '../live-push'
 import type { PtyManager } from '../pty-manager'
-import { getStoredSettings, patchStoredSettings, writeSettingsSnapshot } from '../settings-extra'
+/*
+ * From the store half, never from `settings-extra.ts`, and the difference is
+ * the seam rather than tidiness.
+ *
+ * These three names live in `settings-store.ts` — sanitize, patch, load,
+ * persist, the last-good snapshot — which needs only `fs` and a user-data
+ * directory. `settings-extra.ts` re-exports them beside `app`, `session` and
+ * `shell`, so importing them from there pulled Electron into every closure that
+ * reached this surface, and therefore into `deck-control/index.ts`. That was one
+ * of the two edges `src/headless/host.ts` named where it declined to run a tool
+ * endpoint on a server. The other was `browser-drive-ipc.ts`; see
+ * `browser-drive-current.ts`.
+ */
+import { getStoredSettings, patchStoredSettings, writeSettingsSnapshot } from '../settings-store'
 import { store } from '../store'
 import { readToolTrail } from '../tool-trail'
 import { listTranscripts, readTranscript, transcriptDirs } from '../transcript'

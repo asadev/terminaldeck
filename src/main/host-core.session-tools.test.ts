@@ -558,3 +558,138 @@ describe('a session a phone started', () => {
     CASE_MS,
   )
 })
+
+describe('a session on a host that holds the windows itself', () => {
+  /*
+   * The headless server, and the reason it needed a second seam.
+   *
+   * Almost every session on a server is started by a device that dialled in, so
+   * `forDevice` is true for nearly all of them — and the desktop's gate refuses
+   * those unless the *device* can serve a browser verb. That question is right
+   * on a desktop, where a session a phone started has its windows on the phone
+   * because a device driving the browser here is refused and always will be. It
+   * is the wrong question on a server: the browser is the server's own, and
+   * `HeadlessDriveHost.openForSession` attaches every window it opens to the
+   * calling session in the same `browser-binding` store the desktop mints `B1`
+   * from. The device is not part of it.
+   *
+   * So `hostHoldsWindows` is asked beside `reachesDeviceWindows` rather than
+   * instead of it. Answering the device question `true` from a server would have
+   * been this file being told a phone can show a browser window in order to get
+   * a launch past a gate for an unrelated reason.
+   */
+  const guest = { set: {}, remove: [], paths: [] }
+
+  it(
+    'is given the verbs even though a device asked for it',
+    async () => {
+      const server = createHostCore({
+        storageDir: join(dir, 'remote-server'),
+        userData: dir,
+        sessionTools: { prepare: alwaysTools.prepare, hostHoldsWindows: () => true },
+      })
+      /*
+       * Read **while the session is alive**. `forgetNoVerbs` fires on exit, so a
+       * sentence read after the kill in the `finally` is null for every session
+       * ever launched — an assertion that cannot fail is worse than none.
+       */
+      let said: string | null = 'unread'
+      let provider = ''
+      try {
+        const meta = await server.startSession(
+          { cwd: join(dir, 'work'), cols: 80, rows: 24, provider: 'claude' },
+          guest,
+          undefined,
+          recorder,
+        )
+        provider = meta.provider
+        said = noVerbsLine(meta.id)
+      } finally {
+        server.ptys.killAll()
+        await server.ptys.drain()
+        await server.credentials.stop()
+      }
+      expect(provider).toBe('claude')
+      expect(
+        configIn(spawned.at(-1) ?? []),
+        'a session on a server was launched with no --mcp-config, so the server’s own browser is unreachable from it',
+      ).not.toBeNull()
+      expect(said).toBeNull()
+    },
+    CASE_MS,
+  )
+
+  it(
+    'is given them even when the device that asked holds no windows',
+    async () => {
+      /*
+       * The two seams are `||`, and this is the case that proves it is not `&&`.
+       * A phone answers `reachesDeviceWindows` false — correctly, it holds no
+       * windows — and on a server that must not be the end of it, because the
+       * windows in question are not the phone's.
+       */
+      const server = createHostCore({
+        storageDir: join(dir, 'remote-server-phone'),
+        userData: dir,
+        sessionTools: {
+          prepare: alwaysTools.prepare,
+          reachesDeviceWindows: () => false,
+          hostHoldsWindows: () => true,
+        },
+      })
+      let said: string | null = 'unread'
+      try {
+        const meta = await server.startSession(
+          { cwd: join(dir, 'work'), cols: 80, rows: 24, provider: 'claude' },
+          guest,
+          undefined,
+          recorder,
+        )
+        said = noVerbsLine(meta.id)
+      } finally {
+        server.ptys.killAll()
+        await server.ptys.drain()
+        await server.credentials.stop()
+      }
+      expect(configIn(spawned.at(-1) ?? [])).not.toBeNull()
+      expect(said).toBeNull()
+    },
+    CASE_MS,
+  )
+
+  it(
+    'names the endpoint, not the device, when the tool server is not up yet',
+    async () => {
+      /*
+       * The sentence has to move with the seam or it becomes the lie the seam
+       * was added to stop. On a server whose endpoint has not bound, telling a
+       * session that *"the device that started this session cannot show a
+       * browser window"* names the wrong computer about the wrong browser — and
+       * closes a door that opens a moment later, or on the next launch.
+       */
+      const server = createHostCore({
+        storageDir: join(dir, 'remote-server-early'),
+        userData: dir,
+        sessionTools: { prepare: () => null, hostHoldsWindows: () => true },
+      })
+      let said = ''
+      try {
+        const meta = await server.startSession(
+          { cwd: join(dir, 'work'), cols: 80, rows: 24, provider: 'claude' },
+          guest,
+          undefined,
+          recorder,
+        )
+        said = noVerbsLine(meta.id) ?? ''
+      } finally {
+        server.ptys.killAll()
+        await server.ptys.drain()
+        await server.credentials.stop()
+      }
+      expect(configIn(spawned.at(-1) ?? [])).toBeNull()
+      expect(said).toContain('started again')
+      expect(said).not.toContain('cannot show a browser window')
+    },
+    CASE_MS,
+  )
+})

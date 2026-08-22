@@ -140,7 +140,7 @@ import type { DeckSurface } from './surface'
 import { MAX_TOURS_KEPT, TourStage } from './tour-stage'
 import { tourTool } from './tour-tool'
 import { WHERE_CALL, whereTool } from './where-tool'
-import { browserDrive } from '../browser-drive-ipc'
+import { browserDrive } from '../browser-drive-current'
 
 /* -------------------------------------------------------------- constants -- */
 

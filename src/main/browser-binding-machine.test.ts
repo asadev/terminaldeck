@@ -213,16 +213,31 @@ describe('what a session is handed at launch', () => {
      * password" banner inside the owner's own app chrome is the thing that
      * refusal exists for.
      */
-    // Rewritten 2026-08-21. The flat refusal became a question, because a
-    // paired machine running the full app *should* get the verbs — its windows
-    // are served back to it over the wire — while a phone, which advertises no
-    // `windows` capability and holds no window, still must not. So the gate now
-    // asks whether that specific device can serve one, and the thing this test
-    // guards is that a device path is still gated at all rather than waved
-    // through.
-    expect(core).toContain(
-      "(!forDevice || options.sessionTools?.reachesDeviceWindows?.(confine?.deviceId) === true) &&",
-    )
+    /*
+     * Rewritten 2026-08-21. The flat refusal became a question, because a
+     * paired machine running the full app *should* get the verbs — its windows
+     * are served back to it over the wire — while a phone, which advertises no
+     * `windows` capability and holds no window, still must not. So the gate
+     * asks whether that specific device can serve one, and the thing this test
+     * guards is that a device path is still gated at all rather than waved
+     * through.
+     *
+     * Widened 2026-08-22 by a second question with a different subject, which
+     * is why this is now asserted clause by clause rather than as one line: a
+     * headless server holds the browser *itself*, so a session there drives this
+     * host's Chromium whoever asked for the session, and `hostHoldsWindows`
+     * answers that. The desktop passes no such seam and `?.()` answers
+     * `undefined`, so nothing about a device's session on this Mac changed.
+     *
+     * What must not be lost is `forDevice` still being the thing that opens the
+     * question at all. A gate that stopped asking would hand a phone six verbs
+     * that can only ever refuse — and, worse on a desktop, would let a paired
+     * device make this Mac open a page and click through it.
+     */
+    expect(core).toContain('const forDevice = guest !== undefined || confine !== undefined')
+    expect(core).toContain('(!forDevice ||')
+    expect(core).toContain('options.sessionTools?.reachesDeviceWindows?.(confine?.deviceId) === true ||')
+    expect(core).toContain('options.sessionTools?.hostHoldsWindows?.() === true) &&')
   })
 
   it('is refused for a caller that already composed its own tool surface', async () => {

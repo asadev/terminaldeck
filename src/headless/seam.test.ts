@@ -54,10 +54,10 @@ function resolveSpec(spec: string, from: string): string | null {
   return null
 }
 
-/** Every source file the headless entries can reach, repo-relative, `/`-separated. */
-function closure(): string[] {
+/** Every source file these entries can reach, repo-relative, `/`-separated. */
+function closure(entries: readonly string[] = ENTRIES): string[] {
   const seen = new Set<string>()
-  const stack = ENTRIES.map((entry) => join(ROOT, entry))
+  const stack = entries.map((entry) => join(ROOT, entry))
   while (stack.length > 0) {
     const file = stack.pop() as string
     if (seen.has(file)) continue
@@ -192,6 +192,25 @@ describe('the headless build never reaches Electron', () => {
     expect(files).toContain('src/main/browser-asset-session-cdp.ts')
     expect(files).toContain('src/main/browser-chromium-launch.ts')
     expect(files).toContain('src/main/browser-chromium-install.ts')
+    /*
+     * And the tool endpoint a session on this host is launched against.
+     *
+     * `host.ts` starts `deck-control`'s MCP server over the browser-verb
+     * `DeckControl` and mints a per-launch token and config file for every
+     * session it spawns, so the dispatcher, the catalogue, the caller table, the
+     * action log and the consent broker are all genuinely reached from the
+     * headless entries — and are therefore checked for the Electron edge by the
+     * walk below rather than trusted. Wave-2 asserted three of these by name
+     * while the wiring was still ahead of the graph; they are here because they
+     * are in it.
+     */
+    expect(files).toContain('src/main/deck-control/server.ts')
+    expect(files).toContain('src/main/deck-control/session-tools.ts')
+    expect(files).toContain('src/main/deck-control/control.ts')
+    expect(files).toContain('src/main/deck-control/browser-tools.ts')
+    expect(files).toContain('src/main/deck-control/action-log.ts')
+    expect(files).toContain('src/main/deck-control/consent.ts')
+    expect(files).toContain('src/main/deck-control/catalogue.ts')
   })
 
   it('imports nothing from electron at runtime', () => {
@@ -350,5 +369,108 @@ describe('the headless build can drive a browser without Electron', () => {
     ]) {
       expect(files, file).not.toContain(file)
     }
+  })
+})
+
+describe('the server’s own sessions are offered its own browser', () => {
+  /*
+   * Two lines in `host.ts`, asserted from source for the reason the demo-host
+   * pair above is: this proves the wiring is *written*, not that it fires.
+   * `host.test.ts` proves it fires — it starts a real headless host and asks the
+   * live endpoint for its tool list — and `host-core.session-tools.test.ts`
+   * proves what the gate does with the seam. What none of those can catch is the
+   * seam being quietly dropped from the options object while every other test
+   * keeps passing, which is precisely how the endpoint came to exist for a whole
+   * release without a single session being pointed at it.
+   */
+  it('starts the tool endpoint and hands the core a seam to mint from', () => {
+    const source = readSource('src/headless/host.ts')
+    expect(source).toContain('startDeckControlServer({ control: browserControl })')
+    expect(source).toContain('createSessionTools(controlEndpoint, {')
+    expect(source).toContain('prepare: (inside) => sessionTools?.prepare(inside) ?? null,')
+    expect(source).toContain('hostHoldsWindows: () => true,')
+  })
+
+  it('withholds all of it from the public demo box', () => {
+    /*
+     * A container that hands a stranger a shell must not hand them a browser on
+     * the same machine: that is a fetch primitive pointed at whatever the host
+     * can route to, written into an action log nobody owns. The guard is a
+     * source check because the alternative is booting a demo host in a unit
+     * test, and what can be lost by an ordinary edit is the condition itself.
+     */
+    const source = readSource('src/headless/host.ts')
+    const guard = source.indexOf('if (options.publicHost === undefined) {')
+    const start = source.indexOf('startDeckControlServer({ control: browserControl })')
+    expect(guard).toBeGreaterThan(-1)
+    expect(start).toBeGreaterThan(guard)
+  })
+
+  it('lets go of a session’s token and its windows when the session goes', () => {
+    /*
+     * Both on the same edge, and both were reachable only once a session here
+     * could open a window. A token left on the table points at a session id
+     * nothing can resolve; a binding row left behind puts a dead `B1` into every
+     * other session's hook answer.
+     */
+    const source = readSource('src/headless/host.ts')
+    expect(source).toContain('sessionRemoved(id)')
+    expect(source).toContain('sessionTools?.release(id)')
+    // And the shutdown pair, before the browser they point at is torn down.
+    const revoke = source.indexOf('sessionTools?.stop()')
+    const close = source.indexOf('await stopDeckControlServer()')
+    const browser = source.indexOf('await browserHost.stop()')
+    expect(revoke).toBeGreaterThan(-1)
+    expect(close).toBeGreaterThan(revoke)
+    expect(browser).toBeGreaterThan(close)
+  })
+})
+
+describe('the whole tool surface assembles outside Electron', () => {
+  /*
+   * The two edges wave-2 could not cut, asserted so they cannot grow back.
+   *
+   * `src/headless/host.ts` declined to run a `deck-control` endpoint on a server
+   * in as many words, and named exactly why: `deck-control/index.ts` imported
+   * `browserDrive` from `browser-drive-ipc.ts`, which loads `browser-tab` and
+   * `browser-driver` — `BrowserWindow`, `WebContentsView`, `nativeImage` — at
+   * module scope; and its `live-surface.ts` imported `settings-extra.ts`, which
+   * loads `app`, `session` and `shell`. Both were value imports, so the bundle
+   * would not have started.
+   *
+   * They are cut the way `browser-downloads` was: the *state* moved to a plain
+   * module (`browser-drive-current.ts`) and only the *construction* stayed with
+   * Electron, and the settings read moved to the store half
+   * (`settings-store.ts`), which needs only `fs` and a user-data directory.
+   *
+   * This is asserted rather than merely enjoyed because the headless build does
+   * not import `deck-control/index.ts` today — it assembles the narrower
+   * browser-verb control instead — so the closure walk above would not notice
+   * either edge returning. The property that was bought is that the copilot's
+   * whole tool surface *can* be assembled on a server, and the next lane to try
+   * should find it still true.
+   */
+  it('deck-control/index.ts reaches nothing electron at runtime', () => {
+    const offenders: string[] = []
+    for (const file of closure(['src/main/deck-control/index.ts'])) {
+      for (const clause of runtimeElectronImports(readSource(file))) {
+        offenders.push(`${file}: ${clause}`)
+      }
+    }
+    expect(
+      offenders,
+      'The copilot tool surface has grown an Electron edge again. It was cut so a server could run ' +
+        'one; see browser-drive-current.ts and settings-store.ts for the shape the two halves split in.',
+    ).toEqual([])
+  })
+
+  it('keeps the two cut edges cut, by name', () => {
+    const files = closure(['src/main/deck-control/index.ts'])
+    expect(files).not.toContain('src/main/browser-drive-ipc.ts')
+    expect(files).not.toContain('src/main/settings-extra.ts')
+    // And the halves it reaches instead, so the assertions above cannot pass by
+    // the import having simply been deleted.
+    expect(files).toContain('src/main/browser-drive-current.ts')
+    expect(files).toContain('src/main/settings-store.ts')
   })
 })

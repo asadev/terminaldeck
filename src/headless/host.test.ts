@@ -30,6 +30,9 @@ import {
   type ServerMessage,
 } from '../main/remote/protocol'
 import { store } from '../main/store'
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import { currentEndpoint } from '../main/deck-control/server'
 import { createHeadlessHost, type HeadlessHost } from './host'
 
 /**
@@ -98,6 +101,54 @@ describe('it starts with no Electron in the process', () => {
     const status = await host.status()
     expect(status.remote.running).toBe(false)
     expect(status.remote.reason ?? status.remote.directReason).toBeTruthy()
+  })
+})
+
+describe('a session started on this host can drive this host’s browser', () => {
+  /*
+   * The wiring, asserted against a host that really started.
+   *
+   * `session-drives-server-browser.test.ts` proves what the endpoint *does* by
+   * rebuilding the four-line assembly by hand against a fake Chromium. This
+   * proves the thing that assembly cannot: that `createHeadlessHost` actually
+   * performs it. The failure it is here to catch is the one this repository
+   * keeps re-finding — every layer green and nobody calling the top one, which
+   * is exactly how remote access shipped three times without ever dialling.
+   */
+  it('has a tool endpoint listening on its own loopback', () => {
+    const endpoint = currentEndpoint()
+    expect(endpoint, 'the headless host started deck-control’s MCP server').not.toBeNull()
+    expect(endpoint?.port).toBeGreaterThan(0)
+    expect(endpoint?.url).toContain(`127.0.0.1:${endpoint?.port}`)
+  })
+
+  it('answers MCP on it rather than merely holding the port open', async () => {
+    /*
+     * A listening socket is not a tool server. This asks the endpoint the
+     * question a session's CLI asks first, over the real transport, with the
+     * run's own token — and the answer has to be the browser verbs, because
+     * that is the whole of what a session here is granted.
+     *
+     * `token` is the local attended one this run minted; a session's own token
+     * is narrower still, and `session-drives-server-browser.test.ts` proves the
+     * narrowing. What is proved here is that the thing this host started is the
+     * dispatcher, on this host, with the drive under it.
+     */
+    const endpoint = currentEndpoint()
+    expect(endpoint).not.toBeNull()
+    const client = new Client({ name: 'headless-test', version: '0.0.0' }, { capabilities: {} })
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL((endpoint as { url: string }).url), {
+        requestInit: { headers: { Authorization: `Bearer ${(endpoint as { token: string }).token}` } },
+      }),
+    )
+    try {
+      const names = (await client.listTools()).tools.map((tool) => tool.name)
+      expect(names).toContain('browser_open')
+      expect(names).toContain('browser_read')
+    } finally {
+      await client.close()
+    }
   })
 })
 
