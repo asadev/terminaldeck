@@ -17,6 +17,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -34,6 +36,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -73,12 +76,14 @@ import kotlin.math.roundToInt
  * anything richer belongs on the desktop, which is the same reasoning `protocol.ts` gives for
  * keeping version 1 tiny.
  *
- * ## The title is the switcher
+ * ## The title is the switcher — when there is something to switch to
  *
  * With several machines paired, the one question this screen has to answer before any other is
  * *which computer am I looking at* — so the machine's name is the title rather than the app's, and
- * the title is the control that changes it. See [HostSwitcherSheet], which is also the only place a
- * machine is named, forgotten, or added.
+ * the title is the control that changes it. See [HostSwitcherSheet], which now answers only that
+ * question: naming a machine, forgetting one, pairing another and adding a server are on the
+ * **Machines** screen inside Settings, which is where iOS puts them and why a single-machine title
+ * is no longer a control at all.
  *
  * ## The indicator never claims a connection it does not have
  *
@@ -100,29 +105,12 @@ fun SessionListScreen(
     /** Null means "wherever that machine would have started one" — see `DeckViewModel.newSession`. */
     onNewSession: (String?) -> Unit,
     onSelectHost: (String) -> Unit,
-    onRenameHost: (String, String?) -> Unit,
-    onForgetHost: (String) -> Unit,
-    onAddHost: () -> Unit,
-    /**
-     * Add a **server** — the other kind of machine, and the other ceremony.
-     *
-     * Beside [onAddHost] rather than folded into it: a device is paired with a code minted by the
-     * app at the far end, a server is signed in to with a login it already trusts, and the two share
-     * neither a screen nor a verb. See `SERVERS-DESIGN.md`.
-     */
-    onAddServer: () -> Unit = {},
     /**
      * End a session on the machine on screen. Drawn per row only when [DeckUiState.canCloseSessions]
      * — the machine advertised `close` — and confirmed once here before it is sent, because closing
      * is not undoable. The row is removed on the machine's `closed` answer, not on this tap.
      */
     onCloseSession: (RemoteSessionView) -> Unit = {},
-    /** Open the device roster / the "This server" settings of the machine on screen. */
-    onDevices: () -> Unit = {},
-    onServerSettings: () -> Unit = {},
-    /** The GitHub account this phone holds, or null. Phone-wide, not per machine. */
-    gitHubLogin: String? = null,
-    onGitHub: () -> Unit = {},
 ) {
     val snackbar = remember { SnackbarHostState() }
     var folderMenu by remember { mutableStateOf(false) }
@@ -148,19 +136,29 @@ fun SessionListScreen(
                     titleContentColor = MaterialTheme.colorScheme.onBackground,
                 ),
                 title = {
-                    // The whole title is the control, not just the chevron: a name with an arrow
-                    // next to it that only responds on the arrow is a target the width of a
-                    // fingernail.
+                    /*
+                     * The title is the switcher — but only when there is something to switch to.
+                     *
+                     * With one machine paired there is nothing to pick, and everything that used to
+                     * justify opening this sheet anyway (rename, forget, pair another, add a server,
+                     * GitHub, Devices, This server) is on the Settings tab now. So a single machine
+                     * gets the product's name and no chevron, exactly as on iOS, rather than a
+                     * control that opens a list of one.
+                     *
+                     * When it *is* a control, the whole title is: a name with an arrow next to it
+                     * that only responds on the arrow is a target the width of a fingernail.
+                     */
+                    val switchable = state.hasSeveralHosts
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier
                             .clip(RoundedCornerShape(10.dp))
-                            .clickable { switcher = true }
+                            .then(if (switchable) Modifier.clickable { switcher = true } else Modifier)
                             .padding(horizontal = 6.dp, vertical = 4.dp),
                     ) {
                         Column(modifier = Modifier.weight(1f, fill = false)) {
                             Text(
-                                text = state.hostLabel,
+                                text = if (switchable) state.hostLabel else "Terminal Deck",
                                 style = MaterialTheme.typography.titleLarge,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
@@ -168,7 +166,7 @@ fun SessionListScreen(
                             Text(
                                 // The machine's public name at the relay, which is the only name the
                                 // protocol gives it. `welcome.deviceName` is this phone's.
-                                text = if (state.hasSeveralHosts) {
+                                text = if (switchable) {
                                     "${state.hosts.size} machines · tap to switch"
                                 } else {
                                     state.pairing?.hostId ?: "not paired"
@@ -179,18 +177,27 @@ fun SessionListScreen(
                                 overflow = TextOverflow.Ellipsis,
                             )
                         }
-                        Spacer(Modifier.width(4.dp))
-                        Icon(
-                            Icons.Filled.ExpandMore,
-                            contentDescription = "Your machines",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(20.dp),
-                        )
+                        if (switchable) {
+                            Spacer(Modifier.width(4.dp))
+                            Icon(
+                                Icons.Filled.ExpandMore,
+                                contentDescription = "Your machines",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
                     }
                 },
-                actions = {
-                    TextButton(onClick = onRefresh, enabled = state.transport.isOnline) { Text("Refresh") }
-                },
+                /*
+                 * No Refresh button, and its absence is the decision.
+                 *
+                 * *"Refresh, what does it actually do? Pull-to-refresh would be the natural
+                 * gesture."* It asked the machine for a session list the machine already pushes
+                 * whenever it changes, so the button's whole job was to make somebody wonder whether
+                 * the list was stale. The gesture is on the list below, where a list's refresh
+                 * belongs; the one control that does something a person cannot otherwise do —
+                 * Retry, while the socket is down — is on the connection banner.
+                 */
             )
         },
         floatingActionButton = {
@@ -257,22 +264,43 @@ fun SessionListScreen(
             ConnectionBanner(state.transport, onReconnect)
             FolderNote(state)
 
-            if (state.sessions.isEmpty()) {
-                EmptyState(state)
-            } else {
-                LazyColumn(
-                    contentPadding = PaddingValues(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                    modifier = Modifier.alpha(if (state.live) 1f else 0.55f),
-                ) {
-                    items(state.sessions, key = { it.id }) { session ->
-                        SessionCard(
-                            session = session,
-                            live = state.live,
-                            onClick = { onOpen(session) },
-                            // Absent, not disabled, when the machine never advertised `close`.
-                            onClose = if (state.canCloseSessions) ({ closing = session }) else null,
-                        )
+            /*
+             * Pull to refresh — the gesture that replaced the button.
+             *
+             * It asks the machine for its session list again. That list is *pushed* whenever it
+             * changes, so this is not how the screen stays current; it is what somebody does when
+             * they do not believe it, which is a real thing to want and is worth exactly one
+             * gesture. The spinner is the platform's, and it settles on the answer rather than on a
+             * timer, so a pull against a machine that has gone quiet ends when the socket does.
+             */
+            val refreshing = state.transport.isOnline && !state.loaded
+            PullToRefreshBox(
+                isRefreshing = refreshing,
+                onRefresh = onRefresh,
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                if (state.sessions.isEmpty()) {
+                    // Still inside the pull box: an empty list is exactly where somebody reaches for
+                    // this gesture, so a screen that only offered it once there was something to
+                    // scroll would be missing the case it is for.
+                    EmptyState(state)
+                } else {
+                    LazyColumn(
+                        contentPadding = PaddingValues(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .alpha(if (state.live) 1f else 0.55f),
+                    ) {
+                        items(state.sessions, key = { it.id }) { session ->
+                            SessionCard(
+                                session = session,
+                                live = state.live,
+                                onClick = { onOpen(session) },
+                                // Absent, not disabled, when the machine never advertised `close`.
+                                onClose = if (state.canCloseSessions) ({ closing = session }) else null,
+                            )
+                        }
                     }
                 }
             }
@@ -283,18 +311,6 @@ fun SessionListScreen(
         HostSwitcherSheet(
             hosts = state.hosts,
             onSelect = onSelectHost,
-            onRename = onRenameHost,
-            onForget = onForgetHost,
-            onAddHost = onAddHost,
-            onAddServer = onAddServer,
-            gitHubLogin = gitHubLogin,
-            onGitHub = onGitHub,
-            selectedLabel = state.hostLabel,
-            devicesOffered = state.devicesOffered,
-            onDevices = onDevices,
-            serverSettingsOffered = state.serverSettingsOffered,
-            onServerSettings = onServerSettings,
-            serverBehindSentence = state.serverBehindSentence,
             onDismiss = { switcher = false },
         )
     }
@@ -441,7 +457,11 @@ private fun remaining(retryAt: Long): Int =
 
 @Composable
 private fun EmptyState(state: DeckUiState) {
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+    // Scrollable even with nothing in it, so the pull gesture above has something to pull.
+    Box(
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+        contentAlignment = Alignment.Center,
+    ) {
         if (!state.loaded && state.transport is TransportState.Connecting) {
             CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
         } else {

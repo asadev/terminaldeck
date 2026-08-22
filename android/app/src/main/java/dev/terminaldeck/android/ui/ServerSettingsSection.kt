@@ -4,36 +4,21 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.terminaldeck.android.ServerSettingsView
 import dev.terminaldeck.android.protocol.ServerSettingKey
@@ -53,96 +38,83 @@ import dev.terminaldeck.android.protocol.ServerSettingsLabels
  * The keys and the allowlist are [ServerSettingKey] from the protocol, so the picker cannot compose a
  * frame for a key the desktop's parser would refuse; the only thing decided here is the label for a
  * provider id, via [ServerSettingsLabels].
+ *
+ * ## A section, not a screen
+ *
+ * It used to be a pushed screen with its own bar, reached from the switcher sheet. It is a section
+ * of the Settings tab now, which is where iOS keeps it and where the two rows belong: these are
+ * facts about the machine on screen, and they read as facts when they sit under the rows that name
+ * that machine rather than behind one more push. The screen it replaced had exactly these controls
+ * and the same sentence at the foot, one level further away.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ServerSettingsScreen(
+fun ServerSettingsSection(
     view: ServerSettingsView,
-    machineLabel: String,
-    onBack: () -> Unit,
     onApply: (ServerSettingKey, String) -> Unit,
 ) {
-    Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
-        topBar = {
-            TopAppBar(
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background,
-                    titleContentColor = MaterialTheme.colorScheme.onBackground,
-                ),
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                title = {
-                    Column {
-                        Text("This server", style = MaterialTheme.typography.titleLarge, maxLines = 1)
-                        Text(
-                            text = machineLabel,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                },
-            )
-        },
-    ) { padding ->
-        val rows = view.rows
-        if (rows == null) {
-            Box(
-                modifier = Modifier.fillMaxSize().padding(padding),
-                contentAlignment = Alignment.Center,
-            ) { CircularProgressIndicator(color = MaterialTheme.colorScheme.primary) }
-            return@Scaffold
-        }
-
-        Column(
+    val rows = view.rows
+    if (rows == null) {
+        // "Reading…" rather than a spinner over an empty screen: the section sits inside Settings
+        // now, and a bare spinner in the middle of a list of rows reads as something having gone
+        // wrong rather than as an answer that has not arrived.
+        Text(
+            text = "Reading this machine\u2019s settings…",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .verticalScroll(rememberScrollState())
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp))
                 .padding(16.dp),
-        ) {
-            for (row in rows) {
-                // `rows` has already been filtered to known keys by the controller's merge, so
-                // `known` is non-null here; the null branch is the belt-and-braces that keeps this
-                // exhaustive without drawing anything for a key a future build might add.
-                when (row.known) {
-                    ServerSettingKey.DefaultProvider -> ProviderRow(
-                        row = row,
-                        busy = view.busy == ServerSettingKey.DefaultProvider,
-                        onApply = { onApply(ServerSettingKey.DefaultProvider, it) },
-                    )
-                    ServerSettingKey.RestoreSessions -> ToggleRow(
-                        row = row,
-                        busy = view.busy == ServerSettingKey.RestoreSessions,
-                        onApply = { onApply(ServerSettingKey.RestoreSessions, it) },
-                    )
-                    null -> Unit
-                }
-                Spacer(Modifier.height(14.dp))
-            }
+        )
+        return
+    }
 
-            view.notice?.let { notice ->
-                Text(
-                    text = notice.text,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (notice.ok) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp))
+            .padding(14.dp),
+    ) {
+        rows.forEachIndexed { index, row ->
+            if (index > 0) Spacer(Modifier.height(14.dp))
+            // `rows` has already been filtered to known keys by the controller's merge, so `known`
+            // is non-null here; the null branch is the belt-and-braces that keeps this exhaustive
+            // without drawing anything for a key a future build might add.
+            when (row.known) {
+                ServerSettingKey.DefaultProvider -> ProviderRow(
+                    row = row,
+                    busy = view.busy == ServerSettingKey.DefaultProvider,
+                    onApply = { onApply(ServerSettingKey.DefaultProvider, it) },
                 )
-                Spacer(Modifier.height(10.dp))
+                ServerSettingKey.RestoreSessions -> ToggleRow(
+                    row = row,
+                    busy = view.busy == ServerSettingKey.RestoreSessions,
+                    onApply = { onApply(ServerSettingKey.RestoreSessions, it) },
+                )
+                null -> Unit
             }
-
-            Text(
-                text = "These belong to the machine, not this phone — every device that reaches it sees the same two.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
         }
     }
+
+    view.notice?.let { notice ->
+        Text(
+            text = notice.text,
+            style = MaterialTheme.typography.bodySmall,
+            color = if (notice.ok) {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            } else {
+                MaterialTheme.colorScheme.error
+            },
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp).padding(top = 8.dp),
+        )
+    }
+
+    Text(
+        text = "These belong to the machine, not this phone — every device that reaches it sees the same two.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp).padding(top = 8.dp),
+    )
 }
 
 @OptIn(ExperimentalLayoutApi::class)

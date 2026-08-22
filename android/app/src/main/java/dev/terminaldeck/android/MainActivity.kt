@@ -31,14 +31,35 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import android.net.Uri
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material3.Icon
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.Scaffold
+import androidx.compose.runtime.DisposableEffect
+import androidx.navigation.NavGraph.Companion.findStartDestination
+import androidx.navigation.compose.currentBackStackEntryAsState
+import androidx.navigation.compose.navigation
+import dev.terminaldeck.android.protocol.BrowserSurfaceWire
 import dev.terminaldeck.android.protocol.HostPlatform
+import dev.terminaldeck.android.protocol.SessionControls
+import dev.terminaldeck.android.ui.MachinesScreen
+import dev.terminaldeck.android.ui.SessionControlsSheet
+import dev.terminaldeck.android.ui.SettingsScreen
+import dev.terminaldeck.android.ui.WatchSurfacesScreen
+import dev.terminaldeck.android.ui.WatchViewerScreen
 import dev.terminaldeck.android.transfer.PickedFile
 import dev.terminaldeck.android.ui.AddServerScreen
 import dev.terminaldeck.android.ui.CredentialPromptSheet
 import dev.terminaldeck.android.ui.DevicesScreen
 import dev.terminaldeck.android.ui.GitHubSheet
 import dev.terminaldeck.android.ui.PairingScreen
-import dev.terminaldeck.android.ui.ServerSettingsScreen
 import dev.terminaldeck.android.ui.SessionListScreen
 import dev.terminaldeck.android.ui.TerminalScreen
 import dev.terminaldeck.android.ui.theme.TerminalDeckTheme
@@ -95,6 +116,32 @@ class MainActivity : ComponentActivity() {
 
 }
 
+/**
+ * The two tabs, and why the app has a bottom bar at all.
+ *
+ * Asad, walking the phone app: *"here we need to give a proper menu. Maybe it's super basic
+ * currently. Maybe we can have some tab bar and down here like a pill, something, so it's more easy
+ * to use… let's make it proper simple with a bit more options."* Before this the whole Android app
+ * was one list and one sheet, and everything that was not a session — the machine you are typing
+ * into, the GitHub account, the device roster, the machine's own settings — lived behind a title
+ * that had to be tapped to be discovered. Nine items in one sheet is not a menu, it is a drawer.
+ *
+ * Each tab is a **navigation graph** rather than a destination, which is what gives each one its own
+ * back stack: pushing Machines inside Settings, switching to Sessions, opening a terminal and coming
+ * back leaves Machines where it was. That is the Android shape of the per-tab `NavigationStack` iOS
+ * uses, and `saveState`/`restoreState` on the tab hop is the whole of it.
+ *
+ * ## Two tabs, where iOS has three or four
+ *
+ * iOS draws Copilot · Sessions · Localhost · Settings, the first of those only while the machine on
+ * screen has a copilot. This build has the sessions and the settings; **Localhost and Copilot are
+ * not implemented on Android at all** — no port list, no tunnel, no conversation — and a pill that
+ * opened an empty screen would be worse than a bar with two. They are named in the gap list rather
+ * than drawn.
+ */
+private const val GRAPH_SESSIONS = "graph.sessions"
+private const val GRAPH_SETTINGS = "graph.settings"
+
 private const val ROUTE_SESSIONS = "sessions"
 
 /**
@@ -110,13 +157,26 @@ private const val ARG_HOST_ID = "hostId"
 private const val ARG_SESSION_ID = "sessionId"
 
 /**
- * Devices and This-server act on whichever machine is selected — the same machine the session list
- * is showing — so they are plain routes without an id in them. If the selection changes underneath
- * to a machine that does not serve one, the screen reads a null view and pops itself, the same way
- * the terminal route handles a session that has gone.
+ * Everything under Settings acts on whichever machine is selected — the same machine the session
+ * list is showing — so these are plain routes without an id in them. If the selection changes
+ * underneath to a machine that does not serve one, the screen reads a null view and pops itself, the
+ * same way the terminal route handles a session that has gone.
  */
+private const val ROUTE_SETTINGS = "settings"
+private const val ROUTE_MACHINES = "machines"
 private const val ROUTE_DEVICES = "devices"
-private const val ROUTE_SETTINGS = "server-settings"
+private const val ROUTE_WATCH = "watch"
+
+/**
+ * One watched surface, full screen.
+ *
+ * The window name is in the route because it is what the cast is aimed at, and it is URL-encoded on
+ * the way in: the front tab is the **empty string**, and a slot name is free text from the machine.
+ * A path segment cannot be empty, so [WATCH_FRONT_TAB] stands in for it and is decoded back.
+ */
+private const val ROUTE_WATCH_VIEW = "watch/{window}"
+private const val ARG_WINDOW = "window"
+private const val WATCH_FRONT_TAB = "~front"
 
 @Composable
 fun TerminalDeckApp(
@@ -147,8 +207,20 @@ fun TerminalDeckApp(
      * a rotation does not push the same session twice.
      */
     val created by viewModel.created.collectAsStateWithLifecycle()
-    LaunchedEffect(created) {
+    LaunchedEffect(created, state.needsPairing) {
         val request = created ?: return@LaunchedEffect
+        // The pair screen owns the whole window while this is true, and the graph below is not
+        // mounted — so there is nowhere to navigate to yet. The request is kept rather than dropped:
+        // this effect keys on the flag as well, and runs again the moment the machine lets the phone
+        // back in, which lands the person in the session they asked for.
+        if (state.needsPairing) return@LaunchedEffect
+        // Onto the sessions tab first, then the terminal, so a session started while somebody was
+        // reading Settings lands on the stack it belongs to rather than on top of one.
+        navController.navigate(GRAPH_SESSIONS) {
+            popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+            launchSingleTop = true
+            restoreState = true
+        }
         navController.navigate("terminal/${request.hostId}/${request.sessionId}")
         viewModel.createdHandled()
     }
@@ -223,7 +295,70 @@ fun TerminalDeckApp(
         )
     } else {
 
-    NavHost(navController = navController, startDestination = ROUTE_SESSIONS) {
+    /*
+     * The bottom bar and the two graphs under it.
+     *
+     * The bar is drawn over the screens a person moves between all day and withdrawn from the two
+     * that take the whole window — a terminal and a watched page. That is the rule iOS states in
+     * `DeckChrome`, and it is stated here rather than on each screen for the same reason: a screen
+     * that hid the bar for itself would be one screen deciding something about the app's chrome.
+     */
+    val entry by navController.currentBackStackEntryAsState()
+    val route = entry?.destination?.route
+    val bar = route != ROUTE_TERMINAL && route != ROUTE_WATCH_VIEW
+    val onSessions = route == ROUTE_SESSIONS || route == ROUTE_TERMINAL
+
+    /** Hop to a tab, keeping what was pushed on the one being left. */
+    val showTab: (String) -> Unit = { graph ->
+        navController.navigate(graph) {
+            popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+            launchSingleTop = true
+            restoreState = true
+        }
+    }
+
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        /*
+         * Zero, and the whole app depends on it.
+         *
+         * The default is `systemBars`, which would hand this Scaffold's content a status-bar
+         * inset — and every screen inside already owns its own top inset, either through its own
+         * `TopAppBar` or, in the terminal's case, through an explicit `statusBarsPadding()`. Two
+         * insets for one status bar is a title drawn a bar's height below the clock. The only
+         * inset this level is responsible for is the one under the pill, and the bar consumes that
+         * itself.
+         */
+        contentWindowInsets = WindowInsets(0),
+        bottomBar = {
+            if (bar) {
+                NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
+                    NavigationBarItem(
+                        selected = onSessions,
+                        onClick = { showTab(GRAPH_SESSIONS) },
+                        icon = { Icon(Icons.Filled.Terminal, contentDescription = null) },
+                        label = { Text("Sessions") },
+                    )
+                    NavigationBarItem(
+                        selected = !onSessions,
+                        onClick = { showTab(GRAPH_SETTINGS) },
+                        icon = { Icon(Icons.Filled.Settings, contentDescription = null) },
+                        label = { Text("Settings") },
+                    )
+                }
+            }
+        },
+    ) { barPadding ->
+    NavHost(
+        navController = navController,
+        startDestination = GRAPH_SESSIONS,
+        // Padded by the bar, and the same amount *consumed* — so the screens inside, which ask for
+        // the system bars themselves, are told the bottom one is already handled and do not add a
+        // navigation bar's worth of empty space above a bar that is already sitting on it.
+        modifier = Modifier.padding(barPadding).consumeWindowInsets(barPadding),
+    ) {
+
+    navigation(startDestination = ROUTE_SESSIONS, route = GRAPH_SESSIONS) {
         composable(ROUTE_SESSIONS) {
             SessionListScreen(
                 state = state,
@@ -236,53 +371,7 @@ fun TerminalDeckApp(
                 onReconnect = viewModel::reconnect,
                 onNewSession = viewModel::newSession,
                 onSelectHost = viewModel::select,
-                onRenameHost = viewModel::rename,
-                onForgetHost = viewModel::forget,
-                onAddHost = viewModel::beginAddingHost,
-                onAddServer = viewModel::beginAddingServer,
                 onCloseSession = { session -> viewModel.endSession(session.id) },
-                // The read is triggered by the screen itself, keyed on the live connection, so it
-                // also re-reads if the socket drops and returns while the screen is open.
-                onDevices = { navController.navigate(ROUTE_DEVICES) },
-                onServerSettings = { navController.navigate(ROUTE_SETTINGS) },
-                gitHubLogin = state.gitHubAccount?.login,
-                onGitHub = { github = true },
-            )
-        }
-
-        composable(ROUTE_DEVICES) {
-            // The selected machine's roster. Null when the machine on screen does not serve one —
-            // which can happen if the selection changed to an older machine while this was open — so
-            // it pops itself rather than showing an empty shell, the terminal route's own rule.
-            val view = state.devices
-            if (view == null) {
-                LaunchedEffect(Unit) { navController.popBackStack() }
-                return@composable
-            }
-            // Read on entry, and again if the socket drops and comes back while this is open — a
-            // no-op when the roster is already in hand. See DeviceRosterController.ensureRead.
-            LaunchedEffect(state.live) { if (state.live) viewModel.openDevices() }
-            DevicesScreen(
-                view = view,
-                machineLabel = state.hostLabel,
-                onBack = { navController.popBackStack() },
-                onRefresh = viewModel::refreshDevices,
-                onRevoke = viewModel::revokeDevice,
-            )
-        }
-
-        composable(ROUTE_SETTINGS) {
-            val view = state.serverSettings
-            if (view == null) {
-                LaunchedEffect(Unit) { navController.popBackStack() }
-                return@composable
-            }
-            LaunchedEffect(state.live) { if (state.live) viewModel.openServerSettings() }
-            ServerSettingsScreen(
-                view = view,
-                machineLabel = state.hostLabel,
-                onBack = { navController.popBackStack() },
-                onApply = viewModel::applyServerSetting,
             )
         }
 
@@ -329,6 +418,24 @@ fun TerminalDeckApp(
                 return@composable
             }
 
+            /*
+             * The control cluster follows the session, and only while its screen is up.
+             *
+             * `follow` after the route has resolved a binding, because the question it asks is about
+             * a session this socket has been told is on screen; `forget` on the way out, because
+             * nothing about a session nobody is looking at is worth holding — a reading from a
+             * minute ago is a claim about now that has stopped being true.
+             */
+            // `sessionId` is non-null past the guard above — `binding` is only built when both ids
+            // are — but the compiler cannot carry that through a lambda capture, so it is named once
+            // here rather than asserted at the call.
+            val liveSession = known.id
+            DisposableEffect(hostId, liveSession) {
+                viewModel.followControls(hostId, liveSession)
+                onDispose { viewModel.forgetControls(hostId) }
+            }
+            var controlsOpen by remember(liveSession) { mutableStateOf(false) }
+
             TerminalScreen(
                 binding = binding,
                 title = known.title,
@@ -357,8 +464,123 @@ fun TerminalDeckApp(
                 onCancelUpload = viewModel::cancelUpload,
                 onDismissUpload = viewModel::dismissUpload,
                 notice = state.notice,
+                // Absent, not disabled, when this machine does not serve `controls` or this session
+                // has no agent drawing it — see [SessionControls.clusterShown].
+                hasControls = SessionControls.clusterShown(state.controls?.reading),
+                onControls = { controlsOpen = true },
+            )
+
+            if (controlsOpen) {
+                state.controls?.let { controls ->
+                    SessionControlsSheet(
+                        view = controls,
+                        onApply = { control, value -> viewModel.applyControl(hostId, control, value) },
+                        onDismissNotice = { viewModel.dismissControlsNotice(hostId) },
+                        onDismiss = { controlsOpen = false },
+                    )
+                }
+            }
+        }
+    }
+
+    navigation(startDestination = ROUTE_SETTINGS, route = GRAPH_SETTINGS) {
+        composable(ROUTE_SETTINGS) {
+            // The two request clusters are read when the screen that shows them opens, and again if
+            // the socket drops and returns while it is open — a no-op once the answer is in hand.
+            // See ServerSettingsController.ensureRead and DeviceRosterController.ensureRead.
+            LaunchedEffect(state.live) {
+                if (state.live) {
+                    viewModel.openServerSettings()
+                    viewModel.openDevices()
+                }
+            }
+            SettingsScreen(
+                state = state,
+                onMachines = { navController.navigate(ROUTE_MACHINES) },
+                onDevices = { navController.navigate(ROUTE_DEVICES) },
+                onWatch = { navController.navigate(ROUTE_WATCH) },
+                onGitHub = { github = true },
+                onApplyServerSetting = viewModel::applyServerSetting,
             )
         }
+
+        composable(ROUTE_MACHINES) {
+            MachinesScreen(
+                hosts = state.hosts,
+                onBack = { navController.popBackStack() },
+                onSelect = viewModel::select,
+                onRename = viewModel::rename,
+                onForget = viewModel::forget,
+                onAddHost = viewModel::beginAddingHost,
+                onAddServer = viewModel::beginAddingServer,
+            )
+        }
+
+        composable(ROUTE_DEVICES) {
+            // The selected machine's roster. Null when the machine on screen does not serve one —
+            // which can happen if the selection changed to an older machine while this was open — so
+            // it pops itself rather than showing an empty shell, the terminal route's own rule.
+            val view = state.devices
+            if (view == null) {
+                LaunchedEffect(Unit) { navController.popBackStack() }
+                return@composable
+            }
+            LaunchedEffect(state.live) { if (state.live) viewModel.openDevices() }
+            DevicesScreen(
+                view = view,
+                machineLabel = state.hostLabel,
+                onBack = { navController.popBackStack() },
+                onRefresh = viewModel::refreshDevices,
+                onRevoke = viewModel::revokeDevice,
+            )
+        }
+
+        composable(ROUTE_WATCH) {
+            val view = state.watch
+            if (view == null) {
+                LaunchedEffect(Unit) { navController.popBackStack() }
+                return@composable
+            }
+            LaunchedEffect(state.live) { if (state.live) viewModel.openWatch() }
+            WatchSurfacesScreen(
+                view = view,
+                machineLabel = state.hostLabel,
+                onBack = { navController.popBackStack() },
+                onRefresh = viewModel::refreshWatch,
+                onOpen = { surface ->
+                    val slot = surface.window.ifEmpty { WATCH_FRONT_TAB }
+                    navController.navigate("watch/" + Uri.encode(slot))
+                },
+            )
+        }
+
+        composable(
+            route = ROUTE_WATCH_VIEW,
+            arguments = listOf(navArgument(ARG_WINDOW) { type = NavType.StringType }),
+        ) { entry ->
+            val slot = entry.arguments?.getString(ARG_WINDOW).orEmpty()
+            val window = if (slot == WATCH_FRONT_TAB) "" else slot
+            // The controller, not a copy of the strip: the viewer needs the object it acks and sends
+            // gestures through. Null when the machine on screen stopped offering watching — a switch
+            // or a downgrade — and then there is nothing to cast, so it pops rather than draws.
+            val watcher = viewModel.watcher()
+            val surface = state.watch?.surfaces?.firstOrNull { it.window == window }
+            if (watcher == null) {
+                LaunchedEffect(Unit) { navController.popBackStack() }
+                return@composable
+            }
+            WatchViewerScreen(
+                watch = watcher,
+                // A window the strip no longer lists is still watchable — the strip is a list of what
+                // is open, and it can move while somebody is looking at one of its pages — so the
+                // route's own name is the fallback rather than a pop.
+                surface = surface ?: BrowserSurfaceWire(window = window),
+                onBack = { navController.popBackStack() },
+            )
+        }
+    }
+
+    }
     }
 
     } // end of the paired branch; the sheets below are drawn over either one

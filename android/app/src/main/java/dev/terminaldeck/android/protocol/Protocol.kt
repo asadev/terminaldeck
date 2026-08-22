@@ -115,6 +115,45 @@ object Protocol {
      */
     const val MAX_PASTE_BYTES = 1024 * 1024
 
+    /**
+     * The one frame allowed past [MAX_MESSAGE_BYTES], and how far past.
+     *
+     * A `browser.frame` carries a base64 JPEG of a web page, which is by design larger than the
+     * text cap every other frame lives under. `parseServerMessage` over in `protocol.ts` measures
+     * the cheap cap first and only a message *over* it pays the second check — and the only message
+     * allowed through that second door is a frame. [ServerFrames.parse] does exactly the same, in
+     * the same order, so the frame's larger allowance is never borrowed by another message.
+     *
+     * [MAX_FRAME_DATA_CHARS] is what [MAX_FRAME_BYTES] of JPEG becomes in base64: four characters
+     * per three bytes, rounded up to a whole group.
+     */
+    const val MAX_FRAME_BYTES = 67 * 1024
+    const val MAX_FRAME_DATA_CHARS = ((MAX_FRAME_BYTES + 2) / 3) * 4
+    const val MAX_FRAME_MESSAGE_BYTES = MAX_FRAME_DATA_CHARS + 2 * 1024
+
+    /**
+     * The render width and jpeg quality a watcher may ask a host to cast at.
+     *
+     * Transcribed from `MIN_WATCH_WIDTH`/`MAX_WATCH_WIDTH`/`MIN_WATCH_QUALITY`/`MAX_WATCH_QUALITY`.
+     * A viewer clamps into these rather than sending a number the host would clamp silently, so
+     * what is on screen is what was asked for.
+     */
+    const val MIN_WATCH_WIDTH = 160
+    const val MAX_WATCH_WIDTH = 1600
+    const val MIN_WATCH_QUALITY = 1
+    const val MAX_WATCH_QUALITY = 80
+
+    /** How many surfaces a tab strip will draw, and how long a title or a curtain prompt may be. */
+    const val MAX_SURFACES_REPORTED = 64
+    const val MAX_SURFACE_TITLE_LENGTH = 512
+    const val MAX_WATCH_PROMPT_LENGTH = 256
+
+    /** How many touch points one `browser.input` may name. */
+    const val MAX_TOUCH_POINTS = 10
+
+    /** The longest a control's value may be on the wire. A model name is the long one. */
+    const val MAX_CONTROL_VALUE_LENGTH = 64
+
     /** WebSocket close codes, RFC 6455 §7.4.1 plus the desktop's own reasons. */
     object Close {
         const val NORMAL = 1000
@@ -291,14 +330,41 @@ object Capability {
     const val SETTINGS = "settings"
 
     /**
+     * The session's control cluster — model, effort, fast mode, permission — read and changed.
+     *
+     * Answered by every desktop since 0.5.0; the desktop's own remote window has always sent
+     * `controls.read`/`controls.apply`. A phone that never sent them could watch a session and
+     * never change what it runs at. Nothing is drawn over a machine that did not name this.
+     */
+    const val CONTROLS = "controls"
+
+    /**
+     * Watching — and driving — a browser window the machine is holding.
+     *
+     * Dual-listed like `windows`: the host advertises it to say it can cast, and a client that can
+     * draw a cast claims it back in [CLAIMED]. Advertised only to one of the owner's own devices,
+     * never a guest, because watching a signed-in browser is an owner act.
+     */
+    const val WATCH = "watch"
+
+    /**
      * What this build tells a desktop it can do, in `hello.capabilities`.
      *
      * Only names that run desktop→phone belong here. [CREATE], [LOCALHOST] and [UPLOAD] are things
      * this phone *asks for* and are gated on what the desktop advertised, so claiming them would
      * say nothing at all; [CREDENTIAL] is a frame the desktop sends only once it has been told
      * somebody is listening for it.
+     *
+     * [DEVICES], [SETTINGS] and [WATCH] are here for the same reason [CREDENTIAL] is, and the
+     * list is word for word `CLAIMED_CAPABILITIES` in `pwa/src/protocol-client.ts` and
+     * `WireCapability.claimed` on iOS. Each of the three has a frame the desktop *pushes* rather
+     * than answers — `devices.changed`, `settings.changed`, `browser.frame` — and `server.ts` skips
+     * every connection that did not claim the name before pushing one. Claiming only [CREDENTIAL],
+     * which is what this build did until now, is why an Android roster went stale the moment
+     * another device moved it. [CONTROLS] is deliberately *not* here: it is a pair of verbs this
+     * phone sends, gated on what the desktop advertised, so claiming it would say nothing at all.
      */
-    val CLAIMED: List<String> = listOf(CREDENTIAL)
+    val CLAIMED: List<String> = listOf(CREDENTIAL, DEVICES, SETTINGS, WATCH)
 }
 
 /** A session as the phone sees it. Enough to draw a list and pick one. */

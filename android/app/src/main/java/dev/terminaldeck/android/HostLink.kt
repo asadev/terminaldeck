@@ -143,6 +143,21 @@ class HostLink(
      */
     var settings: ServerSettingsController? = null
 
+    /**
+     * The control cluster of whichever session this machine has on screen — model, effort, fast
+     * mode, permission. Created once per link; follows a session rather than the machine, and draws
+     * nothing until the machine advertises [dev.terminaldeck.android.protocol.Capability.CONTROLS].
+     */
+    var controls: SessionControlsController? = null
+
+    /**
+     * The browser windows of this machine that can be watched, and the cast of the one on screen.
+     * Created once per link; draws nothing until the machine advertises
+     * [dev.terminaldeck.android.protocol.Capability.WATCH], which a host offers to one of the
+     * owner's own devices and never to a guest.
+     */
+    var watch: WatchController? = null
+
     /** The user's name for this machine, or enough of its id to tell it apart. */
     val label: String get() = record.label
 
@@ -174,6 +189,11 @@ class HostLink(
         // that will never answer. `appVersion` is deliberately *not* cleared — see its field.
         devices?.stop()
         settings?.stop()
+        // The controls cluster holds a settle timer as well as its request timers, and the watcher
+        // holds a cast on the machine — a link being taken down must end that cast, or the far end
+        // keeps rendering JPEGs for a phone that is no longer listening.
+        controls?.stop()
+        watch?.stop()
         sessions = emptyList()
         live = false
         loaded = false
