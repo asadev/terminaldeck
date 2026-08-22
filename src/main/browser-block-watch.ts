@@ -395,9 +395,15 @@ export interface BlockWatchDeps {
    *
    * Asked on every settled navigation rather than read once at attach time,
    * because the switch is per profile and a page outlives the moment somebody
-   * clicked it. Absent means on: a caller that has no opinion gets the behaviour
-   * this had before there was a switch. See `browser-block-capture.ts` for why
-   * the default cannot be off.
+   * clicked it — turning it off stops the next picture instead of the next
+   * page. Absent means on: a caller that has no opinion gets the behaviour
+   * this had before there was a switch, which is the right default — by the
+   * time an agent has noticed it was blocked the challenge has rotated and the
+   * picture is of something else, so the only useful moment to take one is a
+   * moment nobody asked for. See `browser-block-capture.ts` for why the
+   * default cannot be off. It is a switch at all because the Scraping panel
+   * offers one, and a control that stores a preference nothing reads is a
+   * control that looks like it works and does not.
    */
   enabled?(): boolean
   /** A bounded sample of the document's text, or `null` when it cannot be read. */
@@ -405,20 +411,6 @@ export interface BlockWatchDeps {
   /** A masked PNG of the page, or `null`. */
   shot(): Promise<Buffer | null>
   rules?(): BlockRules
-  /**
-   * Whether this page's profile wants its refusals photographed.
-   *
-   * Absent — or `true` — is the behaviour this feature shipped with, which is
-   * the right default: by the time an agent has noticed it was blocked the
-   * challenge has rotated and the picture is of something else, so the only
-   * useful moment to take one is a moment nobody asked for.
-   *
-   * It is a switch at all because the Scraping panel offers one, and a control
-   * that stores a preference nothing reads is a control that looks like it
-   * works and does not. Read on every event rather than once at attach, so
-   * turning it off stops the next picture instead of the next page.
-   */
-  enabled?(): boolean
   now?(): number
   /** Told about every capture, so something can say it happened. */
   onCapture?(shot: BlockShot): void
@@ -516,17 +508,14 @@ export function attachBlockWatch(wc: BlockWatchTarget, deps: BlockWatchDeps): vo
     // person can take the page between the navigation starting and it settling,
     // and this is the last moment before anything is read.
     if (deps.state() !== 'agent') return
-    // And the profile's own answer, asked at the same moment and for the same
-    // reason: it can be turned off between the navigation and the settle.
-    if (deps.enabled?.() === false) return
-
     /*
-     * The switch, checked before anything is read.
-     *
-     * Here rather than beside the verdict so that "off" costs nothing at all —
-     * no text read, no URL, no classification. A switch that still ran the whole
-     * machine and threw the answer away would be off in name and on in every
-     * measurable way, and the first person to profile a page load would find it.
+     * And the profile's own switch, asked at the same moment and for the same
+     * reason: it can be turned off between the navigation and the settle.
+     * Checked before anything is read, so that "off" costs nothing at all —
+     * no text read, no URL, no classification. A switch that still ran the
+     * whole machine and threw the answer away would be off in name and on in
+     * every measurable way, and the first person to profile a page load would
+     * find it.
      */
     if (deps.enabled?.() === false) return
 

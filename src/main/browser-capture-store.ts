@@ -133,6 +133,18 @@ export interface CaptureSummary extends CaptureCounts {
   incomplete: boolean
   /** One sentence naming what was dropped and by which bound. Empty when nothing was. */
   shortfall: string
+  /**
+   * True exactly when this run recorded nothing at all — the shape
+   * `empty-result.ts` gives every tool result, carried here too because the
+   * summary file is itself a result: an orchestrator reads it off disk long
+   * after the tool call that produced it has scrolled away, and a person's
+   * own browse-run (`browser-profile-arm.ts`) has no tool call at all. A
+   * folder holding only an all-zero summary must say in words that it is not
+   * a small success.
+   */
+  empty: boolean
+  /** Why, when `empty`. Empty string otherwise. */
+  emptyReason: string
 }
 
 /* ------------------------------------------------------------- the bounds -- */
@@ -492,6 +504,7 @@ export class CaptureStore {
    * reader derive them from seven counters.
    */
   close(): CaptureSummary {
+    const empty = this.counts.entries === 0
     const summary: CaptureSummary = {
       ...this.counts,
       dir: this.dir,
@@ -501,6 +514,11 @@ export class CaptureStore {
       endedAt: this.deps.now(),
       incomplete: this.incomplete(),
       shortfall: this.shortfall(),
+      empty,
+      emptyReason: empty
+        ? 'this run recorded nothing: no background response was seen while it was armed. Either ' +
+          'the page loaded nothing in that window, or its data does not come over XHR or fetch.'
+        : '',
     }
     try {
       this.open()

@@ -435,6 +435,22 @@ export function scrapeSettingsFor(userData: string, profileId: unknown): ScrapeS
 }
 
 /**
+ * Told once per stored write, with the profile and what now stands.
+ *
+ * The hook that makes a toggle a live control rather than a stored note:
+ * `browser-profile-arm.ts` listens here and re-arms (or disarms) every open
+ * page of that profile the moment the panel writes — events, not polling.
+ * One listener, replaced on registration; nothing else has asked to hear.
+ */
+type ScrapeSettingsListener = (profileId: string, settings: ScrapeSettings) => void
+
+let announce: ScrapeSettingsListener | null = null
+
+export function onScrapeSettingsChanged(listener: ScrapeSettingsListener | null): void {
+  announce = listener
+}
+
+/**
  * Store one patch and answer with the whole of what is now stored.
  *
  * The whole of it, never a boolean: the panel takes this reply as the truth and
@@ -457,6 +473,11 @@ export function setScrapeSettings(
     // Kept in memory either way. The reply says what is in force, and a disk
     // that refused the file has not made the panel lie about this session.
   }
+  try {
+    announce?.(id, next)
+  } catch {
+    // A listener that throws must not take the panel's reply down with it.
+  }
   return next
 }
 
@@ -464,4 +485,5 @@ export function setScrapeSettings(
 export function resetScrapeSettingsForTests(): void {
   store = null
   storeDir = null
+  announce = null
 }
