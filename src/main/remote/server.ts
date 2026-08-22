@@ -58,6 +58,7 @@ import { extname, join, normalize, resolve, sep } from 'node:path'
 // implementation of pairing, folders and status, two callers. See ../ipc-seam.
 import type { InvokeRegistrar } from '../ipc-seam'
 import { MAX_FAILED_ATTEMPTS, RemoteAuth, type Device, type PairingToken } from './device-auth'
+import { createEnrollAccess, type EnrollAccess } from './enroll'
 // Type-only, deliberately. The store is built by `index.ts` and handed to
 // `registerRemoteIpc`; importing the class here would put a second constructor
 // for the same file in the one module that must not own it.
@@ -712,6 +713,16 @@ export interface RemoteConnection {
 export interface RemoteEndpointOptions {
   sessions: SessionAccess
   auth: RemoteAuthenticator
+  /**
+   * Sign-in, when this host serves it. **Absent is the switch**, as everywhere.
+   *
+   * With no access here an `enroll` frame is refused `unavailable` — the demo box
+   * and any build with sign-in off are exactly that. Present, it turns a login to
+   * this machine's own sshd into a pre-approved device over the sealed channel;
+   * the connection still authenticates through the ordinary `hello` afterwards,
+   * so this grants nothing on its own.
+   */
+  enroll?: EnrollAccess
   /** Directory holding the built PWA — `pwa/dist`. Injected, never derived here. */
   webRoot: string
   /**
@@ -2589,6 +2600,103 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     announce()
   }
 
+  /**
+   * Sign a device in with an account this machine already trusts.
+   *
+   * The other pre-auth door beside {@link hello}, and it authenticates nothing on
+   * this socket: it mints a pre-approved device over the sealed channel and
+   * answers `enrolled`, after which the client says `hello` with the credential
+   * on this same socket, through the ordinary door. `connection.deviceId`
+   * therefore stays null here — a signed-in connection is an unauthenticated one
+   * until its hello lands.
+   *
+   * The order of the three refusals is the security of this function:
+   *
+   *  - **No sign-in served here** → `unavailable`. The demo box and a build with
+   *    it switched off both land here, and the sentence names the pairing-code
+   *    remedy rather than leaving a phone to guess.
+   *  - **No sealed channel** → `unauthorized`, *and the SSH probe is never run*.
+   *    A connection with no handshake key cannot be bound to the device it would
+   *    mint, and running the loopback probe for one would let anything that can
+   *    open a plain socket point this host at its own sshd as a brute-force
+   *    amplifier. Refused before {@link EnrollAccess.signIn} is even called.
+   *  - Everything else is {@link EnrollAccess.signIn}'s to decide, and its
+   *    refusals are already collapsed and rate-limited.
+   */
+  async function enrol(connection: LiveConnection, message: Extract<ClientMessage, { t: 'enroll' }>): Promise<void> {
+    if (message.protocol !== PROTOCOL_VERSION) {
+      refuse(
+        connection,
+        'version',
+        `This phone app speaks protocol ${message.protocol}; the desktop speaks ${PROTOCOL_VERSION}. Update whichever is older.`,
+        CLOSE.policyViolation,
+      )
+      return
+    }
+
+    const enroll = options.enroll
+    if (!enroll) {
+      refuse(
+        connection,
+        'unavailable',
+        'Sign-in is not available on this machine. Pair it with a code instead.',
+        CLOSE.policyViolation,
+      )
+      return
+    }
+
+    // Sealed channel only, and the probe is not reached without it — see the
+    // header. Refused in the same words as any other rejection, so which door it
+    // failed at is not a remote caller's business.
+    const peerPublicKey = connection.peerPublicKey
+    if (!peerPublicKey) {
+      refuse(
+        connection,
+        'unauthorized',
+        'This device is not allowed in. Pair it again from the desktop app.',
+        CLOSE.policyViolation,
+      )
+      return
+    }
+
+    // The no-hello timer is re-armed around the probe and the mint: the socket is
+    // unauthenticated throughout, the work outlasts a hello's scrypt, and the
+    // fresh window also covers the `hello` the client sends the instant it has
+    // the credential. Same shape the timer is first armed with in attachTransport.
+    if (connection.helloTimer) clearTimeout(connection.helloTimer)
+    connection.helloTimer = setTimeout(() => {
+      if (connection.deviceId) return
+      connection.wire.close(CLOSE.policyViolation, 'no hello')
+    }, helloTimeoutMs)
+    connection.helloTimer.unref?.()
+
+    const outcome = await enroll.signIn({
+      username: message.username,
+      secret: message.secret,
+      method: message.method,
+      deviceName: message.device.name,
+      address: connection.address,
+      peerPublicKey,
+    })
+    // The socket can be gone by now: the probe takes real time and the timer kept
+    // running through it.
+    if (!live.has(connection.id)) return
+    if (!outcome.ok) {
+      refuse(connection, outcome.code, outcome.message, CLOSE.policyViolation)
+      return
+    }
+
+    send(connection, {
+      t: 'enrolled',
+      deviceId: outcome.deviceId,
+      deviceName: outcome.deviceName,
+      credential: outcome.credential,
+    })
+    // Not authenticated here, deliberately. The client stores the credential and
+    // says hello with it on this same socket; that hello is the door, and the
+    // re-armed timer above is the window it has to arrive in.
+  }
+
   async function hello(connection: LiveConnection, message: Extract<ClientMessage, { t: 'hello' }>): Promise<void> {
     if (message.protocol !== PROTOCOL_VERSION) {
       refuse(
@@ -4180,20 +4288,26 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     const message = parsed.message
 
     if (!connection.deviceId) {
-      if (message.t !== 'hello') {
+      if (message.t !== 'hello' && message.t !== 'enroll') {
         // Not merely ignored: a client that talks before authenticating is
-        // either broken or probing, and neither deserves a second try here.
+        // either broken or probing, and neither deserves a second try here. The
+        // only two doors before a welcome are `hello` and `enroll`.
         refuse(connection, 'unauthenticated', 'Say hello first.', CLOSE.policyViolation)
         return
       }
       if (connection.greeting) {
-        refuse(connection, 'bad-message', 'One hello at a time.', CLOSE.protocolError)
+        // The single-flight covers both doors: a second hello or a second enroll
+        // while one is still being answered is refused, so two asynchronous
+        // checks never run against a connection that is unauthenticated for both.
+        refuse(connection, 'bad-message', 'One at a time.', CLOSE.protocolError)
         return
       }
       connection.greeting = true
-      void hello(connection, message)
+      const greeting = message.t === 'enroll' ? enrol(connection, message) : hello(connection, message)
+      void greeting
         .catch((error) => {
-          console.error('[remote] hello failed:', error)
+          console.error('[remote] greeting failed:', error)
+          if (!live.has(connection.id)) return
           refuse(connection, 'unauthorized', 'Could not check this device.', CLOSE.internalError)
         })
         .finally(() => {
@@ -4207,6 +4321,13 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
         // Already authenticated. A second hello would be a way to change
         // identity on a socket that is already attached to sessions.
         refuse(connection, 'bad-message', 'Already said hello.', CLOSE.protocolError)
+        return
+      case 'enroll':
+        // Signing in after this socket is already signed in changes nothing it
+        // could want changed — it has a device — and the only thing a second
+        // enroll here could do is mint a stray row on an authenticated socket.
+        // Refused and closed, the same rule the second hello above follows.
+        refuse(connection, 'bad-message', 'Already signed in.', CLOSE.protocolError)
         return
       case 'list':
         send(connection, { t: 'sessions', sessions: sessionsFor(connection.deviceId) })
@@ -5868,6 +5989,17 @@ export interface RemoteIpcDeps {
    * road from there to the endpoint.
    */
   offer?: readonly string[]
+  /**
+   * Whether this host serves sign-in. **Default true; false never builds it.**
+   *
+   * Sign-in is on wherever this machine's own sshd answers on loopback, with no
+   * toggle — anyone who can already log in to this computer holds strictly more
+   * power than a paired device, so admitting them adds none, and a host with no
+   * sshd simply refuses with a sentence naming the pairing-code remedy. The one
+   * host that sets this false is the public demo box, which must not hand a
+   * stranger a road to becoming one of the owner's own devices.
+   */
+  signin?: boolean
   port?: number
   /** Push an event at the renderer. `index.ts` already has exactly this function. */
   broadcast(channel: string, payload: unknown): void
@@ -6035,6 +6167,12 @@ function relayFor(
   url: string,
   auth: RemoteAuth,
   desk: PairingDesk,
+  /**
+   * Whether this host serves sign-in. When it does, a device this Mac has never
+   * seen is let through the handshake so it can send `enroll` — the third of the
+   * three narrow doors below. Admission still grants nothing.
+   */
+  enrollServed: boolean,
   onState?: (state: RelayState) => void,
 ): RelayLink {
   let link: RelayLink | null = null
@@ -6047,13 +6185,16 @@ function relayFor(
           link = createRelayClient({
             url,
             identity: loadHostIdentity(storageDir),
-            // Two ways in, and both are narrow. A device this Mac already knows,
-            // by a key it stored when that device paired — or any device at all,
-            // but only while a pairing code is on screen, because a phone
-            // pairing for the first time has no key here to be known by. Neither
-            // grants access: the hello that follows still needs a credential,
-            // and a human still has to approve.
-            isKnownDevice: (key) => auth.knowsDeviceKey(key) || desk.open(),
+            // Three ways in, and every one is narrow. A device this Mac already
+            // knows, by a key it stored when that device paired — or any device
+            // at all while a pairing code is on screen, because a phone pairing
+            // for the first time has no key here to be known by — or any device
+            // at all while sign-in is served, because a phone signing in for the
+            // first time is in the same position and its `enroll` frame is the
+            // thing that then proves the login. None of the three grants access:
+            // the hello or enroll that follows still has to prove a credential or
+            // a login, and a paired device still has to be approved.
+            isKnownDevice: (key) => auth.knowsDeviceKey(key) || desk.open() || enrollServed,
             ...(onState ? { onState } : {}),
           })
         } catch (error) {
@@ -6095,6 +6236,14 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
   const desk = pairingDesk(auth)
   const env = deps.env ?? process.env
 
+  // Sign-in, on every host except the one that says not to. Built here for the
+  // reason `relay` is: this is the only place that holds the trust store and the
+  // device kinds together. Building it starts nothing — the loopback probe only
+  // runs when a device actually sends `enroll`. `undefined` is the switch, and
+  // it also decides whether the relay lets an unknown device through the
+  // handshake far enough to send that frame.
+  const enroll = deps.signin === false ? undefined : createEnrollAccess({ auth, kinds: deps.kinds, env })
+
   // Built here rather than inside the server, because this is the only place
   // that holds the trust store and the storage directory. Building it dials
   // nothing and writes no key on its own — `start()` at the bottom of this
@@ -6106,6 +6255,7 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
         relayUrl(env, deps.relayUrl),
         auth,
         desk,
+        enroll !== undefined,
         relayStateFanout(deps.onRelayState, () => announceRemoteChange()),
       )
     : null
@@ -6165,6 +6315,10 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
       }
       deps.onDevicePaired?.(device)
     }),
+    // Absent is the switch, like every capability spread below: with no access
+    // an `enroll` frame is refused `unavailable`, which is exactly what the demo
+    // box (signin === false) wants.
+    ...(enroll ? { enroll } : {}),
     webRoot: deps.webRoot,
     certDir: deps.storageDir,
     ...(deps.uploadsDir ? { uploadsDir: deps.uploadsDir } : {}),

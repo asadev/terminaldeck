@@ -531,6 +531,12 @@ export async function createHeadlessHost(
      * ever asking anyone for one.
      */
     ...(options.publicHost ? {} : { credentials: core.credentials }),
+    // Sign-in off on the demo box, on everywhere else. The same argument as the
+    // credential proxy above: a public host that let a stranger sign in with an
+    // SSH login would be handing out a road to becoming one of the owner's own
+    // devices — and a demo box has no owner to be. Every other headless host
+    // serves it, gated only by whether its own sshd answers on loopback.
+    signin: options.publicHost ? false : true,
     ...(options.publicHost ? { offer: PUBLIC_HOST_OFFER } : {}),
     onDevicePaired: notePaired,
     storageDir: remoteStorageDir,

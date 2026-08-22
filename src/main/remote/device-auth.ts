@@ -125,6 +125,12 @@ export type VerifyResult =
   | { ok: true; device: Device }
   | { ok: false; reason: VerifyFailure; retryAfterMs?: number }
 
+export type EnrollFailure = 'malformed' | 'bad-name' | 'too-many-devices' | 'storage' | 'rate-limited'
+
+export type EnrollResult =
+  | { ok: true; credential: string; device: Device }
+  | { ok: false; reason: EnrollFailure; retryAfterMs?: number }
+
 export interface RemoteAuthOptions {
   /**
    * Injected clock. Everything in this file reads time through it — expiry,
@@ -336,6 +342,19 @@ function cleanName(value: unknown): string | null {
 function addressKey(address: string): string {
   const trimmed = typeof address === 'string' ? address.trim().toLowerCase().slice(0, 64) : ''
   return `addr:${trimmed === '' ? 'unknown' : trimmed}`
+}
+
+/**
+ * The limiter key a sign-in attempt from this address counts against.
+ *
+ * A prefix rather than the bare `addressKey`, so a burst of wrong sign-ins and a
+ * burst of wrong credentials never fill the same bucket: locking a device out of
+ * reconnecting because somebody guessed a password from the same tailnet address
+ * would be a worse bug than the one the limiter exists for. Same table, same
+ * MAX_FAILED_ATTEMPTS and LOCKOUT_MS — a different door onto it.
+ */
+function enrollKey(address: string): string {
+  return `enroll:${addressKey(address)}`
 }
 
 function statusOf(device: { approved: boolean; revoked: boolean }): DeviceStatus {
@@ -703,6 +722,89 @@ export class RemoteAuth {
     this.clearFailures(keys)
     this.touch(device, now)
     return { ok: true, device: toPublic(device) }
+  }
+
+  /* ----------------------------------------------------------------- sign-in */
+
+  /**
+   * May this address try to sign in right now, or is it serving a lockout?
+   *
+   * Consulted by the sign-in layer **before** it spends this machine on an SSH
+   * probe — that ordering is the whole point. Without it a guessing loop turns
+   * this host into an amplifier pointed at its own sshd, one scrypt-free network
+   * round-trip per guess. The limiter is the same one {@link verifyCredential}
+   * reads, under {@link enrollKey}'s own prefix, so the two doors cannot lock
+   * each other's users out.
+   */
+  enrollAllowed(address: string): { ok: true } | { ok: false; retryAfterMs: number } {
+    const blocked = this.blockedFor([enrollKey(address)], this.now())
+    return blocked > 0 ? { ok: false, retryAfterMs: blocked } : { ok: true }
+  }
+
+  /** Count a refused sign-in from this address; the fifth trips the lockout. */
+  noteEnrollFailure(address: string): void {
+    this.noteFailure([enrollKey(address)], this.now())
+  }
+
+  /**
+   * Mint a **pre-approved** device bound to a public key, credential returned once.
+   *
+   * The sign-in counterpart to {@link redeemPairingToken}. The proof that got
+   * here was a loopback SSH login to this machine's own sshd — strictly more
+   * power than any paired device already holds — so the row is born `approved`
+   * rather than `pending`: there is no weaker thing left for a human to approve.
+   *
+   * The public key is **required**, not optional as it is on the pairing path.
+   * A device that cannot seal a channel cannot sign in at all, and a row with no
+   * key could never be tied to the handshake that reaches it — which is the bind
+   * {@link deviceHoldsKey} enforces on every later connection. A key of the
+   * wrong length is a caller bug and is refused rather than stored.
+   *
+   * The credential is plaintext exactly once, in the return value, and a scrypt
+   * hash on disk — the standing contract of this file. The secret that got here
+   * is the caller's to forget; nothing in this method writes or logs it.
+   */
+  async enrollDevice(name: string, address: string, publicKey: Buffer): Promise<EnrollResult> {
+    const now = this.now()
+    if (!Buffer.isBuffer(publicKey) || publicKey.length !== PUBLIC_KEY_BYTES) {
+      return { ok: false, reason: 'malformed' }
+    }
+    const cleaned = cleanName(name)
+    if (cleaned === null) return { ok: false, reason: 'bad-name' }
+    if (this.rosterWithRoom().length >= MAX_DEVICES) return { ok: false, reason: 'too-many-devices' }
+
+    const id = randomBytes(DEVICE_ID_BYTES).toString('base64url')
+    const secret = randomBytes(CREDENTIAL_BYTES)
+    const salt = randomBytes(SALT_BYTES)
+    const hash = await scrypt(secret, salt, SCRYPT)
+
+    const device: StoredDevice = {
+      id,
+      name: cleaned,
+      addedAt: now,
+      lastSeenAt: null,
+      // Approved on mint. The sign-in already was the approval — a login this
+      // machine accepts is a human at this machine, which is the exact thing the
+      // pending state waits for on the pairing path.
+      approved: true,
+      revoked: false,
+      credential: { ...SCRYPT, salt: salt.toString('base64'), hash: hash.toString('base64') },
+      publicKey: publicKey.toString('base64'),
+    }
+
+    try {
+      // Persist before returning the credential, and recompute the roster: the
+      // list can have changed while scrypt ran. Same ordering redeemPairingToken
+      // uses and for the same reason — a credential we returned but never stored
+      // is one the user can never make work.
+      this.commit([...this.rosterWithRoom(), device])
+    } catch (err) {
+      console.error('[remote-auth] could not persist a signed-in device:', err)
+      return { ok: false, reason: 'storage' }
+    }
+
+    this.clearFailures([enrollKey(address)])
+    return { ok: true, credential: `${id}.${secret.toString('base64url')}`, device: toPublic(device) }
   }
 
   /* ------------------------------------------------------------ public keys */

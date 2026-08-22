@@ -630,3 +630,116 @@ describe('running out of room', () => {
     expect((await auth.verifyCredential(keeper.credential, ADDRESS)).ok).toBe(true)
   }, 60_000)
 })
+
+/**
+ * Sign-in mints on the other road into the trust store. The pairing path creates
+ * a pending device a human approves; this path creates one that is already
+ * approved, because the proof that got here — a login to this machine's own sshd
+ * — is the approval. So the attacker's questions are different: is the key really
+ * required, does the credential actually work without an approve, is the limiter
+ * a separate door from the credential one, and does a refused login count.
+ */
+describe('sign-in mint', () => {
+  const KEY = () => randomBytes(32)
+  const SIGN_IN_ADDR = '100.99.1.1'
+
+  it('mints an approved device whose credential works with no approve step', async () => {
+    const auth = new RemoteAuth(tempDir())
+    const key = KEY()
+    const result = await auth.enrollDevice('Asad’s iPhone', SIGN_IN_ADDR, key)
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error('unreachable')
+
+    expect(result.device.status).toBe('approved')
+    // Straight in — the pending state the pairing path sits in is skipped.
+    const verified = await auth.verifyCredential(result.credential, SIGN_IN_ADDR)
+    expect(verified.ok).toBe(true)
+    // Bound to the key, so a stolen credential from a different phone is refused.
+    expect(auth.deviceHoldsKey(result.device.id, key)).toBe(true)
+    expect(auth.knowsDeviceKey(key)).toBe(true)
+  })
+
+  it('refuses a device with no usable key — it could never be bound', async () => {
+    const auth = new RemoteAuth(tempDir())
+    expect((await auth.enrollDevice('iPhone', SIGN_IN_ADDR, Buffer.alloc(0))).ok).toBe(false)
+    const short = await auth.enrollDevice('iPhone', SIGN_IN_ADDR, randomBytes(16))
+    expect(short).toEqual({ ok: false, reason: 'malformed' })
+  })
+
+  it('refuses a blank name', async () => {
+    const auth = new RemoteAuth(tempDir())
+    expect(await auth.enrollDevice('   ', SIGN_IN_ADDR, KEY())).toEqual({ ok: false, reason: 'bad-name' })
+  })
+
+  it('persists the public key so the bind survives a reload', async () => {
+    const dir = tempDir()
+    const key = KEY()
+    const first = new RemoteAuth(dir)
+    const minted = await first.enrollDevice('iPhone', SIGN_IN_ADDR, key)
+    if (!minted.ok) throw new Error('unreachable')
+
+    const reloaded = new RemoteAuth(dir)
+    expect(reloaded.deviceHoldsKey(minted.device.id, key)).toBe(true)
+    expect((await reloaded.verifyCredential(minted.credential, SIGN_IN_ADDR)).ok).toBe(true)
+  })
+
+  it('never stores the minted secret in plaintext', async () => {
+    const auth = new RemoteAuth(tempDir())
+    const minted = await auth.enrollDevice('iPhone', SIGN_IN_ADDR, KEY())
+    if (!minted.ok) throw new Error('unreachable')
+    const secret = minted.credential.split('.')[1]
+    const onDisk = readFileSync(auth.file, 'utf8')
+    expect(onDisk).not.toContain(secret)
+  })
+})
+
+describe('the sign-in limiter', () => {
+  const SIGN_IN_ADDR = '100.99.2.2'
+
+  it('locks an address out after MAX_FAILED_ATTEMPTS and reports how long', () => {
+    const time = clock()
+    const auth = new RemoteAuth(tempDir(), { now: time.now })
+
+    for (let i = 0; i < MAX_FAILED_ATTEMPTS - 1; i++) {
+      auth.noteEnrollFailure(SIGN_IN_ADDR)
+      expect(auth.enrollAllowed(SIGN_IN_ADDR).ok).toBe(true)
+    }
+    auth.noteEnrollFailure(SIGN_IN_ADDR)
+    const blocked = auth.enrollAllowed(SIGN_IN_ADDR)
+    expect(blocked.ok).toBe(false)
+    if (blocked.ok) throw new Error('unreachable')
+    expect(blocked.retryAfterMs).toBeGreaterThan(0)
+    expect(blocked.retryAfterMs).toBeLessThanOrEqual(LOCKOUT_MS)
+
+    // And it clears when the lockout is served.
+    time.advance(LOCKOUT_MS + 1)
+    expect(auth.enrollAllowed(SIGN_IN_ADDR).ok).toBe(true)
+  })
+
+  it('is a separate door from the credential limiter', async () => {
+    const time = clock()
+    const auth = new RemoteAuth(tempDir(), { now: time.now })
+    const { credential } = await paired(auth, 'iPhone')
+
+    // Trip the sign-in limiter for this address.
+    for (let i = 0; i < MAX_FAILED_ATTEMPTS; i++) auth.noteEnrollFailure(SIGN_IN_ADDR)
+    expect(auth.enrollAllowed(SIGN_IN_ADDR).ok).toBe(false)
+
+    // A good credential from the same address is unaffected — the two buckets do
+    // not lock each other's users out.
+    expect((await auth.verifyCredential(credential, SIGN_IN_ADDR)).ok).toBe(true)
+  })
+
+  it('clears the address counter on a successful mint', async () => {
+    const time = clock()
+    const auth = new RemoteAuth(tempDir(), { now: time.now })
+    for (let i = 0; i < MAX_FAILED_ATTEMPTS - 1; i++) auth.noteEnrollFailure(SIGN_IN_ADDR)
+
+    const minted = await auth.enrollDevice('iPhone', SIGN_IN_ADDR, randomBytes(32))
+    expect(minted.ok).toBe(true)
+    // The four earlier failures are wiped, so the next failure starts from one
+    // rather than tripping the lockout.
+    auth.noteEnrollFailure(SIGN_IN_ADDR)
+    expect(auth.enrollAllowed(SIGN_IN_ADDR).ok).toBe(true)
+  })
+})
