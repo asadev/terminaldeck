@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { request } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -12,7 +12,23 @@ import {
   type HookEndpoint,
 } from '../main/hook-server'
 import { installPaths, nodePaths, resetPaths } from '../main/platform/paths'
-import { REMOTE_CONNECTIONS_CHANNEL } from '../main/remote/server'
+import type { RemovalReason } from '../main/pty-manager'
+import {
+  createRemoteEndpoint,
+  REMOTE_CONNECTIONS_CHANNEL,
+  type RemoteEndpoint,
+  type RemoteEndpointOptions,
+  type RemoteWire,
+  type SessionAccess,
+  type SessionHandle,
+} from '../main/remote/server'
+import {
+  PROTOCOL_VERSION,
+  serialize,
+  type ClientMessage,
+  type RemoteSession,
+  type ServerMessage,
+} from '../main/remote/protocol'
 import { store } from '../main/store'
 import { createHeadlessHost, type HeadlessHost } from './host'
 
@@ -370,3 +386,215 @@ async function waitFor<T>(check: () => T | null, timeoutMs = 15_000): Promise<T>
     await new Promise((done) => setTimeout(done, 50))
   }
 }
+
+describe('a session that ends on this host leaves every connected client’s list', () => {
+  /*
+   * The gap this closes, from the far side of the wire.
+   *
+   * The desktop shell forwards `onSessionRemoved` into its core so that a
+   * session ended by anything — another device's verb, the copilot's
+   * `sessions_stop`, the process being killed — is pushed off every phone's list
+   * without a reconnect (index.ts, and the desktop-side assertion at
+   * server.test.ts's "pushes the new list when a session is started at this
+   * machine’s own keyboard"). The headless host forwarded `onSessionStarted` and
+   * nothing else, so a session that *appeared* reached a phone and a session that
+   * *vanished* did not: it sat in the sidebar pointing at a pty this process had
+   * already dropped, exactly the ghost `src/main/session-removed.test.ts`
+   * describes, until the phone reconnected.
+   *
+   * These two tests hold the two halves of the fix. The first is behavioural —
+   * an in-memory client, connected and never attached, watches a session appear
+   * and then disappear from its `sessions` frame, and a `replaced` removal (the
+   * account-switch tab-swap) is proven *not* to push. It reaches the endpoint
+   * through `attachTransport`, the same door the relay uses and the one
+   * `credential-wiring.test.ts` uses, because the running host serves over
+   * Tailscale or the relay and a unit test may dial neither. The push itself is
+   * `endpoint.sessionsChanged()`, applied through the *exact* policy `host.ts`
+   * installs on its core — `if (reason === 'replaced') return`, else push.
+   *
+   * The second reads `host.ts` as text and asserts that policy really is wired
+   * into `createHostCore`, for the reason `credential-wiring.test.ts` reads
+   * `index.ts`: the mechanism can be correct and the join still missing, and a
+   * behavioural test built over its own copy of the wiring would pass against a
+   * host that never made it.
+   */
+
+  /** A session list the test can grow and shrink, as things on the host do. */
+  function liveSessions(): SessionAccess & {
+    add(id: string, cwd: string): void
+    remove(id: string): void
+  } {
+    const rows: RemoteSession[] = []
+    return {
+      list: () => rows,
+      add(id, cwd) {
+        rows.push({ id, title: id, cwd, provider: 'shell', status: 'idle', exitCode: null })
+      },
+      remove(id) {
+        const at = rows.findIndex((row) => row.id === id)
+        if (at >= 0) rows.splice(at, 1)
+      },
+      attach: (): SessionHandle | null => null,
+      write: () => {},
+      resize: () => {},
+      detach: () => {},
+    }
+  }
+
+  /** Every hello is the one owner phone; authentication is not what this checks. */
+  const auth: RemoteEndpointOptions['auth'] = {
+    authenticate: async () => ({
+      ok: true,
+      deviceId: 'device-1',
+      deviceName: 'iPhone',
+      credential: null,
+    }),
+  }
+
+  interface Peer {
+    received: ServerMessage[]
+    send(message: ClientMessage): void
+  }
+
+  /** One connected, unattached client, over the transport seam rather than a socket. */
+  function connectPeer(endpoint: RemoteEndpoint): Peer {
+    const received: ServerMessage[] = []
+    let deliver: ((text: string) => void) | null = null
+    endpoint.attachTransport('100.64.0.2', (handlers) => {
+      deliver = handlers.message
+      const wire: RemoteWire = {
+        send: (text: string) => received.push(JSON.parse(text) as ServerMessage),
+        close: () => handlers.closed(),
+      }
+      return wire
+    })
+    const peer: Peer = {
+      received,
+      send: (message) => deliver?.(serialize(message)),
+    }
+    peer.send({
+      t: 'hello',
+      protocol: PROTOCOL_VERSION,
+      token: 'device-1.secret',
+      device: { name: 'iPhone', platform: 'iOS' },
+    })
+    return peer
+  }
+
+  async function until(
+    peer: Peer,
+    match: (message: ServerMessage) => boolean,
+    what: string,
+  ): Promise<ServerMessage> {
+    for (let i = 0; i < 200; i += 1) {
+      const found = peer.received.find(match)
+      if (found) return found
+      await new Promise((done) => setTimeout(done, 5))
+    }
+    throw new Error(`never received ${what}`)
+  }
+
+  const sessionIds = (message: ServerMessage): string[] =>
+    message.t === 'sessions' ? message.sessions.map((row) => row.id) : []
+
+  it('pushes a fresh sessions frame when one is started here and again when it ends', async () => {
+    const sessions = liveSessions()
+    const endpoint = createRemoteEndpoint({
+      sessions,
+      auth,
+      webRoot: join(dir, 'no-web-here'),
+      pingIntervalMs: 0,
+    })
+
+    const client = connectPeer(endpoint)
+    await until(client, (m) => m.t === 'welcome', 'the welcome')
+
+    // The policy `host.ts` installs on its core, verbatim: every start pushes,
+    // every non-`replaced` removal pushes, a `replaced` removal does not.
+    const onSessionStarted = (): void => {
+      endpoint.sessionsChanged()
+    }
+    const onSessionRemoved = (_id: string, reason: RemovalReason): void => {
+      if (reason === 'replaced') return
+      endpoint.sessionsChanged()
+    }
+
+    // A terminal the host itself opened — nobody on this wire asked for it.
+    sessions.add('made-here', join(dir, 'work'))
+    onSessionStarted()
+    const appeared = await until(
+      client,
+      (m) => m.t === 'sessions' && sessionIds(m).includes('made-here'),
+      'the started session',
+    )
+    expect(sessionIds(appeared)).toContain('made-here')
+
+    // Ended on the server, by whatever route. It must leave the list without a
+    // reconnect — the whole point of the frame.
+    sessions.remove('made-here')
+    onSessionRemoved('made-here', 'stopped')
+    const gone = await until(
+      client,
+      (m) => m.t === 'sessions' && !sessionIds(m).includes('made-here'),
+      'the list without the ended session',
+    )
+    expect(sessionIds(gone)).not.toContain('made-here')
+
+    endpoint.closeAll()
+  })
+
+  it('does not push for a replaced session — the account-switch swap is not a change', async () => {
+    const sessions = liveSessions()
+    const endpoint = createRemoteEndpoint({
+      sessions,
+      auth,
+      webRoot: join(dir, 'no-web-here'),
+      pingIntervalMs: 0,
+    })
+    const client = connectPeer(endpoint)
+    await until(client, (m) => m.t === 'welcome', 'the welcome')
+
+    const onSessionRemoved = (_id: string, reason: RemovalReason): void => {
+      if (reason === 'replaced') return
+      endpoint.sessionsChanged()
+    }
+
+    sessions.add('swap-old', join(dir, 'work'))
+    endpoint.sessionsChanged()
+    await until(
+      client,
+      (m) => m.t === 'sessions' && sessionIds(m).includes('swap-old'),
+      'the session before the swap',
+    )
+
+    const before = client.received.filter((m) => m.t === 'sessions').length
+    // The account switch stops one process and starts another in the same tab.
+    // `onSessionStarted` fires for the replacement; the removal must stay silent
+    // or the list flickers empty between the two.
+    sessions.remove('swap-old')
+    onSessionRemoved('swap-old', 'replaced')
+    await new Promise((done) => setTimeout(done, 20))
+    const after = client.received.filter((m) => m.t === 'sessions').length
+    expect(after).toBe(before)
+
+    endpoint.closeAll()
+  })
+
+  it('is actually wired into createHostCore on the headless host, replaced filtered', () => {
+    // The join, read as text — see credential-wiring.test.ts for why a wiring
+    // this shape is verified against the source and not only through a harness.
+    const source = readFileSync(join(__dirname, 'host.ts'), 'utf8')
+
+    // Both hooks push through the one late-bound fan-out.
+    expect(source).toMatch(/onSessionStarted:\s*\(\)\s*=>\s*tellDevices\?\.\(\)/)
+    expect(source).toMatch(/tellDevices\s*=\s*\(\)\s*=>\s*\{[\s\S]*?sessionsChanged\(\)/)
+
+    // onSessionRemoved forwards every removal except the account-switch swap.
+    const removed = source.match(/onSessionRemoved:\s*\([^)]*\)\s*=>\s*\{[\s\S]*?\n\s*\},/)
+    expect(removed).not.toBeNull()
+    const body = removed?.[0] ?? ''
+    expect(body).toMatch(/reason === 'replaced'/)
+    expect(body).toMatch(/return/)
+    expect(body).toMatch(/tellDevices\?\.\(\)/)
+  })
+})
