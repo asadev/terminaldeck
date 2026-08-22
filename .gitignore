@@ -103,3 +103,4 @@ REFERENCES.local.md
 # Artefacts from `scripts/check-browser-drive.mjs` — a scratch Chromium profile,
 # a bundle and a folder of screenshots, written when it is run with no --out.
 .drive-check/
+.vercel
