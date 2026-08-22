@@ -17,12 +17,14 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -38,6 +40,7 @@ import androidx.compose.ui.unit.dp
 import dev.terminaldeck.android.DevServerView
 import dev.terminaldeck.android.LocalhostView
 import dev.terminaldeck.android.ports.LocalhostRow
+import dev.terminaldeck.android.ports.PortCatalog
 import dev.terminaldeck.android.ports.PortCategory
 import dev.terminaldeck.android.ports.PortRowAction
 import dev.terminaldeck.android.ports.LocalhostSection
@@ -95,6 +98,16 @@ fun LocalhostScreen(
     machineLabel: String,
     /** Whether a page may be served here — the tunnel half, which is `localhost` too. */
     canServeHere: Boolean,
+    /**
+     * Whether the machine's socket is up.
+     *
+     * Separate from [view] being null, because the two are different facts and only one of them is
+     * about the machine: capabilities are cleared when a link is taken down, so a disconnected
+     * machine and one that never offered `localhost` both arrive here with nothing — and telling
+     * somebody their Mac "does not share its ports" while it is merely unreachable is the app
+     * inventing a limitation.
+     */
+    live: Boolean,
     onRefresh: () -> Unit,
     onServeHere: (Int) -> Unit,
     onOpenOnMachine: (Int) -> Unit,
@@ -133,11 +146,16 @@ fun LocalhostScreen(
                 .padding(top = Space.x2, bottom = Space.x10),
         ) {
             if (view == null) {
-                // A named absence, not an empty list: this machine does not serve the capability, and
-                // saying which machine matters on a phone that has three paired.
+                // A named absence, not an empty list — and the *right* absence: nothing is known
+                // about a machine this phone cannot reach, which is a different sentence from a
+                // machine that has looked and does not share its ports.
                 DeckGroup {
                     Text(
-                        text = "$machineLabel does not share what is listening on it.",
+                        text = if (live) {
+                            "$machineLabel does not share what is listening on it."
+                        } else {
+                            "Not connected to $machineLabel, so there is nothing to show yet."
+                        },
                         style = DeckType.body,
                         color = colors.faint,
                         modifier = Modifier.padding(Space.card),
@@ -288,6 +306,7 @@ private fun PortRow(
     val colors = DeckTheme.colors
     val dev = row.dev
     val port = row.port
+    var menu by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = Space.card, vertical = Space.x3)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -312,15 +331,41 @@ private fun PortRow(
                 Spacer(Modifier.width(Space.x2))
                 DeckTag(devWord(dev.status, starting))
             }
+            /*
+             * The row's overflow: name it, and copy its address.
+             *
+             * Copy is here rather than beside the two Open buttons because three weighted buttons on
+             * a 360dp phone leave 110dp each and *"On the machine"* does not fit in that. It is worth
+             * keeping: `http://localhost:3000` pasted into the machine's own terminal is the thing
+             * somebody wants when neither Open is the right answer.
+             */
             if (port != null) {
                 Spacer(Modifier.width(Space.x1))
-                IconButton(onClick = onRename, modifier = Modifier.size(32.dp)) {
-                    Icon(
-                        Icons.Filled.Edit,
-                        contentDescription = "Name port $port",
-                        tint = colors.faint,
-                        modifier = Modifier.size(16.dp),
-                    )
+                Box {
+                    IconButton(onClick = { menu = true }, modifier = Modifier.size(32.dp)) {
+                        Icon(
+                            Icons.Filled.MoreVert,
+                            contentDescription = "More for port $port",
+                            tint = colors.faint,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
+                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                        DropdownMenuItem(
+                            text = { Text(if (row.name == null) "Name this port" else "Rename") },
+                            onClick = {
+                                menu = false
+                                onRename()
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Copy address") },
+                            onClick = {
+                                menu = false
+                                onCopyAddress(port)
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -360,7 +405,7 @@ private fun PortRow(
                     modifier = Modifier.weight(1f),
                 )
             }
-            when (val second = dev?.let { secondAction(row) } ?: secondAction(row)) {
+            when (val second = PortCatalog.secondAction(row)) {
                 is PortRowAction.Start -> DeckQuietButton(
                     label = if (starting) "Starting…" else "Start",
                     onClick = { onStartDevServer(second.folder) },
@@ -378,22 +423,14 @@ private fun PortRow(
                     onClick = { onOpenSession(second.id) },
                     modifier = Modifier.weight(1f),
                 )
-                is PortRowAction.CopyAddress -> if (!canServeHere && !canOpenOnMachine) {
-                    DeckQuietButton(
-                        label = "Copy address",
-                        onClick = { onCopyAddress(second.port) },
-                        modifier = Modifier.weight(1f),
-                    )
-                }
+                // Copy is in the row's overflow, where it does not compete for width with the two
+                // Opens. There is nothing to draw here for a plain port.
+                is PortRowAction.CopyAddress -> Unit
                 PortRowAction.None -> Unit
             }
         }
     }
 }
-
-/** The action `PortCatalog` decides for this row. Named here so the `when` above reads in one piece. */
-private fun secondAction(row: LocalhostRow): PortRowAction =
-    dev.terminaldeck.android.ports.PortCatalog.secondAction(row)
 
 /**
  * Whether there is something on the other end to serve.

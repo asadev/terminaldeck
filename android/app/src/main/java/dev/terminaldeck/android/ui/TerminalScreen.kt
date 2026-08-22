@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.Keyboard
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -183,6 +184,7 @@ fun TerminalScreen(
     val client = remember(binding) { DeckTerminalViewClient(storedTextSize) { size -> TerminalTextSize.save(context, size) } }
     var ctrlArmed by remember(binding) { mutableStateOf(false) }
     var attachOpen by remember { mutableStateOf(false) }
+    var overflowOpen by remember { mutableStateOf(false) }
 
     /*
      * The terminal's paper, and it is not the app's canvas.
@@ -367,6 +369,32 @@ fun TerminalScreen(
                                 Icons.Filled.Tune,
                                 contentDescription = "Model, effort, fast mode and permission for this session",
                                 tint = DeckTheme.colors.primary,
+                            )
+                        }
+                    }
+                    /*
+                     * The ⋯, and the one thing in it.
+                     *
+                     * **Details** — everything the wire says about this session, as a sheet. The
+                     * same sheet the list's long press opens, minus its Open button, because from
+                     * inside the session a button leading to the screen underneath is furniture.
+                     * iOS reaches it from exactly these two places for exactly this reason.
+                     */
+                    Box {
+                        IconButton(onClick = { overflowOpen = true }) {
+                            Icon(
+                                Icons.Filled.MoreVert,
+                                contentDescription = "More about this session",
+                                tint = DeckTheme.colors.primary,
+                            )
+                        }
+                        DropdownMenu(expanded = overflowOpen, onDismissRequest = { overflowOpen = false }) {
+                            DropdownMenuItem(
+                                text = { Text("Details") },
+                                onClick = {
+                                    overflowOpen = false
+                                    onDetails()
+                                },
                             )
                         }
                     }

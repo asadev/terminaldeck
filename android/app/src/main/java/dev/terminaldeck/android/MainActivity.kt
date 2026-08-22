@@ -79,6 +79,7 @@ import dev.terminaldeck.android.ui.PairingScreen
 import dev.terminaldeck.android.ui.SessionListScreen
 import dev.terminaldeck.android.ui.TerminalScreen
 import androidx.compose.ui.platform.LocalConfiguration
+import dev.terminaldeck.android.alerts.AlertCenter
 import dev.terminaldeck.android.ui.theme.AppearanceStore
 import dev.terminaldeck.android.ui.theme.DeckTheme
 import dev.terminaldeck.android.ui.theme.TerminalDeckTheme
@@ -112,6 +113,20 @@ class MainActivity : ComponentActivity() {
          * the window here closes that gap: this runs before `setContent`, so nothing has been drawn
          * yet and there is nothing to flash.
          */
+        /*
+         * The notification channels, declared before anything can post to one.
+         *
+         * On API 26 and up a notification naming a channel that does not exist is **dropped without a
+         * word** — no crash, no log a person would see, just an alert that never arrives. Creating
+         * one at post time instead would be a race with the very first alert, which is exactly the
+         * alert somebody is waiting for. Idempotent, so this costs nothing on every later launch.
+         *
+         * Found by looking: the two switches on the Alerts screen were drawn, stored and read, and
+         * nothing had ever registered a channel for what they gate — which is the "switch wired to
+         * nothing" this app's design brief refuses.
+         */
+        AlertCenter.ensureChannels(this)
+
         val appearance = AppearanceStore.prime(this)
         val dark = appearance.isDark(resources.configuration)
         window.setBackgroundDrawable(ColorDrawable(deckWindowColor(dark)))
@@ -426,7 +441,7 @@ fun TerminalDeckApp(
     // page being served from the machine. A pill sitting over the bottom rows of any of them points
     // somewhere else while the thing you are using needs the height.
     val bar = route != ROUTE_TERMINAL && route != ROUTE_WATCH_VIEW &&
-        route != ROUTE_LOCALHOST_PAGE && route != ROUTE_CHAT
+        route != ROUTE_LOCALHOST_PAGE && route != ROUTE_CHAT && route != ROUTE_COPILOT
     val onSessions = route == ROUTE_SESSIONS || route == ROUTE_TERMINAL || route == ROUTE_CHAT
     val onLocalhost = route == ROUTE_LOCALHOST || route == ROUTE_LOCALHOST_PAGE
     val onCopilot = route == ROUTE_COPILOT
@@ -599,21 +614,56 @@ fun TerminalDeckApp(
             val sessionId = entry.arguments?.getString(ARG_SESSION_ID)
             val known = state.hosts.firstOrNull { it.hostId == hostId }
                 ?.sessions?.firstOrNull { it.id == sessionId }
-            val chat = state.chat
-            // The machine stopped serving a transcript, or the session went. Either way there is
-            // nothing to draw, and the pop is in an effect for the reason the terminal route's is.
-            if (chat == null || known == null) {
+            // The session went, or the machine was forgotten. The pop is in an effect for the reason
+            // the terminal route's is: navigating during composition leaves a black rectangle.
+            if (hostId == null || sessionId == null || known == null) {
                 LaunchedEffect(hostId, sessionId) { navController.popBackStack() }
                 return@composable
             }
+
+            /*
+             * **This screen follows the session too, and that is not a duplicate of the terminal's.**
+             *
+             * Pushing this destination *disposes* the terminal underneath it, and the terminal's own
+             * `onDispose` forgets the cluster — so without this, opening the conversation cleared the
+             * very session it is about, `state.chat` went null on the next frame, and the route
+             * popped itself straight back to the terminal. Which is exactly what it did: the chat
+             * button did nothing at all, three times a second, and looked like a dead control.
+             *
+             * Found by driving it against a live host on 2026-08-22 rather than by reading it, which
+             * is the only way this one shows up: every unit test in the suite passes either way.
+             */
+            DisposableEffect(hostId, sessionId) {
+                val claim = viewModel.followControls(hostId, sessionId)
+                // Only a screen that is up asks for a transcript: a terminal somebody is typing into
+                // must not send a file read across a relay after every burst of output.
+                viewModel.chatting(true)
+                onDispose {
+                    viewModel.chatting(false)
+                    viewModel.releaseSession(hostId, claim)
+                }
+            }
+
+            val chat = state.chat
+            if (chat == null) {
+                /*
+                 * The moment between opening this and the far end answering, said rather than popped.
+                 *
+                 * It is one frame in the ordinary case — the effect above runs immediately after the
+                 * first composition — and it is longer over a relay to a machine on another
+                 * continent. Popping instead would be the screen refusing to open for a reason
+                 * nobody could see.
+                 */
+                Waiting("Reading the conversation on the ${state.machineNoun}\u2026")
+                return@composable
+            }
+
             SessionChatScreen(
                 view = chat,
                 title = known.title,
                 onBack = { navController.popBackStack() },
-                // Only a screen that is up asks for a transcript: a terminal somebody is typing into
-                // must not send a file read across a relay after every burst of output.
-                onOpened = { viewModel.chatting(true) },
-                onClosed = { viewModel.chatting(false) },
+                onOpened = {},
+                onClosed = {},
                 onSend = viewModel::sendMessage,
                 onCopy = viewModel::copyText,
                 onDismissNotice = viewModel::dismissChatNotice,
@@ -643,6 +693,8 @@ fun TerminalDeckApp(
             CopilotScreen(
                 view = view,
                 machineLabel = state.hostLabel,
+                // The pill is not drawn over this screen, so the chevron is the only way out.
+                onLeave = { showTab(GRAPH_SESSIONS) },
                 onStart = viewModel::startCopilot,
                 onCancel = viewModel::cancelCopilotTurn,
                 onStopRun = viewModel::stopCopilotRun,
@@ -752,6 +804,7 @@ fun TerminalDeckApp(
                 sections = sections,
                 machineLabel = state.hostLabel,
                 canServeHere = state.localhostOffered,
+                live = state.live,
                 onRefresh = {
                     viewModel.refreshPorts()
                     viewModel.openDevServers()
@@ -1090,6 +1143,20 @@ private fun LeavingSession(hostNoun: String) {
 }
 
 /**
+ * A screen that has asked and is waiting for the machine to answer.
+ *
+ * The same shape as [LeavingSession] and a different sentence, because they are different facts: one
+ * is *that is gone*, the other is *this has not arrived yet*. A screen that used the first wording
+ * for the second would tell somebody their session had ended every time a relay took a moment.
+ */
+@Composable
+private fun Waiting(text: String) {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Text(text = text, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+/**
  * One open session, on whichever tab's stack it was opened from.
  *
  * Extracted so the same screen can be a destination of the Sessions graph **and** of the Copilot
@@ -1160,8 +1227,8 @@ private fun TerminalRoute(
         // here rather than asserted at the call.
         val liveSession = known.id
         DisposableEffect(hostId, liveSession) {
-            viewModel.followControls(hostId, liveSession)
-            onDispose { viewModel.forgetControls(hostId) }
+            val claim = viewModel.followControls(hostId, liveSession)
+            onDispose { viewModel.releaseSession(hostId, claim) }
         }
         var controlsOpen by remember(liveSession) { mutableStateOf(false) }
 

@@ -399,6 +399,55 @@ object CopilotTimeline {
 private typealias PortCatalogLikeSplit = Unit
 
 /**
+ * Bubble text, as a phone may safely draw it.
+ *
+ * A chat message is **bytes an agent wrote**, and on this wire that can include what a shell echoed
+ * into its own transcript: a restored-session banner, an OSC 7 working-directory sequence, a colour
+ * run. Drawn raw, those arrive as a replacement glyph followed by `]7;file:///Users/...` — which is
+ * not merely ugly, it is this client rendering an escape sequence as content.
+ *
+ * Measured, not imagined: the first bubble of a real run against `scripts/remote-host.sh` on
+ * 2026-08-22 was exactly that string.
+ *
+ * Stripped rather than refused, which is the opposite of the rule for `copilot.say` going the other
+ * way — and the asymmetry is the point. **Outbound**, a control character is refused because
+ * stripping would turn a hostile value into a different legal-looking message that somebody pays
+ * for. **Inbound**, there is nothing to protect but the reader's eyes: the text is never executed,
+ * only drawn, and a bubble with the escapes taken out says exactly what the agent said.
+ *
+ * Newlines and tabs survive. They are layout the agent meant.
+ */
+object CopilotText {
+
+    /** The two bytes, written as escapes so this file holds no control character of its own. */
+    private const val ESC = "\u001B"
+    private const val BEL = "\u0007"
+
+    /** `ESC [ … final` — a CSI sequence, which is what a colour run or a cursor move is. */
+    private val CSI = Regex(ESC + "\\[[0-?]*[ -/]*[@-~]")
+
+    /**
+     * `ESC ] … BEL` or `ESC ] … ESC \\` — an OSC sequence, which is what OSC 7 is.
+     *
+     * Deliberately not a general "ANSI" pattern: these two families are the ones that appear in a
+     * transcript, and a wider expression risks eating a `[` somebody typed.
+     */
+    private val OSC = Regex(ESC + "\\][^" + BEL + ESC + "]*(?:" + BEL + "|" + ESC + "\\\\)?")
+
+    fun display(raw: String): String {
+        if (raw.isEmpty()) return raw
+        val withoutSequences = OSC.replace(CSI.replace(raw, ""), "")
+        // Anything left that is a control character, except the two that are layout. A lone ESC that
+        // began a sequence this build does not recognise goes here rather than onto the screen.
+        return buildString(withoutSequences.length) {
+            for (ch in withoutSequences) {
+                if (!ch.isISOControl() || ch == '\n' || ch == '\t') append(ch)
+            }
+        }
+    }
+}
+
+/**
  * What a confirmation is actually asking for, out of a record this app does not own.
  *
  * [CopilotConsentQuestion.args] is the tool's own shape and a new tool will have one this build has

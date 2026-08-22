@@ -1272,20 +1272,31 @@ class DeckViewModel(
         selected?.settings?.apply(key, value)
     }
 
+    /**
+     * The bar of the machine whose session is on screen, or null.
+     *
+     * **Not** `firstOrNull { it.bar != null }`: every link is given a controller when it is built, so
+     * that expression answers with whichever machine is first in the map — a machine that has been
+     * offline for a week on a phone with five paired. Every verb below acts on the session somebody
+     * is looking at, and only one cluster is ever following one.
+     */
+    private fun following(): SessionBarController? =
+        links.values.firstOrNull { it.bar?.isFollowing == true }?.bar
+
     /* ------------------------------------------------------------- the session bar -- */
 
     /** The ring was pressed. The one reading that boots an agent on the other machine. */
     fun refreshUsage() {
-        links.values.firstOrNull { it.bar?.view() != null }?.bar?.refresh()
+        following()?.refresh()
     }
 
     fun switchAccount(accountId: String) {
-        links.values.firstOrNull { it.bar?.view() != null }?.bar?.switchAccount(accountId)
+        following()?.switchAccount(accountId)
     }
 
     /** The conversation opened or closed. Only a screen that is up asks for a transcript. */
     fun chatting(on: Boolean) {
-        links.values.firstOrNull { it.bar != null }?.bar?.chatting(on)
+        following()?.chatting(on)
     }
 
     /**
@@ -1294,11 +1305,10 @@ class DeckViewModel(
      * Returns whether the draft may be cleared: false keeps it in the box, which is the whole reason
      * a composer rides `session.send` rather than `input`.
      */
-    fun sendMessage(text: String): Boolean =
-        links.values.firstOrNull { it.bar?.chatView() != null }?.bar?.sendMessage(text) ?: false
+    fun sendMessage(text: String): Boolean = following()?.sendMessage(text) ?: false
 
     fun dismissChatNotice() {
-        links.values.firstOrNull { it.bar != null }?.bar?.dismissNotice()
+        following()?.dismissNotice()
     }
 
     /* -------------------------------------------------------------- localhost + web -- */
@@ -1423,13 +1433,31 @@ class DeckViewModel(
      * told is on screen. A no-op over a machine that does not advertise `controls`, so an older
      * desktop simply never grows the button.
      */
-    fun followControls(hostId: String, sessionId: String) {
-        links[hostId]?.controls?.follow(sessionId)
+    fun followControls(hostId: String, sessionId: String): SessionClaim {
+        val controls = links[hostId]?.controls?.follow(sessionId) ?: 0
+        /*
+         * The bar follows the same session, from the same call.
+         *
+         * Two clusters, one screen, one lifetime: both are about *the session on screen*, both are
+         * dropped when it closes, and splitting the two calls is how one of them ends up following a
+         * session the other has left. Found by looking at a real terminal with no bar over it — the
+         * cluster was following and the bar had never been told which session to ask about.
+         */
+        val bar = links[hostId]?.bar?.follow(sessionId) ?: 0
+        return SessionClaim(controls, bar)
     }
 
-    /** The terminal screen went. Nothing about that session is worth holding once nobody is looking. */
-    fun forgetControls(hostId: String) {
-        links[hostId]?.controls?.forget()
+    /**
+     * A screen that was following a session has gone.
+     *
+     * The claim it was handed decides whether anything is actually torn down — see
+     * [SessionControlsController.release]. Compose runs an incoming screen's effects *before* the
+     * outgoing screen's `onDispose`, so a terminal that forgot unconditionally would clear the
+     * session the conversation had already claimed, one frame after the conversation opened.
+     */
+    fun releaseSession(hostId: String, claim: SessionClaim) {
+        links[hostId]?.controls?.release(claim.controls)
+        links[hostId]?.bar?.release(claim.bar)
     }
 
     /** Change one control on the session the terminal screen is showing. */
@@ -1709,8 +1737,8 @@ class DeckViewModel(
             // The bar and the conversation follow the same rule as the control cluster, and for the
             // same reason: they are about the session on screen, which on a phone with two machines
             // paired need not be the machine the switcher is pointing at.
-            bar = links.values.firstNotNullOfOrNull { it.bar?.view() },
-            chat = links.values.firstNotNullOfOrNull { it.bar?.chatView() },
+            bar = following()?.view(),
+            chat = following()?.chatView(),
             watch = current?.watch?.view(),
             localhost = current?.localhost?.view(),
             devServers = current?.devServer?.view(),
@@ -1784,6 +1812,14 @@ class DeckViewModel(
         }
     }
 }
+
+/**
+ * What a screen was handed when it started following a session, and hands back when it stops.
+ *
+ * Two numbers rather than one because the two clusters are independent — a screen may follow one and
+ * not the other — and a single token would make releasing one release the other.
+ */
+data class SessionClaim(val controls: Int, val bar: Int)
 
 /** Which machine, and which of its sessions. See [DeckViewModel.created]. */
 data class OpenRequest(val hostId: String, val sessionId: String)

@@ -572,4 +572,61 @@ class SessionClusterTest {
         // …and a bubble is something that was said, which a drop does not unsay.
         assertEquals(1, b.chatView()!!.rows.size)
     }
+
+    /* ============================================================== the claim == */
+
+    /**
+     * The screen that follows a session hands its claim back, and a **stale** claim tears nothing
+     * down.
+     *
+     * The bug this pins is not reachable from a unit test of one controller — it is an *ordering*
+     * bug in Compose, where an incoming screen's effects run before the outgoing screen's
+     * `onDispose`. Driven against a live host on 2026-08-22, opening the conversation over a
+     * terminal disposed the terminal, the terminal's teardown then cleared the session the
+     * conversation had already claimed, and the chat route popped itself back three times a second.
+     * The button looked dead.
+     *
+     * What is testable, and what fixes it, is that `release` is keyed on the claim rather than on
+     * nothing. These four assertions are the whole contract.
+     */
+    @Test
+    fun `a stale claim releases nothing, so a screen cannot clear its successor's session`() {
+        val rec = Recorder()
+        val c = controls(rec, FakeExpiry())
+
+        val first = c.follow("s1")
+        c.receive(ServerMessage.ControlsReading(rid(rec, 0), "s1", reading()))
+        assertNotNull(c.view())
+
+        // The conversation opens over it and claims the same session.
+        val second = c.follow("s1")
+        assertTrue("each follow is a new claim", second != first)
+
+        // *Then* the terminal underneath is disposed and hands back the claim it was given.
+        c.release(first)
+        assertNotNull("the session the conversation is showing survives", c.view())
+
+        // And the screen that actually holds it can still let go.
+        c.release(second)
+        assertNull(c.view())
+    }
+
+    @Test
+    fun `the bar keeps the same rule, because the two clusters are released together`() {
+        val rec = Recorder()
+        val b = bar(rec, FakeExpiry())
+
+        val first = b.follow("s1")
+        assertTrue(b.isFollowing)
+        val second = b.follow("s1")
+
+        b.release(first)
+        // `isFollowing` is what picks *which machine's* bar a verb acts on; a stale release that
+        // cleared it would send the next `chat.read` to whichever machine happens to be first in the
+        // map — which on a phone with five paired is one that has been offline for a week.
+        assertTrue(b.isFollowing)
+
+        b.release(second)
+        assertFalse(b.isFollowing)
+    }
 }

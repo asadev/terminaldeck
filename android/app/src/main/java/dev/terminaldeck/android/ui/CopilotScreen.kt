@@ -48,6 +48,7 @@ import dev.terminaldeck.android.protocol.CopilotChatMessage
 import dev.terminaldeck.android.protocol.CopilotDesk
 import dev.terminaldeck.android.protocol.CopilotEntry
 import dev.terminaldeck.android.protocol.CopilotOutcome
+import dev.terminaldeck.android.protocol.CopilotText
 import dev.terminaldeck.android.ui.kit.DeckFootnote
 import dev.terminaldeck.android.ui.kit.DeckGroup
 import dev.terminaldeck.android.ui.kit.DeckPrimaryButton
@@ -103,6 +104,16 @@ import dev.terminaldeck.android.ui.theme.Space
 fun CopilotScreen(
     view: CopilotView,
     machineLabel: String,
+    /**
+     * The way off this screen, and it is load bearing in a way an ordinary back button is not.
+     *
+     * The tab bar is withdrawn here — *"if we are on copilot on mobile version, now if we want to
+     * type here, the pill is still there. Why is the pill there if we can type here? Either we will
+     * type or we will use the pill."* — and a tab that hides its own bar has no way out: there is no
+     * chevron over a tab's root and no gesture that pops one. Anything that removes or conditions
+     * this strands somebody here.
+     */
+    onLeave: () -> Unit,
     onStart: () -> Unit,
     onCancel: () -> Unit,
     onStopRun: () -> Unit,
@@ -142,6 +153,7 @@ fun CopilotScreen(
             DeckTopBar(
                 title = "Copilot",
                 subtitle = machineLabel,
+                onBack = onLeave,
                 actions = {
                     if (view.access != CopilotAccess.NotOffered && view.access != CopilotAccess.Connecting) {
                         IconButton(onClick = onSessions) {
@@ -190,14 +202,31 @@ fun CopilotScreen(
 
                     Box(modifier = Modifier.weight(1f)) {
                         if (view.entries.isEmpty()) {
+                            /*
+                             * Three empties, and they are not the same empty.
+                             *
+                             * A run that has said nothing yet is waiting for a question; a machine
+                             * with no run is waiting for a tap; a device that may only watch is
+                             * waiting for somebody else. Keying this on `canStart` alone drew
+                             * *"Watching"* over a live run with a composer under it — which is the
+                             * screen telling somebody they cannot do the thing they are about to do.
+                             */
                             Explanation(
-                                title = if (view.canStart) "Nothing yet" else "Watching",
-                                detail = if (view.canStart) {
-                                    "Start a run and what it says and what it does both land here, " +
-                                        "in the order they happen."
-                                } else {
-                                    "What the copilot says and what it does will land here, in the " +
-                                        "order they happen."
+                                title = when {
+                                    view.state?.hasRun == true -> "Nothing said yet"
+                                    view.canStart -> "Nothing yet"
+                                    else -> "Watching"
+                                },
+                                detail = when {
+                                    view.state?.hasRun == true ->
+                                        "Ask it something and what it says and what it does both " +
+                                            "land here, in the order they happen."
+                                    view.canStart ->
+                                        "Start a run and what it says and what it does both land " +
+                                            "here, in the order they happen."
+                                    else ->
+                                        "What the copilot says and what it does will land here, in " +
+                                            "the order they happen."
                                 },
                             )
                         } else {
@@ -419,10 +448,13 @@ private fun Bubble(message: CopilotChatMessage, onCopy: (String) -> Unit) {
                 .fillMaxWidth(0.88f)
                 .clip(Radius.large)
                 .background(if (mine) colors.accentSoft else colors.surface)
-                .clickable { onCopy(message.text) }
+                .clickable { onCopy(CopilotText.display(message.text)) }
                 .padding(horizontal = Space.x3, vertical = Space.x2),
         ) {
-            Text(message.text, style = DeckType.control, color = colors.primary)
+            // Stripped of the escape sequences a shell writes into its own transcript. See
+            // [CopilotText]: drawn raw, a restored-session banner arrives as a replacement glyph
+            // followed by `]7;file:///Users/…`, which is this client rendering an escape as content.
+            Text(CopilotText.display(message.text), style = DeckType.control, color = colors.primary)
             if (message.truncated) {
                 Spacer(Modifier.height(Space.half))
                 // The desktop saying *there is more of this, go and look on the machine*. Carried
@@ -478,7 +510,13 @@ private fun ToolRow(row: CopilotActionRow) {
             // Untrusted display text: it is a summary a tool produced. Drawn as text, never parsed.
             row.detail.takeIf { it.isNotEmpty() }?.let {
                 Spacer(Modifier.height(Space.half))
-                Text(it, style = DeckType.mono, color = colors.faint, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                Text(
+                    text = CopilotText.display(it),
+                    style = DeckType.mono,
+                    color = colors.faint,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
             row.refusal?.takeIf { it.isNotEmpty() }?.let {
                 Spacer(Modifier.height(Space.half))

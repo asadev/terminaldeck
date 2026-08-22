@@ -54,6 +54,22 @@ class SessionBarController(
 ) {
     private var sessionId: String? = null
 
+    /**
+     * Which screen currently owns this cluster.
+     *
+     * A number rather than a boolean, and it is the fix for a bug that only shows up on a device:
+     * pushing the conversation over the terminal **disposes the terminal**, and Compose runs the new
+     * screen's effects *before* the old screen's `onDispose`. So the terminal's teardown arrived
+     * after the chat had already claimed the session and cleared it out from under it — the chat
+     * screen then sat on "reading the conversation" forever, and the button that opened it looked
+     * dead.
+     *
+     * [follow] hands out a token and [release] only forgets when the token it is given is still the
+     * live one. Which makes the order the two effects run in stop mattering, rather than making this
+     * code depend on it.
+     */
+    private var claim = 0
+
     private var plan: Double? = null
     private var context: Double? = null
     private var account: AccountWire? = null
@@ -98,6 +114,17 @@ class SessionBarController(
     private var confirmCancel: (() -> Unit)? = null
     private var counter = 0
     private var askedPlanAt: Long? = null
+
+    /**
+     * Whether this cluster is about a session right now.
+     *
+     * The one honest way to pick *which machine's* bar a screen means. `firstOrNull { it.bar != null }`
+     * is not it: every link is given a controller when it is built, so that expression answers with
+     * whichever machine happens to be first in the map — which on a phone with five paired is a
+     * machine that has been offline for a week. It sent `chat.read` to the wrong computer and the
+     * conversation sat on a spinner.
+     */
+    val isFollowing: Boolean get() = sessionId != null
 
     fun canReadUsage(): Boolean = capabilities().contains(Capability.USAGE)
 
@@ -152,13 +179,26 @@ class SessionBarController(
     }
 
     /** The screen opened a session. Everything held about the last one goes. */
-    fun follow(id: String) {
+    fun follow(id: String): Int {
         if (sessionId != id) forget()
         sessionId = id
         askUsage(UsageWant.Context)
         askPlan()
         askAccount()
+        claim += 1
         onChange()
+        return claim
+    }
+
+    /**
+     * The screen that held [follow]'s token has gone.
+     *
+     * Forgets only when nothing has claimed the session since — see [claim]. A screen that hands back
+     * a stale token is one whose successor is already on top of it, and tearing down for that is how
+     * the conversation lost the session it was opened for.
+     */
+    fun release(token: Int) {
+        if (token == claim) forget()
     }
 
     fun forget() {

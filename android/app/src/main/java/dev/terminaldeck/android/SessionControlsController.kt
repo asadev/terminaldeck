@@ -50,6 +50,22 @@ class SessionControlsController(
     /** The session this cluster is about, or null when none is attached. */
     private var sessionId: String? = null
 
+    /**
+     * Which screen currently owns this cluster.
+     *
+     * A number rather than a boolean, and it is the fix for a bug that only shows up on a device:
+     * pushing the conversation over the terminal **disposes the terminal**, and Compose runs the new
+     * screen's effects *before* the old screen's `onDispose`. So the terminal's teardown arrived
+     * after the chat had already claimed the session and cleared it out from under it — the chat
+     * screen then sat on "reading the conversation" forever, and the button that opened it looked
+     * dead.
+     *
+     * [follow] hands out a token and [release] only forgets when the token it is given is still the
+     * live one. Which makes the order the two effects run in stop mattering, rather than making this
+     * code depend on it.
+     */
+    private var claim = 0
+
     /** The whole reading, or null until one has landed. */
     private var reading: ControlsReadingWire? = null
 
@@ -101,17 +117,30 @@ class SessionControlsController(
     /* ----------------------------------------------------------------- lifecycle -- */
 
     /** The screen opened a session. Everything held about the last one goes. */
-    fun follow(id: String) {
+    fun follow(id: String): Int {
         if (sessionId != id) forget()
         sessionId = id
         ask()
+        claim += 1
         onChange()
+        return claim
     }
 
     /**
      * The screen closed. Timers stop and nothing stale is left on a cluster that may draw again in a
      * second against a different session.
      */
+    /**
+     * The screen that held [follow]'s token has gone.
+     *
+     * Forgets only when nothing has claimed the session since — see [claim]. A screen that hands back
+     * a stale token is one whose successor is already on top of it, and tearing down for that is how
+     * the conversation lost the session it was opened for.
+     */
+    fun release(token: Int) {
+        if (token == claim) forget()
+    }
+
     fun forget() {
         stop()
         sessionId = null
