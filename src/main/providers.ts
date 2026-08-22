@@ -385,9 +385,22 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = providersFor(currentP
  */
 let cachedPath: string | null = null
 
+/**
+ * The probe that is running right now, if one is.
+ *
+ * Restore starts every session at once, and each one asks for the PATH before
+ * the first answer has come back — so the memo above is empty for all of them
+ * and each spawns its own login shell. Three of them were observed sitting on
+ * one machine at the same time. Sharing the in-flight promise makes it one
+ * shell per launch however many sessions come back, which also matters because
+ * the thing being spawned reads the user's whole rc file.
+ */
+let probing: Promise<string> | null = null
+
 /** Drops the memo. Exported for tests, which pin one platform per case. */
 export function resetLoginPathCache(): void {
   cachedPath = null
+  probing = null
 }
 
 export async function loginPath(platform: Platform = currentPlatform()): Promise<string> {
@@ -395,17 +408,48 @@ export async function loginPath(platform: Platform = currentPlatform()): Promise
 
   const spec = loginPathSpec(platform, process.env)
   if (spec === null) {
+    // Windows: the environment's own PATH *is* the answer, so it is a real
+    // answer and is memoised like one.
     cachedPath = envPath(process.env, platform)
     return cachedPath
   }
 
-  try {
-    const { stdout } = await run(spec.command, spec.args, { timeout: 5000 })
-    cachedPath = stdout.trim() || envPath(process.env, platform)
-  } catch {
-    cachedPath = envPath(process.env, platform)
-  }
-  return cachedPath
+  if (probing) return probing
+  probing = (async () => {
+    try {
+      const { stdout } = await run(spec.command, spec.args, { timeout: 5000 })
+      const answered = stdout.trim()
+      if (answered !== '') {
+        cachedPath = answered
+        return answered
+      }
+    } catch {
+      // Timed out, or the shell died. Falls through to the same place an empty
+      // answer does.
+    }
+    /*
+     * A fallback is NOT an answer, and memoising it is how one bad launch
+     * poisons a whole run.
+     *
+     * GUI apps inherit a minimal PATH, and the CLIs this app spawns are
+     * routinely somewhere that PATH cannot see — `~/.local/bin/claude` on this
+     * machine. So when the probe misses, every lookup for the rest of the
+     * process answers "Claude Code could not be found on this machine". That is
+     * not hypothetical: it is in this machine's own log, twice at boot and then
+     * again on the two Retry presses three minutes later, because the memo made
+     * Retry a button that could not possibly work. The five-second timeout is
+     * generous on a warm machine and is not generous at all on the launch right
+     * after an update swap, which is exactly when restore runs.
+     *
+     * So the fallback is returned to *this* caller and nothing is remembered:
+     * the next ask — a Retry, a sign-in, the readiness scan — pays for one more
+     * shell and gets the real PATH.
+     */
+    return envPath(process.env, platform)
+  })().finally(() => {
+    probing = null
+  })
+  return probing
 }
 
 /**
