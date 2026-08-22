@@ -254,6 +254,17 @@ export const SESSION_TOOLS: ReadonlySet<string> = new Set([
   'browser.worker',
   'browser_worker',
   /*
+   * The ask, not the act. `browser.lift_request` files a request that surfaces
+   * in the Scraping panel with Approve and Decline; the lift stays behind the
+   * `ipcMain` channel above, on a person's armed press. The long argument for
+   * why there is still no `browser.lift` — and why an ask is not a hole in it
+   * — is in `lift-ask-tool.ts` and `browser-lift-requests.ts`. On this list
+   * because a session doing fleet work is exactly the asker; the desk prices
+   * the retry loop at zero (dedupe, a cap, and no agent-reachable answer).
+   */
+  'browser.lift_request',
+  'browser_lift_request',
+  /*
    * Harvesting, added 2026-08-21, and it belongs to a session as much as to the
    * copilot — arguably more. The person who runs a scrape runs it from a
    * terminal, in a session, against a window they attached by hand; a grant

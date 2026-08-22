@@ -111,11 +111,29 @@ describe('the session lift, which is the dangerous one', () => {
   })
 
   it('promises an inbox only on a build that has one', () => {
-    // There is no channel behind the ask inbox today. A standing sentence
-    // saying asks show up here would be a claim about a mechanism this build
-    // does not have.
+    // The channel behind the ask inbox is real since 2026-08-22
+    // (browser-lift-requests.ts, wired through scraping-adapter.ts), and on an
+    // older preload without it the standing sentence must still not appear —
+    // a claim about a mechanism that build does not have.
     const inbox = onScreen.slice(onScreen.indexOf('Lifting copies'))
     expect(inbox.slice(0, inbox.indexOf('</p>'))).toContain('liftRequestsAvailable(api) &&')
+  })
+
+  it('shows a pending ask even where there is no page to lift from', () => {
+    /*
+     * The inbox stands OUTSIDE the `canLift` branch. Approving lifts from
+     * whatever page is open in the profile the ask names (`handleLiftAnswer`),
+     * not from the page in front of the approver — so an ask is answerable
+     * from Settings → Scraping too, and hiding the question exactly where
+     * somebody reads settings would leave an agent waiting on an answer the
+     * person was never shown.
+     */
+    const session = onScreen.slice(onScreen.indexOf('title="Session"'))
+    const inboxAt = session.indexOf('liftRequestsAvailable(api) && asks.length > 0')
+    const gateAt = session.indexOf('{!canLift ? (')
+    expect(inboxAt).toBeGreaterThan(-1)
+    expect(gateAt).toBeGreaterThan(-1)
+    expect(inboxAt).toBeLessThan(gateAt)
   })
 
   it('has no way to lift into everything at once', () => {

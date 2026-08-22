@@ -159,13 +159,70 @@ describe('what the adapter offers a build with the four lanes on it', () => {
     // subscribe to and the fleet line says "busy not measured" rather than
     // printing a number that is as old as the last time the panel opened.
     expect(scrapingStatusAvailable(api)).toBe(false)
-    // No channel lists or answers a request for a lift. Inventing one here
-    // would be building the path around the gesture `session-tools.ts` exists
-    // to prevent.
+    // A preload without the lift-request channels gets no inbox — the same
+    // absent-not-disabled bargain every other seam strikes. (A build WITH
+    // them gets a live one; the block below pins that.)
     expect(liftRequestsAvailable(api)).toBe(false)
     expect(api.browserScrapingCaptureClear).toBeUndefined()
     expect(api.browserScrapingCaptureReveal).toBeUndefined()
     expect(api.browserScrapingLedgerClear).toBeUndefined()
+  })
+
+  it('wires the ask inbox whole when the preload carries all three channels', async () => {
+    /*
+     * The channel behind the approvals branch. Until 2026-08-22 this seam was
+     * left open on purpose and the panel's inbox rendered against methods that
+     * could never exist — a control drawn and unable to fire. All three or
+     * none, because half an inbox (a list nobody can answer, an answer with no
+     * list) is the same dead branch by another door.
+     */
+    const answered: unknown[] = []
+    const push = { cb: null as ((inbox: unknown) => void) | null }
+    const withInbox = {
+      ...host,
+      browserWorkerLiftRequests: async () => [
+        { id: 'ask-1', askedBy: 'The session driving B1', fromProfileId: 'p1', intoProfileIds: ['w1'], reason: '', at: 5 },
+      ],
+      browserWorkerLiftAnswer: async (requestId: string, approve: boolean) => {
+        answered.push({ requestId, approve })
+        return { ok: true, message: 'Declined. Nothing was copied.', count: null }
+      },
+      onBrowserWorkerLiftRequest: (cb: (inbox: unknown) => void) => {
+        push.cb = cb
+        return () => {
+          push.cb = null
+        }
+      },
+    }
+    const api = resolveScrapingApi(withInbox, { viewId: () => 'tab-1' })
+    expect(liftRequestsAvailable(api)).toBe(true)
+
+    const listed = await api.browserScrapingLiftRequests?.()
+    expect(Array.isArray(listed) && (listed as unknown[]).length).toBe(1)
+
+    await api.browserScrapingLiftAnswer?.('ask-1', false)
+    expect(answered).toEqual([{ requestId: 'ask-1', approve: false }])
+
+    // The push is handed through, and unsubscribing really unsubscribes.
+    const seen: unknown[] = []
+    const off = api.onBrowserScrapingLiftRequest?.((inbox) => seen.push(inbox))
+    push.cb?.(['row'])
+    expect(seen).toEqual([['row']])
+    off?.()
+    expect(push.cb).toBeNull()
+  })
+
+  it('wires no half inbox when a channel is missing', () => {
+    const partial = {
+      ...host,
+      browserWorkerLiftRequests: async () => [],
+      browserWorkerLiftAnswer: async () => ({ ok: true, message: '', count: null }),
+      // no onBrowserWorkerLiftRequest
+    }
+    const api = resolveScrapingApi(partial, { viewId: () => 'tab-1' })
+    expect(liftRequestsAvailable(api)).toBe(false)
+    expect(api.browserScrapingLiftRequests).toBeUndefined()
+    expect(api.browserScrapingLiftAnswer).toBeUndefined()
   })
 
   it('offers no lift at all without a page to take one from', () => {

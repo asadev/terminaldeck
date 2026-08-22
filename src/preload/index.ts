@@ -2095,6 +2095,23 @@ const api = {
     ipcRenderer.invoke('browser-worker:inject', request),
   browserWorkerForgetLift: (liftId: string): Promise<unknown> =>
     ipcRenderer.invoke('browser-worker:forget-lift', liftId),
+  /*
+   * The ask inbox. An agent that wants a session lifted files a request
+   * (`browser-lift-requests.ts`); these three are how the panel lists the
+   * asks, hears a new one arrive, and answers one. Answering is the only door
+   * to a filed ask and it is behind a button a person armed — the lift itself
+   * still runs only in the main process, on approval. Reading the list also
+   * subscribes this window to the push.
+   */
+  browserWorkerLiftRequests: (): Promise<unknown> =>
+    ipcRenderer.invoke('browser-worker:lift-requests'),
+  browserWorkerLiftAnswer: (requestId: string, approve: boolean): Promise<unknown> =>
+    ipcRenderer.invoke('browser-worker:lift-answer', { requestId, approve }),
+  onBrowserWorkerLiftRequest: (cb: (inbox: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, inbox: unknown) => cb(inbox)
+    ipcRenderer.on('browser-worker:lift-request', handler)
+    return () => ipcRenderer.off('browser-worker:lift-request', handler)
+  },
 
   /* ------------------------------------------------ the scraping settings -- */
 

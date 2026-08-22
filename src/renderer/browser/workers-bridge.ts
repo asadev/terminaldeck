@@ -90,6 +90,14 @@ export interface WorkersApi {
   browserWorkerLift?(request: { viewId: string }): Promise<unknown>
   browserWorkerInject?(request: { liftId: string; profileIds?: string[] }): Promise<unknown>
   browserWorkerForgetLift?(liftId: string): Promise<unknown>
+  /*
+   * The ask inbox — asks agents file, answers a person gives. See
+   * `src/main/browser-lift-requests.ts` for the desk and its rules; the shapes
+   * these carry are `scraping-bridge.ts`'s `LiftRequest` and `ScrapingOutcome`.
+   */
+  browserWorkerLiftRequests?(): Promise<unknown>
+  browserWorkerLiftAnswer?(requestId: string, approve: boolean): Promise<unknown>
+  onBrowserWorkerLiftRequest?(cb: (inbox: unknown) => void): () => void
 }
 
 const METHODS = [
@@ -101,6 +109,9 @@ const METHODS = [
   'browserWorkerLift',
   'browserWorkerInject',
   'browserWorkerForgetLift',
+  'browserWorkerLiftRequests',
+  'browserWorkerLiftAnswer',
+  'onBrowserWorkerLiftRequest',
 ] as const satisfies readonly (keyof WorkersApi)[]
 
 export function resolveWorkersApi(host?: unknown): WorkersApi {

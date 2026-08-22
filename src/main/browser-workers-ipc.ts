@@ -1,5 +1,11 @@
-import { app, webContents, type IpcMain, type IpcMainInvokeEvent, type Session } from 'electron'
+import { app, webContents, type IpcMain, type IpcMainInvokeEvent, type Session, type WebContents } from 'electron'
 import { logger } from './app-log'
+import {
+  configureLiftRequests,
+  listLiftRequests,
+  peekLiftRequest,
+  takeLiftRequest,
+} from './browser-lift-requests'
 import { isProfileGuestSession, profileState, sessionForPartition } from './browser-profiles'
 import { frameOrigin, writeSeedPreload, GUEST_SEED_CHANNEL } from './browser-seed-preload'
 import {
@@ -364,6 +370,193 @@ async function handleInject(event: IpcMainInvokeEvent, raw: unknown): Promise<In
   return { ok: true, reports, line: liftLine(summariseLift(lift), targets.length) }
 }
 
+/* ------------------------------------------------------- the lift inbox -- */
+
+/**
+ * The windows that have read the lift inbox, told when it changes.
+ *
+ * The `mcp:state` arrangement exactly: reading the list is subscribing, the
+ * push carries the whole inbox, and a destroyed listener is dropped on the
+ * next send. Subscribed-on-read is enough here because the only surface that
+ * draws the inbox — the Scraping panel — always lists before it listens.
+ */
+const inboxWatchers = new Set<WebContents>()
+
+const LIFT_REQUEST_CHANNEL = 'browser-worker:lift-request'
+
+function pushLiftInbox(): void {
+  const inbox = listLiftRequests()
+  for (const contents of inboxWatchers) {
+    // One try around both the liveness question and the send: a watcher this
+    // cannot speak to, for any reason, is a watcher to drop, never a crashed
+    // notify — the desk calls this from inside an agent's tool call.
+    try {
+      if (contents.isDestroyed()) {
+        inboxWatchers.delete(contents)
+        continue
+      }
+      contents.send(LIFT_REQUEST_CHANNEL, inbox)
+    } catch {
+      inboxWatchers.delete(contents)
+    }
+  }
+}
+
+/**
+ * The first live page in one partition, for a lift approved from the inbox.
+ *
+ * The same enumeration {@link pagesIn} makes and the same argument for it —
+ * the truth, not a registry — but answering with the `WebContents` itself,
+ * because `liftFromPage` needs the page and not its address.
+ */
+function pageInProfile(partition: string): WebContents | null {
+  let jar: Session
+  try {
+    jar = sessionForPartition(partition)
+  } catch {
+    return null
+  }
+  let all: ReturnType<typeof webContents.getAllWebContents>
+  try {
+    all = webContents.getAllWebContents()
+  } catch {
+    return null
+  }
+  for (const contents of all) {
+    try {
+      if (contents.isDestroyed() || contents.session !== jar) continue
+      const url = contents.getURL()
+      if (url === '' || url === 'about:blank') continue
+      return contents
+    } catch {
+      // A view that went between the enumeration and the read. Not a page.
+    }
+  }
+  return null
+}
+
+/** The outcome shape the Scraping panel's `readOutcome` narrows. */
+interface AskOutcome {
+  ok: boolean
+  message: string
+  count: number | null
+}
+
+/**
+ * Answer one ask from the inbox — the only place a filed lift request can be
+ * granted or refused, and it is behind two presses in the panel (Approve is
+ * armed, exactly as the person's own Lift button is).
+ *
+ * Approving performs the whole gesture the person's Lift performs — take the
+ * session off a live page in the named profile, put it into the named workers,
+ * forget the lift — with one difference of address: the person's button lifts
+ * from *the page in front of them*; an approval lifts from whatever page is
+ * open in the profile the ask names, because the ask is about a profile and
+ * the approver may be looking at something else. No page open in that profile
+ * is a refusal that **keeps the ask**, so the person can open the site, sign
+ * in, and press Approve again rather than hunting for the agent to re-ask.
+ */
+async function handleLiftAnswer(event: IpcMainInvokeEvent, raw: unknown): Promise<AskOutcome> {
+  if (!fromAppWindow(event)) {
+    return { ok: false, message: 'That answer did not come from this app’s window.', count: null }
+  }
+  const input = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+  const requestId = typeof input.requestId === 'string' ? input.requestId : ''
+  const approve = input.approve === true
+
+  const pending = peekLiftRequest(requestId)
+  if (pending === null) {
+    return { ok: false, message: 'That ask has already been answered, or did not survive a restart.', count: null }
+  }
+
+  if (!approve) {
+    takeLiftRequest(requestId)
+    logger.info('browser-workers', 'a lift ask was declined', {
+      askedBy: pending.askedBy,
+      from: pending.fromProfileId,
+      workers: pending.intoProfileIds.length,
+    })
+    return { ok: true, message: 'Declined. Nothing was copied.', count: null }
+  }
+
+  const profile = profileState(userData()).profiles.find((row) => row.id === pending.fromProfileId)
+  if (profile === undefined) {
+    takeLiftRequest(requestId)
+    return { ok: false, message: 'The profile that ask names no longer exists, so the ask was dropped.', count: null }
+  }
+
+  const page = pageInProfile(profile.partition)
+  if (page === null) {
+    // The ask stays: this is "not yet", not "no".
+    return {
+      ok: false,
+      message: `No page is open in ${profile.name} to take a session from. Open the site in that profile, sign in, and press Approve again — the ask is still here.`,
+      count: null,
+    }
+  }
+
+  const taken = await liftFromPage({
+    page,
+    jar: page.session,
+    profileId: profile.id,
+    profileName: profile.name,
+  })
+  if (!taken.ok) {
+    // A page that is open but not signed in, most often. The ask stays for the
+    // same reason no-page does.
+    return { ok: false, message: taken.reason, count: null }
+  }
+  const lift = liftById(taken.summary.id)
+  if (lift === null) {
+    return { ok: false, message: 'The lifted session expired before it could be copied. Try again.', count: null }
+  }
+
+  const targets: InjectTarget[] = workerList(userData())
+    .filter((worker) => pending.intoProfileIds.includes(worker.profileId) && worker.profileId !== profile.id)
+    .map((worker) => ({
+      profileId: worker.profileId,
+      name: worker.name,
+      partition: worker.partition,
+      jar: sessionForPartition(worker.partition),
+    }))
+  if (targets.length === 0) {
+    forgetLift(lift.id)
+    takeLiftRequest(requestId)
+    return { ok: false, message: 'None of the workers that ask names exist any more, so the ask was dropped.', count: null }
+  }
+
+  const reports = await injectLift({ lift, targets, register: registerSeedPreload })
+  // Used once, forgotten at once — a live session must not sit in memory after
+  // the gesture that needed it is finished. Same rule the panel's own lift keeps.
+  forgetLift(lift.id)
+  takeLiftRequest(requestId)
+
+  /*
+   * Written down, without values — the same record the by-hand lift writes,
+   * with the ask on it, because "which agent asked and who granted it" is the
+   * fact an audit of a moved credential starts from.
+   */
+  logger.info('browser-workers', 'a lift ask was approved by hand', {
+    askedBy: pending.askedBy,
+    host: lift.host,
+    from: profile.name,
+    workers: reports.length,
+    cookiesSet: reports.reduce((sum, report) => sum + report.cookiesSet, 0),
+  })
+
+  const notes: string[] = []
+  for (const report of reports) {
+    const note = report.note.trim()
+    if (note !== '' && !notes.includes(note)) notes.push(note)
+  }
+  const head = liftLine(summariseLift(lift), targets.length)
+  return {
+    ok: true,
+    message: notes.length === 0 ? head : `${head} ${notes.join(' ')}`,
+    count: reports.reduce((sum, report) => sum + report.cookiesSet, 0),
+  }
+}
+
 /* --------------------------------------------------------------- register -- */
 
 /**
@@ -380,6 +573,9 @@ async function handleInject(event: IpcMainInvokeEvent, raw: unknown): Promise<In
  * - `browser-worker:pace`        (invoke, pace)              → {@link WorkersView}
  * - `browser-worker:lift`        (invoke, {viewId})          → {@link LiftAnswer}
  * - `browser-worker:inject`      (invoke, {liftId, profileIds?}) → {@link InjectAnswer}
+ * - `browser-worker:lift-requests` (invoke)                  → the ask inbox, and subscribes the caller
+ * - `browser-worker:lift-answer`   (invoke, {requestId, approve}) → {@link AskOutcome}
+ * - `browser-worker:lift-request`  (push)                    → the inbox, whenever it changes
  * - `browser-worker:forget-lift` (invoke, liftId)            → {@link WorkersView}
  * - `terminaldeck-browser:seed`  (invoke, from a worker frame) → the seed, once
  */
@@ -410,6 +606,26 @@ export function registerBrowserWorkerIpc(ipcMain: IpcMain): void {
 
   ipcMain.handle('browser-worker:lift', handleLift)
   ipcMain.handle('browser-worker:inject', handleInject)
+
+  /*
+   * The ask inbox — see `browser-lift-requests.ts` for what it is and is not.
+   * Wired here because this file owns the stores the desk names things from,
+   * and because the answer handler above is the one place an ask may be acted
+   * on. Reading the inbox subscribes the reading window to its changes.
+   */
+  configureLiftRequests({
+    profiles: () => profileState(userData()).profiles.map((row) => ({ id: row.id, name: row.name })),
+    workers: () => workerList(userData()).map((worker) => ({ id: worker.profileId, name: worker.name })),
+    notify: pushLiftInbox,
+  })
+
+  ipcMain.handle('browser-worker:lift-requests', (event) => {
+    if (!fromAppWindow(event)) return []
+    inboxWatchers.add(event.sender)
+    return listLiftRequests()
+  })
+
+  ipcMain.handle('browser-worker:lift-answer', handleLiftAnswer)
 
   ipcMain.handle('browser-worker:forget-lift', (_event, liftId: unknown) => {
     forgetLift(liftId)
