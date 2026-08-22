@@ -401,8 +401,11 @@ jobs:
           NOTE
           )"
 
-          notes="${notes//\{\{MACNOTE\}\}/$macnote}"
-          notes="${notes//\{\{APP\}\}/$app}"
+          # Substituted with python rather than ${var//pat/rep}: bash 5.2 expands a
+          # bare `&` in the replacement half to the MATCHED text, so the mac note's
+          # "Privacy & Security" came out as "Privacy {{MACNOTE}} Security" in the
+          # published v0.10.0 notes. python replaces literally on every bash.
+          notes="$(MACNOTE="$macnote" APP="$app" NOTES="$notes" python3 -c 'import os,sys; sys.stdout.write(os.environ["NOTES"].replace("{{MACNOTE}}", os.environ["MACNOTE"]).replace("{{APP}}", os.environ["APP"]))')"
 
           gh release create "${GITHUB_REF_NAME}" \
             --title "${GITHUB_REF_NAME}" \
