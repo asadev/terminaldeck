@@ -138,6 +138,7 @@ describe('today’s usage', () => {
       activeSessionId: 'a',
       scanning: false,
       truncated: false,
+      watching: true,
       updatedAt: NOW,
     }
     const today = usageToday(summary, NOW)
@@ -155,6 +156,7 @@ describe('today’s usage', () => {
       activeSessionId: null,
       scanning: false,
       truncated: false,
+      watching: true,
       updatedAt: NOW,
     }
     expect(usageToday(summary, NOW).carriedOver).toBe(1)

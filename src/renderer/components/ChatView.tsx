@@ -303,6 +303,138 @@ export function mergeMessages(current: ChatMessage[], incoming: readonly ChatMes
   return next
 }
 
+/* ------------------------------------------------------------- the echo -- */
+
+/**
+ * A message that has been sent and is not in the transcript yet.
+ *
+ * Chat mode types into the session's pty and reads the conversation back out of
+ * the file the agent writes, so a message you send is *nowhere on screen* until
+ * the agent has written it down and a watcher has said so — measured at about a
+ * second on a healthy project and unbounded on an unhealthy one. For the whole
+ * of that window the pane looked exactly as it looks when nothing was sent,
+ * which is the experience being fixed: *"when we send our message mostly it is
+ * page still stays blank."*
+ *
+ * So the message goes on screen the instant it is sent, marked as not yet
+ * recorded, and is replaced by the transcript's own copy when that arrives. It
+ * is never presented as a fact about the file: {@link EchoBubble} says
+ * "Sending…" while it waits and says something different if the wait goes on,
+ * because an echo that quietly looks like a recorded message is a claim this app
+ * has no business making.
+ */
+export interface PendingEcho {
+  id: string
+  text: string
+  /** When it was sent, by this window's clock. */
+  at: number
+}
+
+/**
+ * How much clock disagreement to allow when matching an echo to the transcript
+ * line that recorded it.
+ *
+ * The echo is stamped by the renderer and the line is stamped by the agent, and
+ * on a paired machine those are two different computers. Five seconds is far
+ * wider than any drift between a session and the window driving it, and far
+ * narrower than the gap to the previous time the same words were sent.
+ */
+export const ECHO_SLACK_MS = 5000
+
+/** Whitespace-insensitive, because the CLI trims the line before it stores it. */
+function normalise(text: string): string {
+  return text.replace(/\s+/g, ' ').trim()
+}
+
+/**
+ * Drop the echoes the transcript has caught up with.
+ *
+ * Matched on the words rather than on a count, because the count is not
+ * reliable: a compaction replays prompts, and a session can be typed into from
+ * the terminal view while a chat message is in flight. `includes` as well as
+ * equality, because what reaches the transcript is not always character for
+ * character what was typed — an attachment arrives as an `@"…"` mention beside
+ * the words, and the CLI has its own preamble on the first line of a session.
+ *
+ * One transcript line settles at most one echo. Sending the same sentence twice
+ * in a row is a real thing to do, and letting one recorded line clear both
+ * would take the second one off the screen before its own line arrived.
+ */
+export function settleEchoes(
+  pending: readonly PendingEcho[],
+  messages: readonly ChatMessage[],
+): PendingEcho[] {
+  if (pending.length === 0) return pending as PendingEcho[]
+  const open = pending.map((echo) => ({ echo, text: normalise(echo.text), settled: false }))
+  for (const message of messages) {
+    if (message.role !== 'you') continue
+    const said = normalise(message.text)
+    if (said === '') continue
+    const match = open.find(
+      (candidate) =>
+        !candidate.settled &&
+        message.at >= candidate.echo.at - ECHO_SLACK_MS &&
+        (said === candidate.text || said.includes(candidate.text)),
+    )
+    if (match) match.settled = true
+  }
+  const kept = open.filter((candidate) => !candidate.settled).map((candidate) => candidate.echo)
+  return kept.length === pending.length ? (pending as PendingEcho[]) : kept
+}
+
+/* ---------------------------------------------------- what was on screen -- */
+
+/**
+ * The last conversation drawn for each pane, so coming back to a tab paints
+ * instead of blanking.
+ *
+ * `App.tsx` mounts this component only while its session is the one in front,
+ * so every trip to another tab unmounts the pane and every trip back re-reads
+ * the transcript from byte zero. That read is fast on a small file and is not
+ * fast on a large one — transcripts on this machine reach 154 MB — and until it
+ * lands the pane draws "Reading the transcript…" over a conversation the user
+ * was looking at two seconds ago. Measured switching away and back on 2026-08-22:
+ * the loading state, then the messages.
+ *
+ * Held outside the component because that is the only place it survives an
+ * unmount. It is a *painting*, not a source of truth: `chat:load` replaces it
+ * wholesale the moment it answers, so a conversation that moved on while the tab
+ * was away is corrected rather than trusted.
+ */
+const DRAWN = new Map<string, ChatMessage[]>()
+
+/**
+ * How many panes' conversations to keep.
+ *
+ * One per tab a person is moving between, and a few spare. Each entry is the
+ * messages already in memory for a mounted pane, so the cost of the cache is the
+ * cost of the tabs somebody has actually opened rather than of the folder.
+ */
+const MAX_DRAWN = 8
+
+/** Remember what a pane is showing, evicting the least recently drawn. */
+export function rememberDrawn(key: string, messages: readonly ChatMessage[]): void {
+  if (key === '') return
+  DRAWN.delete(key)
+  DRAWN.set(key, [...messages])
+  while (DRAWN.size > MAX_DRAWN) {
+    const oldest = DRAWN.keys().next().value
+    if (typeof oldest !== 'string') break
+    DRAWN.delete(oldest)
+  }
+}
+
+/** What that pane was showing last time, or nothing. */
+export function recallDrawn(key: string): ChatMessage[] {
+  const found = key === '' ? undefined : DRAWN.get(key)
+  return found ? [...found] : []
+}
+
+/** Only for tests, which must not inherit another test's cache. */
+export function forgetDrawn(): void {
+  DRAWN.clear()
+}
+
 const TIME = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' })
 const DAY = new Intl.DateTimeFormat(undefined, { weekday: 'long', day: 'numeric', month: 'long' })
 
@@ -536,6 +668,47 @@ export function ChatBubble({
 }
 
 /**
+ * How long an echo waits before it stops saying "Sending…".
+ *
+ * Long enough that an ordinary send never reaches it — the transcript line for
+ * a message lands inside a second and a half on a healthy project — and short
+ * enough that somebody staring at a pane which is not moving is told so rather
+ * than left to wonder. Nothing is retried and nothing is retracted: the message
+ * really was written to the session, and what has not happened is the agent
+ * writing it down.
+ */
+const ECHO_PATIENCE_MS = 12000
+
+/**
+ * A message that has been sent and is not in the transcript yet.
+ *
+ * Drawn as the user's own bubble so it lands where the recorded one will land,
+ * and drawn *differently enough to be honest*: dimmed, with the word "Sending…"
+ * where the time will be. There is no copy button, because there is nothing in
+ * a file to copy yet.
+ *
+ * After {@link ECHO_PATIENCE_MS} the label changes rather than the bubble
+ * disappearing. A message that vanished would be the worst of the three
+ * outcomes: the words were typed into a real session and are really there, and
+ * removing them from the screen would be the app disagreeing with the terminal
+ * one click away.
+ */
+export function EchoBubble({ echo, now }: { echo: PendingEcho; now: number }) {
+  const waited = now - echo.at
+  const slow = waited >= ECHO_PATIENCE_MS
+  return (
+    <article className="cv-message cv-you cv-echo" data-slow={slow ? 'true' : 'false'}>
+      <div className="cv-body cv-plain">{echo.text}</div>
+      <footer className="cv-foot">
+        <span className="cv-echo-note" role="status">
+          {slow ? 'Sent — the agent has not written it down yet' : 'Sending…'}
+        </span>
+      </footer>
+    </article>
+  )
+}
+
+/**
  * The conversation, and nothing else.
  *
  * A component of its own so the rule below is a thing a test can hold: **the
@@ -588,7 +761,24 @@ export type ChatEmptyState =
   | 'unwired'
   | 'shell'
 
-export function ChatEmpty({ state }: { state: ChatEmptyState }) {
+/**
+ * Where the person reading this is supposed to type.
+ *
+ * Three of the states below ended in *"Send a first message in the terminal and
+ * it will appear here"*, and in this pane the box to type in is eighty pixels
+ * below the sentence. Pointing somebody at another view to do the thing the
+ * view they are in does is the kind of small wrongness that reads as the feature
+ * not working. Two callers genuinely have no composer — a pane opened on a
+ * transcript rather than on a session — and they keep the old sentence, because
+ * for them it is true.
+ */
+function typeHere(canType: boolean): string {
+  return canType
+    ? 'Type below and it will appear here.'
+    : 'Send a first message in the terminal and it will appear here.'
+}
+
+export function ChatEmpty({ state, canType = false }: { state: ChatEmptyState; canType?: boolean }) {
   const copy: Record<typeof state, { title: string; detail: string }> = {
     loading: { title: 'Reading the transcript…', detail: '' },
     'no-project': {
@@ -606,16 +796,14 @@ export function ChatEmpty({ state }: { state: ChatEmptyState }) {
      */
     'no-transcript': {
       title: 'No transcript for this project yet',
-      detail:
-        'An agent writes one as it works. Send a first message in the terminal and it will appear here.',
+      detail: `An agent writes one as it works. ${typeHere(canType)}`,
     },
     // Deliberately not "no transcript for this project": there may well be
     // several, and one of them may be being written to right now by a `claude`
     // this app did not start. None of them are this session's.
     'no-session-transcript': {
       title: 'Nothing from this session yet',
-      detail:
-        'An agent writes a transcript once a session makes its first request. Send a first message in the terminal and it will appear here.',
+      detail: `An agent writes a transcript once a session makes its first request. ${typeHere(canType)}`,
     },
     /*
      * The one state that is an admission rather than a wait.
@@ -638,7 +826,9 @@ export function ChatEmpty({ state }: { state: ChatEmptyState }) {
     },
     silent: {
       title: 'Nothing said yet',
-      detail: 'This session has a transcript but no prompts or replies in it. Type something in the terminal.',
+      detail: `This session has a transcript but no prompts or replies in it. ${
+        canType ? 'Type below to start it.' : 'Type something in the terminal.'
+      }`,
     },
     unwired: {
       title: 'Chat is not wired into this build',
@@ -900,8 +1090,26 @@ export function ChatView({
     revision: transcriptRevision,
   })
   const ownPath = lookup.status === 'ready' ? lookup.choice.path : null
-  const [messages, setMessages] = useState<ChatMessage[]>([])
-  const [found, setFound] = useState<boolean | null>(null)
+  /**
+   * What this *pane* is, as opposed to which file it turned out to be reading.
+   *
+   * The conversation's path is not known at mount — the attribution is a
+   * directory listing away — so a cache keyed on it cannot paint anything until
+   * that answer lands, which is exactly the window the cache exists to cover.
+   * This is known from the props alone, on the first render, and it identifies
+   * the same thing a person means by "that tab".
+   */
+  const paneKey = conversationKey ?? sessionId ?? transcriptPath ?? cwd ?? ''
+  /**
+   * Seeded with whatever this pane last drew. See `DRAWN`: the read below
+   * replaces it wholesale, and this is what is on screen while that happens
+   * instead of a loading state over a conversation somebody was looking at two
+   * seconds ago.
+   */
+  const [messages, setMessages] = useState<ChatMessage[]>(() => recallDrawn(paneKey))
+  const [found, setFound] = useState<boolean | null>(() =>
+    recallDrawn(paneKey).length > 0 ? true : null,
+  )
   const [behind, setBehind] = useState(false)
   /**
    * The two things only a reading from another computer can report: that it
@@ -971,8 +1179,17 @@ export function ChatView({
   useEffect(() => {
     if (!resolved || key === '') return
     let live = true
-    setMessages([])
-    setFound(null)
+    /*
+     * Whatever is already on screen stays on screen until the read answers.
+     *
+     * Not a shortcut around the read — `chat:load` runs immediately below and
+     * replaces this wholesale. It is what the pane draws for the few hundred
+     * milliseconds the read takes, instead of "Reading the transcript…" over a
+     * conversation somebody was looking at two seconds ago. Empty for a pane
+     * that has never been drawn, which is the behaviour this always had.
+     */
+    setMessages((current) => (current.length > 0 ? current : recallDrawn(paneKey)))
+    setFound((current) => (current === true ? current : null))
     setPartial(false)
     setUnattributable(null)
     stickRef.current = true
@@ -992,7 +1209,7 @@ export function ChatView({
       // Let the main process drop the reader and its dedup set.
       if (pathRef.current) resolved.closeChat(pathRef.current)
     }
-  }, [resolved, key, request, apply])
+  }, [resolved, key, paneKey, request, apply])
 
   /**
    * Read whatever the agent has appended since the last read.
@@ -1076,15 +1293,131 @@ export function ChatView({
   }, [subscribe, tail])
 
   /**
-   * The fallback, for a build with no cost channel or a pane opened on a
-   * transcript outside any project — there is no watcher to ride, and the only
-   * honest alternative to a stale pane is to look. On the shared tick, so it is
-   * not a wake-up of its own, and off entirely while the window is hidden.
+   * The fallback, for a build with no cost channel, a pane opened on a
+   * transcript outside any project, or — the case this stopped covering and now
+   * covers again — a watcher whose pushes are not arriving. There is nothing to
+   * ride, and the only honest alternative to a stale pane is to look. On the
+   * shared tick, so it is not a wake-up of its own, and off entirely while the
+   * window is hidden.
+   *
+   * `watched` is now evidence rather than intent: `useTranscriptChanges` answers
+   * true once the main process has said a live watch is established over a
+   * directory that exists, or once a push has actually landed. It used to answer
+   * true the moment a subscription existed, which switched this off over a feed
+   * that was delivering nothing — measured on 2026-08-22 as a chat pane three
+   * messages behind with zero `chat:tail` calls behind it.
    */
   useEvery(!watched && resolved && key !== '' && refreshMs > 0 ? refreshMs : null, tail)
 
+  /*
+   * Keep the painting, so leaving this tab and coming back is not a blank pane.
+   * See `DRAWN`.
+   */
+  useEffect(() => {
+    if (messages.length === 0) return
+    rememberDrawn(paneKey, messages)
+  }, [paneKey, messages])
+
+  /*
+   * And start again from the right painting when the props point this pane at a
+   * different session without unmounting it — which is what a split does when
+   * one of its sides is handed another tab.
+   */
+  const paneRef = useRef(paneKey)
+  useEffect(() => {
+    if (paneRef.current === paneKey) return
+    paneRef.current = paneKey
+    const drawn = recallDrawn(paneKey)
+    setMessages(drawn)
+    setFound(drawn.length > 0 ? true : null)
+  }, [paneKey])
+
   /** Absent in a window with no clipboard, which draws no copy buttons at all. */
   const copy = useMemo(() => clipboardWriter(), [])
+
+  // A shell short-circuits every transcript state below it: there is no file to
+  // look for, so "Reading…" followed by "nothing yet" would be a search the app
+  // knows in advance will fail.
+  //
+  // "A shell" is not the same as "was started as a shell", and that stopped
+  // being a distinction this file could ignore the moment Run Claude existed
+  // (NEXT-UPDATE item 1). A shell session with Claude running in it has a real
+  // conversation being written, and telling its reader that "a shell just runs
+  // what you type, so there is nothing here to read" would be the app arguing
+  // with the transcript it is about to find.
+  const shell = effectiveProvider === 'shell'
+
+
+  /* --------------------------------------------------------------- echo -- */
+
+  /**
+   * Messages sent from this composer that the transcript has not caught up with.
+   *
+   * See {@link PendingEcho}. They are this component's own state and never
+   * touch `messages`, so nothing here can put a word into the conversation that
+   * the agent did not write: the column is the file, and these are drawn after
+   * it and labelled.
+   */
+  const [pending, setPending] = useState<readonly PendingEcho[]>([])
+  const echoSeq = useRef(0)
+  /**
+   * The clock the "Sending…" label reads, ticked only while something is
+   * waiting. A pane with nothing in flight does no work at all.
+   */
+  const [now, setNow] = useState(0)
+  useEvery(pending.length > 0 ? 1000 : null, useCallback(() => setNow(Date.now()), []))
+
+  /**
+   * What Return actually does, wrapped so the message is on screen before the
+   * round trip.
+   *
+   * Only wrapped where an echo would be true. A shell has no conversation to
+   * echo into — its pane says so — and a pane whose bridge is missing cannot
+   * ever settle one, so both get the plain callback and no bubble.
+   */
+  const echoing = onSend !== undefined && !shell && resolved !== null
+  const handleSend = useCallback(
+    (text: string) => {
+      onSend?.(text)
+      if (!echoing) return
+      const at = Date.now()
+      echoSeq.current += 1
+      setNow(at)
+      setPending((current) => [...current, { id: `echo:${echoSeq.current}`, text, at }])
+      // Follow it down: somebody who has just pressed Return is at the bottom
+      // of the conversation by definition, whatever the scroll position was
+      // while they were typing.
+      stickRef.current = true
+      setBehind(false)
+    },
+    [echoing, onSend],
+  )
+
+  /*
+   * Retire an echo the moment its own line arrives. Watching `messages` rather
+   * than doing it inside `apply`, because the same line can arrive through the
+   * load, the tail or a reset, and this way there is one rule and one place.
+   */
+  useEffect(() => {
+    setPending((current) => settleEchoes(current, messages))
+  }, [messages])
+
+  /*
+   * A pane that has been pointed at a different **session** is not waiting for
+   * anything: those messages were sent into another one.
+   *
+   * `paneKey` and deliberately not `key`. `key` is the transcript path, and it
+   * changes from empty to a path the moment the attribution resolves — which,
+   * for the first message of a session, is a second or two *after* it was sent
+   * and while its echo is the only thing on screen. Keyed on that, the first
+   * message of every new session had its echo dropped at the exact moment the
+   * conversation was found and the pane fell back through "Reading the
+   * transcript…". Measured at t=2343ms driving the packed build on 2026-08-22,
+   * which is how this comment exists.
+   */
+  useEffect(() => {
+    setPending([])
+  }, [paneKey])
 
   const jump = useCallback(() => {
     const host = scrollRef.current
@@ -1099,10 +1432,14 @@ export function ChatView({
   // the single most annoying thing a live transcript can do.
   useEffect(() => {
     const host = scrollRef.current
-    if (!host || messages.length === 0) return
+    if (!host || messages.length + pending.length === 0) return
     if (stickRef.current) host.scrollTop = host.scrollHeight
     else setBehind(true)
-  }, [messages])
+    // `pending` as well as `messages`: an echo is a new thing at the bottom of
+    // the column and has to be scrolled to like any other, or pressing Return
+    // on a long conversation would put the message you just sent below the
+    // fold.
+  }, [messages, pending])
 
   const onScroll = useCallback(() => {
     const host = scrollRef.current
@@ -1112,21 +1449,15 @@ export function ChatView({
     if (stickRef.current) setBehind(false)
   }, [])
 
-  // A shell short-circuits every transcript state below it: there is no file to
-  // look for, so "Reading…" followed by "nothing yet" would be a search the app
-  // knows in advance will fail.
-  //
-  // "A shell" is not the same as "was started as a shell", and that stopped
-  // being a distinction this file could ignore the moment Run Claude existed
-  // (NEXT-UPDATE item 1). A shell session with Claude running in it has a real
-  // conversation being written, and telling its reader that "a shell just runs
-  // what you type, so there is nothing here to read" would be the app arguing
-  // with the transcript it is about to find.
-  const shell = effectiveProvider === 'shell'
-
   const state: ChatEmptyState | null =
     shell ? 'shell'
     : !resolved ? 'unwired'
+    // There is a conversation on screen. Everything below this line is a
+    // sentence about *not* having one, and drawing any of them over messages
+    // somebody can see would be the pane contradicting itself. It is also what
+    // makes the painting worth keeping: without this, a remount would draw a
+    // loading state over the cache on its very first render.
+    : messages.length > 0 ? null
     : scoped && !target
       ? lookup.status === 'loading'
         ? 'loading'
@@ -1183,8 +1514,17 @@ export function ChatView({
           floating over the last message, just above the box. */}
       <div className="cv-stage">
         <div className="cv-scroll" ref={scrollRef} onScroll={onScroll}>
-          {state ? (
-            <ChatEmpty state={state} />
+          {/*
+            An explanation for an empty pane, and only while the pane is empty.
+
+            A message sent a moment ago is on screen as an echo, so the sentence
+            underneath it ("Nothing from this session yet", "Reading the
+            transcript…") would be the pane contradicting the words directly
+            above it. `pending` is the whole of the difference: with one in
+            flight there is something to look at, and the column below draws it.
+          */}
+          {state && pending.length === 0 ? (
+            <ChatEmpty state={state} canType={onSend !== undefined && !shell} />
           ) : (
             /* Resolved once, here, rather than per message: reaching for
                `navigator.clipboard` in every bubble would ask the same question
@@ -1204,6 +1544,14 @@ export function ChatView({
                 </p>
               ) : null}
               <ChatColumn messages={messages} {...(copy ? { onCopy: copy } : {})} />
+              {/* After the file, never inside it. See `PendingEcho`. */}
+              {pending.length > 0 ? (
+                <div className="cv-column cv-echoes">
+                  {pending.map((echo) => (
+                    <EchoBubble key={echo.id} echo={echo} now={now} />
+                  ))}
+                </div>
+              ) : null}
             </>
           )}
         </div>
@@ -1247,7 +1595,10 @@ export function ChatView({
              with the rest of "what has this session done".
       */}
       <ChatComposer
-        onSend={onSend}
+        // Wrapped, so what you typed is on screen before the agent has written
+        // it down. `handleSend` calls straight through to `onSend`; everything
+        // it adds is the bubble above. See `PendingEcho`.
+        onSend={onSend === undefined ? undefined : handleSend}
         cwd={cwd}
         // What pressing Return actually does. For an agent it is a message; for
         // a shell it is a command line, typed into the pty exactly as if it had

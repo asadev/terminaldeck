@@ -1,5 +1,6 @@
 import { useEffect, useMemo } from 'react'
 import { ChatView } from '../../components/ChatView'
+import { sendToTerminal } from '../../chat/attach/mentions'
 import { serverChatBridge, useServerChatPush } from './server-chat'
 import type { ServersBridge } from './types'
 
@@ -154,7 +155,12 @@ export function ServerChatPane({
          * in the scrollback when you switch back.
          */
         onSend={(text) => {
-          void bridge.writeToServerShell(shellId, `${text}\r`)
+          // Two writes with a gap, never one with a `\r` on the end: over 64
+          // bytes the CLI reads the chunk as a paste and the carriage return
+          // becomes a newline, so the message lands in the agent's input box
+          // unsent. `mentions.ts` holds the measurement and the sequence, and
+          // the desktop composer had exactly the same defect.
+          void sendToTerminal(text, (data) => bridge.writeToServerShell(shellId, data))
         }}
       />
       {/*

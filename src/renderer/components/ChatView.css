@@ -464,3 +464,36 @@
   line-height: var(--lh-body);
   text-align: center;
 }
+
+/*
+  A message that has been sent and is not in the transcript yet.
+
+  Same bubble, same side, same measure — because it is going to *become* that
+  bubble and a jump in position when it does would be worse than the wait it
+  replaces. What changes is the weight and the label under it: dimmed while it
+  waits, and never carrying a time, because it has no recorded time. See
+  `PendingEcho` in `ChatView.tsx` for why an echo exists at all and why it is
+  drawn outside the transcript's own column.
+*/
+.cv-echoes {
+  padding: 0;
+}
+
+.cv-echo .cv-body {
+  opacity: 0.62;
+}
+
+.cv-echo-note {
+  font-size: var(--t-footnote);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+  The wait has gone on. The words stay exactly where they are — they really were
+  written into the session and the terminal one click away is showing them — and
+  only the note changes, so nothing on screen is retracted.
+*/
+.cv-echo[data-slow='true'] .cv-echo-note {
+  color: var(--color-warning);
+}

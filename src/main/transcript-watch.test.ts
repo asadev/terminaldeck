@@ -856,7 +856,114 @@ describe('the live watch is wired', () => {
     expect(code, 'start() no longer waits for the watchers to be ready').toMatch(
       /each\.once\('ready', done\)/,
     )
+    /*
+     * And the directory *appearing* is wired, which is the only event a watch
+     * aimed at a path that does not exist ever delivers.
+     *
+     * Measured against chokidar 5 on this Mac on 2026-08-22: watch a missing
+     * directory, then create it and write a file into it in the same instant.
+     * One event arrives — `addDir` for the directory — and nothing else, ever:
+     * not the `add` for the file inside it, not a `change` for any append after.
+     * A project whose first agent run creates that directory therefore had a
+     * watcher that was blind for the rest of its life, and the chat pane that
+     * rides this push showed a conversation three messages behind with the
+     * empty state still on it.
+     */
+    expect(code, 'a transcript directory that appears is no longer picked up').toMatch(
+      /watcher\.on\('addDir', \(path: string\) => this\.adoptDirectory\(path\)\)/,
+    )
+    // And the second, event-free way in: the call the app already makes when a
+    // session appears re-checks whether the directory has turned up.
+    expect(code, 'refresh() no longer adopts a directory that has appeared').toMatch(
+      /if \(!this\.adopted && existsSync\(this\.dir\)\) this\.adoptDirectory\(this\.dir\)/,
+    )
   })
+})
+
+describe('a project whose transcript directory does not exist yet', () => {
+  /**
+   * The defect behind *"when we send our message mostly it is page still stays
+   * blank"*, on the half of it that is not the send itself.
+   *
+   * A project this app opens has usually never been worked in — a fresh
+   * worktree, a clone, a scratch folder — so `~/.claude/projects/<encoded cwd>`
+   * is created minutes later by the first agent that runs there, long after the
+   * watcher was started. Driven in the packed app on 2026-08-22: three messages
+   * sent and answered in a real session, three replies on disk, and the chat
+   * pane still showing the empty state ninety seconds later, with **zero**
+   * `cost:update` pushes and zero `chat:tail` calls behind it.
+   */
+  it('says it is not watching yet, rather than promising a feed it has not got', async () => {
+    const config = scratch('terminaldeck-late-')
+    const cwd = '/fake/late-project'
+    const watcher = new TranscriptWatcher({ cwd, configDir: config, debounceMs: 50, onUpdate: () => {} })
+    await watcher.start()
+    try {
+      // Nothing to watch, and the summary says so — which is what lets the chat
+      // pane keep its own re-read instead of switching it off over a dead feed.
+      expect(watcher.summary().watching).toBe(false)
+      expect(watcher.summary().requests).toBe(0)
+    } finally {
+      watcher.stop()
+    }
+  }, WATCH_MS)
+
+  it('comes alive when the directory turns up, and counts what is in it', async () => {
+    const config = scratch('terminaldeck-late-')
+    const cwd = '/fake/late-project'
+    const dir = join(config, 'projects', encodeProjectPath(cwd))
+    const updates: ProjectSummary[] = []
+    const watcher = new TranscriptWatcher({
+      cwd,
+      configDir: config,
+      debounceMs: 50,
+      onUpdate: (summary) => updates.push(summary),
+    })
+    await watcher.start()
+    try {
+      expect(watcher.summary().watching).toBe(false)
+
+      // The agent's first run: the directory and its first transcript, in one
+      // burst, exactly as Claude Code creates them.
+      mkdirSync(dir, { recursive: true })
+      appendFileSync(join(dir, 'sess-late.jsonl'), line('m1', 1_000_000))
+
+      /*
+       * Driven through `refresh()` rather than waiting on the notification, for
+       * the reason {@link until} gives at length: an `addDir` under full-suite
+       * load can go missing, and a test that waits for one is a test that goes
+       * red about something that is not wrong. `refresh()` is the app's own
+       * call — `index.ts` makes it from the hook that says a session has
+       * appeared — and the `addDir` wiring itself is pinned at source above.
+       */
+      await watcher.refresh()
+      const alive = await until('the late directory to be adopted', watcher, (s) => s.requests >= 1)
+      expect(alive.watching).toBe(true)
+      expect(alive.requests).toBe(1)
+
+      // And it is a *watch* now, not one read: the next append is picked up the
+      // same way any other project's is.
+      appendFileSync(join(dir, 'sess-late.jsonl'), line('m2', 1_000_000))
+      await watcher.refresh()
+      const more = await until('an append after adoption', watcher, (s) => s.requests >= 2)
+      expect(more.requests).toBe(2)
+      expect(updates.length).toBeGreaterThan(0)
+    } finally {
+      watcher.stop()
+    }
+  }, WATCH_SLOW_MS)
+
+  it('stops promising a feed once it has been stopped', async () => {
+    const config = scratch('terminaldeck-late-')
+    const cwd = '/fake/late-project'
+    mkdirSync(join(config, 'projects', encodeProjectPath(cwd)), { recursive: true })
+    const watcher = new TranscriptWatcher({ cwd, configDir: config, debounceMs: 50, onUpdate: () => {} })
+    await watcher.start()
+    expect(watcher.summary().watching).toBe(true)
+    watcher.stop()
+    // A stopped watcher promises nothing, whatever it was watching a moment ago.
+    expect(watcher.summary().watching).toBe(false)
+  }, WATCH_MS)
 })
 
 describe('what the cap counts as unread', () => {

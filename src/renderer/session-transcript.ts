@@ -91,9 +91,42 @@ export interface SessionScope {
   startedAt: number
   /** Started with "continue the last conversation". */
   resumed?: boolean
+  /**
+   * The conversation id this app *gave* the agent when it started it —
+   * `SessionMeta.agentSessionId`.
+   *
+   * Everything else in this file is inference from clocks, and this is not: the
+   * app spawns `claude --session-id <uuid>`, the CLI files the conversation at
+   * `<store>/<encoded cwd>/<that uuid>.jsonl`, and both halves of that are facts
+   * this process put on a command line itself. `context-window.ts` has read the
+   * transcript by name this way since 2026-08-19; the chat pane went on guessing
+   * from birth times beside it, and paid for it twice.
+   *
+   * Once with the wait. A brand new session has no transcript until its first
+   * prompt, and the inference below can only notice one by re-listing the
+   * directory, so the pane sat on "Nothing from this session yet" for the whole
+   * of {@link WAIT_MS} after a message had gone out. Measured in the packed app
+   * on 2026-08-22: 3.78 seconds of empty page with the reply already written.
+   *
+   * And once with the blank apology. Two tabs open in one folder before either
+   * has spoken cannot be told apart by start times — that is the whole of the
+   * `ambiguous` verdict — and a declared id makes the question moot, because
+   * the file is named after the tab.
+   *
+   * Honestly absent where the app did not name one: a resumed session, another
+   * agent, a session this app did not start. Those keep the inference, and the
+   * verdict still says which it was.
+   */
+  agentSessionId?: string
 }
 
-export type Attribution = 'session' | 'resumed' | 'project'
+/**
+ * How a transcript came to be this session's.
+ *
+ * `declared` is the only one of the four that is not a deduction: the app told
+ * the agent which conversation to write and this is that file, matched by name.
+ */
+export type Attribution = 'declared' | 'session' | 'resumed' | 'project'
 
 export interface TranscriptChoice {
   path: string
@@ -170,6 +203,27 @@ export function attributeTranscript(
   scope: SessionScope | null,
   others: readonly number[] = [],
 ): TranscriptVerdict {
+  /*
+   * A conversation this app named, before any of the clock work below.
+   *
+   * First, and unconditionally, because every rule under it is a way of ruling
+   * out files when the answer is not known — and here it is known. A transcript
+   * is filed under the id it was started with, so the match is a name against a
+   * name and nothing else can beat it: not a sibling tab, not a `claude` running
+   * in the same folder outside the app, not a clock that disagrees.
+   *
+   * `none` when no file carries it yet, and never `ambiguous`. A session whose
+   * conversation is named cannot be confused with another one; it has simply not
+   * written anything, which is a state that ends by itself.
+   */
+  const declared = scope?.agentSessionId
+  if (declared !== undefined && declared !== '') {
+    const own = files.find((file) => file.sessionId === declared)
+    return own === undefined
+      ? { kind: 'none' }
+      : { kind: 'choice', choice: { path: own.path, sessionId: own.sessionId, attribution: 'declared' } }
+  }
+
   if (files.length === 0) return { kind: 'none' }
 
   const byWrite = [...files].sort((a, b) => b.modifiedAt - a.modifiedAt)
@@ -322,6 +376,12 @@ export function useSessionTranscript(
   const [lookup, setLookup] = useState<TranscriptLookup>({ status: 'loading' })
   const startedAt = scope?.startedAt ?? null
   const resumed = scope?.resumed === true
+  /**
+   * Read out here rather than off `scope` inside the effect, because `scope` is
+   * an object literal at every call site and would tear the effect down on every
+   * render of the caller. The three fields are what the question is made of.
+   */
+  const declaredId = scope?.agentSessionId ?? ''
   const revision = options.revision ?? 0
 
   /*
@@ -336,7 +396,7 @@ export function useSessionTranscript(
   const othersKey = (options.others ?? []).join(',')
 
   /** Which session, in which folder, this lookup is currently answering about. */
-  const question = `${cwd ?? ''}|${startedAt ?? ''}|${resumed}`
+  const question = `${cwd ?? ''}|${startedAt ?? ''}|${resumed}|${declaredId}`
   const askedRef = useRef('')
 
   useEffect(() => {
@@ -361,7 +421,11 @@ export function useSessionTranscript(
       let verdict: TranscriptVerdict = { kind: 'none' }
       try {
         const files = asTranscriptFiles(await deck.listSessionInsights(cwd))
-        verdict = attributeTranscript(files, startedAt === null ? null : { startedAt, resumed }, others)
+        verdict = attributeTranscript(
+          files,
+          startedAt === null ? null : { startedAt, resumed, ...(declaredId === '' ? {} : { agentSessionId: declaredId }) },
+          others,
+        )
       } catch {
         // A folder Claude Code has never opened is not an error worth showing.
       }
@@ -399,7 +463,7 @@ export function useSessionTranscript(
       alive = false
       if (timer !== null) clearTimeout(timer)
     }
-  }, [cwd, startedAt, resumed, question, othersKey, revision])
+  }, [cwd, startedAt, resumed, declaredId, question, othersKey, revision])
 
   return lookup
 }

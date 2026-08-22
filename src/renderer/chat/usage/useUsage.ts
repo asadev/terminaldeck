@@ -87,28 +87,67 @@ function release(bridge: UsageBridge, cwd: string): void {
  * window, not per caller, so a second tally over the same channel would have
  * the first unmount switch off the watcher the other subscriber is still using.
  *
- * Returns whether it is actually watching. False means the bridge has no cost
- * channel — an unwired build, or a harness stub — and the caller has to fall
- * back rather than sit silently on stale content.
+ * Returns whether this folder's push has **actually delivered something**, and
+ * that is a deliberate change from what it used to answer.
+ *
+ * It used to return `bridge !== null && cwd !== null` — "a subscription was set
+ * up" — and every caller reads it as "you can switch your fallback off". Those
+ * are not the same sentence, and the gap between them was measured costing the
+ * whole feature: a watcher established on a transcript directory that does not
+ * exist yet reports the directory appearing and then never another thing (see
+ * `TranscriptWatcher.adoptDirectory`), so the subscription was real, the answer
+ * was `true`, the fallback was switched off, and the pane sat on a conversation
+ * that had moved three messages on. A dead feed that says it is live is worse
+ * than no feed, because nothing downstream can tell.
+ *
+ * So it answers from evidence, and there are two kinds of it. The main process
+ * says whether a watch is established over a transcript directory that exists
+ * ({@link ProjectSummary.watching}); and a push that has actually arrived for
+ * this folder settles the question outright. Either is enough. Neither means
+ * the pane is stale in the meantime — the caller re-reads on its own timer
+ * until one of them lands, which on a healthy project is the first answer
+ * `cost:watch` gives.
+ *
+ * False also still covers the case it always covered: a bridge with no cost
+ * channel at all, an unwired build or a harness stub.
  */
 export function useTranscriptChanges(cwd: string | null, onChange: () => void): boolean {
   const [bridge] = useState<UsageBridge | null>(() => resolveUsageBridge())
   const latest = useRef(onChange)
   latest.current = onChange
+  /**
+   * Whether this folder's push can be relied on. Reset when the folder changes,
+   * because it is an answer about a directory and not about the bridge.
+   */
+  const [live, setLive] = useState(false)
 
   useEffect(() => {
-    if (!bridge || !cwd) return
+    if (!bridge || !cwd) {
+      setLive(false)
+      return
+    }
     let mounted = true
+    setLive(false)
 
     const off = bridge.onCostUpdate((payload) => {
       // The push carries every watched project, so a second panel on another
       // folder must not make this one re-read.
       const next = readProjectSummary(payload)
-      if (mounted && next && sameProject(next.cwd, cwd)) latest.current()
+      if (!mounted || !next || !sameProject(next.cwd, cwd)) return
+      // A push that arrived is the strongest possible evidence that pushes
+      // arrive, whatever the flag on it says.
+      setLive(true)
+      latest.current()
     })
 
     retain(cwd)
-    void bridge.watchProjectCost(cwd).catch(() => {})
+    void bridge
+      .watchProjectCost(cwd)
+      .then((summary) => {
+        const next = readProjectSummary(summary)
+        if (mounted && next?.watching === true) setLive(true)
+      })
+      .catch(() => {})
 
     return () => {
       mounted = false
@@ -117,7 +156,7 @@ export function useTranscriptChanges(cwd: string | null, onChange: () => void): 
     }
   }, [bridge, cwd])
 
-  return bridge !== null && cwd !== null
+  return live
 }
 
 export interface UsageState {

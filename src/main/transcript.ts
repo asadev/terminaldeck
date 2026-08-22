@@ -1199,6 +1199,24 @@ export interface ProjectSummary {
    * the tile borrows that phrasing, so one idea is said one way in this app.
    */
   truncated: boolean
+  /**
+   * Whether a live watch is actually established over this folder's transcript
+   * directory — so a reader may switch its own fallback off and rely on the
+   * push.
+   *
+   * It exists because "a subscription was set up" and "changes will arrive" are
+   * two different sentences, and the renderer was reading the first as the
+   * second. A watcher started before the transcript directory existed reports
+   * the directory appearing and nothing afterwards — see
+   * {@link TranscriptWatcher.adoptDirectory} — and until that is adopted this is
+   * false, which is a chat pane keeping its own two-second re-read rather than
+   * sitting frozen on a conversation three messages behind.
+   *
+   * False from `cost:project` too, which has no watcher at all: a one-shot total
+   * makes no promise about the future, and saying otherwise is exactly the kind
+   * of claim this field was added to stop.
+   */
+  watching: boolean
   updatedAt: number
 }
 
@@ -1371,6 +1389,24 @@ export class TranscriptWatcher {
   private scanning = true
   private stopped = false
   /**
+   * Whether a watch is established over a transcript directory that exists.
+   *
+   * Reported as {@link ProjectSummary.watching}, and it is a measurement rather
+   * than an intention: `start()` sets it from `existsSync` at the moment the
+   * watch is attached, and {@link adoptDirectory} sets it when a directory that
+   * was missing turns up. Everything downstream that switches a fallback off
+   * reads this and not the mere existence of a subscription.
+   */
+  private watchingDir = false
+  /**
+   * Whether the transcript directory has already been picked up after appearing.
+   *
+   * chokidar can report the same `addDir` more than once when a directory is
+   * created and written to in one burst, and each one would otherwise leave
+   * another live watch behind on the same path for the life of the project.
+   */
+  private adopted = false
+  /**
    * How many of this folder's transcripts were never opened.
    *
    * Set by the opening scan and only ever added to: a file excluded by the age
@@ -1497,6 +1533,40 @@ export class TranscriptWatcher {
   }
 
   /**
+   * The watched transcript directory has just been created: attach a watch that
+   * can actually see inside it.
+   *
+   * Only ever reached when this watcher was started before the directory
+   * existed. chokidar aims a missing path at its parent and reports the path
+   * appearing; what it does not do is descend into it, so the original watch is
+   * finished as a source of file events the moment this fires. A second watch
+   * over the same path — which now exists — behaves exactly as the ordinary case
+   * does, and is the same call with the same options.
+   *
+   * `rescanned()` afterwards rather than trusting the new watch to report what
+   * is already inside: the directory and the first transcript in it are created
+   * within milliseconds of each other, and `ignoreInitial` means a watch
+   * attached after that write would never mention the file. A `readdir` cannot
+   * miss what is already on disk — the same argument {@link rescanned} makes for
+   * the confined stores, for the same shape of race.
+   */
+  private adoptDirectory(path: string): void {
+    if (this.stopped || this.adopted) return
+    if (resolve(path) !== resolve(this.dir)) return
+    this.adopted = true
+    this.watchingDir = true
+    const watcher = watch(this.dir, { ignoreInitial: true, depth: 0, persistent: true })
+    this.watchers.push(watcher)
+    watcher.on('add', (file: string) => this.enqueue(file))
+    watcher.on('change', (file: string) => this.enqueue(file))
+    watcher.on('unlink', (file: string) => this.forget(file))
+    watcher.on('error', (err: unknown) =>
+      console.error('[transcript] watch failed:', this.dir, err),
+    )
+    void this.rescanned()
+  }
+
+  /**
    * Look again: a store may have appeared since this watcher started.
    *
    * Called when the app itself starts a confined session, which is the honest
@@ -1516,6 +1586,18 @@ export class TranscriptWatcher {
    */
   async refresh(): Promise<void> {
     if (this.stopped) return
+    /*
+     * The profile's own transcript directory, if it has appeared since this
+     * watcher started.
+     *
+     * The `addDir` handler in `start()` is the primary way that is noticed and
+     * this is the one that does not depend on a notification arriving. It costs
+     * one `existsSync` on a call the app already makes when a session appears,
+     * and it means a folder whose first agent run creates the directory has two
+     * independent ways to come alive rather than one — which matters, because
+     * the failure it covers is silent and lasts for the life of the project.
+     */
+    if (!this.adopted && existsSync(this.dir)) this.adoptDirectory(this.dir)
     const homes = this.homesRoot
     if (homes !== null) {
       const primary = this.options.configDir ?? claudeConfigDir()
@@ -1577,6 +1659,12 @@ export class TranscriptWatcher {
 
     // Watch before draining, so appends that land mid-scan are not missed.
     // `ignoreInitial` because the scan above already has the current contents.
+    //
+    // Measured here, not assumed: a watch over a directory that exists delivers
+    // every append, and one aimed at a path that does not exist delivers exactly
+    // one `addDir` and then nothing. Only the first of those is a feed anything
+    // may rely on, so only the first sets `watchingDir`.
+    this.watchingDir = existsSync(this.dir)
     const watcher = watch(this.dir, {
       ignoreInitial: true,
       depth: 0,
@@ -1586,6 +1674,32 @@ export class TranscriptWatcher {
     watcher.on('add', (path: string) => this.enqueue(path))
     watcher.on('change', (path: string) => this.enqueue(path))
     watcher.on('unlink', (path: string) => this.forget(path))
+    /*
+     * The transcript directory itself appearing, which is the moment this
+     * watcher stops being blind.
+     *
+     * A project this app opens has usually never been worked in — a fresh
+     * worktree, a clone, a scratch folder — so `this.dir` does not exist when
+     * the watch above is attached, and it is created a few minutes later by the
+     * first agent that runs there. Measured against chokidar 5 on this Mac: a
+     * watch aimed at a path that does not exist reports **one** event when it
+     * appears, `addDir` for the directory, and then nothing ever again — not the
+     * `add` for the transcript created inside it in the same instant, and not a
+     * single `change` for the appends that follow.
+     *
+     * The cost of that is the whole of *"when we send our message mostly it is
+     * page still stays blank"*: this push is the only thing that tells a chat
+     * pane its conversation moved, so a session in a folder like that had a
+     * conversation being written four hundred milliseconds away and a pane that
+     * never heard about any of it. Driven, not reasoned: three messages sent
+     * and answered in a real session, three replies on disk, and the pane still
+     * showing the empty state ninety seconds later with zero `chat:tail` calls
+     * behind it.
+     *
+     * So the directory turning up is treated as what it is — the point at which
+     * a real watch can be established — and {@link adoptDirectory} attaches one.
+     */
+    watcher.on('addDir', (path: string) => this.adoptDirectory(path))
     watcher.on('error', (err: unknown) => console.error('[transcript] watch failed:', this.dir, err),
     )
 
@@ -1750,6 +1864,9 @@ export class TranscriptWatcher {
       // A count is what is known; "some of this folder was not read" is what the
       // tile needs to say. See the field's own note.
       truncated: this.unread > 0,
+      // A stopped watcher promises nothing, whatever it was watching a moment
+      // ago. See the field's own note.
+      watching: this.watchingDir && !this.stopped,
       updatedAt: Date.now(),
     }
   }
