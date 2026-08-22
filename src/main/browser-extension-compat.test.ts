@@ -12,6 +12,7 @@ import {
   injectIntoHtml,
   planCompat,
   prependLine,
+  setCompatRuntime,
 } from './browser-extension-compat'
 import type { ExtensionManifest } from './browser-extension-support'
 
@@ -457,5 +458,68 @@ describe('the layer, run', () => {
   it('parses under strict mode, because a module service worker is strict', () => {
     const text = compatShimFor(planCompat({ manifest_version: 3, permissions: ['storage'] }))
     expect(() => new Function(`'use strict';${text}`)).not.toThrow()
+  })
+})
+
+/**
+ * The runtime flag, which is what makes the same shim safe on the server.
+ *
+ * On the desktop this whole layer fills gaps in Electron's Chromium. On the
+ * server the Chromium is full chrome-for-testing, which provides those namespaces
+ * itself — and the shim's own `if (!api.X)` guards already self-disable there for
+ * all but `storage.sync`, the one namespace it replaces without such a guard
+ * because on Electron the object exists and silently never works. The flag is how
+ * the shim learns not to overwrite a `storage.sync` that actually works.
+ */
+describe('the runtime flag', () => {
+  it('compiles the runtime into the layer, leaving no placeholder', () => {
+    setCompatRuntime('chromium')
+    try {
+      const text = compatShimFor(planCompat({ manifest_version: 3, permissions: ['storage'] }))
+      expect(text).toContain('var TD_NATIVE = true')
+      expect(text).not.toContain('__TD_NATIVE__')
+    } finally {
+      setCompatRuntime('electron')
+    }
+    const electronText = compatShimFor(planCompat({ manifest_version: 3, permissions: ['storage'] }))
+    expect(electronText).toContain('var TD_NATIVE = false')
+    expect(electronText).not.toContain('__TD_NATIVE__')
+  })
+
+  it('leaves a working native storage.sync alone under chromium', () => {
+    setCompatRuntime('chromium')
+    try {
+      const { chrome } = fakeChrome()
+      const native = { __native: true, get() {}, set() {} }
+      // Stand in for a real chrome-for-testing storage.sync: present and working.
+      ;(chrome.storage as unknown as { sync: unknown }).sync = native
+      runShim(chrome)
+      // The native store is untouched — not replaced by the storage.local mirror.
+      expect((chrome.storage as unknown as { sync: unknown }).sync).toBe(native)
+    } finally {
+      setCompatRuntime('electron')
+    }
+  })
+
+  it('reports storage.sync as not provided under chromium, because it was native', () => {
+    setCompatRuntime('chromium')
+    try {
+      const { chrome } = fakeChrome()
+      ;(chrome.storage as unknown as { sync: unknown }).sync = { get() {}, set() {} }
+      const scope = runShim(chrome)
+      const report = (scope as { __tdCompat?: { provided: string[] } }).__tdCompat
+      expect(report?.provided ?? []).not.toContain('storage.sync')
+    } finally {
+      setCompatRuntime('electron')
+    }
+  })
+
+  it('still replaces the broken Electron storage.sync when the runtime is electron', () => {
+    // The default the desktop keeps: on Electron the object exists but never
+    // works, so the mirror must go in regardless.
+    const { chrome } = fakeChrome()
+    const broken = (chrome.storage as unknown as { sync: unknown }).sync
+    runShim(chrome)
+    expect((chrome.storage as unknown as { sync: unknown }).sync).not.toBe(broken)
   })
 })

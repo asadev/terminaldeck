@@ -99,6 +99,43 @@ export const ELECTRON_MEASURED = '41.10.5'
 export const CHROMIUM_MEASURED = '146.0.7680.216'
 
 /**
+ * Which browser these verdicts are being read against.
+ *
+ * Every "missing" and every static-ruleset warning in this file was measured on
+ * the Electron build named above — Electron strips the namespaces
+ * `browser-extension-compat.ts` shims from the Chromium it embeds, and it does
+ * not switch on manifest-declared static rulesets at load. The headless server
+ * runs a full chrome-for-testing Chromium of the same 146 family instead, where
+ * both of those are true differently: the shimmed namespaces are *native*, and a
+ * static ruleset marked enabled is on at load. So on the server this file must
+ * report those as resolved rather than repeat a measurement taken elsewhere — a
+ * limits list that names a gap the runtime has closed is the same defect, read
+ * backwards, as a control that does nothing.
+ *
+ * Deliberately narrow: on `'chromium'` this file relaxes only the namespaces the
+ * compat layer *measured* it provides ({@link COMPAT_PROVIDES}) and the static
+ * ruleset gap. Namespaces it never measured on either runtime stay reported the
+ * way they always were — "measured, not remembered" cuts both directions.
+ */
+export type ExtensionRuntime = 'electron' | 'chromium'
+
+let runtime: ExtensionRuntime = 'electron'
+
+/**
+ * Tell this module which browser it is answering about. The server calls it with
+ * `'chromium'` at boot; the desktop leaves the `'electron'` default, so every
+ * verdict on the desktop is unchanged.
+ */
+export function setExtensionRuntime(next: ExtensionRuntime): void {
+  runtime = next
+}
+
+/** The runtime these verdicts are currently read against. */
+export function extensionRuntime(): ExtensionRuntime {
+  return runtime
+}
+
+/**
  * The `chrome.*` namespaces that exist here.
  *
  * Read out of a live extension context on {@link ELECTRON_MEASURED}, from both
@@ -300,7 +337,12 @@ export function requestedApis(manifest: ExtensionManifest): string[] {
  */
 export function missingApis(manifest: ExtensionManifest): string[] {
   return requestedApis(manifest).filter(
-    (name) => MISSING_APIS.includes(name) && !SUPPORTED_APIS.includes(name),
+    (name) =>
+      MISSING_APIS.includes(name) &&
+      !SUPPORTED_APIS.includes(name) &&
+      // On the server these are native, not missing. Only the compat-measured
+      // set is relaxed — see {@link ExtensionRuntime}.
+      !(runtime === 'chromium' && COMPAT_PROVIDES.includes(name)),
   )
 }
 
@@ -370,6 +412,11 @@ export function loadability(manifest: ExtensionManifest): { ok: true } | { ok: f
  * The whole point of naming it is that nothing else would.
  */
 export function usesStaticRulesets(manifest: ExtensionManifest): boolean {
+  // On the server the gap this flags is closed: real Chromium enables a manifest
+  // ruleset marked `"enabled": true` at load, so there is no dead-on-arrival
+  // blocking to warn about. On Electron (the default) it stays the measured
+  // fact. See {@link ExtensionRuntime}.
+  if (runtime === 'chromium') return false
   const dnr = record(manifest.declarative_net_request)
   return Array.isArray(dnr.rule_resources) && dnr.rule_resources.length > 0
 }

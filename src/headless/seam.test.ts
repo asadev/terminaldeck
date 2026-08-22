@@ -332,3 +332,34 @@ describe('the headless build can drive a browser without Electron', () => {
     }
   })
 })
+
+describe('the headless build can carry downloads and profile-cookied fetch without Electron', () => {
+  /*
+   * Wave-2 Lane E splits downloads so the server can keep the same ledger the
+   * desktop does. `browser-downloads-store.ts` is the ledger — the rows, the
+   * dedup, the digest and the move-to-another-machine logic — with no Electron
+   * under it; `browser-downloads-electron.ts` is the desktop `will-download`
+   * transport and stays out of this closure; `browser-downloads-cdp.ts` is the
+   * server's transport, driven from `Browser.downloadWillBegin` /
+   * `downloadProgress`. `browser-asset-session-cdp.ts` is the server's
+   * profile-cookied `AssetOpen`: a single-URL cookie read replayed onto an
+   * undici fetch, deliberately declaring its own copy of the seam's shapes so it
+   * never imports the electron-backed `browser-asset-session.ts`.
+   *
+   * The store is already reached (index.ts, through `browser-downloads.ts`); the
+   * two CDP files become reachable once the host wiring lands (a later lane adds
+   * them to the closure contains-list above and drops their KNOWN_UNREACHABLE
+   * entries). They must be clean before they can be, so this asserts the property
+   * on the source directly — the same detector the closure walk uses, pointed at
+   * the files by name.
+   */
+  it('keeps the download ledger, its CDP transport and the CDP asset fetch free of runtime Electron imports', () => {
+    for (const file of [
+      'src/main/browser-downloads-store.ts',
+      'src/main/browser-downloads-cdp.ts',
+      'src/main/browser-asset-session-cdp.ts',
+    ]) {
+      expect(runtimeElectronImports(readSource(file)), file).toEqual([])
+    }
+  })
+})
