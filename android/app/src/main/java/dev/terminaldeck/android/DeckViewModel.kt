@@ -377,6 +377,7 @@ class DeckViewModel(
         link.copilot = CopilotController(
             send = { link.transport.send(it) },
             capabilities = { link.capabilities },
+            expiry = coroutineExpiry(viewModelScope),
             onChange = { publish() },
         )
         // Collected per machine, with the link captured, so a frame cannot arrive without the

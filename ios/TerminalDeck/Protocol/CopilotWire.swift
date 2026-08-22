@@ -82,6 +82,73 @@
 
 import Foundation
 
+/**
+ * Bubble text, as a phone may safely draw it.
+ *
+ * A chat message is **bytes an agent wrote**, and on this wire that can include
+ * what a shell echoed into its own transcript: a restored-session banner, an
+ * OSC 7 working-directory sequence, a colour run. Drawn raw they arrive as a
+ * replacement glyph followed by `]7;file:///Users/…`, which is not merely ugly —
+ * it is this client rendering an escape sequence as content.
+ *
+ * Measured, not imagined. The first thing the copilot's own pty held on
+ * 2026-08-22, read back out of the desktop through `/scrollback`, was exactly
+ * that string; the Android client already scrubs it and this one did not, so the
+ * same conversation was legible on one phone and littered on the other.
+ *
+ * Stripped rather than refused, which is the opposite of the rule for
+ * `copilot.say` going the other way — and the asymmetry is the point.
+ * **Outbound**, a control character is refused because stripping would turn a
+ * hostile value into a different legal-looking message that somebody pays for.
+ * **Inbound**, there is nothing to protect but the reader's eyes: the text is
+ * never executed, only drawn, and a bubble with the escapes taken out says
+ * exactly what the agent said.
+ *
+ * Newlines and tabs survive. They are layout the agent meant.
+ *
+ * A transcription of `CopilotText` in
+ * `android/.../protocol/CopilotWire.kt` — same two families, same survivors, so
+ * two phones looking at one machine cannot disagree about what it said.
+ */
+enum CopilotText {
+
+    /// The two bytes, written as escapes so this file holds no control
+    /// character of its own.
+    private static let esc = "\u{1B}"
+    private static let bel = "\u{07}"
+
+    /// `ESC [ … final` — a CSI sequence, which is what a colour run or a cursor
+    /// move is.
+    private static let csi = try? NSRegularExpression(pattern: "\u{1B}\\[[0-?]*[ -/]*[@-~]")
+
+    /// `ESC ] … BEL` or `ESC ] … ESC \` — an OSC sequence, which is what OSC 7
+    /// is. Deliberately not a general "ANSI" pattern: these two families are the
+    /// ones that appear in a transcript, and a wider expression risks eating a
+    /// `[` somebody typed.
+    private static let osc = try? NSRegularExpression(
+        pattern: "\u{1B}\\][^\u{07}\u{1B}]*(?:\u{07}|\u{1B}\\\\)?"
+    )
+
+    static func display(_ raw: String) -> String {
+        guard !raw.isEmpty else { return raw }
+        var text = raw
+        for pattern in [csi, osc].compactMap({ $0 }) {
+            text = pattern.stringByReplacingMatches(
+                in: text,
+                range: NSRange(text.startIndex..., in: text),
+                withTemplate: ""
+            )
+        }
+        // Anything left that is a control character, except the two that are
+        // layout. A lone ESC that began a sequence this build does not recognise
+        // goes here rather than onto the screen.
+        return String(text.unicodeScalars.filter { scalar in
+            scalar == "\n" || scalar == "\t"
+                || !(scalar.value <= 0x1f || (scalar.value >= 0x7f && scalar.value <= 0x9f))
+        })
+    }
+}
+
 enum Copilot {
 
     /**
@@ -150,6 +217,21 @@ enum Copilot {
      * pages against the file on the desktop rather than against this array.
      */
     static let maxTimelineRows = 600
+
+    /**
+     * How long one of this phone's own messages may go unechoed before the row
+     * on screen says so.
+     *
+     * The echo is not a network acknowledgement and a shorter number could not
+     * be honest about what it means: the person's own words come back when the
+     * agent CLI has taken the turn, and the *first* message to a device starts
+     * the run — a cold CLI booting and reading an MCP config, several seconds on
+     * a fast Mac and more on a slow one. Thirty is comfortably past that and is
+     * still a wait somebody sits through rather than gives up on. It is the same
+     * number `pwa/src/copilot.ts` reached, from the same measurement, for the
+     * same question.
+     */
+    static let echoWaitSeconds = 30
 
     /*
      * **`codeLength` and `maxCredentialChars` used to be here, and both are
@@ -898,15 +980,29 @@ extension WireCodec {
                                   truncated: row["truncated"] as? Bool == true)
     }
 
-    /// Several lines of text somebody is about to read. Keeps newlines and tabs,
-    /// drops everything else invisible, and bounds the result at the same
-    /// `MAX_COPILOT_MESSAGE_CHARS` the desktop cuts at — a cap only the far end
-    /// enforces is not a cap.
+    /**
+     * Several lines of text somebody is about to read. Keeps newlines and tabs,
+     * drops everything else invisible, and bounds the result at the same
+     * `MAX_COPILOT_MESSAGE_CHARS` the desktop cuts at — a cap only the far end
+     * enforces is not a cap.
+     *
+     * **The escape sequences go first, and the order is the whole point.** This
+     * was the filter alone, and the filter is what made those sequences
+     * unremovable by anything downstream: it drops the `ESC` that *begins* one
+     * and leaves the rest as ordinary characters, so a shell's
+     * working-directory report reached the screen as `]7;file:///Users/…` with
+     * nothing left to tell it apart from something the agent meant to say.
+     * Photographed on a Simulator against a real host on 2026-08-22, three times
+     * in one bubble — and a scrub added at the `Text` that drew it looked
+     * correct while it could not possibly work, because by then the `ESC` was
+     * already gone.
+     *
+     * Doing it here is also one pass per frame rather than one per redraw, which
+     * is the difference between a fixed cost and a cost that scales with how
+     * often the row a streaming answer is extending gets laid out again.
+     */
     static func prose(_ raw: String) -> String {
-        let cleaned = String(raw.unicodeScalars.filter { scalar in
-            scalar == "\n" || scalar == "\t"
-                || !(scalar.value <= 0x1f || (scalar.value >= 0x7f && scalar.value <= 0x9f))
-        })
+        let cleaned = CopilotText.display(raw)
         return cleaned.count <= Copilot.maxMessageChars
             ? cleaned
             : String(cleaned.prefix(Copilot.maxMessageChars))
@@ -927,7 +1023,11 @@ extension WireCodec {
               let id = string(row["id"]), !id.isEmpty,
               let tool = displayLine(row["tool"]),
               let outcome = string(row["outcome"]), !outcome.isEmpty,
-              let detail = displayLine(row["detail"]) else { return nil }
+              // Through `CopilotText` first, for the reason `prose` gives: a
+              // tool's summary is text a *tool* produced, which on this wire can
+              // carry what a shell wrote, and `displayLine` drops the `ESC` that
+              // begins a sequence while leaving the rest of it on the screen.
+              let detail = displayLine(CopilotText.display(string(row["detail"]) ?? "")) else { return nil }
         return CopilotAction(id: id,
                              at: isoMilliseconds(row["at"]),
                              tool: tool,

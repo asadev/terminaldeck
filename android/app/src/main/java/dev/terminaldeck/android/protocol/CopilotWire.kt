@@ -325,6 +325,53 @@ sealed interface CopilotEntry {
     data class Did(val row: CopilotActionRow) : CopilotEntry {
         override val id: String get() = "tool:${row.id}"
     }
+
+    /**
+     * Something **this phone** just said, drawn before the machine has echoed it back.
+     *
+     * Asad, on this screen: *"it should be a very smooth and clean process."* It was not. A message
+     * left this phone, the draft cleared, and the timeline stayed exactly as it was — because the
+     * only bubble a person's own words ever get is the one the far machine sends back, and that is a
+     * full round trip through a pty, an agent CLI and a transcript reader. Measured on 2026-08-22
+     * against `scripts/remote-host.sh`: **three seconds against a shell on this same Mac**, and a
+     * real agent CLI is slower. What a person saw in that window was a message that had vanished.
+     *
+     * So the bubble is drawn here, immediately, and the machine's own version **replaces** it when
+     * it arrives — see [CopilotTimeline.settle]. It is not a second message and it must never read
+     * as one: it is the same sentence, drawn early, and it carries [state] so it never claims more
+     * than is known.
+     *
+     * A row is added **only when the frame went onto the socket**. A send this end refused — too
+     * long, a control character, a dead socket — keeps the draft in the box and says why under the
+     * composer instead, because a bubble plus a full text field is one message shown twice.
+     */
+    data class Mine(
+        /** This phone's own id for the row. Never sent anywhere. */
+        val localId: String,
+        val text: String,
+        val at: Long,
+        /** What is known about it, and nothing more. */
+        val state: CopilotSendState = CopilotSendState.Sending,
+    ) : CopilotEntry {
+        override val id: String get() = "mine:$localId"
+    }
+}
+
+/**
+ * What is known about a message this phone sent.
+ *
+ * Two states and no third, because there is no third fact. The machine acknowledges a `copilot.say`
+ * by echoing the person's own words back in a `copilot.chat`; until that arrives this end knows the
+ * frame left the socket and nothing else, and after a wait long enough to cover a cold agent CLI it
+ * knows the echo has not come. Neither is "failed" — the desktop may still be typing it into a
+ * prompt — so the second one says what it can defend.
+ */
+enum class CopilotSendState {
+    /** On the wire. The machine has not echoed it back yet. */
+    Sending,
+
+    /** Long enough that something is wrong, and this end cannot say what. */
+    Unacknowledged,
 }
 
 /**
@@ -353,13 +400,73 @@ object CopilotTimeline {
         messages: List<CopilotChatMessage>,
         reset: Boolean,
     ): List<CopilotEntry> {
-        if (reset) return messages.map { CopilotEntry.Said(it) }
+        /*
+         * A reset replaces the conversation — and **keeps a message this phone has just sent**.
+         *
+         * The two are not the same kind of thing. A reset is the machine saying *this is the whole
+         * conversation now*; an unechoed [CopilotEntry.Mine] is a sentence that left this device
+         * seconds ago and that the machine has not spoken about yet. Dropping it on a reset would
+         * be the exact defect this row exists to fix, arriving one frame later — a `copilot.state`
+         * lands, a reset comes with it, and a person watches their own message disappear.
+         */
+        val pending = held.filterIsInstance<CopilotEntry.Mine>()
+        if (reset) return settle(messages.map { CopilotEntry.Said(it) } + pending, messages)
         val out = held.toMutableList()
         for (message in messages) {
             val at = out.indexOfFirst { it is CopilotEntry.Said && it.message.id == message.id }
             if (at >= 0) out[at] = CopilotEntry.Said(message) else out += CopilotEntry.Said(message)
         }
+        return settle(out, messages)
+    }
+
+    /**
+     * Take away the rows the machine has now said itself.
+     *
+     * A [CopilotEntry.Mine] is this phone drawing its own sentence early. The moment the same
+     * sentence comes back as a `you` message it is **the machine's row**, in the machine's order,
+     * with the machine's id — so the early one goes, rather than sitting above it as a duplicate.
+     *
+     * Matched on the text rather than on an id, because there is no shared id to match on: a
+     * `copilot.say` carries no request id and the desktop mints the message id from its own
+     * transcript. Compared after [CopilotText.display] and a trim, so an echo that arrived with a
+     * shell's escape sequences around it still cancels the row it belongs to.
+     *
+     * Only ever removes; it never edits a row it did not match. A sentence somebody genuinely sent
+     * twice cancels one pending row per echo, which is the right count.
+     */
+    fun settle(held: List<CopilotEntry>, messages: List<CopilotChatMessage>): List<CopilotEntry> {
+        val echoes = messages
+            .filter { it.role == ChatRole.You }
+            .map { CopilotText.display(it.text).trim() }
+            .filter { it.isNotEmpty() }
+            .toMutableList()
+        if (echoes.isEmpty()) return held
+        val out = mutableListOf<CopilotEntry>()
+        for (entry in held) {
+            val mine = entry as? CopilotEntry.Mine
+            if (mine != null) {
+                val at = echoes.indexOf(mine.text.trim())
+                if (at >= 0) {
+                    echoes.removeAt(at)
+                    continue
+                }
+            }
+            out += entry
+        }
         return out
+    }
+
+    /** Put a message this phone just sent at the end, where a person is looking. */
+    fun appendMine(held: List<CopilotEntry>, entry: CopilotEntry.Mine): List<CopilotEntry> =
+        held + entry
+
+    /** Say that one of this phone's own messages has gone unanswered for too long. */
+    fun mark(
+        held: List<CopilotEntry>,
+        localId: String,
+        state: CopilotSendState,
+    ): List<CopilotEntry> = held.map { entry ->
+        if (entry is CopilotEntry.Mine && entry.localId == localId) entry.copy(state = state) else entry
     }
 
     /**

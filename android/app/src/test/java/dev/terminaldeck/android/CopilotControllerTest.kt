@@ -1,5 +1,6 @@
 package dev.terminaldeck.android
 
+import dev.terminaldeck.android.credential.Expiry
 import dev.terminaldeck.android.protocol.Capability
 import dev.terminaldeck.android.protocol.ChatRole
 import dev.terminaldeck.android.protocol.ClientMessage
@@ -12,6 +13,7 @@ import dev.terminaldeck.android.protocol.CopilotEntry
 import dev.terminaldeck.android.protocol.CopilotGrantWire
 import dev.terminaldeck.android.protocol.CopilotLinkWire
 import dev.terminaldeck.android.protocol.CopilotPendingRow
+import dev.terminaldeck.android.protocol.CopilotSendState
 import dev.terminaldeck.android.protocol.CopilotSettledRow
 import dev.terminaldeck.android.protocol.CopilotStateReport
 import dev.terminaldeck.android.protocol.Protocol
@@ -44,10 +46,29 @@ class CopilotControllerTest {
         fun clear() = sent.clear()
     }
 
+    /** A clock somebody else winds. Every wait in this file is fired by hand or not at all. */
+    private class Clock {
+        val due = mutableListOf<Pair<Long, () -> Unit>>()
+        fun expiry() = Expiry { ms, run ->
+            val entry = ms to run
+            due += entry
+            { due.remove(entry) }
+        }
+
+        /** Fire everything that was scheduled, in the order it was scheduled. */
+        fun fire() {
+            val now = due.toList()
+            due.clear()
+            for ((_, run) in now) run()
+        }
+    }
+
     private fun controller(
         wire: Wire,
         caps: Set<String> = setOf(Capability.COPILOT),
-    ) = CopilotController(wire::send, { caps }, onChange = {})
+        clock: Clock = Clock(),
+        changes: () -> Unit = {},
+    ) = CopilotController(wire::send, { caps }, clock.expiry(), { 0L }, changes)
 
     private fun grant(read: Boolean = true, act: Boolean = true, alter: Boolean = true) =
         ServerMessage.CopilotGrant(
@@ -87,11 +108,37 @@ class CopilotControllerTest {
     @Test
     fun `opening the tab spends nothing`() {
         val wire = Wire()
-        controller(wire).open()
-        // hello, attach, sessions, pending — all `read`. **No start.**
+        val c = controller(wire)
+        c.open()
+        c.receive(grant())
+        // hello, then attach, sessions, pending — all `read`. **No start.**
         assertEquals(1, wire.only<ClientMessage.CopilotHello>().size)
         assertEquals(1, wire.only<ClientMessage.CopilotAttach>().size)
         assertEquals(0, wire.only<ClientMessage.CopilotStart>().size)
+    }
+
+    /**
+     * The attach waits for the hello to be **answered**, and this is the whole of a defect a person
+     * met on their first visit to the screen.
+     *
+     * `server.ts` refuses every `copilot.*` verb from a socket whose `copilotOpen` is false, and
+     * that flag is set by the answer to the hello. Sending both together — which this client did —
+     * had the attach, the session list and the pending list all refused, so no `copilot.state` ever
+     * came back and the screen drew an empty bar under the word *"Watching"* over a phone that had
+     * been granted every tier. Leaving and coming back fixed it, which is how it survived.
+     */
+    @Test
+    fun `nothing is attached until the hello is answered`() {
+        val wire = Wire()
+        val c = controller(wire)
+        c.open()
+        assertEquals(1, wire.only<ClientMessage.CopilotHello>().size)
+        assertEquals(0, wire.only<ClientMessage.CopilotAttach>().size)
+
+        c.receive(grant())
+        assertEquals(1, wire.only<ClientMessage.CopilotAttach>().size)
+        assertEquals(1, wire.only<ClientMessage.CopilotSessions>().size)
+        assertEquals(1, wire.only<ClientMessage.CopilotPending>().size)
     }
 
     @Test
@@ -99,8 +146,45 @@ class CopilotControllerTest {
         val wire = Wire()
         val c = controller(wire)
         c.open()
+        c.receive(grant())
         c.open()
         assertEquals(1, wire.only<ClientMessage.CopilotAttach>().size)
+    }
+
+    /**
+     * A reconnect says hello again, and attaches again.
+     *
+     * The old version keyed the renewal on the same flag the drop had just cleared, so it concluded
+     * nothing had been attached and did nothing: after **any** reconnect this screen went
+     * permanently deaf, keeping a conversation that could no longer grow over a composer whose
+     * messages went into a stream nobody was serving. Reproduced on an emulator with airplane mode.
+     */
+    @Test
+    fun `a reconnect says hello again and re-attaches`() {
+        val wire = Wire()
+        val c = opened(wire, run = "r1")
+
+        c.dropped()
+        c.renew()
+        assertEquals(1, wire.only<ClientMessage.CopilotHello>().size)
+        // And **not** an attach yet: this socket has not been answered.
+        assertEquals(0, wire.only<ClientMessage.CopilotAttach>().size)
+
+        c.receive(grant())
+        assertEquals(1, wire.only<ClientMessage.CopilotAttach>().size)
+    }
+
+    /** A screen that was never open does not re-open itself behind somebody's back. */
+    @Test
+    fun `a reconnect renews nothing when the screen is not up`() {
+        val wire = Wire()
+        val c = opened(wire, run = "r1")
+        c.close()
+        wire.clear()
+
+        c.dropped()
+        c.renew()
+        assertEquals(emptyList<ClientMessage>(), wire.sent)
     }
 
     @Test
@@ -381,4 +465,135 @@ class CopilotControllerTest {
         requestedAt = 1,
         expiresAt = 2,
     )
+
+    /* ------------------------------------------------- a message, drawn before the round trip -- */
+
+    /**
+     * The bubble appears on the send, not on the echo.
+     *
+     * Asad, on this screen: *"it should be a very smooth and clean process."* It was not — the
+     * draft cleared, the frame went, and the timeline did not change until the machine had written
+     * the sentence into a pty, an agent CLI had taken the turn and a transcript reader had pushed
+     * it back. Measured at about three seconds against a plain shell on the same Mac.
+     */
+    @Test
+    fun `a sent message is on the timeline immediately`() {
+        val wire = Wire()
+        val c = opened(wire, run = "r1")
+
+        assertTrue(c.say("what happened overnight"))
+        val mine = c.view()!!.entries.filterIsInstance<CopilotEntry.Mine>()
+        assertEquals(1, mine.size)
+        assertEquals("what happened overnight", mine[0].text)
+        assertEquals(CopilotSendState.Sending, mine[0].state)
+    }
+
+    /** The machine's own row replaces it, rather than sitting under a duplicate. */
+    @Test
+    fun `the machine's echo settles the row this phone drew`() {
+        val wire = Wire()
+        val c = opened(wire, run = "r1")
+        c.say("what happened overnight")
+
+        c.receive(
+            ServerMessage.CopilotChat(
+                run = "r1",
+                messages = listOf(
+                    CopilotChatMessage(id = "m1", role = ChatRole.You, text = "what happened overnight")
+                ),
+                reset = false,
+            )
+        )
+        val entries = c.view()!!.entries
+        assertEquals(0, entries.filterIsInstance<CopilotEntry.Mine>().size)
+        assertEquals(1, entries.filterIsInstance<CopilotEntry.Said>().size)
+    }
+
+    /**
+     * An echo wrapped in what a shell wrote still cancels the row it belongs to.
+     *
+     * The text on the wire is bytes an agent produced, and a restored-session banner arrives with
+     * an OSC 7 sequence around it. Comparing raw would leave the early bubble on screen for ever,
+     * above the machine's own copy of the same sentence.
+     */
+    @Test
+    fun `an echo carrying escape sequences still settles the row`() {
+        val wire = Wire()
+        val c = opened(wire, run = "r1")
+        c.say("hello")
+
+        c.receive(
+            ServerMessage.CopilotChat(
+                run = "r1",
+                messages = listOf(
+                    CopilotChatMessage(id = "m1", role = ChatRole.You, text = "\u001B[32mhello\u001B[0m")
+                ),
+                reset = false,
+            )
+        )
+        assertEquals(0, c.view()!!.entries.filterIsInstance<CopilotEntry.Mine>().size)
+    }
+
+    /** A reset is *the whole conversation now* — and a sentence sent a moment ago is not in it yet. */
+    @Test
+    fun `a reset keeps a message this phone has not had echoed`() {
+        val wire = Wire()
+        val c = opened(wire, run = "r1")
+        c.say("still going")
+
+        c.receive(ServerMessage.CopilotChat(run = "r1", messages = emptyList(), reset = true))
+        assertEquals(1, c.view()!!.entries.filterIsInstance<CopilotEntry.Mine>().size)
+    }
+
+    /**
+     * Silence is reported as silence, not as failure.
+     *
+     * The echo is the agent CLI having taken the turn rather than a network acknowledgement, so a
+     * message that has not come back is unaccounted for and might still land. What the row must not
+     * do is disappear, or claim something this end cannot know.
+     */
+    @Test
+    fun `a message that is never echoed says so, and keeps its text`() {
+        val wire = Wire()
+        val clock = Clock()
+        val c = CopilotController(wire::send, { setOf(Capability.COPILOT) }, clock.expiry(), { 0L }, {})
+        c.open()
+        c.receive(grant())
+        c.receive(state(run = "r1"))
+        c.say("are you there")
+
+        clock.fire()
+        val mine = c.view()!!.entries.filterIsInstance<CopilotEntry.Mine>()
+        assertEquals(1, mine.size)
+        assertEquals(CopilotSendState.Unacknowledged, mine[0].state)
+        assertEquals("are you there", mine[0].text)
+    }
+
+    /**
+     * A refusal keeps the draft **and** says something, and the second half is what was missing.
+     *
+     * Every sentence this class composes about its own end — not connected, too long, a control
+     * character — was written to the field the screen draws and never shown, because nothing told
+     * the screen to look again. A person pressing Send over a dead socket got a draft that stayed
+     * in the box for no stated reason, which reads as a button that has stopped working.
+     */
+    @Test
+    fun `a send that cannot go says why, and redraws so it is seen`() {
+        val wire = Wire()
+        var changes = 0
+        val c = CopilotController(wire::send, { setOf(Capability.COPILOT) }, Clock().expiry(), { 0L }) { changes += 1 }
+        c.open()
+        c.receive(grant())
+        c.receive(state(run = "r1"))
+        val before = changes
+
+        wire.connected = false
+        assertFalse(c.say("into the void"))
+
+        assertEquals(CopilotController.NOT_CONNECTED, c.view()!!.notice?.text)
+        assertTrue("the screen was never told to redraw", changes > before)
+        // And no bubble: the text is still in the box, and one message shown twice is worse than
+        // one message shown once.
+        assertEquals(0, c.view()!!.entries.filterIsInstance<CopilotEntry.Mine>().size)
+    }
 }

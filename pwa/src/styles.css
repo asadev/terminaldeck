@@ -2896,6 +2896,17 @@ a.browse__go {
   font-size: 12px;
 }
 
+/* A message this browser has sent and the machine has not echoed back. The same
+   bubble on the same side in the same colour — it is not a different message, it
+   is this message drawn early — with one quiet line under it. Anything that made
+   it look like a separate kind of row would show a person their sentence twice
+   with nothing saying which one counted. */
+.chat__unsaid {
+  margin-top: 4px;
+  color: var(--color-warning);
+  font-size: 12px;
+}
+
 /* What the copilot actually did, as it does it — the frame that makes a refusal
    visible rather than silent. */
 .trail {
