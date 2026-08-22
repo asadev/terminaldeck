@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -24,6 +26,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.IconButton
@@ -111,6 +115,23 @@ fun SessionListScreen(
      * is not undoable. The row is removed on the machine's `closed` answer, not on this tap.
      */
     onCloseSession: (RemoteSessionView) -> Unit = {},
+    /**
+     * The rows this phone has put away on the machine on screen, and the ones pulled to the top.
+     *
+     * Passed in already split rather than derived here, so that the count on the ⋯ item and the rows
+     * on the screen behind it come from one calculation. Empty when nothing is archived, which is
+     * the ordinary case and draws no menu item at all.
+     */
+    listed: List<RemoteSessionView> = state.sessions,
+    archived: List<RemoteSessionView> = emptyList(),
+    isPinned: (RemoteSessionView) -> Boolean = { false },
+    onArchive: (RemoteSessionView) -> Unit = {},
+    onPin: (RemoteSessionView, Boolean) -> Unit = { _, _ -> },
+    onArchivedList: () -> Unit = {},
+    /** Everything the wire says about one session, as a sheet. Long-press, and the terminal's ⋯. */
+    onDetails: (RemoteSessionView) -> Unit = {},
+    /** The line that says what changed while the app was gone, and the tap that dismisses it. */
+    onDismissAwayReport: () -> Unit = {},
 ) {
     val snackbar = remember { SnackbarHostState() }
     var folderMenu by remember { mutableStateOf(false) }
@@ -189,6 +210,47 @@ fun SessionListScreen(
                     }
                 },
                 /*
+                 * One item in the ⋯, and it is a place rather than an action: **Archived**.
+                 *
+                 * Refresh and Reconnect were both in it and both are gone — *"Refresh, what does it
+                 * actually do? Pull-to-refresh would be the natural gesture. Reconnect, I don't know
+                 * why we need it… if they are useless and everything is automatically working, we
+                 * need to remove them."* The gesture is on the list and the one control that does
+                 * something a person cannot otherwise do — Retry, while the socket is down — is on
+                 * the connection banner.
+                 *
+                 * The whole ⋯ is absent when nothing is archived on this machine, because then it
+                 * opens a screen that says only that nothing is there.
+                 */
+                actions = {
+                    if (archived.isNotEmpty()) {
+                        var overflow by remember { mutableStateOf(false) }
+                        Box {
+                            IconButton(onClick = { overflow = true }) {
+                                Icon(
+                                    Icons.Filled.MoreVert,
+                                    contentDescription = "More",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            DropdownMenu(expanded = overflow, onDismissRequest = { overflow = false }) {
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            if (archived.size == 1) {
+                                                "Archived · 1"
+                                            } else {
+                                                "Archived · ${archived.size}"
+                                            }
+                                        )
+                                    },
+                                    onClick = { overflow = false; onArchivedList() },
+                                )
+                            }
+                        }
+                    }
+                },
+                /*
                  * No Refresh button, and its absence is the decision.
                  *
                  * *"Refresh, what does it actually do? Pull-to-refresh would be the natural
@@ -262,6 +324,7 @@ fun SessionListScreen(
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
             ConnectionBanner(state.transport, onReconnect)
+            AwayLine(state.awayReport, onDismissAwayReport)
             FolderNote(state)
 
             /*
@@ -279,7 +342,7 @@ fun SessionListScreen(
                 onRefresh = onRefresh,
                 modifier = Modifier.fillMaxSize(),
             ) {
-                if (state.sessions.isEmpty()) {
+                if (listed.isEmpty()) {
                     // Still inside the pull box: an empty list is exactly where somebody reaches for
                     // this gesture, so a screen that only offered it once there was something to
                     // scroll would be missing the case it is for.
@@ -292,13 +355,17 @@ fun SessionListScreen(
                             .fillMaxSize()
                             .alpha(if (state.live) 1f else 0.55f),
                     ) {
-                        items(state.sessions, key = { it.id }) { session ->
+                        items(listed, key = { it.id }) { session ->
                             SessionCard(
                                 session = session,
                                 live = state.live,
+                                pinned = isPinned(session),
                                 onClick = { onOpen(session) },
                                 // Absent, not disabled, when the machine never advertised `close`.
                                 onClose = if (state.canCloseSessions) ({ closing = session }) else null,
+                                onArchive = { onArchive(session) },
+                                onPin = { onPin(session, !isPinned(session)) },
+                                onDetails = { onDetails(session) },
                             )
                         }
                     }
@@ -481,21 +548,41 @@ private fun EmptyState(state: DeckUiState) {
     }
 }
 
+/**
+ * One session, and the four things that can be done to its row.
+ *
+ * Asad asked for a gesture: *"close the session (with a confirmation), archive, move. When we will
+ * have a lot of sessions we will not like to have all of them over here."* iOS answers that with
+ * `swipeActions`, which exists inside a `List` and has the system's rubber band and its interaction
+ * with the back gesture at the left edge. Android has neither for a column of cards, and
+ * hand-rolling a drag would give a swipe that is not the platform's — a different depth and a
+ * different feel from every other app on the phone, in exchange for hiding four verbs behind a
+ * gesture nobody is told about.
+ *
+ * So the verbs are a **long press**, which is Android's own convention for "more about this row",
+ * and the ✕ stays on the card because closing is the one that is not undoable and belongs in sight.
+ */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun SessionCard(
     session: RemoteSessionView,
     live: Boolean,
+    pinned: Boolean = false,
     onClick: () -> Unit,
     /** Null when the machine does not advertise `close`; the ✕ is absent then, never disabled. */
     onClose: (() -> Unit)? = null,
+    onArchive: () -> Unit = {},
+    onPin: () -> Unit = {},
+    onDetails: () -> Unit = {},
 ) {
+    var menu by remember { mutableStateOf(false) }
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .background(MaterialTheme.colorScheme.surface)
             .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp))
-            .clickable(onClick = onClick)
+            .combinedClickable(onClick = onClick, onLongClick = { menu = true })
             .padding(start = 14.dp, top = 14.dp, end = if (onClose != null) 4.dp else 14.dp, bottom = 14.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -509,6 +596,15 @@ private fun SessionCard(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
+            if (pinned) {
+                Icon(
+                    Icons.Filled.PushPin,
+                    contentDescription = "Pinned",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(14.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+            }
             ProviderChip(session.provider)
             if (onClose != null) {
                 Spacer(Modifier.width(4.dp))
@@ -520,6 +616,20 @@ private fun SessionCard(
                         modifier = Modifier.size(18.dp),
                     )
                 }
+            }
+            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                DropdownMenuItem(
+                    text = { Text("Details") },
+                    onClick = { menu = false; onDetails() },
+                )
+                DropdownMenuItem(
+                    text = { Text(if (pinned) "Unpin" else "Pin to the top") },
+                    onClick = { menu = false; onPin() },
+                )
+                DropdownMenuItem(
+                    text = { Text("Archive") },
+                    onClick = { menu = false; onArchive() },
+                )
             }
         }
 
@@ -548,6 +658,46 @@ private fun SessionCard(
             },
             style = MaterialTheme.typography.labelSmall,
             color = statusColor(session),
+        )
+    }
+}
+
+/**
+ * What changed while the app was away, as one line above the list.
+ *
+ * The honest half of having no push service. A reconnect that lands while somebody is looking at
+ * this screen is them watching the list refill, and interrupting that with four notifications is
+ * worse than a sentence — so a catch-up is reported here and a live change is raised on the lock
+ * screen. See `SessionAlerts`.
+ *
+ * It is dismissed by a tap because it is about a moment: leaving it up after it has been read would
+ * make the next reconnect's line look like the same one.
+ */
+@Composable
+private fun AwayLine(text: String?, onDismiss: () -> Unit) {
+    if (text == null) return
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .clickable(onClick = onDismiss)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(1f),
+        )
+        Spacer(Modifier.width(8.dp))
+        Icon(
+            Icons.Filled.Close,
+            contentDescription = "Dismiss",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(16.dp),
         )
     }
 }

@@ -19,6 +19,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -37,6 +38,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.Icon
@@ -57,6 +59,13 @@ import dev.terminaldeck.android.ui.WatchSurfacesScreen
 import dev.terminaldeck.android.ui.WatchViewerScreen
 import dev.terminaldeck.android.transfer.PickedFile
 import dev.terminaldeck.android.ui.AddServerScreen
+import dev.terminaldeck.android.ui.AlertsScreen
+import dev.terminaldeck.android.ui.AppearanceScreen
+import dev.terminaldeck.android.ui.ArchivedSessionsSheet
+import dev.terminaldeck.android.ui.LocalhostBrowser
+import dev.terminaldeck.android.ui.LocalhostScreen
+import dev.terminaldeck.android.ui.SessionChatScreen
+import dev.terminaldeck.android.ui.SessionDetailSheet
 import dev.terminaldeck.android.ui.CredentialPromptSheet
 import dev.terminaldeck.android.ui.DevicesScreen
 import dev.terminaldeck.android.ui.GitHubSheet
@@ -187,15 +196,20 @@ class MainActivity : ComponentActivity() {
  * back leaves Machines where it was. That is the Android shape of the per-tab `NavigationStack` iOS
  * uses, and `saveState`/`restoreState` on the tab hop is the whole of it.
  *
- * ## Two tabs, where iOS has three or four
+ * ## Three tabs, where iOS has three or four
  *
  * iOS draws Copilot · Sessions · Localhost · Settings, the first of those only while the machine on
- * screen has a copilot. This build has the sessions and the settings; **Localhost and Copilot are
- * not implemented on Android at all** — no port list, no tunnel, no conversation — and a pill that
- * opened an empty screen would be worse than a bar with two. They are named in the gap list rather
- * than drawn.
+ * screen has a copilot this device may drive. This build draws **Sessions · Localhost · Settings**.
+ *
+ * Localhost is here now: the port list, the dev servers, and a real tunnel that serves one of the
+ * machine's ports on this phone's own loopback at the same number, so a page's own absolute links
+ * keep working. **Copilot is not built on Android** — no conversation, no run log, no consent
+ * questions — and a fourth pill that opened an empty screen would be worse than three. It is named
+ * in the gap list rather than drawn, which is also iOS's own rule for that pill: conditional, never
+ * an empty tab.
  */
 private const val GRAPH_SESSIONS = "graph.sessions"
+private const val GRAPH_LOCALHOST = "graph.localhost"
 private const val GRAPH_SETTINGS = "graph.settings"
 
 private const val ROUTE_SESSIONS = "sessions"
@@ -222,6 +236,15 @@ private const val ROUTE_SETTINGS = "settings"
 private const val ROUTE_MACHINES = "machines"
 private const val ROUTE_DEVICES = "devices"
 private const val ROUTE_WATCH = "watch"
+private const val ROUTE_ALERTS = "alerts"
+private const val ROUTE_APPEARANCE = "appearance"
+
+/** The machine's ports and dev servers, and the page one of them is being served as. */
+private const val ROUTE_LOCALHOST = "localhost"
+private const val ROUTE_LOCALHOST_PAGE = "localhost/page"
+
+/** The conversation of the session a terminal is showing, as bubbles rather than as a pty. */
+private const val ROUTE_CHAT = "chat/{hostId}/{sessionId}"
 
 /**
  * One watched surface, full screen.
@@ -251,6 +274,31 @@ fun TerminalDeckApp(
      * switcher, which is itself drawn above whatever route is current.
      */
     var github by remember { mutableStateOf(false) }
+
+    /**
+     * This phone's own names for the machine's ports, and which groups it has folded.
+     *
+     * A file rather than snapshot state, so [bookRevision] is what a composition keys on: a write to
+     * a plain map is invisible to `remember`, and the grouping that reads it would go on showing the
+     * old name until something else happened to recompose.
+     */
+    val portBook = remember { dev.terminaldeck.android.ports.PortBook.on(context) }
+    var bookRevision by remember { mutableIntStateOf(0) }
+
+    /**
+     * The rows this phone has put away, per machine, and the ones it has pulled to the top.
+     *
+     * Same shape and same reason as the book above: it is a file, and [shelfRevision] is the thing
+     * a composition can watch.
+     */
+    val shelf = remember { dev.terminaldeck.android.store.SessionShelf.on(context) }
+    var shelfRevision by remember { mutableIntStateOf(0) }
+
+    /** The session whose details are up, or null. A sheet rather than a route: it is about a row. */
+    var detailFor by remember { mutableStateOf<dev.terminaldeck.android.protocol.RemoteSessionView?>(null) }
+
+    /** Whether the archived list is up. */
+    var archivedOpen by remember { mutableStateOf(false) }
 
     onRegisterResume { viewModel.resume() }
 
@@ -361,8 +409,13 @@ fun TerminalDeckApp(
      */
     val entry by navController.currentBackStackEntryAsState()
     val route = entry?.destination?.route
-    val bar = route != ROUTE_TERMINAL && route != ROUTE_WATCH_VIEW
-    val onSessions = route == ROUTE_SESSIONS || route == ROUTE_TERMINAL
+    // Withdrawn from the three screens that take the whole window: a terminal, a watched page and a
+    // page being served from the machine. A pill sitting over the bottom rows of any of them points
+    // somewhere else while the thing you are using needs the height.
+    val bar = route != ROUTE_TERMINAL && route != ROUTE_WATCH_VIEW &&
+        route != ROUTE_LOCALHOST_PAGE && route != ROUTE_CHAT
+    val onSessions = route == ROUTE_SESSIONS || route == ROUTE_TERMINAL || route == ROUTE_CHAT
+    val onLocalhost = route == ROUTE_LOCALHOST || route == ROUTE_LOCALHOST_PAGE
 
     /** Hop to a tab, keeping what was pushed on the one being left. */
     val showTab: (String) -> Unit = { graph ->
@@ -396,7 +449,13 @@ fun TerminalDeckApp(
                         label = { Text("Sessions") },
                     )
                     NavigationBarItem(
-                        selected = !onSessions,
+                        selected = onLocalhost,
+                        onClick = { showTab(GRAPH_LOCALHOST) },
+                        icon = { Icon(Icons.Filled.Public, contentDescription = null) },
+                        label = { Text("Localhost") },
+                    )
+                    NavigationBarItem(
+                        selected = !onSessions && !onLocalhost,
                         onClick = { showTab(GRAPH_SETTINGS) },
                         icon = { Icon(Icons.Filled.Settings, contentDescription = null) },
                         label = { Text("Settings") },
@@ -416,6 +475,13 @@ fun TerminalDeckApp(
 
     navigation(startDestination = ROUTE_SESSIONS, route = GRAPH_SESSIONS) {
         composable(ROUTE_SESSIONS) {
+            val hostId = state.host?.hostId.orEmpty()
+            // The shelf is a file, so `shelfRevision` is what a composition can watch: a write to a
+            // plain map is invisible to `remember` and the list would go on drawing the row that was
+            // just archived until something else happened to recompose.
+            val split = remember(state.sessions, hostId, shelfRevision) {
+                shelf.split(state.sessions, hostId)
+            }
             SessionListScreen(
                 state = state,
                 onOpen = { session ->
@@ -428,6 +494,20 @@ fun TerminalDeckApp(
                 onNewSession = viewModel::newSession,
                 onSelectHost = viewModel::select,
                 onCloseSession = { session -> viewModel.endSession(session.id) },
+                listed = split.listed,
+                archived = split.archived,
+                isPinned = { session -> shelf.isPinned(hostId, session.id) },
+                onArchive = { session ->
+                    shelf.setArchived(true, hostId, session.id)
+                    shelfRevision += 1
+                },
+                onPin = { session, on ->
+                    shelf.setPinned(on, hostId, session.id)
+                    shelfRevision += 1
+                },
+                onArchivedList = { archivedOpen = true },
+                onDetails = { session -> detailFor = session },
+                onDismissAwayReport = viewModel::dismissAwayReport,
             )
         }
 
@@ -524,6 +604,13 @@ fun TerminalDeckApp(
                 // has no agent drawing it — see [SessionControls.clusterShown].
                 hasControls = SessionControls.clusterShown(state.controls?.reading),
                 onControls = { controlsOpen = true },
+                // Null over a machine that advertises none of usage/account/chat/send, which gets a
+                // terminal exactly as it was rather than a bar with nothing in it.
+                bar = state.bar,
+                onRefreshUsage = viewModel::refreshUsage,
+                onSwitchAccount = viewModel::switchAccount,
+                onOpenChat = { navController.navigate("chat/$hostId/$liveSession") },
+                onDetails = { detailFor = known },
             )
 
             if (controlsOpen) {
@@ -536,6 +623,144 @@ fun TerminalDeckApp(
                     )
                 }
             }
+        }
+
+        /*
+         * The conversation, as bubbles rather than as a pty.
+         *
+         * Its own route rather than a mode of the terminal, because the two are different screens
+         * with different chrome — one has a key bar and a pty, the other has a composer — and a flag
+         * that swapped half a screen would leave the emulator alive underneath something that is not
+         * showing it. The route names its machine for the reason the terminal route does.
+         */
+        composable(
+            route = ROUTE_CHAT,
+            arguments = listOf(
+                navArgument(ARG_HOST_ID) { type = NavType.StringType },
+                navArgument(ARG_SESSION_ID) { type = NavType.StringType },
+            ),
+        ) { entry ->
+            val hostId = entry.arguments?.getString(ARG_HOST_ID)
+            val sessionId = entry.arguments?.getString(ARG_SESSION_ID)
+            val known = state.hosts.firstOrNull { it.hostId == hostId }
+                ?.sessions?.firstOrNull { it.id == sessionId }
+            val chat = state.chat
+            // The machine stopped serving a transcript, or the session went. Either way there is
+            // nothing to draw, and the pop is in an effect for the reason the terminal route's is.
+            if (chat == null || known == null) {
+                LaunchedEffect(hostId, sessionId) { navController.popBackStack() }
+                return@composable
+            }
+            SessionChatScreen(
+                view = chat,
+                title = known.title,
+                onBack = { navController.popBackStack() },
+                // Only a screen that is up asks for a transcript: a terminal somebody is typing into
+                // must not send a file read across a relay after every burst of output.
+                onOpened = { viewModel.chatting(true) },
+                onClosed = { viewModel.chatting(false) },
+                onSend = viewModel::sendMessage,
+                onCopy = viewModel::copyText,
+                onDismissNotice = viewModel::dismissChatNotice,
+            )
+        }
+
+    }
+
+    /*
+     * Localhost: what the machine is serving, and one of those pages in your hand.
+     *
+     * Its own graph rather than a destination inside Settings, because the page opens with a **push**
+     * from the list — Asad, of the iOS version: *"it should not come like this up. It should just
+     * move like this when we click on localhost page… give it a native feel."* A modal rises from the
+     * bottom edge because it is an interruption; a page from your own machine is not one, it is where
+     * the tap was going.
+     */
+    navigation(startDestination = ROUTE_LOCALHOST, route = GRAPH_LOCALHOST) {
+        composable(ROUTE_LOCALHOST) {
+            // Read when the screen opens, and again when a socket that had gone comes back while it
+            // is up. A no-op over a machine that never advertised either capability.
+            LaunchedEffect(state.live) {
+                if (state.live) {
+                    viewModel.openLocalhost()
+                    viewModel.openDevServers()
+                }
+            }
+            val hostId = state.host?.hostId.orEmpty()
+            // Recomputed whenever the ports, the dev servers or this phone's own names move. The
+            // grouping is pure — see PortCatalog — so this is a fold over two lists rather than a
+            // second source of truth that could disagree with them.
+            val sections = remember(state.localhost, state.devServers, hostId, bookRevision) {
+                dev.terminaldeck.android.ports.PortCatalog.sections(
+                    ports = state.localhost?.ports.orEmpty(),
+                    devServers = state.devServers?.rows?.values?.toList().orEmpty(),
+                    names = portBook.names(hostId),
+                )
+            }
+            LocalhostScreen(
+                view = state.localhost,
+                devServers = state.devServers,
+                sections = sections,
+                machineLabel = state.hostLabel,
+                canServeHere = state.localhostOffered,
+                onRefresh = {
+                    viewModel.refreshPorts()
+                    viewModel.openDevServers()
+                },
+                onServeHere = { port ->
+                    viewModel.servePort(port)
+                    navController.navigate(ROUTE_LOCALHOST_PAGE)
+                },
+                onOpenOnMachine = viewModel::openPort,
+                onStartDevServer = viewModel::startDevServer,
+                onOpenSession = { sessionId ->
+                    state.host?.let { host ->
+                        navController.navigate(GRAPH_SESSIONS) {
+                            popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                        navController.navigate("terminal/${host.hostId}/$sessionId")
+                    }
+                },
+                onCopyAddress = { port -> viewModel.copyText("http://localhost:$port") },
+                onRename = { port, name ->
+                    portBook.setName(name, hostId, port)
+                    // The book is not observable state — it is a file — so the one thing that has to
+                    // move is a counter the grouping keys on. A snapshot read inside `remember`
+                    // cannot see a write to a map that is not snapshot state.
+                    bookRevision += 1
+                },
+                isFolded = { category -> portBook.isFolded(hostId, category) },
+                onFold = { category, folded ->
+                    portBook.setFolded(folded, hostId, category)
+                    bookRevision += 1
+                },
+            )
+        }
+
+        composable(ROUTE_LOCALHOST_PAGE) {
+            /*
+             * The page, or nothing.
+             *
+             * `state.tunnel` is null the instant the tunnel is closed — by the Close button, by the
+             * machine, or by the socket dropping — so this route pops itself rather than leaving a
+             * rendered page on screen with nothing behind it. That is the whole promise this screen
+             * makes, and the pop is in an effect for the reason the terminal route's is: navigating
+             * during composition leaves a black rectangle with no bar on it.
+             */
+            val tunnel = state.tunnel
+            if (tunnel == null) {
+                LaunchedEffect(Unit) { navController.popBackStack() }
+                return@composable
+            }
+            LocalhostBrowser(
+                view = tunnel,
+                onClose = {
+                    viewModel.closeServedPort()
+                    navController.popBackStack()
+                },
+            )
         }
     }
 
@@ -556,8 +781,18 @@ fun TerminalDeckApp(
                 onDevices = { navController.navigate(ROUTE_DEVICES) },
                 onWatch = { navController.navigate(ROUTE_WATCH) },
                 onGitHub = { github = true },
+                onAlerts = { navController.navigate(ROUTE_ALERTS) },
+                onAppearance = { navController.navigate(ROUTE_APPEARANCE) },
                 onApplyServerSetting = viewModel::applyServerSetting,
             )
+        }
+
+        composable(ROUTE_ALERTS) {
+            AlertsScreen(onBack = { navController.popBackStack() })
+        }
+
+        composable(ROUTE_APPEARANCE) {
+            AppearanceScreen(onBack = { navController.popBackStack() })
         }
 
         composable(ROUTE_MACHINES) {
@@ -669,6 +904,78 @@ fun TerminalDeckApp(
      * are answered without anything reaching here, which is the policy and is why this is null
      * almost always.
      */
+    /*
+     * Everything about one session, and the rows this phone has put away.
+     *
+     * Above the graph rather than inside one, because both are reachable from two places: the detail
+     * sheet from a long press on a row **and** from the ⋯ inside the session itself, and the archived
+     * list from the list's own ⋯. A destination inside the sessions graph could only be reached from
+     * one of those, and a copy in each would be two screens to keep in step.
+     */
+    detailFor?.let { session ->
+        val host = state.host
+        // Re-derived here rather than reused from inside the paired branch: these sheets are drawn
+        // above *both* branches, and the route is what decides whether Open leads somewhere.
+        val onList = navController.currentBackStackEntryAsState().value?.destination?.route == ROUTE_SESSIONS
+        // The session ended, or the machine was unpaired out from under this sheet. Both are real
+        // sequences; neither is a reason to draw a screen of blanks.
+        val live = host?.sessions?.firstOrNull { it.id == session.id }
+        if (host == null || live == null) {
+            LaunchedEffect(session.id) { detailFor = null }
+        } else {
+            SessionDetailSheet(
+                session = live,
+                host = host,
+                startableFolders = state.startableFolders,
+                canStart = state.canStartSession,
+                gitLoginsOffered = state.canAnswerGitLogins,
+                gitHubLogin = state.gitHubAccount?.login,
+                // Offered only from the list. Raised from inside the session, a button leading to
+                // the screen underneath is furniture — so the terminal passes a sheet with no Open.
+                onOpen = if (onList) {
+                    {
+                        detailFor = null
+                        navController.navigate("terminal/${host.hostId}/${live.id}")
+                    }
+                } else {
+                    null
+                },
+                onNewSessionHere = { folder ->
+                    detailFor = null
+                    viewModel.newSession(folder)
+                },
+                onCopy = viewModel::copyText,
+                onGitHub = {
+                    detailFor = null
+                    github = true
+                },
+                onDismiss = { detailFor = null },
+            )
+        }
+    }
+
+    if (archivedOpen) {
+        val hostId = state.host?.hostId.orEmpty()
+        val away = remember(state.sessions, hostId, shelfRevision) {
+            shelf.split(state.sessions, hostId).archived
+        }
+        ArchivedSessionsSheet(
+            sessions = away,
+            machine = state.hostLabel,
+            onUnarchive = { id ->
+                shelf.setArchived(false, hostId, id)
+                shelfRevision += 1
+            },
+            onOpen = { session ->
+                archivedOpen = false
+                state.host?.let { host ->
+                    navController.navigate("terminal/${host.hostId}/${session.id}")
+                }
+            },
+            onDismiss = { archivedOpen = false },
+        )
+    }
+
     state.credentialPrompt?.let { question ->
         CredentialPromptSheet(
             question = question,

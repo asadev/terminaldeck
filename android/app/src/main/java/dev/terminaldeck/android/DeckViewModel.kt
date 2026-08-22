@@ -43,6 +43,10 @@ import dev.terminaldeck.android.transfer.UploadView
 import dev.terminaldeck.android.transfer.shellQuoted
 import dev.terminaldeck.android.transport.DeckTransport
 import dev.terminaldeck.android.transport.Heartbeat
+import dev.terminaldeck.android.alerts.AlertReason
+import dev.terminaldeck.android.alerts.AwayReport
+import dev.terminaldeck.android.alerts.SessionAlert
+import dev.terminaldeck.android.alerts.SessionAlerts
 import dev.terminaldeck.android.transport.TransportState
 import dev.terminaldeck.android.tunnel.TunnelController
 import dev.terminaldeck.android.tunnel.TunnelView
@@ -153,6 +157,16 @@ class DeckViewModel(
      * non-answer a build with no stamp gives, and [HostVersion] refuses to compare against it.
      */
     private val clientVersion: String = "",
+    /**
+     * Put one alert on the lock screen.
+     *
+     * A lambda rather than a call into `AlertCenter`, for the reason [clipboard] and [network] are
+     * seams: this class is deliberately free of Android, and a notification manager reached from
+     * here would be a `Context` on the unit-test classpath where every field is a stub. The real one
+     * is wired in [factory]; the default does nothing, which is exactly what a test wants unless it
+     * says otherwise.
+     */
+    private val raiseAlert: (SessionAlert) -> Unit = {},
     private val transportFactory: (CoroutineScope, String, DeviceVault) -> DeckTransport,
 ) : ViewModel() {
 
@@ -164,6 +178,24 @@ class DeckViewModel(
      * itself between one look and the next and has people tapping the row that used to be there.
      */
     private val links = LinkedHashMap<String, HostLink>()
+
+    /**
+     * What each machine's sessions were doing last time anybody looked.
+     *
+     * One detector for every machine rather than one per link, because it is keyed by host id and
+     * because it has to survive a link being taken down and brought back: a reconnect is precisely
+     * the moment its answer matters, and a detector rebuilt with the link would seed itself from the
+     * list that arrived on the new connection and announce nothing.
+     */
+    private val alerts = SessionAlerts()
+
+    /**
+     * The one line the session list shows after the app has been away, or null.
+     *
+     * Held rather than derived, because it is about a *moment* — the first list after a connection
+     * came back — and nothing in the state that is folded every frame remembers moments.
+     */
+    private var awayReport: String? = null
 
     private var selectedHostId: String? = null
 
@@ -401,6 +433,33 @@ class DeckViewModel(
         publish()
     }
 
+    /**
+     * Hand this machine's session list to the detector, and do whatever its answer deserves.
+     *
+     * A **live** change is raised on the phone: a session stopping and asking for an answer is the
+     * reason this app is on a phone at all. A **catch-up** is not, and that is the judgement rather
+     * than an optimisation — a reconnect that lands while somebody is looking at the list is them
+     * watching it refill, and interrupting that with four banners is worse than a line of text.
+     *
+     * Both paths cost nothing over a machine that changed nothing: the detector answers with an
+     * empty list and the away line is left exactly as it was.
+     */
+    private fun noteAlerts(link: HostLink, reason: AlertReason) {
+        val raised = alerts.observe(link.hostId, link.label, link.sessions)
+        if (raised.isEmpty()) return
+        when (reason) {
+            AlertReason.Live -> for (alert in raised) raiseAlert(alert)
+            AlertReason.CatchUp -> awayReport = AwayReport.sentence(raised)
+        }
+    }
+
+    /** The away line was read. It says what changed *while you were gone*, so it is said once. */
+    fun dismissAwayReport() {
+        if (awayReport == null) return
+        awayReport = null
+        publish()
+    }
+
     private fun onFrame(link: HostLink, message: ServerMessage) {
         when (message) {
             /*
@@ -478,6 +537,9 @@ class DeckViewModel(
                 link.devServer?.renew()
                 link.loaded = message.sessions.isNotEmpty() || link.loaded
                 link.live = true
+                // The first list after a connection came back. What is in it happened while this
+                // phone was not listening, so it is reported as a line rather than as four banners.
+                noteAlerts(link, AlertReason.CatchUp)
             }
 
             // The same list again, because somebody edited it at the desk. Handled identically to
@@ -487,9 +549,13 @@ class DeckViewModel(
             is ServerMessage.Folders -> link.grantedFolders = message.folders
 
             is ServerMessage.Sessions -> {
+                val wasLive = link.live
                 link.sessions = message.sessions.map { it.toView() }
                 link.loaded = true
                 link.live = true
+                // A list on a connection that was already up is news; one that arrives as a machine
+                // comes back is a catch-up, and the difference is only in what is *done* with it.
+                noteAlerts(link, if (wasLive) AlertReason.Live else AlertReason.CatchUp)
             }
 
             is ServerMessage.Exit -> {
@@ -1025,6 +1091,9 @@ class DeckViewModel(
      */
     fun forget(hostId: String) {
         val link = links.remove(hostId) ?: return
+        // Its sessions are not going to change again, and keeping them would make a re-pair look
+        // like a machine where everything happened at once.
+        alerts.forget(hostId)
         link.stop()
         // Before the vault, because after `stop` there is no socket left to answer on and a prompt
         // still naming this machine would be three buttons with nowhere to send their answer.
@@ -1579,6 +1648,7 @@ class DeckViewModel(
             localhost = current?.localhost?.view(),
             devServers = current?.devServer?.view(),
             tunnel = current?.tunnels?.view(),
+            awayReport = awayReport,
             addServer = if (addingServer) {
                 AddServerView(working = serverSignInWorking, error = serverSignInError)
             } else {
@@ -1634,6 +1704,10 @@ class DeckViewModel(
                         // transport introduces itself with, read in the one place that is allowed
                         // to touch `android.os.Build`.
                         deviceName = "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}".trim(),
+                        // The one place a notification is actually posted. Gated inside
+                        // `AlertCenter` on the permission and on the two switches, so a build whose
+                        // permission was refused raises nothing and says nothing about it.
+                        raiseAlert = { dev.terminaldeck.android.alerts.AlertCenter.post(application, it) },
                     ) { scope, hostId, store ->
                         WebSocketDeckTransport(scope = scope, hostId = hostId, vault = store)
                     }
@@ -1745,6 +1819,13 @@ data class DeckUiState(
     val devServers: DevServerView? = null,
     /** The page this phone is serving from the machine, or null when none is open. */
     val tunnel: TunnelView? = null,
+    /**
+     * What changed while the app was away, as one line at the top of the session list.
+     *
+     * The honest half of having no push service: a phone whose process was killed is caught up on
+     * the next connection rather than woken, and this is where that catching-up is said.
+     */
+    val awayReport: String? = null,
     /** The watchable browser windows of the machine on screen, or null when it does not offer any. */
     val watch: WatchView? = null,
     /**
@@ -1881,6 +1962,15 @@ data class DeckUiState(
 
     /** Whether the open session's conversation can be read as a chat rather than as a terminal. */
     val chatOffered: Boolean get() = live && capabilities.contains(Capability.CHAT)
+
+    /**
+     * Whether git on this machine may ask **this phone** for a login.
+     *
+     * The one capability that runs backwards, so the sentence it justifies is about what this device
+     * would answer rather than about what it may ask for. Not gated on [live]: it is a fact about the
+     * machine's build, and the sentence is worth saying while the socket is down.
+     */
+    val canAnswerGitLogins: Boolean get() = capabilities.contains(Capability.CREDENTIAL)
 
     /**
      * Whether this machine holds an agent of its own that this device may drive.

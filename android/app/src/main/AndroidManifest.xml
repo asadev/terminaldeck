@@ -9,6 +9,21 @@
     <uses-permission android:name="android.permission.INTERNET" />
 
     <!--
+      Alerts.
+
+      A session on one of your machines that has stopped and is waiting for an answer, and one that
+      has finished. Requested at runtime on Android 13 and up, and asked for from the Alerts screen
+      rather than at launch: the prompt is one question, and asking it before the phone has been
+      paired with anything is how it gets refused.
+
+      It buys exactly what the Alerts screen says it buys and no more. There is no push service in
+      this product — no FCM key here and no server holding one — so an alert can only be raised
+      while this app's process is alive. Anything that happened while it was gone is caught up on
+      the next connection and reported as a line at the top of the session list.
+    -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!--
       There is deliberately no CAMERA permission. This app carried one for the pairing QR code, and
       the QR did not work; pairing is now six digits somebody reads off the machine and types, and
       `QRScanner` and the ZXing dependency went with it. A permission for a capability the binary

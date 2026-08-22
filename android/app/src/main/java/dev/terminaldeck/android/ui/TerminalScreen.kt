@@ -63,6 +63,7 @@ import com.termux.terminal.KeyHandler
 import com.termux.terminal.TerminalSession
 import com.termux.view.TerminalView
 import com.termux.view.TerminalViewClient
+import dev.terminaldeck.android.SessionBarView
 import dev.terminaldeck.android.session.RemoteSessionBinding
 import dev.terminaldeck.android.transfer.UploadPhase
 import dev.terminaldeck.android.transfer.UploadView
@@ -142,6 +143,18 @@ fun TerminalScreen(
      * worked. Found by tapping Copy on a real emulator and watching nothing happen.
      */
     notice: String? = null,
+    /**
+     * The plan ring, the context bar, the login this session runs as, and the way into the
+     * conversation. Null over a machine that advertises none of `usage`/`account`/`chat`/`send` —
+     * which gets a terminal that is exactly what it was rather than a bar with nothing in it.
+     */
+    bar: SessionBarView? = null,
+    onRefreshUsage: () -> Unit = {},
+    onSwitchAccount: (String) -> Unit = {},
+    /** The way into the conversation. Absent when this machine serves no transcript for it. */
+    onOpenChat: () -> Unit = {},
+    /** Everything about this one session, as a sheet. iOS reaches it from here and from the row. */
+    onDetails: () -> Unit = {},
     /**
      * Whether this session has a control cluster worth opening.
      *
@@ -320,6 +333,18 @@ fun TerminalScreen(
                             tint = MaterialTheme.colorScheme.onBackground,
                         )
                     }
+                }
+
+                // Between the title and the connection strip, so both stay legible: the chips
+                // are about the session, the strip is about the socket, and the strip has to be the
+                // last thing before the terminal or it reads as a property of whatever is under it.
+                bar?.let { row ->
+                    SessionBarRow(
+                        view = row,
+                        onRefresh = onRefreshUsage,
+                        onSwitchAccount = onSwitchAccount,
+                        onOpenChat = onOpenChat,
+                    )
                 }
 
                 if (!transport.isOnline) {
