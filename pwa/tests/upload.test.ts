@@ -188,6 +188,17 @@ describe('the files app.terminaldeck.dev is built from', () => {
       // that was written down.
       'src/shared/scan.ts',
       'src/shared/sealed.ts',
+      // The server-address token, decoded by the function that writes it. This
+      // crossing is the fix for a measured failure rather than a convenience:
+      // the encoder and all three client screens were built in parallel, each
+      // client grew its own liberal reader, and none of them had ever seen the
+      // `srv1.` prefix a host actually prints — so every phone refused every
+      // real address on paste, behind a green suite. This client now hands the
+      // canonical form to `parseServerAddress`, so there is one implementation
+      // of the token and one place the base64url fold lives; `asEndpoint` still
+      // makes this client's own decision about what came out. It imports only
+      // `pairing-link.ts`, which crosses above.
+      'src/shared/server-address.ts',
       'src/shared/short-code.ts',
     ])
   })

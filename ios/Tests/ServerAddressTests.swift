@@ -65,6 +65,12 @@ final class ServerAddressTests: XCTestCase {
     }
 
     /// One unbroken token survives a paste; four lines of JSON do not.
+    ///
+    /// `td1:` is a **tolerance**, not the format — no part of this product has
+    /// ever printed that label, and believing otherwise is how this parser came
+    /// to ship without knowing the one prefix that is real. The format a host
+    /// writes is `srv1.` and it is pinned, from the encoder's own output, in
+    /// `ServerAddressSeamTests`.
     func testTheOneLineBlob() {
         let json = """
         {"kind":"relay","url":"\(relay)","hostId":"\(hostId)","hostKey":"\(keyBase64URL)"}
@@ -154,7 +160,7 @@ final class ServerAddressTests: XCTestCase {
     /// Every refusal names something to do. A sentence that only describes the
     /// parser is a sentence nobody can act on.
     func testEveryRefusalSaysSomething() {
-        for error in [ServerAddressError.empty, .notAnAddress, .relay, .hostId, .hostKey] {
+        for error in [ServerAddressError.empty, .notAnAddress, .wrongVersion(2), .relay, .hostId, .hostKey] {
             XCTAssertFalse(error.detail.isEmpty)
             XCTAssertTrue(error.detail.hasSuffix("."), "\(error) should read as a sentence")
         }

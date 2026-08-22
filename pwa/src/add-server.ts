@@ -52,8 +52,9 @@ import {
 } from './protocol-client'
 import { relaySocket } from './relay-socket'
 import { INSTALL_COMMAND, SignIn, type SignInOutcome } from './signin'
-import { readServerAddress, type AddressFault } from './server-address'
+import { readServerAddress, type ReadAddress } from './server-address'
 import type { StaticKeyPair } from '../../src/shared/sealed'
+import { SERVER_ADDRESS_VERSION } from '../../src/shared/server-address'
 
 /** Re-exported so the screen has one import for everything it draws. */
 export { INSTALL_COMMAND }
@@ -80,12 +81,32 @@ export type CheckedFields =
   | { ok: true; endpoint: RelayEndpoint; username: string; secret: string; method: SignInMethod }
   | { ok: false; problem: FieldFault }
 
-const ADDRESS_SENTENCE: Record<AddressFault, string> = {
-  empty: 'Paste the server address that machine printed.',
-  // Names the three facts rather than the encoding: the encoding is not
-  // something a person pasting can act on, and a missing fact is.
-  unreadable:
-    'That is not a server address. It is the block a machine prints for itself — the relay, its host id and its key, all three.',
+/**
+ * The sentence for a paste that did not become an endpoint.
+ *
+ * A function rather than a lookup table because one of the three refusals has a
+ * number in it, and that number is the whole value of the refusal: an address
+ * announcing a format this build does not read is not a bad paste, it is two
+ * builds that disagree, and the person holding it needs to be told which one to
+ * move rather than sent back to their clipboard.
+ */
+function addressSentence(read: Extract<ReadAddress, { ok: false }>): string {
+  switch (read.fault) {
+    case 'empty':
+      return 'Paste the server address that machine printed.'
+    // Names the three facts rather than the encoding: the encoding is not
+    // something a person pasting can act on, and a missing fact is.
+    case 'unreadable':
+      return 'That is not a server address. It is the block a machine prints for itself — the relay, its host id and its key, all three.'
+    case 'version':
+      // Both directions, because the sentence has to name the half that is
+      // behind. Only one of them can happen today — version 1 is the first
+      // there has been — and writing the pair costs a clause and means the
+      // wrong one can never be printed the day there is a second.
+      return read.version > SERVER_ADDRESS_VERSION
+        ? `That address is version ${read.version} and this app reads version ${SERVER_ADDRESS_VERSION}, so this app is older than that server. Update this app — reload the page — and paste the address again.`
+        : `That address is version ${read.version} and this app reads version ${SERVER_ADDRESS_VERSION}, so that server is older than this app. Update the server, then copy its address again.`
+  }
 }
 
 /** Control characters and delete, which a login may not contain. See below. */
@@ -107,7 +128,7 @@ const CONTROL = /[\u0000-\u001f\u007f]/
 export function checkFields(fields: SignInFields): CheckedFields {
   const address = readServerAddress(fields.address)
   if (!address.ok) {
-    return { ok: false, problem: { field: 'address', message: ADDRESS_SENTENCE[address.fault] } }
+    return { ok: false, problem: { field: 'address', message: addressSentence(address) } }
   }
 
   const username = fields.username.trim()
