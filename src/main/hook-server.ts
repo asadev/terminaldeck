@@ -114,6 +114,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { connect } from 'node:net'
 import { homedir } from 'node:os'
 import { dirname, posix, win32 } from 'node:path'
+import { AGENT_CATALOG } from '../shared/agent-catalog'
 import { BRAND } from '../shared/brand'
 import { currentPlatform, isWindows, type Platform } from './platform/host'
 import { writeSecretFile } from './remote/secret-file'
@@ -166,6 +167,12 @@ export interface HookEvent {
   receivedAt: number
   /** The parsed payload, or an empty object when the body was not JSON. */
   payload: Record<string, unknown>
+  /**
+   * What the hook process read out of its own environment, or null when the
+   * client did not report one — which is every POSIX hook, where `ps eww` can
+   * read the agent directly and the curl command carries no such header.
+   */
+  agentEnv: AgentEnvReport | null
 }
 
 export type HookEventListener = (event: HookEvent) => void
@@ -290,6 +297,11 @@ const MAX_SOCKET_PATH_BYTES = 100
 /** Header names, kept in step with the brand rather than spelled out twice. */
 export const TOKEN_HEADER = `x-${BRAND.id}-token`
 export const SESSION_HEADER = `x-${BRAND.id}-session`
+/**
+ * The agent's own environment, reported by the Windows client. See
+ * {@link parseAgentEnv} for why this channel exists and what it carries.
+ */
+export const AGENT_ENV_HEADER = `x-${BRAND.id}-agent-env`
 
 /**
  * Hook payloads carry tool input, which for a large Write is genuinely big.
@@ -795,6 +807,84 @@ function str(value: unknown): string | null {
   return typeof value === 'string' && value !== '' ? value : null
 }
 
+/* ------------------------------------------------------- agent environment -- */
+
+/**
+ * The agent's environment as its own hook read it, from inside the process.
+ *
+ * ## Why a hook is the one honest witness on Windows
+ *
+ * `session-account.ts` names a session's login by reading the running agent's
+ * environment — `CLAUDE_CONFIG_DIR` decides which store, and which store
+ * decides which account. On POSIX `ps eww` reads it from outside. On Windows
+ * there is no unelevated way to read another process's environment (the PEB
+ * walk needs `PROCESS_VM_READ` and native code), so the app was withholding the
+ * account of every agent typed at a prompt — which on his PC is most of them.
+ *
+ * The hook command, though, runs *inside* the agent's own process tree: the CLI
+ * spawns it, so the client script inherits exactly the environment the agent is
+ * using. It does not have to snoop — it is the environment. So the Windows
+ * client reads the few variables that decide an account and sends them along
+ * with every event, base64 over one header, and `session-account.ts` treats the
+ * report as the same class of evidence the `ps` rung produces on a Mac.
+ *
+ * ## The same absence rule as the SIP guard
+ *
+ * The Mac rung believes a *missing* `CLAUDE_CONFIG_DIR` only when the rest of
+ * the environment arrived with it, because macOS scrubs SIP-protected binaries
+ * and an empty dump proves nothing. The report keeps that shape: `path` is true
+ * only when the client saw a `PATH`, and a report without it proves an agent
+ * ran a hook and nothing about its store — so an absence in it is never turned
+ * into "the default account".
+ */
+export interface AgentEnvReport {
+  /**
+   * The config-directory variables that were set, by name — `CLAUDE_CONFIG_DIR`
+   * and its peers from the agent catalog. A variable that was unset is absent.
+   */
+  vars: Record<string, string>
+  /** The client saw a PATH, which is the proof the environment was read. */
+  envRead: boolean
+  /** The home the agent runs under (`USERPROFILE`), for the foreign-home rung. */
+  home: string | null
+}
+
+/** The variables worth carrying: every agent's config-directory redirect. */
+const AGENT_ENV_VARS: readonly string[] = Object.values(AGENT_CATALOG)
+  .map((entry) => entry.configEnv)
+  .filter((name): name is string => name !== null)
+
+/**
+ * Decode one {@link AGENT_ENV_HEADER} value, strictly, or answer null.
+ *
+ * Base64 because the values are paths under somebody's account name, which on
+ * Windows is legally non-ASCII, and an HTTP header is not. `Buffer.from(…,
+ * 'base64')` never throws — it decodes what it can — so the JSON parse is the
+ * gate, and anything that does not parse to the expected shape is a report
+ * nobody sent rather than an error worth failing a hook over.
+ */
+export function parseAgentEnv(header: unknown): AgentEnvReport | null {
+  if (typeof header !== 'string' || header === '') return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(Buffer.from(header, 'base64').toString('utf8'))
+  } catch {
+    return null
+  }
+  if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+    const raw = parsed as Record<string, unknown>
+    const vars: Record<string, string> = {}
+    if (typeof raw.vars === 'object' && raw.vars !== null && !Array.isArray(raw.vars)) {
+      for (const [name, value] of Object.entries(raw.vars as Record<string, unknown>)) {
+        if (typeof value === 'string' && value.trim() !== '') vars[name] = value.trim()
+      }
+    }
+    const home = typeof raw.home === 'string' && raw.home.trim() !== '' ? raw.home.trim() : null
+    return { vars, envRead: raw.path === true, home }
+  }
+  return null
+}
+
 /**
  * Turn a raw payload into the fields the app actually uses.
  *
@@ -807,6 +897,7 @@ export function toHookEvent(
   event: string,
   sessionId: string | null,
   body: string,
+  agentEnv: AgentEnvReport | null = null,
 ): HookEvent {
   let payload: Record<string, unknown> = {}
   if (body.trim() !== '') {
@@ -829,6 +920,7 @@ export function toHookEvent(
     toolName: str(payload.tool_name),
     receivedAt: Date.now(),
     payload,
+    agentEnv,
   }
 }
 
@@ -984,7 +1076,17 @@ async function handle(
   // Only now tell the app. Subscribers run synchronously, and a slow one on
   // this side of the response would be a slow one inside the user's turn: the
   // agent is stopped dead until its hook command returns.
-  if (route) emit(toHookEvent(route.provider, route.event, sessionId, body))
+  if (route) {
+    emit(
+      toHookEvent(
+        route.provider,
+        route.event,
+        sessionId,
+        body,
+        parseAgentEnv(req.headers[AGENT_ENV_HEADER]),
+      ),
+    )
+  }
 }
 
 /* --------------------------------------------------------------- lifecycle -- */
@@ -1192,6 +1294,19 @@ try {
   # binds and the config records.
   $name = $config.pipe -replace '^\\\\\\\\\\.\\\\pipe\\\\', ''
   $bytes = [System.Text.Encoding]::UTF8.GetBytes($body)
+  # The environment this script inherited IS the running agent's own — the CLI
+  # spawned this process — and a hook is the only honest way to read that
+  # environment on Windows, where nothing unelevated can read another
+  # process's. The app names this session's account from the report; PATH
+  # rides along as the proof the environment was genuinely read, the same
+  # guard the macOS rung applies to a scrubbed \`ps eww\`.
+  $agentVars = @{}
+  foreach ($varName in @(${AGENT_ENV_VARS.map((name) => `'${name}'`).join(', ')})) {
+    $varValue = [Environment]::GetEnvironmentVariable($varName)
+    if ($varValue) { $agentVars[$varName] = $varValue }
+  }
+  $agentReport = @{ vars = $agentVars; path = [bool]$env:PATH; home = $env:USERPROFILE } | ConvertTo-Json -Compress
+  $agentEnv = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($agentReport))
   $pipe = New-Object System.IO.Pipes.NamedPipeClientStream('.', $name, [System.IO.Pipes.PipeDirection]::InOut)
   $pipe.Connect(1000)
   try {
@@ -1200,6 +1315,7 @@ try {
       "content-type: application/json\`r\`n" +
       "${TOKEN_HEADER}: $($config.token)\`r\`n" +
       "${SESSION_HEADER}: $($env:${BRAND.sessionEnvVar})\`r\`n" +
+      "${AGENT_ENV_HEADER}: $agentEnv\`r\`n" +
       "Content-Length: $($bytes.Length)\`r\`n" +
       "Connection: close\`r\`n\`r\`n"
     $headBytes = [System.Text.Encoding]::ASCII.GetBytes($head)
