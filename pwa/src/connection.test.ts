@@ -176,7 +176,9 @@ describe('the handshake', () => {
       // Not decoration. Without `credential` here the desktop never asks this
       // client anything, and a push from a folder it was granted fails with
       // "your device isn't reachable" about a tab that is open and connected.
-      capabilities: ['credential'],
+      // `devices` is named for the same shape of reason: the host sends
+      // `devices.changed` only to a connection that claimed it.
+      capabilities: ['credential', 'devices'],
     })
   })
 

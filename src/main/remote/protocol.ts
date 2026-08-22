@@ -456,6 +456,21 @@ export const CAPABILITY = {
   account: 'account',
   logins: 'logins',
   /**
+   * The roster of every device signed in here, and the one verb that takes one
+   * away.
+   *
+   * A host lists it in `welcome.capabilities` for one of the owner's own devices
+   * only — never a guest — and a client that sees it may ask for the list
+   * (`devices.list`), remove a device (`devices.revoke`), and hear the
+   * unsolicited `devices.changed` when the roster moves. Approving is not here:
+   * a device is admitted at the trusted surface and nowhere else, so the wire
+   * carries revoke, which doubles as deny, and never an approve. Withheld from a
+   * guest for the reason `logins` is: there is no push frame that could correct
+   * a welcome later, so a device that may not manage the roster is never told
+   * the capability exists.
+   */
+  devices: 'devices',
+  /**
    * The conversation, as a chat rather than as a terminal.
    *
    * Asad, about the desktop's chat view: *"my message should start from the
@@ -563,6 +578,7 @@ export const CAPABILITIES: string[] = [
   CAPABILITY.send,
   CAPABILITY.account,
   CAPABILITY.logins,
+  CAPABILITY.devices,
   CAPABILITY.chat,
   CAPABILITY.windows,
   CAPABILITY.hostWindows,
@@ -1058,7 +1074,7 @@ const MAX_TOKEN_LENGTH = 200
  * carry a thousand of them — and what it buys is that a `hello` cannot be made
  * to cost this process a megabyte of strings before it has authenticated.
  */
-export const MAX_CLIENT_CAPABILITIES = 16
+export const MAX_CLIENT_CAPABILITIES = 24
 export const MAX_CAPABILITY_LENGTH = 32
 
 /**
@@ -1129,6 +1145,33 @@ export interface RemoteSession {
 export interface DeviceDescriptor {
   name: string
   platform: string
+}
+
+/**
+ * One row of the device roster, as `devices.rows`/`devices.revoked`/
+ * `devices.changed` carry it.
+ *
+ * The host's own `Device` (device-auth.ts) plus the device's kind and whether it
+ * has a live socket right now — three facts a phone's device screen shows that
+ * are not all in one place on the host. Restated here rather than imported
+ * because this file imports nothing (the header rule): `kind` mirrors
+ * `DeviceKind` (device-kind.ts) and `status` is `DeviceStatus` minus `revoked`,
+ * because a revoked row is never listed — it matches the CLI's own filter.
+ *
+ * `addedAt` and `lastSeenAt` are epoch milliseconds straight off the `Device`;
+ * `lastSeenAt` is null until the device has attached at least once. `fingerprint`
+ * is the six-group key form a person can read and compare, or null for a device
+ * paired before it had one.
+ */
+export interface DeviceRosterRow {
+  id: string
+  name: string
+  kind: 'mine' | 'guest'
+  status: 'pending' | 'approved'
+  addedAt: number
+  lastSeenAt: number | null
+  connected: boolean
+  fingerprint: string | null
 }
 
 /* -------------------------------------------------- capability `copilot` -- */
@@ -2493,6 +2536,24 @@ export type ClientMessage =
    */
   | { t: 'chat.read'; rid: string; id: string; tail: boolean }
 
+  /* ---- capability `devices` ------------------------------------------- */
+  /**
+   * List every device signed in here. Capability `devices`, and one of the
+   * owner's own devices only — a guest is never told the capability exists and
+   * is refused if it sends this anyway. Answered with `devices.rows`.
+   */
+  | { t: 'devices.list'; rid: string }
+  /**
+   * Remove one device. Its credential is revoked, its sockets dropped, and every
+   * per-device store forgets it — the same cascade the desktop's own Settings
+   * runs. `device` is the id to remove. Self-revoke is legal and is sign-out:
+   * the cascade drops the asker's own socket, and a client treats the socket
+   * closing after this frame as the confirmation. Answered with
+   * `devices.revoked`, unless the asker was the one removed. There is no approve
+   * verb: revoke doubles as deny for a pending device.
+   */
+  | { t: 'devices.revoke'; rid: string; device: string }
+
 export type ServerMessage =
   | {
       t: 'welcome'
@@ -3071,6 +3132,29 @@ export type ServerMessage =
    * every outstanding request was about.
    */
   | { t: 'session.sent'; rid: string; id: string; ok: boolean; message: string }
+
+  /* ---- capability `devices` ------------------------------------------- */
+  /** The answer to one `devices.list`, and only ever to one. `rid` is echoed. */
+  | { t: 'devices.rows'; rid: string; devices: DeviceRosterRow[] }
+  /**
+   * The answer to one `devices.revoke`. `ok` is false when the id named nothing
+   * or was already revoked; `message` is a sentence for either outcome; and the
+   * fresh roster rides along so the asking screen redraws without a second ask.
+   * Not sent when the asker revoked itself — that socket is already closing, and
+   * the close is the confirmation.
+   */
+  | { t: 'devices.revoked'; rid: string; ok: boolean; message: string; devices: DeviceRosterRow[] }
+  /**
+   * The roster moved — a device paired, was approved, or was revoked — pushed
+   * without being asked.
+   *
+   * Sent only to a connection that named `devices` in its hello **and** whose
+   * device kind is `mine`, both read at send time. A build that never named it
+   * closes the channel on a frame it cannot parse — the precedent every
+   * host→client push in this protocol guards against — so the capability in the
+   * hello is what makes this frame safe to send hopefully.
+   */
+  | { t: 'devices.changed'; devices: DeviceRosterRow[] }
 
 /**
  * Every refusal this protocol can name, as a value rather than only a type.
@@ -3931,6 +4015,28 @@ export function parseClientMessage(raw: unknown): ParseResult {
       return { ok: true, message: { t: 'chat.read', rid: requestId, id: sessionId, tail: parsed.tail === true } }
     }
 
+    /* ---- capability `devices` ------------------------------------------- */
+    // Shape only. Whether this host keeps a roster, whether this device is one
+    // of the owner's own, and whether the id names a real device are the
+    // server's questions — this narrows the frame and nothing more.
+    case 'devices.list': {
+      const requestId = id(parsed.rid)
+      if (!requestId) return bad('devices.list without a request id')
+      return { ok: true, message: { t: 'devices.list', rid: requestId } }
+    }
+    case 'devices.revoke': {
+      const requestId = id(parsed.rid)
+      if (!requestId) return bad('devices.revoke without a request id')
+      // A device id is a `randomUUID` from the trust store, so it satisfies the
+      // same `ID_RE` a session id does. Anything else is refused here rather
+      // than passed to the store, which would treat an unknown string as a
+      // no-op and answer `ok: false` — a truthful answer, but one earned after a
+      // lookup this refusal saves. The value is never echoed into the reason.
+      const device = id(parsed.device)
+      if (!device) return bad('devices.revoke without a device id')
+      return { ok: true, message: { t: 'devices.revoke', rid: requestId, device } }
+    }
+
     /* ---- capability `send` ---------------------------------------------- */
     // Shape only, and the shape is `input`'s: this frame carries the same bytes
     // to the same `SessionAccess.write`. What it does not carry is an attach,
@@ -4499,6 +4605,50 @@ export function parseSession(value: unknown): RemoteSession | null {
   if (provider === null || status === null) return null
   const exitCode = value.exitCode === null ? null : asWhole(value.exitCode)
   return { id, title, cwd, provider, status, exitCode }
+}
+
+/**
+ * One device-roster row, or null. A malformed row is skipped rather than
+ * fatal, exactly as {@link parseSession} skips one: a phone that shows nine of
+ * ten devices is useful; one that shows none because the tenth had a bad kind
+ * is not.
+ *
+ * `kind` and `status` are narrowed to their literals here — a value outside the
+ * set is not guessed at, it drops the row — because both drive what the screen
+ * offers, and a row read as `mine` that the host meant as `guest` would draw a
+ * Remove button beside the wrong claim about who it is.
+ */
+export function parseDeviceRow(value: unknown): DeviceRosterRow | null {
+  if (!isRecord(value)) return null
+  const id = asString(value.id)
+  const name = asString(value.name)
+  if (id === null || id === '' || name === null) return null
+  const kind = value.kind === 'mine' || value.kind === 'guest' ? value.kind : null
+  if (kind === null) return null
+  const status = value.status === 'pending' || value.status === 'approved' ? value.status : null
+  if (status === null) return null
+  const lastSeenAt = value.lastSeenAt === null ? null : asWhole(value.lastSeenAt)
+  return {
+    id,
+    name,
+    kind,
+    status,
+    addedAt: stamp(value.addedAt),
+    lastSeenAt,
+    connected: value.connected === true,
+    fingerprint: asString(value.fingerprint),
+  }
+}
+
+/** A list of device rows, unreadable ones dropped, mirroring {@link sessionRows}. */
+function deviceRows(value: unknown): DeviceRosterRow[] | null {
+  if (!Array.isArray(value)) return null
+  const rows: DeviceRosterRow[] = []
+  for (const entry of value) {
+    const row = parseDeviceRow(entry)
+    if (row !== null) rows.push(row)
+  }
+  return rows
 }
 
 /**
@@ -5575,6 +5725,35 @@ export function parseServerFrame(parsed: unknown): ServerParse {
           message: asString(parsed.message) ?? '',
         },
       }
+    }
+    /* ---- capability `devices` ------------------------------------------- */
+    case 'devices.rows': {
+      const requestId = id(parsed.rid)
+      if (requestId === null) return { ok: false, reason: 'devices.rows without a request id' }
+      const devices = deviceRows(parsed.devices)
+      if (devices === null) return { ok: false, reason: 'devices.rows without a device list' }
+      return { ok: true, message: { t: 'devices.rows', rid: requestId, devices } }
+    }
+    case 'devices.revoked': {
+      const requestId = id(parsed.rid)
+      if (requestId === null) return { ok: false, reason: 'devices.revoked without a request id' }
+      const devices = deviceRows(parsed.devices)
+      if (devices === null) return { ok: false, reason: 'devices.revoked without a device list' }
+      return {
+        ok: true,
+        message: {
+          t: 'devices.revoked',
+          rid: requestId,
+          ok: parsed.ok === true,
+          message: asString(parsed.message) ?? '',
+          devices,
+        },
+      }
+    }
+    case 'devices.changed': {
+      const devices = deviceRows(parsed.devices)
+      if (devices === null) return { ok: false, reason: 'devices.changed without a device list' }
+      return { ok: true, message: { t: 'devices.changed', devices } }
     }
     case 'error': {
       const code = asErrorCode(parsed.code)

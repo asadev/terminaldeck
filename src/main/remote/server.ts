@@ -77,6 +77,7 @@ import type { WindowAskDesk } from './window-asks'
 // union — importing it pulls in the store's module but not its file, and the
 // store itself stays type-only for the reason `FolderGrants` above does.
 import { asDeviceKind, type DeviceKindRecord, type DeviceKinds } from './device-kind'
+import { createDeviceRoster, type DeviceRoster } from './device-roster'
 // Type-only for the same reason `FolderGrants` is: `index.ts` owns the one
 // instance, and `copilotFrameAllowed` is a pure function over a table, so
 // importing it pulls in nothing but `protocol.ts` — which this file already has.
@@ -907,6 +908,15 @@ export interface RemoteEndpointOptions {
    */
   copilotEligible?(deviceId: string): boolean
   /**
+   * The device roster, and the one revoke cascade. **Absent is the switch**,
+   * like every other capability here: a host with no roster does not advertise
+   * `devices`, so a phone never draws a device screen and never sends a frame
+   * this endpoint would refuse. Built in `registerRemoteIpc` over the trust
+   * store and the core's `forgetDevice`, so the wire, the desktop IPC and the
+   * headless CLI all run one cascade — see `device-roster.ts`.
+   */
+  roster?: DeviceRoster
+  /**
    * Which of this machine's coding logins this particular device may use.
    *
    * **Optional, and absent means every device may use every login** — which is
@@ -1054,6 +1064,17 @@ export interface RemoteEndpoint {
    */
   sessionsChanged(): number
   /**
+   * The device roster moved — a device paired, was approved, or was revoked.
+   * Push `devices.changed` to every connection that may hear it, and return how
+   * many were told.
+   *
+   * Per connection like `sessionsChanged`, and gated twice at send time: the
+   * capability the device named in its hello, and its kind now. A guest and a
+   * build that never named `devices` are both skipped — the latter because it
+   * would close the channel on a frame it cannot parse.
+   */
+  rosterChanged(): number
+  /**
    * A browser window in this app was attached to, or detached from, a session on
    * a device. Re-send the holdings to every connection that can hear them.
    *
@@ -1150,6 +1171,11 @@ export interface RemoteServer {
    * Push the new list to every connected device. Zero when none are connected.
    */
   sessionsChanged(): number
+  /**
+   * The device roster moved. Push `devices.changed` to every eligible
+   * connection; zero when the server is down or none may hear it.
+   */
+  rosterChanged(): number
   /**
    * A browser window in this app was attached to, or detached from, a session on
    * a device. Re-send the holdings to every connection that can hear them.
@@ -1830,6 +1856,12 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     // be asked for a GitHub login and then never ask, which is a screen in
     // somebody's app for a thing that cannot happen.
     if (name === CAPABILITY.credential) return options.credentials !== undefined
+    // Same rule once more: the roster is the thing that makes the feature
+    // possible, so a host with none does not advertise `devices` and a phone
+    // never draws a device screen or sends a frame this endpoint would refuse.
+    // (`capabilitiesFor` narrows it further, to the owner's own devices — this
+    // is only whether the host speaks it at all.)
+    if (name === CAPABILITY.devices) return options.roster !== undefined
     /*
      * Same rule, running the same way round as `credential`: this one is a
      * question *this* machine asks a device, so what it is gated on is having a
@@ -2082,6 +2114,13 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     const withheld: string[] = []
     if (!anyAccountFor(deviceId)) withheld.push(CAPABILITY.account)
     if (!ownDevice(deviceId)) withheld.push(CAPABILITY.logins)
+    // And the roster, on the same rule as `logins` above and for the same
+    // reason: listing every device signed in here and taking one away are acts
+    // on the machine, not on a folder somebody was lent, so they go to one of
+    // the owner's own devices only. Stripped here rather than only refused
+    // because no push frame could correct a welcome later — a guest must never
+    // be told the capability exists.
+    if (!ownDevice(deviceId)) withheld.push(CAPABILITY.devices)
     const narrowed = withheld.length === 0 ? advertised : advertised.filter((name) => !withheld.includes(name))
     if (copilotEligible(deviceId)) return narrowed
     // `web` goes with it, and for the same reason: opening a page puts a window
@@ -3235,6 +3274,37 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
   }
 
   /**
+   * Push the device roster to every connection that may hear it, without waiting
+   * for one to ask. Fired when a device pairs, is approved, or is revoked.
+   *
+   * Two gates, both read *at send time*, and that is the security property: the
+   * capability the device named in its hello, and its kind now. A device demoted
+   * or revoked between the trigger and this loop hears nothing — the kind is the
+   * live answer through `ownDevice`, not the one the device had when it
+   * connected. And a build that never named `devices` is skipped, because it
+   * would close the channel on a frame it has never parsed — the same rule
+   * `tellWindowHolds` follows for `hostWindows`.
+   *
+   * The payload is recomputed inside the loop, per connection, never one list
+   * fanned out. The roster is a global list today, so every eligible connection
+   * gets the same rows — but the rule that a push is built per socket is the one
+   * that stays correct on the day it stops being global, and it is cheap.
+   */
+  function tellRoster(): number {
+    const roster = options.roster
+    if (roster === undefined) return 0
+    let told = 0
+    for (const connection of live.values()) {
+      if (!connection.deviceId) continue
+      if (!connection.capabilities.includes(CAPABILITY.devices)) continue
+      if (!ownDevice(connection.deviceId)) continue
+      send(connection, { t: 'devices.changed', devices: roster.list() })
+      told += 1
+    }
+    return told
+  }
+
+  /**
    * Tell one connection which of its own sessions this app is holding a browser
    * window for.
    *
@@ -3775,6 +3845,60 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
       // machine has no way to write a better one about a computer it is not on.
       message: answer.message,
       session: answer.session,
+    })
+  }
+
+  /**
+   * Serve one `devices.list` or `devices.revoke`.
+   *
+   * Synchronous, unlike the readings around it: listing the roster and running
+   * the revoke cascade are in-memory and file writes this process already holds,
+   * with no CLI to boot and no probe to wait on — the neighbours are promises
+   * because they spawn agents, and nothing here does.
+   *
+   * The gate is the serve half of the two named in `capabilitiesFor`: the
+   * advertisement decides what a *client of ours* draws, this decides what *any*
+   * client gets — a build older than the rule, or one somebody wrote, that sends
+   * the frame without having read the welcome. `unauthorized` rather than
+   * `unavailable`: the roster is real and present, it is simply not a guest's to
+   * touch, and the refusal on a channel that stays open must not cost the device
+   * the terminal it is holding.
+   */
+  function devicesServe(
+    connection: LiveConnection,
+    deviceId: string,
+    message: Extract<ClientMessage, { t: 'devices.list' | 'devices.revoke' }>,
+  ): void {
+    const roster = options.roster
+    if (roster === undefined || !advertised.includes(CAPABILITY.devices) || !ownDevice(deviceId)) {
+      send(connection, {
+        t: 'error',
+        code: 'unauthorized',
+        message: 'Only your own devices can manage the devices signed in here.',
+      })
+      return
+    }
+    if (message.t === 'devices.list') {
+      send(connection, { t: 'devices.rows', rid: message.rid, devices: roster.list() })
+      return
+    }
+    // A revoke runs the one cascade — revoke, drop, forget, announce — and the
+    // announce inside it is what pushes `devices.changed` to every other
+    // eligible connection, so the direct answer below is only for the asker.
+    const ok = roster.revoke(message.device)
+    // Self-revoke is legal and is sign-out: the cascade dropped this very socket,
+    // so there is nothing left to answer on and the client reads the close as
+    // the confirmation. Reached whenever the asker removed itself.
+    if (!live.has(connection.id)) return
+    send(connection, {
+      t: 'devices.revoked',
+      rid: message.rid,
+      ok,
+      // A sentence for either outcome, neither of which quotes the id. `ok` false
+      // means the id named nothing or was already gone — a truthful "nothing to
+      // do" rather than an error.
+      message: ok ? 'That device was removed.' : 'That device is not signed in here.',
+      devices: roster.list(),
     })
   }
 
@@ -4423,6 +4547,13 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
           })
         })
         return
+      case 'devices.list':
+      case 'devices.revoke':
+        // Synchronous, not awaited: unlike the readings above, listing the
+        // roster and running the revoke cascade spawn nothing and wait on
+        // nothing, exactly as `session.send` two cases below is synchronous.
+        devicesServe(connection, connection.deviceId, message)
+        return
       case 'upload.begin':
       case 'upload.data':
       case 'upload.end':
@@ -4959,6 +5090,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     },
     foldersChanged: tellFolders,
     sessionsChanged: tellSessions,
+    rosterChanged: tellRoster,
     windowsHeldChanged: tellWindowsHeld,
     copilotGrantChanged: tellCopilotGrant,
     dropConnection(connectionId: string): boolean {
@@ -5611,6 +5743,10 @@ export function createRemoteServer(options: RemoteServerOptions): RemoteServer {
     // Nothing to tell with the server down: no device is connected, and each
     // one reads the list it missed in its `welcome` the next time it is.
     sessionsChanged: () => endpoint?.sessionsChanged() ?? 0,
+    // Same rule, same reason: with the server down there is no socket to push a
+    // roster on, and every eligible device reads the current one in its next
+    // `welcome`.
+    rosterChanged: () => endpoint?.rosterChanged() ?? 0,
     // Same rule, same reason: with the server down there is no socket to say
     // it on, and every device reads the set it missed in its next `welcome`.
     windowsHeldChanged: () => endpoint?.windowsHeldChanged() ?? 0,
@@ -5737,6 +5873,19 @@ export interface RemoteIpcDeps {
    * another, and the two would agree right up until somebody approved a device.
    */
   kinds: DeviceKinds
+  /**
+   * Forget every per-device store row when a device is revoked — the store half
+   * of the cascade `device-roster.ts` runs.
+   *
+   * Required, not optional, and that is the fail-closed choice: a host that
+   * forgot to wire it would revoke a device's credential and drop its socket
+   * while leaving its folder, session, account and window grants in place — a
+   * permission with nobody to hold it, which is precisely the shape of hole this
+   * store exists to close. Both shells wire it to `core.forgetDevice`, the one
+   * instance the settings panels also write, so the roster forgets the same
+   * copy the rest of the app reads.
+   */
+  forgetDevice(deviceId: string): void
   /**
    * Open a page on this machine, for a device that asked. Absent is the switch.
    *
@@ -5981,6 +6130,13 @@ export interface RemoteIpc {
    * that says a code is valid while the machine refuses it.
    */
   desk: PairingDesk
+  /**
+   * The one revoke cascade, handed out so the headless CLI and any shell reach
+   * it directly rather than going back through the `remote:device:revoke` IPC
+   * channel — the channel now calls this too, so all three surfaces are one
+   * closure. See `device-roster.ts`.
+   */
+  roster: DeviceRoster
 }
 
 /**
@@ -6127,10 +6283,35 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
    */
   function announceRemoteChange(): void {
     deps.broadcast(REMOTE_CONNECTIONS_CHANNEL, server.connections())
+    // And every device that may see the roster hears it on its own socket, not
+    // only the window that is watching the settings pane. Pair, approve and
+    // revoke all land here, so all three push the new list to a watching phone —
+    // per connection, gated on kind and capability at send time.
+    server.rosterChanged()
   }
+
+  /**
+   * The device roster and its one revoke cascade, built here because this is the
+   * only place holding both the trust store and the core's `forgetDevice`.
+   *
+   * Before `const server`, so the `remote:device:revoke` handler below can call
+   * `roster.revoke` — but its `drop` and `connectedIds` closures read `server`,
+   * which is assigned just below. That is the same hoisting trick
+   * `announceRemoteChange` documents: the closures run long after construction,
+   * so `server` is there by the time either is called.
+   */
+  const roster = createDeviceRoster({
+    auth,
+    kinds: deps.kinds,
+    drop: (id) => server.dropDevice(id),
+    forget: deps.forgetDevice,
+    connectedIds: () => new Set(server.connections().map((connection) => connection.deviceId)),
+    announce: announceRemoteChange,
+  })
 
   const server = createRemoteServer({
     sessions: deps.sessions,
+    roster,
     /*
      * The pairing hook, wired for every host rather than only the headless one.
      *
@@ -6454,55 +6635,20 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
    */
   ipcMain.handle('remote:kinds', (): DeviceKindRecord[] => deps.kinds.list())
   ipcMain.handle('remote:device:revoke', (_event, id: unknown): Device[] => {
-    if (typeof id === 'string' && auth.revokeDevice(id)) {
-      // A revoke that only applied to the next connection would not be one:
-      // the phone that is already attached has to lose the socket it is
-      // holding, now.
-      server.dropDevice(id)
-      // And its folder list goes with it. Revocation is permanent — a returning
-      // phone pairs again and is issued a *new* device id — so the row left
-      // behind could never be reached by anything again.
-      deps.folders.forget(id)
-      // And its session ticks, for the same reason and on the same argument:
-      // the id can never be issued again, so the row could never be reached.
-      deps.sessionGrants?.forget(id)
-      // And its login ticks, on the same argument once more.
-      deps.accountGrants?.forget(id)
-      // And its window grant. The same garbage-collection argument, and the one
-      // where a row left behind matters most: an id still in that set is a
-      // permission to move this person's browser with nobody attached to it.
-      deps.windowGrants?.forget(id)
-      /*
-       * Nothing to forget for the copilot any more, and that is worth a line
-       * rather than a silence.
-       *
-       * There used to be a `copilotLinks.forget(id)` here, garbage-collecting a
-       * stored credential that could never be reached again. Since 2026-08-19
-       * there is no such record: copilot access is derived from the device's
-       * kind, and the kind is dropped two lines below. `dropDevice` above has
-       * already stopped the run and dropped its MCP token, so the revocation is
-       * complete before this comment ends.
-       */
-      /*
-       * And its kind, which is what makes re-pairing the way to change one.
-       *
-       * Same garbage-collection argument as the two above — a revoked device id
-       * is never reachable again — and one extra consequence worth naming: this
-       * is the *only* thing that ever removes a kind, so "revoke, pair again,
-       * choose again" is not a workaround for a missing toggle, it is the
-       * supported path and the file has no other door.
-       */
-      deps.kinds.forget(id)
-      /*
-       * And the announcement, for the same reason approval makes one: Deny is
-       * how a waiting device is answered *no*, and a bell that went on counting
-       * a device somebody had already refused would be a count nothing could
-       * clear. Inside the `if`, unlike approval's, because `revokeDevice`
-       * answers false for a device that was already revoked and there is
-       * nothing to announce about a no-op.
-       */
-      announceRemoteChange()
-    }
+    /*
+     * One cascade, now shared with the wire and the CLI.
+     *
+     * This handler used to hold the whole of it inline — revoke, drop the
+     * socket, forget five stores, announce — which made it the only surface that
+     * could revoke: an Electron channel a phone and the headless CLI could not
+     * reach. It is `device-roster.ts` now, and this calls it, so pressing Remove
+     * in Settings, sending `devices.revoke` off the wire and running
+     * `terminaldeck revoke` are one closure. The five forgets moved into
+     * `HostCore.forgetDevice`; `roster.revoke` runs revoke → drop → forget →
+     * announce, and answers false for a no-op without announcing, exactly as the
+     * `if (auth.revokeDevice(id))` guard did.
+     */
+    if (typeof id === 'string') roster.revoke(id)
     return auth.listDevices()
   })
 
@@ -6697,5 +6843,5 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
     (): CopilotReach[] => deps.copilotLinks?.list(auth.listDevices().map((device) => device.id)) ?? [],
   )
 
-  return { server, auth, desk }
+  return { server, auth, desk, roster }
 }

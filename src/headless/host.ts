@@ -461,6 +461,11 @@ export async function createHeadlessHost(
     // and a build where this was the missing argument would be a build where
     // every device is a guest with no folders.
     kinds: core.kinds,
+    // The store half of revocation, wired to the same core the CLI's other
+    // device channels read. `device-roster.ts` runs it as the forget step of the
+    // one cascade the wire, the `terminaldeck revoke` command and the desktop's
+    // Settings all reach.
+    forgetDevice: (id) => core.forgetDevice(id),
     /*
      * No `copilot`, and that is a limit this build states rather than an
      * argument somebody forgot.

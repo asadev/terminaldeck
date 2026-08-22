@@ -109,6 +109,7 @@ import {
   type DevAction,
   type DevState,
 } from './dev-server'
+import { deviceStanding, devicesOffered, fingerprintText, lastSeenSentence } from './devices'
 import { folderOffer, foldersAfter, noFoldersSentence, pickerRows } from './folders'
 import { machineNoun, readHostPlatform, type HostPlatform } from './host-platform'
 import { createKeyBar, type KeyBarHandle } from './keybar'
@@ -201,7 +202,13 @@ import { relaySocket } from './relay-socket'
  */
 import { holdUntilFilled, QUIET_MS, type Backfill } from '../../src/renderer/components/terminal-backfill'
 import { lookupMachine } from './rendezvous'
-import { chunkInput, type DevServerReport, type RemoteSession, type ServerMessage } from './protocol-client'
+import {
+  chunkInput,
+  type DevServerReport,
+  type DeviceRosterRow,
+  type RemoteSession,
+  type ServerMessage,
+} from './protocol-client'
 import {
   closeOffered,
   closeQuestion,
@@ -263,7 +270,7 @@ function socketUrl(location: Location): string {
  * `localhost.ts` for what that screen can honestly do from a browser tab and
  * what it deliberately does not pretend to.
  */
-type Screen = 'copilot' | 'pair' | 'sessions' | 'localhost' | 'settings' | 'machines' | 'terminal'
+type Screen = 'copilot' | 'pair' | 'sessions' | 'localhost' | 'settings' | 'machines' | 'devices' | 'terminal'
 
 /**
  * The tabs, and why Machines is not one of them.
@@ -288,7 +295,7 @@ type Screen = 'copilot' | 'pair' | 'sessions' | 'localhost' | 'settings' | 'mach
  * carried a copilot for *this* device, which never happens for a guest — see
  * `CopilotState.offered`.
  */
-const LISTING_SCREENS: readonly Screen[] = ['copilot', 'sessions', 'localhost', 'settings', 'machines']
+const LISTING_SCREENS: readonly Screen[] = ['copilot', 'sessions', 'localhost', 'settings', 'machines', 'devices']
 
 /**
  * Text on its way into the terminal rather than into the DOM.
@@ -846,6 +853,27 @@ class Deck {
    * answers by accident the next time they look.
    */
   private closing: string | null = null
+  /**
+   * The device roster, from the last `devices.rows` or `devices.changed`.
+   *
+   * Only meaningful over a host that advertised `devices`, which it does only to
+   * one of the owner's own devices. Rebuilt whole on every answer and push —
+   * there is nothing to merge, the far end sends the current list — so nothing
+   * here has to remember what it last held.
+   */
+  private deviceRoster: DeviceRosterRow[] = []
+  /** rids of `devices.list`/`devices.revoke` this client is still waiting on. */
+  private readonly devicesAsked = new Set<string>()
+  private devicesRid = 0
+  /**
+   * The device whose Remove is waiting for a second press, by id.
+   *
+   * The same two-step the session Close uses, and for the same reason it is held
+   * here rather than in the DOM: a `devices.changed` push rebuilds this list
+   * mid-decision. Removing a device — especially this one, which is sign-out — is
+   * a thing done once and regretted, so it asks twice.
+   */
+  private removing: string | null = null
   /** The port being renamed, and the text so far. See `port-book.ts`. */
   private renamingPort: number | null = null
   /** The machine being renamed, by id. */
@@ -1190,6 +1218,12 @@ class Deck {
     this.credentialAsk = null
     this.openRow = null
     this.closing = null
+    // The roster is one machine's, like everything else here: a different desktop
+    // has a different set of devices signed into it, and carrying this one across
+    // would list the wrong machine's phones under the new name.
+    this.deviceRoster = []
+    this.devicesAsked.clear()
+    this.removing = null
     this.attachedId = null
     this.destroyTerminal()
     this.forgetLocalhost()
@@ -1958,6 +1992,13 @@ class Deck {
         // re-paired as a guest, whose welcome now carries no copilot at all. The
         // tab goes, so the screen it was showing has to go with it.
         if (this.screen === 'copilot' && !this.copilot.offered) this.screen = 'sessions'
+        // And the device screen, on the same argument: a device re-paired as a
+        // guest is no longer told `devices`, so the screen it may have been on
+        // has to close rather than sit there refusing every Remove.
+        if (this.screen === 'devices' && !devicesOffered(this.capabilities)) this.screen = 'settings'
+        // Kept live: asked again on every welcome while it is on screen, so a
+        // reconnect re-subscribes to the push and refreshes the list.
+        if (this.screen === 'devices' && devicesOffered(this.capabilities)) this.askDevices()
         // Asked on arrival rather than on the first tap, but only for somebody
         // already looking at it — which is the reconnect case, since the tab is
         // what asks otherwise.
@@ -2083,6 +2124,37 @@ class Deck {
         return
       }
 
+      case 'devices.rows':
+        // Routed by `rid`, like the chat above: an answer belongs to the ask
+        // that made it, and one with no waiting request — a duplicate, or one
+        // that landed after its screen was left — falls on the floor here.
+        if (!this.devicesAsked.delete(message.rid)) return
+        this.deviceRoster = message.devices
+        if (this.screen === 'devices') this.renderContent()
+        return
+
+      case 'devices.revoked':
+        if (!this.devicesAsked.delete(message.rid)) return
+        this.deviceRoster = message.devices
+        // The confirm is spent whatever the outcome: the list came back fresh,
+        // and a Remove left mid-press over a rebuilt row is a control frozen on
+        // a question nobody is still asking.
+        this.removing = null
+        // A refused revoke — the device was already gone, or named nothing — is
+        // the host's own sentence, said where the person is looking.
+        if (!message.ok) this.say(plain(message.message))
+        if (this.screen === 'devices') this.renderContent()
+        return
+
+      case 'devices.changed':
+        // Unsolicited, and the whole reason this client names `devices` in its
+        // hello: another device paired or was revoked elsewhere, and the roster
+        // on screen updates without a reload. Whole list every time, nothing to
+        // merge.
+        this.deviceRoster = message.devices
+        if (this.screen === 'devices') this.renderContent()
+        return
+
       case 'error':
         // A refused request is not going to be followed by a `created`, and a
         // button left reading "Starting…" over a session that will never exist
@@ -2195,7 +2267,8 @@ class Deck {
         // pushed screen would leave every tab unmarked, which reads as having
         // fallen out of the app.
         const here =
-          this.screen === option.screen || (option.screen === 'settings' && this.screen === 'machines')
+          this.screen === option.screen ||
+          (option.screen === 'settings' && (this.screen === 'machines' || this.screen === 'devices'))
         const tab = element('button', here ? 'tab tab--here' : 'tab', option.label)
         tab.type = 'button'
         // `aria-current` rather than `aria-pressed`: these are two places to be,
@@ -2227,8 +2300,16 @@ class Deck {
     // back to Sessions and finding a Close session button already waiting under
     // a thumb would be the app holding a question nobody is still asking.
     this.closing = null
+    // Same rule for the device Remove confirmation.
+    this.removing = null
     this.renamingPort = null
     this.renamingMachine = null
+    // The roster is asked for on arrival, for the reason the dev-server list is:
+    // it reads state the host already holds, and the ask is also what this
+    // connection has to send to be sure of a fresh list — the `devices.changed`
+    // push keeps it current after, but only for a device that was connected when
+    // the change happened.
+    if (screen === 'devices') this.askDevices()
     if (
       screen === 'localhost' &&
       this.localhost.ports === null &&
@@ -2339,6 +2420,7 @@ class Deck {
       return
     }
     if (this.screen === 'machines') this.title.textContent = 'Machines'
+    if (this.screen === 'devices') this.title.textContent = 'Devices'
     if (this.screen === 'settings') this.title.textContent = 'Settings'
     if (this.screen === 'copilot') this.title.textContent = 'Copilot'
 
@@ -2379,6 +2461,7 @@ class Deck {
   private backTarget(): Screen | null {
     if (this.screen === 'terminal') return 'sessions'
     if (this.screen === 'machines') return 'settings'
+    if (this.screen === 'devices') return 'settings'
     // The pair screen has a way back only when it was reached deliberately from
     // the Machines screen. A browser with no machines has nowhere to go back to,
     // and a chevron there would be the bug that rule exists to prevent.
@@ -2445,6 +2528,9 @@ class Deck {
         return
       case 'machines':
         this.content.replaceChildren(this.machinesScreen())
+        return
+      case 'devices':
+        this.content.replaceChildren(this.devicesScreen())
         return
       case 'sessions':
         this.content.replaceChildren(this.sessionsScreen())
@@ -3879,6 +3965,25 @@ class Deck {
     machines.append(row)
     screen.append(machines)
 
+    // Devices, but only over a host that advertised the roster — which it does
+    // only to one of the owner's own devices. A guest never sees this row,
+    // because a guest could not open the screen behind it: the same capability
+    // gates the advertisement and the serving.
+    if (devicesOffered(this.capabilities)) {
+      const devices = element('div', 'group')
+      const devicesRow = element('button', 'setting')
+      devicesRow.type = 'button'
+      const count = this.deviceRoster.length
+      devicesRow.append(
+        element('span', 'setting__title', 'Devices'),
+        element('span', 'setting__value', count === 0 ? 'signed in here' : count === 1 ? '1 signed in' : `${count} signed in`),
+        element('span', 'setting__mark', '›'),
+      )
+      devicesRow.addEventListener('click', () => this.goTo('devices'))
+      devices.append(devicesRow)
+      screen.append(devices)
+    }
+
     screen.append(element('p', 'caption', 'Terminal'))
     screen.append(this.textSizeGroup())
     screen.append(
@@ -4158,6 +4263,137 @@ class Deck {
     const running = this.sessions.filter((session) => session.exitCode === null).length
     if (running === 0) return 'nothing running'
     return running === 1 ? '1 session' : `${running} sessions`
+  }
+
+  /* ------------------------------------------------------------- devices -- */
+
+  /**
+   * Ask the host for the roster.
+   *
+   * A fresh `rid` each time, remembered so the answer is matched to this ask and
+   * a late one to a screen already left falls on the floor — the same routing
+   * the chat read uses. Nothing is sent when there is no socket; the screen
+   * shows whatever it last held and says it is reconnecting.
+   */
+  private askDevices(): void {
+    const rid = `dev-${(this.devicesRid += 1)}`
+    if (this.connection?.send({ t: 'devices.list', rid }) !== true) return
+    this.devicesAsked.add(rid)
+  }
+
+  /**
+   * Remove one device — the second press of the two-step.
+   *
+   * Removing this device is sign-out: the host drops this very socket, so no
+   * answer comes back and the connection simply ends, which the state machine
+   * already turns into the disconnected screen. For any other device the
+   * `devices.revoked` answer redraws the list. The confirm is cleared on the
+   * answer, or here if the socket is gone.
+   */
+  private sendRevoke(deviceId: string): void {
+    const rid = `dev-${(this.devicesRid += 1)}`
+    if (this.connection?.send({ t: 'devices.revoke', rid, device: deviceId }) !== true) {
+      this.removing = null
+      this.renderContent()
+      return
+    }
+    this.devicesAsked.add(rid)
+  }
+
+  /**
+   * Every device signed in on the host, with the one act this screen has: Remove.
+   *
+   * There is no approve here, by design — approving is a thing done at the
+   * trusted surface — so a pending device shows as waiting and Remove doubles as
+   * deny. The row for this very device is marked and its Remove reads "Sign out",
+   * because removing yourself is exactly that.
+   */
+  private devicesScreen(): HTMLElement {
+    const screen = element('div', 'screen')
+    const now = Date.now()
+    const mineId = this.credential?.deviceId ?? null
+
+    if (this.deviceRoster.length === 0) {
+      const note =
+        this.state.phase === 'online'
+          ? 'No devices are signed in here yet.'
+          : `Reconnecting to the ${this.noun} to show what is signed in…`
+      screen.append(element('p', 'note note--plain', note))
+      return screen
+    }
+
+    const list = element('ul', 'devices')
+    for (const row of this.deviceRoster) list.append(this.deviceRow(row, now, mineId))
+    screen.append(list)
+
+    screen.append(
+      element(
+        'p',
+        'note note--plain',
+        'Removing a device revokes it and drops it now. To change what a device is — your own or a ' +
+          'guest — remove it and pair it again; there is no other way, on purpose.',
+      ),
+    )
+    return screen
+  }
+
+  /**
+   * One device.
+   *
+   * The name leads, with a live dot when it has a socket open and a "This device"
+   * tag when it is the one you are holding. Under it: what it is (or that it is
+   * waiting), when it was last here, and the fingerprint to check against the one
+   * it shows. Remove is two steps for the reason the session Close is — a thing
+   * done once and regretted — and here the stakes are highest on your own row,
+   * which is why that one says "Sign out".
+   */
+  private deviceRow(row: DeviceRosterRow, now: number, mineId: string | null): HTMLElement {
+    const item = element('li', 'device')
+    const isThis = mineId !== null && row.id === mineId
+
+    const line = element('div', 'device__line')
+    if (row.connected) line.append(element('span', 'device__dot device__dot--live'))
+    else line.append(element('span', 'device__dot'))
+    line.append(element('span', 'device__name', plain(row.name)))
+    if (isThis) line.append(element('span', 'device__tag', 'This device'))
+    item.append(line)
+
+    item.append(element('p', 'device__standing', deviceStanding(row)))
+    item.append(element('p', 'device__state', lastSeenSentence(row, now)))
+    item.append(element('p', 'device__print', fingerprintText(row)))
+
+    if (this.removing === row.id) {
+      const actions = element('div', 'device__actions')
+      const confirm = element(
+        'button',
+        'button button--danger device__confirm',
+        isThis ? 'Sign this device out' : 'Remove',
+      )
+      confirm.type = 'button'
+      confirm.disabled = this.state.phase !== 'online'
+      confirm.addEventListener('click', () => this.sendRevoke(row.id))
+      const cancel = element('button', 'button button--quiet device__cancel', 'Cancel')
+      cancel.type = 'button'
+      cancel.addEventListener('click', () => {
+        this.removing = null
+        this.renderContent()
+      })
+      actions.append(confirm, cancel)
+      item.append(actions)
+    } else {
+      const remove = element('button', 'button button--quiet device__remove', isThis ? 'Sign out' : 'Remove')
+      remove.type = 'button'
+      // Offline, there is no socket to carry the revoke, so the control is drawn
+      // back rather than allowed to fail — the same rule the rest of this app
+      // follows about a button that would only refuse.
+      remove.disabled = this.state.phase !== 'online'
+      remove.addEventListener('click', () => {
+        this.removing = row.id
+        this.renderContent()
+      })
+      item.append(remove)
+    }
+    return item
   }
 
   /* --------------------------------------------------------------- bits -- */

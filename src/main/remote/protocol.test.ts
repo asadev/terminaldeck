@@ -58,6 +58,7 @@ import type { ControlId } from '../agent-controls'
  */
 
 const SESSION_ID = '4f1c2ae0-8f1d-4b1e-9a2f-77d7c0a1b3e5'
+const DEVICE_ID = 'd2b7f4a1-0c3e-4a9b-8e11-6f5a2c9d1b04'
 const DEVICE = { name: 'Asad’s iPhone', platform: 'iOS 26' }
 const TOKEN = 'a'.repeat(64)
 
@@ -111,6 +112,8 @@ const CLIENT_TYPES: Record<ClientMessage['t'], true> = {
   'logins.read': true,
   'logins.signin': true,
   'chat.read': true,
+  'devices.list': true,
+  'devices.revoke': true,
   'window.result': true,
   'window.holds': true,
   'window.call': true,
@@ -161,6 +164,9 @@ const SERVER_TYPES: Record<ServerMessage['t'], true> = {
   'logins.state': true,
   'logins.signedin': true,
   'session.sent': true,
+  'devices.rows': true,
+  'devices.revoked': true,
+  'devices.changed': true,
   'chat.rows': true,
   'window.call': true,
   'window.holds': true,
@@ -292,6 +298,8 @@ const VALID_CLIENT: ClientMessage[] = [
   // The conversation, and the same view asking what has changed since.
   { t: 'chat.read', rid: 'cht-1', id: SESSION_ID, tail: false },
   { t: 'chat.read', rid: 'cht-2', id: SESSION_ID, tail: true },
+  { t: 'devices.list', rid: 'dev-1' },
+  { t: 'devices.revoke', rid: 'dev-2', device: DEVICE_ID },
   { t: 'window.result', id: 'win-1', ok: true, body: '{"url":"https://example.com"}' },
   { t: 'window.result', id: 'win-2', ok: false, body: '{"message":"no window by that name"}' },
   // Which of that machine's sessions this client is holding a browser window
@@ -365,6 +373,36 @@ const VALID_SERVER: ServerMessage[] = [
   // already decided.
   { t: 'session.sent', rid: 'snd-1', id: SESSION_ID, ok: true, message: 'Sent.' },
   { t: 'session.sent', rid: 'snd-2', id: SESSION_ID, ok: false, message: `No session ${SESSION_ID} is running.` },
+  { t: 'devices.rows', rid: 'dev-1', devices: [] },
+  {
+    t: 'devices.rows',
+    rid: 'dev-2',
+    devices: [
+      {
+        id: DEVICE_ID,
+        name: 'iPhone',
+        kind: 'mine',
+        status: 'approved',
+        addedAt: 1_760_000_000_000,
+        lastSeenAt: 1_760_000_500_000,
+        connected: true,
+        fingerprint: 'aa bb cc dd ee ff',
+      },
+      {
+        id: 'c1a0f9e2-3b4c-4d5e-8f60-71829a3b4c5d',
+        name: 'Nexus',
+        kind: 'guest',
+        status: 'pending',
+        addedAt: 1_760_000_100_000,
+        lastSeenAt: null,
+        connected: false,
+        fingerprint: null,
+      },
+    ],
+  },
+  { t: 'devices.revoked', rid: 'dev-3', ok: true, message: 'That device was removed.', devices: [] },
+  { t: 'devices.revoked', rid: 'dev-4', ok: false, message: 'That device is not signed in here.', devices: [] },
+  { t: 'devices.changed', devices: [] },
   {
     t: 'chat.rows',
     rid: 'cht-1',

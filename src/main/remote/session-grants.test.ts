@@ -615,6 +615,7 @@ describe('the settings channel', () => {
       folders: new FolderGrants(dir),
       sessionGrants: grants,
       kinds: new DeviceKinds(dir),
+      forgetDevice: () => {},
       webRoot: join(dir, 'nowhere'),
       storageDir: dir,
       broadcast: () => {},

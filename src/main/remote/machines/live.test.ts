@@ -486,6 +486,8 @@ async function thisDesktop(options: { relay?: boolean } = {}): Promise<{
       sessions: fakeSessions(),
       folders: new FolderGrants(tempDir()),
       kinds: new DeviceKinds(tempDir()),
+      // Nothing here revokes, so the store half of the cascade is a no-op stand-in.
+      forgetDevice: () => {},
       webRoot: join(dir, 'nowhere'),
       storageDir: dir,
       broadcast: () => {},

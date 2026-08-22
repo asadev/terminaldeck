@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { BRAND } from '../shared/brand'
 import type { Device } from '../main/remote/device-auth'
+import type { DeviceKindRecord } from '../main/remote/device-kind'
 import type { DeviceFolderGrant } from '../main/remote/folder-grants'
 import {
   duration,
@@ -8,6 +9,7 @@ import {
   parseArgs,
   pickDevice,
   renderApproved,
+  renderDevices,
   renderFolders,
   renderKindQuestion,
   renderNewDevice,
@@ -32,12 +34,31 @@ const device = (patch: Partial<Device> = {}): Device => ({
 })
 
 describe('parseArgs', () => {
-  it('takes the four commands and nothing else', () => {
+  it('takes the commands and nothing else', () => {
     // `deviceKind: null` is "nobody has said", which is what makes `main.ts` ask.
     expect(parseArgs(['pair'])).toEqual({ kind: 'pair', deviceKind: null })
     expect(parseArgs(['status'])).toEqual({ kind: 'status' })
+    expect(parseArgs(['devices'])).toEqual({ kind: 'devices' })
     expect(parseArgs(['folders'])).toEqual({ kind: 'folders' })
     expect(parseArgs(['stop'])).toEqual({ kind: 'stop' })
+  })
+
+  it('reads revoke, by a bare name, by --device, or nothing at all', () => {
+    expect(parseArgs(['revoke', 'iPhone'])).toEqual({ kind: 'revoke', device: 'iPhone' })
+    expect(parseArgs(['revoke', '--device', 'iPhone'])).toEqual({ kind: 'revoke', device: 'iPhone' })
+    // Bare `revoke` is allowed here; `pickDevice` decides whether a single
+    // device makes the omission unambiguous.
+    expect(parseArgs(['revoke'])).toEqual({ kind: 'revoke', device: null })
+  })
+
+  it('refuses revoke naming a device two ways, or two devices', () => {
+    expect(parseArgs(['revoke', 'iPhone', '--device', 'iPad']).kind).toBe('error')
+    expect(parseArgs(['revoke', 'iPhone', 'iPad']).kind).toBe('error')
+    expect(parseArgs(['revoke', '--device']).kind).toBe('error')
+  })
+
+  it('takes no arguments to devices', () => {
+    expect(parseArgs(['devices', 'extra']).kind).toBe('error')
   })
 
   it('prints usage for no arguments and for --help', () => {
@@ -52,7 +73,7 @@ describe('parseArgs', () => {
     expect(parsed.kind).toBe('error')
     if (parsed.kind !== 'error') return
     expect(parsed.message).toContain('restart')
-    expect(parsed.message).toContain('pair, status, browser, folders and stop')
+    expect(parsed.message).toContain('pair, status, devices, revoke, browser, folders and stop')
   })
 
   it('refuses arguments a command does not take', () => {
@@ -155,6 +176,43 @@ describe('renderFolders', () => {
     const grants: DeviceFolderGrant[] = [{ deviceId: 'a', folders: ['/one', '/two'] }]
     const text = renderFolders([device({ id: 'a' })], grants)
     expect(text.indexOf('/one')).toBeLessThan(text.indexOf('/two'))
+  })
+})
+
+describe('renderDevices', () => {
+  const kind = (deviceId: string, k: 'mine' | 'guest'): DeviceKindRecord => ({
+    deviceId,
+    kind: k,
+    decidedAt: 0,
+  })
+
+  it('says nothing is signed in when the list is empty', () => {
+    expect(renderDevices([], [], 0)).toContain('No devices are signed in')
+  })
+
+  it('shows each device with its kind, status, last seen, fingerprint and id', () => {
+    const dev = device({ id: 'aaaa1111', name: 'Asad’s iPhone', lastSeenAt: 0, fingerprint: 'AAAA-BBBB' })
+    const text = renderDevices([dev], [kind('aaaa1111', 'mine')], 60_000)
+    expect(text).toContain('Asad’s iPhone')
+    expect(text).toContain('mine')
+    expect(text).toContain('approved')
+    expect(text).toContain('last seen 1m ago')
+    expect(text).toContain('AAAA-BBBB')
+    expect(text).toContain('aaaa1111')
+  })
+
+  it('reads a device with no kind record as undecided, enforced as guest', () => {
+    const dev = device({ id: 'bbbb2222', name: 'Old phone' })
+    const text = renderDevices([dev], [], 0)
+    expect(text).toContain('undecided, enforced as guest')
+  })
+
+  it('never lists a revoked device', () => {
+    const gone = device({ id: 'ccc', name: 'Gone', revoked: true, status: 'revoked' })
+    const here = device({ id: 'ddd', name: 'Here' })
+    const text = renderDevices([gone, here], [], 0)
+    expect(text).toContain('Here')
+    expect(text).not.toContain('Gone')
   })
 })
 

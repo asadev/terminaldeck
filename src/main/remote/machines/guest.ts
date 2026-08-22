@@ -1519,6 +1519,33 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
          */
         settle(message.rid, message)
         return
+      case 'devices.rows':
+      case 'devices.revoked':
+        /*
+         * The answer to a `devices.list` or `devices.revoke` this end asked,
+         * handed to whoever asked it on its own `rid`.
+         *
+         * Its own block rather than a label added to the settle group above only
+         * so that group's case list stays the fixed set no lane appends to;
+         * nothing else is different — the roster belongs to the screen that
+         * asked for it, not to link state, keyed by `rid` like every other
+         * request and answer on this link.
+         */
+        settle(message.rid, message)
+        return
+      case 'devices.changed':
+        /*
+         * An unsolicited roster push, and this end is not its audience.
+         *
+         * This machine reaches another as one of *its* devices; it has no
+         * screen for managing that machine's roster, so there is nothing to
+         * redraw and the frame is dropped rather than published as link state.
+         * The phones are the audience for this push. The case exists at all
+         * because the inbound switch is exhaustive on purpose — a new
+         * `ServerMessage` with no case here stops the build rather than becoming
+         * somebody else's silent problem.
+         */
+        return
       case 'upload.ready':
       case 'upload.ack':
       case 'upload.done':
