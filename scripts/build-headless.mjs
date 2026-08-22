@@ -35,7 +35,7 @@ const root = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'))
 
 /* ------------------------------------------------------------------ build -- */
 
-execFileSync('npx', ['vite', 'build', '--config', 'vite.headless.config.ts'], {
+execFileSync(process.platform === 'win32' ? 'npx.cmd' : 'npx', ['vite', 'build', '--config', 'vite.headless.config.ts'], {
   cwd: ROOT,
   stdio: 'inherit',
 })
@@ -182,7 +182,7 @@ const SHIP = join(ROOT, 'out', 'headless-package')
 rmSync(SHIP, { recursive: true, force: true })
 mkdirSync(SHIP, { recursive: true })
 
-execFileSync('npm', ['pack', '--silent', '--pack-destination', SHIP], { cwd: OUT, stdio: 'inherit' })
+execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['pack', '--silent', '--pack-destination', SHIP], { cwd: OUT, stdio: 'inherit' })
 const packed = readdirSync(SHIP).filter((name) => name.endsWith('.tgz'))
 if (packed.length !== 1) {
   console.error(`Expected one tarball in ${SHIP} and found ${packed.length}.`)
