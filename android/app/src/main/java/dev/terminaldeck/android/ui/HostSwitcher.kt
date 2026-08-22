@@ -57,6 +57,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.terminaldeck.android.HostSummary
+import dev.terminaldeck.android.protocol.HostVersion
 import dev.terminaldeck.android.transport.TransportState
 import dev.terminaldeck.android.transport.detail
 
@@ -96,6 +97,20 @@ fun HostSwitcherSheet(
      */
     gitHubLogin: String? = null,
     onGitHub: () -> Unit = {},
+    /**
+     * The selected machine's label, its device roster, its two server-owned settings, and the one
+     * sentence to say when this app is newer than it.
+     *
+     * These four are about the machine on screen rather than the phone, so — unlike GitHub — the
+     * rows are drawn only when that machine advertised the capability behind them. A row that only
+     * ever led to a screen the machine refuses would be the fake control the design forbids.
+     */
+    selectedLabel: String = "",
+    devicesOffered: Boolean = false,
+    onDevices: () -> Unit = {},
+    serverSettingsOffered: Boolean = false,
+    onServerSettings: () -> Unit = {},
+    serverBehindSentence: String? = null,
     onDismiss: () -> Unit,
 ) {
     var renaming by remember { mutableStateOf<HostSummary?>(null) }
@@ -263,6 +278,49 @@ fun HostSwitcherSheet(
                         )
                     }
                 }
+
+                // Devices and This server act on the machine on screen, so each is drawn only when
+                // that machine advertised the capability behind it. An older machine, or a guest,
+                // sees neither — exactly the surface it had before, not a row explaining a gap.
+                if (devicesOffered) {
+                    HorizontalDivider(
+                        color = MaterialTheme.colorScheme.outline,
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+                    )
+                    SwitcherActionRow(
+                        title = "Devices",
+                        subtitle = "Every device signed in to $selectedLabel",
+                    ) {
+                        onDismiss()
+                        onDevices()
+                    }
+                }
+
+                if (serverSettingsOffered) {
+                    HorizontalDivider(
+                        color = MaterialTheme.colorScheme.outline,
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+                    )
+                    SwitcherActionRow(
+                        title = "This server",
+                        subtitle = "Settings $selectedLabel owns, not this phone",
+                    ) {
+                        onDismiss()
+                        onServerSettings()
+                    }
+                }
+
+                // The one sentence about being behind, and only when this app is genuinely ahead of
+                // the machine — default-closed in [DeckUiState.serverBehindSentence]. No button: the
+                // wire carries no update verb, so this is a fact, not an action.
+                serverBehindSentence?.let { sentence ->
+                    Text(
+                        text = sentence,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 12.dp),
+                    )
+                }
             }
         }
     }
@@ -359,6 +417,19 @@ private fun HostRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            // What build this machine is, and whether it is a desktop or a server. Empty for a
+            // machine older than the field — nothing drawn rather than a blank line.
+            HostVersion.hostVersionLine(host.appVersion, host.hostKind)
+                .takeIf { it.isNotEmpty() }
+                ?.let { line ->
+                    Text(
+                        text = line,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
         }
 
         if (host.selected) {
@@ -394,6 +465,37 @@ private fun HostRow(
                     },
                 )
             }
+        }
+    }
+}
+
+/**
+ * One tappable row of the sheet's lower section — a title and a sentence under it — in the same shape
+ * as the GitHub and "Pair another machine" rows, so the three read as one list.
+ */
+@Composable
+private fun SwitcherActionRow(title: String, subtitle: String, onClick: () -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 56.dp)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 20.dp, vertical = 12.dp),
+    ) {
+        Column {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }

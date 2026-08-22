@@ -21,8 +21,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -101,6 +103,15 @@ fun SessionListScreen(
     onRenameHost: (String, String?) -> Unit,
     onForgetHost: (String) -> Unit,
     onAddHost: () -> Unit,
+    /**
+     * End a session on the machine on screen. Drawn per row only when [DeckUiState.canCloseSessions]
+     * — the machine advertised `close` — and confirmed once here before it is sent, because closing
+     * is not undoable. The row is removed on the machine's `closed` answer, not on this tap.
+     */
+    onCloseSession: (RemoteSessionView) -> Unit = {},
+    /** Open the device roster / the "This server" settings of the machine on screen. */
+    onDevices: () -> Unit = {},
+    onServerSettings: () -> Unit = {},
     /** The GitHub account this phone holds, or null. Phone-wide, not per machine. */
     gitHubLogin: String? = null,
     onGitHub: () -> Unit = {},
@@ -108,6 +119,8 @@ fun SessionListScreen(
     val snackbar = remember { SnackbarHostState() }
     var folderMenu by remember { mutableStateOf(false) }
     var switcher by remember { mutableStateOf(false) }
+    // Set to the row a person asked to close; the confirm dialog is drawn while it is non-null.
+    var closing by remember { mutableStateOf<RemoteSessionView?>(null) }
     LaunchedEffect(state.notice) {
         state.notice?.let { snackbar.showSnackbar(it) }
     }
@@ -245,7 +258,13 @@ fun SessionListScreen(
                     modifier = Modifier.alpha(if (state.live) 1f else 0.55f),
                 ) {
                     items(state.sessions, key = { it.id }) { session ->
-                        SessionCard(session, live = state.live, onClick = { onOpen(session) })
+                        SessionCard(
+                            session = session,
+                            live = state.live,
+                            onClick = { onOpen(session) },
+                            // Absent, not disabled, when the machine never advertised `close`.
+                            onClose = if (state.canCloseSessions) ({ closing = session }) else null,
+                        )
                     }
                 }
             }
@@ -261,11 +280,65 @@ fun SessionListScreen(
             onAddHost = onAddHost,
             gitHubLogin = gitHubLogin,
             onGitHub = onGitHub,
+            selectedLabel = state.hostLabel,
+            devicesOffered = state.devicesOffered,
+            onDevices = onDevices,
+            serverSettingsOffered = state.serverSettingsOffered,
+            onServerSettings = onServerSettings,
+            serverBehindSentence = state.serverBehindSentence,
             onDismiss = { switcher = false },
         )
     }
 
+    closing?.let { session ->
+        CloseSessionDialog(
+            session = session,
+            machineNoun = state.machineNoun,
+            onConfirm = {
+                closing = null
+                onCloseSession(session)
+            },
+            onCancel = { closing = null },
+        )
     }
+
+    }
+}
+
+/**
+ * The one confirm before a session is ended.
+ *
+ * Closing does not come back, so it asks — and the sentence says three things and no more: which
+ * session, what happens to it, and that it is gone for good. It deliberately does not say "are you
+ * sure"; the two buttons already ask that. The row is not removed here — it goes on the machine's
+ * `closed` answer, for the reason [DeckViewModel] gives — so the destructive button just sends and
+ * dismisses.
+ */
+@Composable
+private fun CloseSessionDialog(
+    session: RemoteSessionView,
+    machineNoun: String,
+    onConfirm: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onCancel,
+        containerColor = MaterialTheme.colorScheme.surface,
+        title = { Text("Close ${session.title}?") },
+        text = {
+            Text(
+                text = "The session stops on the $machineNoun and does not come back.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text("Close session", color = MaterialTheme.colorScheme.error)
+            }
+        },
+        dismissButton = { TextButton(onClick = onCancel) { Text("Keep") } },
+    )
 }
 
 /**
@@ -380,7 +453,13 @@ private fun EmptyState(state: DeckUiState) {
 }
 
 @Composable
-private fun SessionCard(session: RemoteSessionView, live: Boolean, onClick: () -> Unit) {
+private fun SessionCard(
+    session: RemoteSessionView,
+    live: Boolean,
+    onClick: () -> Unit,
+    /** Null when the machine does not advertise `close`; the ✕ is absent then, never disabled. */
+    onClose: (() -> Unit)? = null,
+) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -388,7 +467,7 @@ private fun SessionCard(session: RemoteSessionView, live: Boolean, onClick: () -
             .background(MaterialTheme.colorScheme.surface)
             .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp))
             .clickable(onClick = onClick)
-            .padding(14.dp),
+            .padding(start = 14.dp, top = 14.dp, end = if (onClose != null) 4.dp else 14.dp, bottom = 14.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             StatusDot(session)
@@ -402,6 +481,17 @@ private fun SessionCard(session: RemoteSessionView, live: Boolean, onClick: () -
                 modifier = Modifier.weight(1f),
             )
             ProviderChip(session.provider)
+            if (onClose != null) {
+                Spacer(Modifier.width(4.dp))
+                IconButton(onClick = onClose, modifier = Modifier.size(32.dp)) {
+                    Icon(
+                        Icons.Filled.Close,
+                        contentDescription = "Close ${session.title}",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
         }
 
         Spacer(Modifier.height(8.dp))

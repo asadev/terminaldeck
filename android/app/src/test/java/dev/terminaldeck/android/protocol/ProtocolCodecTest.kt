@@ -333,4 +333,158 @@ class ProtocolSizingTest {
         // Anchoring: a newline must not let a bad id pass by matching only its first line.
         assertTrue(!Protocol.isValidSessionId("good\nbad id"))
     }
+
+    /* ---- capability `close` --------------------------------------------------------------- */
+
+    @Test
+    fun `close is tagged the way the desktop parses it`() {
+        assertEquals("""{"t":"close","id":"s1"}""", ClientFrames.encode(ClientMessage.Close("s1")))
+    }
+
+    @Test
+    fun `closed carries the id and is routed by it`() {
+        val result = ServerFrames.parse("""{"t":"closed","id":"s1"}""")
+        val message = (result as ServerFrames.Result.Ok).message as ServerMessage.Closed
+        assertEquals("s1", message.id)
+        // Routed like exit/status, so the session list can drop the row against the right session.
+        assertEquals("s1", ServerFrames.sessionIdOf(message))
+    }
+
+    @Test
+    fun `the close capability is the string the desktop advertises`() {
+        assertEquals("close", Capability.CLOSE)
+    }
+
+    /* ---- capability `devices` ------------------------------------------------------------- */
+
+    @Test
+    fun `the devices verbs are tagged the way the desktop parses them`() {
+        assertEquals("""{"t":"devices.list","rid":"r1"}""", ClientFrames.encode(ClientMessage.DevicesList("r1")))
+        assertEquals(
+            """{"t":"devices.revoke","rid":"r2","device":"d9"}""",
+            ClientFrames.encode(ClientMessage.DevicesRevoke("r2", "d9")),
+        )
+        assertEquals("devices", Capability.DEVICES)
+    }
+
+    @Test
+    fun `devices rows parse into the roster the screen reads`() {
+        val raw = """{"t":"devices.rows","rid":"r1","devices":[""" +
+            """{"id":"d1","name":"Pixel","kind":"mine","status":"approved","addedAt":10,""" +
+            """"lastSeenAt":20,"connected":true,"fingerprint":"ab cd ef gh ij kl"},""" +
+            """{"id":"d2","name":"Guest","kind":"guest","status":"pending","addedAt":30,""" +
+            """"lastSeenAt":null,"connected":false,"fingerprint":null}]}"""
+        val message = (ServerFrames.parse(raw) as ServerFrames.Result.Ok).message as ServerMessage.DevicesRows
+        assertEquals("r1", message.rid)
+        assertEquals(2, message.devices.size)
+        val mine = message.devices[0]
+        assertTrue(mine.isMine)
+        assertTrue(!mine.isPending)
+        assertEquals(20L, mine.lastSeenAt)
+        val guest = message.devices[1]
+        assertTrue(!guest.isMine)
+        assertTrue(guest.isPending)
+        assertEquals(null, guest.lastSeenAt)
+        assertEquals(null, guest.fingerprint)
+    }
+
+    @Test
+    fun `devices revoked carries the outcome and the fresh roster, and changed is unsolicited`() {
+        val revoked = (ServerFrames.parse(
+            """{"t":"devices.revoked","rid":"r3","ok":true,"message":"Removed.","devices":[]}"""
+        ) as ServerFrames.Result.Ok).message as ServerMessage.DevicesRevoked
+        assertEquals("r3", revoked.rid)
+        assertEquals(true, revoked.ok)
+        assertEquals("Removed.", revoked.message)
+        assertTrue(revoked.devices.isEmpty())
+
+        val changed = (ServerFrames.parse(
+            """{"t":"devices.changed","devices":[{"id":"d1","name":"Pixel","kind":"mine","status":"approved"}]}"""
+        ) as ServerFrames.Result.Ok).message as ServerMessage.DevicesChanged
+        assertEquals(1, changed.devices.size)
+        // addedAt/connected default when the frame omits them rather than failing the parse.
+        assertEquals(0L, changed.devices[0].addedAt)
+        assertEquals(false, changed.devices[0].connected)
+    }
+
+    /* ---- capability `settings` ------------------------------------------------------------ */
+
+    @Test
+    fun `the settings verbs are tagged the way the desktop parses them`() {
+        assertEquals("""{"t":"settings.read","rid":"r1"}""", ClientFrames.encode(ClientMessage.SettingsRead("r1")))
+        assertEquals(
+            """{"t":"settings.apply","rid":"r2","key":"agents.defaultProvider","value":"codex"}""",
+            ClientFrames.encode(ClientMessage.SettingsApply("r2", ServerSettingKey.DefaultProvider, "codex")),
+        )
+        assertEquals(
+            """{"t":"settings.apply","rid":"r3","key":"general.restoreSessions","value":"true"}""",
+            ClientFrames.encode(ClientMessage.SettingsApply("r3", ServerSettingKey.RestoreSessions, "true")),
+        )
+        assertEquals("settings", Capability.SETTINGS)
+    }
+
+    @Test
+    fun `settings state parses the chooser with its options and the boolean without`() {
+        val raw = """{"t":"settings.state","rid":"r1","settings":[""" +
+            """{"key":"agents.defaultProvider","value":"claude","options":["claude","codex","gemini"]},""" +
+            """{"key":"general.restoreSessions","value":"false"}]}"""
+        val message = (ServerFrames.parse(raw) as ServerFrames.Result.Ok).message as ServerMessage.SettingsState
+        assertEquals(2, message.settings.size)
+        assertEquals("agents.defaultProvider", message.settings[0].key)
+        assertEquals(ServerSettingKey.DefaultProvider, message.settings[0].known)
+        assertEquals(listOf("claude", "codex", "gemini"), message.settings[0].options)
+        assertEquals(ServerSettingKey.RestoreSessions, message.settings[1].known)
+        assertEquals(null, message.settings[1].options)
+    }
+
+    @Test
+    fun `a settings row naming a key outside the allowlist is dropped, not fatal to the frame`() {
+        // Additive, the rule the whole protocol runs on: a future desktop adding a third server
+        // setting must not stop an older phone reading the two it knows. The frame parses, the
+        // unknown row survives decode as a free-string key, and `merge` drops it — leaving the known
+        // one. A strict enum here would have failed the whole frame and hidden both settings.
+        val raw = """{"t":"settings.state","rid":"r1","settings":[""" +
+            """{"key":"remote.enabled","value":"true"},{"key":"general.restoreSessions","value":"false"}]}"""
+        val message = (ServerFrames.parse(raw) as ServerFrames.Result.Ok).message as ServerMessage.SettingsState
+        assertEquals(2, message.settings.size)
+        assertEquals(null, message.settings[0].known)
+        val drawn = ServerSettingWire.merge(null, message.settings)
+        assertEquals(1, drawn.size)
+        assertEquals(ServerSettingKey.RestoreSessions, drawn[0].known)
+    }
+
+    @Test
+    fun `settings applied and changed parse`() {
+        val applied = (ServerFrames.parse(
+            """{"t":"settings.applied","rid":"r2","ok":false,"message":"No.","setting":{"key":"general.restoreSessions","value":"false"}}"""
+        ) as ServerFrames.Result.Ok).message as ServerMessage.SettingsApplied
+        assertEquals(false, applied.ok)
+        assertEquals("No.", applied.message)
+        assertEquals(ServerSettingKey.RestoreSessions, applied.setting.known)
+
+        val changed = (ServerFrames.parse(
+            """{"t":"settings.changed","settings":[{"key":"agents.defaultProvider","value":"shell"}]}"""
+        ) as ServerFrames.Result.Ok).message as ServerMessage.SettingsChanged
+        assertEquals("shell", changed.settings[0].value)
+    }
+
+    /* ---- welcome version fields ----------------------------------------------------------- */
+
+    @Test
+    fun `welcome carries the build and kind, and absent stays neutral`() {
+        val full = """{"t":"welcome","protocol":1,"deviceId":"d1","deviceName":"Phone","token":null,""" +
+            """"sessions":[],"capabilities":["close","devices","settings"],"hostPlatform":"win32",""" +
+            """"appVersion":"0.10.0","hostKind":"headless","hostName":"studio-pc"}"""
+        val message = (ServerFrames.parse(full) as ServerFrames.Result.Ok).message as ServerMessage.Welcome
+        assertEquals("0.10.0", message.appVersion)
+        assertEquals("headless", message.hostKind)
+        assertEquals("studio-pc", message.hostName)
+
+        val old = """{"t":"welcome","protocol":1,"deviceId":"d1","deviceName":"Phone","token":null,""" +
+            """"sessions":[],"capabilities":[]}"""
+        val older = (ServerFrames.parse(old) as ServerFrames.Result.Ok).message as ServerMessage.Welcome
+        assertEquals(null, older.appVersion)
+        assertEquals(null, older.hostKind)
+        assertEquals(null, older.hostName)
+    }
 }

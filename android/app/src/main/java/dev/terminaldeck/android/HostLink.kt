@@ -111,6 +111,38 @@ class HostLink(
     /** Set between asking this machine for a session and being told about it. */
     var openWhenCreated: Boolean = false
 
+    /**
+     * What build this machine is running, from `welcome.appVersion`, or "" when it never said.
+     *
+     * Kept through a disconnect and through [stop], like [hostPlatform]: a machine does not change
+     * its build between one reconnect and the next, and the one sentence this drives — *update this
+     * server from a desktop* — is worth as much after the socket drops as before. "" is the honest
+     * non-answer a build older than the field gives; see [dev.terminaldeck.android.protocol
+     * .HostVersion], which refuses to compare against it rather than manufacturing a verdict.
+     */
+    var appVersion: String = ""
+
+    /** `"desktop"` / `"headless"` from `welcome.hostKind`, or null. Read through `HostVersion`. */
+    var hostKind: String? = null
+
+    /** What the machine calls itself, from `welcome.hostName`, or null. Display text only. */
+    var hostName: String? = null
+
+    /** This phone's own device id on this machine, from `welcome.deviceId`. Names its own roster row. */
+    var myDeviceId: String? = null
+
+    /**
+     * The device roster of this machine, and the verb that removes a row. Created once per link;
+     * draws nothing until the machine advertises [dev.terminaldeck.android.protocol.Capability.DEVICES].
+     */
+    var devices: DeviceRosterController? = null
+
+    /**
+     * The two server-owned settings of this machine. Created once per link; draws nothing until the
+     * machine advertises [dev.terminaldeck.android.protocol.Capability.SETTINGS].
+     */
+    var settings: ServerSettingsController? = null
+
     /** The user's name for this machine, or enough of its id to tell it apart. */
     val label: String get() = record.label
 
@@ -137,6 +169,11 @@ class HostLink(
         upload?.cancel("The machine was disconnected.")
         upload = null
         transport.disconnect()
+        // The request clusters hold coroutine timers on the view model's scope; a stopped link is
+        // about to be dropped, so they are cancelled here rather than left to fire against a socket
+        // that will never answer. `appVersion` is deliberately *not* cleared — see its field.
+        devices?.stop()
+        settings?.stop()
         sessions = emptyList()
         live = false
         loaded = false
@@ -155,6 +192,8 @@ class HostLink(
         live = live,
         sessions = sessions,
         hostPlatform = hostPlatform,
+        appVersion = appVersion,
+        hostKind = hostKind,
         selected = selected,
     )
 }
@@ -194,6 +233,15 @@ data class HostSummary(
      * [HostPlatform.UNKNOWN] until that machine's own `welcome` says otherwise. Never a guess.
      */
     val hostPlatform: HostPlatform,
+    /**
+     * What build this machine is running, from its own `welcome.appVersion`, or "" when it never
+     * said. Per row for the reason [hostPlatform] is: a phone with a Mac and a PC shows each one's
+     * build, and reading it off the selected machine would print one computer's version under
+     * another's name.
+     */
+    val appVersion: String,
+    /** `"desktop"` / `"headless"` for this machine, or null. Read through `HostVersion`. */
+    val hostKind: String?,
     val selected: Boolean,
 ) {
     val isOnline: Boolean get() = connection.isOnline
