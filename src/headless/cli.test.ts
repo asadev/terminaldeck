@@ -133,6 +133,21 @@ describe('pickDevice', () => {
     expect(pickDevice([iphone, ipad], 'ipad')).toEqual({ ok: true, device: ipad })
   })
 
+  it('takes an id that leads with a dash, from the argv and in the match', () => {
+    // 3% of device ids on disk lead with `-` or `_` — base64url's first two
+    // characters — and this is the surface where that is most likely to be eaten
+    // silently: an argument beginning with a dash reads as a flag in most
+    // parsers. It must survive argv and then match the row it names, or the CLI
+    // is a second place a device cannot be revoked from.
+    const stuck = device({ id: '-Nx7Qa2bLm9zRt4V', name: 'Old phone' })
+    expect(parseArgs(['revoke', stuck.id])).toEqual({ kind: 'revoke', device: stuck.id })
+    expect(parseArgs(['revoke', '--device', stuck.id])).toEqual({ kind: 'revoke', device: stuck.id })
+    expect(pickDevice([iphone, stuck], stuck.id)).toEqual({ ok: true, device: stuck })
+    // And by a prefix that is only the dash and the first characters, the way a
+    // person copies it out of `terminaldeck devices`.
+    expect(pickDevice([iphone, stuck], '-nx7')).toEqual({ ok: true, device: stuck })
+  })
+
   it('refuses an ambiguous match rather than taking the first', () => {
     // Two phones whose names share a word is the ordinary case in a household,
     // and granting a folder to the wrong one is not a mistake to make quietly.

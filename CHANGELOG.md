@@ -10,6 +10,10 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Remove works on every device signed in to a host, including the ones it used to skip.** About one paired device in thirty was given an id the Remove button could not name, and pressing it did nothing except knock the phone that pressed it off — so a lost or stolen device could only be cut off from the desktop it was paired at. Every device already paired is now removable from any of your own devices; nothing has to be paired again, and no per-device folder or account permission changes hands.
+
 ## [0.10.0] — 2026-08-22
 
 ### Added

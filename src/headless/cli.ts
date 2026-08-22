@@ -279,10 +279,15 @@ export type DevicePick =
 /**
  * Which device a command is about.
  *
- * Device ids are UUIDs, and a CLI that made a person retype one would be a CLI
- * nobody uses twice. So: a name or an id, matched case-insensitively, by prefix
- * as well as in full — and when there is exactly one paired device, nothing at
- * all, because naming the only device you have is a ceremony.
+ * A device id is sixteen characters of base64url — `device-auth.ts` mints them,
+ * not a UUID — and a CLI that made a person retype one would be a CLI nobody uses
+ * twice. So: a name or an id, matched case-insensitively, by prefix as well as in
+ * full — and when there is exactly one paired device, nothing at all, because
+ * naming the only device you have is a ceremony.
+ *
+ * Some of those ids lead with `-` or `_`, which is why `revoke` takes its device
+ * as a positional argument rather than through a flag parser that would eat one:
+ * `cli.test.ts` holds both spellings and the prefix match to a dash-leading id.
  *
  * Ambiguity is an error rather than a first match. Two phones called "iPhone"
  * is the ordinary case in a household, and granting a folder to the wrong one is
