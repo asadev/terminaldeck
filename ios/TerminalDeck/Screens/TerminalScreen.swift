@@ -58,6 +58,10 @@ struct TerminalScreen: View {
     /// Whether the details sheet is up: the folder this session runs in, its
     /// agent, its status and the machine it is on. See `SessionDetailView`.
     @State private var showingDetails = false
+    /// Whether the control cluster is up — model, effort, fast mode, permission.
+    /// See `SessionControlsView`. Only offered when an agent is drawing this
+    /// session, the same rule the desktop's own cluster keeps.
+    @State private var showingControls = false
     /**
      * Whether this session is being read as a conversation rather than as a
      * terminal.
@@ -244,6 +248,24 @@ struct TerminalScreen: View {
                         Label("Session details", systemImage: "info.circle")
                     }
                     .accessibilityIdentifier("terminal.details")
+
+                    /*
+                     * Model, effort, fast mode, permission — the desktop's
+                     * control cluster, which has no room to be inline chips on a
+                     * phone. Shown only when an agent is drawing this session
+                     * (`clusterShown`): a model menu over a plain shell is the
+                     * defect the desktop's own cluster withdraws itself for, and
+                     * over an older desktop that never advertised `controls` the
+                     * reading never arrives so this stays hidden.
+                     */
+                    if showsControlsButton {
+                        Button {
+                            DispatchQueue.main.async { showingControls = true }
+                        } label: {
+                            Label("Model & effort", systemImage: "slider.horizontal.3")
+                        }
+                        .accessibilityIdentifier("terminal.controls")
+                    }
 
                     Divider()
 
@@ -442,6 +464,12 @@ struct TerminalScreen: View {
                               open: nil,
                               dismiss: { showingDetails = false })
         }
+        .sheet(isPresented: $showingControls) {
+            if let controls = host?.controls {
+                SessionControlsView(controls: controls, dismiss: { showingControls = false })
+                    .presentationDetents([.medium, .large])
+            }
+        }
         .onAppear {
             bridge.onTitle = { title = $0 }
             bridge.onCopy = { show(host?.copy(from: sessionID) ?? "Nothing to copy.") }
@@ -466,6 +494,9 @@ struct TerminalScreen: View {
             // After the attach, because the three questions it asks are about a
             // session this socket has been told is on screen.
             host?.bar.follow(sessionID)
+            // The control cluster over the same session — model, effort, fast
+            // mode, permission — read the same way and over the same attach.
+            host?.controls.follow(sessionID)
         }
         .onDisappear {
             bridge.onCopy = nil
@@ -481,6 +512,7 @@ struct TerminalScreen: View {
             // gone: a ring from a session nobody is looking at is a ring that
             // will be wrong by the time anybody does.
             host?.bar.forget()
+            host?.controls.forget()
             chatMode = false
             // The moment the grace period is measured from: whatever the desktop
             // decides about this session in the next few seconds is the tail of
@@ -509,6 +541,19 @@ struct TerminalScreen: View {
         guard connection.isLive, host?.bar.canReadChat == true else { return false }
         if chatMode { return true }
         return host?.bar.transcript != false
+    }
+
+    /**
+     * Whether the control cluster is worth offering.
+     *
+     * A live socket, a machine that advertised `controls`, and — the honest half
+     * — a reading that says an agent is drawing this session (`clusterShown`). A
+     * model menu over a plain shell acts on nothing, so the button is simply not
+     * there rather than opening onto a sheet that explains why it is empty.
+     */
+    private var showsControlsButton: Bool {
+        guard connection.isLive, let controls = host?.controls, controls.offered else { return false }
+        return SessionControls.clusterShown(controls.reading)
     }
 
     /// Swap the pane, and ask for the conversation the first time.

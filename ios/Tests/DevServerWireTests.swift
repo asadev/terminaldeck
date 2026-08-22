@@ -210,7 +210,7 @@ final class DevServerWireTests: XCTestCase {
     func testDevServersAreOnlyOfferedWhenTheDesktopAdvertisesThem() {
         let without = #"{"t":"welcome","protocol":1,"deviceId":"d","deviceName":"p","token":null,"sessions":[],"capabilities":["localhost","create"]}"#
         guard case let .ok(plain, _) = WireCodec.decode(without),
-              case let .welcome(_, _, _, _, _, none, _, _, _, _) = plain else {
+              case let .welcome(_, _, _, _, _, none, _, _, _, _, _, _) = plain else {
             return XCTFail("a welcome without devserver should decode")
         }
         XCTAssertFalse(none.contains(WireCapability.devserver),
@@ -218,7 +218,7 @@ final class DevServerWireTests: XCTestCase {
 
         let with = #"{"t":"welcome","protocol":1,"deviceId":"d","deviceName":"p","token":null,"sessions":[],"capabilities":["devserver"]}"#
         guard case let .ok(newer, _) = WireCodec.decode(with),
-              case let .welcome(_, _, _, _, _, offered, _, _, _, _) = newer else {
+              case let .welcome(_, _, _, _, _, offered, _, _, _, _, _, _) = newer else {
             return XCTFail("a welcome with devserver should decode")
         }
         XCTAssertTrue(offered.contains(WireCapability.devserver))
@@ -229,8 +229,16 @@ final class DevServerWireTests: XCTestCase {
     /// nothing — unlike `credential`, which is a frame the desktop only sends
     /// once somebody has said they are listening.
     func testDevServerIsNotClaimedInHello() {
+        // `devserver` is a thing this phone *asks for*, gated by what the desktop
+        // advertised, so claiming it would say nothing. The claimed set is only
+        // the names that run desktop→phone: a question the desktop asks
+        // (credential), the pushes a client would otherwise miss (devices,
+        // settings), and the client half of a dual-listed name (watch) — the
+        // same list `CLAIMED_CAPABILITIES` carries in the PWA as of 0.10.0.
         XCTAssertFalse(WireCapability.claimed.contains(WireCapability.devserver))
-        XCTAssertEqual(WireCapability.claimed, [WireCapability.credential])
+        XCTAssertEqual(Set(WireCapability.claimed),
+                       [WireCapability.credential, WireCapability.devices,
+                        WireCapability.settings, WireCapability.watch])
     }
 
     private func jsonRow(_ text: String) -> [String: Any] {

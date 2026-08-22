@@ -198,6 +198,15 @@ struct DeckTabs: View {
                         switch route {
                         case .machines:
                             MachinesView(model: model)
+                        case .devices:
+                            if let host = model.current {
+                                DeviceRosterView(devices: host.devices,
+                                                 thisDeviceId: host.thisDeviceId)
+                            }
+                        case .watch:
+                            if let host = model.current {
+                                WatchSurfacesView(watch: host.watch)
+                            }
                         }
                     }
             }
@@ -600,6 +609,46 @@ struct DeckSettingsView: View {
                         SettingsDivider()
 
                         /*
+                         * Every device signed in to the current machine, and the
+                         * one verb that removes one. Drawn only over a host that
+                         * advertised `devices` — one of the owner's own devices
+                         * only, since the host withholds the capability from a
+                         * guest at the source. An older desktop, or this phone
+                         * connected as a guest, gets no row rather than one that
+                         * pushes onto an empty screen. See `DeviceRosterView`.
+                         */
+                        if model.current?.devices.offered == true {
+                            NavigationLink(value: DeckModel.SettingsRoute.devices) {
+                                SettingsRowBody(title: "Devices",
+                                                value: devicesValue,
+                                                icon: "iphone.gen3")
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("settings.devices")
+
+                            SettingsDivider()
+                        }
+
+                        /*
+                         * The machine's own browser, live: watch one of its
+                         * windows and drive it with a finger. Drawn only over a
+                         * host that advertised `watch` — withheld from a guest at
+                         * the source, because watching a signed-in browser is an
+                         * owner act. See `WatchSurfacesView`.
+                         */
+                        if model.current?.watch.offered == true {
+                            NavigationLink(value: DeckModel.SettingsRoute.watch) {
+                                SettingsRowBody(title: "Watch browser",
+                                                value: "",
+                                                icon: "macwindow.on.rectangle")
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("settings.watch")
+
+                            SettingsDivider()
+                        }
+
+                        /*
                          * **There is no Copilot row here, and that is the
                          * change of 2026-08-19.**
                          *
@@ -641,6 +690,15 @@ struct DeckSettingsView: View {
                             DispatchQueue.main.async { model.showingAlerts = true }
                         }
                         .accessibilityIdentifier("settings.alerts")
+                    }
+
+                    // The two settings the current machine owns rather than this
+                    // phone — the coding tool a fresh session starts with, and
+                    // whether the last layout is restored. Draws nothing over a
+                    // host that did not advertise `settings`, so an older desktop
+                    // or a guest sees exactly what it did before.
+                    if let host = model.current {
+                        ServerSettingsSection(settings: host.serverSettings)
                     }
 
                     SectionCaption("Appearance")
@@ -760,6 +818,51 @@ struct DeckSettingsView: View {
                         }
                         .padding(.horizontal, 16)
                         .padding(.vertical, 13)
+
+                        /*
+                         * What the machine at the other end is running.
+                         *
+                         * Drawn only when the host said — every desktop before
+                         * 0.10.0 sends no version, and absent stays silent rather
+                         * than guessing. Display text and nothing to press: there
+                         * is no update verb on this wire, so the one honest thing
+                         * a phone can say when its own build is ahead is a
+                         * sentence, below. `hostKind` names the box — *server* for
+                         * a headless host, *desktop* otherwise.
+                         */
+                        if let host = model.current, let version = host.hostAppVersion {
+                            SettingsDivider()
+                            HStack(spacing: 12) {
+                                Image(systemName: host.hostKind == .headless ? "server.rack" : "desktopcomputer")
+                                    .font(.system(size: 15))
+                                    .foregroundStyle(Theme.secondary)
+                                    .frame(width: 18)
+                                Text("This \(host.hostKind.noun)")
+                                    .font(.system(size: 16))
+                                    .foregroundStyle(Theme.primary)
+                                Spacer(minLength: 8)
+                                Text(version)
+                                    .font(.system(size: 14, design: .monospaced))
+                                    .foregroundStyle(Theme.faint)
+                                    .accessibilityIdentifier("settings.hostVersion")
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 13)
+                        }
+                    }
+
+                    // The one sentence a phone can honestly say when its own build
+                    // is ahead of the machine's: there is nothing to press here,
+                    // because replacing a host stays on the desktop and SSH plane.
+                    if let host = model.current, let version = host.hostAppVersion,
+                       versionIsBehind(version, than: Brand.version) {
+                        Text("This \(host.hostKind.noun) is running an older build. Update it from a desktop.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.faint)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.horizontal, 4)
+                            .padding(.top, 8)
+                            .accessibilityIdentifier("settings.hostBehind")
                     }
 
                     Text("This phone talks to your own machines. There is no notification server "
@@ -796,6 +899,40 @@ struct DeckSettingsView: View {
     /// screen is being asked.
     private var machinesValue: String {
         model.hosts.count == 1 ? "1 paired" : "\(model.hosts.count) paired"
+    }
+
+    /// The Devices row's summary before it is opened. The count once the roster
+    /// has been read on some visit, and nothing before — the row does not poll a
+    /// figure it does not have, the same rule the bar keeps for a figure it has
+    /// not been told.
+    private var devicesValue: String {
+        guard let count = model.current?.devices.rows?.count else { return "" }
+        return count == 1 ? "1 signed in" : "\(count) signed in"
+    }
+
+    /**
+     * Whether `host` is an older build than `app`, comparing the release cores
+     * numerically. A version this app cannot parse returns false — it claims
+     * "behind" only when it is sure, so an unfamiliar version string never puts
+     * an "update this" sentence on screen wrongly. A prerelease of the same core
+     * (`0.10.0-rc.1`) is behind the release, the same order a tag sorts in.
+     */
+    private func versionIsBehind(_ host: String, than app: String) -> Bool {
+        func parts(_ v: String) -> (core: [Int], pre: Bool)? {
+            let core = v.split(separator: "-", maxSplits: 1).first.map(String.init) ?? v
+            let nums = core.split(separator: ".").map { Int($0) }
+            guard !nums.isEmpty, nums.allSatisfy({ $0 != nil }) else { return nil }
+            return (nums.map { $0! }, v.contains("-"))
+        }
+        guard let h = parts(host), let a = parts(app) else { return false }
+        let width = max(h.core.count, a.core.count)
+        for i in 0..<width {
+            let hv = i < h.core.count ? h.core[i] : 0
+            let av = i < a.core.count ? a.core[i] : 0
+            if hv != av { return hv < av }
+        }
+        // Same core: a prerelease host is behind a release app, not the reverse.
+        return h.pre && !a.pre
     }
 
     /// What the Alerts row says without being opened. A row that always read

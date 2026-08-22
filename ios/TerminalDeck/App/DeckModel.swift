@@ -195,6 +195,14 @@ final class DeckModel {
      */
     enum SettingsRoute: Hashable {
         case machines
+        /// The device roster for the current machine — every device signed in
+        /// here, and the one verb that removes one. Pushed only over a host that
+        /// advertised `devices`. See `DeviceRosterView`.
+        case devices
+        /// The machine's watchable browser surfaces — a live cast of one, and the
+        /// taps that drive it. Pushed only over a host that advertised `watch`.
+        /// See `WatchSurfacesView`.
+        case watch
     }
 
     /**
