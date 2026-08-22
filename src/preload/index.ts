@@ -1663,6 +1663,13 @@ const api = {
     ipcRenderer.invoke('hooks:install', provider),
   removeHooks: (provider: string): Promise<unknown> => ipcRenderer.invoke('hooks:remove', provider),
   syncHooks: (): Promise<unknown> => ipcRenderer.invoke('hooks:sync'),
+  // The first-run offer: whether to ask, one press that covers every installed
+  // assistant, and one that declines forever. No provider id crosses this seam
+  // on purpose — main owns the list, so the renderer cannot ask for a partial
+  // accept the strip's sentence never offered.
+  hooksOffer: (): Promise<unknown> => ipcRenderer.invoke('hooks:offer'),
+  hooksOfferAccept: (): Promise<unknown> => ipcRenderer.invoke('hooks:offer-accept'),
+  hooksOfferDecline: (): Promise<unknown> => ipcRenderer.invoke('hooks:offer-decline'),
 
   /*
    * There was a second MCP surface here — `mcpList`, `mcpConnect`,

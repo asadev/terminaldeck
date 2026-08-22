@@ -254,6 +254,18 @@ const SEAMS: Array<{ file: string; child: string; props: string[]; why: string }
   },
   {
     file: 'renderer/App.tsx',
+    child: 'HooksOffer',
+    props: [],
+    // No required props for the same reason as UpdateBanner below: it resolves
+    // its own bridge, and main decides whether there is anything to ask. Being
+    // rendered at all is the entire wiring — and this component exists because
+    // its predecessor wasn't: hook install was a pane inside Settings that a
+    // fresh machine had no reason to open, so on every machine but a
+    // developer's, no session event ever reached the app.
+    why: 'the only consent step a fresh install ever sees — unmounted, hooks are never offered and every session stays silent',
+  },
+  {
+    file: 'renderer/App.tsx',
     child: 'UpdateBanner',
     props: [],
     // It takes no required props on purpose — it resolves its own bridge, and
