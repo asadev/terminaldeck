@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { currentPlatform, type Platform } from '../main/platform/host'
 import {
   callControl,
   clearDaemonRecord,
@@ -21,10 +22,33 @@ import {
 const made: string[] = []
 const servers: ControlServer[] = []
 
+/**
+ * The platform this file is running on, for the half of it that genuinely binds.
+ *
+ * The pure cases below pin both platforms as values from either machine, which
+ * is the point of `controlPaths` taking a platform at all. The live cases cannot
+ * do that: they open a listener, and only one of the two kinds of listener
+ * exists on any given machine.
+ */
+const PLATFORM: Platform = currentPlatform()
+
+/** A short-lived directory per test, so two tests never share a channel name. */
 function tempDir(): string {
   const dir = mkdtempSync(join(tmpdir(), 'td-control-'))
   made.push(dir)
   return dir
+}
+
+/**
+ * The channel name for a directory, in this machine's own spelling.
+ *
+ * `join(dir, 'host.sock')` written out by hand is what made this whole block
+ * unrunnable on Windows: libuv maps `listen(path)` to a named pipe there, a
+ * filename is not a pipe name, and the runner answered `EACCES` on every case.
+ * `hook-server.test.ts` carries the same note for the same reason.
+ */
+function channel(dir: string): string {
+  return controlPaths(dir, PLATFORM).socket
 }
 
 afterEach(async () => {
@@ -153,31 +177,33 @@ describe('framing', () => {
 })
 
 /*
- * POSIX hosts only, and not because the feature is POSIX-only — it is not.
+ * The cases that genuinely BIND — on whichever channel this machine has.
  *
- * These cases pass `platform: 'linux'` and then genuinely BIND, which is the
- * point: they are the ones that prove framing, tokens and refusals against a
- * real socket rather than a fake. A Unix domain socket needs a POSIX host to
- * bind on, so on Windows the whole block fails with
- * `listen EACCES … \td-control-…\host.sock` — the runner faithfully doing what
- * it was told, in a place Windows has no such thing.
+ * They are the ones that prove framing, tokens and refusals against a real
+ * listener rather than a fake, and they used to run on POSIX only: they pinned
+ * `platform: 'linux'` and spelled the address `join(dir, 'host.sock')`, so on
+ * Windows the whole block failed with `listen EACCES … \td-control-…\host.sock`
+ * — the runner faithfully doing what it was told, in a place Windows has no such
+ * thing — and was skipped there rather than fixed.
  *
- * Windows is not left unproven by this. It has its own transport — a named pipe,
- * `\\.\pipe\<brand>-<tag>` — and `controlPaths` above pins that name, its
- * uniqueness per install, and the fact that it is not a filesystem path at all.
- * What is genuinely NOT covered anywhere is a live named pipe end to end, and
- * that needs a Windows runner deliberately exercising the win32 branch rather
- * than this block pretending to.
+ * Skipping it left the one thing that most needed proving unproven. `controlPaths`
+ * pins the *name* of the Windows channel, `\\.\pipe\<brand>-<tag>`, and a name is
+ * not a channel: until something bound it, nothing in this repository had ever
+ * opened the transport that `terminaldeck status`, `address` and `stop` use on
+ * Windows. The address now comes from {@link channel}, which asks
+ * `controlPaths` for this machine's answer, so the Windows runner exercises the
+ * named pipe end to end and the Mac exercises the Unix socket — the same tests,
+ * each on the thing it actually has.
  */
-describe.skipIf(process.platform === 'win32')('a live control socket', () => {
+describe('a live control channel', () => {
   it('carries a command and its answer', async () => {
     const dir = tempDir()
-    const socket = join(dir, 'host.sock')
+    const socket = channel(dir)
     servers.push(
       await serveControl({
         socket,
         token: 'secret',
-        platform: 'linux',
+        platform: PLATFORM,
         handle: async (cmd, args) => ({ cmd, args }),
       }),
     )
@@ -188,9 +214,9 @@ describe.skipIf(process.platform === 'win32')('a live control socket', () => {
 
   it('refuses a caller with the wrong token, in the same words as a missing one', async () => {
     const dir = tempDir()
-    const socket = join(dir, 'host.sock')
+    const socket = channel(dir)
     servers.push(
-      await serveControl({ socket, token: 'secret', platform: 'linux', handle: async () => 'no' }),
+      await serveControl({ socket, token: 'secret', platform: PLATFORM, handle: async () => 'no' }),
     )
 
     const wrong = await callControl({ socket, token: 'guess', cmd: 'stop' })
@@ -201,12 +227,12 @@ describe.skipIf(process.platform === 'win32')('a live control socket', () => {
 
   it('sends a thrown message back rather than dropping the connection', async () => {
     const dir = tempDir()
-    const socket = join(dir, 'host.sock')
+    const socket = channel(dir)
     servers.push(
       await serveControl({
         socket,
         token: 't',
-        platform: 'linux',
+        platform: PLATFORM,
         handle: async () => {
           throw new Error('no such folder')
         },
@@ -232,7 +258,10 @@ describe.skipIf(process.platform === 'win32')('a live control socket', () => {
   it('says "no host is listening" rather than a syscall name, and codes it', async () => {
     const dir = tempDir()
     const answer = await callControl({
-      socket: join(dir, 'nothing.sock'),
+      // A channel nothing has ever bound, named the way this machine names one:
+      // a socket file that is not on disk, or a pipe that was never created.
+      // Both answer ENOENT, which is the code this case is about.
+      socket: channel(join(dir, 'never-served')),
       token: 't',
       cmd: 'status',
       timeoutMs: 500,
@@ -244,7 +273,17 @@ describe.skipIf(process.platform === 'win32')('a live control socket', () => {
     })
   })
 
-  it('takes over a socket file a dead host left behind', async () => {
+  /*
+   * The one case in this block that is genuinely about POSIX rather than about
+   * the control channel, so it is the one case still pinned to `linux`.
+   *
+   * A Unix socket is a file, and a power cut leaves it behind; a named pipe is
+   * a kernel object that goes away with the process that made it, so there is
+   * nothing on Windows for a dead host to leave and nothing for the next start
+   * to take over. Running it there would assert a hazard that platform does not
+   * have.
+   */
+  it.skipIf(PLATFORM === 'win32')('takes over a socket file a dead host left behind', async () => {
     // A power cut leaves the file, and `listen` then fails with EADDRINUSE
     // however dead the process behind it is. Without this a host never starts
     // again after one.
@@ -262,9 +301,9 @@ describe.skipIf(process.platform === 'win32')('a live control socket', () => {
 
   it('writes the record with the socket it is actually listening on', async () => {
     const dir = tempDir()
-    const { socket } = controlPaths(dir, 'linux')
+    const socket = channel(dir)
     servers.push(
-      await serveControl({ socket, token: 'tok', platform: 'linux', handle: async () => 'ok' }),
+      await serveControl({ socket, token: 'tok', platform: PLATFORM, handle: async () => 'ok' }),
     )
     writeDaemonRecord(dir, { pid: process.pid, socket, token: 'tok', startedAt: 0, version: 'v' })
     const record = readDaemonRecord(dir)
