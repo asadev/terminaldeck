@@ -7,6 +7,12 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js'
 import { BRAND } from '../shared/brand'
 import { addMcpServer, removeMcpServer } from './mcp-add'
+import {
+  buildStoreView,
+  installFromCatalogue,
+  readStoreFacts,
+  type ConfiguredServer,
+} from './mcp-store'
 import { currentPlatform, envPath, isPathKey, withPath, type Platform } from './platform/host'
 import { loginPath } from './providers'
 import { onWebContentsDestroyed } from './web-contents-teardown'
@@ -1155,6 +1161,27 @@ function stringArgs(value: unknown): Record<string, string> {
 }
 
 /**
+ * The configuration as the store needs to see it: a name, a scope, and one
+ * string to look a package token up in.
+ *
+ * Deliberately lossy. The store asks exactly two questions of what is already
+ * configured — *is this row installed* and *is something else wearing its name*
+ * — and both are answered by those three fields. Handing it the whole
+ * `McpServerConfig`, environment variables and all, would put every configured
+ * secret on a wire that has no reason to carry one.
+ */
+function configuredForStore(projectPath: string | null): ConfiguredServer[] {
+  return loadServers(projectPath).map((server) => ({
+    name: server.name,
+    scope: server.scope,
+    commandLine:
+      server.transport === 'stdio'
+        ? [server.command ?? '', ...server.args].join(' ').trim()
+        : server.url ?? '',
+  }))
+}
+
+/**
  * Wire the MCP channels into the main process.
  * Call once during startup: `registerMcpIpc(ipcMain)`.
  *
@@ -1162,6 +1189,8 @@ function stringArgs(value: unknown): Record<string, string> {
  *  - `mcp:list`          (projectPath?)                    -> McpServerStatus[]
  *  - `mcp:add`           (McpAddRequest)                   -> McpAddResult
  *  - `mcp:remove`        (McpRemoveRequest)                -> McpAddResult
+ *  - `mcp:store`         (projectPath?)                    -> McpStoreView
+ *  - `mcp:store-install` (McpInstallRequest)               -> McpStoreResult
  *  - `mcp:connect`       (serverId, projectPath?)          -> McpServerStatus
  *  - `mcp:disconnect`    (serverId)                        -> McpServerStatus | null
  *  - `mcp:inventory`     (serverId, projectPath?)          -> McpInventory
@@ -1192,6 +1221,42 @@ export function registerMcpIpc(ipcMain: Electron.IpcMain): void {
   // to read-modify-write from over here. The request is validated on that side,
   // so `unknown` is the honest parameter type.
   ipcMain.handle('mcp:add', (_e, request: unknown) => addMcpServer(request))
+
+  /*
+   * The store: what can be installed on this machine, and installing it.
+   *
+   * Two channels rather than three, because **Remove is already here** —
+   * `mcp:remove` takes a name and a scope, which is exactly what a store row
+   * has once it is installed. A `mcp:store-remove` would be a second path to
+   * one file, and the two would drift the way two copies of a write always do.
+   *
+   * The list read is deliberately the same `loadServers` the page above uses,
+   * so a row cannot say "not installed" about a server the list on the other tab
+   * is showing. See `mcp-store.ts` for what is measured and what is not.
+   */
+  ipcMain.handle('mcp:store', async (_e, projectPath?: unknown) => {
+    const project = optionalProjectPath(projectPath)
+    const facts = await readStoreFacts()
+    return buildStoreView({
+      configured: configuredForStore(project),
+      runtimes: facts.runtimes,
+      environment: facts.environment,
+      environmentSource: facts.environmentSource,
+      writer: facts.writer,
+      projectPath: project,
+    })
+  })
+
+  ipcMain.handle('mcp:store-install', (_e, request: unknown) => {
+    // The configuration is re-read here rather than taken from the request:
+    // whether a name is already taken is a fact about the file at the moment of
+    // writing, not about the view the renderer was looking at.
+    const project =
+      typeof request === 'object' && request !== null
+        ? optionalProjectPath((request as { projectPath?: unknown }).projectPath)
+        : null
+    return installFromCatalogue(request, configuredForStore(project))
+  })
 
   // The other write, and it exists because the panel used to point at a
   // terminal instead of doing it: *"To remove one, run `claude mcp remove` in a

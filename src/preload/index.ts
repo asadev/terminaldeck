@@ -2380,6 +2380,22 @@ const api = {
   addMcpServer: (request: unknown): Promise<unknown> => ipcRenderer.invoke('mcp:add', request),
   removeMcpServer: (request: unknown): Promise<unknown> => ipcRenderer.invoke('mcp:remove', request),
   /*
+   * The store: the catalogue as it applies to *this* machine, and one install.
+   *
+   * There is no `mcpStoreRemove`, and the absence is the design rather than an
+   * omission — `removeMcpServer` above already takes the name and the scope a
+   * store row has once it is installed, and a second path to the same file is
+   * two chances to write it differently.
+   *
+   * The read carries the project path for the same reason `listMcpServers`
+   * does: two of the three MCP scopes are keyed on the open folder, so "is this
+   * already installed" has a different answer in a different one.
+   */
+  mcpStore: (projectPath?: string | null): Promise<unknown> =>
+    ipcRenderer.invoke('mcp:store', projectPath),
+  mcpStoreInstall: (request: unknown): Promise<unknown> =>
+    ipcRenderer.invoke('mcp:store-install', request),
+  /*
    * These three carry the project path, and for a while they did not.
    *
    * Three of the MCP scopes are addressed differently: `user` servers come out

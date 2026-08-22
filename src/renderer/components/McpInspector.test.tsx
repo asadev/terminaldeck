@@ -307,6 +307,41 @@ describe('<McpInspector>', () => {
    * document for the screen reader, clipped to a pixel, so a test can still
    * assert the app has not quietly stopped saying what it cannot do.
    */
+  /**
+   * The Store tab, and the build that has no store.
+   *
+   * The store's methods are resolved separately from `BRIDGE_METHODS` above —
+   * see `mcp-store-bridge.ts` — precisely so a preload older than the feature
+   * costs this page one tab rather than the whole window. These two are that
+   * promise, in both directions.
+   */
+  it('draws no tab switch at all when the preload has no store', () => {
+    // His most repeated note, applied to a tab: *"a dropdown only when some
+    // exist. Hide it when empty."* A Store button that opened an apology is
+    // worse than no Store button.
+    const html = renderToStaticMarkup(<McpInspector bridge={bridge} projectPath="/work/app" />)
+    expect(html).not.toContain('Which view of MCP servers to show')
+  })
+
+  it('offers the store beside the list when the preload carries it', () => {
+    const store = {
+      mcpStore: async () => ({ rows: [], runtimes: [], writer: { found: true, path: '/c' } }),
+      mcpStoreInstall: async () => ({ ok: true, message: 'Added.' }),
+      removeMcpServer: async () => ({ ok: true, message: 'Removed.' }),
+      addMcpServer: async () => ({ ok: true, message: 'Added.' }),
+    }
+    const html = renderToStaticMarkup(
+      <McpInspector bridge={bridge} store={store} projectPath="/work/app" />,
+    )
+    expect(html).toContain('Which view of MCP servers to show')
+    expect(html).toContain('Your servers')
+    expect(html).toContain('>Store<')
+    // The list is still the tab that is on: a page that opened into a catalogue
+    // when somebody navigated to "MCP servers" would be answering a question
+    // they did not ask.
+    expect(html).toContain('aria-pressed="true"')
+  })
+
   it('puts the two surviving facts behind the information dot, not on the page', () => {
     const html = renderToStaticMarkup(<McpInspector bridge={bridge} projectPath="/work/app" />)
     const sub = /<div class="mcp-subheading">(.*?)<\/div>/s.exec(html)?.[1] ?? ''
