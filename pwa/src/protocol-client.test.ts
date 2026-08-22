@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 import {
   MAX_FRAME_DATA_CHARS,
@@ -682,31 +681,12 @@ describe('the localhost frames', () => {
     expect(long.ok && long.message.t === 'tunnel.closed' && long.message.message.length).toBe(300)
   })
 
-  it('never asks for a byte stream, which is the half that still holds', () => {
-    /*
-     * This used to assert that the client could not *read* `net.*`. It can now,
-     * and not because anybody taught it to: `decodeServerMessage` delegates to
-     * `parseServerFrame`, and that reader gained the byte-stream frames when the
-     * desktop learned to reach a port on another machine. One reader, shared on
-     * purpose — the alternative is two readers of one wire, which is the drift
-     * this whole describe block exists to catch.
-     *
-     * So the claim moves from what it can parse to what it can ask for, which is
-     * the part that was ever really true. `net.*` only exists inside a stream
-     * begun by a `net.open`, and a browser tab has no socket to serve bytes
-     * into. This client sends no such frame, so it is never in that conversation
-     * — and being able to read a sentence nobody will say to you costs nothing.
-     *
-     * Asserted against the source rather than by sending one, because the point
-     * is that no code path exists at all, and a runtime test can only show that
-     * the path was not taken today.
-     */
-    const source = readFileSync(new URL('./protocol-client.ts', import.meta.url), 'utf8')
-    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
-    expect(code, 'this client now sends net.open — it has no socket to serve').not.toContain(
-      'net.open',
-    )
-  })
+  // The source-text guard that this client never *sends* `net.open` — it has no
+  // socket to serve a byte stream into — reads `protocol-client.ts` off disk with
+  // `node:fs`, so it lives on the node side of the split in
+  // `pwa/tests/protocol-client-source.test.ts`, where the other grep-the-source
+  // guards do. Keeping it out of here is what lets this browser unit test compile
+  // clean under `pwa/tsconfig.json`'s `"types": []`.
 })
 
 /*

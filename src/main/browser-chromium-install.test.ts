@@ -6,14 +6,17 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { makeZip } from './browser-extension-zip.fixture'
 import {
   CHROMIUM_PATH_ENV,
+  PINNED_CHROMIUM_SHA256,
   PINNED_CHROMIUM_VERSION,
   cftPlatformFor,
   chromeExecutableRel,
+  defaultPinnedSha256,
   downloadUrlFor,
   installChromium,
   md5FromGoogHash,
   resolveChromeDownload,
   verifyChecksum,
+  type CftPlatform,
   type FetchJson,
   type FetchZip,
 } from './browser-chromium-install'
@@ -51,6 +54,19 @@ function fakeChromeZip(): Buffer {
 function md5Base64(bytes: Buffer): string {
   return createHash('md5').update(bytes).digest('base64')
 }
+
+function sha256Hex(bytes: Buffer): string {
+  return createHash('sha256').update(bytes).digest('hex')
+}
+
+/**
+ * A version this app does *not* pin a sha256 for, so an install of it exercises
+ * the md5 fallback with a fake archive — the real pinned build's app-owned digest
+ * would never match a fixture zip. Same `146.0.7680` family as the pin; the `.999`
+ * makes it unmistakably synthetic. Only ever handed to a faked index and a faked
+ * download, so it is never fetched.
+ */
+const UNPINNED_VERSION = '146.0.7680.999'
 
 function fetchJsonReturning(json: unknown): FetchJson {
   return async () => ({ ok: true, json, message: '' })
@@ -189,6 +205,43 @@ describe('verifying the download against a checksum', () => {
   })
 })
 
+describe('the app-owned sha256 pinned for the shipped build', () => {
+  const PLATFORMS: CftPlatform[] = ['linux64', 'mac-arm64', 'mac-x64', 'win64']
+
+  it('pins a well-formed sha256 for every published platform', () => {
+    for (const platform of PLATFORMS) {
+      expect(PINNED_CHROMIUM_SHA256[platform], platform).toMatch(/^[0-9a-f]{64}$/)
+    }
+  })
+
+  it('holds the exact digests of the pinned version’s archives', () => {
+    // Locked to the values computed from the real chrome-for-testing objects for
+    // PINNED_CHROMIUM_VERSION and cross-checked against Google's published md5.
+    // A fat-fingered pin fails here rather than at a user's install, and when the
+    // version bumps these move with it in the same commit.
+    expect(PINNED_CHROMIUM_SHA256).toEqual({
+      linux64: '0436ed08838d35a05ef0b0f20b07cca5fddb88ec6a0c76c143d6c137d6f70ed1',
+      'mac-arm64': '41f692f646dd3ce07ed377d71a15f90e8f2f9a3e3af383c5dde0718f034d6b52',
+      'mac-x64': '266fe088699a2bdaec210ecb5a4951d9f6047ab5a54d58b220d9602ca0b00a5f',
+      win64: '65d1d4d993da8b24fc871f59f7c8100ffc3719afd58cbf843d81d6ada9bc9880',
+    })
+  })
+
+  it('is the default authority for the pinned version, on every platform', () => {
+    for (const platform of PLATFORMS) {
+      expect(defaultPinnedSha256(PINNED_CHROMIUM_VERSION, platform), platform).toBe(
+        PINNED_CHROMIUM_SHA256[platform],
+      )
+    }
+  })
+
+  it('offers no default for any other version, so those fall back to the md5', () => {
+    for (const platform of PLATFORMS) {
+      expect(defaultPinnedSha256(UNPINNED_VERSION, platform), platform).toBeUndefined()
+    }
+  })
+})
+
 describe('reading the md5 out of a GCS x-goog-hash header', () => {
   it('pulls md5 from a combined header', () => {
     expect(md5FromGoogHash('crc32c=JKfb+Q==,md5=5mu38j3wKRCjHKUQ/Mnvcw==')).toBe('5mu38j3wKRCjHKUQ/Mnvcw==')
@@ -208,20 +261,25 @@ describe('reading the md5 out of a GCS x-goog-hash header', () => {
 /* ------------------------------------------------------------- installing -- */
 
 describe('installing Chromium end to end', () => {
-  it('downloads, verifies against the md5, unpacks, and returns the executable', async () => {
+  it('downloads a build with no app-owned pin, falls back to the md5, unpacks, and returns the executable', async () => {
+    // A version this app pins no sha256 for, so the server md5 is the authority
+    // — the fallback path, exercised with a fixture archive the real pinned
+    // build's digest could never match. Everything else about the install (the
+    // unpack, the exec bits, the record) is the same on either path.
     const zip = fakeChromeZip()
     const result = await installChromium({
       root,
       platform: 'linux64',
+      version: UNPINNED_VERSION,
       env: {},
-      fetchJson: fetchJsonReturning(versionsIndex()),
+      fetchJson: fetchJsonReturning(versionsIndex(UNPINNED_VERSION)),
       fetchZip: fetchZipReturning(zip, md5Base64(zip)),
     })
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.reused).toBe(false)
     expect(result.sideloaded).toBe(false)
-    expect(result.path).toBe(join(root, VERSION, 'chrome-linux64', 'chrome'))
+    expect(result.path).toBe(join(root, UNPINNED_VERSION, 'chrome-linux64', 'chrome'))
     expect(existsSync(result.path)).toBe(true)
     // The exec bit `unzip` drops has been put back on the binary and the helper.
     // NTFS carries no Unix exec bit, so the check is only meaningful off Windows;
@@ -229,26 +287,55 @@ describe('installing Chromium end to end', () => {
     // on every platform, just not this one Unix-permission property.
     if (process.platform !== 'win32') {
       expect(statSync(result.path).mode & 0o111).not.toBe(0)
-      expect(statSync(join(root, VERSION, 'chrome-linux64', 'chrome_crashpad_handler')).mode & 0o111).not.toBe(0)
+      expect(statSync(join(root, UNPINNED_VERSION, 'chrome-linux64', 'chrome_crashpad_handler')).mode & 0o111).not.toBe(0)
     }
-    // The record was written so a second install can reuse it.
-    expect(existsSync(join(root, VERSION, 'installed.json'))).toBe(true)
+    // The record was written so a second install can reuse it, and it names the
+    // md5 as the checksum that authorised these bytes.
+    const record = JSON.parse(readFileSync(join(root, UNPINNED_VERSION, 'installed.json'), 'utf8'))
+    expect(record.checksum).toBe('md5')
   })
 
-  it('accepts a pinned sha256 as the authority', async () => {
+  it('verifies the pinned build against the app-owned sha256 by default, not the server md5', async () => {
+    // The crux of the pin. Installing the pinned version with no explicit
+    // pinnedSha256 must verify against PINNED_CHROMIUM_SHA256, which travels in
+    // the app's own bytes — so a fixture archive is refused *even though its
+    // server md5 is correct*, because the md5 is no longer the authority for this
+    // build. A correct md5 that no longer suffices is exactly the md5→sha256
+    // upgrade, proven from the caller's side.
     const zip = fakeChromeZip()
-    const sha256 = createHash('sha256').update(zip).digest('hex')
     const result = await installChromium({
       root,
       platform: 'linux64',
       env: {},
-      pinnedSha256: sha256,
+      // No pinnedSha256, and the md5 is the *right* one for these bytes.
       fetchJson: fetchJsonReturning(versionsIndex()),
-      // md5 deliberately wrong: the pin is what must be trusted.
+      fetchZip: fetchZipReturning(zip, md5Base64(zip)),
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.why).toContain('pinned sha256')
+    // Nothing was written for a build that failed its app-owned digest.
+    expect(existsSync(join(root, VERSION))).toBe(false)
+  })
+
+  it('installs the pinned build when the download matches the app-owned sha256', async () => {
+    // The positive of the test above: bytes whose sha256 is what the app pins do
+    // install, and the record names sha256 as the authority. Driven by overriding
+    // the default pin with the fixture's own digest, because a fixture cannot be
+    // the multi-hundred-megabyte real archive PINNED_CHROMIUM_SHA256 is taken
+    // from — verifyChecksum treats an explicit pin and the default identically.
+    const zip = fakeChromeZip()
+    const result = await installChromium({
+      root,
+      platform: 'linux64',
+      env: {},
+      pinnedSha256: sha256Hex(zip),
+      fetchJson: fetchJsonReturning(versionsIndex()),
+      // md5 deliberately wrong: the sha256 is what must be trusted.
       fetchZip: fetchZipReturning(zip, md5Base64(Buffer.from('wrong'))),
     })
     expect(result.ok).toBe(true)
     if (result.ok) {
+      expect(result.path).toBe(join(root, VERSION, 'chrome-linux64', 'chrome'))
       const record = JSON.parse(readFileSync(join(root, VERSION, 'installed.json'), 'utf8'))
       expect(record.checksum).toBe('sha256')
     }
@@ -260,6 +347,9 @@ describe('installing Chromium end to end', () => {
       root,
       platform: 'linux64',
       env: {},
+      // The pinned build, verified by its app-owned digest (the fixture's stands
+      // in for it); reuse then reads the record and the executable, never a hash.
+      pinnedSha256: sha256Hex(zip),
       fetchJson: fetchJsonReturning(versionsIndex()),
       fetchZip: fetchZipReturning(zip, md5Base64(zip)),
     })
@@ -270,6 +360,7 @@ describe('installing Chromium end to end', () => {
       root,
       platform: 'linux64',
       env: {},
+      pinnedSha256: sha256Hex(zip),
       fetchJson: async () => {
         secondFetched = true
         return { ok: true, json: versionsIndex(), message: '' }
@@ -315,27 +406,33 @@ describe('installing Chromium end to end', () => {
     if (!result.ok) expect(result.why).toContain(CHROMIUM_PATH_ENV)
   })
 
-  it('refuses and writes nothing when the checksum does not match', async () => {
+  it('refuses and writes nothing when the md5 does not match', async () => {
+    // The unpinned build, so this genuinely tests the md5 fallback rejecting
+    // tampered bytes rather than the app-owned sha256 doing it.
     const zip = fakeChromeZip()
     const result = await installChromium({
       root,
       platform: 'linux64',
+      version: UNPINNED_VERSION,
       env: {},
-      fetchJson: fetchJsonReturning(versionsIndex()),
+      fetchJson: fetchJsonReturning(versionsIndex(UNPINNED_VERSION)),
       fetchZip: fetchZipReturning(zip, md5Base64(Buffer.from('tampered'))),
     })
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.why).toContain('does not match')
-    expect(existsSync(join(root, VERSION))).toBe(false)
+    expect(existsSync(join(root, UNPINNED_VERSION))).toBe(false)
   })
 
-  it('refuses when the download carries no checksum', async () => {
+  it('refuses when the download carries no checksum and none is pinned', async () => {
+    // The unpinned build with an empty md5 header: no pin, no server digest,
+    // nothing to verify against — so nothing is unpacked.
     const zip = fakeChromeZip()
     const result = await installChromium({
       root,
       platform: 'linux64',
+      version: UNPINNED_VERSION,
       env: {},
-      fetchJson: fetchJsonReturning(versionsIndex()),
+      fetchJson: fetchJsonReturning(versionsIndex(UNPINNED_VERSION)),
       fetchZip: fetchZipReturning(zip, ''),
     })
     expect(result.ok).toBe(false)

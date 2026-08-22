@@ -51,14 +51,18 @@ import { userDataDir } from './platform/paths'
  * app's own bytes** before a single byte is written — the strongest arrangement,
  * because the digest travels in the program rather than beside the download.
  * chrome-for-testing's `known-good-versions-with-downloads.json` publishes the
- * download **URL** but no digest at all, so a pinned sha256 is the *authority
- * when it is supplied* ({@link InstallOptions.pinnedSha256}) and the default
- * path verifies the bytes against the **md5 that Google Cloud Storage publishes
- * for that exact object** in its `x-goog-hash` response header. Both are a
- * checksum verified before use; neither is a silent "trust the download". When
- * neither a pin nor a header digest is available the install is a *named error*
- * and nothing is written — the same refusal the extension store makes, never a
- * fallback to unverified bytes.
+ * download **URL** but no digest at all, so for the build this app actually ships
+ * the digest is pinned here instead: {@link PINNED_CHROMIUM_SHA256} holds the
+ * sha256 of each platform's archive for {@link PINNED_CHROMIUM_VERSION}, and it
+ * is the default authority ({@link defaultPinnedSha256}). A caller may still
+ * override it with an explicit {@link InstallOptions.pinnedSha256}, and when
+ * neither the caller nor the map has a sha256 for the build in hand — a version
+ * other than the pinned one — the fallback verifies the bytes against the **md5
+ * that Google Cloud Storage publishes for that exact object** in its
+ * `x-goog-hash` response header. All three are a checksum verified before use;
+ * none is a silent "trust the download". When neither a pin nor a header digest
+ * is available the install is a *named error* and nothing is written — the same
+ * refusal the extension store makes, never a fallback to unverified bytes.
  *
  * ## Air-gapped override
  *
@@ -90,6 +94,62 @@ import { userDataDir } from './platform/paths'
  * derivation lives in the comment, which is where a future bump reconciles it.
  */
 export const PINNED_CHROMIUM_VERSION = '146.0.7680.165'
+
+/**
+ * The sha256 of each platform's `chrome-<platform>.zip` for
+ * {@link PINNED_CHROMIUM_VERSION} — the app-owned digest, pinned in this
+ * program's own bytes.
+ *
+ * ## Why this exists and what it upgrades
+ *
+ * chrome-for-testing's index publishes a download **URL** and no digest at all,
+ * so before this map the only thing to verify the archive against was the **md5
+ * Google Cloud Storage prints in the object's `x-goog-hash` response header** —
+ * a checksum that travels *beside* the download and vouches for it with the same
+ * authority that served it. That is the fallback, not the floor. The extension
+ * store and the tools store both verify a sha256 that ships **inside the
+ * application**, and this brings the standalone-Chromium install up to the same
+ * discipline: for the pinned build the digest is now app-owned, and the server's
+ * md5 is consulted only when no pin exists for a build (see
+ * {@link defaultPinnedSha256} and {@link verifyChecksum}).
+ *
+ * ## How these were derived, and how to re-derive them on a bump
+ *
+ * Each value is the sha256 of the exact object at
+ * {@link downloadUrlFor}`(PINNED_CHROMIUM_VERSION, platform)`, computed on
+ * 2026-08-22 and cross-checked against the md5 GCS publishes for that same
+ * object — the download's bytes were confirmed to reproduce the header md5
+ * before being sha256'd, so a truncated fetch could not have seeded a wrong pin.
+ * The one-liner, per platform:
+ *
+ *     curl -sSL "$(url)" | shasum -a 256
+ *
+ * When {@link PINNED_CHROMIUM_VERSION} moves, recompute all four and replace
+ * them in the same commit; a version whose sha is stale here would be refused by
+ * its own integrity check rather than fall back — which is the safe direction,
+ * but a self-inflicted outage all the same, so the two constants move together.
+ */
+export const PINNED_CHROMIUM_SHA256: Record<CftPlatform, string> = {
+  linux64: '0436ed08838d35a05ef0b0f20b07cca5fddb88ec6a0c76c143d6c137d6f70ed1',
+  'mac-arm64': '41f692f646dd3ce07ed377d71a15f90e8f2f9a3e3af383c5dde0718f034d6b52',
+  'mac-x64': '266fe088699a2bdaec210ecb5a4951d9f6047ab5a54d58b220d9602ca0b00a5f',
+  win64: '65d1d4d993da8b24fc871f59f7c8100ffc3719afd58cbf843d81d6ada9bc9880',
+}
+
+/**
+ * The app-owned sha256 to verify a download against, or `undefined` when there
+ * is none for this exact build.
+ *
+ * Keyed on version as well as platform because {@link PINNED_CHROMIUM_SHA256} is
+ * a digest of one build's bytes: it is the authority for
+ * {@link PINNED_CHROMIUM_VERSION} and says nothing about any other version, so a
+ * caller installing a different one (a test, or a future bump before its shas are
+ * filled in) gets `undefined` here and falls back to the server-published md5
+ * rather than being checked against the wrong digest.
+ */
+export function defaultPinnedSha256(version: string, platform: CftPlatform): string | undefined {
+  return version === PINNED_CHROMIUM_VERSION ? PINNED_CHROMIUM_SHA256[platform] : undefined
+}
 
 /** The versions index chrome-for-testing publishes, with per-platform URLs. */
 export const KNOWN_GOOD_VERSIONS_URL =
@@ -452,7 +512,11 @@ export interface InstallOptions {
   root?: string
   /** The environment to read the override from. Defaults to `process.env`. */
   env?: NodeJS.ProcessEnv
-  /** A sha256 pinned in the app; the authority when set. */
+  /**
+   * A sha256 to verify the download against, overriding the app-owned default in
+   * {@link PINNED_CHROMIUM_SHA256}. Left unset, the pinned build is verified
+   * against that default and any other version falls back to the server md5.
+   */
   pinnedSha256?: string
   fetchJson?: FetchJson
   fetchZip?: FetchZip
@@ -531,8 +595,11 @@ export async function installChromium(options: InstallOptions = {}): Promise<Ins
   const got = await fetchZip(resolved.url, MAX_CHROMIUM_ZIP_BYTES)
   if (!got.ok) return { ok: false, why: got.message }
 
-  // 6. Verify before a single byte is written.
-  const checksum = verifyChecksum(got.bytes, { sha256: options.pinnedSha256, md5: got.md5 })
+  // 6. Verify before a single byte is written. A caller's explicit pin wins;
+  //    otherwise the app-owned digest for this build is the authority, and the
+  //    server-published md5 is the fallback only when neither exists.
+  const sha256 = options.pinnedSha256 ?? defaultPinnedSha256(version, platform)
+  const checksum = verifyChecksum(got.bytes, { sha256, md5: got.md5 })
   if (!checksum.ok) return { ok: false, why: `Chromium ${version} was not installed: ${checksum.why}` }
 
   // 7. Unpack, with the shared, hardened unpacker (safe paths, no symlinks, ceilings).
