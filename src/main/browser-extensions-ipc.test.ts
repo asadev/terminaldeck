@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { makeExtensionZip, plainManifest } from './browser-extension-zip.fixture'
+import { makeExtensionZip, makeSignedCrx, plainManifest } from './browser-extension-zip.fixture'
 import type { ExtensionEntry } from './browser-extensions'
 
 /**
@@ -124,6 +124,7 @@ const ENTRY: ExtensionEntry = {
   homepage: 'https://example.com/repo',
   licence: 'MIT',
   version: '1.0.0',
+  category: 'scripting',
   works: 'works',
   measured: 'Watched working.',
   reach: ['<all_urls>'],
@@ -136,17 +137,25 @@ const ENTRY: ExtensionEntry = {
 
 let root = ''
 
+/** What the two Add dialogs answer next. `null` is a cancel, not a failure. */
+let chosenFolder: string | null = null
+let chosenCrx: string | null = null
+
 function build() {
   return installBrowserExtensions({
     userData: () => root,
     catalogue: [ENTRY],
     fetchArchive: async () => ({ ok: true, bytes: ARCHIVE, message: '' }),
+    chooseFolder: async () => chosenFolder,
+    chooseCrx: async () => chosenCrx,
   })
 }
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'td-ext-ipc-'))
   loadOutcome = 'ok'
+  chosenFolder = null
+  chosenCrx = null
   loadedIds.length = 0
   removedIds.length = 0
   fakeSession.extensions.loadExtension.mockClear()
@@ -432,5 +441,125 @@ describe('the store that was never built', () => {
       expect(result.ok, channel).toBe(false)
       expect(result.message, channel).toContain('not available in this build')
     }
+  })
+})
+
+describe('adding your own, through the channel', () => {
+  /*
+   * The dialog is opened by the main process and its answer never crosses the
+   * IPC boundary as an argument. That is the rule this suite pins: a renderer
+   * that could name a folder could name any folder, and this app would copy it
+   * into a profile and run it as a program.
+   */
+  it('takes the folder the dialog answered with, and loads it straight away', async () => {
+    const folder = mkdtempSync(join(tmpdir(), 'td-own-ipc-'))
+    writeFileSync(join(folder, 'manifest.json'), JSON.stringify(plainManifest()))
+    build()
+    const call = wire()
+    chosenFolder = folder
+    try {
+      const result = (await call('browser-extension:add-folder', PROFILE)) as {
+        ok: boolean
+        message: string
+      }
+      expect(result.ok, result.message).toBe(true)
+      // Loaded now, not at the next launch: an Add whose effect only appears
+      // after a restart is a button whose effect is invisible, and the person
+      // pressing it cannot tell that from one that failed.
+      expect(loadedIds).toHaveLength(1)
+
+      const answer = (await call('browser-extension:list', PROFILE)) as ListAnswer
+      const own = answer.view.extensions.find((row) => row.id.startsWith('own-'))
+      expect(own?.state).toBe('installed')
+      expect(own?.enabled).toBe(true)
+      // And it is not swept into "no longer offered", which is where a folder
+      // with no catalogue row would otherwise land.
+      expect((answer as unknown as { orphans: string[] }).orphans).toEqual([])
+    } finally {
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
+  it('treats a cancelled dialog as nothing happening, not as a failure', async () => {
+    /*
+     * The row must not turn red because somebody changed their mind. `ok` with
+     * an empty message is what the panel prints nothing for.
+     */
+    build()
+    const call = wire()
+    chosenFolder = null
+    const result = (await call('browser-extension:add-folder', PROFILE)) as {
+      ok: boolean
+      message: string
+    }
+    expect(result.ok).toBe(true)
+    expect(result.message).toBe('')
+    expect(loadedIds).toHaveLength(0)
+  })
+
+  it('says the browser refused it rather than reporting a success it did not have', async () => {
+    const folder = mkdtempSync(join(tmpdir(), 'td-own-ipc-'))
+    writeFileSync(join(folder, 'manifest.json'), JSON.stringify(plainManifest()))
+    build()
+    const call = wire()
+    chosenFolder = folder
+    loadOutcome = new Error('Could not load extension')
+    try {
+      const result = (await call('browser-extension:add-folder', PROFILE)) as {
+        ok: boolean
+        message: string
+      }
+      expect(result.ok).toBe(false)
+      expect(result.message).toContain('would not load it')
+      expect(result.message).toContain('Could not load extension')
+    } finally {
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
+  it('opens a .crx from the dialog and refuses one that has been altered', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'td-crx-ipc-'))
+    const path = join(dir, 'thing.crx')
+    const packed = makeSignedCrx(makeExtensionZip(plainManifest()))
+    build()
+    const call = wire()
+    chosenCrx = path
+    try {
+      writeFileSync(path, packed.crx)
+      const good = (await call('browser-extension:add-crx', PROFILE)) as {
+        ok: boolean
+        message: string
+      }
+      expect(good.ok, good.message).toBe(true)
+      expect(good.message).toContain(packed.id)
+
+      const bent = Buffer.from(packed.crx)
+      bent[bent.length - 40] ^= 0xff
+      writeFileSync(path, bent)
+      const bad = (await call('browser-extension:add-crx', PROFILE)) as { ok: boolean; message: string }
+      expect(bad.ok).toBe(false)
+      expect(bad.message).toContain('Nothing was added')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('an extension’s settings page', () => {
+  it('refuses with its own sentence when the extension has none', async () => {
+    /*
+     * The panel asks `optionsPage` before drawing the control, so this refusal
+     * is a second line rather than the only one — but a caller that went round
+     * the screen must get the same truth the screen gives.
+     */
+    build()
+    const call = wire()
+    await call('browser-extension:install', PROFILE, 'test')
+    const result = (await call('browser-extension:options', PROFILE, 'test')) as {
+      ok: boolean
+      message: string
+    }
+    expect(result.ok).toBe(false)
+    expect(result.message).toContain('no settings page of its own')
   })
 })

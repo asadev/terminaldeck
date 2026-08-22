@@ -1,3 +1,4 @@
+import { createHash, createSign, generateKeyPairSync } from 'node:crypto'
 import { deflateRawSync } from 'node:zlib'
 
 /**
@@ -130,4 +131,65 @@ export function plainManifest(over: Record<string, unknown> = {}): Record<string
     host_permissions: ['https://example.com/*'],
     ...over,
   }
+}
+
+/* --------------------------------------------------------------- a .crx -- */
+
+function varint(value: number): Buffer {
+  const out: number[] = []
+  let left = value
+  while (left > 0x7f) {
+    out.push((left & 0x7f) | 0x80)
+    left = Math.floor(left / 128)
+  }
+  out.push(left)
+  return Buffer.from(out)
+}
+
+/** One length-delimited protobuf field: `(number << 3) | 2`, length, bytes. */
+function field(number: number, bytes: Buffer): Buffer {
+  return Buffer.concat([varint(number * 8 + 2), varint(bytes.length), bytes])
+}
+
+const SIGNED_PREFIX = Buffer.concat([Buffer.from('CRX3 SignedData', 'ascii'), Buffer.from([0])])
+
+export interface PackedCrx {
+  crx: Buffer
+  /** The id the signing key yields, in Chrome's `a`–`p` alphabet. */
+  id: string
+  /** The zip that went in, for tests that swap payloads about. */
+  zip: Buffer
+}
+
+/**
+ * Pack a zip into a real, signed CRX3.
+ *
+ * Signed with a freshly generated key over the real prefix, rather than checked
+ * in as bytes, for the reason `browser-extension-crx.test.ts` gives: a fixture
+ * built by the same misunderstanding as the reader would agree with it, and the
+ * two would be wrong together about every genuine `.crx` in the world.
+ */
+export function makeSignedCrx(zip: Buffer, options: { wrongId?: boolean } = {}): PackedCrx {
+  const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
+  const spki = Buffer.from(publicKey.export({ type: 'spki', format: 'der' }))
+  const digest = createHash('sha256').update(spki).digest().subarray(0, 16)
+  const alphabet = 'abcdefghijklmnop'
+  let id = ''
+  for (const byte of digest) id += alphabet[byte >> 4] + alphabet[byte & 0x0f]
+
+  const signedHeaderData = field(1, options.wrongId === true ? Buffer.alloc(16, 7) : digest)
+  const lengthLE = Buffer.alloc(4)
+  lengthLE.writeUInt32LE(signedHeaderData.length, 0)
+  const signer = createSign('sha256')
+  signer.update(Buffer.concat([SIGNED_PREFIX, lengthLE, signedHeaderData, zip]))
+  signer.end()
+  const signature = signer.sign(privateKey)
+
+  const proof = Buffer.concat([field(1, spki), field(2, signature)])
+  const header = Buffer.concat([field(2, proof), field(10000, signedHeaderData)])
+  const front = Buffer.alloc(12)
+  front.write('Cr24', 0, 'ascii')
+  front.writeUInt32LE(3, 4)
+  front.writeUInt32LE(header.length, 8)
+  return { crx: Buffer.concat([front, header, zip]), id, zip }
 }

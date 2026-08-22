@@ -2,6 +2,7 @@ import {
   canAct,
   extensionActionLabel,
   extensionActionVerb,
+  hasReach,
   reachWords,
   type StoreExtension,
 } from './extensions-bridge'
@@ -51,9 +52,12 @@ interface RowProps {
   busy: boolean
   said: string
   canOpenPopup: boolean
+  /** Whether this build's preload carries the settings-page door. */
+  canOpenOptions: boolean
   onAct(verb: 'install' | 'remove'): void
   onEnable(on: boolean): void
   onOpenPopup(): void
+  onOpenOptions(): void
 }
 
 /**
@@ -69,9 +73,11 @@ export function ExtensionRow({
   busy,
   said,
   canOpenPopup,
+  canOpenOptions,
   onAct,
   onEnable,
   onOpenPopup,
+  onOpenOptions,
 }: RowProps) {
   const actionable = canAct(extension)
   const isInstalled = extension.state === 'installed'
@@ -79,7 +85,27 @@ export function ExtensionRow({
     <li className="bw-store-row">
       <div className="bw-store-head">
         <span className="bw-store-name">{extension.name}</span>
-        <span className="bw-store-version">{extension.version}</span>
+        {/* A version only when there is a release this app has actually got
+            hold of. A number under a name this app has never run would be one
+            more true-looking thing that is not a measurement. */}
+        {extension.version !== '' && (
+          <span className="bw-store-version">{extension.version}</span>
+        )}
+        {/*
+          The one-word version of the row's state, because the sections that
+          used to carry it are gone. A catalogue this size browses by shelf now
+          — Blocking, Passwords, and so on — and a row with no Install sitting
+          inside one of those shelves would otherwise be a row somebody has to
+          read a paragraph of to understand. The chip says which kind of
+          buttonless it is; the paragraph underneath still says why.
+        */}
+        {extension.state === 'unavailable' && (
+          <span className="bw-store-chip bw-store-chip-no">Cannot work here</span>
+        )}
+        {extension.state === 'not-offered' && (
+          <span className="bw-store-chip">Nothing measured</span>
+        )}
+        {extension.sideloaded && <span className="bw-store-chip">Added by you</span>}
         <span className="bw-grow" />
         {/* An extension that draws a panel of its own gets a way in. Only when
             it has one and only when it is running — a button opening the popup
@@ -87,6 +113,18 @@ export function ExtensionRow({
         {isInstalled && extension.enabled && extension.popup !== '' && canOpenPopup && (
           <button type="button" className="bw-text-button" onClick={onOpenPopup}>
             Open panel
+          </button>
+        )}
+        {/*
+          And its settings, which had no door at all until now. An extension can
+          declare an options page and no popup — two in this catalogue do — and
+          such a thing installed, loaded and ran with nothing anywhere that could
+          open it. Drawn on the same terms as the panel: only when it has one,
+          and only when it is running.
+        */}
+        {isInstalled && extension.enabled && extension.optionsPage !== '' && canOpenOptions && (
+          <button type="button" className="bw-text-button" onClick={onOpenOptions}>
+            Open settings
           </button>
         )}
         {isInstalled && (
@@ -117,6 +155,7 @@ export function ExtensionRow({
       <p className="bw-store-summary">{extension.summary}</p>
 
       <dl className="bw-store-facts">
+        {hasReach(extension) && (
         <div>
           <dt>Reaches</dt>
           {/*
@@ -132,14 +171,59 @@ export function ExtensionRow({
           */}
           <dd>{reachWords(extension.reach, extension.everywhere)}</dd>
         </div>
-        <div>
-          <dt>Licence</dt>
-          <dd>{extension.licence}</dd>
-        </div>
-        <div>
-          <dt>Project</dt>
-          <dd>{extension.homepage}</dd>
-        </div>
+        )}
+        {/*
+          What it would like to reach and never will. `optional_host_permissions`
+          is a real part of a manifest and this browser can grant none of it:
+          there is no runtime prompt here, and the compatibility layer answers
+          permissions.request() with false. Left off the row entirely, this reads
+          as an extension that asks for less than it does.
+        */}
+        {extension.mayAsk.length > 0 && (
+          <div>
+            <dt>Would like to reach</dt>
+            <dd>
+              {extension.mayAsk.join(', ')} — it can ask for this at any time and this browser
+              always answers no, so it never gets it.
+            </dd>
+          </div>
+        )}
+        {extension.licence !== '' && (
+          <div>
+            <dt>Licence</dt>
+            <dd>{extension.licence}</dd>
+          </div>
+        )}
+        {extension.homepage !== '' && (
+          <div>
+            <dt>Project</dt>
+            <dd>{extension.homepage}</dd>
+          </div>
+        )}
+        {/*
+          Where a folder or a .crx somebody added came from, and what its
+          signature is worth. Both on the row for the same reason the URL and
+          the digest are on a catalogue row: "where did this program on my disk
+          come from" has an answer and it is not a shrug.
+        */}
+        {extension.sideloaded && extension.origin !== '' && (
+          <div>
+            <dt>Added from</dt>
+            <dd>
+              <code>{extension.origin}</code>
+            </dd>
+          </div>
+        )}
+        {extension.sideloaded && extension.crxId !== '' && (
+          <div>
+            <dt>Signed as</dt>
+            <dd>
+              <code>{extension.crxId}</code> — its signature matched its contents, which says the
+              file has not changed since it was packed and says nothing at all about who packed
+              it. That id is the fingerprint of the signing key.
+            </dd>
+          </div>
+        )}
         {/*
           Where the bytes come from and what they must hash to — drawn only when
           there is a download at all. A row this app measured failing pins no
@@ -225,6 +309,15 @@ export function ExtensionRow({
             off, and this browser does not switch those on, so they are not in force.
           </p>
         )}
+      {/*
+        Why there is no download for a row nothing was measured on. Printed as a
+        note and not an error: nothing is broken, and the project on the other
+        end has done nothing wrong by publishing through a store this app does
+        not talk to.
+      */}
+      {extension.state === 'not-offered' && extension.noRelease !== '' && (
+        <p className="bw-store-note">{extension.noRelease}</p>
+      )}
       {extension.state === 'damaged' && <p className="bw-error">{extension.message}</p>}
       {extension.state === 'installed' && extension.message !== '' && (
         <p className="bw-error">{extension.message}</p>

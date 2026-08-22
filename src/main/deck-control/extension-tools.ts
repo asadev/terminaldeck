@@ -61,7 +61,40 @@ import { Refused } from './surface'
  * whose profile it is, at the panel, having read what it reaches. There is no
  * argument for putting it behind a model's judgement, and a store whose
  * catalogue an agent could work through is a store that can install nine
- * programs while nobody is looking.
+ * programs while nobody is looking. The same goes double for **Add your own**:
+ * that one copies a folder off this machine and runs it as a program, and it
+ * exists behind a file dialog a person opens.
+ *
+ * ## What a session may ask about, and what it may not
+ *
+ * This tool is on {@link SESSION_TOOLS} as of 2026-08-22, so a session — here or
+ * on a server over the relay — can list and switch. One narrowing, applied
+ * here rather than at the gate: **a session may not name a `profile`.** It gets
+ * the one that is switched on, which is the browser it is driving; the copilot
+ * at the desk keeps the argument.
+ *
+ * The reason is the one `boundOf` gives about windows. A session resolves
+ * everything inside its own binding, and a list of what is installed in every
+ * profile somebody keeps — which is a list of the separations they went to the
+ * trouble of making — is not something a shell on a Linux box needs in order to
+ * read a page. Refusing the argument rather than filtering the answer is
+ * deliberate: a filtered answer teaches a model to keep trying names, and a
+ * refusal that names the working call does not.
+ *
+ * So, plainly, for the *"use there with session ai"* half:
+ *
+ *  - **A session can see** every extension installed in the profile it is
+ *    driving, catalogue rows and ones the person added themselves alike, what
+ *    each reaches, whether it is running, and what about it this browser cannot
+ *    carry.
+ *  - **A session can switch one off and back on**, which is how it gets a page
+ *    as the site actually sends it.
+ *  - **A session cannot install, remove, or add one from a folder.**
+ *  - **A session cannot drive an extension's own interface.** Not a limit of
+ *    this tool: there is no channel from an Electron app into a third-party
+ *    extension's message handlers at all, and none of these manifests declares
+ *    one. `darkreader.toggle` would have to be a robot clicking that
+ *    extension's popup, which works until its next release moves a button.
  */
 
 export interface ExtensionToolDeps {
@@ -168,10 +201,12 @@ export function extensionTools(deps: ExtensionToolDeps): ToolSpec[] {
       title: 'See and switch the browser’s extensions',
       description:
         'List the browser extensions installed in a profile and whether each one is running, or ' +
-        'switch one on or off. Read it before reading a page: an extension that runs on every page ' +
+        'switch one on or off, including ones the person added themselves from a folder. Read it ' +
+        'before reading a page: an extension that runs on every page ' +
         'changes what that page contains, so a blocker, a dark-mode rewriter or a URL cleaner will ' +
         'otherwise be reported as the site’s own behaviour. Switching one off is how you see a page ' +
-        'as the site actually sends it. It cannot install or remove anything — that is done by hand ' +
+        'as the site actually sends it. It cannot install, remove or drive one — there is no channel ' +
+        'from this app into another extension’s own code — and that installing is done by hand ' +
         // One door, one spelling: the same words the menu row wears, imported
         // from the tool that answers for the other half of the same store.
         `in ${STORE_PLACE}.`,
@@ -194,8 +229,21 @@ export function extensionTools(deps: ExtensionToolDeps): ToolSpec[] {
         return `Switch ${id} ${args.on === true ? 'on' : 'off'} in ${where}`
       },
 
-      run: async (args: Record<string, unknown>, _context: ToolContext): Promise<ToolOutput> => {
-        const profileId = optStr(args, 'profile') ?? deps.currentProfileId()
+      run: async (args: Record<string, unknown>, context: ToolContext): Promise<ToolOutput> => {
+        const named = optStr(args, 'profile')
+        /*
+         * A session gets the browser it is driving and no other. See this
+         * file's header: the narrowing is the tool's, not the gate's, because
+         * the gate cannot tell one argument from another.
+         */
+        if (named !== null && context.caller?.kind === 'session') {
+          throw new Refused(
+            'not-permitted',
+            'a session can only ask about the browser profile that is switched on. Call this tool ' +
+              'with no profile.',
+          )
+        }
+        const profileId = named ?? deps.currentProfileId()
         const profileName = deps.profileName(profileId)
         const id = optStr(args, 'extension')
 

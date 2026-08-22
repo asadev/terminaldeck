@@ -2277,6 +2277,17 @@ const api = {
     ipcRenderer.invoke('browser-extension:enable', profileId, id, on),
   browserExtensionPopup: (profileId: string, id: string): Promise<unknown> =>
     ipcRenderer.invoke('browser-extension:popup', profileId, id),
+  browserExtensionOptions: (profileId: string, id: string): Promise<unknown> =>
+    ipcRenderer.invoke('browser-extension:options', profileId, id),
+  /*
+   * Adding your own. No path crosses here in either direction: the dialog is
+   * opened by the main process, so what is added is a folder somebody pointed
+   * at rather than a string a renderer put together.
+   */
+  browserExtensionAddFolder: (profileId: string): Promise<unknown> =>
+    ipcRenderer.invoke('browser-extension:add-folder', profileId),
+  browserExtensionAddCrx: (profileId: string): Promise<unknown> =>
+    ipcRenderer.invoke('browser-extension:add-crx', profileId),
 
   browserPasswordsAvailable: (): Promise<unknown> =>
     ipcRenderer.invoke('browser-password:available'),

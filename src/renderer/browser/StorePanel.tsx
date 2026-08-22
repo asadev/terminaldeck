@@ -8,11 +8,16 @@ import {
   type StoreView,
 } from './store-bridge'
 import {
+  CATEGORY_NAMES,
+  CATEGORY_ORDER,
   extensionsAvailable,
+  matchesSearch,
   readExtensionResult,
   readExtensionsView,
+  type ExtensionCategory,
   type ExtensionsApi,
   type ExtensionsView,
+  type StoreExtension,
 } from './extensions-bridge'
 import { ToolRow } from './ToolRow'
 import { ExtensionRow } from './ExtensionRow'
@@ -114,6 +119,10 @@ export function StorePanel({ open, store, extensions, profileId, onClose }: Prop
   const [said, setSaid] = useState<Record<string, string>>({})
   /** The row with something in flight, so its button can say so. */
   const [busy, setBusy] = useState('')
+  /** What has been typed into the search box. */
+  const [query, setQuery] = useState('')
+  /** Which shelf is being looked at, or `'all'`. */
+  const [category, setCategory] = useState<ExtensionCategory | 'all'>('all')
 
   useEffect(() => {
     if (open) setShowing(profileId)
@@ -228,6 +237,53 @@ export function StorePanel({ open, store, extensions, profileId, onClose }: Prop
     [extensions, showing],
   )
 
+  const openOptions = useCallback(
+    async (id: string) => {
+      if (!extensions.browserExtensionOptions) return
+      try {
+        const result = readExtensionResult(await extensions.browserExtensionOptions(showing, id))
+        if (!result.ok) setSaid((was) => ({ ...was, [`e:${id}`]: result.message }))
+      } catch (error) {
+        setSaid((was) => ({
+          ...was,
+          [`e:${id}`]: error instanceof Error ? error.message : 'Its settings did not open.',
+        }))
+      }
+    },
+    [extensions, showing],
+  )
+
+  /**
+   * Add a folder or a `.crx`.
+   *
+   * The path never travels through here. This calls the channel, the main
+   * process opens the dialog, and what comes back is a sentence — so a renderer
+   * cannot name a directory nobody chose. A cancelled dialog answers ok with an
+   * empty message and nothing is printed, because changing your mind is not a
+   * failure and must not be drawn as one.
+   */
+  const addOwn = useCallback(
+    async (kind: 'folder' | 'crx') => {
+      const call =
+        kind === 'folder' ? extensions.browserExtensionAddFolder : extensions.browserExtensionAddCrx
+      if (!call) return
+      setBusy(`own:${kind}`)
+      try {
+        const result = readExtensionResult(await call(showing))
+        setSaid((was) => ({ ...was, own: result.message }))
+      } catch (error) {
+        setSaid((was) => ({
+          ...was,
+          own: error instanceof Error ? error.message : 'That did not work.',
+        }))
+      } finally {
+        setBusy('')
+        await loadExtensions()
+      }
+    },
+    [extensions, showing, loadExtensions],
+  )
+
   return (
     <Modal open={open} title="Tools store" onClose={onClose} size="lg">
       {!loaded ? null : (
@@ -242,11 +298,20 @@ export function StorePanel({ open, store, extensions, profileId, onClose }: Prop
           busy={busy}
           said={said}
           canOpenPopup={typeof extensions.browserExtensionPopup === 'function'}
+          canOpenOptions={typeof extensions.browserExtensionOptions === 'function'}
+          canAddFolder={typeof extensions.browserExtensionAddFolder === 'function'}
+          canAddCrx={typeof extensions.browserExtensionAddCrx === 'function'}
+          query={query}
+          category={category}
           onShowProfile={setShowing}
+          onQuery={setQuery}
+          onCategory={setCategory}
           onTool={(id, verb) => void actTool(id, verb)}
           onExtension={(id, verb) => void actExtension(id, verb)}
           onEnable={(id, on) => void setEnabled(id, on)}
           onOpenPopup={(id) => void openPopup(id)}
+          onOpenOptions={(id) => void openOptions(id)}
+          onAddOwn={(kind) => void addOwn(kind)}
         />
       )}
     </Modal>
@@ -270,11 +335,21 @@ export interface StoreBodyProps {
   busy: string
   said: Record<string, string>
   canOpenPopup: boolean
+  canOpenOptions: boolean
+  /** Whether this build's preload carries each Add-your-own door. */
+  canAddFolder: boolean
+  canAddCrx: boolean
+  query: string
+  category: ExtensionCategory | 'all'
   onShowProfile(id: string): void
+  onQuery(next: string): void
+  onCategory(next: ExtensionCategory | 'all'): void
   onTool(id: string, verb: 'install' | 'remove'): void
   onExtension(id: string, verb: 'install' | 'remove'): void
   onEnable(id: string, on: boolean): void
   onOpenPopup(id: string): void
+  onOpenOptions(id: string): void
+  onAddOwn(kind: 'folder' | 'crx'): void
 }
 
 /**
@@ -296,30 +371,69 @@ export function StoreBody({
   busy,
   said,
   canOpenPopup,
+  canOpenOptions,
+  canAddFolder,
+  canAddCrx,
+  query,
+  category,
   onShowProfile,
+  onQuery,
+  onCategory,
   onTool,
   onExtension,
   onEnable,
   onOpenPopup,
+  onOpenOptions,
+  onAddOwn,
 }: StoreBodyProps) {
   const installed = ext.extensions.filter(
     (one) => one.state === 'installed' || one.state === 'damaged',
   )
-  const available = ext.extensions.filter((one) => one.state === 'available')
-  const unavailable = ext.extensions.filter((one) => one.state === 'unavailable')
 
-  const extensionRow = (extension: (typeof ext.extensions)[number]) => (
+  const extensionRow = (extension: StoreExtension) => (
     <ExtensionRow
       key={extension.id}
       extension={extension}
       busy={busy === `e:${extension.id}`}
       said={said[`e:${extension.id}`] ?? ''}
       canOpenPopup={canOpenPopup}
+      canOpenOptions={canOpenOptions}
       onAct={(verb) => onExtension(extension.id, verb)}
       onEnable={(on) => onEnable(extension.id, on)}
       onOpenPopup={() => onOpenPopup(extension.id)}
+      onOpenOptions={() => onOpenOptions(extension.id)}
     />
   )
+
+  /*
+   * Everything that is not already installed, in shelf order, filtered by
+   * whatever is typed and whichever shelf is chosen.
+   *
+   * Within a shelf: what can be installed, then what was measured failing, then
+   * what nothing was measured on. That order is the store being honest about
+   * itself twice over — the useful rows come first, and the two kinds of
+   * buttonless row stay apart rather than being swept into one bin at the
+   * bottom that reads as *the broken ones*.
+   */
+  const rank: Record<string, number> = {
+    available: 0,
+    installed: 0,
+    damaged: 0,
+    unavailable: 1,
+    'not-offered': 2,
+  }
+  const browsing = ext.extensions
+    .filter((one) => one.state !== 'installed' && one.state !== 'damaged')
+    .filter((one) => category === 'all' || one.category === category)
+    .filter((one) => matchesSearch(one, query))
+  const shelves = CATEGORY_ORDER.map((id) => ({
+    id,
+    name: CATEGORY_NAMES[id],
+    rows: browsing
+      .filter((one) => one.category === id)
+      .sort((a, b) => (rank[a.state] ?? 0) - (rank[b.state] ?? 0)),
+  })).filter((shelf) => shelf.rows.length > 0)
+  const filtering = query.trim() !== '' || category !== 'all'
 
   /* Installed first, so "do I have this" is answered by order as well as by
      the chip on the row — the built-in half is one list, not two sections. */
@@ -336,13 +450,26 @@ export function StoreBody({
             Said once, before the first row, because these change how the whole
             list should be read rather than qualifying any part of it.
           */}
-          <section className="bw-store-section">
+          <details className="bw-store-section bw-store-limits">
+            {/*
+              A `details` and not a paragraph wall, and not React state either:
+              nine measured sentences ahead of the first row turn a store into a
+              disclaimer, and a `summary` that says how many there are and that
+              every one was measured is a truer invitation than showing them all
+              and having them scrolled past. It renders open or shut without a
+              single line of JavaScript, which is why it works in a test that has
+              no DOM.
+            */}
+            <summary className="bw-store-note">
+              What an extension can and cannot do in this browser — {ext.limits.length} things,
+              every one of them measured by running something here.
+            </summary>
             {ext.limits.map((line) => (
               <p key={line} className="bw-store-note">
                 {line}
               </p>
             ))}
-          </section>
+          </details>
 
           {ext.profiles.length > 1 && (
             <label className="bw-store-note bw-ext-profile" htmlFor="bw-ext-profile">
@@ -370,32 +497,131 @@ export function StoreBody({
             </section>
           )}
 
-          <section className="bw-store-section">
-            <h3 className="bw-store-heading">Open-source extensions</h3>
-            {/* The half of the store that is downloads, said at the seam where
-                it meets the half that is not. */}
+          {/*
+            The browsing controls. A catalogue this size stopped being a list
+            somebody reads top to bottom, and a store that cannot be searched is
+            a list with a nicer name.
+          */}
+          <section className="bw-store-section bw-store-browse">
+            <label className="bw-store-search" htmlFor="bw-ext-search">
+              <span className="bw-store-note">Search</span>
+              <input
+                id="bw-ext-search"
+                type="search"
+                value={query}
+                placeholder="blocker, dark, password…"
+                onChange={(event) => onQuery(event.target.value)}
+              />
+            </label>
+            <div className="bw-store-chips">
+              <button
+                type="button"
+                className={category === 'all' ? 'bw-chip bw-chip-on' : 'bw-chip'}
+                aria-pressed={category === 'all'}
+                onClick={() => onCategory('all')}
+              >
+                Everything
+              </button>
+              {/*
+                Only the shelves that have something on them to browse. Built
+                from what is *browsable* rather than from the whole catalogue,
+                because everything installed is drawn above this and a chip that
+                filtered down to "nothing matches that" would be a control that
+                does nothing — which is the thing this app keeps being about.
+              */}
+              {CATEGORY_ORDER.filter((id) =>
+                ext.extensions.some(
+                  (one) =>
+                    one.category === id &&
+                    one.state !== 'installed' &&
+                    one.state !== 'damaged',
+                ),
+              ).map((id) => (
+                <button
+                  key={id}
+                  type="button"
+                  className={category === id ? 'bw-chip bw-chip-on' : 'bw-chip'}
+                  aria-pressed={category === id}
+                  onClick={() => onCategory(id)}
+                >
+                  {CATEGORY_NAMES[id]}
+                </button>
+              ))}
+            </div>
+            {/*
+              The two things every shelf below mixes, said once rather than under
+              each heading. A row with no Install is not an oversight and the
+              reason it has none differs by row — so the sentence points at the
+              row rather than trying to say it for all of them.
+            */}
             <p className="bw-store-note">
-              None of these ship inside this app. Install downloads one from the address on its
-              row and checks it against the fingerprint beside it before anything is saved.
+              Nothing here ships inside this app. Install fetches it from the address on its row
+              and checks it against the fingerprint beside it before a byte is saved. Some rows
+              have no Install at all: either this app ran them here and watched them fail, or
+              their project publishes nothing this app could fetch and fingerprint. Each of those
+              rows says which.
             </p>
-            {available.length === 0 ? (
-              <p className="bw-muted">
-                Everything this app can install is already installed in this profile.
-              </p>
-            ) : (
-              <ul className="bw-store-list">{available.map(extensionRow)}</ul>
-            )}
           </section>
 
-          {unavailable.length > 0 && (
+          {shelves.length === 0 ? (
+            <p className="bw-muted">
+              {filtering
+                ? 'Nothing in the store matches that.'
+                : 'Everything this app can install is already installed in this profile.'}
+            </p>
+          ) : (
+            shelves.map((shelf) => (
+              <section key={shelf.id} className="bw-store-section">
+                <h3 className="bw-store-heading">{shelf.name}</h3>
+                <ul className="bw-store-list">{shelf.rows.map(extensionRow)}</ul>
+              </section>
+            ))
+          )}
+
+          {/*
+            Add your own. Two doors, drawn only when the preload has them —
+            absent rather than disabled, which is the standing rule for this
+            whole menu.
+          */}
+          {(canAddFolder || canAddCrx) && (
             <section className="bw-store-section">
-              <h3 className="bw-store-heading">Cannot work in this browser</h3>
+              <h3 className="bw-store-heading">Add your own</h3>
               <p className="bw-store-note">
-                These load and then do not do their job. Each line is what this app saw when it
-                ran them here, not a guess from their manifests. There is no Install for them,
-                because installing one would only put a program on your disk that does nothing.
+                An extension you have on this machine — one you are writing, or one you got
+                somewhere this app does not know about. It is copied into{' '}
+                {ext.profileName || 'this profile'} and switched on. Nothing about it was measured
+                here, no fingerprint is checked against it, and its row says exactly that instead
+                of borrowing the confidence of the rows above.
               </p>
-              <ul className="bw-store-list">{unavailable.map(extensionRow)}</ul>
+              <div className="bw-store-own">
+                {canAddFolder && (
+                  <button
+                    type="button"
+                    className="bw-store-install"
+                    disabled={busy === 'own:folder'}
+                    onClick={() => onAddOwn('folder')}
+                  >
+                    {busy === 'own:folder' ? 'Working…' : 'Add a folder…'}
+                  </button>
+                )}
+                {canAddCrx && (
+                  <button
+                    type="button"
+                    className="bw-text-button"
+                    disabled={busy === 'own:crx'}
+                    onClick={() => onAddOwn('crx')}
+                  >
+                    {busy === 'own:crx' ? 'Working…' : 'Add a .crx…'}
+                  </button>
+                )}
+              </div>
+              <p className="bw-store-note">
+                A folder is the one with the manifest.json in it. A .crx is opened here rather
+                than handed to the browser, and its own signature is checked first — which proves
+                the file has not changed since it was packed and proves nothing about who packed
+                it, because a .crx carries its own key.
+              </p>
+              {(said.own ?? '') !== '' && <p className="bw-store-said">{said.own}</p>}
             </section>
           )}
         </>

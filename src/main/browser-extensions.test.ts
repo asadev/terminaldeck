@@ -1,15 +1,25 @@
 import { createHash } from 'node:crypto'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { makeExtensionZip, plainManifest } from './browser-extension-zip.fixture'
+import { makeExtensionZip, makeSignedCrx, plainManifest } from './browser-extension-zip.fixture'
 import {
   createExtensionStore,
   digestMatches,
+  isSideloadId,
   orphanExtensionIds,
   profileExtensionsRoot,
   safeProfileId,
+  sideloadId,
   type ExtensionCatalogue,
   type ExtensionEntry,
 } from './browser-extensions'
@@ -29,6 +39,7 @@ function entryFor(id: string, archive: Buffer, over: Partial<ExtensionEntry> = {
     homepage: 'https://example.com/repo',
     licence: 'MIT',
     version: '1.0.0',
+    category: 'scripting',
     works: 'works',
     measured: 'Watched working.',
     reach: ['https://example.com/*'],
@@ -477,5 +488,277 @@ describe('folders this build can no longer name', () => {
     await store.install(PROFILE, 'withdrawn')
     expect(orphanExtensionIds(root, PROFILE, [])).toEqual(['withdrawn'])
     expect(orphanExtensionIds(root, PROFILE, [entryFor('withdrawn', archive)])).toEqual([])
+  })
+})
+
+/* ----------------------------------------------------- adding your own -- */
+
+/** An unpacked extension on disk, the way somebody building one would have it. */
+function folderWith(
+  manifest: Record<string, unknown> = plainManifest(),
+  extra: Record<string, string> = { 'bg.js': 'self.ran = true\n' },
+): string {
+  const dir = mkdtempSync(join(tmpdir(), 'td-own-'))
+  writeFileSync(join(dir, 'manifest.json'), JSON.stringify(manifest))
+  for (const [name, body] of Object.entries(extra)) writeFileSync(join(dir, name), body)
+  return dir
+}
+
+describe('adding your own, from a folder', () => {
+  /*
+   * The half of the store with no fingerprint in it, which is exactly why these
+   * tests exist. A catalogue install is guarded by a digest pinned in this app;
+   * this path has nothing of the kind and must not pretend otherwise, in the
+   * row it produces or in the sentence it answers with.
+   */
+  it('copies it in, records where it came from, and says nothing was checked', () => {
+    const store = storeWith([], null)
+    const folder = folderWith()
+    try {
+      const result = store.addFolder(PROFILE, folder)
+      expect(result.ok, result.message).toBe(true)
+      expect(result.message).toContain('measured nothing about it')
+      expect(result.message).toContain('checked no fingerprint')
+
+      const id = sideloadId('folder', folder)
+      const dir = join(profileExtensionsRoot(root, PROFILE) ?? '', id)
+      expect(existsSync(join(dir, 'manifest.json'))).toBe(true)
+      expect(readFileSync(join(dir, 'bg.js'), 'utf8')).toContain('self.ran')
+
+      const row = store.view(PROFILE, 'Default').extensions.find((one) => one.id === id)
+      expect(row?.state).toBe('installed')
+      expect(row?.sideloaded).toBe(true)
+      expect(row?.origin).toBe(folder)
+      expect(row?.category).toBe('your-own')
+      // The verdict a row this app has never run is allowed to carry, and the
+      // only one: not `works`, not `no`, and nothing borrowed from a measurement.
+      expect(row?.works).toBe('unmeasured')
+      expect(row?.crxId).toBe('')
+    } finally {
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
+  it('is loaded like any other install, so a session sees it', () => {
+    /*
+     * `installed()` is what the launch loader replays and what
+     * `browser.extensions` answers with. An extension the person added
+     * themselves is running in their browser exactly as a catalogue one is, and
+     * a list that left it out would have an agent read a page altered by a
+     * program the list said was not there.
+     */
+    const store = storeWith([], null)
+    const folder = folderWith()
+    try {
+      expect(store.addFolder(PROFILE, folder).ok).toBe(true)
+      const installed = store.installed(PROFILE)
+      expect(installed).toHaveLength(1)
+      expect(isSideloadId(installed[0]?.entry.id ?? '')).toBe(true)
+      expect(installed[0]?.entry.name).toBe('Test Extension')
+    } finally {
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
+  it('replaces rather than accumulates when the same folder is added twice', () => {
+    // Somebody iterating on an extension they are writing presses Add after
+    // every build. A store that grew a row each time would be unusable by the
+    // third press.
+    const store = storeWith([], null)
+    const folder = folderWith()
+    try {
+      expect(store.addFolder(PROFILE, folder).ok).toBe(true)
+      expect(store.addFolder(PROFILE, folder).ok).toBe(true)
+      expect(store.view(PROFILE, 'Default').extensions.filter((one) => one.sideloaded)).toHaveLength(1)
+    } finally {
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
+  it('switches off, back on, and removes, the same as any other row', () => {
+    const store = storeWith([], null)
+    const folder = folderWith()
+    try {
+      store.addFolder(PROFILE, folder)
+      const id = sideloadId('folder', folder)
+      expect(store.setEnabled(PROFILE, id, false).ok).toBe(true)
+      expect(store.installed(PROFILE)[0]?.enabled).toBe(false)
+      expect(store.setEnabled(PROFILE, id, true).ok).toBe(true)
+      expect(store.installed(PROFILE)[0]?.enabled).toBe(true)
+      const removed = store.remove(PROFILE, id)
+      expect(removed.ok).toBe(true)
+      expect(removed.message).toContain('Test Extension')
+      expect(existsSync(join(profileExtensionsRoot(root, PROFILE) ?? '', id))).toBe(false)
+    } finally {
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
+  it('is never reported as an orphan', () => {
+    /*
+     * `orphanExtensionIds` names folders this build has no row for, so a person
+     * can delete what a withdrawn extension left behind. Something they added
+     * five minutes ago has no catalogue row either, by definition, and telling
+     * them it was "no longer offered" would be nonsense.
+     */
+    const store = storeWith([], null)
+    const folder = folderWith()
+    try {
+      store.addFolder(PROFILE, folder)
+      expect(orphanExtensionIds(root, PROFILE, [])).toEqual([])
+    } finally {
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses a folder with no manifest, and says which folder to pick', () => {
+    const store = storeWith([], null)
+    const empty = mkdtempSync(join(tmpdir(), 'td-empty-'))
+    try {
+      const result = store.addFolder(PROFILE, empty)
+      expect(result.ok).toBe(false)
+      expect(result.message).toContain('no manifest.json in that folder')
+      expect(result.message).toContain('not the one above it')
+    } finally {
+      rmSync(empty, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses a relative path outright', () => {
+    // A path that is not absolute did not come out of a file dialog.
+    const store = storeWith([], null)
+    expect(store.addFolder(PROFILE, 'some/where').ok).toBe(false)
+  })
+
+  it('refuses a manifest Chromium would refuse at load, before writing anything', () => {
+    const store = storeWith([], null)
+    const folder = folderWith(
+      plainManifest({
+        manifest_version: 2,
+        permissions: ['webRequest'],
+        background: { scripts: ['bg.js'], persistent: false },
+      }),
+    )
+    try {
+      const result = store.addFolder(PROFILE, folder)
+      expect(result.ok).toBe(false)
+      expect(result.message).toContain('event page')
+      expect(store.view(PROFILE, 'Default').extensions.filter((one) => one.sideloaded)).toHaveLength(0)
+    } finally {
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
+  it('does not follow a symlink out of the folder it was given', () => {
+    /*
+     * The one that is not about tidiness. A folder somebody picked is not
+     * hostile by assumption, and a symlink inside it pointing at their home
+     * directory would have this app copy that home directory into a profile and
+     * then load it as a program.
+     */
+    const store = storeWith([], null)
+    const folder = folderWith()
+    const outside = mkdtempSync(join(tmpdir(), 'td-outside-'))
+    try {
+      mkdirSync(join(outside, 'secrets'))
+      writeFileSync(join(outside, 'secrets', 'key.txt'), 'do not copy me')
+      symlinkSync(join(outside, 'secrets'), join(folder, 'linked'))
+      expect(store.addFolder(PROFILE, folder).ok).toBe(true)
+      const dir = join(profileExtensionsRoot(root, PROFILE) ?? '', sideloadId('folder', folder))
+      expect(existsSync(join(dir, 'linked'))).toBe(false)
+      expect(existsSync(join(dir, 'linked', 'key.txt'))).toBe(false)
+    } finally {
+      rmSync(folder, { recursive: true, force: true })
+      rmSync(outside, { recursive: true, force: true })
+    }
+  })
+
+  it('never writes an installed.json out of the folder into the copy', () => {
+    // The store's own record lives under the same name. A folder that happened
+    // to contain one would otherwise overwrite what this app wrote about it.
+    const store = storeWith([], null)
+    const folder = folderWith(plainManifest(), {
+      'installed.json': JSON.stringify({ sideloaded: false, enabled: false, name: 'Lies' }),
+    })
+    try {
+      expect(store.addFolder(PROFILE, folder).ok).toBe(true)
+      const dir = join(profileExtensionsRoot(root, PROFILE) ?? '', sideloadId('folder', folder))
+      const record = JSON.parse(readFileSync(join(dir, 'installed.json'), 'utf8')) as {
+        sideloaded: boolean
+        name: string
+      }
+      expect(record.sideloaded).toBe(true)
+      expect(record.name).toBe('Test Extension')
+    } finally {
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('adding your own, from a .crx', () => {
+  function crxAt(zip: Buffer, options: { wrongId?: boolean } = {}): { path: string; id: string } {
+    const packed = makeSignedCrx(zip, options)
+    const dir = mkdtempSync(join(tmpdir(), 'td-crx-'))
+    const path = join(dir, 'thing.crx')
+    writeFileSync(path, packed.crx)
+    return { path, id: packed.id }
+  }
+
+  it('opens it, unpacks it, and records the id its own signature yields', () => {
+    const store = storeWith([], null)
+    const { path, id } = crxAt(makeExtensionZip(plainManifest()))
+    try {
+      const result = store.addCrx(PROFILE, path)
+      expect(result.ok, result.message).toBe(true)
+      /*
+       * The sentence has to be exactly this careful. A signature on a `.crx`
+       * proves the file has not changed since it was packed and proves nothing
+       * about who packed it, because the key travels inside the file. A message
+       * that said "verified" would be this app lending its own credibility to a
+       * stranger's self-signature.
+       */
+      expect(result.message).toContain('says nothing about who packed it')
+      expect(result.message).toContain(id)
+
+      const row = store
+        .view(PROFILE, 'Default')
+        .extensions.find((one) => one.id === sideloadId('crx', path))
+      expect(row?.state).toBe('installed')
+      expect(row?.crxId).toBe(id)
+      expect(row?.sideloaded).toBe(true)
+    } finally {
+      rmSync(join(path, '..'), { recursive: true, force: true })
+    }
+  })
+
+  it('refuses a tampered .crx and writes nothing', () => {
+    const store = storeWith([], null)
+    const { path } = crxAt(makeExtensionZip(plainManifest()))
+    try {
+      const bytes = readFileSync(path)
+      bytes[bytes.length - 30] ^= 0xff
+      writeFileSync(path, bytes)
+      const result = store.addCrx(PROFILE, path)
+      expect(result.ok).toBe(false)
+      expect(result.message).toContain('Nothing was added')
+      expect(result.message).toContain('signature does not match')
+      expect(store.view(PROFILE, 'Default').extensions.filter((one) => one.sideloaded)).toHaveLength(0)
+    } finally {
+      rmSync(join(path, '..'), { recursive: true, force: true })
+    }
+  })
+
+  it('refuses a file that is not a .crx at all', () => {
+    const store = storeWith([], null)
+    const dir = mkdtempSync(join(tmpdir(), 'td-crx-'))
+    const path = join(dir, 'not.crx')
+    try {
+      writeFileSync(path, makeExtensionZip(plainManifest()))
+      const result = store.addCrx(PROFILE, path)
+      expect(result.ok).toBe(false)
+      expect(result.message).toContain('not a .crx')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

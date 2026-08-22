@@ -13,10 +13,59 @@
  */
 
 /** Mirrors `ExtensionVerdict` in `src/main/browser-extensions.ts`. */
-export type ExtensionVerdict = 'works' | 'partly' | 'no'
+export type ExtensionVerdict = 'works' | 'partly' | 'no' | 'unmeasured'
 
 /** Mirrors `ExtensionState`. */
-export type ExtensionState = 'available' | 'installed' | 'damaged' | 'unavailable'
+export type ExtensionState =
+  | 'available'
+  | 'installed'
+  | 'damaged'
+  | 'unavailable'
+  | 'not-offered'
+
+/** Mirrors `ExtensionCategory`. */
+export type ExtensionCategory =
+  | 'blocking'
+  | 'privacy'
+  | 'appearance'
+  | 'media'
+  | 'passwords'
+  | 'research'
+  | 'scripting'
+  | 'your-own'
+
+/**
+ * The shelves, and the name each wears. Mirrors `EXTENSION_CATEGORIES`.
+ *
+ * Written out here rather than sent down the wire with the list, unlike the
+ * limits next to it, and the difference is what each one is: a limit is a
+ * **measurement** and belongs to the module that took it, so a limit that stops
+ * being true is deleted where it was measured. A section heading is a label on a
+ * screen. Sending it would mean a build of the panel could draw a heading that
+ * no longer matched what the panel does with it.
+ */
+export const CATEGORY_NAMES: Readonly<Record<ExtensionCategory, string>> = {
+  blocking: 'Blocking ads and trackers',
+  privacy: 'Privacy and cleaning up',
+  appearance: 'How pages look',
+  media: 'Video and audio',
+  passwords: 'Passwords',
+  research: 'Saving and research',
+  scripting: 'Scripting and the keyboard',
+  'your-own': 'Added by you',
+}
+
+/** The order the store draws them in. */
+export const CATEGORY_ORDER: readonly ExtensionCategory[] = [
+  'blocking',
+  'privacy',
+  'appearance',
+  'media',
+  'passwords',
+  'research',
+  'scripting',
+  'your-own',
+]
 
 /** Mirrors `StoreExtension`. */
 export interface StoreExtension {
@@ -27,7 +76,10 @@ export interface StoreExtension {
   licence: string
   version: string
   works: ExtensionVerdict
+  category: ExtensionCategory
   measured: string
+  /** Why nothing was measured and nothing is offered, or `''`. */
+  noRelease: string
   url: string
   sha256: string
   bytes: number
@@ -36,6 +88,8 @@ export interface StoreExtension {
   installedAt: number
   enabled: boolean
   reach: string[]
+  /** What it may ask to reach later, and can never be granted here. */
+  mayAsk: string[]
   everywhere: boolean
   missing: string[]
   /** `chrome.*` this app fills in so the extension can start. */
@@ -45,6 +99,14 @@ export interface StoreExtension {
   /** How many of its manifest declarativeNetRequest rulesets this app switched on. */
   rulesetsSwitchedOn: number
   popup: string
+  /** Its own settings page, or `''`. */
+  optionsPage: string
+  /** True for one a person added themselves. */
+  sideloaded: boolean
+  /** The folder or `.crx` a sideloaded one came from. */
+  origin: string
+  /** The id a `.crx`'s own signature yields, or `''`. */
+  crxId: string
   staticRulesets: boolean
   message: string
 }
@@ -78,6 +140,9 @@ export interface ExtensionsApi {
   browserExtensionRemove?(profileId: string, id: string): Promise<unknown>
   browserExtensionEnable?(profileId: string, id: string, on: boolean): Promise<unknown>
   browserExtensionPopup?(profileId: string, id: string): Promise<unknown>
+  browserExtensionOptions?(profileId: string, id: string): Promise<unknown>
+  browserExtensionAddFolder?(profileId: string): Promise<unknown>
+  browserExtensionAddCrx?(profileId: string): Promise<unknown>
 }
 
 const METHODS = [
@@ -86,6 +151,9 @@ const METHODS = [
   'browserExtensionRemove',
   'browserExtensionEnable',
   'browserExtensionPopup',
+  'browserExtensionOptions',
+  'browserExtensionAddFolder',
+  'browserExtensionAddCrx',
 ] as const satisfies readonly (keyof ExtensionsApi)[]
 
 export function resolveExtensionsApi(host?: unknown): ExtensionsApi {
@@ -142,11 +210,22 @@ function words(raw: unknown, limit: number): string[] {
 }
 
 function readVerdict(raw: unknown): ExtensionVerdict {
-  return raw === 'works' || raw === 'partly' ? raw : 'no'
+  return raw === 'works' || raw === 'partly' || raw === 'unmeasured' ? raw : 'no'
 }
 
 function readState(raw: unknown): ExtensionState {
-  return raw === 'installed' || raw === 'damaged' || raw === 'unavailable' ? raw : 'available'
+  return raw === 'installed' ||
+    raw === 'damaged' ||
+    raw === 'unavailable' ||
+    raw === 'not-offered'
+    ? raw
+    : 'available'
+}
+
+function readCategory(raw: unknown): ExtensionCategory {
+  return CATEGORY_ORDER.includes(raw as ExtensionCategory)
+    ? (raw as ExtensionCategory)
+    : 'scripting'
 }
 
 function readExtension(raw: unknown): StoreExtension | null {
@@ -162,7 +241,9 @@ function readExtension(raw: unknown): StoreExtension | null {
     licence: text(record.licence),
     version: text(record.version),
     works: readVerdict(record.works),
+    category: readCategory(record.category),
     measured: text(record.measured),
+    noRelease: text(record.noRelease),
     url: text(record.url),
     sha256: text(record.sha256),
     bytes: count(record.bytes),
@@ -171,12 +252,17 @@ function readExtension(raw: unknown): StoreExtension | null {
     installedAt: count(record.installedAt),
     enabled: record.enabled === true,
     reach: words(record.reach, 40),
+    mayAsk: words(record.mayAsk, 12),
     everywhere: record.everywhere === true,
     missing: words(record.missing, 24),
     provides: words(record.provides, 24),
     inert: words(record.inert, 12),
     rulesetsSwitchedOn: count(record.rulesetsSwitchedOn),
     popup: text(record.popup),
+    optionsPage: text(record.optionsPage),
+    sideloaded: record.sideloaded === true,
+    origin: text(record.origin),
+    crxId: text(record.crxId),
     staticRulesets: record.staticRulesets === true,
     message: text(record.message),
   }
@@ -277,5 +363,40 @@ export function extensionActionVerb(extension: StoreExtension): 'install' | 'rem
  * true answer and it is not silence.
  */
 export function canAct(extension: StoreExtension): boolean {
-  return extension.state !== 'unavailable'
+  return extension.state !== 'unavailable' && extension.state !== 'not-offered'
+}
+
+/**
+ * Does this row's `Reaches` line mean anything yet?
+ *
+ * False for a row nothing was measured on. There is no release, so there is no
+ * manifest, so there is no reach — and `reachWords` answering *no pages of its
+ * own* about Privacy Badger would be this app inventing a fact about a program
+ * it has never seen, which is the exact failure the row exists to avoid.
+ */
+export function hasReach(extension: StoreExtension): boolean {
+  return extension.state !== 'not-offered'
+}
+
+/**
+ * Which rows a typed word keeps.
+ *
+ * Name, summary and category, and deliberately **not** the measured sentence:
+ * those paragraphs mention `chrome.tabs`, `ads.doubleclick.net` and every
+ * namespace this browser lacks, so searching them would make a search for
+ * "cookies" return the ad blockers and a search for "tabs" return most of the
+ * catalogue. A search that answers with almost everything is the same as one
+ * that answers with nothing, and slower to disbelieve.
+ */
+export function matchesSearch(extension: StoreExtension, query: string): boolean {
+  const needle = query.trim().toLowerCase()
+  if (needle === '') return true
+  const haystack = [
+    extension.name,
+    extension.summary,
+    CATEGORY_NAMES[extension.category],
+  ]
+    .join(' ')
+    .toLowerCase()
+  return needle.split(/\s+/).every((word) => haystack.includes(word))
 }

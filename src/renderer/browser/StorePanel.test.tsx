@@ -50,7 +50,9 @@ function extension(over: Partial<StoreExtension> = {}): StoreExtension {
     homepage: 'https://github.com/darkreader/darkreader',
     licence: 'MIT',
     version: '4.9.129',
+    category: 'appearance',
     works: 'works',
+    noRelease: '',
     measured: 'Watched working.',
     url: 'https://github.com/darkreader/releases/a.zip',
     sha256: 'a'.repeat(64),
@@ -59,6 +61,7 @@ function extension(over: Partial<StoreExtension> = {}): StoreExtension {
     installedVersion: '',
     installedAt: 0,
     enabled: false,
+    mayAsk: [],
     reach: ['*://*/*'],
     everywhere: true,
     missing: [],
@@ -66,6 +69,10 @@ function extension(over: Partial<StoreExtension> = {}): StoreExtension {
     inert: [],
     rulesetsSwitchedOn: 0,
     popup: '',
+    optionsPage: '',
+    sideloaded: false,
+    origin: '',
+    crxId: '',
     staticRulesets: false,
     message: '',
     ...over,
@@ -102,11 +109,20 @@ function render(over: Partial<StoreBodyProps> = {}): string {
       busy=""
       said={{}}
       canOpenPopup
+      canOpenOptions
+      canAddFolder
+      canAddCrx
+      query=""
+      category="all"
       onShowProfile={noop}
+      onQuery={noop}
+      onCategory={noop}
       onTool={noop}
       onExtension={noop}
       onEnable={noop}
       onOpenPopup={noop}
+      onOpenOptions={noop}
+      onAddOwn={noop}
       {...over}
     />,
   )
@@ -116,14 +132,14 @@ describe('one screen, both halves, the seam in words', () => {
   const markup = render()
 
   it('holds the downloads and the built-ins together', () => {
-    expect(markup).toContain('Open-source extensions')
+    expect(markup).toContain('How pages look')
     expect(markup).toContain('Dark Reader')
     expect(markup).toContain('Built into this app')
     expect(markup).toContain('Full-size images')
   })
 
   it('says the downloads ship nowhere inside the app', () => {
-    expect(markup).toContain('None of these ship inside this app')
+    expect(markup).toContain('Nothing here ships inside this app')
     expect(markup).toContain('checks it against the fingerprint')
   })
 
@@ -145,6 +161,9 @@ describe('one screen, both halves, the seam in words', () => {
 describe('the honesty that must not regress', () => {
   it('a measured-failing extension keeps its section and gets no button', () => {
     const markup = render({
+      toolsWired: false,
+      canAddFolder: false,
+      canAddCrx: false,
       ext: {
         ...EXT,
         extensions: [
@@ -161,12 +180,78 @@ describe('the honesty that must not regress', () => {
         ],
       },
     })
-    expect(markup).toContain('Cannot work in this browser')
+    expect(markup).toContain('Cannot work here')
     expect(markup).toContain('It loads, and then blocks nothing.')
-    // The row is drawn inside the unavailable section with no control on it —
-    // ExtensionRow.test.tsx pins the row itself; this pins that the unified
-    // screen still gives such a row a home instead of dropping it.
-    expect(markup).toContain('installing one would only put a program on your disk that does nothing')
+    /*
+     * It keeps its place on the shelf it belongs to rather than being swept
+     * into a bin at the bottom, and it carries no button. The screen used to
+     * put every such row under one heading; a store that browses by category
+     * has to say it on the row instead, which is why the chip above is the
+     * thing asserted and why the row must still have nothing to press.
+     */
+    expect(markup).toContain('How pages look')
+    expect(markup).not.toContain('>Install<')
+  })
+
+  it('a row nothing was measured on says so, and says why there is no download', () => {
+    /*
+     * The third answer to *where is Vimium*. It has to be visibly different
+     * from the row above it — that one was run and watched failing, this one
+     * was never run — or a person reads a measurement into a silence.
+     */
+    const markup = render({
+      toolsWired: false,
+      canAddFolder: false,
+      canAddCrx: false,
+      ext: {
+        ...EXT,
+        extensions: [
+          extension({
+            id: 'vimium',
+            name: 'Vimium',
+            works: 'unmeasured',
+            state: 'not-offered',
+            url: '',
+            sha256: '',
+            bytes: 0,
+            version: '',
+            measured: 'Nothing was measured.',
+            noRelease: 'Its project publishes no release this app could fetch and fingerprint.',
+          }),
+        ],
+      },
+    })
+    expect(markup).toContain('Nothing measured')
+    expect(markup).toContain('Its project publishes no release this app could fetch')
+    expect(markup).not.toContain('Cannot work here')
+    expect(markup).not.toContain('>Install<')
+  })
+
+  it('offers both doors for adding your own, and says what is not checked', () => {
+    const markup = render()
+    expect(markup).toContain('Add a folder…')
+    expect(markup).toContain('Add a .crx…')
+    expect(markup).toContain('no fingerprint is checked against it')
+  })
+
+  it('draws neither Add door when the preload has neither', () => {
+    // Absent rather than disabled, the standing rule for this whole menu.
+    const markup = render({ canAddFolder: false, canAddCrx: false })
+    expect(markup).not.toContain('Add a folder…')
+    expect(markup).not.toContain('Add your own')
+  })
+
+  it('searches by name, and says so when a search matches nothing', () => {
+    expect(render({ query: 'dark' })).toContain('Dark Reader')
+    const nothing = render({ query: 'wombat' })
+    expect(nothing).not.toContain('Dark Reader')
+    expect(nothing).toContain('Nothing in the store matches that')
+  })
+
+  it('narrows to one shelf when a category is chosen', () => {
+    const markup = render({ category: 'passwords' })
+    expect(markup).not.toContain('Dark Reader')
+    expect(markup).toContain('Nothing in the store matches that')
   })
 
   it('a download row shows URL and fingerprint on this screen, not in a detail view', () => {

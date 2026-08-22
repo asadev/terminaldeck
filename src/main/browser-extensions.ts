@@ -1,19 +1,30 @@
 import { createHash, timingSafeEqual } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { writeFileAtomic } from './atomic-write'
 import {
   CANNOT_INSTALL_CRX,
   displayName,
   everywhere,
   loadability,
+  mayAskToReach,
   missingApis,
+  optionsPageOf,
   parseManifest,
   popupPage,
   reachOf,
   usesStaticRulesets,
   type ExtensionManifest,
 } from './browser-extension-support'
+import { openCrx } from './browser-extension-crx'
 import { applyCompat, planCompat, type CompatReport } from './browser-extension-compat'
 import { manifestPrefix, unzip } from './browser-extension-unzip'
 
@@ -116,7 +127,37 @@ export interface ExtensionSource {
  * whose manifest looks fine. The distinction is the entire honesty of this
  * feature: every extension in the catalogue loads.
  */
-export type ExtensionVerdict = 'works' | 'partly' | 'no'
+export type ExtensionVerdict = 'works' | 'partly' | 'no' | 'unmeasured'
+
+/**
+ * Where a row sits in the store, so a catalogue this size browses instead of
+ * scrolling.
+ *
+ * Sections rather than tags: an extension belongs to one of these, and a row
+ * that appeared under three headings would make the store look bigger than it
+ * is, which is the one thing a store must never do about itself.
+ */
+export type ExtensionCategory =
+  | 'blocking'
+  | 'privacy'
+  | 'appearance'
+  | 'media'
+  | 'passwords'
+  | 'research'
+  | 'scripting'
+  | 'your-own'
+
+/** The categories, in the order the store draws them, with the name each wears. */
+export const EXTENSION_CATEGORIES: readonly { id: ExtensionCategory; name: string }[] = [
+  { id: 'blocking', name: 'Blocking ads and trackers' },
+  { id: 'privacy', name: 'Privacy and cleaning up' },
+  { id: 'appearance', name: 'How pages look' },
+  { id: 'media', name: 'Video and audio' },
+  { id: 'passwords', name: 'Passwords' },
+  { id: 'research', name: 'Saving and research' },
+  { id: 'scripting', name: 'Scripting and the keyboard' },
+  { id: 'your-own', name: 'Added by you' },
+]
 
 /** One row of the curated table. */
 export interface ExtensionEntry {
@@ -126,6 +167,8 @@ export interface ExtensionEntry {
   homepage: string
   licence: string
   version: string
+  /** Which shelf it sits on. */
+  category: ExtensionCategory
   works: ExtensionVerdict
   /** What was observed, in a sentence. Never a claim about what should happen. */
   measured: string
@@ -141,14 +184,53 @@ export interface ExtensionEntry {
    * versions is caught by the row it disagrees with rather than by nobody.
    */
   reach: readonly string[]
-  /** `null` when `works` is `no` — there is nothing worth pinning. */
+  /**
+   * What it may **ask** to reach later and never gets, from the release this row
+   * pins. Empty for almost everything.
+   *
+   * On the row because `optional_host_permissions` is a real part of a manifest
+   * and this browser can never grant one: there is no runtime prompt, and the
+   * compatibility layer answers `permissions.request()` with `false`. An
+   * extension built around asking for more when it needs it therefore stays at
+   * whatever it declared, and a person deciding whether to install it is
+   * entitled to know that before rather than after.
+   */
+  mayAskToReach?: readonly string[]
+  /**
+   * Why this app pins no download, for a row it never ran.
+   *
+   * The third answer to *"where is Vimium"*, and it exists because the other two
+   * were both wrong. "It is not in the list" is what somebody gets today, and it
+   * reads as *never heard of it*. "It cannot work here" is a lie — nothing was
+   * run, because there was nothing to run: the project publishes its extension
+   * through the Chrome Web Store and its releases carry no file this app could
+   * fetch and pin a fingerprint to.
+   *
+   * Set only on a row whose {@link works} is `unmeasured`, and such a row has no
+   * source, no button, and no verdict borrowed from anywhere.
+   */
+  noRelease?: string
+  /** `null` when there is nothing worth pinning: a measured refusal, or no release. */
   source: ExtensionSource | null
 }
 
 export type ExtensionCatalogue = readonly ExtensionEntry[]
 
-/** What a row is doing right now, on one profile. */
-export type ExtensionState = 'available' | 'installed' | 'damaged' | 'unavailable'
+/**
+ * What a row is doing right now, on one profile.
+ *
+ * `unavailable` and `not-offered` are both buttonless and they are not the same
+ * thing, which is the whole reason for the second one: `unavailable` is *this
+ * app ran it here and watched it fail*, and `not-offered` is *this app has never
+ * run it, because its project publishes nothing to run*. Collapsing them would
+ * put a measurement's authority behind a row nobody measured.
+ */
+export type ExtensionState =
+  | 'available'
+  | 'installed'
+  | 'damaged'
+  | 'unavailable'
+  | 'not-offered'
 
 /** One row as a panel draws it. */
 export interface StoreExtension {
@@ -159,7 +241,10 @@ export interface StoreExtension {
   licence: string
   version: string
   works: ExtensionVerdict
+  category: ExtensionCategory
   measured: string
+  /** Why there is no download for a row nothing was measured on, or `''`. */
+  noRelease: string
   /** `''` for an entry with no download. */
   url: string
   sha256: string
@@ -172,6 +257,8 @@ export interface StoreExtension {
   enabled: boolean
   /** What its manifest asks to reach. Read off the disk once installed. */
   reach: string[]
+  /** What it may ask to reach later, and never gets here. */
+  mayAsk: string[]
   /** True when its content scripts run on every page. */
   everywhere: boolean
   /**
@@ -195,6 +282,17 @@ export interface StoreExtension {
   /** The page its toolbar button opens, or `''`. */
   popup: string
   /**
+   * Its own settings page, or `''`.
+   *
+   * On the row for the same reason the popup is, and it closes a dead end the
+   * popup alone left open: an extension with an options page and no
+   * `default_popup` — Search by Image and Web Archives both — had **no**
+   * reachable interface at all in this browser, because nothing drew a toolbar
+   * and nothing offered the settings. A row that says Installed over a program
+   * with no way in is the shape of dead control this store exists to remove.
+   */
+  optionsPage: string
+  /**
    * True when its blocking rests on manifest `declarativeNetRequest` rulesets.
    *
    * On the row because those are measured not to be switched on when an
@@ -203,6 +301,18 @@ export interface StoreExtension {
    * `browser-extension-support.ts` for the measurement.
    */
   staticRulesets: boolean
+  /** True for an extension a person added themselves, from a folder or a .crx. */
+  sideloaded: boolean
+  /** Where a sideloaded one came from: the folder or file that was chosen. */
+  origin: string
+  /**
+   * For one opened from a `.crx`: the id its own signature yields.
+   *
+   * Shown because it is the only thing about a `.crx` that is checkable, and
+   * because it is comparable — it is the id in a Chrome Web Store URL. It is
+   * **not** an endorsement, and `ExtensionRow` says what it is worth beside it.
+   */
+  crxId: string
   /** Why it is damaged or unavailable, or `''`. */
   message: string
 }
@@ -349,6 +459,16 @@ interface OnDisk {
   sha256: string
   installedAt: number
   enabled: boolean
+  /** True for something a person added themselves. Absent means a catalogue row. */
+  sideloaded: boolean
+  /** A sideload's own name, so a row can be drawn with no catalogue entry behind it. */
+  name: string
+  /** Where it came from: the folder or the `.crx` that was chosen. */
+  origin: string
+  /** How it arrived. */
+  kind: 'folder' | 'crx' | ''
+  /** For a `.crx`: the id its signature yields. */
+  crxId: string
 }
 
 const RECORD = 'installed.json'
@@ -366,6 +486,11 @@ function readOnDisk(dir: string): OnDisk | null {
       // absent one is a record from a build that had no switch — and the state
       // that build was in was loaded.
       enabled: value.enabled !== false,
+      sideloaded: value.sideloaded === true,
+      name: typeof value.name === 'string' ? value.name : '',
+      origin: typeof value.origin === 'string' ? value.origin : '',
+      kind: value.kind === 'folder' || value.kind === 'crx' ? value.kind : '',
+      crxId: typeof value.crxId === 'string' ? value.crxId : '',
     }
   } catch {
     return null
@@ -386,6 +511,10 @@ export interface ExtensionStoreOptions {
 export interface ExtensionStore {
   view(profileId: string, profileName: string): ExtensionStoreView
   install(profileId: string, id: string): Promise<ExtensionResult>
+  /** Add an unpacked extension from a folder somebody chose. */
+  addFolder(profileId: string, folder: string): ExtensionResult
+  /** Add one from a `.crx` somebody chose, after checking its own signature. */
+  addCrx(profileId: string, file: string): ExtensionResult
   remove(profileId: string, id: string): ExtensionResult
   /** Turn one on or off without deleting it. */
   setEnabled(profileId: string, id: string, on: boolean): ExtensionResult
@@ -425,10 +554,97 @@ function everywhereIn(reach: readonly string[]): boolean {
  * person agreed to more than they got, and nobody is worse off.
  */
 function widerThanRow(entry: ExtensionEntry, manifest: ExtensionManifest): string {
+  /*
+   * A row that already says *every page* cannot be out-reached, and saying so
+   * here is what lets such a row stay readable. `reachOf` now includes content
+   * script matches, and ClearURLs alone declares 196 of them — all of them
+   * inside the `<all_urls>` its row already discloses. Listing them on the row
+   * to satisfy a string comparison would bury the one line somebody reads under
+   * two hundred they never will, and would not make the disclosure truer by a
+   * word.
+   */
+  if (everywhereIn(entry.reach)) return ''
   const asked = reachOf(manifest)
   const extra = asked.filter((pattern) => !entry.reach.includes(pattern))
   if (extra.length === 0) return ''
   return `it asks to read ${extra.join(', ')}, which is not what this store row says it reaches`
+}
+
+/* ------------------------------------------------------------- your own -- */
+
+/** The prefix on every id this app mints for an extension a person added. */
+export const SIDELOAD_PREFIX = 'own-'
+
+/** Is this an id this app minted for something somebody added themselves? */
+export function isSideloadId(id: string): boolean {
+  return id.startsWith(SIDELOAD_PREFIX)
+}
+
+/**
+ * The id for a folder or a `.crx` somebody chose.
+ *
+ * Derived from the path so that adding the same folder twice **replaces** rather
+ * than accumulates: a person iterating on an extension they are writing presses
+ * Add after every build, and a store that grew a new row each time would be
+ * unusable by the third press. Hashed rather than slugged because a path is not
+ * a directory name — it has slashes, spaces and anything else a filesystem
+ * allows — and {@link SAFE_ID} is what decides where this app is willing to
+ * write.
+ */
+export function sideloadId(kind: 'folder' | 'crx', source: string): string {
+  return SIDELOAD_PREFIX + createHash('sha256').update(`${kind}:${source}`).digest('hex').slice(0, 12)
+}
+
+interface Gathered {
+  ok: boolean
+  files: { path: string; bytes: Buffer }[]
+  why: string
+}
+
+/**
+ * Every file under a folder, with the same ceilings the zip path has.
+ *
+ * Symlinks are **skipped, never followed**. A folder somebody picked in a file
+ * dialog is not hostile by assumption, but a symlink inside it pointing at their
+ * home directory would have this app copy that home directory into a profile and
+ * then load it as a program, and no amount of trust in the person who pressed
+ * the button makes that a thing to do.
+ */
+function gatherFolder(root: string, limits: { maxBytes: number; maxFiles: number }): Gathered {
+  const files: { path: string; bytes: Buffer }[] = []
+  let total = 0
+  const walk = (dir: string, prefix: string): string => {
+    let entries: { name: string; isSymbolicLink(): boolean; isDirectory(): boolean; isFile(): boolean }[]
+    try {
+      entries = readdirSync(dir, { withFileTypes: true })
+    } catch (error) {
+      return `${prefix === '' ? 'the folder' : prefix} could not be read: ${error instanceof Error ? error.message : 'no reason given'}`
+    }
+    for (const entry of entries) {
+      const relative = prefix === '' ? entry.name : `${prefix}/${entry.name}`
+      if (entry.isSymbolicLink()) continue
+      if (entry.isDirectory()) {
+        const why = walk(join(dir, entry.name), relative)
+        if (why !== '') return why
+        continue
+      }
+      if (!entry.isFile()) continue
+      if (files.length >= limits.maxFiles) return `it holds more than ${limits.maxFiles} files`
+      let bytes: Buffer
+      try {
+        bytes = readFileSync(join(dir, entry.name))
+      } catch (error) {
+        return `${relative} could not be read: ${error instanceof Error ? error.message : 'no reason given'}`
+      }
+      total += bytes.byteLength
+      if (total > limits.maxBytes) return `it is larger than ${limits.maxBytes} bytes`
+      files.push({ path: relative, bytes })
+    }
+    return ''
+  }
+  const why = walk(root, '')
+  if (why !== '') return { ok: false, files: [], why }
+  return { ok: true, files, why: '' }
 }
 
 export function createExtensionStore(options: ExtensionStoreOptions): ExtensionStore {
@@ -497,6 +713,289 @@ export function createExtensionStore(options: ExtensionStoreOptions): ExtensionS
     writeFileAtomic(join(dir, RECORD), `${JSON.stringify(record, null, 2)}\n`)
   }
 
+  /* ------------------------------------------------------- somebody's own -- */
+
+  /** Every `own-` folder in a profile that has a record and a manifest. */
+  function sideloadIds(profileId: string): string[] {
+    const root = profileExtensionsRoot(options.userData, profileId)
+    if (root === null) return []
+    let names: string[]
+    try {
+      names = readdirSync(root, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => entry.name)
+    } catch {
+      return []
+    }
+    return names.filter((name) => isSideloadId(name) && SAFE_ID.test(name)).sort()
+  }
+
+  /**
+   * Read one back off the disk, the way {@link load} does for a catalogue row.
+   *
+   * The digest check that guards a catalogue install is deliberately **not**
+   * here, and its absence is the whole difference: there is no pinned
+   * fingerprint for a folder somebody chose, and inventing one — hashing what
+   * this app itself just wrote and comparing it to itself — would be a check
+   * that can never fail, which is worse than no check because it looks like one.
+   * What is checked is what can be: the record exists, the manifest parses, and
+   * the manifest is what the row is drawn from.
+   */
+  function loadSideload(
+    profileId: string,
+    id: string,
+  ): { extension: InstalledExtension; disk: OnDisk } | { why: string } | null {
+    const dir = dirFor(profileId, id)
+    if (dir === null) return null
+    const file = join(dir, 'manifest.json')
+    if (!existsSync(file)) return null
+    let bytes: string
+    try {
+      bytes = readFileSync(file, 'utf8')
+    } catch {
+      return { why: 'its manifest could not be read' }
+    }
+    const parsed = parseManifest(bytes)
+    if (!parsed.ok) return { why: parsed.why }
+    const disk = readOnDisk(dir)
+    if (disk === null || !disk.sideloaded) {
+      return { why: 'this app has no record of adding it — remove it and add it again' }
+    }
+    const name = displayName(parsed.manifest, disk.name === '' ? id : disk.name)
+    return {
+      disk,
+      extension: {
+        entry: {
+          id,
+          name,
+          summary:
+            disk.kind === 'crx'
+              ? `Added by you, from ${basename(disk.origin) || 'a .crx'}.`
+              : 'Added by you, from a folder on this machine.',
+          homepage: '',
+          licence: '',
+          version: typeof parsed.manifest.version === 'string' ? parsed.manifest.version : '',
+          category: 'your-own',
+          works: 'unmeasured',
+          measured:
+            'This app has measured nothing about it. It was not fetched, no fingerprint was ' +
+            'checked against it, and no verdict here is about it — it is running because you ' +
+            'said so.',
+          reach: reachOf(parsed.manifest),
+          source: null,
+        },
+        dir,
+        manifest: parsed.manifest,
+        installedAt: disk.installedAt,
+        enabled: disk.enabled,
+      },
+    }
+  }
+
+  /** The rows for everything somebody added, drawn from the disk alone. */
+  function sideloadRows(profileId: string): StoreExtension[] {
+    const out: StoreExtension[] = []
+    for (const id of sideloadIds(profileId)) {
+      const loaded = loadSideload(profileId, id)
+      if (loaded === null) continue
+      const disk = readOnDisk(dirFor(profileId, id) ?? '')
+      const base: StoreExtension = {
+        id,
+        name: disk?.name === '' || disk?.name === undefined ? id : disk.name,
+        summary: '',
+        homepage: '',
+        licence: '',
+        version: disk?.version ?? '',
+        works: 'unmeasured',
+        category: 'your-own',
+        measured: '',
+        noRelease: '',
+        url: '',
+        sha256: '',
+        bytes: 0,
+        state: 'damaged',
+        installedVersion: disk?.version ?? '',
+        installedAt: disk?.installedAt ?? 0,
+        enabled: false,
+        reach: [],
+        mayAsk: [],
+        everywhere: false,
+        missing: [],
+        provides: [],
+        inert: [],
+        rulesetsSwitchedOn: 0,
+        popup: '',
+        optionsPage: '',
+        sideloaded: true,
+        origin: disk?.origin ?? '',
+        crxId: disk?.crxId ?? '',
+        staticRulesets: false,
+        message: '',
+      }
+      if ('why' in loaded) {
+        out.push({ ...base, message: loaded.why })
+        continue
+      }
+      const { manifest, installedAt, enabled } = loaded.extension
+      const compat = planCompat(manifest)
+      out.push({
+        ...base,
+        name: loaded.extension.entry.name,
+        summary: loaded.extension.entry.summary,
+        measured: loaded.extension.entry.measured,
+        state: 'installed',
+        version: loaded.extension.entry.version,
+        installedVersion: loaded.extension.entry.version,
+        installedAt,
+        enabled,
+        reach: reachOf(manifest),
+        mayAsk: mayAskToReach(manifest),
+        everywhere: everywhere(manifest),
+        missing: missingApis(manifest).filter((api) => !compat.provides.includes(api)),
+        provides: compat.provides,
+        inert: compat.inert,
+        rulesetsSwitchedOn: compat.rulesets.length,
+        popup: popupPage(manifest),
+        optionsPage: optionsPageOf(manifest),
+        staticRulesets: usesStaticRulesets(manifest),
+      })
+    }
+    return out
+  }
+
+  /**
+   * Put a folder or a `.crx` somebody chose into a profile.
+   *
+   * The order is the same as an install's and for the same reasons: read the
+   * manifest **before** anything is written, refuse the shapes Chromium refuses
+   * at load, write, apply the compatibility layer, then record. What is missing
+   * compared to an install is the digest, and every sentence this produces says
+   * so rather than letting the confidence of the pinned rows leak onto a row
+   * that has not earned it.
+   */
+  function addOwn(profileId: string, kind: 'folder' | 'crx', chosen: string): ExtensionResult {
+    const root = profileExtensionsRoot(options.userData, profileId)
+    if (root === null) return { ok: false, message: 'That is not a profile this app knows.' }
+    if (typeof chosen !== 'string' || chosen.trim() === '' || !isAbsolute(chosen)) {
+      return { ok: false, message: 'Nothing was added: that is not a path on this machine.' }
+    }
+    const source = resolve(chosen)
+    let files: { path: string; bytes: Buffer }[]
+    let crxId = ''
+    if (kind === 'folder') {
+      if (!existsSync(join(source, 'manifest.json'))) {
+        return {
+          ok: false,
+          message:
+            'Nothing was added: there is no manifest.json in that folder. Pick the folder that ' +
+            'has the manifest.json in it, not the one above it.',
+        }
+      }
+      const gathered = gatherFolder(source, {
+        maxBytes: MAX_UNPACKED_BYTES,
+        maxFiles: MAX_FILES,
+      })
+      if (!gathered.ok) return { ok: false, message: `Nothing was added: ${gathered.why}.` }
+      files = gathered.files
+    } else {
+      let bytes: Buffer
+      try {
+        const size = statSync(source).size
+        if (size > MAX_ARCHIVE_BYTES) {
+          return { ok: false, message: `Nothing was added: that file is larger than ${MAX_ARCHIVE_BYTES} bytes.` }
+        }
+        bytes = readFileSync(source)
+      } catch (error) {
+        return {
+          ok: false,
+          message: `Nothing was added: that file could not be read${error instanceof Error ? ` — ${error.message}` : ''}.`,
+        }
+      }
+      const opened = openCrx(bytes)
+      if (!opened.ok) return { ok: false, message: `Nothing was added: ${opened.why}.` }
+      crxId = opened.crx.crxId
+      const unzipped = unzip(opened.crx.zip, {
+        maxTotalBytes: MAX_UNPACKED_BYTES,
+        maxFiles: MAX_FILES,
+      })
+      if (!unzipped.ok) return { ok: false, message: `Nothing was added: ${unzipped.why}.` }
+      const prefix = manifestPrefix(unzipped.files)
+      if (prefix === null) {
+        return { ok: false, message: 'Nothing was added: there is no manifest.json inside that .crx.' }
+      }
+      files = unzipped.files
+        .filter((file) => file.path.startsWith(prefix) && file.path !== prefix)
+        .map((file) => ({ path: file.path.slice(prefix.length), bytes: file.bytes }))
+    }
+
+    const manifestFile = files.find((file) => file.path === 'manifest.json')
+    const parsed = parseManifest(manifestFile?.bytes.toString('utf8') ?? '')
+    if (!parsed.ok) return { ok: false, message: `Nothing was added: ${parsed.why}.` }
+    const can = loadability(parsed.manifest)
+    if (!can.ok) return { ok: false, message: `Nothing was added: ${can.why}.` }
+
+    const id = sideloadId(kind, source)
+    const dir = dirFor(profileId, id)
+    if (dir === null) return { ok: false, message: 'Nothing was added: that profile is not one this app knows.' }
+    const name = displayName(parsed.manifest, basename(source) || id)
+
+    let compat: CompatReport = { ok: true, provides: [], inert: [], why: '' }
+    try {
+      rmSync(dir, { recursive: true, force: true })
+      mkdirSync(dir, { recursive: true })
+      for (const file of files) {
+        if (file.path === '' || NOT_AN_EXTENSION.has(file.path)) continue
+        const target = join(dir, file.path)
+        mkdirSync(dirname(target), { recursive: true })
+        writeFileSync(target, file.bytes)
+      }
+      compat = applyCompat(dir, parsed.manifest)
+      writeRecord(dir, {
+        id,
+        version: typeof parsed.manifest.version === 'string' ? parsed.manifest.version : '',
+        sha256: '',
+        installedAt: now(),
+        enabled: true,
+        sideloaded: true,
+        name,
+        origin: source,
+        kind,
+        crxId,
+      })
+    } catch (error) {
+      try {
+        rmSync(dir, { recursive: true, force: true })
+      } catch {
+        /* The message below says nothing was added, which stays true. */
+      }
+      return {
+        ok: false,
+        message: `Nothing was added: ${error instanceof Error ? error.message : 'it could not be saved'}.`,
+      }
+    }
+
+    const gaps = missingApis(parsed.manifest).filter((api) => !compat.provides.includes(api))
+    const note =
+      gaps.length === 0
+        ? ''
+        : ` It asks for ${gaps.map((api) => `chrome.${api}`).join(', ')}, which this browser does not have, so whatever it uses those for will not work.`
+    const filled =
+      compat.provides.length === 0
+        ? ''
+        : ` This app fills in ${compat.provides.map((api) => `chrome.${api}`).join(', ')} so it can start.`
+    const inert = compat.inert.length === 0 ? '' : ` Even so, ${compat.inert.join('; ')}.`
+    const signed =
+      kind === 'crx'
+        ? ` Its signature matched its contents, which says the file has not changed since it was packed and says nothing about who packed it. Its signing key gives the id ${crxId}.`
+        : ''
+    return {
+      ok: true,
+      message:
+        `${name} was copied into this profile from ${source} and switched on. This app measured ` +
+        `nothing about it and checked no fingerprint against it.${signed}${filled}${inert}${note}`,
+    }
+  }
+
   return {
     view(profileId: string, profileName: string): ExtensionStoreView {
       const root = profileExtensionsRoot(options.userData, profileId)
@@ -509,7 +1008,9 @@ export function createExtensionStore(options: ExtensionStoreOptions): ExtensionS
           licence: entry.licence,
           version: entry.version,
           works: entry.works,
+          category: entry.category,
           measured: entry.measured,
+          noRelease: entry.noRelease ?? '',
           url: entry.source?.url ?? '',
           sha256: entry.source?.sha256 ?? '',
           bytes: entry.source?.bytes ?? 0,
@@ -519,14 +1020,26 @@ export function createExtensionStore(options: ExtensionStoreOptions): ExtensionS
           // Stated from the catalogue before there is a manifest, and replaced
           // by the manifest's own answer the moment there is one.
           reach: [...entry.reach],
+          mayAsk: [...(entry.mayAskToReach ?? [])],
           everywhere: everywhereIn(entry.reach),
           missing: [] as string[],
           provides: [] as string[],
           inert: [] as string[],
           rulesetsSwitchedOn: 0,
           popup: '',
+          optionsPage: '',
+          sideloaded: false,
+          origin: '',
+          crxId: '',
           staticRulesets: false,
           message: '',
+        }
+        /*
+         * A row nobody ran, because there was nothing to run. Separate from the
+         * refusal below and separate from silence: see {@link ExtensionEntry.noRelease}.
+         */
+        if (entry.works === 'unmeasured') {
+          return { ...base, state: 'not-offered' as const, message: entry.noRelease ?? '' }
         }
         /*
          * An entry with no download is not "available". `available` is the state
@@ -557,21 +1070,31 @@ export function createExtensionStore(options: ExtensionStoreOptions): ExtensionS
           installedAt,
           enabled,
           reach: reachOf(manifest),
+          mayAsk: mayAskToReach(manifest),
           everywhere: everywhere(manifest),
           missing: missingApis(manifest).filter((api) => !compat.provides.includes(api)),
           provides: compat.provides,
           inert: compat.inert,
           rulesetsSwitchedOn: compat.rulesets.length,
           popup: popupPage(manifest),
+          optionsPage: optionsPageOf(manifest),
           staticRulesets: usesStaticRulesets(manifest),
         }
       })
       return {
         profileId,
         profileName,
-        extensions,
+        extensions: [...extensions, ...sideloadRows(profileId)],
         folder: root ?? '',
       }
+    },
+
+    addFolder(profileId: string, folder: string): ExtensionResult {
+      return addOwn(profileId, 'folder', folder)
+    },
+
+    addCrx(profileId: string, file: string): ExtensionResult {
+      return addOwn(profileId, 'crx', file)
     },
 
     async install(profileId: string, id: string): Promise<ExtensionResult> {
@@ -678,6 +1201,11 @@ export function createExtensionStore(options: ExtensionStoreOptions): ExtensionS
           sha256: entry.source.sha256,
           installedAt: now(),
           enabled: true,
+          sideloaded: false,
+          name: entry.name,
+          origin: entry.source.url,
+          kind: '',
+          crxId: '',
         })
       } catch (error) {
         // A half-written extension is worse than none: it has a manifest and
@@ -736,6 +1264,11 @@ export function createExtensionStore(options: ExtensionStoreOptions): ExtensionS
       if (dir === null) return { ok: false, message: 'That is not an extension this app installed.' }
       const entry = entryFor(id)
       if (!existsSync(dir)) return { ok: true, message: 'It was not installed.' }
+      // Read before deleting: the name a sideloaded row wears lives in the file
+      // this is about to remove, and a confirmation that could only say "the
+      // extension" about a thing the person named themselves is a worse
+      // sentence than the one it replaces.
+      const readOnDiskName = readOnDisk(dir)?.name
       try {
         rmSync(dir, { recursive: true, force: true })
       } catch (error) {
@@ -749,31 +1282,33 @@ export function createExtensionStore(options: ExtensionStoreOptions): ExtensionS
       if (existsSync(dir)) {
         return { ok: false, message: 'It could not be removed: the folder is still on disk.' }
       }
+      const own = isSideloadId(id) ? (readOnDiskName ?? '') : ''
       return {
         ok: true,
-        message: `${entry?.name ?? 'The extension'} is removed. Its files are deleted.`,
+        message: `${entry?.name ?? (own === '' ? 'The extension' : own)} is removed. Its files are deleted.`,
       }
     },
 
     setEnabled(profileId: string, id: string, on: boolean): ExtensionResult {
       const dir = dirFor(profileId, id)
       const entry = entryFor(id)
-      if (dir === null || entry === null) {
+      if (dir === null || (entry === null && !isSideloadId(id))) {
         return { ok: false, message: 'That is not an extension this app installed.' }
       }
       const disk = readOnDisk(dir)
       if (disk === null) return { ok: false, message: 'It is not installed in this profile.' }
       try {
-        writeRecord(dir, { id, ...disk, enabled: on })
+        writeRecord(dir, { ...disk, id, enabled: on })
       } catch (error) {
         return {
           ok: false,
           message: `That could not be saved: ${error instanceof Error ? error.message : 'the file would not write'}.`,
         }
       }
+      const name = entry?.name ?? (disk.name === '' ? id : disk.name)
       return {
         ok: true,
-        message: on ? `${entry.name} is switched on.` : `${entry.name} is switched off.`,
+        message: on ? `${name} is switched on.` : `${name} is switched off.`,
       }
     },
 
@@ -781,6 +1316,17 @@ export function createExtensionStore(options: ExtensionStoreOptions): ExtensionS
       const out: InstalledExtension[] = []
       for (const entry of options.catalogue) {
         const loaded = load(profileId, entry)
+        if (loaded !== null && 'extension' in loaded) out.push(loaded.extension)
+      }
+      /*
+       * And everything somebody added themselves. On this list because it is
+       * what the launch loader replays and what `browser.extensions` answers
+       * with: an extension the person added is running in their browser exactly
+       * as a catalogue one is, and a list that left it out would have an agent
+       * reading a page altered by a program the list said was not there.
+       */
+      for (const id of sideloadIds(profileId)) {
+        const loaded = loadSideload(profileId, id)
         if (loaded !== null && 'extension' in loaded) out.push(loaded.extension)
       }
       return out
@@ -825,5 +1371,13 @@ export function orphanExtensionIds(
     return []
   }
   const known = new Set(catalogue.map((entry) => entry.id))
-  return names.filter((name) => SAFE_ID.test(name) && !known.has(name)).sort()
+  /*
+   * An `own-` folder is not an orphan. It has no catalogue row and never will —
+   * that is what it is — and reporting it under *No longer offered* would tell
+   * somebody that the extension they added themselves five minutes ago had been
+   * withdrawn from the app.
+   */
+  return names
+    .filter((name) => SAFE_ID.test(name) && !known.has(name) && !isSideloadId(name))
+    .sort()
 }

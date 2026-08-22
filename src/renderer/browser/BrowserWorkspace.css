@@ -2633,6 +2633,108 @@
 }
 
 /*
+  Browsing a catalogue rather than reading one.
+
+  Twenty-four rows is the size at which a list stops being a list: the search
+  box and the shelf chips are what make it a store, and both are drawn above the
+  first row so the shape of the thing is visible before any scrolling happens.
+  `.bw-chip` is the toolbar's chip reused deliberately — a second chip that
+  looked almost the same would be a second thing to keep in step.
+*/
+.bw-store-browse {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.bw-store-search {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.bw-store-search input {
+  flex: 1;
+  min-width: 0;
+  height: var(--control-h);
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--t-caption);
+}
+
+.bw-store-search input:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.bw-store-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-15);
+}
+
+/* The chosen shelf. A pressed chip rather than a highlight, and `aria-pressed`
+   carries the same fact for anything not reading the colour. */
+.bw-chip-on {
+  background: var(--accent);
+  color: #fff;
+}
+
+.bw-chip-on:hover:not(:disabled) {
+  background: var(--accent);
+  color: #fff;
+}
+
+/*
+  The nine measured limits, folded away.
+
+  They were nine paragraphs before the first row, which turned a store into a
+  disclaimer. A `details` keeps every word and costs no JavaScript, so it
+  renders the same in a test with no DOM as it does in the app.
+*/
+.bw-store-limits > summary {
+  cursor: pointer;
+  margin-bottom: var(--sp-2);
+}
+
+.bw-store-limits > summary::marker {
+  color: var(--text-muted);
+}
+
+/* The row's one-word state, for the rows that carry no button: which kind of
+   buttonless this is. Sized like `.bw-store-version` so a row does not change
+   height when it has one. */
+.bw-store-chip {
+  flex-shrink: 0;
+  padding: 1px var(--sp-2);
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  color: var(--text-secondary);
+  font-size: var(--t-footnote);
+  font-weight: var(--w-medium);
+}
+
+/* Measured failing here. Warmer than the neutral one beside it because it is a
+   different sentence — *this app ran it and watched it fail* — and quieter than
+   an error, because nothing is wrong: the store is telling the truth. */
+.bw-store-chip-no {
+  background: color-mix(in srgb, var(--color-critical) 14%, transparent);
+  color: var(--color-critical);
+}
+
+.bw-store-own {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-2);
+}
+
+/*
   Which profile the panel is talking about.
 
   A control rather than prose, because "installed" is never a global fact here —
