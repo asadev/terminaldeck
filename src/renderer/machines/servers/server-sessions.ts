@@ -87,6 +87,20 @@ export interface ServerSession {
    * window cannot make.
    */
   startIn: string | null
+  /**
+   * A command to type into the shell once it opens, or null for a plain prompt.
+   *
+   * The server bar's account chip mints rows like *"New terminal running Claude
+   * Code"* — the honest verb over a terminal this app did not start the agent
+   * in — and this is how the press keeps that promise. It is *typed*, visibly,
+   * followed by Enter, exactly as the person would have typed it: if the agent
+   * is not on the PATH over there, the shell's own `command not found` is the
+   * truthful outcome, on screen, where an invented error dialog would not be.
+   *
+   * Read exactly once, when the shell answers its open — the same once-only
+   * rule {@link startIn} states, for the same reason.
+   */
+  run: string | null
 }
 
 /** A server that has at least one shell open, and the shells under it. */
@@ -119,6 +133,8 @@ export function withServerSession(
   shellKey: string = newShellKey(),
   /** Where on the server it starts. Null — the default — is where SSH lands. */
   startIn: string | null = null,
+  /** A command to type once it opens. Null — the default — is a plain prompt. */
+  run: string | null = null,
 ): ServerSession[] {
   return [
     ...open,
@@ -129,6 +145,7 @@ export function withServerSession(
       shellKey,
       status: 'idle',
       startIn,
+      run,
     },
   ]
 }

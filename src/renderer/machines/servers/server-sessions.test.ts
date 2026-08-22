@@ -202,3 +202,14 @@ describe('what a server tab is', () => {
     expect(tabLabel(tabs[2], tabs)).toBe('Session 1')
   })
 })
+
+describe('a shell opened to run an agent', () => {
+  it('carries the command on the row, and defaults to a plain prompt', () => {
+    // The account chip's "New terminal running …" rows mint the command; every
+    // other opener leaves it null and gets exactly the shell it always got.
+    const plain = withServerSession([], 'srv-1', 'web-01', 'k1')
+    expect(plain[0].run).toBeNull()
+    const running = withServerSession([], 'srv-1', 'web-01', 'k2', null, 'claude')
+    expect(running[1] ?? running[0]).toMatchObject({ run: 'claude', startIn: null })
+  })
+})

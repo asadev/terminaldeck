@@ -107,7 +107,8 @@ import {
 } from './shell/workspace-tabs'
 import { ServerSessionPane } from './machines/servers/ServerSessionPane'
 import { ServerChatPane } from './machines/servers/ServerChatPane'
-import { serverChatWired, signInLine, useServerSignIn } from './machines/servers/server-chat'
+import { serverChatWired, useServerSignIn } from './machines/servers/server-chat'
+import { agentCommand, ServerAccountChip } from './machines/servers/ServerAccountChip'
 import { MachineSessions } from './machines/new-session-context'
 import { MachineSessionViews } from './machines/session-view-context'
 import { ServerSessions } from './machines/servers/session-context'
@@ -3124,9 +3125,9 @@ function Workspace() {
    * machine, which was already running over there and is merely being looked at.
    */
   const openServerShell = useCallback(
-    (serverId: string, serverName: string, startIn: string | null = null) => {
+    (serverId: string, serverName: string, startIn: string | null = null, run: string | null = null) => {
       const key = newShellKey()
-      setServerSessions((current) => withServerSession(current, serverId, serverName, key, startIn))
+      setServerSessions((current) => withServerSession(current, serverId, serverName, key, startIn, run))
       const id = serverTabId(serverId, key)
       /*
        * The same three things selecting a remote session does, and for the same
@@ -5433,27 +5434,28 @@ function Workspace() {
    * Which login the coding agent in that server account's home is signed in as,
    * for the bar over a terminal on a server.
    *
-   * ## It is not this session's account, and the bar says what it is instead
+   * ## It is not this session's account, and the chip says what it is instead
    *
    * Every other bar in this app names the account its session runs under because
    * this app started that session. Nothing on the SSH side carries it. A
    * transcript line records `cwd`, `gitBranch`, `version` and its own
    * `sessionId` and says nothing whatever about a login, and this app did not
-   * spawn whatever somebody typed into that terminal. There is no switch to
-   * offer either: changing which account a server's agent uses is `/login` over
-   * there, in a browser on that machine.
+   * spawn whatever somebody typed into that terminal.
    *
-   * So there is no honest account *chip* here — a menu with nothing to act on is
-   * the one thing this bar must never grow. What there is instead is the fact
-   * that does exist, stated as what it is: the sign-in of the agent installed in
-   * the home the shell landed in, which is what a `claude` started in that
-   * terminal will run as. Drawn as a word, with no menu behind it, in the slot
-   * the account holds for a local session.
+   * This slot used to conclude "so there is no honest account *chip* here" and
+   * drew a plain word. Asad, inside exactly this bar: *"when I am inside the
+   * server, I cannot even change the accounts."* The conclusion mistook one
+   * impossible verb for all of them: switching *this* terminal's agent is
+   * indeed not on offer and the menu says so in as many words, but starting a
+   * new terminal on that server with one of its signed-in agents running is
+   * real, and so is going to where the sign-ins are changed. See
+   * `ServerAccountChip` for the whole argument.
    *
    * It costs no round trip of its own — `servers:shell:account` reads it out of
-   * the probe the server page already runs, and answers null for a server that
-   * has never been looked at and cannot be reached. Null draws nothing at all,
-   * which is the same silent degrade the connectors chip beside it makes.
+   * the probe the server page already runs, and answers null only while the
+   * first ask is in flight, which is the one moment there genuinely is nothing
+   * to say. Null draws nothing at all, the same silent degrade the connectors
+   * chip beside it makes.
    */
   const headingServerTabId = openServerTab?.id ?? (headingTab?.server ? headingTab.id : null)
   const serverSignIn = useServerSignIn(
@@ -5461,20 +5463,12 @@ function Workspace() {
     headingServerTabId === null ? null : serverShellIds[headingServerTabId] ?? null,
   )
   /**
-   * The one line, and the tooltip under it.
+   * The server under the heading — id for the verbs, name for the sentences.
    *
-   * Composed in `server-chat.ts` beside the reader rather than here, because
-   * which of the four sentences applies is a decision about an answer and this
-   * file draws answers. Null only while the first ask is still in flight, which
-   * is the one moment there genuinely is nothing to say.
+   * Whichever of the two the bar is naming: the pane on screen, or a server
+   * tab that is the heading without being the open pane.
    */
-  const serverWords =
-    serverSignIn === null
-      ? null
-      // Whichever of the two the bar is naming — the pane on screen, or a server
-      // tab that is the heading without being the open pane. Empty is a real
-      // answer and the composer has a plain word for it.
-      : signInLine(serverSignIn, (openServerTab ?? headingTab)?.server?.name ?? '')
+  const headingServer = (openServerTab ?? headingTab)?.server ?? null
 
   /**
    * The session the window's control cluster acts on, and which computer it is on.
@@ -6280,11 +6274,10 @@ function Workspace() {
                         </>
                       )}
                     </div>
-                  ) : headingServerTabId !== null && serverWords !== null ? (
+                  ) : headingServerTabId !== null && serverSignIn !== null && headingServer !== null ? (
                     /*
-                      A terminal on a server, which has no folder chip and no
-                      account menu, and does have one true thing to say in that
-                      row.
+                      A terminal on a server, which has no folder chip — and an
+                      account chip now, where a bare word stood.
 
                       The folder is genuinely absent — a shell lands wherever
                       that sign-in lands and a path here would be resolved
@@ -6294,21 +6287,17 @@ function Workspace() {
                       which computer a session is on is the fact that must never
                       go missing.
 
-                      Beside it, a word and not a control. Which login *this
-                      session's* agent is on is not a fact the SSH side carries,
-                      and there is nothing here that could switch one — so what
-                      is drawn is the fact that does exist, said as what it is:
-                      which coding logins the account this shell signed in as
-                      holds. It is a `span` with no hover, no chevron and no
-                      handler, deliberately: on this bar anything that looks
-                      pressable is pressable.
-
-                      And it is never blank. The four situations that used to
-                      draw an empty slot — a server nobody had opened, one that
-                      would not answer, one with no agent on it, and one whose
-                      agents are all signed out — each have their own sentence
-                      now. `signInLine` in `server-chat.ts` is where they are,
-                      and which of them applies is the whole of what it decides.
+                      Beside it, the same chip idiom as everywhere else. The
+                      words on it are still `signInLine`'s four sentences — a
+                      server nobody had opened, one that would not answer, one
+                      with no agent, one signed out, each said as itself, never
+                      blank — but the slot is pressable now, because it has two
+                      real verbs: a new terminal on that server with one of its
+                      signed-in agents running, and the road to where sign-ins
+                      are changed. What it still cannot do — switch *this*
+                      terminal's agent — the menu says before any row is read.
+                      *"when I am inside the server, I cannot even change the
+                      accounts"* — `ServerAccountChip` carries the argument.
                     */
                     <div className="toolbar-chips">
                       {heading.subtitle !== null ? (
@@ -6317,9 +6306,14 @@ function Workspace() {
                           <span className="toolbar-chip-sep" aria-hidden="true" />
                         </>
                       ) : null}
-                      <span className="toolbar-signin" title={serverWords.title}>
-                        {serverWords.line}
-                      </span>
+                      <ServerAccountChip
+                        signIn={serverSignIn}
+                        serverName={headingServer.name}
+                        onStartAgent={(agentId) =>
+                          openServerShell(headingServer.id, headingServer.name, null, agentCommand(agentId))
+                        }
+                        onManage={() => openSettings('profiles')}
+                      />
                     </div>
                   ) : null
                 }
@@ -6650,6 +6644,7 @@ function Workspace() {
                     serverId={entry.serverId}
                     shellKey={entry.shellKey}
                     startIn={entry.startIn}
+                    run={entry.run}
                     bridge={serversBridge}
                     /* Where in the pane area to draw, when a pane is holding it. See
                        `layout/pane-slots.ts`; `undefined` leaves the stylesheet's

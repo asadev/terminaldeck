@@ -73,6 +73,7 @@ import {
   type RestoreDecision,
 } from '../main/session-restore'
 import { getState as profilesState, resolveProfile } from '../main/profiles'
+import { configureSessionAccounts } from '../main/session-account'
 /*
  * Running a session as another login, and opening a sign-in terminal — the
  * same functions the desktop shell hands its core, reached through the same
@@ -425,6 +426,19 @@ export async function createHeadlessHost(
     onSessionOpened: (meta) => {
       logger.info('headless', 'a sign-in terminal was opened', { folder: meta.cwd, agent: meta.provider })
     },
+  })
+  /*
+   * And the ladder that answers *whose login is this session on* — the
+   * `current` half of the account chip a device draws over one of this host's
+   * sessions. The same registration the desktop makes in
+   * `registerSessionAccountIpc`, minus the IPC: without it `sessionAccount`
+   * answers `withheld` for everything and the chip over a session running on
+   * this very host says "No login" above a terminal whose banner names one.
+   */
+  configureSessionAccounts({
+    pidOf: (id) => core.ptys.pidOf(id),
+    describeSession: (id) => core.ptys.list().find((session) => session.id === id) ?? null,
+    platform,
   })
 
   const remote = registerRemoteIpc(desk, {
