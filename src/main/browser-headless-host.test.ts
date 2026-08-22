@@ -6,6 +6,7 @@ import type { CdpEvent } from './browser-cdp-pipe'
 import type { CdpTransport } from './browser-driven-cdp'
 import {
   HeadlessDriveHost,
+  confirmReady,
   type HeadlessBrowserHandle,
   type LaunchBrowser,
 } from './browser-headless-host'
@@ -102,6 +103,16 @@ describe('the headless tab authority', () => {
     expect(viewId).not.toBeNull()
     // Launched once, auto-attach armed, and a target opened at the URL.
     expect(transport.count('Target.setAutoAttach')).toBe(1)
+    /*
+     * And discovery armed, which is a different switch for a different reason.
+     * `Target.targetInfoChanged` — the only event a page's title arrives on — is
+     * emitted at the browser level only when targets are discovered, and
+     * auto-attach does not imply it. Measured against a real Chromium 146: with
+     * auto-attach alone that event never fired once across a whole navigation,
+     * so every tab a phone saw from a server host was called nothing at all.
+     */
+    expect(transport.count('Target.setDiscoverTargets')).toBe(1)
+    expect(transport.last('Target.setDiscoverTargets')?.params.discover).toBe(true)
     expect(transport.last('Target.createTarget')?.params.url).toBe('https://example.com')
     // No throwaway context for a persistent tab.
     expect(transport.count('Target.createBrowserContext')).toBe(0)
@@ -229,5 +240,54 @@ describe('the headless tab authority', () => {
     await host.openTab({ url: 'https://example.com', isolate: false })
     await host.stop()
     expect(stop).toHaveBeenCalledTimes(1)
+  })
+})
+
+
+/* ------------------------------------------- is there a browser on the end -- */
+
+/*
+ * A pid is not a running browser, and a pipe onto a dead one is silent.
+ *
+ * This is the guard for the failure that a fake `spawn` could never show and a
+ * real Ubuntu server showed on the first try: `launchChromium` reported a
+ * healthy process — pid, null exit code, both fd 3/4 pipes — for a Chromium that
+ * was gone 30 ms later with exit 127, after which the first CDP command was
+ * written into a closed pipe and waited forever. The fix is that the first
+ * command races the process's death, so there is no arm of this that hangs.
+ */
+describe('confirming a launched browser is really there', () => {
+  const never = new Promise<string>(() => {})
+
+  it('is null when the browser answers its first command', async () => {
+    const transport = { command: async () => ({ product: 'HeadlessChrome/146.0.7680.165' }) }
+    expect(await confirmReady(transport, never, 1000)).toBeNull()
+  })
+
+  it('is the death when the process dies instead of answering', async () => {
+    // The shape measured on the server: the command never settles, and the only
+    // thing that ever happens is the exit.
+    const transport = { command: () => new Promise<unknown>(() => {}) }
+    const whenGone = Promise.resolve('Chromium could not start: it needs libatk-1.0.so.0, which is not installed')
+    const why = await confirmReady(transport, whenGone, 1000)
+    expect(why).toContain('libatk-1.0.so.0')
+  })
+
+  it('prefers the death to the timeout when both are available', async () => {
+    const transport = { command: () => new Promise<unknown>(() => {}) }
+    const whenGone = new Promise<string>((resolve) => setTimeout(() => resolve('Chromium exited with code 127'), 5))
+    expect(await confirmReady(transport, whenGone, 400)).toContain('code 127')
+  })
+
+  it('gives up on a browser that neither answers nor exits, rather than waiting for ever', async () => {
+    const transport = { command: () => new Promise<unknown>(() => {}) }
+    const why = await confirmReady(transport, never, 30)
+    expect(why).toContain('did not answer its first command')
+  })
+
+  it('a refused first command is a named error, not a hang', async () => {
+    const transport = { command: () => Promise.reject(new Error('the pipe closed')) }
+    const why = await confirmReady(transport, never, 1000)
+    expect(why).toContain('the pipe closed')
   })
 })

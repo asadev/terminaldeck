@@ -49,6 +49,7 @@ import type { DeviceFolderGrant } from '../main/remote/folder-grants'
 import type { PairingToken } from '../main/remote/device-auth'
 import { currentPlatform } from '../main/platform/host'
 import { CHROMIUM_PATH_ENV, installChromium } from '../main/browser-chromium-install'
+import { readSandboxFacts, sandboxDecision } from '../main/browser-chromium-launch'
 import {
   callControl,
   clearDaemonRecord,
@@ -146,6 +147,29 @@ async function browserInstall(): Promise<number> {
       ? ' (already installed)'
       : ''
   process.stdout.write(`Chromium ${result.version}${how}\n${result.path}\n`)
+
+  /*
+   * Say it here if the sandbox will be dropped, because this is the one moment
+   * somebody is looking.
+   *
+   * The launch logs it too, but a log on a server is read after something has
+   * gone wrong, and nothing will go wrong — the browser will work perfectly, with
+   * one less wall around it than the person assumes. This is the command an
+   * operator runs deliberately, on a machine they chose, and it is the honest
+   * place to tell them what their machine can and cannot give. Printed as a
+   * statement of fact rather than a warning to dismiss: on a rented server run as
+   * root there is no configuration that would restore it, so there is nothing
+   * here for them to fix and it would be wrong to imply otherwise.
+   */
+  const decision = sandboxDecision(readSandboxFacts())
+  if (!decision.sandbox) {
+    process.stdout.write(
+      `\nThis Chromium will run without its sandbox: ${decision.why}.\n` +
+        'The sandbox is what isolates a page from the rest of the machine, so pages this host is asked\n' +
+        'to open are less contained than they would be on a desktop. Running the host as an ordinary\n' +
+        'user on a kernel that allows unprivileged user namespaces is the only arrangement that keeps it.\n',
+    )
+  }
   return 0
 }
 
@@ -259,9 +283,9 @@ async function showStatus(record: DaemonRecord): Promise<number> {
  * later with nothing pointing back at the paste.
  */
 async function showAddress(record: DaemonRecord): Promise<number> {
-  const answer = await ask(record, 'status')
-  if (!answer.ok) return fail(answer)
-  const address = addressAnswer((answer.value as HostStatus).remote.relay)
+  const answer = await waitForAddress(record)
+  if (!answer.ok) return fail(answer.answer)
+  const address = answer.address
   if (!address.ok) {
     process.stderr.write(`${address.why}\n`)
     return 1
@@ -269,6 +293,70 @@ async function showAddress(record: DaemonRecord): Promise<number> {
   process.stdout.write(`${address.address}\n`)
   process.stderr.write(renderAddressNote())
   return 0
+}
+
+/** How long, from its own start, a host gets to reach the relay before `address` gives up on it. */
+export const ADDRESS_WAIT_MS = 10_000
+const ADDRESS_RETRY_MS = 400
+
+/**
+ * The address, waiting out a relay connection that is still being made.
+ *
+ * ## The first run this got wrong
+ *
+ * `install.sh` finishes by starting the host and asking it for its address,
+ * which is the right thing to do — the address is what the whole install was
+ * for, and the moment somebody is looking at the terminal is the moment to hand
+ * it over. But the host has only just been started, and reaching the relay is a
+ * WebSocket dial across the internet. Measured on a real server on 2026-08-22:
+ * one install printed the address, and a second install on the same box printed
+ * *"No address yet — this host is not on the relay"* — and the address was there
+ * when asked again fourteen seconds later. Same code, same machine, different
+ * luck.
+ *
+ * That is the worst possible moment for a false negative. The reader has just
+ * run an installer, the last thing it says is that the thing they installed
+ * cannot be reached, and the advice is to go and run another command. Most
+ * people will conclude it did not work.
+ *
+ * ## What is waited on, and what is not
+ *
+ * Only a host **young enough that the relay could still be dialling**, measured
+ * from the `startedAt` it reports rather than from when this command happened to
+ * run. That is what makes the wait self-limiting and, more importantly, correct
+ * in the other direction: a host that has been up for an hour and is not on the
+ * relay has a real problem, and standing there for ten more seconds would not
+ * find it — that answer is given immediately, as it always was.
+ *
+ * `RELAY_FACTS_UNUSABLE` is not waited on either. It means the host is connected
+ * and describing itself wrongly, which no amount of waiting repairs.
+ *
+ * ## Why this waits rather than subscribing
+ *
+ * The standing preference here is events over polling, and a background timer
+ * asking the same question forever would be the thing that rule is about. This
+ * is not that: it is a one-shot command, run by a person who is waiting, for a
+ * connection already in flight, and it stops the instant the answer arrives.
+ * Holding the reply on the host until the relay connects would be tidier still,
+ * and it needs a control operation that does not exist; if one is ever added,
+ * this is the caller that should use it.
+ */
+export async function waitForAddress(
+  record: DaemonRecord,
+  now: () => number = Date.now,
+  sleep: (ms: number) => Promise<void> = (ms) => new Promise((done) => setTimeout(done, ms)),
+): Promise<{ ok: true; address: ReturnType<typeof addressAnswer> } | { ok: false; answer: ControlResponse }> {
+  for (;;) {
+    const answer = await ask(record, 'status')
+    if (!answer.ok) return { ok: false, answer }
+    const status = answer.value as HostStatus
+    const address = addressAnswer(status.remote.relay)
+    // Connected and answerable, or connected and broken: either way, done.
+    if (address.ok || status.remote.relay !== null) return { ok: true, address }
+    const startedAt = typeof status.startedAt === 'number' ? status.startedAt : null
+    if (startedAt === null || now() >= startedAt + ADDRESS_WAIT_MS) return { ok: true, address }
+    await sleep(ADDRESS_RETRY_MS)
+  }
 }
 
 /**

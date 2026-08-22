@@ -42,6 +42,7 @@
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { userDataDir } from './platform/paths'
+import { logger } from './app-log'
 import { CdpPipe } from './browser-cdp-pipe'
 import type { CdpEvent } from './browser-cdp-pipe'
 import { cdpDrivenPage, type CdpTransport } from './browser-driven-cdp'
@@ -131,8 +132,79 @@ const defaultLaunch: LaunchBrowser = async ({ userDataDir: dir, extensionDirs })
     extensionDirs,
   })
   if (!launched.ok) return { ok: false, why: launched.why }
+  if (!launched.sandbox.sandbox) {
+    // Stated, every time, wherever it happens. A dropped security boundary that
+    // is never mentioned is the thing `sandboxDecision` exists to prevent.
+    logger.warn('browser', `Chromium is running without its sandbox: ${launched.sandbox.why}`)
+  }
   const pipe = new CdpPipe(launched.handle.pipeWrite, launched.handle.pipeRead)
+
+  /*
+   * Confirm there is a browser on the other end before calling this a success.
+   *
+   * `launchChromium` can only report what is knowable synchronously — a pid, two
+   * pipe fds — and a Chromium that is about to die on its first instruction has
+   * all three. Measured on a real Ubuntu server: a binary with one missing
+   * shared library was reported healthy and was gone 30 ms later with exit 127,
+   * after which this function returned a transport onto a closed pipe and the
+   * first real CDP command waited forever. A hang is the worst of the available
+   * failures: nothing is logged, nothing times out, and the phone that asked for
+   * a page simply never hears back.
+   *
+   * So the handshake is the confirmation. `Browser.getVersion` is the cheapest
+   * command there is and one round-trip has to happen anyway, so this costs
+   * nothing against a browser that is alive, and against a dead one the race
+   * turns silence into the sentence `describeExit` built. The timeout is the
+   * third arm rather than a guard against the second: a browser that starts and
+   * then wedges without exiting would satisfy neither of the other two.
+   */
+  const ready = await confirmReady(pipe, launched.handle.whenGone)
+  if (ready !== null) {
+    launched.handle.close()
+    return { ok: false, why: ready }
+  }
+
   return { ok: true, handle: { transport: pipe, stop: () => launched.handle.close() } }
+}
+
+/** How long a launched Chromium gets to answer its first command. */
+const FIRST_COMMAND_TIMEOUT_MS = 30_000
+
+/**
+ * `null` when the browser answered, or the sentence saying why it never will.
+ *
+ * Exported, and taking the transport structurally rather than as a `CdpPipe`, so
+ * `browser-headless-host.test.ts` can drive all three arms — the answer, the
+ * death and the wedge — with no process and no real pipe. The timeout is a
+ * parameter for the same reason: a test that had to wait the production thirty
+ * seconds to prove the third arm would simply not be written.
+ */
+export async function confirmReady(
+  transport: { command(command: { method: string; params?: unknown }): Promise<unknown> },
+  whenGone: Promise<string>,
+  timeoutMs: number = FIRST_COMMAND_TIMEOUT_MS,
+): Promise<string | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<string>((resolve) => {
+    timer = setTimeout(
+      () => resolve(`Chromium started but did not answer its first command within ${Math.round(timeoutMs / 1000)} s`),
+      timeoutMs,
+    )
+  })
+  try {
+    return await Promise.race([
+      transport.command({ method: 'Browser.getVersion', params: {} }).then(
+        () => null,
+        (error: unknown) => `Chromium refused its first command: ${error instanceof Error ? error.message : 'no answer'}`,
+      ),
+      whenGone,
+      timeout,
+    ])
+  } finally {
+    // The timer would otherwise hold the event loop open for its full duration
+    // after a launch that succeeded in milliseconds.
+    if (timer !== undefined) clearTimeout(timer)
+  }
 }
 
 /* -------------------------------------------------------------- the deps -- */
@@ -298,12 +370,37 @@ export class HeadlessDriveHost implements DriveHost {
       // agent can read, the same posture `openTab` returning null takes.
       throw new Error(`the server's browser could not start: ${result.why}`)
     }
-    // Multiplex every target's session on the one pipe by sessionId.
+    /*
+     * Two browser-level subscriptions, and they are not the same subscription.
+     *
+     * `setAutoAttach` multiplexes every target's session on the one pipe by
+     * sessionId — the thing that makes a single `--remote-debugging-pipe` enough
+     * for every tab.
+     *
+     * `setDiscoverTargets` is what makes Chromium emit `Target.targetInfoChanged`
+     * at the browser level, and `browser-driven-cdp.ts` reads a page's title out
+     * of exactly that event and nowhere else. Without it `page.title()` is the
+     * empty string for the entire life of every target on a server — measured
+     * against a real Chromium 146 on 2026-08-22: with auto-attach alone,
+     * `Target.targetInfoChanged` arrived **zero** times over a full navigation to
+     * a page whose title Chromium was perfectly willing to report when asked
+     * directly; with discovery on, six. The title is the label a phone draws for
+     * a tab, so the whole browser feature looked, on a server, like a list of
+     * blank rows.
+     *
+     * They are separate calls because they are separate domains' switches, and
+     * enabling one has never implied the other. Best-effort, like the rest of the
+     * arming: a browser that refuses discovery still drives, it just cannot say
+     * what its tabs are called.
+     */
     await result.handle.transport
       .command({
         method: 'Target.setAutoAttach',
         params: { autoAttach: true, flatten: true, waitForDebuggerOnStart: false },
       })
+      .catch(() => undefined)
+    await result.handle.transport
+      .command({ method: 'Target.setDiscoverTargets', params: { discover: true } })
       .catch(() => undefined)
     const downloads = this.armDownloads(result.handle.transport)
     return { handle: result.handle, downloads }

@@ -1,6 +1,8 @@
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { execFileSync } from 'node:child_process'
+import { chromiumLibraryHint } from './browser-chromium-launch'
 import { unzip } from './browser-extension-unzip'
 import { currentPlatform, type Platform } from './platform/host'
 import { userDataDir } from './platform/paths'
@@ -501,6 +503,87 @@ export function chromiumRoot(root?: string): string {
   return root ?? join(userDataDir(), 'chromium')
 }
 
+/* ------------------------------------------------------ can it actually run -- */
+
+/**
+ * The libraries a binary needs and this machine does not have, out of `ldd`.
+ *
+ * Pure over the text so `browser-chromium-install.test.ts` can pin it against
+ * the real output captured from a real server, with no `ldd` on the machine
+ * running the test — which matters, because the machine running the test is a
+ * Mac and has no `ldd` at all.
+ */
+export function missingLibraries(lddOutput: string): string[] {
+  const missing: string[] = []
+  for (const line of lddOutput.split('\n')) {
+    if (!line.includes('not found')) continue
+    const name = line.trim().split(/\s+/)[0]
+    if (name !== undefined && name !== '' && !missing.includes(name)) missing.push(name)
+  }
+  return missing
+}
+
+/** Read a binary's dynamic linkage, or `null` when that cannot be asked here. */
+export type ReadLinkage = (exePath: string) => string | null
+
+const defaultReadLinkage: ReadLinkage = (exePath) => {
+  try {
+    return execFileSync('ldd', [exePath], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+  } catch {
+    // `ldd` is absent (a musl box, a stripped image), or it refused the file.
+    // Either way there is nothing to report and the launch is left to say so.
+    return null
+  }
+}
+
+/**
+ * `null` when the binary can run here, or the sentence saying what is missing.
+ *
+ * ## Why an install verifies this at all
+ *
+ * Because without it `terminaldeck browser install` was a lie, and that was
+ * measured rather than reasoned about. On a stock Ubuntu 24.04 server the
+ * command downloaded 183 MB, verified it against the app-owned sha256, unpacked
+ * 372 MB, printed `Chromium 146.0.7680.165` and a path, and exited 0 — and the
+ * binary at that path could not execute, because thirteen of the libraries it
+ * links were not on the machine. Nothing was wrong with the download. Everything
+ * was wrong with the sentence describing it.
+ *
+ * A command that reports success and leaves something that does not work is the
+ * exact failure this product refuses elsewhere — it is why `install-headless.sh`
+ * checks that npm actually produced a `terminaldeck` binary instead of trusting
+ * npm's exit code. This is the same check for the same reason, one layer down.
+ *
+ * Keyed on the **chrome-for-testing platform of the build being installed**
+ * rather than on the host, which is the same argument `cftPlatformFor` makes:
+ * the question is whether this artefact can run, a `linux64` build is the only
+ * one `ldd` describes, and keying it that way is what lets the whole path be
+ * exercised from a Mac. In production the two agree, because a host installs its
+ * own platform's build.
+ *
+ * Best-effort: where there is no `ldd` — a musl box, a stripped image, or a
+ * developer's Mac holding a linux64 archive — this says nothing rather than
+ * guessing, and the launch failure stays the backstop it always was.
+ */
+export function linkageProblem(
+  exePath: string,
+  platform: CftPlatform,
+  read: ReadLinkage = defaultReadLinkage,
+): string | null {
+  if (platform !== 'linux64') return null
+  const output = read(exePath)
+  if (output === null) return null
+  const missing = missingLibraries(output)
+  if (missing.length === 0) return null
+  return (
+    `Chromium was downloaded and verified, but it cannot run on this machine yet: ` +
+    `${missing.length} shared ${missing.length === 1 ? 'library it needs is' : 'libraries it needs are'} ` +
+    `missing (${missing.slice(0, 4).join(', ')}${missing.length > 4 ? `, and ${missing.length - 4} more` : ''}). ` +
+    'A downloaded Chromium links the system graphics, font and accessibility libraries, and a minimal ' +
+    `server image ships almost none of them. On Debian or Ubuntu: ${chromiumLibraryHint()}`
+  )
+}
+
 /* --------------------------------------------------------------- install -- */
 
 export interface InstallOptions {
@@ -521,6 +604,13 @@ export interface InstallOptions {
   fetchJson?: FetchJson
   fetchZip?: FetchZip
   now?: () => number
+  /**
+   * Read a binary's dynamic linkage. Defaults to `ldd`.
+   *
+   * A seam because the check has to be exercised on a machine that has no `ldd`
+   * and no linux64 Chromium — see {@link linkageProblem}.
+   */
+  readLinkage?: ReadLinkage
 }
 
 export type InstallResult =
@@ -580,6 +670,11 @@ export async function installChromium(options: InstallOptions = {}): Promise<Ins
   // 3. A verified copy already on disk is reused rather than refetched.
   const record = readRecord(installDir)
   if (record !== null && record.version === version && record.platform === platform && existsSync(exePath)) {
+    // Re-checked on reuse, not only after unpacking: the libraries live on the
+    // machine, not in the install, so a copy that ran yesterday is not proof
+    // about today. It is one `ldd` — a few milliseconds against a launch.
+    const problem = linkageProblem(exePath, platform, options.readLinkage)
+    if (problem !== null) return { ok: false, why: problem }
     return { ok: true, path: exePath, version, platform, reused: true, sideloaded: false }
   }
 
@@ -650,6 +745,9 @@ export async function installChromium(options: InstallOptions = {}): Promise<Ins
       why: `Chromium ${version} was not installed: ${error instanceof Error ? error.message : 'it could not be saved'}`,
     }
   }
+
+  const problem = linkageProblem(exePath, platform, options.readLinkage)
+  if (problem !== null) return { ok: false, why: problem }
 
   return { ok: true, path: exePath, version, platform, reused: false, sideloaded: false }
 }

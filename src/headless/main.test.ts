@@ -195,17 +195,34 @@ const ADDRESS = formatServerAddress({
   hostKey: Buffer.alloc(32, 7).toString('base64url'),
 }) as string
 
-async function hostAnswering(relay: unknown): Promise<ControlServer> {
+async function hostAnswering(relay: unknown, extra: Record<string, unknown> = {}): Promise<ControlServer> {
+  return hostAnsweringEach(() => relay, extra)
+}
+
+/**
+ * A stand-in whose relay state can differ from one `status` to the next.
+ *
+ * The relay connection is made *after* the host starts, so "not on the relay"
+ * and "on the relay" are the same host a second apart — which a stand-in with
+ * one fixed answer cannot express, and which is exactly the case `address` got
+ * wrong on a real server.
+ */
+async function hostAnsweringEach(
+  relayFor: (call: number) => unknown,
+  extra: Record<string, unknown> = {},
+): Promise<ControlServer> {
   noRecord()
   const { socket } = controlPaths(STATE_DIR, 'linux')
   const token = 'a-token'
+  let calls = 0
   const control = await serveControl({
     socket,
     token,
     platform: 'linux',
     handle: async (cmd) => {
       if (cmd !== 'status') throw new Error(`this stand-in only answers status, not ${cmd}`)
-      return { remote: { relay } }
+      calls += 1
+      return { ...extra, remote: { relay: relayFor(calls) } }
     },
   })
   writeDaemonRecord(STATE_DIR, {
@@ -216,6 +233,17 @@ async function hostAnswering(relay: unknown): Promise<ControlServer> {
     version: '0.0.0-test',
   })
   return control
+}
+
+const CONNECTED_RELAY = {
+  url: 'wss://relay.terminaldeck.dev',
+  hostId: 'A2B3C4D5E6F7G8H9JKLMNPQSTU',
+  publicKey: Buffer.alloc(32, 7).toString('base64url'),
+  fingerprint: 'AAAA-BBBB',
+  connected: true,
+  channels: 0,
+  reason: null,
+  retryAt: null,
 }
 
 describe('the address command', () => {
@@ -260,6 +288,51 @@ describe('the address command', () => {
       expect(code).toBe(1)
       expect(written).toBe('')
       expect(complained).toContain('not dialling out to a relay')
+    } finally {
+      await control.close()
+    }
+  })
+
+  /*
+   * The install-script race, pinned.
+   *
+   * `install.sh` starts the host and asks for the address in the next breath, so
+   * the first `status` legitimately answers "no relay yet". Reporting that as the
+   * final word is how an installer ends by telling somebody the thing they just
+   * installed cannot be reached — measured happening on a real server on
+   * 2026-08-22, with the address available fourteen seconds later.
+   */
+  it('waits for a host that has only just started to reach the relay', async () => {
+    const control = await hostAnsweringEach(
+      (call) => (call < 3 ? null : CONNECTED_RELAY),
+      { startedAt: Date.now() },
+    )
+    capture()
+
+    try {
+      const code = await run(['address'], PATHS)
+      expect(code).toBe(0)
+      expect(written.trim()).toBe(ADDRESS)
+    } finally {
+      await control.close()
+    }
+  })
+
+  /*
+   * And the other direction, which is what keeps the wait from becoming a hang:
+   * a host that has been up for an hour and is not on the relay has a real
+   * problem, and ten more seconds of standing there would not find it.
+   */
+  it('does not wait for a host that has been up long enough to know better', async () => {
+    const control = await hostAnswering(null, { startedAt: Date.now() - 60 * 60 * 1000 })
+    capture()
+
+    const began = Date.now()
+    try {
+      const code = await run(['address'], PATHS)
+      expect(code).toBe(1)
+      expect(written).toBe('')
+      expect(Date.now() - began).toBeLessThan(2_000)
     } finally {
       await control.close()
     }

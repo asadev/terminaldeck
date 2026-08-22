@@ -134,6 +134,29 @@ export const DEFAULT_BLOCK_RULES: BlockRules = Object.freeze({
     'access denied',
     'checking your browser',
     'enable javascript and cookies to continue',
+    /*
+     * The four below came from a live challenge, not from a list of things
+     * challenges might say.
+     *
+     * On 2026-08-22 the server-side browser was pointed at a real search engine
+     * from a datacenter IP — the ordinary condition of this whole feature, since
+     * a headless host runs on a rented box — and was served a picture puzzle:
+     * *"Please complete the following challenge to confirm this search was made
+     * by a human. Select all squares containing a duck."* Every rule above was
+     * consulted and none fired. The status was 200, the URL was the site's own,
+     * the title was the ordinary search title, and the run went on believing it
+     * had results. That is the exact failure this module exists to prevent, met
+     * in the wild the first time it was tried there.
+     *
+     * They are kept narrow on purpose. `bodyMarkerMaxChars` already gates them
+     * to short documents — the challenge page measured 900 characters of text —
+     * and each is a phrase a page shows a person it is refusing, rather than a
+     * word an article about bots would use.
+     */
+    'complete the following challenge',
+    'select all squares',
+    'was made by a human',
+    'i am not a robot',
   ]),
   bodyMarkerMaxChars: 2_000,
   offSiteRedirect: false,
