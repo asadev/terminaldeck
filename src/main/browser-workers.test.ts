@@ -46,6 +46,7 @@ const {
   readWorkerStore,
   registerWorker,
   resetWorkersForTests,
+  setPoolClockForTests,
   setWorkerPace,
   unregisterWorker,
   workerForSession,
@@ -218,6 +219,14 @@ describe('the wait a lease owes', () => {
     setWorkerPace(dir, { maxConcurrent: 4, minDelayMs: 2_000, jitterMs: 0 })
     const [worker] = workerList(dir)
 
+    // Pin the pool's clock (and its jitter) so the pace is exactly its
+    // configured value, not a real-time subtraction. The release and the lease
+    // then read the same instant — elapsed is 0 — so the wait is 2000 to the
+    // millisecond. With a real `Date.now()`, ~1ms passing between the release
+    // and the lease under CI load turns 2000 into 1999, which is the flake this
+    // test kept hitting on the macOS runner.
+    setPoolClockForTests(() => 5_000_000, () => 0)
+
     const first = await leaseWorker(dir, { holder: 'h' }, async () => undefined)
     expect(first.ok).toBe(true)
     pool.release({ holder: 'h', profileId: worker.profileId })
@@ -250,6 +259,9 @@ describe('the wait a lease owes', () => {
   it('reports the wait it actually served, so a pace of zero is visible', async () => {
     ensureWorkers(dir, 1)
     setWorkerPace(dir, { maxConcurrent: 4, minDelayMs: 0, jitterMs: 0 })
+    // Pinned for the same reason, so this asserts a computed 0 rather than a 0
+    // that only holds because real time keeps `now` ahead of the last release.
+    setPoolClockForTests(() => 5_000_000, () => 0)
     const answer = await leaseWorker(dir, { holder: 'h' }, async () => undefined)
     expect(answer.ok && answer.pacedMs).toBe(0)
   })

@@ -6,6 +6,17 @@ directories:
   output: release
   buildResources: build
 
+# The freshly-generated resources — the headless host package (all platforms)
+# and, on Windows, tdconfine.exe — are copied in here rather than by
+# `extraResources`. Both are written seconds before this build runs, and on a
+# Windows runner a file that new is still held by Defender or the indexer: a
+# plain copy throws `EBUSY: resource busy or locked` and fails the whole build,
+# because extraResources copies once with no retry. The hook copies to the same
+# final paths (`resources/headless`, `resources/tdconfine.exe`) with a short
+# retry-with-backoff, so `process.resourcesPath` readers are unchanged and a
+# transient lock is survived rather than fatal. See scripts/after-pack.mjs.
+afterPack: scripts/after-pack.mjs
+
 # Default names carry the product name verbatim — "Terminal Deck-0.1.0-arm64.dmg"
 # — and a space in a release asset becomes %20 in every download URL and every
 # curl command someone pastes. Named from the slug instead.
@@ -84,12 +95,15 @@ files:
 # `putFile`, which streams it off disk over SFTP, and a path inside app.asar is
 # not a file anything can stream. `scripts/build-headless.mjs` writes both files,
 # and `dist:mac`/`dist:win` run it before electron-builder — if it has not run,
-# this entry matches nothing, the app builds, and the server page draws no
-# Install button with a sentence saying this build carries no package. That is
-# the honest failure, but it is a quiet one, so the build step is not optional.
-extraResources:
-  - from: out/headless-package
-    to: headless
+# the `afterPack` hook copies nothing, the app builds, and the server page draws
+# no Install button with a sentence saying this build carries no package. That
+# is the honest failure, but it is a quiet one, so the build step is not
+# optional.
+#
+# This is copied by the `afterPack` hook (see top of file) rather than by
+# `extraResources`, because on Windows the copy of these seconds-old files hits
+# a transient Defender/indexer lock (EBUSY) that only a retry survives. The hook
+# lands it at the same `resources/headless`, so nothing downstream changes.
 
 asar: true
 # electron-builder detects native modules and unpacks them on its own; naming
@@ -261,27 +275,23 @@ win:
       arch: [x64]
   icon: build/icon.ico
 
-  # The confinement launcher, beside the asar rather than inside it.
+  # The confinement launcher and the headless package are copied by the
+  # `afterPack` hook (see top of file), not by `extraResources`.
   #
-  # Not a packaging preference: `tdconfine.exe` is an executable and
-  # `CreateProcess` cannot run a file that only exists inside an archive. It is
-  # what applies the AppContainer to a session started from a device — see
-  # `src/main/confine/appcontainer.ts` — and `confine/tools.ts` looks for it at
-  # `process.resourcesPath`, which is exactly where `extraResources` puts it.
+  # `tdconfine.exe` is an executable and `CreateProcess` cannot run a file that
+  # only exists inside an archive; it is what applies the AppContainer to a
+  # session started from a device — see `src/main/confine/appcontainer.ts` — and
+  # `confine/tools.ts` looks for it at `process.resourcesPath`, which is exactly
+  # where the hook still puts it (`resources/tdconfine.exe`). `build.ps1`
+  # compiles it and the release workflow runs that step **before**
+  # electron-builder; if the file is not there the hook copies nothing, the
+  # installer builds anyway, and Windows sessions report themselves unconfined —
+  # the honest, quiet failure, so the CI step is not optional.
   #
-  # `native/win-confine/build.ps1` compiles it, and the release workflow has to
-  # run that step **before** electron-builder. If the file is not there this
-  # entry matches nothing, the installer builds anyway, and Windows sessions
-  # report themselves unconfined with the sentence that says the build ships no
-  # launcher — which is the honest failure, but it is a silent one, so the CI
-  # step is not optional.
-  extraResources:
-    - from: native/win-confine/tdconfine.exe
-      to: tdconfine.exe
-    # Restated for the same reason the `files` list is: a platform
-    # `extraResources` REPLACES the top-level one rather than adding to it.
-    - from: out/headless-package
-      to: headless
+  # It moved off `extraResources` for the same reason the headless package did:
+  # both are compiled/written seconds before the build, and on a Windows runner
+  # Defender or the indexer still holds the fresh file, so a single-shot copy
+  # throws EBUSY and fails the whole build. The hook retries the copy.
 
 nsis:
   # Both targets emit .exe, so each needs its own name. The inherited pattern

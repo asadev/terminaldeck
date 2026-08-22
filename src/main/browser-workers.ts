@@ -172,6 +172,8 @@ export function resetWorkersForTests(): void {
   storeDir = null
   registeredAt.clear()
   pool.reset()
+  // Real time again, so a case that pinned the clock cannot freeze the next.
+  setPoolClockForTests(null, null)
 }
 
 /* ------------------------------------------------------------- the list -- */
@@ -361,6 +363,37 @@ export function setWorkerPace(userData: string, raw: unknown): PaceSettings {
 /* --------------------------------------------------------------- the pool -- */
 
 /**
+ * The clock and the coin the one pool reads.
+ *
+ * `browser-worker-pool.ts` takes its `now` and its `random` as arguments for a
+ * reason spelled out at length there: a pace is arithmetic over a clock, and
+ * the only honest way to assert a delay without waiting is to lie to it about
+ * the time. The pool created below is the one the whole app shares and the one
+ * `leaseWorker` drives, so the seam has to reach it too — otherwise the module
+ * pool's pace is a real `Date.now()` subtraction that loses a millisecond under
+ * CI load, turning a configured 2000 into 1999. In production both are the real
+ * thing; a test pins them so the wait is exact rather than approximate.
+ */
+let clock: () => number = () => Date.now()
+let coin: () => number = () => Math.random()
+
+/**
+ * Pin (or restore) the pool's clock and jitter. Tests only.
+ *
+ * Passing `null` for either restores the real one, so a test can pin just the
+ * clock and leave randomness real, or pin both. {@link resetWorkersForTests}
+ * restores both between cases, so a test that forgets to unpin cannot bleed a
+ * frozen clock into the next.
+ */
+export function setPoolClockForTests(
+  now: (() => number) | null,
+  random: (() => number) | null = null,
+): void {
+  clock = now ?? (() => Date.now())
+  coin = random ?? (() => Math.random())
+}
+
+/**
  * The one pool.
  *
  * Module-level rather than per-caller because "which worker is busy" has to be
@@ -374,8 +407,8 @@ export function setWorkerPace(userData: string, raw: unknown): PaceSettings {
 export const pool: WorkerPool = createWorkerPool({
   workers: () => (storeDir === null ? [] : workerList(storeDir)),
   pace: () => (storeDir === null ? { ...DEFAULT_PACE } : workerPace(storeDir)),
-  now: () => Date.now(),
-  random: () => Math.random(),
+  now: () => clock(),
+  random: () => coin(),
   changed: () => announce(),
 })
 

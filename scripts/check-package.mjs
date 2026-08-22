@@ -220,14 +220,49 @@ if (resources === null || !existsSync(join(resources, 'app.asar'))) {
 }
 
 /*
+ * The headless host package, by the same argument and against the same failure.
+ *
+ * The desktop app carries the host tarball plus its installer as a resource, so
+ * the server page can offer an Install button that streams them to a box over
+ * SFTP. They are copied into `resources/headless` by the `afterPack` hook (moved
+ * there from `extraResources` because on Windows the copy of these seconds-old
+ * files hit a transient Defender/indexer EBUSY lock — see
+ * `scripts/after-pack.mjs`). A hook that copies nothing when the source is
+ * absent is exactly as quiet as the `extraResources` it replaced: `dist:mac`/
+ * `dist:win` run `dist:headless` first, but nothing until now proved the two
+ * files actually landed in the bundle.
+ *
+ * The runtime failure is the quiet kind — `host-package.ts` finds no package and
+ * the server page draws no Install button, with a sentence that only somebody
+ * running from a checkout was ever meant to read. Asserted here so a release
+ * that shipped without it fails the gate instead of the user.
+ */
+if (resources !== null) {
+  const headless = join(resources, 'headless')
+  const tarball = join(headless, 'terminaldeck-host.tgz')
+  const installer = join(headless, 'install.sh')
+  if (!existsSync(tarball) || !existsSync(installer)) {
+    problems.push(
+      'the headless host package is missing — expected resources/headless/' +
+        'terminaldeck-host.tgz and install.sh. Run `npm run dist:headless` before ' +
+        'packaging; without it the server page offers no Install button and only ' +
+        'says so to someone running from a tree.',
+    )
+  } else {
+    note(`ok    the headless host package is present (${(statSync(tarball).size / MB).toFixed(1)} MB tarball + install.sh)`)
+  }
+}
+
+/*
  * The Windows confinement launcher, by the same argument and against the same
  * failure.
  *
- * `electron-builder.yml` carries `extraResources: native/win-confine/tdconfine.exe`,
- * and the binary is not committed — only the `.c` it is built from. An
- * `extraResources` entry whose source does not exist does NOT fail the build:
- * it packages nothing and says nothing, which is precisely how three releases
- * shipped with no phone client and why the check above exists.
+ * `native/win-confine/tdconfine.exe` is not committed — only the `.c` it is
+ * built from — and it is copied into `resources` by the `afterPack` hook (moved
+ * off `extraResources` for the same EBUSY reason as the headless package). A
+ * copy of a source that does not exist packages nothing and says nothing, which
+ * is precisely how three releases shipped with no phone client and why the
+ * check above exists.
  *
  * The consequence here is quieter than a missing phone client and therefore
  * worse to find. Confinement is gated on the launcher being present at runtime,
