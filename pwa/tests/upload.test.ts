@@ -172,6 +172,7 @@ describe('the files app.terminaldeck.dev is built from', () => {
       // test here rather than a deploy.
       'src/renderer/components/terminal-backfill.ts',
       'src/shared/brand.ts',
+      'src/shared/held-window.ts',
       // The CLI's own model picker, captured — what `catalog.ts` above builds
       // the model rows from. In `shared/` because the main process fills it by
       // reading the real `/model` dialog and every surface offers what it read;
