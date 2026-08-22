@@ -141,12 +141,23 @@ export type ExtensionVerdict = 'works' | 'partly' | 'no' | 'unmeasured'
  * Something a person has to bring before a row can do its job — not something
  * this browser is missing.
  *
- * Deliberately narrow, and it stays narrow. A browser extension needs nothing
- * from you: you install it and it runs. Two in this catalogue are exceptions and
- * they are exceptions of two different kinds — one wants an account somewhere
- * else, one wants a second program running on this machine — so they are two
- * values rather than one called `setup`, which would have made the filter answer
- * a question nobody asked.
+ * Deliberately narrow, and it stays narrow — two values, not a general-purpose
+ * `setup` that would have made the filter answer a question nobody asked.
+ *
+ * It was written when it could say something stronger: *"a browser extension
+ * needs nothing from you: you install it and it runs"*, with exactly two
+ * exceptions in the catalogue. That held while every row was an open-source
+ * project. It stopped holding on 2026-08-23, when the store gained the
+ * extensions people actually arrive looking for — Grammarly, LastPass, Loom,
+ * the Google ones — every one of which is a client for an account and does
+ * nothing at all without one.
+ *
+ * So `account` is now a fact about ten rows rather than one, and
+ * `companion-app` is still exactly one: a second program running on this
+ * machine really is rare. What did not change is that most of the catalogue
+ * needs nothing, and `browser-extension-catalogue.test.ts` holds it there — an
+ * extension store where most rows want an account would be a store of services
+ * with a browser attached.
  *
  * The MCP store's version of this facet has different values for the same
  * reason: an MCP server genuinely can want an API key or a directory, and
@@ -159,12 +170,38 @@ export type ExtensionNeed =
   /** A second program running on this machine that it talks to. */
   | 'companion-app'
 
+/**
+ * What using the extension costs, once it is installed.
+ *
+ * ## Why an extension store needs this at all
+ *
+ * Because the catalogue stopped being all open source. Asad:
+ *
+ *   > *"maybe some other tools paid ones too not just open source … and also all
+ *   > other regular tools too like google's ones or like this."*
+ *
+ * Every extension in a browser store is a free download — that is what a browser
+ * store *is* — and for the open-source half that was the whole story. It is not
+ * the story for 1Password, whose extension is free and useless without a
+ * subscription, or for Loom, whose free plan caps a recording at five minutes.
+ * A row that said nothing would be letting *free to install* stand in for *free
+ * to use*, and those are different sentences.
+ *
+ * Five values, mirroring `store/storefront.ts`, which argues them. `unknown` is
+ * for the one row this app genuinely cannot answer for: something a person added
+ * themselves, which it has never seen and will not guess about.
+ */
+export type ExtensionCost = 'free' | 'account' | 'metered' | 'paid' | 'unknown'
+
 export type ExtensionCategory =
   | 'blocking'
   | 'privacy'
   | 'appearance'
   | 'media'
   | 'passwords'
+  | 'writing'
+  | 'work'
+  | 'shopping'
   | 'research'
   | 'scripting'
   | 'your-own'
@@ -176,6 +213,9 @@ export const EXTENSION_CATEGORIES: readonly { id: ExtensionCategory; name: strin
   { id: 'appearance', name: 'How pages look' },
   { id: 'media', name: 'Video and audio' },
   { id: 'passwords', name: 'Passwords' },
+  { id: 'writing', name: 'Writing and language' },
+  { id: 'work', name: 'Documents and work' },
+  { id: 'shopping', name: 'Shopping' },
   { id: 'research', name: 'Saving and research' },
   { id: 'scripting', name: 'Scripting and the keyboard' },
   { id: 'your-own', name: 'Added by you' },
@@ -203,6 +243,14 @@ export interface ExtensionEntry {
   tags: readonly string[]
   /** What a person has to bring. Absent on almost everything, and that is the point. */
   needs?: readonly ExtensionNeed[]
+  /** What using it costs. See {@link ExtensionCost}. */
+  cost: ExtensionCost
+  /**
+   * The price reality in one sentence, on the row, **before** anything is
+   * pressed. Required for everything that is not `free`, and
+   * `browser-extension-catalogue.test.ts` fails a row that skips it.
+   */
+  costNote: string
   works: ExtensionVerdict
   /** What was observed, in a sentence. Never a claim about what should happen. */
   measured: string
@@ -303,6 +351,10 @@ export interface StoreExtension {
   tags: string[]
   /** What a person has to bring before it can do its job. Usually empty. */
   needs: ExtensionNeed[]
+  /** What using it costs. See {@link ExtensionCost}. */
+  cost: ExtensionCost
+  /** The price reality in a sentence, or `''` for a row that is simply free. */
+  costNote: string
   measured: string
   /** Why there is no download for a row nothing was measured on, or `''`. */
   noRelease: string
@@ -846,6 +898,10 @@ export function createExtensionStore(options: ExtensionStoreOptions): ExtensionS
           version: typeof parsed.manifest.version === 'string' ? parsed.manifest.version : '',
           category: 'your-own',
           tags: [],
+          /* Nothing is known about it, so nothing is claimed. `free` would be
+             this app pricing a program it has never opened. */
+          cost: 'unknown',
+          costNote: '',
           works: 'unmeasured',
           measured:
             'This app has measured nothing about it. It was not fetched, no fingerprint was ' +
@@ -883,6 +939,8 @@ export function createExtensionStore(options: ExtensionStoreOptions): ExtensionS
            would be this app describing a program it has never read. */
         tags: [],
         needs: [],
+        cost: 'unknown',
+        costNote: '',
         measured: '',
         noRelease: '',
         /* Nobody's catalogue has ever seen this folder, so nobody's catalogue
@@ -1090,6 +1148,8 @@ export function createExtensionStore(options: ExtensionStoreOptions): ExtensionS
           category: entry.category,
           tags: [...entry.tags],
           needs: [...(entry.needs ?? [])],
+          cost: entry.cost,
+          costNote: entry.costNote,
           measured: entry.measured,
           noRelease: entry.noRelease ?? '',
           logo: entry.logo ?? '',

@@ -11,6 +11,7 @@ import {
 import { StoreLinkOut } from '../store/StoreLinkOut'
 import { StoreRowName } from '../store/StoreRowName'
 import { StoreLogo } from '../store/StoreLogo'
+import { COST_WORDS } from '../store/storefront'
 
 /**
  * One row of the store's download half — an open-source browser extension.
@@ -123,6 +124,18 @@ export function ExtensionRow({
           <span className="bw-store-version">{extension.version}</span>
         )}
         {/*
+          What it costs, in the head, before anything is pressed.
+          Every extension in a browser store is a free download, so *free to
+          install* was quietly standing in for *free to use* — which is true of
+          uBlock Origin and false of 1Password, whose extension does nothing at
+          all without a subscription. The chip is on every row, including the
+          free ones, because a price that only appeared on the expensive rows
+          would make its absence a claim as well.
+        */}
+        <span className="bw-store-chip" data-cost={extension.cost}>
+          {COST_WORDS[extension.cost]}
+        </span>
+        {/*
           The one-word version of the row's state, because the sections that
           used to carry it are gone. A catalogue this size browses by shelf now
           — Blocking, Passwords, and so on — and a row with no Install sitting
@@ -232,6 +245,23 @@ export function ExtensionRow({
               {extension.mayAsk.join(', ')} — it can ask for this at any time and this browser
               always answers no, so it never gets it.
             </dd>
+          </div>
+        )}
+        {/*
+          The price reality, in the catalogue's own sentence, above the button
+          and above the measured paragraph.
+
+          On the facts list rather than in a footnote for the same reason
+          *Reaches* is: this is part of what somebody is deciding, and a sentence
+          they read after installing arrived too late. Drawn only when there is
+          one — a row that is simply free carries none, and printing *Free.*
+          under a chip that already says *Free* is the padding that teaches
+          people to stop reading this list.
+        */}
+        {extension.costNote !== '' && (
+          <div>
+            <dt>What it costs</dt>
+            <dd>{extension.costNote}</dd>
           </div>
         )}
         {extension.licence !== '' && (

@@ -41,6 +41,8 @@ function entryFor(id: string, archive: Buffer, over: Partial<ExtensionEntry> = {
     version: '1.0.0',
     category: 'scripting',
     tags: ['test'],
+    cost: 'free',
+    costNote: '',
     works: 'works',
     measured: 'Watched working.',
     reach: ['https://example.com/*'],

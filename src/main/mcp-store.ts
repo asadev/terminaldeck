@@ -12,6 +12,7 @@ import {
   type McpCatalogueEntry,
   type McpCatalogueInput,
   type McpCategory,
+  type McpCost,
   type McpOrigin,
   type McpRuntime,
 } from './mcp-catalogue'
@@ -124,6 +125,10 @@ export interface McpStoreRow {
   /** The binary the runtime needs, so the row can name what was looked for. */
   runtimeBinary: string
   origin: McpOrigin
+  /** What using it costs, from the catalogue. See `McpCost`. */
+  cost: McpCost
+  /** The price reality in one sentence, or `''` for a row that is simply free. */
+  costNote: string
   /** The command as it would be written, placeholders and all. */
   command: string
   inputs: McpStoreInput[]
@@ -168,7 +173,7 @@ export interface McpStoreView {
   runtimes: McpRuntimeReport[]
   /**
    * The CLI that writes the configuration. Nothing installs without it, so this
-   * is reported once at the top rather than as nineteen identical failures.
+   * is reported once at the top rather than as one identical failure per row.
    */
   writer: { found: boolean; path: string }
   environmentSource: McpEnvironmentSource
@@ -377,6 +382,14 @@ export function buildStoreView(input: {
       runtime: entry.runtime,
       runtimeBinary: RUNTIME_BINARY[entry.runtime],
       origin: entry.origin,
+      /*
+       * Price travels with the row and is not worked out here from anything
+       * else. A store that inferred it — *"this one takes a secret, so it must
+       * cost money"* — would call Notion paid and Google Maps free, and those
+       * are both wrong in the direction that matters.
+       */
+      cost: entry.cost,
+      costNote: entry.costNote,
       /*
        * An installed row shows **what is actually in the configuration**, not
        * the template it came from.
@@ -617,8 +630,8 @@ export async function installFromCatalogue(
  * Everything the store needs from this machine, measured.
  *
  * Three `which` calls and one login shell, in parallel, once per read of the
- * page. The alternative — probing per row — is nineteen spawns for the same
- * three answers.
+ * page. The alternative — probing per row — is one spawn per row for the same
+ * three answers, which is thirty-nine of them today and more with every row.
  */
 /**
  * The real probe currently in flight, or null.

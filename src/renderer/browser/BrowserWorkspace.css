@@ -2718,6 +2718,19 @@
   font-weight: var(--w-medium);
 }
 
+/* Price. Free is stated in the same neutral fill as everything else: the chip
+   earns its place by being on every row, and colouring the ordinary case would
+   make *Free* look like an award.
+
+   Only the two that cost money are warmer, and warning rather than critical —
+   nothing is broken, and a store that shouted at a paid extension would be
+   editorialising about price rather than stating it. */
+.bw-store-chip[data-cost='metered'],
+.bw-store-chip[data-cost='paid'] {
+  background: color-mix(in srgb, var(--color-warning) 16%, transparent);
+  color: var(--color-warning);
+}
+
 /* Measured failing here. Warmer than the neutral one beside it because it is a
    different sentence — *this app ran it and watched it fail* — and quieter than
    an error, because nothing is wrong: the store is telling the truth. */

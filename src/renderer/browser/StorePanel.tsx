@@ -507,6 +507,9 @@ export function builtInFacets(tool: StoreTool): StoreFacets {
     id: tool.id,
     name: tool.name,
     summary: tool.summary,
+    // It ships in this app's own bytes, so there is nothing to pay and nothing
+    // to sign up for — the one cost answer that is a measurement, not a claim.
+    cost: 'free',
     category: BUILT_IN_SHELF,
     categoryName: BUILT_IN_NAME,
     tags: [],

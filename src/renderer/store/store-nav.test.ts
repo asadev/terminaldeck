@@ -25,6 +25,7 @@ function row(over: Partial<StoreFacets> = {}): StoreFacets {
     id: 'ublock',
     name: 'uBlock Origin',
     summary: 'Blocks ads and trackers.',
+    cost: 'free',
     category: 'blocking',
     categoryName: 'Blocking ads and trackers',
     tags: ['adblock'],

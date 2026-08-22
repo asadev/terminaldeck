@@ -25,6 +25,8 @@ const ROW: Row = {
   summary: 'Reads the thing.',
   category: 'utility',
   tags: [],
+  cost: 'free',
+  costNote: '',
   homepage: 'https://example.com/guarded',
   registry: 'https://www.npmjs.com/package/guarded',
   licence: 'MIT',
@@ -257,5 +259,46 @@ describe('the store bar', () => {
       ],
     })
     expect(html).toContain('This project only')
+  })
+})
+
+describe('what it costs', () => {
+  it('is on the row before the button, in the catalogue’s own sentence', () => {
+    /*
+     * The rule Asad set: a row whose service needs a paid plan says so
+     * **before** install, next to the price. A sentence somebody reads after
+     * pressing Install arrived too late to be a disclosure.
+     */
+    const html = draw({
+      ...ROW,
+      cost: 'metered',
+      costNote: 'Free to a limit, then every search is billed to the key.',
+    })
+    /*
+     * Two places, and they are doing different jobs. The **chip** is in the head
+     * and has to come before the Install button, because that is the one somebody
+     * reads without meaning to. The **sentence** is in the facts list under it,
+     * where Source, Needs and Command already are — the same place, and the same
+     * moment, as everything else an install is decided from.
+     */
+    const chip = html.indexOf('Free to a limit, then paid')
+    const button = html.indexOf('mcp-store-install')
+    expect(chip).toBeGreaterThan(-1)
+    expect(chip, 'the price chip came after the Install button').toBeLessThan(button)
+    expect(html).toContain('What it costs')
+    expect(html).toContain('Free to a limit, then every search is billed to the key.')
+  })
+
+  it('draws the price on every row, free ones included', () => {
+    // A price that only appeared on the expensive rows would make its absence a
+    // claim as well, and a quieter one than the chip.
+    expect(draw({ ...ROW, cost: 'free', costNote: '' })).toContain('Free')
+    expect(draw({ ...ROW, cost: 'paid', costNote: 'No free tier at all.' })).toContain('Paid')
+  })
+
+  it('says nothing extra about a row that is simply free', () => {
+    // No note, no line. *Free.* printed under a chip that already says *Free* is
+    // the padding that teaches people to stop reading the facts list.
+    expect(draw({ ...ROW, cost: 'free', costNote: '' })).not.toContain('What it costs')
   })
 })

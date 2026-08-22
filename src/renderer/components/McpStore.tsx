@@ -57,7 +57,7 @@ import {
  *   > attach their own things to this application."*
  *
  * So the form is at the top, in its own section, with its own heading — not
- * under nineteen rows, and not behind a link at the bottom reading "advanced".
+ * under thirty-nine rows, and not behind a link at the bottom reading "advanced".
  * The catalogue is the convenience; arbitrary servers are the capability. A
  * store that buried the second under the first would be offering a walled
  * garden with a suggestion box.
@@ -433,7 +433,7 @@ export function StoreBody({
 
         This store used to group by *state*: Installed, Ready to install, A
         server already has this name, Cannot run on this machine. That is four
-        bins holding nineteen rows and it answers only one question, which is one
+        bins holding the whole catalogue and it answers only one question, which is one
         nobody arrives with. Asad: *"make a proper search page and everything
         proper filters and search and separation of the categories … so they can
         categorize and choose which specific tool they want."* State did not

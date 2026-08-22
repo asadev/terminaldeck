@@ -54,6 +54,8 @@ function extension(over: Partial<StoreExtension> = {}): StoreExtension {
     category: 'appearance',
     tags: [],
     needs: [],
+    cost: 'free',
+    costNote: '',
     works: 'works',
     noRelease: '',
     logo: '',

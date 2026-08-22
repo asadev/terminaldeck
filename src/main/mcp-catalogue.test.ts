@@ -7,7 +7,11 @@ import {
   requiredRuntimes,
   RUNTIME_BINARY,
   RUNTIME_NEEDS,
+  type McpCost,
 } from './mcp-catalogue'
+
+/** Every price a row may wear. */
+const COSTS: readonly McpCost[] = ['free', 'account', 'metered', 'paid']
 
 /**
  * The catalogue's shape, held to what its own header promises.
@@ -122,7 +126,7 @@ describe('the MCP catalogue', () => {
     /*
      * One, never three. `browser-extension-catalogue.ts` gives the reason and it
      * holds here: *"a row that appeared under three headings would make a
-     * catalogue of twenty-four look like a catalogue of forty, and a store
+     * catalogue of thirty-six look like a catalogue of sixty, and a store
      * overstating its own size is the first thing that makes the rest of it
      * unbelievable."*
      */
@@ -188,6 +192,70 @@ describe('the MCP catalogue', () => {
     }
   })
 
+  it('names a price, and says more than the word when it is not free', () => {
+    /*
+     * The rule Asad set when the catalogue stopped being all open source:
+     * **never imply free when a key costs money.** Nearly every row here is MIT,
+     * and `tavily` is MIT and does nothing at all without a key that is billed —
+     * so licence had been quietly answering a question it does not answer, and a
+     * bare `metered` would be almost as unhelpful as silence.
+     */
+    for (const entry of MCP_CATALOGUE) {
+      expect(COSTS, `${entry.id} has no price`).toContain(entry.cost)
+      if (entry.cost === 'free') continue
+      expect(entry.costNote.trim().length, `${entry.id} says ${entry.cost} and nothing else`)
+        .toBeGreaterThan(20)
+    }
+  })
+
+  it('has more than one answer about price, or the field is decoration', () => {
+    // `facetControl` refuses to draw a control whose options all match the same
+    // rows. A catalogue that drifted back to all-free would be switching this
+    // off rather than saying so.
+    const prices = new Set(MCP_CATALOGUE.map((entry) => entry.cost))
+    expect(prices.size).toBeGreaterThan(2)
+    expect(prices.has('paid'), 'nothing here needs money and one thing does').toBe(true)
+  })
+
+  it('says what a hosted row is really installing, on the row', () => {
+    /*
+     * The one shape in this catalogue where the row's own licence and version
+     * are not about the thing being used: they are `mcp-remote`'s, because that
+     * proxy is the only code that reaches this machine. A hosted row that stayed
+     * quiet would be letting *MIT, 0.1.43* read as a statement about Atlassian's
+     * server, which this app has never seen and cannot check.
+     */
+    const hosted = MCP_CATALOGUE.filter((entry) => entry.origin === 'hosted')
+    expect(hosted.length).toBeGreaterThan(0)
+    for (const entry of hosted) {
+      expect(entry.command, entry.id).toContain('mcp-remote')
+      expect(entry.caveat ?? '', entry.id).toContain('mcp-remote')
+      // Its token is the endpoint rather than the proxy: every hosted row runs
+      // the same `npx -y mcp-remote`, so a token of `mcp-remote` would make each
+      // of them report the others installed.
+      expect(entry.command, entry.id).toContain('https://')
+      expect(entry.token, entry.id).not.toBe('mcp-remote')
+    }
+  })
+
+  it('answers the vendors people arrive with', () => {
+    /*
+     * *"all other regular tools too like google's ones or like this."* Stated as
+     * the searches, because that is how the ask arrives — and every one of these
+     * answered with an empty list before 2026-08-23.
+     */
+    const finds = (word: string): string[] =>
+      MCP_CATALOGUE.filter((entry) =>
+        [entry.name, entry.summary, ...entry.tags].join(' ').toLowerCase().includes(word),
+      ).map((entry) => entry.id)
+
+    expect(finds('google').length).toBeGreaterThan(3)
+    expect(finds('jira')).toContain('atlassian')
+    expect(finds('payments')).toContain('stripe')
+    expect(finds('design')).toContain('figma')
+    expect(finds('gmail')).toContain('google-workspace')
+  })
+
   it('offers both halves of what was asked for', () => {
     // *"most probably most of the open sourced one"* — the reference servers and
     // the ones everybody actually pastes out of a README. A catalogue that
@@ -195,6 +263,11 @@ describe('the MCP catalogue', () => {
     const origins = new Set(MCP_CATALOGUE.map((entry) => entry.origin))
     expect(origins.has('reference')).toBe(true)
     expect(origins.has('third-party')).toBe(true)
+    // And the two the widening round added, which are the ones that answer
+    // *"google's ones or like this"*: a company's own server, and a company's
+    // own server that runs somewhere else.
+    expect(origins.has('vendor')).toBe(true)
+    expect(origins.has('hosted')).toBe(true)
     // And more than one way of being run, because the honest capability check
     // has nothing to say on a machine where every row needs the same binary.
     expect(requiredRuntimes().length).toBeGreaterThan(1)

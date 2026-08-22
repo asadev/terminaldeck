@@ -126,6 +126,8 @@ const ENTRY: ExtensionEntry = {
   version: '1.0.0',
   category: 'scripting',
   tags: ['test'],
+  cost: 'free',
+  costNote: '',
   works: 'works',
   measured: 'Watched working.',
   reach: ['<all_urls>'],

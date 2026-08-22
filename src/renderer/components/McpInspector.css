@@ -392,6 +392,22 @@
   color: var(--text-muted);
 }
 
+/*
+   Price. Free is stated in the same neutral fill as everything else beside it:
+   the chip earns its place by being on every row, and colouring the ordinary
+   case would make *Free* look like an award.
+
+   The two that cost money are warmer, and only those two. `metered` and `paid`
+   are the rows where somebody is about to type a key into a field and find out
+   later that using it is billed — which is the whole reason the field exists.
+   They are warning-coloured rather than critical: nothing is broken, and a store
+   that shouted at a paid tool would be editorialising about price. */
+.mcp-tag[data-cost='metered'],
+.mcp-tag[data-cost='paid'] {
+  background: color-mix(in srgb, var(--color-warning) 16%, transparent);
+  color: var(--color-warning);
+}
+
 .mcp-tag[data-warn='true'] {
   background: color-mix(in srgb, var(--color-warning) 18%, transparent);
   color: var(--color-warning);
