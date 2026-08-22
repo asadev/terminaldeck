@@ -43,6 +43,31 @@ interface Props {
   /** Reopen the recorded flow. Absent when nothing has been recorded. */
   onFlow?: () => void
   /**
+   * Open the find bar on this page.
+   *
+   * Absent on a preload that has not wired the find channels — see
+   * `findAvailable` in `find-bridge.ts` — and then there is no row, for the
+   * standing reason: disabled says "not now", and the truth in that build is
+   * "not at all". This row is what makes ⌘F discoverable; the chord alone is a
+   * feature only its owner's fingers know about.
+   */
+  onFind?: () => void
+  /**
+   * The system print dialog for this page. Same bargain as `onFind`: the row
+   * goes with `browserPrint` being wired, never drawn dead.
+   */
+  onPrint?: () => void
+  /**
+   * The page's zoom, and the three moves on it — one compact row, Chrome's own
+   * arrangement, because zoom is one fact with three verbs and three full-width
+   * rows would say the same word three times. All three come together or the
+   * row is not drawn: a stepper with no reset strands anybody who taps too far.
+   */
+  zoom?: number
+  onZoomIn?: () => void
+  onZoomOut?: () => void
+  onZoomReset?: () => void
+  /**
    * The cookies dialog — but only in a build with no profile button.
    *
    * Site data is a *profile's* site data, so its home is `ProfileMenu`. That
@@ -135,6 +160,12 @@ export function BrowserMenu({
   onSettings,
   onHistory,
   onFlow,
+  onFind,
+  onPrint,
+  zoom = 1,
+  onZoomIn,
+  onZoomOut,
+  onZoomReset,
   onCookies,
   onDownloads,
   onTools,
@@ -268,6 +299,80 @@ export function BrowserMenu({
         >
           Open in your browser
         </button>
+
+        {/*
+          The everyday page verbs — zoom, then find, then print — because his
+          ask for this menu was Chrome's ⋮ by name. Find and Print
+          come and go with the preload halves behind them (`find-bridge.ts`);
+          the zoom row rides on `browserZoom`, which every panel that draws at
+          all can call. Disabled with a reason, not hidden, when no page is
+          open: there is always a page or there is not, and a menu changing
+          shape at random is the other complaint.
+        */}
+        {onZoomIn && onZoomOut && onZoomReset && (
+          <div className="bw-menu-zoom" role="group" aria-label="Zoom">
+            <button
+              type="button"
+              className="bw-menu-zoom-btn"
+              disabled={url === ''}
+              title={url === '' ? 'No page open' : 'Zoom out'}
+              aria-label="Zoom out"
+              onClick={onZoomOut}
+            >
+              −
+            </button>
+            <button
+              type="button"
+              className="bw-menu-zoom-value"
+              disabled={url === ''}
+              title={url === '' ? 'No page open' : 'Reset zoom'}
+              aria-label={`Zoom ${Math.round(zoom * 100)}%, reset to 100%`}
+              onClick={onZoomReset}
+            >
+              {Math.round(zoom * 100)}%
+            </button>
+            <button
+              type="button"
+              className="bw-menu-zoom-btn"
+              disabled={url === ''}
+              title={url === '' ? 'No page open' : 'Zoom in'}
+              aria-label="Zoom in"
+              onClick={onZoomIn}
+            >
+              +
+            </button>
+          </div>
+        )}
+
+        {onFind && (
+          <button
+            type="button"
+            className="bw-menu-item"
+            disabled={url === ''}
+            title={url === '' ? 'No page open' : undefined}
+            onClick={() => {
+              onFind()
+              onClose()
+            }}
+          >
+            Find in page
+          </button>
+        )}
+
+        {onPrint && (
+          <button
+            type="button"
+            className="bw-menu-item"
+            disabled={url === ''}
+            title={url === '' ? 'No page open' : undefined}
+            onClick={() => {
+              onPrint()
+              onClose()
+            }}
+          >
+            Print
+          </button>
+        )}
 
         {/*
           History, which is the row he named out loud with Chrome's own ⋮ menu

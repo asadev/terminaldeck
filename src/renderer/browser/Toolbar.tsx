@@ -175,6 +175,19 @@ interface Props {
    * somebody looks to find out where they are.
    */
   servedBy?: ServedBy | null
+  /**
+   * The page's zoom factor, for the chip at the end of the address field.
+   *
+   * Chrome's arrangement, kept for Chrome's reason: the chip exists only while
+   * zoom is not 100%, so the field says nothing at all in the ordinary case and
+   * an unusual page announces itself where somebody looks to find out what is
+   * unusual. A chip here rather than a band below because appearing must not
+   * reflow the website — zoom steps several times in a row, and a page that
+   * jumps a strip's height on the first ⌘+ is the chrome fighting the site.
+   */
+  zoom?: number
+  /** Pressing the chip goes back to 100% — the chip is the control, not a label. */
+  onResetZoom?: () => void
 }
 
 /**
@@ -246,6 +259,8 @@ export function Toolbar({
   onToggleIsolation,
   machinePicker,
   servedBy = null,
+  zoom = 1,
+  onResetZoom,
 }: Props) {
   const inputRef = useRef<HTMLInputElement>(null)
   const fieldRef = useRef<HTMLFormElement>(null)
@@ -529,6 +544,25 @@ export function Toolbar({
 
         {tab?.editing && resolution.kind === 'search' && (
           <span className="bw-address-hint">Search</span>
+        )}
+
+        {/*
+          Only while zoom is not 100% — a chip reading "100%" on every window is
+          chrome answering a question nobody asked. `Math.round` because
+          Chromium reports the factor it applied, which can carry float dust,
+          and a chip that appears for 100.0001% is the same noise. Pressing it
+          resets — the discoverable half of ⌘0.
+        */}
+        {has && onResetZoom && Math.round(zoom * 100) !== 100 && (
+          <button
+            type="button"
+            className="bw-zoom"
+            title="Reset zoom"
+            aria-label={`Zoom ${Math.round(zoom * 100)}%, reset to 100%`}
+            onClick={onResetZoom}
+          >
+            {Math.round(zoom * 100)}%
+          </button>
         )}
       </form>
 

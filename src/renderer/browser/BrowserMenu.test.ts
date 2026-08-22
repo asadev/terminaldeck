@@ -199,3 +199,61 @@ describe('the browser can reach its scraping', () => {
     expect(onScreen.indexOf('{onScraping && (')).toBeLessThan(onScreen.indexOf('{onSettings && ('))
   })
 })
+
+/**
+ * The everyday page verbs — find, zoom, print — T41's lost tail. All three are
+ * the bargain kept the way Extensions kept it: the row arrived *after* the
+ * thing did. `browser-view.ts` runs the find session and the print dialog;
+ * `find-bridge.ts` decides which builds may offer them.
+ *
+ * Bookmarks are the absence this block pins, exactly as Saved passwords is
+ * pinned above: this release has no bookmark store, so the menu draws no
+ * bookmark row. Adding one means building the store first — a place the saved
+ * pages live, a way back to them, per profile like history — and then this
+ * test is what tells you to come back.
+ */
+describe('the everyday page verbs', () => {
+  it('draws Find in page, and only where the preload can find', () => {
+    expect(onScreen).toMatch(/>\s*Find in page\s*</)
+    expect(onScreen).toContain('onFind?: () => void')
+    expect(onScreen).toContain('{onFind && (')
+  })
+
+  it('draws Print, and only where the preload can print', () => {
+    expect(onScreen).toMatch(/>\s*Print\s*</)
+    expect(onScreen).toContain('onPrint?: () => void')
+    expect(onScreen).toContain('{onPrint && (')
+  })
+
+  it('draws zoom as one row with all three moves or not at all', () => {
+    // A stepper with no reset strands anybody who taps too far; a reset with
+    // no stepper is a control about nothing. All three or none.
+    expect(onScreen).toContain('{onZoomIn && onZoomOut && onZoomReset && (')
+    expect(onScreen).toContain('aria-label="Zoom in"')
+    expect(onScreen).toContain('aria-label="Zoom out"')
+  })
+
+  it('disables the verbs with a reason when no page is open, rather than hiding them', () => {
+    // There is always a page or there is not — a menu changing shape at random
+    // is the other complaint. Same arrangement as Set as start page.
+    const find = onScreen.slice(onScreen.indexOf('{onFind && ('))
+    expect(find.slice(0, find.indexOf('</button>'))).toContain("'No page open'")
+    const print = onScreen.slice(onScreen.indexOf('{onPrint && ('))
+    expect(print.slice(0, print.indexOf('</button>'))).toContain("'No page open'")
+  })
+
+  it('closes the menu behind Find and Print, but stays open for zoom steps', () => {
+    const find = onScreen.slice(onScreen.indexOf('onFind()'))
+    expect(find.slice(0, find.indexOf('</button>'))).toContain('onClose()')
+    const print = onScreen.slice(onScreen.indexOf('onPrint()'))
+    expect(print.slice(0, print.indexOf('</button>'))).toContain('onClose()')
+    // Zoom is pressed several times in a row; a menu that shuts on the first
+    // press makes the second press a whole reopening. Chrome's menu stays too.
+    const zoom = onScreen.slice(onScreen.indexOf('bw-menu-zoom'), onScreen.indexOf('{onFind && ('))
+    expect(zoom).not.toContain('onClose()')
+  })
+
+  it('draws no Bookmarks row, because this release has no bookmark store', () => {
+    expect(onScreen).not.toContain('Bookmark')
+  })
+})
