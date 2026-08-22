@@ -1079,6 +1079,64 @@ final class DeckModel {
 
     @ObservationIgnored private var signInFlow: GitHubSignIn?
 
+    /**
+     * The server sign-in, owned here for the reason the GitHub one is.
+     *
+     * The exchange includes a real SSH login run on the far machine, behind a
+     * two-probe gate — seconds, sometimes tens of them. A flow that belonged to
+     * the sheet would die on the one button somebody presses when the screen has
+     * not caught up: Cancel. This one outlives the sheet, so the screen can be
+     * closed and reopened onto the same attempt, or onto the machine it finished
+     * adding while nobody was looking.
+     *
+     * `onSignedIn` is where the collection catches up. The credential is already
+     * in the Keychain by then — `ServerSignIn` writes it before it says anything
+     * — so this is not a save, it is the list learning about a machine that is
+     * already paired.
+     */
+    var serverSignIn: ServerSignIn {
+        if let flow = serverFlow { return flow }
+        let flow = ServerSignIn(credentials: credentials, device: device) { [weak self] record in
+            self?.adoptSignedIn(record)
+        }
+        serverFlow = flow
+        return flow
+    }
+
+    @ObservationIgnored private var serverFlow: ServerSignIn?
+
+    /**
+     * A machine this phone just signed into, brought into the collection.
+     *
+     * The same three moves `pairAsync` ends with, and they have to be the same:
+     * a machine that arrived through the sign-in door must be indistinguishable
+     * from one that arrived through the pairing door, or every screen past this
+     * point has two kinds of machine to know about.
+     *
+     * A machine already in the list is restarted rather than added twice —
+     * signing in again after a revoke is a normal thing to do, and it must not
+     * cost the user a duplicate row or their other machines.
+     */
+    private func adoptSignedIn(_ record: StoredCredential) {
+        let hostId = record.hostId
+        pairingNotice = nil
+        collectionError = nil
+        if let link = hosts.first(where: { $0.id == hostId }) {
+            // Torn down and brought back up so the transport reads the credential
+            // that was just written rather than retrying with the old one.
+            link.stop()
+            link.start()
+            select(hostId)
+        } else {
+            let link = adopt(record)
+            link.start()
+            // The machine somebody just signed into is the one they are looking
+            // at. Anything else would be a sign-in that appears to do nothing.
+            currentHostId = hostId
+            UserDefaults.standard.set(hostId, forKey: Self.selectionKey)
+        }
+    }
+
     // MARK: - Navigation
 
     /**

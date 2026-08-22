@@ -287,6 +287,29 @@ extension XCUIApplication {
         return textFields["pairing.field"].waitForExistence(timeout: 20)
     }
 
+    /**
+     * Open the **Add a server** screen, from wherever this phone currently is.
+     *
+     * Two ways in, because there are two, and which one exists depends on
+     * whether anything is paired: a phone with no machines is sitting on the
+     * pairing screen and the door is a line under the code field; a phone with
+     * machines reaches it from the Machines list. A helper that knew only one
+     * would skip on exactly the phone the other was built for.
+     */
+    @discardableResult
+    func beginAddingAServer() -> Bool {
+        let onPairingScreen = buttons["pairing.addServer"]
+        if onPairingScreen.waitForExistence(timeout: 3) {
+            onPairingScreen.tap()
+            return textFields["addServer.address"].waitForExistence(timeout: 20)
+        }
+        guard openMachinesTab() else { return false }
+        let add = buttons["machines.addServer"]
+        guard add.waitForExistence(timeout: 10) else { return false }
+        add.tap()
+        return textFields["addServer.address"].waitForExistence(timeout: 20)
+    }
+
     /// The GitHub account screen, from Settings.
     @discardableResult
     func openGitHubAccount() -> Bool {
