@@ -3398,6 +3398,20 @@ export function BrowserWorkspace({
               ? () => setHistoryFor(activeProfileId)
               : undefined
           }
+          /* The saved-logins manager, for the profile the person is in. It
+             lives in the profile's own section (`ProfileSettings`), so that is
+             what the row opens — the same dialog the profile menu's Settings
+             opens, not a second copy. Same gates as History, for the same
+             reasons: no store wired means no row, and an Isolated tab saves
+             nothing to manage. */
+          onPasswords={
+            passwordsAvailable(accounts) &&
+            profilesAvailable(accounts) &&
+            activeProfileId !== '' &&
+            active?.isolated !== true
+              ? () => setSettingsFor(activeProfileId)
+              : undefined
+          }
           /*
              Scraping. Offered where profiles are, because a worker *is* a
              profile: the fleet, the session lift and every per-profile rule in

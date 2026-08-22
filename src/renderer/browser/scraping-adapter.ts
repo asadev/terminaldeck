@@ -35,11 +35,19 @@
  * channel reachable from this app's own window and from nowhere else, and
  * `deck-control/session-tools.ts` records at length why no tool may call it.
  * Nothing here widens that: {@link adaptScrapingApi} calls it from exactly one
- * place, that place is reached from one button a person armed and pressed, and
- * the ask-inbox seams (`browserScrapingLiftRequests` and its answer) are left
- * **unwired on purpose** — there is no channel behind them, and inventing one
- * here would be building the path around the gesture that those files exist to
- * prevent.
+ * place, and that place is reached from one button a person armed and pressed.
+ *
+ * The ask-inbox seams (`browserScrapingLiftRequests` and its answer) were left
+ * unwired here until 2026-08-22, on the argument that a channel behind them
+ * would be "the path around the gesture". That defended the wrong thing. An
+ * inbox is not a path around a gesture — it is how the gesture stays one when
+ * something that is not a person wants it: the agent's ask becomes a row with
+ * Approve and Decline, and the lift still runs only in the main process, on
+ * the person's armed press (`browser-lift-requests.ts` holds the desk and the
+ * whole argument). What the unwired seam actually produced was the panel's
+ * approvals branch rendering against methods that could never exist — a
+ * control drawn and unable to fire, the exact prohibited shape. So the three
+ * seams are wired below, to the real channels.
  */
 
 import type {
@@ -457,6 +465,24 @@ export function adaptScrapingApi(source: object, context?: ScrapingHostContext):
       const count = put.reports.reduce((sum, report) => sum + report.cookiesSet, 0)
       return { ok: true, message: liftMessage(summary, put.reports), count } satisfies ScrapingOutcome
     }
+  }
+
+  /* -- the ask inbox ------------------------------------------------------ */
+
+  /*
+   * All three or none, because the panel's `liftRequestsAvailable` asks for all
+   * three: a list nobody can answer, or an answer with no list to pick from,
+   * is half an inbox — and half an inbox is the drawn-but-dead branch this
+   * wiring exists to end.
+   */
+  const asks = workers.browserWorkerLiftRequests
+  const answer = workers.browserWorkerLiftAnswer
+  const onAsk = workers.onBrowserWorkerLiftRequest
+  if (asks && answer && onAsk) {
+    api.browserScrapingLiftRequests = async (): Promise<unknown> => asks()
+    api.browserScrapingLiftAnswer = async (requestId: string, approve: boolean): Promise<unknown> =>
+      answer(requestId, approve)
+    api.onBrowserScrapingLiftRequest = (cb: (request: unknown) => void): (() => void) => onAsk(cb)
   }
 
   /* -- the store ---------------------------------------------------------- */

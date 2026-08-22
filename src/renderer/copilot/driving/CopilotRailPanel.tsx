@@ -204,11 +204,23 @@ export function CopilotRailPanel() {
         </p>
       ) : machineId !== '' ? (
         /*
-         * A session on a paired machine. Its transcript is a file on that
-         * machine's disk and this app opens a terminal there, not a filesystem
-         * it reads conversations out of — the same limit the chat toggle states
-         * on a remote session's bar. Saying so is the alternative to showing an
-         * empty conversation that looks like a session with nothing to say.
+         * A session on a **paired machine** — and only that. A terminal on an
+         * SSH server can never be this panel's subject: `attachableSessions`
+         * (agent-target.ts) refuses server shells a browser window outright, a
+         * server row's `machineId` is `''` by construction, and the binding
+         * map has no key shape for one. So the sentence below is about paired
+         * machines alone, and there it is still true: a paired machine's
+         * transcript is a file on that machine's disk, and nothing in this app
+         * reads a conversation off a paired machine.
+         *
+         * That scoping is the 2026-08-22 correction. This comment used to
+         * borrow its authority from "the same limit the chat toggle states on
+         * a remote session's bar" — stale since 129b890 built the *server*
+         * chat reader (`servers/chat.ts`, `ServerChatPane`) and App.tsx
+         * stopped blocking chat on a server session. If server shells ever do
+         * take a browser window, this branch must route to that reader rather
+         * than reuse this sentence: the claim "cannot be read here" would be
+         * false for them on the day they arrive.
          *
          * The box underneath still works: `session.send` types into a session on
          * a paired machine without attaching to it, which is the route the

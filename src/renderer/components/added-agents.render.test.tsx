@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { AddAgentForm } from './AddAgentForm'
@@ -71,10 +72,10 @@ const form = (draft: CustomAgentDraft, problems = {}): string =>
 describe('the agent list', () => {
   it('ends with the plus, on a machine that has added nothing', () => {
     const html = list([])
-    expect(html).toContain('Add an agent')
+    expect(html).toContain('Add a CLI')
     // After the last shipped row, not before the first: it is how the list gets
     // longer, so it reads as the end of the list.
-    expect(html.indexOf('Add an agent')).toBeGreaterThan(html.indexOf('value="shell"'))
+    expect(html.indexOf('Add a CLI')).toBeGreaterThan(html.indexOf('value="shell"'))
   })
 
   it('shows an added agent beside the shipped ones, under them', () => {
@@ -83,7 +84,7 @@ describe('the agent list', () => {
     expect(html).toContain('Grok')
     // `allAgentEntries` decides the order and says why it is not alphabetical.
     expect(html.indexOf('value="custom:grok"')).toBeGreaterThan(html.indexOf('value="claude"'))
-    expect(html.indexOf('value="custom:grok"')).toBeLessThan(html.indexOf('Add an agent'))
+    expect(html.indexOf('value="custom:grok"')).toBeLessThan(html.indexOf('Add a CLI'))
   })
 
   it('offers Remove on an added agent and on nothing else', () => {
@@ -203,5 +204,21 @@ describe('the form behind the plus', () => {
     // is what stops the font redrawing `-->` inside an argument, and its own
     // test asserts this class is registered there.
     expect(form(EMPTY_DRAFT).match(/aa-mono/g)).toHaveLength(3)
+  })
+})
+
+describe('the words on the flow', () => {
+  it('says "Add agent" nowhere a person can read it', () => {
+    /*
+     * T14, finished 2026-08-22. The Settings button became **Add accounts**
+     * (AgentsSection.test.tsx pins that pane); this flow adds a CLI, not an
+     * account, so it says so — and the old wording must not creep back through
+     * either door. Comments may cite the history; rendered strings may not.
+     */
+    const source = readFileSync(new URL('./NewSessionDialog.tsx', import.meta.url), 'utf8')
+    const withoutComments = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+    expect(withoutComments).not.toContain('Add agent')
+    expect(withoutComments).not.toContain('Add an agent')
+    expect(withoutComments).toContain('Add a CLI')
   })
 })

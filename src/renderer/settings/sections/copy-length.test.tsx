@@ -259,10 +259,11 @@ describe('what the cut was not allowed to take with it', () => {
     // `AccountsSection.test.tsx`, on the panel itself.
     expect(html).toContain('>Accounts<')
     expect(html).not.toContain('>Add account<')
-    // Setup. "Other coding tools" was the heading until GitHub Copilot moved to
-    // the GitHub page — what is left under it is git and the GitHub CLI, which
-    // are tools this app uses rather than coding tools. See `MOVED_TOOL_IDS`.
-    expect(html).toContain('Other tools')
+    // Setup. "Other tools" is gone whole (2026-08-22): the probe only ever
+    // answers for the agents and Copilot, all of which this pane subtracts, so
+    // the disclosure could never hold a row and only flashed while the probe
+    // was out. See the note in `SetupSection.tsx`.
+    expect(html).not.toContain('Other tools')
     expect(html).not.toContain('GitHub Copilot')
   })
 

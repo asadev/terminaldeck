@@ -126,14 +126,23 @@ describe('the tool that is not here', () => {
       expect(SESSION_TOOLS.has(id)).toBe(false)
     }
     const ids = workerTools(fakeDeps()).map((tool) => tool.id)
-    expect(ids).toEqual(['browser.workers', 'browser.worker'])
+    // `browser.lift_request` is the ask, not the act — it files a row in the
+    // person's inbox and moves nothing. The two names above stay forbidden;
+    // the ask tool's own suite (lift-ask-tool.test.ts) pins that its run calls
+    // only the request desk.
+    expect(ids).toEqual(['browser.workers', 'browser.worker', 'browser.lift_request'])
     const source = readFileSync(new URL('./worker-tools.ts', import.meta.url), 'utf8')
     expect(source).not.toContain('liftFromPage')
     expect(source).not.toContain('injectLift')
+    // And the ask tool's file touches neither engine either: no lift, no jar.
+    const ask = readFileSync(new URL('./lift-ask-tool.ts', import.meta.url), 'utf8')
+    expect(ask).not.toContain('liftFromPage')
+    expect(ask).not.toContain('injectLift')
+    expect(ask).not.toContain('sessionForPartition')
   })
 
-  it('names both spellings of the two that are, so neither is a way round the list', () => {
-    for (const id of ['browser.workers', 'browser.worker']) {
+  it('names both spellings of the three that are, so neither is a way round the list', () => {
+    for (const id of ['browser.workers', 'browser.worker', 'browser.lift_request']) {
       expect(SESSION_TOOLS.has(id)).toBe(true)
       expect(SESSION_TOOLS.has(id.replace('.', '_'))).toBe(true)
     }

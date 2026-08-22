@@ -133,17 +133,29 @@ export function reachableMachines(view: MachinesView): MachineWithLink[] {
     .filter((row) => row.link?.state === 'online')
 }
 
-/**
- * How often the window re-reads the machine list.
+/*
+ * `REREAD_MS = 4000` was here — a four-second poll described in its own
+ * comment as a backstop for "the rest" of what the pushes did not cover. His
+ * rule, quoted in that very comment, is *"events, not polling — they make the
+ * system heavier"*, so on 2026-08-22 the rest was enumerated instead of
+ * backstopped, and every item turned out to be a missing event, not a reason
+ * to poll:
  *
- * There is no push channel for it — `onMachinesState` exists and fires on
- * connect, disconnect and session changes, which is most of what moves. The
- * poll is the backstop for the rest, and it is deliberately slow: a machine
- * appearing four seconds late costs nothing, and a window that polls a socket
- * layer every second is the "they make the system heavier" he has objected to
- * by name.
+ *  - link state, sessions, folders, ports, a machine's copilot — every
+ *    `publish` in `remote/machines/guest.ts` lands in `announce()` and pushes
+ *    `machines:state`. Always covered.
+ *  - pair, forget, rename — announced by their own handlers. Always covered.
+ *  - the browser-driving grant (`machines:drive-windows`) — answered only to
+ *    its caller until now; its handler announces too.
+ *  - the relay link coming up, which is what clears the pairing screen's
+ *    `blocked` sentence on a machine with nothing paired yet (no links, so no
+ *    `machines:state` was ever going to fire) — pushed on
+ *    `remote:connections` now, the channel that already means "the remote
+ *    picture moved". Subscribed to below as a bare nudge.
+ *
+ * With the list closed, the timer had nothing left to catch, and a timer that
+ * catches nothing is load on every window for the length of every session.
  */
-const REREAD_MS = 4000
 
 /**
  * How long to wait for a started session to appear.
@@ -193,10 +205,19 @@ export function useMachines(provided?: MachinesBridge): MachinesRead {
     const off = bridge.onMachinesState((raw) => {
       if (alive.current) setView(asView(raw))
     })
-    const timer = setInterval(reread, REREAD_MS)
+    /*
+     * The one fact `machines:state` cannot carry on its own: `blocked` is
+     * computed from the relay's state, and a machine with nothing paired has
+     * no link to publish when the relay comes up. The nudge's payload is
+     * ignored — one read is one source of truth — and the re-read is rare by
+     * nature: pairings, approvals, and the relay connecting or dropping.
+     * Optional-chained because an older preload has no such channel, and that
+     * build simply keeps the coverage the pushes above give it.
+     */
+    const offRemote = bridge.onRemoteConnections?.(() => reread())
     return () => {
       off()
-      clearInterval(timer)
+      offRemote?.()
     }
   }, [bridge, reread])
 

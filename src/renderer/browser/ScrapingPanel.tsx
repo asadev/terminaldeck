@@ -666,6 +666,61 @@ export function ScrapingBody({
         ever be disabled — and a control that is certain to refuse costs a click
         to discover the lie. Named absence, one sentence, no control.
       */}
+      {/*
+        The inbox, above everything else in this section — including the page
+        gate. An agent that wants a session lifted gets to *ask*, and the ask
+        lands here as a row with two answers — the whole of "surfaces as a
+        request to the person, not as a completed action". It is outside the
+        `canLift` branch on purpose: approving lifts from whatever page is open
+        in the profile the ask NAMES (`handleLiftAnswer`), not from the page in
+        front of the approver, so an ask is answerable from Settings → Scraping
+        as well as from the browser's own panel — and an inbox hidden exactly
+        where somebody reads settings would be a question they never see.
+        Drawn only when there is an ask: an empty inbox drawn every time would
+        train somebody to skip past it.
+      */}
+      {liftRequestsAvailable(api) && asks.length > 0 && (
+        <ul className="bw-menu-list">
+          {asks.map((ask) => (
+            <li key={ask.id} className="bw-scrape-ask">
+              <span className="bw-scrape-ask-line">
+                {liftRequestLine(ask.askedBy, nameOf(ask.fromProfileId), ask.intoProfileIds.map(nameOf))}
+              </span>
+              <span className="bw-scrape-ask-when">{timeLabel(ask.at)}</span>
+              {ask.reason !== '' && <span className="bw-muted">{ask.reason}</span>}
+              {approving === ask.id ? (
+                <span className="bw-scrape-row">
+                  <button type="button" className="bw-danger" onClick={() => void answerAsk(ask, true)}>
+                    {liftLine(nameOf(ask.fromProfileId), ask.intoProfileIds.map(nameOf))}
+                  </button>
+                  <button
+                    type="button"
+                    className="bw-text-button"
+                    autoFocus
+                    onClick={() => setApproving('')}
+                  >
+                    Cancel
+                  </button>
+                </span>
+              ) : (
+                <span className="bw-scrape-row">
+                  <button type="button" className="bw-primary" onClick={() => setApproving(ask.id)}>
+                    Approve this lift
+                  </button>
+                  <button
+                    type="button"
+                    className="bw-text-button"
+                    onClick={() => void answerAsk(ask, false)}
+                  >
+                    Decline
+                  </button>
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+
       {!canLift ? (
         <p className="bw-scrape-hint">
           A lift is taken off the page in front of you, and there is no page here. It is on the
@@ -680,58 +735,6 @@ export function ScrapingBody({
             {liftRequestsAvailable(api) &&
               ' Anything else that wants one has to ask, and the ask shows up in this section for you to answer.'}
           </p>
-
-          {/*
-            The inbox, above the button.
-
-            An agent that wants a session lifted gets to *ask*, and the ask lands
-            here as a row with two answers — which is the whole of "surfaces as a
-            request to the person, not as a completed action". It sits above the
-            control rather than below it so that a pending ask is the first thing
-            read in this section, and it is drawn only when there is one: an empty
-            inbox drawn every time would train somebody to skip past it.
-          */}
-          {liftRequestsAvailable(api) && asks.length > 0 && (
-            <ul className="bw-menu-list">
-              {asks.map((ask) => (
-                <li key={ask.id} className="bw-scrape-ask">
-                  <span className="bw-scrape-ask-line">
-                    {liftRequestLine(ask.askedBy, nameOf(ask.fromProfileId), ask.intoProfileIds.map(nameOf))}
-                  </span>
-                  <span className="bw-scrape-ask-when">{timeLabel(ask.at)}</span>
-                  {ask.reason !== '' && <span className="bw-muted">{ask.reason}</span>}
-                  {approving === ask.id ? (
-                    <span className="bw-scrape-row">
-                      <button type="button" className="bw-danger" onClick={() => void answerAsk(ask, true)}>
-                        {liftLine(nameOf(ask.fromProfileId), ask.intoProfileIds.map(nameOf))}
-                      </button>
-                      <button
-                        type="button"
-                        className="bw-text-button"
-                        autoFocus
-                        onClick={() => setApproving('')}
-                      >
-                        Cancel
-                      </button>
-                    </span>
-                  ) : (
-                    <span className="bw-scrape-row">
-                      <button type="button" className="bw-primary" onClick={() => setApproving(ask.id)}>
-                        Approve this lift
-                      </button>
-                      <button
-                        type="button"
-                        className="bw-text-button"
-                        onClick={() => void answerAsk(ask, false)}
-                      >
-                        Decline
-                      </button>
-                    </span>
-                  )}
-                </li>
-              ))}
-            </ul>
-          )}
 
           {!liftAvailable(api) ? (
             <Unavailable what="nothing in this build can copy a session between profiles" />

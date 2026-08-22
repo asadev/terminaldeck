@@ -20,14 +20,16 @@ const box = vi.hoisted(() => {
   const { mkdtempSync: make } = require('node:fs') as typeof import('node:fs')
   const { tmpdir: tmp } = require('node:os') as typeof import('node:os')
   const { join: j } = require('node:path') as typeof import('node:path')
-  return { dir: make(j(tmp(), 'td-workers-ipc-')), contents: null as unknown }
+  return { dir: make(j(tmp(), 'td-workers-ipc-')), contents: null as unknown, pages: [] as unknown[] }
 })
 
 vi.mock('electron', () => {
   const made = new Map<string, unknown>()
   return {
     app: { getPath: () => box.dir, userAgentFallback: 'test' },
-    webContents: { getAllWebContents: () => [] },
+    // `box.pages` so the ask-inbox tests can put a live page into a profile's
+    // jar; every other test leaves it empty, which is what the literal [] was.
+    webContents: { getAllWebContents: () => box.pages },
     session: {
       fromPartition: (partition: string) => {
         if (!made.has(partition)) {
@@ -61,6 +63,9 @@ const { ensureWorkers, resetWorkersForTests, workerList } = await import('./brow
 const { resetProfilesForTests, sessionForPartition, DEFAULT_PARTITION } = await import('./browser-profiles')
 const { forgetAllLifts, forgetAllSeeds, injectLift, liftSummaries } = await import(
   './browser-session-lift'
+)
+const { fileLiftRequest, listLiftRequests, peekLiftRequest, resetLiftRequestsForTests } = await import(
+  './browser-lift-requests'
 )
 
 /** One signed-in cookie, with a value nobody would type by accident. */
@@ -105,7 +110,9 @@ beforeEach(() => {
   resetWorkersForTests()
   forgetAllLifts()
   forgetAllSeeds()
+  resetLiftRequestsForTests()
   box.contents = null
+  box.pages = []
 })
 
 afterEach(() => {
@@ -326,6 +333,142 @@ describe('the seed a worker frame is handed', () => {
       senderFrame: { url: 'https://shop.example.com/account' },
     })
     expect(again).toBeNull()
+  })
+})
+
+describe('the ask inbox, wired end to end', () => {
+  /**
+   * The person's half of the lift-request channel: the panel lists asks over
+   * `browser-worker:lift-requests`, hears changes on the push, and answers one
+   * over `browser-worker:lift-answer`. Approval performs the WHOLE gesture in
+   * this process — lift off a live page in the named profile, inject into the
+   * named workers, forget — which is why this file owns the test: the desk
+   * only ever holds rows, and the row-to-cookies step lives in `handleLiftAnswer`.
+   */
+
+  /** A live, signed-in page in the default profile's jar. */
+  function signedInPage(): void {
+    const jar = sessionForPartition(DEFAULT_PARTITION) as unknown as { cookies: unknown }
+    jar.cookies = {
+      get: async (): Promise<Cookie[]> => [SESSION_COOKIE],
+      set: async () => undefined,
+    }
+    box.pages = [
+      {
+        isDestroyed: () => false,
+        session: jar,
+        getURL: () => 'https://shop.example.com/account',
+        executeJavaScriptInIsolatedWorld: async () => {
+          throw new Error('no script')
+        },
+      },
+    ]
+  }
+
+  /** File one ask through the desk the registration configured. */
+  function ask(into: string[] = []): string {
+    const filed = fileLiftRequest({ askedBy: 'The session driving B1', from: 'Default', into })
+    if (!filed.ok) throw new Error(filed.reason)
+    return filed.request.id
+  }
+
+  it('registration wires the desk, so an ask resolves against the real profiles', async () => {
+    const b = bench()
+    ensureWorkers(box.dir, 2)
+    const id = ask()
+    const listed = (await b.call('browser-worker:lift-requests', fromWindow())) as unknown[]
+    expect(listed).toHaveLength(1)
+    expect((listed[0] as { id: string }).id).toBe(id)
+  })
+
+  it('pushes the inbox to a window that has read it, when an ask arrives', async () => {
+    const b = bench()
+    ensureWorkers(box.dir, 1)
+    const sent: Array<{ channel: string; inbox: unknown }> = []
+    const sender = {
+      session: { notAProfile: true },
+      isDestroyed: () => false,
+      send: (channel: string, inbox: unknown) => sent.push({ channel, inbox }),
+    }
+    await b.call('browser-worker:lift-requests', { sender })
+    ask()
+    expect(sent).toHaveLength(1)
+    expect(sent[0].channel).toBe('browser-worker:lift-request')
+    expect(sent[0].inbox).toHaveLength(1)
+  })
+
+  it('refuses an answer that did not come from this app’s window', async () => {
+    const b = bench()
+    ensureWorkers(box.dir, 1)
+    const id = ask()
+    const guest = sessionForPartition(DEFAULT_PARTITION)
+    const answer = (await b.call('browser-worker:lift-answer', { sender: { session: guest } }, {
+      requestId: id,
+      approve: true,
+    })) as { ok: boolean; message: string }
+    expect(answer.ok).toBe(false)
+    expect(answer.message).toContain('did not come from this app')
+    // And the ask is still there: a refused answer answers nothing.
+    expect(peekLiftRequest(id)).not.toBeNull()
+  })
+
+  it('declines without touching anything, and the row leaves the inbox', async () => {
+    const b = bench()
+    ensureWorkers(box.dir, 1)
+    const id = ask()
+    const answer = (await b.call('browser-worker:lift-answer', fromWindow(), {
+      requestId: id,
+      approve: false,
+    })) as { ok: boolean; message: string; count: number | null }
+    expect(answer.ok).toBe(true)
+    expect(answer.message).toContain('Declined')
+    expect(answer.count).toBeNull()
+    expect(listLiftRequests()).toHaveLength(0)
+    expect(liftSummaries()).toHaveLength(0)
+  })
+
+  it('keeps the ask when no page is open in that profile, and says what to do', async () => {
+    const b = bench()
+    ensureWorkers(box.dir, 1)
+    const id = ask()
+    const answer = (await b.call('browser-worker:lift-answer', fromWindow(), {
+      requestId: id,
+      approve: true,
+    })) as { ok: boolean; message: string }
+    expect(answer.ok).toBe(false)
+    expect(answer.message).toContain('No page is open in Default')
+    expect(answer.message).toContain('still here')
+    // "Not yet", not "no": the person can open the site and press Approve again.
+    expect(peekLiftRequest(id)).not.toBeNull()
+  })
+
+  it('approving performs the whole gesture: lift, inject, forget, and the row leaves', async () => {
+    const b = bench()
+    ensureWorkers(box.dir, 2)
+    signedInPage()
+    const id = ask()
+    const answer = (await b.call('browser-worker:lift-answer', fromWindow(), {
+      requestId: id,
+      approve: true,
+    })) as { ok: boolean; message: string; count: number | null }
+    expect(answer.ok).toBe(true)
+    expect(answer.message).toContain('shop.example.com')
+    expect(answer.count).toBeGreaterThan(0)
+    // The row is answered, and the lifted session did not outlive the gesture.
+    expect(listLiftRequests()).toHaveLength(0)
+    expect(liftSummaries()).toHaveLength(0)
+    // The rule the whole feature is built on: no value crosses the answer.
+    expect(JSON.stringify(answer)).not.toContain('the-actual-token')
+  })
+
+  it('answers honestly about an ask that no longer exists', async () => {
+    const b = bench()
+    const answer = (await b.call('browser-worker:lift-answer', fromWindow(), {
+      requestId: 'gone',
+      approve: true,
+    })) as { ok: boolean; message: string }
+    expect(answer.ok).toBe(false)
+    expect(answer.message).toContain('already been answered')
   })
 })
 

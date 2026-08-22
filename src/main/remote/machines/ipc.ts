@@ -795,10 +795,17 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
   ipcMain.handle('machines:drive-windows', (_event, id: unknown, allowed: unknown): MachinesView => {
     // Only a literal boolean is a person pressing the switch. Now that the
     // default is open, mapping a garbled value to `false` would let a bug on
-    // the bridge quietly untick a machine — a write nobody asked for — so
-    // anything that is not an answer changes nothing, and the view answers
-    // what is actually stored.
+    // the bridge quietly untick a machine, so anything that is not an answer
+    // changes nothing and the view answers what is actually stored.
     if (typeof id === 'string' && typeof allowed === 'boolean') store.setDrivesWindows(id, allowed)
+    /*
+     * Broadcast as well as answered, the same argument `machines:forget` and
+     * `machines:rename` make above. A grant is drawn in more than one window,
+     * and until 2026-08-22 this was the one store write of the three that
+     * reached nobody but its caller; the renderer's four-second poll that
+     * papered over it is gone, because the rule is events, not polling.
+     */
+    announce()
     return view()
   })
 

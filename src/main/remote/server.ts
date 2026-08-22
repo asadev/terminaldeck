@@ -5997,6 +5997,39 @@ export interface RemoteIpc {
  * answer is no relay, a sentence in the status, and a tailnet path that is
  * untouched by any of it.
  */
+/**
+ * What one relay state change is told to, in order: the assembly's own hook,
+ * then every window.
+ *
+ * The second half is 2026-08-22's. `onRelayState`'s doc used to say "nothing
+ * with a window needs it — a panel reads `remote:status` when it draws", and
+ * that was true of panels and false of the one sentence computed from relay
+ * state that stands on screen *between* draws: the pairing screen's `blocked`
+ * line (`machines:list` builds it from this relay's state). On a machine with
+ * nothing paired yet there are no machine links to publish when the relay
+ * comes up, so nothing pushed `machines:state`, and the warning outlived the
+ * condition it warned about — cleared, until 2026-08-22, only by the machines
+ * hook's four-second poll. The poll is gone (his rule: events, not polling),
+ * so the event is real now: the relay's state change lands on
+ * `remote:connections`, the channel that already means "the remote picture
+ * moved" and whose listeners re-read and ignore the payload — see
+ * {@link REMOTE_CONNECTIONS_CHANNEL} for the first widening and why it is
+ * cheap. Rare by nature: a relay connects once per launch and drops when a
+ * network does.
+ *
+ * Named and exported rather than an inline arrow so the composition is a thing
+ * a test can call: the wiring itself is pinned by `relay-announce.test.ts`.
+ */
+export function relayStateFanout(
+  tell: ((state: RelayState) => void) | undefined,
+  announce: () => void,
+): (state: RelayState) => void {
+  return (state) => {
+    tell?.(state)
+    announce()
+  }
+}
+
 function relayFor(
   storageDir: string,
   url: string,
@@ -6068,7 +6101,13 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
   // function is what does both, on every launch unless this Mac was switched
   // off.
   const relay = relayEnabled(env, deps.relayEnabled)
-    ? relayFor(deps.storageDir, relayUrl(env, deps.relayUrl), auth, desk, deps.onRelayState)
+    ? relayFor(
+        deps.storageDir,
+        relayUrl(env, deps.relayUrl),
+        auth,
+        desk,
+        relayStateFanout(deps.onRelayState, () => announceRemoteChange()),
+      )
     : null
 
   /**

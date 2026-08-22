@@ -15,6 +15,10 @@ import { DeckControl, type CallResult } from './control'
 import { storeTools } from './store-tools'
 import { type DeckSurface } from './surface'
 import { workerTools, type WorkerToolDeps } from './worker-tools'
+import {
+  configureLiftRequests,
+  resetLiftRequestsForTests,
+} from '../browser-lift-requests'
 
 /**
  * The gate over every tool this round added: none of them may answer nothing
@@ -396,6 +400,25 @@ const CASES: Case[] = [
       const bench = harness({ workers: [aWorker()] })
       await bench.deck.call('browser.worker', { action: 'take' })
       return bench.deck.call('browser.worker', { action: 'renew', worker: 'Worker 1' })
+    },
+  },
+  {
+    id: 'browser.lift_request',
+    mode: '',
+    label: 'an ask was filed, or the call was refused with the reason',
+    empty: false,
+    why: 'filing either lands one row in the person\u2019s inbox (or re-finds the identical row already waiting, and says repeated) or the tool refuses with a sentence \u2014 an unknown profile, a full inbox, no workers. There is no third outcome to be empty about.',
+    run: async () => {
+      resetLiftRequestsForTests()
+      configureLiftRequests({
+        profiles: () => [
+          { id: 'p-default', name: 'Default' },
+          { id: 'p-w1', name: 'Worker 1' },
+        ],
+        workers: () => [{ id: 'p-w1', name: 'Worker 1' }],
+        notify: () => {},
+      })
+      return harness({ workers: [aWorker()] }).deck.call('browser.lift_request', { from: 'Default' })
     },
   },
   {

@@ -1,6 +1,7 @@
 import { slotName, windowsOf } from '../browser-binding'
 import type { JsonSchema, ToolContext, ToolOutput, ToolSpec } from './catalogue'
 import { emptySummary, withEmptiness } from './empty-result'
+import { liftAskTool } from './lift-ask-tool'
 import { Refused } from './surface'
 
 /**
@@ -481,5 +482,14 @@ export function workerTools(deps: WorkerToolDeps): ToolSpec[] {
     },
   }
 
-  return [listTool, workerTool]
+  /*
+   * And the ask — `browser.lift_request`, in its own file because it touches
+   * neither of this file's deps: it files a row with the desk in
+   * `browser-lift-requests.ts` and moves nothing. It rides in this list so the
+   * three worker-facing tools are registered as one family, from the one call
+   * `index.ts` already makes. The header above still holds: there is no tool
+   * that lifts a session, and the ask tool's own header carries the argument
+   * for why an ask is not a hole in that rule.
+   */
+  return [listTool, workerTool, liftAskTool()]
 }
