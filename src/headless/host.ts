@@ -73,6 +73,15 @@ import {
   type RestoreDecision,
 } from '../main/session-restore'
 import { getState as profilesState, resolveProfile } from '../main/profiles'
+/*
+ * Running a session as another login, and opening a sign-in terminal — the
+ * same functions the desktop shell hands its core, reached through the same
+ * seam. This is the wiring behind *"when I am inside the server, I cannot even
+ * change the accounts"*: handing the two verbs over is what makes this host
+ * advertise `CAPABILITY.account` and `CAPABILITY.logins`, and the phone and
+ * PWA already send the frames.
+ */
+import { createSessionSwitch, type SessionSwitch } from '../main/session-switch-run'
 import { store } from '../main/store'
 import { NO_COPILOT_HERE } from './cli'
 import { ChannelDesk } from './desk'
@@ -350,6 +359,34 @@ export async function createHeadlessHost(
     }
   }
 
+  /**
+   * Tell every attached device the session list changed — once the remote
+   * layer exists to tell them through.
+   *
+   * Late-bound for the reason the desktop's `remoteLayer` is: the core is
+   * constructed here and the wire below it, so a session restored at boot can
+   * exist before there is anybody to push at, and pushing to nobody is the
+   * correct answer rather than a race to work around. Each connection is sent
+   * its *own* `sessionsFor` list — see `tellSessions` in `remote/server.ts` —
+   * so this is an event, never a shared payload.
+   */
+  let tellDevices: (() => void) | null = null
+
+  /**
+   * The account switch and the sign-in, once the core exists to build them on.
+   *
+   * Late-bound because they are made *from* the core the options below
+   * construct — the same one-tick gap the desktop shell carries, answered with
+   * a sentence rather than a rejected promise if anything could ever ask
+   * inside it.
+   */
+  let accountVerbs: SessionSwitch | null = null
+  const stillStarting = Promise.resolve({
+    ok: false,
+    message: 'This computer is still starting up.',
+    session: null,
+  })
+
   const core = createHostCore({
     storageDir: remoteStorageDir,
     userData: stateDir,
@@ -359,6 +396,34 @@ export async function createHeadlessHost(
     // would be a broadcast into an empty room.
     onSessionCreated: (meta) => {
       logger.info('headless', 'a device started a session', { folder: meta.cwd, agent: meta.provider })
+    },
+    /*
+     * Every session, the moment it exists — so a terminal the *host itself*
+     * opened reaches the devices' lists without being asked for. The two that
+     * matter here are the sign-in terminal (`signInAccount` answers its id, and
+     * the pane that asked attaches to it) and a switch's replacement; a device
+     * that started a session hears about it twice, which `tellSessions` calls
+     * a harmless refresh.
+     */
+    onSessionStarted: () => tellDevices?.(),
+    /*
+     * The two verbs whose absence was the whole defect. `createHostCore`
+     * advertises `account` and `logins` exactly when a shell supplies these —
+     * see `SessionAccess.account` — so this host used to be a machine whose
+     * bar said "no rows to press". They are the desktop's own functions, built
+     * over this host's core; there is no headless dialect.
+     */
+    switchAccount: (sessionId, accountId) =>
+      accountVerbs?.switchAccount(sessionId, accountId) ?? stillStarting,
+    signInAccount: (accountId) => accountVerbs?.signInAccount(accountId) ?? stillStarting,
+  })
+  accountVerbs = createSessionSwitch(core, {
+    // The tab a desktop would make of it has no equivalent here; the device
+    // that asked opens the answered id, and `onSessionStarted` above has
+    // already pushed the new list at everybody else. What is left to do is say
+    // it happened on the machine where it happened.
+    onSessionOpened: (meta) => {
+      logger.info('headless', 'a sign-in terminal was opened', { folder: meta.cwd, agent: meta.provider })
     },
   })
 
@@ -460,6 +525,12 @@ export async function createHeadlessHost(
     ...(options.serve ? { serve: options.serve } : {}),
     broadcast,
   })
+
+  // The wire exists now. See the declaration for why this is late-bound; the
+  // push itself sends every connection its own per-device list.
+  tellDevices = () => {
+    remote.server.sessionsChanged()
+  }
 
   const machines = registerMachinesIpc(desk, {
     storageDir: remoteStorageDir,

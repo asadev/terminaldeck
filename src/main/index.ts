@@ -1,5 +1,4 @@
 import { existsSync, mkdirSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
 import {
   app,
@@ -12,7 +11,7 @@ import {
   shell,
 } from 'electron'
 import { BRAND } from '../shared/brand'
-import type { CreateSessionInput, ProviderId, SessionMeta } from '../shared/types'
+import type { CreateSessionInput, SessionMeta } from '../shared/types'
 import { createHostCore } from './host-core'
 import { detectProviders } from './providers'
 import { lookupCommand, registerCustomAgentsIpc } from './custom-agents'
@@ -38,22 +37,11 @@ import {
  * beside the handler down in this file, which is a fact about
  * `preload/contract.test.ts` as much as about the house rule.
  */
-// `transcriptDir` and `projectPathSpellings`: where a named conversation is
-// filed under one account's store, in both spellings of a folder reached
-// through a symlink. Read by the account switch, to check that the
-// conversation it is about to name is one the other login can actually see.
-import { projectPathSpellings, transcriptDir } from './transcript'
 import { savedFrom, SESSIONS_HELD_CHANNEL } from './session-held'
 import {
-  conversationOnDisk,
-  conversationScope,
-  conversationStore,
-  folderExists,
   personalSessions,
-  planRestore,
   restoreOpenSessions,
   type RestoreDecision,
-  type SavedSession,
 } from './session-restore'
 import { store, type Preferences } from './store'
 import { pickerStartDirectory } from './project-picker'
@@ -115,28 +103,20 @@ import { registerDashboardIpc } from './dashboard-store'
 import { registerArtifactsIpc } from './artifacts'
 import { registerSessionSearchIpc } from './session-search'
 import { registerAlertsIpc } from './alerts'
-import {
-  registerProfilesIpc,
-  findProfile,
-  getState as profilesState,
-  resolveProfile,
-} from './profiles'
+import { registerProfilesIpc, getState as profilesState } from './profiles'
 /*
  * Switching the account a *running* session is on. The channels are named in
  * the module that owns the feature, for the same two reasons the held list's is
  * — the house rule, and `preload/contract.test.ts`, which can only resolve a
  * channel registered through an exported constant.
  */
-import {
-  conversationToCarry,
-  planSwitch,
-  SESSION_SWITCH_CHANNEL,
-  SESSION_SWITCH_PLAN_CHANNEL,
-  startFailed,
-  survivedStart,
-  switchRefusal,
-  type SwitchPlan,
-} from './session-switch'
+import { SESSION_SWITCH_CHANNEL, SESSION_SWITCH_PLAN_CHANNEL } from './session-switch'
+/*
+ * The operations behind those channels — the switch itself, and the sign-in
+ * that opens a terminal. In their own module because the headless build hands
+ * the very same functions to its core; see `session-switch-run.ts`.
+ */
+import { createSessionSwitch, savedPlanner } from './session-switch-run'
 /*
  * The same switch, deferred to the next message he sends. Kept in its own
  * module because the part that is hard is not the switch — that is the one
@@ -156,12 +136,7 @@ import {
   switchedNote,
   type ArmedSwitch,
 } from './switch-later'
-import {
-  adoptSharedHistory,
-  canJoinSharedHistory,
-  joinSharedHistory,
-  registerSharedProjectsIpc,
-} from './shared-projects'
+import { adoptSharedHistory, registerSharedProjectsIpc } from './shared-projects'
 import { registerSignInIpc } from './profiles-signin'
 import { copilotState, registerCopilotIpc } from './copilot-session'
 import { appendCopilotAction, copilotPaths } from './copilot-home'
@@ -600,23 +575,6 @@ let updates: ReturnType<typeof registerUpdateIpc> | null = null
 let remoteLayer: { server: { sessionsChanged(): number } } | null = null
 
 /**
- * Running a session as a different account, once the IPC handlers exist.
- *
- * At module scope for the reason {@link remoteLayer} is: the core is constructed
- * here, at module scope, and the switch is assembled inside `registerIpc` out of
- * `startSession`, the ledger and the survival probe. Null until then, and a
- * paired machine that asks in that window is told so in a sentence rather than
- * left holding a promise — see the `switchAccount` option below.
- *
- * There is exactly one of these on this machine and this is a reference to it,
- * not a second arrangement of the same parts: the window at this desk and a
- * window on his PC press the same function.
- */
-let performSwitchAccount:
-  | ((sessionId: string, accountId: string) => Promise<SessionMeta>)
-  | null = null
-
-/**
  * The per-device copilot runs, once the remote layer is assembled.
  *
  * At module scope for one reason: `before-quit` has to be able to stop them, and
@@ -963,108 +921,30 @@ const core = createHostCore({
   // Mac and only the phone knows about it.
   onSessionCreated: (meta) => announceSession(meta),
   /*
-   * The account chip on a window on one of his other machines.
+   * The account chip on a window on one of his other machines — and the same
+   * two verbs the headless build now hands over.
    *
    * Asad, 2026-08-20: *"Then also bring the account selection here for the remote
-   * sessions too."* This is the shell's half — the operation itself, which only
-   * this file has, because a switch starts a replacement, waits to see whether
-   * the agent survived, and only then ends the session it replaced.
+   * sessions too."* And, inside a session on a server: *"when I am inside the
+   * server, I cannot even change the accounts."* The operations themselves —
+   * the switch that starts a replacement, waits to see whether the agent
+   * survived and only then ends the session it replaced, and the sign-in that
+   * opens a terminal for a person to finish a login in — live in
+   * `session-switch-run.ts` now, because they never needed a window and the
+   * headless host needs them verbatim. This shell hands them to the core
+   * exactly as `src/headless/host.ts` does.
    *
-   * `performSwitchAccount` rather than the function directly, because that one is
-   * built inside `registerIpc` and this object is constructed before it. A
-   * request that arrives in the gap is answered with a sentence rather than a
-   * rejected promise, which on the far side would be an unexplained "that could
-   * not be reached".
+   * Late-bound through `sessionSwitch`, because that object is built *from* the
+   * core this options bag constructs. The gap is one synchronous tick — nothing
+   * can call these before the module finishes loading — and the arrow reads the
+   * binding at call time.
    *
    * The new id travels because a switch replaces the process: the far window is
    * attached to the old session and has to follow, or it is looking at a pty that
-   * no longer exists. `meta.id` is the id the session has afterwards.
+   * no longer exists. The answered `session` is the id the session has afterwards.
    */
-  /*
-   * Signing one of this machine's logins in, from a pane on one of his own
-   * machines.
-   *
-   * Asad, 2026-08-21, looking at Settings → Coding AI with a paired PC in the
-   * rail beside it: *"So we can click and manage what accounts are there, what
-   * we want to login, logout, things, access. All of this we can just manage
-   * from this."*
-   *
-   * ## Why this opens a terminal instead of running a command
-   *
-   * Because that is what signing in *is* for every agent this app ships with.
-   * `agent-catalog.ts` carries `signInArgs` and `provider-accounts.ts` only ever
-   * turns it into a sentence to print, because the flow is interactive: the CLI
-   * writes a URL, waits, and finishes when a person has been to it. So the honest
-   * act is the one this app's own Accounts pane performs — start a session under
-   * that account's configuration directory and let the login happen in it — and
-   * the id of that session travels back so the window that asked can open it and
-   * read the URL, rather than being told to walk to the other machine.
-   *
-   * ## Why it is not confined, and why that is safe to say
-   *
-   * A session a *guest* asks for is held inside its granted folder with a home
-   * of its own, which is exactly wrong here: a login writes into `~/.claude` or
-   * the account's own directory, so a confined one would complete and leave
-   * nothing behind. It does not widen anything, because this verb is served to
-   * one of the owner's own devices and to nobody else — `CAPABILITY.logins` is
-   * stripped for a guest before the frame is ever read (`capabilitiesFor` in
-   * `remote/server.ts`), and refused again at the door. *"My device — full
-   * access. It's you at another keyboard."*
-   */
-  signInAccount: async (accountId) => {
-    const profile = findProfile(profilesState(), accountId)
-    if (profile === null) {
-      // The far pane listed this machine's logins a moment ago, so a miss is an
-      // account deleted in between — said as what it is rather than as a failure
-      // of the sign-in.
-      return { ok: false, message: 'There is no such login on this computer any more.', session: null }
-    }
-    try {
-      const meta = await startSession({
-        // The person's own home directory, which is where a login belongs: it
-        // touches the agent's configuration and nothing in any project, and a
-        // folder chosen from over there would be this machine opening a terminal
-        // somewhere the person did not ask for.
-        cwd: homedir(),
-        cols: 80,
-        rows: 24,
-        provider: profile.provider as ProviderId,
-        profileId: profile.id,
-      })
-      announceSession(meta)
-      return {
-        ok: true,
-        // What actually happened, and what to do next. Never "signed in": nobody
-        // has typed anything yet, and whether the login succeeds is a question
-        // for the next read of this machine's own probe.
-        message: `A terminal is open on this computer for ${profile.name}. Finish the login in it.`,
-        session: meta.id,
-      }
-    } catch (error) {
-      const message = error instanceof Error && error.message ? error.message : 'That login could not be started.'
-      return { ok: false, message, session: null }
-    }
-  },
-  switchAccount: async (sessionId, accountId) => {
-    const perform = performSwitchAccount
-    if (perform === null) {
-      return { ok: false, message: 'This computer is still starting up.', session: null }
-    }
-    try {
-      const meta = await perform(sessionId, accountId)
-      return { ok: true, message: '', session: meta.id }
-    } catch (error) {
-      /*
-       * The refusal as it was written, not a wrapper around it. `performSwitch`
-       * throws `plan.refusal` — "that account has never signed in", the CLI's own
-       * start failure — and those sentences are already written for the person
-       * reading them. `session` is the id the session still has, because a switch
-       * that did not happen left it running.
-       */
-      const message = error instanceof Error ? error.message : 'That account could not be used.'
-      return { ok: false, message, session: sessionId }
-    }
-  },
+  signInAccount: (accountId) => sessionSwitch.signInAccount(accountId),
+  switchAccount: (sessionId, accountId) => sessionSwitch.switchAccount(sessionId, accountId),
 })
 
 /**
@@ -1102,6 +982,22 @@ function announceSession(meta: SessionMeta): void {
  * seven hundred lines of incidental churn.
  */
 const { ptys, wsl, sessions: remoteSessions, ledger, startSession, statablePath } = core
+
+/**
+ * Running a session as another login, and opening a sign-in terminal — the one
+ * implementation on this machine, shared with the headless build.
+ *
+ * Built from the core the moment the core exists, which is what lets the
+ * options bag above hand `switchAccount` and `signInAccount` to the fanout: the
+ * window at this desk, a window on a paired machine and a phone talking to a
+ * headless host all press this same object. See `session-switch-run.ts` for
+ * why the operations live behind the seam.
+ *
+ * `onSessionOpened` is this shell's half of the sign-in: the terminal has to
+ * become a tab in this window, or the session runs with only the far pane
+ * knowing it exists.
+ */
+const sessionSwitch = createSessionSwitch(core, { onSessionOpened: (meta) => announceSession(meta) })
 
 /**
  * How many routine runs this whole app may start in an hour, across every
@@ -1524,38 +1420,7 @@ let restored = false
  * from the one that failed, which is the class of difference nobody notices
  * until it is a bug report.
  */
-const planSaved = (sessions: readonly SavedSession[]): Promise<RestoreDecision[]> =>
-  planRestore(sessions, {
-    // Asked about the folder as Windows can see it. Without the translation
-    // every session that was running inside a distro is planned as "its folder
-    // is gone" and dropped, which is the app losing a day's tabs and explaining
-    // it with a sentence that is not true.
-    folderExists: (cwd) => folderExists(statablePath(cwd)),
-    // `core.canContinue`, not `PROVIDERS[provider].resumeArgs`: the table has
-    // only the agents this build ships, so a restored session on an agent the
-    // person added threw a `TypeError` here and took the whole restore — every
-    // other tab included — down with it.
-    canContinue: core.canContinue,
-    /*
-     * Resolved exactly the way `startSession` resolves it, and that is the
-     * point: the directory searched for a conversation has to be the directory
-     * the restored session will then write to, or the answer is about a
-     * different login than the one coming back.
-     *
-     * Passing `conversationOnDisk` by reference used to be enough — it took an
-     * optional config directory and fell back to the app's own. That fallback is
-     * `~/.claude`, so every session that ran as a profile was asked about the
-     * wrong store, answered "no conversation" and came back blank with its
-     * transcript sitting untouched on disk. The profile is the whole reason the
-     * transcripts moved.
-     */
-    configDir: (session) =>
-      resolveProfile(profilesState(), {
-        sessionProfileId: session.profileId ?? undefined,
-        projectPath: session.cwd,
-      }).configDir,
-    conversation: conversationOnDisk,
-  })
+const planSaved = savedPlanner(core)
 
 /**
  * Tell the window which sessions are being held.
@@ -3735,366 +3600,23 @@ function registerIpc(): void {
   /* ------------------------------------ running this session as somebody else -- */
 
   /**
-   * Everything the two channels below need to know about one session, gathered
-   * once.
+   * The plan, the switch and the deferred switch, wired to the channels this
+   * window speaks.
    *
-   * A helper rather than two copies, because the plan and the switch have to
-   * agree about every one of these or the sentence somebody read is not a
-   * description of what then happened. That is the entire promise this feature
-   * makes: *say what will happen before it happens.* Two independent lookups is
-   * how the two would come to disagree — the account resolved twice, the folder
-   * probed twice, the conversation asked about twice, in between which the
-   * person has had time to read a paragraph and press a button.
-   */
-  const switchSubject = async (
-    sessionId: unknown,
-    profileId: unknown,
-  ): Promise<{
-    plan: SwitchPlan
-    saved: SavedSession | null
-    resume: boolean
-    /** The conversation to name on the replacement, or null for the folder's newest. */
-    conversationId: string | null
-  }> => {
-    const id = typeof sessionId === 'string' ? sessionId : ''
-    const wanted = typeof profileId === 'string' ? profileId : ''
-    const meta = ptys.list().find((session) => session.id === id) ?? null
-    const saved = ledger.get(id)
-    const target = wanted === '' ? null : findProfile(profilesState(), wanted)
-
-    /*
-     * The decision is only asked for once the cheap refusals have passed, and
-     * that ordering is deliberate rather than an optimisation. `planSaved` stats
-     * a folder and reads a directory; asking it about a session that is a plain
-     * shell, or about an account of the wrong agent, would be doing work to
-     * answer a question that has already been answered — and, on a WSL machine,
-     * doing it across a filesystem boundary.
-     */
-    const refused = switchRefusal({ meta, saved, target })
-    if (refused !== null || saved === null || target === null) {
-      /*
-       * `switchRefusal` and not `planSwitch` for the question itself, and that
-       * distinction cost a live driving run to find. `planSwitch` treats a
-       * *missing* decision as a refusal in its own right — deliberately, because
-       * "nothing was decided" is not "start it fresh" — so asking it with
-       * `decision: null` answers "cannot be started again" about every switch
-       * that was going to work perfectly well. The refusals that can be reached
-       * without touching a disk are their own function precisely so this pass
-       * can ask only them.
-       */
-      return {
-        plan: planSwitch({
-          sessionId: id,
-          meta,
-          saved,
-          target,
-          decision: null,
-          occupied: false,
-          // Nothing was decided, so nothing is being said about a conversation.
-          sharedStore: false,
-        }),
-        saved,
-        resume: false,
-        conversationId: null,
-      }
-    }
-
-    /*
-     * The two accounts are put on one conversation history before anything is
-     * asked about it, and that ordering is the whole of the D1 fix.
-     *
-     *   > *"It's not keeping the conversation history… It should at least keep
-     *   > the conversation there, history there, memory there when I switch
-     *   > between the accounts."*
-     *
-     * `adoptSharedHistory` runs at boot and covers every account that exists
-     * then; this covers the one added since, and it costs an `lstat` per side
-     * when there is nothing to do. It is deliberately *before* `planSaved`,
-     * because `planSaved` reads the target account's conversation store to
-     * decide whether there is anything to continue — and the answer to that
-     * question is different on either side of the link. Asking first and
-     * linking afterwards is how the sheet would say "starts a new one" about a
-     * switch that then continued the conversation on screen, which is the same
-     * failure as the original one with the sign reversed.
-     *
-     * A write on the path a *plan* takes, and that is intended: the plan is the
-     * only route to the switch, both sides are refused unless the link is
-     * additive, and the alternative is describing a state the app is about to
-     * leave. An account the app must not restructure — another agent's, or a
-     * directory somebody pointed at themselves — is left alone and the sheet
-     * goes on saying what really happens to it.
-     */
-    const source = resolveProfile(profilesState(), {
-      sessionProfileId: saved.profileId ?? undefined,
-      projectPath: saved.cwd,
-    })
-    if (canJoinSharedHistory(source) && canJoinSharedHistory(target)) {
-      try {
-        joinSharedHistory(source)
-        joinSharedHistory(target)
-      } catch (cause) {
-        /*
-         * A link that could not be made is not a switch that cannot happen.
-         * Everything below reads the disk for itself, so failing here leaves
-         * the plan describing two separate stores — which is the truth, and is
-         * the case the sheet still carries a warning for. Throwing instead
-         * would turn "your conversation stays behind" into "the account could
-         * not be switched", which is a worse answer to a working switch.
-         */
-        logger.warn('accounts', 'could not join the shared conversation history', {
-          from: source.id,
-          to: target.id,
-          reason: cause instanceof Error ? cause.message : String(cause),
-        })
-      }
-    }
-
-    const switched: SavedSession = { ...saved, profileId: target.id }
-    const [decision] = await planSaved([switched])
-
-    /*
-     * Is another tab already on the conversation this one would continue?
-     *
-     * `conversationScope` is the shared answer to "which transcript would
-     * `--continue` attach to" — provider, config directory and folder, which is
-     * narrower than a folder and was made narrower because keying on the folder
-     * alone silently threw conversations away. Reused rather than re-derived, so
-     * the switch and the launch cannot come to disagree about what counts as the
-     * same conversation.
-     *
-     * `planRestore` cannot answer this for a switch: it reasons about a list of
-     * *remembered* sessions being started together, and this one is about the
-     * tabs open on screen right now. Hence the one extra fact, computed here
-     * where the live list is, and applied by `planSwitch`.
-     */
-    const configDir = decision?.configDir ?? null
-    const mine = configDir === null ? null : conversationScope(switched, configDir)
-    const occupied =
-      mine !== null &&
-      ledger
-        .entries()
-        .filter((entry) => entry.id !== id)
-        .some(
-          (entry) =>
-            conversationScope(
-              entry.saved,
-              resolveProfile(profilesState(), {
-                sessionProfileId: entry.saved.profileId ?? undefined,
-                projectPath: entry.saved.cwd,
-              }).configDir,
-            ) === mine,
-        )
-
-    /*
-     * Do the two accounts read one conversation history?
-     *
-     * `conversationStore` is the same realpath-and-memo the occupancy check
-     * above rests on, asked of both sides rather than of one: an account whose
-     * `projects/` has been linked into the shared location by
-     * `shared-projects.ts` resolves to the same store as the account it was
-     * linked to, and two that have not resolve to two. It decides nothing about
-     * what the switch *does* — the continue flag is handed over either way — and
-     * everything about what the sheet is allowed to claim, because with one
-     * store the conversation the replacement picks up is the conversation on
-     * screen, and with two it is a different one that lives in the same folder.
-     */
-    const sharedStore =
-      configDir !== null && conversationStore(configDir) === conversationStore(source.configDir)
-
-    const plan = planSwitch({
-      sessionId: id,
-      meta,
-      saved,
-      target,
-      decision: decision ?? null,
-      occupied,
-      sharedStore,
-    })
-
-    /*
-     * Which conversation the replacement is told to continue.
-     *
-     * `--continue` means "the folder's newest in the target's store", and the
-     * sheet has just promised something narrower than that — the conversation
-     * *on screen*. This app knows its id, because it put it on the outgoing
-     * process's own command line, so the replacement can name it instead of
-     * describing it. The check is the honest half: the transcript has to be
-     * readable from the store the replacement will run against, or `--resume`
-     * is a process that prints an error and exits. `conversationToCarry` holds
-     * the three conditions and is tested on its own.
-     *
-     * Both spellings of the folder, because on this platform everything under
-     * `/tmp` is reached through a symlink and the CLI files a transcript under
-     * whichever spelling it was handed.
-     */
-    const named = meta?.agentSessionId
-    const carried =
-      configDir === null || typeof named !== 'string'
-        ? null
-        : conversationToCarry({
-            plan,
-            agentSessionId: named,
-            readableInTarget: projectPathSpellings(saved.cwd).some((spelling) =>
-              existsSync(join(transcriptDir(spelling, configDir), `${named}.jsonl`)),
-            ),
-          })
-
-    return { plan, saved, resume: plan.resume, conversationId: carried }
-  }
-
-  /**
-   * What a switch would do, before one is made.
-   *
-   * The window draws this as a sheet and will not stop anything until somebody
-   * has read it. It is the whole of the answer to the complaint underneath this
-   * feature — a restart nobody expected — and it is why the plan touches the
-   * disk and the switch does not decide anything.
+   * The operations themselves live in `session-switch-run.ts` and are shared
+   * with the headless build — see `sessionSwitch` at module scope. What stays
+   * here is only what a *window* adds: the sheet that will not stop anything
+   * until somebody has read it, and the deferred switch that fires on his next
+   * message.
    */
   ipcMain.handle(SESSION_SWITCH_PLAN_CHANNEL, async (_e, sessionId: unknown, profileId: unknown) => {
-    const { plan } = await switchSubject(sessionId, profileId)
+    const { plan } = await sessionSwitch.subject(sessionId, profileId)
     return plan
   })
 
-  /**
-   * Run this session as another account: same tab, same folder, new process.
-   *
-   * ## The order is start, then stop, and that is the point
-   *
-   * The obvious order is the wrong one. Stopping first and spawning afterwards
-   * means a spawn that fails has already destroyed a working session — and
-   * `AgentUnavailableError` is thrown *by* the spawn, after probing, so "could
-   * this even start?" cannot be answered fully in advance. That is the exact
-   * fault that was just fixed on the restore path in the other direction, and
-   * the fix there was to keep the request rather than let it evaporate.
-   *
-   * Here it can be avoided outright, because the two processes cannot collide.
-   * They are different accounts, so they are different config directories, so
-   * they are different transcript stores — the measurement at the top of
-   * `session-switch.ts` is exactly that — and the old session is stopped within
-   * a moment of the new one existing. So a switch that cannot start leaves the
-   * session it was asked about running, untouched, and the window says why.
-   *
-   * ## Which is why nothing is held
-   *
-   * `session:create` holds a request that failed, because there the alternative
-   * is a tab that vanished with nothing to show for it. Here the session is
-   * still there. A held row saying *"this could not be started"* beside a
-   * session that is still running would be the app inventing a loss it did not
-   * suffer, and the Try again beside it would start a *second* session rather
-   * than retrying anything. The reuse that matters is the sentence:
-   * `AgentUnavailableError`'s own message is what the window prints, unchanged,
-   * because it is already written for the person who is reading it.
-   */
-  const performSwitch = async (sessionId: unknown, profileId: unknown): Promise<SessionMeta> => {
-    const { plan, saved, conversationId } = await switchSubject(sessionId, profileId)
-    if (plan.refusal !== null || saved === null || plan.to === null) {
-      throw new Error(plan.refusal ?? 'This session cannot be switched.')
-    }
-
-    const meta = await startSession({
-      cwd: saved.cwd,
-      cols: saved.cols,
-      rows: saved.rows,
-      provider: saved.provider,
-      profileId: plan.to.id,
-      resume: plan.resume,
-      /*
-       * The two facts that make the sheet's promise come true, and neither of
-       * them existed while this feature was reported broken twice.
-       *
-       * `replaces` exempts the outgoing session from the one-conversation
-       * guard. The order below is start-then-stop, so at this instant there is
-       * a live session of the same provider in the same folder, and
-       * `one-conversation.ts` — which cannot otherwise tell a replacement from
-       * a second tab — dropped `--continue` on every switch ever made. That is
-       * the whole of *"it's not keeping the conversation history"*.
-       *
-       * `resumeConversationId` then makes the resume mean the conversation on
-       * screen rather than the folder's newest. Null whenever that could not be
-       * established, which falls back to exactly the behaviour above it.
-       */
-      replaces: plan.sessionId,
-      ...(conversationId === null ? {} : { resumeConversationId: conversationId }),
-    })
-
-    /*
-     * A spawn that succeeded is not yet a session that started.
-     *
-     * `startSession` resolves the moment the pty exists, and the agent can still
-     * refuse a second later — `--continue` against a transcript the CLI declines
-     * to continue is a real, reproduced case, and `survivedStart` carries it.
-     * Stopping the old session before knowing would leave a dead tab where a
-     * working agent was, which is the one outcome this feature must not produce.
-     *
-     * The replacement is cleaned up rather than left as a corpse: it never
-     * became anybody's tab — this handler is the only thing that knows it exists
-     * — so leaving it in the ledger would put a phantom session in `openSessions`
-     * for the next launch to restore.
-     */
-    const started = await survivedStart(meta.id, {
-      wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-      alive: (id) => ptys.list().some((session) => session.id === id),
-      screen: (id) => ptys.scrollback(id),
-    })
-    if (!started.alive) {
-      ledger.forget(meta.id)
-      ptys.kill(meta.id)
-      const why = startFailed(plan.to.name, started.said)
-      logger.warn('session', `account switch did not take: ${why}`, {
-        folder: saved.cwd,
-        agent: saved.provider,
-        to: plan.to.id,
-      })
-      throw new Error(why)
-    }
-
-    /*
-     * Only now. `ledger.forget` as well as the kill, for the reason
-     * `session:kill` gives: `onExit` arrives later, and a session that has been
-     * deliberately replaced must not sit in the remembered list in the meantime,
-     * where a crash inside that gap would bring it back beside its replacement.
-     */
-    ledger.forget(plan.sessionId)
-    // `replaced`, not `stopped`: the tab is not going anywhere, only the process
-    // inside it. Announcing a removal for the outgoing half would race the
-    // window's own swap, which finds the old row by id and leaves the list alone
-    // when it cannot — so the losing side of that race is a tab that vanishes in
-    // the middle of a switch. See `RemovalReason`.
-    ptys.kill(plan.sessionId, 'replaced')
-    logger.info('session', 'switched account', {
-      folder: saved.cwd,
-      agent: saved.provider,
-      from: plan.from?.id ?? null,
-      to: plan.to.id,
-      /*
-       * What the process got, not what the plan asked for.
-       *
-       * This read `plan.resume`, and for as long as the guard above was
-       * dropping the flag it logged `continued: true` over a replacement that
-       * had started a brand-new conversation — the one line anybody
-       * investigating would have trusted, agreeing with the sheet and with
-       * nothing else. `SessionMeta.resumed` is read off the argument list that
-       * was actually spawned.
-       */
-      continued: meta.resumed === true,
-      conversation: conversationId,
-    })
-    return meta
-  }
-
   ipcMain.handle(SESSION_SWITCH_CHANNEL, (_e, sessionId: unknown, profileId: unknown) =>
-    performSwitch(sessionId, profileId),
+    sessionSwitch.perform(sessionId, profileId),
   )
-
-  /*
-   * And the same function, for a window on one of his other machines.
-   *
-   * Published rather than reimplemented: `remote/account-serve.ts` reaches this
-   * exact reference, so a switch asked for from his PC runs the same plan, the
-   * same conversation guard and the same survival probe as one pressed at this
-   * keyboard. See `performSwitchAccount` at module scope for why it is late-bound.
-   */
-  performSwitchAccount = (sessionId, accountId) => performSwitch(sessionId, accountId)
 
   /* ------------------------------- the same switch, at his next message -- */
 
@@ -4116,10 +3638,10 @@ function registerIpc(): void {
    *
    * It is re-planned at the moment it fires, and this stored copy is never
    * acted on — the account could be removed, or another tab could take the
-   * conversation, in between arming and sending. `performSwitch` asks again.
+   * conversation, in between arming and sending. `sessionSwitch.perform` asks again.
    */
   ipcMain.handle(SESSION_SWITCH_LATER_CHANNEL, async (_e, sessionId: unknown, profileId: unknown) => {
-    const { plan } = await switchSubject(sessionId, profileId)
+    const { plan } = await sessionSwitch.subject(sessionId, profileId)
     if (plan.refusal !== null || plan.to === null) {
       throw new Error(plan.refusal ?? 'This session cannot be switched.')
     }
@@ -4156,7 +3678,7 @@ function registerIpc(): void {
   /**
    * Run an armed switch, then deliver the message it was waiting for.
    *
-   * The order is what makes it safe. `performSwitch` starts the replacement,
+   * The order is what makes it safe. `sessionSwitch.perform` starts the replacement,
    * proves it is alive and only then stops the old session — so a switch that
    * fails leaves the old session running with the typed line still in its
    * prompt, exactly where the person left it, and the window is told why.
@@ -4169,7 +3691,7 @@ function registerIpc(): void {
   const fireSwitch = async (armed: ArmedSwitch, line: string, submit: boolean): Promise<void> => {
     let meta: SessionMeta
     try {
-      meta = await performSwitch(armed.sessionId, armed.profileId)
+      meta = await sessionSwitch.perform(armed.sessionId, armed.profileId)
     } catch (cause) {
       const why = cause instanceof Error ? cause.message : String(cause)
       // The account id travels with the reason so the window can reopen the
