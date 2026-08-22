@@ -1,6 +1,8 @@
 import { spawn } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { accessSync, constants, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import type { Readable, Writable } from 'node:stream'
+import { CdpPipe } from './browser-cdp-pipe'
 import { currentPlatform, type Platform } from './platform/host'
 
 /**
@@ -80,15 +82,83 @@ import { currentPlatform, type Platform } from './platform/host'
 /* ------------------------------------------------------- system libraries -- */
 
 /**
+ * The package manager a Linux box has, in the order `install-headless.sh` asks.
+ *
+ * `musl` is not a package manager and is deliberately in the same union: an
+ * Alpine box's answer to "which packages do I install" is *none of them*, and a
+ * type that could not say so would force this file to print an `apk add` line
+ * that cannot work. See {@link chromiumLibraryHint}.
+ */
+export type PackageFamily = 'apt' | 'dnf' | 'yum' | 'pacman' | 'zypper' | 'musl'
+
+/** Is this command on PATH? The seam every family check goes through. */
+export type HaveCommand = (command: string) => boolean
+
+const defaultHave: HaveCommand = (command) => {
+  const path = process.env.PATH ?? ''
+  const sep = process.platform === 'win32' ? ';' : ':'
+  for (const dir of path.split(sep)) {
+    if (dir === '') continue
+    try {
+      accessSync(join(dir, command), constants.X_OK)
+      return true
+    } catch {
+      /* Not here; try the next entry. */
+    }
+  }
+  return false
+}
+
+/**
+ * Which family this machine is, decided the way `install-headless.sh` decides it.
+ *
+ * That script's `check_native_toolchain` walks `apk`, `dnf`, `yum`, `pacman`,
+ * `zypper` and falls back to `apt-get`, and this walks the same list in the same
+ * order so the two never disagree about a box. `apk` first is not arbitrary —
+ * it is the one answer that changes the *advice* rather than only the command,
+ * so it has to be asked before anything else can claim the machine.
+ *
+ * The default is `apt` rather than "unknown" for the reason the shell script
+ * has: the overwhelming majority of rented Linux servers are Debian or Ubuntu,
+ * and a person on the exception has a package manager in front of them and can
+ * translate one line. A refusal to guess would help nobody.
+ */
+export function detectPackageFamily(have: HaveCommand = defaultHave): PackageFamily {
+  if (have('apk')) return 'musl'
+  if (have('dnf')) return 'dnf'
+  if (have('yum')) return 'yum'
+  if (have('pacman')) return 'pacman'
+  if (have('zypper')) return 'zypper'
+  return 'apt'
+}
+
+/**
  * The Debian/Ubuntu packages a downloaded Chromium needs and a server image does
  * not have.
  *
  * A chrome-for-testing archive is not self-contained: it links the system's
  * graphics, font, accessibility and audio libraries dynamically, and a minimal
  * cloud image ships almost none of them. Measured on a stock Ubuntu 24.04
- * Hetzner box on 2026-08-22: of the twenty-three libraries the binary needs,
- * **thirteen were missing**, so the download verified, unpacked, reported
- * success and could not execute a single instruction.
+ * Hetzner box on 2026-08-22: of the fifty-three entries `ldd` prints for the
+ * binary, **thirteen resolved to nothing** —
+ *
+ *     libasound.so.2  libatk-1.0.so.0  libatk-bridge-2.0.so.0  libatspi.so.0
+ *     libcairo.so.2   libcups.so.2     libgbm.so.1             libpango-1.0.so.0
+ *     libXcomposite.so.1  libXdamage.so.1  libXext.so.6  libXfixes.so.3
+ *     libXrandr.so.2
+ *
+ * — so the download verified, unpacked, reported success and could not execute a
+ * single instruction. Installing exactly this list and re-running `ldd` left
+ * nothing unresolved and `chrome --version` answered, on that same box, the same
+ * day. That is the whole claim this constant makes, and it was measured rather
+ * than assembled from a wiki page.
+ *
+ * `libxext6` is in the list even though apt pulls it in behind `libxrandr2`,
+ * because a list that depends on somebody else's dependency graph is a list that
+ * breaks when that graph changes and gives no clue why. `libnss3` and
+ * `libxkbcommon0` were already present on that image and are named anyway —
+ * Chromium links both, and an image that lacks them would otherwise get a
+ * "install these" line that leaves it still broken.
  *
  * The list is the packages rather than the library filenames because a package
  * is what a person can act on. `t64` suffixes are the 64-bit-time_t transition
@@ -109,6 +179,7 @@ export const CHROMIUM_LINUX_PACKAGES: readonly string[] = [
   'libatspi2.0-0t64',
   'libxcomposite1',
   'libxdamage1',
+  'libxext6',
   'libxfixes3',
   'libxrandr2',
   'libpango-1.0-0',
@@ -117,9 +188,96 @@ export const CHROMIUM_LINUX_PACKAGES: readonly string[] = [
   'libxkbcommon0',
 ]
 
-/** The one line that installs them, for a message a person can paste. */
-export function chromiumLibraryHint(): string {
-  return `sudo apt-get install -y ${CHROMIUM_LINUX_PACKAGES.join(' ')}`
+/**
+ * The same libraries under each family's own package names.
+ *
+ * Only the `apt` row is measured — on the Ubuntu 24.04 box described above. The
+ * others are the same fourteen libraries spelled the way each distribution
+ * spells them, and they are here because the alternative that shipped was an
+ * `apt-get` line printed at a person holding `dnf`, which is not a hint, it is
+ * a puzzle. Where one of these is wrong it is wrong by a package name that
+ * `dnf`/`pacman`/`zypper` will say it cannot find — a failure that names itself
+ * — rather than by claiming a machine is ready when it is not.
+ *
+ * `musl` has no row on purpose. See {@link chromiumLibraryHint}.
+ */
+const PACKAGES_BY_FAMILY: Record<Exclude<PackageFamily, 'musl'>, readonly string[]> = {
+  apt: CHROMIUM_LINUX_PACKAGES,
+  dnf: [
+    'atk', 'at-spi2-atk', 'cups-libs', 'mesa-libgbm', 'alsa-lib', 'at-spi2-core',
+    'libXcomposite', 'libXdamage', 'libXext', 'libXfixes', 'libXrandr',
+    'pango', 'cairo', 'nss', 'libxkbcommon',
+  ],
+  yum: [
+    'atk', 'at-spi2-atk', 'cups-libs', 'mesa-libgbm', 'alsa-lib', 'at-spi2-core',
+    'libXcomposite', 'libXdamage', 'libXext', 'libXfixes', 'libXrandr',
+    'pango', 'cairo', 'nss', 'libxkbcommon',
+  ],
+  pacman: [
+    'atk', 'at-spi2-atk', 'libcups', 'mesa', 'alsa-lib', 'at-spi2-core',
+    'libxcomposite', 'libxdamage', 'libxext', 'libxfixes', 'libxrandr',
+    'pango', 'cairo', 'nss', 'libxkbcommon',
+  ],
+  zypper: [
+    'libatk-1_0-0', 'libatk-bridge-2_0-0', 'libcups2', 'libgbm1', 'libasound2',
+    'libatspi0', 'libXcomposite1', 'libXdamage1', 'libXext6', 'libXfixes3',
+    'libXrandr2', 'libpango-1_0-0', 'libcairo2', 'mozilla-nss', 'libxkbcommon0',
+  ],
+}
+
+/** The install verb each family spells differently, with its non-interactive flag. */
+const INSTALL_VERB: Record<Exclude<PackageFamily, 'musl'>, string> = {
+  apt: 'apt-get install -y',
+  dnf: 'dnf install -y',
+  yum: 'yum install -y',
+  pacman: 'pacman -S --needed --noconfirm',
+  zypper: 'zypper install -y',
+}
+
+/**
+ * The one command that installs the libraries, for this machine's package
+ * manager — or, on musl, the honest statement that no such command exists.
+ *
+ * ## Why Alpine gets a different sentence rather than an `apk add` line
+ *
+ * chrome-for-testing publishes **glibc** builds and nothing else. On a musl box
+ * the binary's interpreter — `/lib64/ld-linux-x86-64.so.2` — is not there, so
+ * the failure is not a missing feature library that `apk add` could supply; the
+ * loader itself is absent and every package in the world leaves it absent. An
+ * `apk add` line here would send somebody to install fourteen packages and land
+ * them back at exactly the same error, which is the "no resistance" rule broken
+ * twice: once by the original wrong success, once by the wrong fix.
+ *
+ * What *does* work on Alpine is the distribution's own `chromium` package, built
+ * against musl — and this app already has the door for it, because
+ * `CHROMIUM_PATH_ENV` exists for exactly the operator who wants to supply their
+ * own binary. So that is what the sentence says.
+ */
+export function chromiumLibraryHint(family: PackageFamily = detectPackageFamily()): string {
+  if (family === 'musl') {
+    return (
+      'apk add chromium && TERMINALDECK_CHROMIUM_PATH=/usr/bin/chromium ' +
+      '(chrome-for-testing publishes glibc builds only, so no package makes the downloaded one run here)'
+    )
+  }
+  return `sudo ${INSTALL_VERB[family]} ${PACKAGES_BY_FAMILY[family].join(' ')}`
+}
+
+/**
+ * The command {@link chromiumLibraryHint} describes, split for `spawn`, or
+ * `null` where there is nothing to run.
+ *
+ * Separate from the hint string because the two have different jobs and only one
+ * of them may ever be executed: the hint is prose a person reads, this is an
+ * argv a machine runs — and only when someone passed `--with-deps`. `null` for
+ * musl keeps that promise mechanically rather than by remembering to check.
+ */
+export function chromiumLibraryCommand(
+  family: PackageFamily = detectPackageFamily(),
+): { command: string; args: string[] } | null {
+  if (family === 'musl') return null
+  const [command, ...verbArgs] = INSTALL_VERB[family].split(' ')
+  return { command, args: [...verbArgs, ...PACKAGES_BY_FAMILY[family]] }
 }
 
 /* --------------------------------------------------------------- sandbox -- */
@@ -365,7 +523,12 @@ export interface ChromiumHandle {
   close(): void
 }
 
-export type LaunchResult =
+/**
+ * A spawned browser and the sandbox decision it was spawned under — what is
+ * knowable the instant the process exists, and no more. {@link launchChromium}
+ * is the one that also knows whether it *works*.
+ */
+export type SpawnResult =
   | {
       ok: true
       handle: ChromiumHandle
@@ -376,6 +539,24 @@ export type LaunchResult =
        * dropped has to be sayable by whatever is reporting to the person —
        * `terminaldeck status` prints it, and the drive check prints it.
        */
+      sandbox: SandboxDecision
+    }
+  | { ok: false; why: string }
+
+/** A browser that has answered, with the pipe it answered on. */
+export type LaunchResult =
+  | {
+      ok: true
+      handle: ChromiumHandle
+      /**
+       * The framed CDP channel, already used for the handshake.
+       *
+       * Handed back rather than rebuilt by the caller because it is the *same*
+       * pipe: a second `CdpPipe` over the same fds would race the first for
+       * every byte. It structurally satisfies `browser-driven-cdp.ts`'s
+       * `CdpTransport`, which is what the host drives through.
+       */
+      transport: CdpPipe
       sandbox: SandboxDecision
     }
   | { ok: false; why: string }
@@ -392,21 +573,33 @@ export interface LaunchOptions extends FlagOptions {
    * `/proc`. A test supplies them; production never does.
    */
   sandboxFacts?: SandboxFacts
+  /**
+   * How long the browser gets to answer its first command before the launch is
+   * called a failure. Defaults to {@link FIRST_COMMAND_TIMEOUT_MS}.
+   *
+   * A parameter because a test proving the timeout arm would otherwise have to
+   * wait the production thirty seconds, which means it would not be written.
+   */
+  readyTimeoutMs?: number
 }
 
 /**
  * Spawn Chromium with the CDP pipe stdio and return its two fd streams, or a
  * named error.
  *
- * Three failures are caught rather than left to surface later as an unhandled
+ * Four failures are caught rather than left to surface later as an unhandled
  * event or a hang: a `spawn` that throws, a child that came back with no pid
  * (the ordinary "the executable is not there" case — `spawn` reports it
- * asynchronously, but a missing pid is synchronous), and a child that has
- * already exited before this function returned. A child that spawned but has no
- * pipe on fd 3 or fd 4 is also refused, because a CDP channel that is not there
- * is not a browser anyone can drive.
+ * asynchronously, but a missing pid is synchronous), a child that has already
+ * exited before this function returned, and a child with no pipe on fd 3 or
+ * fd 4, because a CDP channel that is not there is not a browser anyone can
+ * drive.
+ *
+ * **None of those four is proof that the browser works**, and that is the whole
+ * reason this is not the exported entry point any more. See
+ * {@link launchChromium}.
  */
-export function launchChromium(options: LaunchOptions): LaunchResult {
+export function spawnChromium(options: LaunchOptions): SpawnResult {
   const spawnFn = options.spawn ?? defaultSpawn
   const sandbox =
     options.sandbox === undefined
@@ -453,12 +646,38 @@ export function launchChromium(options: LaunchOptions): LaunchResult {
    * fills its buffer and can wedge the child, which is a second reason to
    * consume it. Two kilobytes is far more than the one line that matters and far
    * less than a browser's debug chatter over a long session.
+   *
+   * The *diagnostic* is kept separately, and that is not belt-and-braces. A
+   * Chromium that aborts prints its reason first and then twenty stack frames
+   * and a register dump — measured on Ubuntu 24.04, 2026-08-22: the `FATAL:`
+   * line naming a missing crashpad handler was 1.6 kB above the end of the
+   * output, so a two-kilobyte tail held the register dump and had thrown the
+   * only useful line away. {@link describeExit} was then handing a person
+   * `Chromium exited on signal SIGABRT: [end of stack trace]`. So the line is
+   * caught as it goes past instead of dug for afterwards.
    */
   let stderrTail = ''
+  let diagnostic = ''
+  let stderrLine = ''
   const stderr = child.stdio[2]
   if (stderr !== null && stderr !== undefined && typeof (stderr as Readable).on === 'function') {
     ;(stderr as Readable).on('data', (chunk: Buffer | string) => {
-      stderrTail = `${stderrTail}${String(chunk)}`.slice(-2048)
+      const text = String(chunk)
+      stderrTail = `${stderrTail}${text}`.slice(-2048)
+      // Line-buffered, because a chunk boundary lands mid-sentence often enough
+      // that matching per chunk would miss the one line that matters.
+      stderrLine += text
+      let newline = stderrLine.indexOf('\n')
+      while (newline !== -1) {
+        const line = stderrLine.slice(0, newline)
+        if (isDiagnostic(line)) diagnostic = line.trim()
+        stderrLine = stderrLine.slice(newline + 1)
+        newline = stderrLine.indexOf('\n')
+      }
+      // A final line with no trailing newline still counts — a process that dies
+      // mid-line is exactly the case here.
+      if (stderrLine.length > 0 && isDiagnostic(stderrLine)) diagnostic = stderrLine.trim()
+      if (stderrLine.length > 4096) stderrLine = stderrLine.slice(-4096)
     })
   }
 
@@ -468,7 +687,7 @@ export function launchChromium(options: LaunchOptions): LaunchResult {
     announce = resolve
   })
   child.on('exit', (code, signal) => {
-    exitReason = describeExit(code, signal, stderrTail)
+    exitReason = describeExit(code, signal, stderrTail, diagnostic)
     announce(exitReason)
   })
 
@@ -492,49 +711,238 @@ export function launchChromium(options: LaunchOptions): LaunchResult {
   }
 }
 
+/* --------------------------------------------------------- is it awake yet -- */
+
+/** How long a launched Chromium gets to answer its first command. */
+export const FIRST_COMMAND_TIMEOUT_MS = 30_000
+
+/**
+ * How long a lost pipe waits for the exit that explains it.
+ *
+ * Not a guess: with a *real* process the fd closing and the `'exit'` event are
+ * two separate deliveries and the pipe wins, so the first thing this function
+ * learns about a browser that died at startup is `the debugger pipe closed` —
+ * true, and useless. The exit that says `it needs libatk-1.0.so.0, install
+ * these packages` arrives a tick or two later. Half a second is far longer than
+ * that gap and short enough that a pipe which closed for some other reason is
+ * still reported promptly.
+ *
+ * The fakes in `browser-chromium-launch.test.ts` never showed this, because a
+ * modelled child delivers both from the same tick. The test that spawns a real
+ * `/bin/sh` did, on the first run.
+ */
+export const EXIT_GRACE_MS = 500
+
+/**
+ * `null` when the browser answered, or the sentence saying why it never will.
+ *
+ * Exported, and taking the transport structurally rather than as a `CdpPipe`, so
+ * `browser-chromium-launch.test.ts` can drive all four arms — the answer, the
+ * death, the refusal and the wedge — with no process and no real pipe. The
+ * timeout is a parameter for the same reason: a test that had to wait the
+ * production thirty seconds to prove the wedge would simply not be written.
+ *
+ * The arms are not equal. A refusal is reported *last*, after {@link
+ * EXIT_GRACE_MS}, because a pipe error and a process death are the same event
+ * seen from two places and only one of them knows what happened.
+ */
+export async function confirmReady(
+  transport: { command(command: { method: string; params?: unknown }): Promise<unknown> },
+  whenGone: Promise<string>,
+  timeoutMs: number = FIRST_COMMAND_TIMEOUT_MS,
+  graceMs: number = EXIT_GRACE_MS,
+): Promise<string | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<{ why: string }>((resolve) => {
+    timer = setTimeout(
+      () => resolve({ why: `Chromium started but did not answer its first command within ${Math.round(timeoutMs / 1000)} s` }),
+      timeoutMs,
+    )
+  })
+  try {
+    const outcome = await Promise.race<{ why: string } | { refused: string } | null>([
+      transport.command({ method: 'Browser.getVersion', params: {} }).then(
+        () => null,
+        (error: unknown) => ({
+          refused: `Chromium refused its first command: ${error instanceof Error ? error.message : 'no answer'}`,
+        }),
+      ),
+      whenGone.then((why) => ({ why })),
+      timeout,
+    ])
+    if (outcome === null) return null
+    if ('why' in outcome) return outcome.why
+
+    // The pipe went first. Give the exit its moment; it carries the reason.
+    let graceTimer: ReturnType<typeof setTimeout> | undefined
+    const grace = new Promise<null>((resolve) => {
+      graceTimer = setTimeout(() => resolve(null), graceMs)
+    })
+    try {
+      return (await Promise.race([whenGone, grace])) ?? outcome.refused
+    } finally {
+      if (graceTimer !== undefined) clearTimeout(graceTimer)
+    }
+  } finally {
+    // The timer would otherwise hold the event loop open for its full duration
+    // after a launch that succeeded in milliseconds.
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
+
+/**
+ * Start Chromium and hand back a browser that has **answered**, or the sentence
+ * saying why there is none.
+ *
+ * ## Why this is async, and why the synchronous one is not the door any more
+ *
+ * `spawnChromium` can only report what is knowable in the instant it returns: a
+ * pid, a null `exitCode`, two open fds. A Chromium that is about to die on its
+ * first instruction has all three. Measured on a stock Ubuntu 24.04 Hetzner box
+ * on 2026-08-22: a binary missing `libatk-1.0.so.0` was reported healthy, and
+ * was gone thirty milliseconds later with exit 127. Every caller that believed
+ * that answer then wrote a CDP command into a pipe with a corpse on the far end
+ * and waited for a reply that could not come — and a hang is the worst failure
+ * available, because nothing is logged, nothing times out, and the phone that
+ * asked for a page simply never hears back.
+ *
+ * So a launch is not finished until the browser has said something. The
+ * handshake is the proof: `Browser.getVersion` is the cheapest command in the
+ * protocol, one round-trip has to happen anyway, and it costs 285 ms against a
+ * live browser — measured on that same box, against the same pinned build. The
+ * race has three arms and no fourth outcome: the browser answers, the process
+ * dies and its death is the error, or the bounded timeout fires because it
+ * started and wedged without exiting.
+ *
+ * A failed confirmation kills the child before returning. A browser that is
+ * alive but unusable is still a browser holding a profile lock, and leaving one
+ * behind is how the next launch fails for a reason that has nothing to do with
+ * what went wrong.
+ */
+export async function launchChromium(options: LaunchOptions): Promise<LaunchResult> {
+  const spawned = spawnChromium(options)
+  if (!spawned.ok) return spawned
+
+  const transport = new CdpPipe(spawned.handle.pipeWrite, spawned.handle.pipeRead)
+  const why = await confirmReady(
+    transport,
+    spawned.handle.whenGone,
+    options.readyTimeoutMs ?? FIRST_COMMAND_TIMEOUT_MS,
+  )
+  if (why !== null) {
+    transport.close()
+    spawned.handle.close()
+    return { ok: false, why }
+  }
+  return { ok: true, handle: spawned.handle, transport, sandbox: spawned.sandbox }
+}
+
 /* ------------------------------------------------------------ the reason -- */
+
+/**
+ * Chromium's own log-line shape: `[pid:tid:MMDD/HHMMSS.uuuuuu:FATAL:file.cc:12]`.
+ *
+ * Matched rather than merely searched for `FATAL`, because the prefix is also
+ * the thing that gets stripped: what a person needs is the message, not the
+ * source file inside Chromium that noticed it.
+ */
+const CHROMIUM_LOG_LINE = /^\[[^\]]*:(FATAL|ERROR|WARNING):[^\]]*\]\s*(.*)$/
+
+/**
+ * Lines that are a crash dump rather than a reason.
+ *
+ * A Chromium abort prints `Received signal 6`, twenty-odd `#12 0x...` frames, a
+ * register dump and `[end of stack trace]`. The *last* line of that — which is
+ * what the previous version of {@link describeExit} handed to a person — is
+ * `[end of stack trace]`, which tells them nothing at all and is exactly the
+ * "a stack trace, not a sentence" failure this file is meant not to have.
+ */
+function isNoise(line: string): boolean {
+  return (
+    line === '[end of stack trace]' ||
+    /^Received signal\b/.test(line) ||
+    /^#\d+\s/.test(line) ||
+    // A register dump row: two-to-four short names each followed by a hex word.
+    /^\s*[a-z0-9]{2,3}:\s+[0-9a-f]{8,16}\b/.test(line) ||
+    /^\[end of/.test(line)
+  )
+}
+
+/**
+ * Is this line worth remembering as *the* reason?
+ *
+ * Used while stderr is streaming — see {@link spawnChromium} — so the one useful
+ * line survives the crash dump that follows it and pushes it out of the tail.
+ */
+export function isDiagnostic(line: string): boolean {
+  const trimmed = line.trim()
+  if (trimmed === '' || isNoise(trimmed)) return false
+  if (trimmed.includes('error while loading shared libraries')) return true
+  const match = CHROMIUM_LOG_LINE.exec(trimmed)
+  if (match === null) return false
+  // A warning is not why a browser died; an error or a fatal might be.
+  return match[1] !== 'WARNING'
+}
+
+/** A Chromium log line reduced to its message, or the line unchanged. */
+function withoutLogPrefix(line: string): string {
+  const match = CHROMIUM_LOG_LINE.exec(line.trim())
+  return match === null ? line.trim() : match[2].trim()
+}
 
 /**
  * Turn an exit into a sentence somebody can act on.
  *
- * The generic form is the code and the last thing the browser said. The two
- * special cases are the two that were actually hit on the first real server, and
- * both are situations where the raw stderr line is true but not useful unless
+ * The generic form is the code and the last *meaningful* thing the browser said.
+ * The three special cases are the ones actually hit on real servers, and all
+ * three are situations where the raw stderr line is true but not useful unless
  * you already know what it means:
  *
- *  - a missing shared library, where the fix is installing a package and the
- *    message should say which library is missing rather than leave a person
+ *  - a missing shared library, where the fix is installing packages and the
+ *    message should name the library and the command rather than leave a person
  *    reading a linker error;
  *  - the sandbox refusals, where the message should name the machine's setting
- *    rather than the code path inside Chromium that noticed it.
+ *    rather than the code path inside Chromium that noticed it;
+ *  - an abort, where Chromium prints the reason and then buries it under a
+ *    stack trace and a register dump — hence `diagnostic`, captured as the
+ *    output streamed, and the noise filter over whatever is left.
  *
- * Exported for `browser-chromium-launch.test.ts`, which pins both against the
- * exact stderr the real binary produced.
+ * Exported for `browser-chromium-launch.test.ts`, which pins all of them against
+ * the exact stderr the real binary produced.
  */
 export function describeExit(
   code: number | null,
   signal: NodeJS.Signals | null,
   stderrTail: string,
+  /**
+   * The last `FATAL:`/`ERROR:` line seen while stderr streamed, if any.
+   *
+   * Separate from the tail because on an abort it is no longer *in* the tail:
+   * measured on Ubuntu 24.04, the FATAL line naming the real cause was 1.6 kB
+   * above the end of the output.
+   */
+  diagnostic = '',
 ): string {
   const how = signal !== null ? `on signal ${signal}` : `with code ${code ?? 'unknown'}`
+  const haystack = `${diagnostic}\n${stderrTail}`
 
-  const missingLibrary = /error while loading shared libraries: ([^:]+):/.exec(stderrTail)
+  const missingLibrary = /error while loading shared libraries: ([^:]+):/.exec(haystack)
   if (missingLibrary !== null) {
     return (
       `Chromium could not start: it needs ${missingLibrary[1]}, which is not installed on this machine. ` +
       'A downloaded Chromium links the system graphics and accessibility libraries, and a minimal server ' +
-      `image has none of them. On Debian or Ubuntu: ${chromiumLibraryHint()}`
+      `image has none of them. Install them with: ${chromiumLibraryHint()}`
     )
   }
 
-  if (stderrTail.includes('Running as root without --no-sandbox')) {
+  if (haystack.includes('Running as root without --no-sandbox')) {
     return (
       'Chromium will not run as root with its sandbox on, and this host is running as root. ' +
       'That case is meant to be handled before launch — see sandboxDecision — so reaching this means the ' +
       'sandbox facts were read as something other than root.'
     )
   }
-  if (stderrTail.includes('No usable sandbox')) {
+  if (haystack.includes('No usable sandbox')) {
     return (
       'Chromium found no usable sandbox on this machine, which on Ubuntu 23.10 and newer is ' +
       'apparmor_restrict_unprivileged_userns being set. That case is meant to be handled before launch — ' +
@@ -542,12 +950,16 @@ export function describeExit(
     )
   }
 
-  const said = stderrTail
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line !== '')
-    .pop()
-  return said === undefined
+  const said =
+    diagnostic.trim() !== ''
+      ? withoutLogPrefix(diagnostic)
+      : stderrTail
+          .split('\n')
+          .map((line) => line.trim())
+          .filter((line) => line !== '' && !isNoise(line))
+          .map(withoutLogPrefix)
+          .pop()
+  return said === undefined || said === ''
     ? `Chromium exited ${how}`
     : `Chromium exited ${how}: ${said.slice(0, 300)}`
 }

@@ -43,7 +43,6 @@ import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { userDataDir } from './platform/paths'
 import { logger } from './app-log'
-import { CdpPipe } from './browser-cdp-pipe'
 import type { CdpEvent } from './browser-cdp-pipe'
 import { cdpDrivenPage, type CdpTransport } from './browser-driven-cdp'
 import { launchChromium } from './browser-chromium-launch'
@@ -126,7 +125,17 @@ export type LaunchBrowser = (input: {
 const defaultLaunch: LaunchBrowser = async ({ userDataDir: dir, extensionDirs }) => {
   const install = await installChromium()
   if (!install.ok) return { ok: false, why: install.why }
-  const launched = launchChromium({
+
+  /*
+   * `launchChromium` is the confirmed launch: it does not return until the
+   * browser has answered `Browser.getVersion` on the pipe, the process has died,
+   * or a bounded timeout has fired. That used to be this function's job, done
+   * here after a synchronous launch that reported a pid and called it success —
+   * and a Chromium about to die on its first instruction has a pid. It moved one
+   * layer down so that *no* caller can hold an unconfirmed browser, not just
+   * this one.
+   */
+  const launched = await launchChromium({
     executablePath: install.path,
     userDataDir: dir,
     extensionDirs,
@@ -137,75 +146,23 @@ const defaultLaunch: LaunchBrowser = async ({ userDataDir: dir, extensionDirs })
     // is never mentioned is the thing `sandboxDecision` exists to prevent.
     logger.warn('browser', `Chromium is running without its sandbox: ${launched.sandbox.why}`)
   }
-  const pipe = new CdpPipe(launched.handle.pipeWrite, launched.handle.pipeRead)
 
-  /*
-   * Confirm there is a browser on the other end before calling this a success.
-   *
-   * `launchChromium` can only report what is knowable synchronously — a pid, two
-   * pipe fds — and a Chromium that is about to die on its first instruction has
-   * all three. Measured on a real Ubuntu server: a binary with one missing
-   * shared library was reported healthy and was gone 30 ms later with exit 127,
-   * after which this function returned a transport onto a closed pipe and the
-   * first real CDP command waited forever. A hang is the worst of the available
-   * failures: nothing is logged, nothing times out, and the phone that asked for
-   * a page simply never hears back.
-   *
-   * So the handshake is the confirmation. `Browser.getVersion` is the cheapest
-   * command there is and one round-trip has to happen anyway, so this costs
-   * nothing against a browser that is alive, and against a dead one the race
-   * turns silence into the sentence `describeExit` built. The timeout is the
-   * third arm rather than a guard against the second: a browser that starts and
-   * then wedges without exiting would satisfy neither of the other two.
-   */
-  const ready = await confirmReady(pipe, launched.handle.whenGone)
-  if (ready !== null) {
-    launched.handle.close()
-    return { ok: false, why: ready }
+  return {
+    ok: true,
+    handle: { transport: launched.transport, stop: () => launched.handle.close() },
   }
-
-  return { ok: true, handle: { transport: pipe, stop: () => launched.handle.close() } }
 }
-
-/** How long a launched Chromium gets to answer its first command. */
-const FIRST_COMMAND_TIMEOUT_MS = 30_000
 
 /**
- * `null` when the browser answered, or the sentence saying why it never will.
+ * Re-exported from `browser-chromium-launch.ts`, where it now lives.
  *
- * Exported, and taking the transport structurally rather than as a `CdpPipe`, so
- * `browser-headless-host.test.ts` can drive all three arms — the answer, the
- * death and the wedge — with no process and no real pipe. The timeout is a
- * parameter for the same reason: a test that had to wait the production thirty
- * seconds to prove the third arm would simply not be written.
+ * It moved because it is part of what a launch *is*, not something a caller
+ * remembers to do afterwards — a browser nobody confirmed is the defect this
+ * whole path was built around. Kept named here because the readiness race is
+ * this host's contract with its browser and is asserted as such in
+ * `browser-headless-host.test.ts`.
  */
-export async function confirmReady(
-  transport: { command(command: { method: string; params?: unknown }): Promise<unknown> },
-  whenGone: Promise<string>,
-  timeoutMs: number = FIRST_COMMAND_TIMEOUT_MS,
-): Promise<string | null> {
-  let timer: ReturnType<typeof setTimeout> | undefined
-  const timeout = new Promise<string>((resolve) => {
-    timer = setTimeout(
-      () => resolve(`Chromium started but did not answer its first command within ${Math.round(timeoutMs / 1000)} s`),
-      timeoutMs,
-    )
-  })
-  try {
-    return await Promise.race([
-      transport.command({ method: 'Browser.getVersion', params: {} }).then(
-        () => null,
-        (error: unknown) => `Chromium refused its first command: ${error instanceof Error ? error.message : 'no answer'}`,
-      ),
-      whenGone,
-      timeout,
-    ])
-  } finally {
-    // The timer would otherwise hold the event loop open for its full duration
-    // after a launch that succeeded in milliseconds.
-    if (timer !== undefined) clearTimeout(timer)
-  }
-}
+export { confirmReady } from './browser-chromium-launch'
 
 /* -------------------------------------------------------------- the deps -- */
 
@@ -298,6 +255,9 @@ export class HeadlessDriveHost implements DriveHost {
 
   /** One browser per profile, launched on first use. */
   private readonly browsers = new Map<string, Promise<BrowserInstance>>()
+  /** The reason the last launch or tab failed, for {@link whyNoTab}. */
+  private lastFailure: string | null = null
+
   /** Settled instances, filled as each launch resolves, for the synchronous {@link browserFor}. */
   private readonly settledBrowsers = new Map<string, BrowserInstance>()
   /** The guest bridge for each armed target, by target id. */
@@ -805,8 +765,26 @@ export class HeadlessDriveHost implements DriveHost {
 
   private publishError(error: unknown): void {
     const message = error instanceof Error ? error.message : 'the server’s browser is unavailable'
+    // Kept as well as published. The banner is what a *person* watching a device
+    // sees; `whyNoTab` is what the copilot is told when its `openTab` came back
+    // null, and without it the driver falls back to a sentence about a Settings
+    // pane this machine does not have. See `browser-driver.ts`.
+    this.lastFailure = message
     // The banner carries the reason so a connected device shows why nothing
     // moved rather than a spinner that never resolves.
     this.publishFn({ state: 'idle', tabId: null, step: message, prompt: '', url: '' })
+  }
+
+  /**
+   * Why the last {@link openTab} produced nothing — the `DriveHost` half of the
+   * same message the banner got.
+   *
+   * Cleared on read, because it answers about *that* failure: a stale reason
+   * attached to a later, unrelated null would be a worse answer than none.
+   */
+  whyNoTab(): string | null {
+    const why = this.lastFailure
+    this.lastFailure = null
+    return why
   }
 }
