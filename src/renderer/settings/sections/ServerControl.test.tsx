@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import {
@@ -383,5 +385,35 @@ describe("the pane stays inside the window's copy budget", () => {
 
   it('keeps the whole pane under 130 words of standing prose', () => {
     expect(paragraphs().reduce((sum, count) => sum + count, 0)).toBeLessThanOrEqual(130)
+  })
+})
+
+/**
+ * The one place this pane borrows a class from the servers area.
+ *
+ * **What to call it here** draws its field and **Save** with
+ * `.servers-card-actions`, which is right — the shape is the same one — except
+ * for the `margin-top` that class carries to hold a *card's* buttons off the
+ * sentence above them. Inside a settings row there is no sentence above them,
+ * and rendered in the packaged app on 2026-08-22 the field sat 6px below the
+ * centre of its own label in a row 40px tall where its neighbours are 34px.
+ *
+ * Read as text because jsdom applies no stylesheet — the same reason
+ * `settings-surface.test.ts` parses its sheet — and pinned here rather than
+ * there because this component is what does the borrowing.
+ */
+describe('the rename row lines up with the rows around it', () => {
+  it('cancels the card margin the settings row does not want', () => {
+    const sheet = readFileSync(
+      join(__dirname, '..', '..', 'machines', 'servers', 'servers.css'),
+      'utf8',
+    )
+    const rule = sheet.match(/\.settings-row-control\s*>\s*\.servers-card-actions\s*\{([^}]*)\}/)
+    expect(rule, 'servers.css cancels the margin inside a settings row').not.toBeNull()
+    expect(rule?.[1]).toMatch(/margin-top\s*:\s*0/)
+  })
+
+  it('is still the class being borrowed, so the rule above still bites', () => {
+    expect(draw()).toContain('class="servers-card-actions"')
   })
 })

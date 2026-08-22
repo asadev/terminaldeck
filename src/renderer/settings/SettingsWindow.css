@@ -660,12 +660,51 @@
 .settings-value {
   display: inline-flex;
   align-items: center;
+  justify-content: flex-end;
   box-sizing: border-box;
-  height: var(--control-h);
+  /*
+   * `min-height`, not `height`. A one-word answer — which is all this class was
+   * written for — is unchanged: it is one line and lands on exactly the same
+   * control height as the row above it. What changed is that Servers puts whole
+   * sentences through it (*"A key, sealed by this computer and never shown on
+   * any screen."*), and a fixed height means a sentence that wraps draws
+   * outside its own box and over the row beneath.
+   */
+  min-height: var(--control-h);
   padding: 0 var(--sp-2);
   color: var(--text-secondary);
   font-family: var(--font-ui);
   font-size: var(--t-callout);
+  /* Right-aligned once it can occupy two lines: the value column is flush with
+     the pane's right edge, and ragged-right inside a right-flush column reads
+     as a stray indent. */
+  text-align: right;
+}
+
+/*
+ * The one control that gives ground.
+ *
+ * `.settings-row-control` refuses to shrink, which is right for every control
+ * with a size of its own — a dropdown squeezed to nothing is a dropdown nobody
+ * can read. A stated value has no such size, and the refusal made the *label*
+ * pay: rendered on 2026-08-22 at an 820px window, which this app allows (its
+ * minimum is 720), **Kept on this computer** broke into three lines — "Kept on"
+ * / "this" / "computer" — with its ⓘ orphaned on a fourth, while the sentence
+ * beside it sat comfortably on one. The label is the part of a row that must
+ * stay readable, so the value is the part that yields.
+ */
+.settings-row-control:has(> .settings-value) {
+  /*
+   * Two, not one. Both columns shrinking at the same rate still left the label
+   * as the one that broke: measured at 820px, an even share gave it 142px for
+   * a 167px line, so **Kept on this computer** took three lines and pushed its
+   * ⓘ onto a fourth. Yielding twice as fast puts the label back on two lines
+   * with the dot beside the last word, and takes the row from 60px to 41px.
+   * Above 2 buys a pixel or two and nothing else; on a pane wide enough for
+   * both columns none of this applies, because nothing is shrinking.
+   */
+  flex-shrink: 2;
+  min-width: 0;
 }
 
 /* What this machine has and a server cannot take: a name, and one line beside
@@ -1382,8 +1421,28 @@
    a second surface. */
 .settings-scope {
   display: flex;
-  gap: var(--sp-05);
+  /*
+   * Wraps, and is capped at the column it sits in.
+   *
+   * `width: fit-content` alone made this row as wide as its buttons needed and
+   * let it hang off the end of the pane: rendered on 2026-08-22 with five
+   * servers of ordinary length — `deck-demo-box`, `build-runner-02`,
+   * `staging-web-01`, `db-primary-frankfurt`, `edge-cache-eu-west-1` — the run
+   * measured 720px inside a 709px column, the last pill sat past the pane's
+   * right margin and the whole Settings panel grew a horizontal scrollbar
+   * (`scrollWidth` 844 against `clientWidth` 833). The Servers pane is where it
+   * bites first, because that switch carries one seat per stored server and a
+   * name may be 64 characters, but Coding AI's grows the same way with paired
+   * devices.
+   *
+   * Wrapping rather than scrolling, because a seat you have to find by dragging
+   * is a seat nobody knows is there. A row that already fits is untouched: with
+   * one line, `row-gap` has nothing to space and `max-width` binds nothing.
+   */
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-05);
   width: fit-content;
+  max-width: 100%;
   margin: 0 0 var(--sp-6);
 }
 
