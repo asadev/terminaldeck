@@ -285,6 +285,10 @@ security find-identity -v -p codesigning "$KEYCHAIN" | grep "Developer ID Applic
 step "Build"
 npm run build
 npm run build:pwa
+# The headless host package (out/headless-package) — the afterPack hook copies it
+# into the .app's Resources. `dist:mac`/`dist:win` run this; this signed path
+# must too, or the packaged app ships with no server-install package (0.10.0).
+npm run dist:headless
 
 step "Package, sign and notarize"
 
