@@ -125,6 +125,10 @@ const KNOWN_UNREACHABLE: Record<string, string> = {
     'unreachable until wave-2 Lane C/D wire it: the CDP-over-pipe adapter (fds 3/4, NUL-delimited JSON) that browser-driven-cdp.ts will send through and the headless tab authority will spawn into. It lives in src/ so tsc checks it against the allow-list it enforces. REMOVE when a headless entry reaches it — reachable.test flags a stale entry.',
   'src/main/browser-chromium-launch.ts':
     'unreachable until wave-2 Lane B lands: it spawns chrome-for-testing over --remote-debugging-pipe and hands back fds 3/4, but the CDP codec that consumes those fds (`browser-cdp-pipe.ts`) is not built yet. It lives in src/ so tsc checks the launch flags and the fd stdio shape against the pipe adapter it will feed. REMOVE THIS ENTRY when Lane B wires it — a stale allowlist entry is its own lie.',
+  'src/main/browser-driven-cdp.ts':
+    'unreachable until wave-2 Lane D wires it: the CDP implementation of the DrivenPage seam — one Chromium target spoken to over browser-cdp-pipe.ts — that the headless tab authority will hand back from contentsFor. It lives in src/ so tsc checks it against the DrivenPage interface it implements and the pipe it sends through. REMOVE THIS ENTRY when a headless entry reaches it — reachable.test flags a stale one.',
+  'src/main/browser-preload-cdp.ts':
+    'unreachable until wave-2 Lane D wires it: the guest-preload bridge that re-delivers browser-preload.ts over Page.addScriptToEvaluateOnNewDocument + Runtime.addBinding once a CDP page is being driven. It lives in src/ so tsc checks its shim against the guest script it reuses. REMOVE THIS ENTRY when a headless entry reaches it — a stale allowlist entry is its own lie.',
   'src/main/browser-extension-zip.fixture.ts':
     'unreachable on purpose: it builds the zip archives `browser-extension-unzip.test.ts` reads, ' +
     'including the malformed ones — path traversal, symlinks, a lying size, zip64 — that no real ' +

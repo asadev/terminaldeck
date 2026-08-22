@@ -316,4 +316,19 @@ describe('the headless build can drive a browser without Electron', () => {
       expect(runtimeElectronImports(readSource(file)), file).toEqual([])
     }
   })
+
+  /*
+   * The CDP `DrivenPage` and the guest-preload bridge that re-delivers the
+   * guest script over `Page.addScriptToEvaluateOnNewDocument`. These are the
+   * server's implementation of the seam — one target spoken to over the pipe —
+   * and become reachable once the host wiring lands (a later lane adds them to
+   * the closure contains-list above). They must be Electron-free before they
+   * can be, so this asserts it on the source now, the same way the driver's is
+   * asserted before the graph reaches it.
+   */
+  it('keeps the CDP page and its preload bridge free of runtime Electron imports', () => {
+    for (const file of ['src/main/browser-driven-cdp.ts', 'src/main/browser-preload-cdp.ts']) {
+      expect(runtimeElectronImports(readSource(file)), file).toEqual([])
+    }
+  })
 })
