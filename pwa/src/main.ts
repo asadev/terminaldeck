@@ -99,6 +99,7 @@ import {
   hostKeyBytes,
   loadDeviceIdentity,
   type DeckEndpoint,
+  type RelayEndpoint,
 } from './endpoint'
 import {
   NO_DEV,
@@ -110,6 +111,15 @@ import {
   type DevState,
 } from './dev-server'
 import { deviceStanding, devicesOffered, fingerprintText, lastSeenSentence } from './devices'
+import {
+  INSTALL_COMMAND,
+  checkFields,
+  runSignIn,
+  type FieldFault,
+  type SignInFailure,
+  type SignInFields,
+  type SignInMethod,
+} from './add-server'
 import { MAX_WATCH_WINDOWS, WATCH_UNAVAILABLE, WatchCanvas, watchOffered } from './browser-view'
 import { folderOffer, foldersAfter, noFoldersSentence, pickerRows } from './folders'
 import { machineNoun, readHostPlatform, type HostPlatform } from './host-platform'
@@ -277,6 +287,17 @@ function socketUrl(location: Location): string {
 type Screen =
   | 'copilot'
   | 'pair'
+  /**
+   * Sign in to a server, which is the other way a machine gets into this book.
+   *
+   * Its own screen rather than a mode of the pair screen, because the two ask
+   * for different things from different people. Pairing is six digits read off
+   * a desktop by somebody standing at it; this is an address and a login, for a
+   * machine with no screen and nobody near it. A single screen that switched
+   * between them would be a form whose fields change under the person filling
+   * it in.
+   */
+  | 'add-server'
   | 'sessions'
   | 'localhost'
   | 'settings'
@@ -955,6 +976,39 @@ class Deck {
    * stranded on a screen that looks like they have been signed out.
    */
   private pairingAnother = false
+
+  /* ---------------------------------------------------------- add a server -- */
+
+  /**
+   * What the Add-server form is holding, between renders.
+   *
+   * Held on the model rather than read off the elements, for the reason
+   * `renameText` is: any push from the machine rebuilds this screen's DOM, and a
+   * pasted key several kilobytes long is not something to make somebody paste
+   * twice because a `sessions` frame arrived while they were typing a username.
+   *
+   * The secret is in memory for exactly as long as the screen is, and is cleared
+   * on the way out — see {@link leaveAddServer}. It is never written to either
+   * store: what is worth keeping is the credential the sign-in earns, and an SSH
+   * password kept beside it would be a second, far more powerful secret sitting
+   * in a browser profile for the sake of saving one typing.
+   */
+  private addFields: SignInFields = { address: '', username: '', secret: '', method: 'password' }
+  /** Which field the form is complaining about, and what it says. */
+  private addProblem: FieldFault | null = null
+  /** How the machine refused, when it got as far as answering. */
+  private addFailure: SignInFailure | null = null
+  /** A sign-in is in flight. The submit is disabled and says so. */
+  private addingServer = false
+  /**
+   * Where the back chevron goes from the Add-server screen.
+   *
+   * The same fact `pairingAnother` carries for the pair screen and for the same
+   * reason: a browser with no machines has nowhere to go back to, and a browser
+   * that came here from the Machines screen must be able to abandon a
+   * half-filled form without looking signed out.
+   */
+  private addServerFrom: Screen = 'pair'
 
   /**
    * The one file on its way to the machine, or none.
@@ -2544,6 +2598,7 @@ class Deck {
       return
     }
     if (this.screen === 'machines') this.title.textContent = 'Machines'
+    if (this.screen === 'add-server') this.title.textContent = 'Add a server'
     if (this.screen === 'devices') this.title.textContent = 'Devices'
     if (this.screen === 'settings') this.title.textContent = 'Settings'
     if (this.screen === 'copilot') this.title.textContent = 'Copilot'
@@ -2590,6 +2645,11 @@ class Deck {
     // the Machines screen. A browser with no machines has nowhere to go back to,
     // and a chevron there would be the bug that rule exists to prevent.
     if (this.screen === 'pair' && this.pairingAnother && this.book.machines.length > 0) return 'machines'
+    // The Add-server screen always has a way back, because it is always reached
+    // from somewhere: the pair screen on a fresh browser, the Machines screen on
+    // one that already has machines. Which of the two is remembered rather than
+    // inferred, so the chevron returns to the screen the person actually left.
+    if (this.screen === 'add-server') return this.addServerFrom
     return null
   }
 
@@ -2599,6 +2659,11 @@ class Deck {
     if (target === null) return
     if (this.screen === 'terminal') {
       this.leaveTerminal()
+      return
+    }
+    if (this.screen === 'add-server') {
+      this.leaveAddServer()
+      this.goTo(target)
       return
     }
     if (this.screen === 'pair') {
@@ -2643,6 +2708,9 @@ class Deck {
         return
       case 'pair':
         this.content.replaceChildren(this.pairScreen())
+        return
+      case 'add-server':
+        this.content.replaceChildren(this.addServerScreen())
         return
       case 'localhost':
         this.content.replaceChildren(this.localhostScreen())
@@ -2896,6 +2964,21 @@ class Deck {
     screen.append(submit)
 
     /*
+     * The other door, on the screen that is the empty state of a fresh browser.
+     *
+     * A code needs somebody standing at the machine to read it off a screen, and
+     * a headless server has neither. That machine is reached by signing in to
+     * it, and until now there was nowhere in this client to do that — the wire
+     * existed and nothing called it. This is the whole of the entry point: one
+     * quiet button under the primary one, because pairing is still what most
+     * people are here to do and the two must not read as equal choices.
+     */
+    const signIn = element('button', 'button button--quiet', 'Sign in to a server instead')
+    signIn.type = 'button'
+    signIn.addEventListener('click', () => this.openAddServer('pair'))
+    screen.append(signIn)
+
+    /*
      * Auto-submit, and the guard that makes it safe to have.
      *
      * `input` fires for a paste as well as for a keystroke, so pasting six
@@ -3075,6 +3158,411 @@ class Deck {
   private pairNotice(detail: string): void {
     this.state = { phase: 'offline', detail, retryAt: null, attempts: 0 }
     this.renderBanner()
+  }
+
+  /* ---------------------------------------------------------- add a server -- */
+
+  /**
+   * Open the sign-in form, remembering where it was opened from.
+   *
+   * The `from` is the only state the screen needs that it cannot work out for
+   * itself: a browser with no machines reached it from the pair screen and a
+   * browser with several reached it from Machines, and the chevron has to go
+   * back to whichever it was rather than to whichever the book implies.
+   */
+  private openAddServer(from: Screen): void {
+    this.addServerFrom = from
+    this.addProblem = null
+    this.addFailure = null
+    this.screen = 'add-server'
+    this.render()
+  }
+
+  /**
+   * Forget the form, and the login in it.
+   *
+   * Called on the way out by every route — the chevron, and a sign-in that
+   * succeeded. The secret is the reason this is a method rather than three
+   * assignments at two call sites: a password or a private key left on the model
+   * would outlive the screen, sit in memory for the life of the tab, and be
+   * there in a heap snapshot of a page anybody can open the dev tools on. It
+   * buys nothing to keep — the credential the sign-in earned is what
+   * reconnects, and it is stored where the person said it may be.
+   */
+  private leaveAddServer(): void {
+    this.addFields = { address: '', username: '', secret: '', method: 'password' }
+    this.addProblem = null
+    this.addFailure = null
+    this.addingServer = false
+  }
+
+  /**
+   * Sign in to a machine nobody is standing at.
+   *
+   * ## Why this screen exists at all
+   *
+   * Pairing is six digits shown on a desktop, and it works because there is a
+   * person at that desktop to read them off it. A headless server has no screen
+   * and nobody near it, which is precisely the machine this is for: the login
+   * that box already trusts *is* the credential, and `enroll` trades it for a
+   * device row without anyone walking anywhere.
+   *
+   * ## The three fields, and why the first one is a paste rather than a code
+   *
+   * A first connection to a machine this browser has never met is a Noise **IK**
+   * handshake, and IK needs the machine's static public key before it can send
+   * its first message. A host id is `BASE32(SHA-256(secret))` — a one-way hash —
+   * so no code a person can type carries a key, and a field that took one would
+   * be a Sign in button that cannot be implemented. So the machine prints its
+   * address and it is pasted here; `server-address.ts` reads every shape one
+   * arrives in and says what is missing when it is not one.
+   *
+   * ## The honest limit, stated on the screen
+   *
+   * A browser cannot open an SSH connection — there is no such API and there
+   * will not be one — so this client cannot install a server on a machine that
+   * has none, the way a desktop with a terminal could. It shows the command
+   * instead, and only where a missing server is actually the explanation. See
+   * `add-server.ts`, which decides that from what the machine said rather than
+   * from a guess here.
+   */
+  private addServerScreen(): HTMLElement {
+    const screen = element('div', 'screen screen--form')
+
+    const heading = element('div', 'screen__heading')
+    heading.append(
+      element('h2', undefined, 'Sign in to a server'),
+      infoDot(
+        'signing in',
+        'A server with no screen cannot show a pairing code, so it prints an address instead — the relay ' +
+          'it is reachable at, its host id and its public key. Paste that, then the login on that machine: ' +
+          `${BRAND.name} checks it against the machine's own SSH and mints this browser a device of its own. ` +
+          'The login is used for that one check and is never stored. Everything between the two ends is ' +
+          'sealed; the relay that carries it holds no key and cannot read a session.',
+      ),
+    )
+    screen.append(heading)
+
+    screen.append(
+      this.addField({
+        label: 'Server address',
+        // Multi-line, because an address is a few hundred characters and a
+        // terminal wraps it. A single-line field would show a person the last
+        // forty characters of what they pasted and nothing else. Four rows fits
+        // most of one at a phone width and scrolls for the rest; the field is
+        // resizable, which is the honest answer to a value with no fixed length.
+        lines: 4,
+        value: this.addFields.address,
+        placeholder: 'The block the machine printed',
+        mono: true,
+        field: 'address',
+        onInput: (value) => {
+          this.addFields.address = value
+        },
+      }),
+    )
+
+    screen.append(
+      this.addField({
+        label: 'Login',
+        value: this.addFields.username,
+        placeholder: 'The username you would SSH in as',
+        field: 'username',
+        onInput: (value) => {
+          this.addFields.username = value
+        },
+      }),
+    )
+
+    screen.append(this.addMethodChoice())
+
+    screen.append(
+      this.addField({
+        label: this.addFields.method === 'password' ? 'Password' : 'Private key',
+        // A PEM is several kilobytes and has real newlines in it, so the key
+        // method gets a box and the password gets a line. The password is also
+        // the one field in this client that is masked, for the obvious reason.
+        lines: this.addFields.method === 'key' ? 6 : 0,
+        secret: this.addFields.method === 'password',
+        mono: this.addFields.method === 'key',
+        value: this.addFields.secret,
+        placeholder: this.addFields.method === 'password' ? '' : '-----BEGIN OPENSSH PRIVATE KEY-----',
+        field: 'secret',
+        onInput: (value) => {
+          this.addFields.secret = value
+        },
+      }),
+    )
+
+    /*
+     * The same question the pair screen asks, on the same terms.
+     *
+     * It is about *this computer* — whether a credential may outlive the tab —
+     * not about which machine is being added, so it is asked once per browser
+     * and only while there are no machines. Leaving it off this screen would
+     * have meant somebody who reached the product through a server rather than
+     * through a desktop was never asked at all, and silently given the answer
+     * that makes them sign in again after every tab close.
+     */
+    if (this.book.machines.length === 0) screen.append(this.rememberChoice())
+
+    const submit = element('button', 'button', this.addingServer ? 'Signing in…' : 'Sign in')
+    submit.type = 'button'
+    // Disabled only while one is in flight. Every other refusal is a sentence
+    // under the field it is about, because a button that greys itself out has
+    // told somebody they are wrong without telling them where.
+    submit.disabled = this.addingServer
+    submit.addEventListener('click', () => void this.submitAddServer())
+    screen.append(submit)
+
+    const failure = this.addFailure
+    if (failure !== null) {
+      // The machine's own words, or this client's account of a channel that
+      // closed with none. See `signInFor` and `closeFailure`.
+      screen.append(element('p', 'form__failure', failure.message))
+      if (failure.install) screen.append(this.installBlock())
+    }
+
+    return screen
+  }
+
+  /**
+   * One labelled field, with the sentence about it underneath when there is one.
+   *
+   * A single builder rather than three, because the three differ in four
+   * attributes and nothing else — and because the thing that must never differ
+   * between them is where the error goes. A message printed above one field and
+   * below another is a form somebody has to hunt around.
+   */
+  private addField(spec: {
+    label: string
+    value: string
+    field: FieldFault['field']
+    onInput: (value: string) => void
+    placeholder?: string
+    lines?: number
+    mono?: boolean
+    secret?: boolean
+  }): HTMLElement {
+    const block = element('div', 'form__row')
+    const id = `add-${spec.field}`
+    const label = element('label', 'form__label', spec.label)
+    label.htmlFor = id
+    block.append(label)
+
+    const multiline = (spec.lines ?? 0) > 1
+    const input = multiline ? element('textarea') : element('input')
+    input.id = id
+    input.className = spec.mono === true ? 'form__field form__field--mono' : 'form__field'
+    input.value = spec.value
+    if (spec.placeholder !== undefined && spec.placeholder !== '') input.placeholder = spec.placeholder
+    if (input instanceof HTMLTextAreaElement) {
+      input.rows = spec.lines ?? 3
+    } else {
+      input.type = spec.secret === true ? 'password' : 'text'
+      // A login is not a sentence, and every one of these turns a username into
+      // something it is not on the way in.
+      input.autocapitalize = 'none'
+      input.autocomplete = 'off'
+      input.spellcheck = false
+    }
+    // Held on the model rather than read at submit time, because any frame the
+    // machine pushes rebuilds this screen — see `addFields`.
+    input.addEventListener('input', () => spec.onInput(input.value))
+    block.append(input)
+
+    const problem = this.addProblem
+    if (problem !== null && problem.field === spec.field) {
+      input.setAttribute('aria-invalid', 'true')
+      const said = element('p', 'form__problem', problem.message)
+      said.id = `${id}-problem`
+      input.setAttribute('aria-describedby', said.id)
+      block.append(said)
+    }
+    return block
+  }
+
+  /**
+   * Password or private key.
+   *
+   * Two buttons rather than a select, because there are two and both are worth
+   * seeing at once; and it re-renders rather than swapping the field's type in
+   * place, because the two fields are genuinely different shapes — a masked line
+   * and a six-row box for a PEM.
+   *
+   * The secret is cleared on the switch. A password typed into the key box would
+   * be sent to sshd as a key and refused, spending one of five attempts against
+   * the host's limiter to say something this screen already knew.
+   */
+  private addMethodChoice(): HTMLElement {
+    const block = element('div', 'form__row')
+    block.append(element('p', 'form__label', 'Prove it with'))
+    const row = element('div', 'form__methods')
+    const options: Array<{ value: SignInMethod; title: string }> = [
+      { value: 'password', title: 'Password' },
+      { value: 'key', title: 'Private key' },
+    ]
+    for (const option of options) {
+      const here = this.addFields.method === option.value
+      const pick = element('button', here ? 'form__method form__method--here' : 'form__method', option.title)
+      pick.type = 'button'
+      pick.setAttribute('aria-pressed', here ? 'true' : 'false')
+      pick.disabled = here || this.addingServer
+      pick.addEventListener('click', () => {
+        this.addFields = { ...this.addFields, method: option.value, secret: '' }
+        this.addProblem = null
+        this.renderContent()
+      })
+      row.append(pick)
+    }
+    block.append(row)
+    return block
+  }
+
+  /**
+   * The one-line install, and the sentence that says why it is here.
+   *
+   * Drawn only when a missing server is actually the explanation — a wrong
+   * password does not get one. The limit is stated rather than implied: a
+   * browser has no SSH and cannot run this for anybody, which is the whole
+   * reason the command is on screen instead of a button.
+   */
+  private installBlock(): HTMLElement {
+    const block = element('div', 'install')
+    block.append(
+      element(
+        'p',
+        'install__note',
+        `A browser cannot open an SSH connection, so it cannot install ${BRAND.name} on that machine for ` +
+          'you. Run this on the machine, then sign in.',
+      ),
+    )
+    const line = element('div', 'install__line')
+    line.append(element('code', 'install__command', INSTALL_COMMAND))
+    const copy = element('button', 'button button--quiet install__copy', 'Copy')
+    copy.type = 'button'
+    copy.addEventListener('click', () => void this.copyInstall())
+    line.append(copy)
+    block.append(line)
+    return block
+  }
+
+  /** The install command on the clipboard, or the honest word that it is not. */
+  private async copyInstall(): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(INSTALL_COMMAND)
+      this.say('Copied the install command')
+    } catch {
+      // A clipboard write needs a secure context and, in some browsers, a
+      // permission. A silent copy that did not happen is indistinguishable from
+      // one that did, and the command is on screen to select by hand.
+      this.say('This browser would not let the page copy it. Select the line instead.')
+    }
+  }
+
+  /**
+   * Check the form, run the exchange, and say what came back.
+   *
+   * Nothing is stored until a `welcome` has been earned on the same socket that
+   * minted the credential — which is `runSignIn`'s whole sequence — so a machine
+   * that mints and then refuses cannot leave a row in the book that nothing can
+   * reconnect to.
+   */
+  private async submitAddServer(): Promise<void> {
+    if (this.addingServer) return
+    this.addProblem = null
+    this.addFailure = null
+
+    const checked = checkFields(this.addFields)
+    if (!checked.ok) {
+      this.addProblem = checked.problem
+      this.renderContent()
+      return
+    }
+
+    this.addingServer = true
+    this.renderContent()
+
+    let outcome: Awaited<ReturnType<typeof runSignIn>>
+    try {
+      outcome = await runSignIn({
+        endpoint: checked.endpoint,
+        username: checked.username,
+        secret: checked.secret,
+        method: checked.method,
+        device: describeDevice(navigator.userAgent),
+        // This browser's durable identity, not a fresh one: the device row the
+        // machine is about to mint is bound to whatever key opens this channel,
+        // and the connection that follows has to present the same one.
+        deviceKeys: this.deviceKeys,
+      })
+    } catch {
+      // `runSignIn` answers rather than throws for every ordinary failure, so
+      // reaching here means the crypto could not run in this browser at all.
+      this.addingServer = false
+      this.addFailure = {
+        ok: false,
+        kind: 'fault',
+        message: 'This browser could not run the sign-in, so nothing was sent.',
+        install: false,
+      }
+      this.renderContent()
+      return
+    }
+
+    this.addingServer = false
+    if (!outcome.ok) {
+      this.addFailure = outcome
+      this.renderContent()
+      return
+    }
+    this.finishAddServer(checked.endpoint, outcome)
+  }
+
+  /**
+   * A signed-in machine becomes an ordinary one.
+   *
+   * The end state has to be indistinguishable from a pairing, which is why this
+   * hands off to {@link switchTo} rather than writing a book and a connection by
+   * hand: switching is what clears the previous machine's sessions, folders,
+   * capabilities, roster and copilot, and a machine added by a route that forgot
+   * one of those would show the last computer's list under the new one's name.
+   *
+   * The selection is deliberately cleared first. `withMachine` marks a new row
+   * current, and `switchTo` refuses a machine that is already current — so
+   * without this, adding a server would leave a book pointing at a machine
+   * nothing had dialled.
+   */
+  private finishAddServer(endpoint: RelayEndpoint, outcome: Extract<Awaited<ReturnType<typeof runSignIn>>, { ok: true }>): void {
+    const now = Date.now()
+    const id = machineId(endpoint)
+    const credential: StoredCredential = {
+      token: outcome.token,
+      deviceId: outcome.deviceId,
+      deviceName: outcome.deviceName,
+      pairedAt: now,
+      // Read off the welcome this sign-in already earned, so the first paint
+      // names the machine correctly instead of waiting for the next socket.
+      hostPlatform: readHostPlatform(outcome.welcome.hostPlatform),
+      endpoint,
+      expiresAt: now + REMEMBERED_TTL_MS,
+    }
+    // The login goes now, before anything is drawn with it still in memory.
+    this.leaveAddServer()
+
+    this.book = withMachine(this.book, {
+      id,
+      nickname: null,
+      hostName: cleanNickname(outcome.welcome.hostName ?? null),
+      credential,
+    })
+    this.book = { ...this.book, currentId: null }
+    this.keep()
+    // Whatever brought this browser here is over, the same way `onCredential`
+    // ends a pairing: a back chevron left pointing at the pair screen would be
+    // a way back to a form nobody is filling in.
+    this.pairingAnother = false
+    this.switchTo(id)
   }
 
   private sessionsScreen(): HTMLElement {
@@ -4468,6 +4956,15 @@ class Deck {
     })
     screen.append(add)
 
+    // The second way a machine joins this list, beside the first and drawn the
+    // same: a server with no screen cannot show a code, and signing in to one is
+    // not a lesser route to the same place — it is the only route to that kind of
+    // machine. See `addServerScreen`.
+    const signIn = element('button', 'button button--quiet machines__add', 'Sign in to a server')
+    signIn.type = 'button'
+    signIn.addEventListener('click', () => this.openAddServer('machines'))
+    screen.append(signIn)
+
     screen.append(element('p', 'note note--plain', MACHINES_FOOTNOTE))
     return screen
   }
@@ -5289,6 +5786,7 @@ class Deck {
       this.copilot.link.open &&
       this.screen !== 'copilot' &&
       this.screen !== 'pair' &&
+      this.screen !== 'add-server' &&
       this.screen !== 'terminal' &&
       !this.dockFolded &&
       (this.scanState !== null || this.answer !== null || this.copilot.chat.length > 0)

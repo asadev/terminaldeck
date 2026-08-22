@@ -69,6 +69,8 @@ import {
   MAX_CREDENTIAL_HOST_LENGTH,
   MAX_CREDENTIAL_REPO_LENGTH,
   MAX_CWD_BYTES,
+  MAX_ENROLL_SECRET_BYTES,
+  MAX_ENROLL_USERNAME_LENGTH,
   MAX_FRAME_DATA_CHARS,
   MAX_INPUT_BYTES,
   MAX_MESSAGE_BYTES,
@@ -125,6 +127,17 @@ export {
   CAPABILITY,
   MAX_COPILOT_MESSAGE_CHARS,
   MAX_COPILOT_SAY_BYTES,
+  /*
+   * The two bounds a sign-in form has to obey, re-exported rather than restated.
+   *
+   * `add-server.ts` checks a username's length and a secret's byte count before
+   * either crosses, and it must check them against the *host's* numbers: a
+   * client with its own copy is a client that eventually lets somebody type a
+   * login the host will refuse to parse, spending a round trip and one of five
+   * rate-limiter attempts to discover it.
+   */
+  MAX_ENROLL_SECRET_BYTES,
+  MAX_ENROLL_USERNAME_LENGTH,
   PROTOCOL_VERSION,
 }
 

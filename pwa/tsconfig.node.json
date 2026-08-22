@@ -3,12 +3,35 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "lib": ["ES2023"],
+    /*
+     * `DOM` alongside the Node types, and the two are not in tension here.
+     *
+     * This config covers `vite.config.ts` and `tests/`, which is where the
+     * grep-the-source guards live — and now also `tests/sign-in-live.test.ts`,
+     * which runs the *browser* client against a real host in a Node process. It
+     * therefore imports `pwa/src/*` for real, and those files are browser files:
+     * `remember.ts` reads `window.localStorage`, `relay-socket.ts` opens a
+     * `WebSocket`. Without the DOM lib this config cannot describe the client it
+     * is testing.
+     *
+     * The latch this must not weaken is the *other* one. `pwa/tsconfig.json`
+     * keeps `"types": []`, which is what stops a Node built-in nobody planned
+     * for reaching the bundle, and it is untouched. Nothing here compiles into
+     * anything shipped.
+     */
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "types": ["node"],
     "strict": true,
     "skipLibCheck": true,
     "esModuleInterop": true,
     "noEmit": true
   },
-  "include": ["vite.config.ts", "tests/**/*"]
+  /*
+   * `ssh2.d.ts` is here for the same reason the DOM lib is: the sign-in test
+   * stands up the real host, whose `enroll.ts` reaches `ssh-verify.ts`, which
+   * imports `ssh2`. The package ships no types and this repo declares them once,
+   * in `src/main/servers/ssh2.d.ts` — named rather than copied, so a second
+   * description of that module cannot drift from the first.
+   */
+  "include": ["vite.config.ts", "tests/**/*", "../src/main/servers/ssh2.d.ts"]
 }

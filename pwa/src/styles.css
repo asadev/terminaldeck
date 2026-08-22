@@ -3789,3 +3789,161 @@ a.browse__go {
 .screen__heading h2 {
   margin: 0;
 }
+
+/* ------------------------------------------------------- sign in to a server */
+
+/* The Add-server form: three fields, a choice, and a button.
+
+   The one form in this client with more than a single field on it, which is why
+   it carries a label per row where the pairing screen carries none. A six-digit
+   field on a screen whose only act is typing six digits needs no label; three
+   boxes that take an address, a login and a secret are ambiguous without one,
+   and the design brief's bar is a screen somebody who has never seen it can
+   read. The labels are one or two words each — a label is not prose, and the
+   paragraph that explains the whole thing is behind the ⓘ where the pair
+   screen's is. */
+.form__row {
+  margin-top: 14px;
+}
+
+.form__label {
+  display: block;
+  margin: 0 0 6px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+/* The same fill and height as the rename field, because they are the same
+   interaction — a box somebody types into — and two shapes of text field in one
+   client is how one of them ends up without a focus ring. The border reset lives
+   with `input[type='text']` further up; a textarea and a password field need it
+   too, and both are declared here rather than there so this block is readable on
+   its own. */
+.form__field {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: none;
+  outline: none;
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 15px;
+  /* A textarea is resizable by default and drags out of the column. The row
+     count is the height, and it is chosen per field. */
+  resize: vertical;
+}
+
+.form__field:focus-visible {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+/* An address and a PEM are exact, countable characters — the same promise the
+   port list's paths and the machines list's endpoints make in this face. */
+.form__field--mono {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+/* What is wrong with the field directly above it, and never anywhere else. A
+   message printed above one field and below another is a form people hunt
+   around. Warning rather than critical: nothing has failed yet — this is the
+   form declining to send something the machine would refuse. */
+.form__problem {
+  margin: 6px 0 0;
+  color: var(--color-warning);
+  font-size: 13px;
+}
+
+/* How the machine refused, in the machine's own words. Under the button rather
+   than under a field, because it is not about any one of them. */
+.form__failure {
+  max-width: var(--prose);
+  margin: 14px 0 0;
+  color: var(--color-critical);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.form__methods {
+  display: flex;
+  gap: 8px;
+}
+
+/* Two of them, so neither is a picker with one item in it. The chosen one is
+   tinted and not pressable — pressing the answer you already gave costs a
+   re-render and changes nothing, the same rule the machine switcher follows. */
+.form__method {
+  flex: 1;
+  min-height: 40px;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 14px;
+  text-align: center;
+}
+
+.form__method--here {
+  background: var(--accent-soft);
+  color: var(--accent);
+  opacity: 1;
+}
+
+.form__method:disabled {
+  cursor: default;
+}
+
+/* The install command, shown only where a machine with no server on it is
+   actually the explanation — see `add-server.ts`, which decides that from what
+   the machine said rather than from a guess. */
+.install {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.install__note {
+  max-width: var(--prose);
+  margin: 0 0 10px;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.install__line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Selectable by hand as well as copyable by button: a clipboard write needs a
+   secure context and, in some browsers, a permission, and a command nobody can
+   select is a command somebody has to retype. It scrolls inside its own box
+   rather than wrapping, because a wrapped shell line invites a paste with a
+   newline in the middle of it. */
+.install__command {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: pre;
+  user-select: all;
+}
+
+.install__copy {
+  width: auto;
+  margin: 0;
+  min-height: 34px;
+  padding: 6px 14px;
+  font-size: 13px;
+}
