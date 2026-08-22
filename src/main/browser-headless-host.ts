@@ -1,0 +1,715 @@
+/**
+ * The tab authority for a server: a real Chromium of this machine's own, driven
+ * over CDP, standing in for everything the desktop's renderer does when the
+ * copilot asks for a browser.
+ *
+ * ## What this replaces, and why it can
+ *
+ * On the desktop a driven page is a `WebContentsView` the renderer built, sitting
+ * in the tab strip where a person can see and close it — so `DriveHost.openTab`
+ * (`browser-drive-ipc.ts`) *asks the window* for one and gets a shell tab id
+ * back, and `browser-tab.ts`/`browser-popup.ts` make the object. There is no
+ * window here and no renderer to ask. So this module is the tab authority
+ * itself: it launches Chromium once (per profile), opens targets in it, and
+ * hands the driver a {@link DrivenPage} spoken to over the pipe. The long
+ * comment in `src/headless/host.ts` where the copilot is declined names exactly
+ * this — "a `WebContentsView` created in the main process would be a page that
+ * exists, is doing things, and cannot be found" is the desktop's reason for
+ * going through the renderer, and it does not hold on a server whose browser has
+ * no strip to be missing from and whose windows are numbered by the same
+ * {@link browser-binding} store the desktop uses.
+ *
+ * ## Why background targets are not a problem here
+ *
+ * `DriveHost.showWindow` is a success no-op on this host, and that is the pivot
+ * that makes Route B beat Electron-under-Xvfb. The desktop needs `showWindow`
+ * because a background `WebContentsView` has a 0×0 viewport and drops input
+ * (measured, see `browser-driver.ts`'s `showWindow` header). Under real headless
+ * Chromium every target composites independently and CDP `Input.*` reaches any
+ * target regardless of front/back, so the whole background-input-dropped defect
+ * vanishes and a fleet of targets can be driven at once.
+ *
+ * ## Electron-free, and checked
+ *
+ * Nothing here imports Electron, and `src/headless/seam.test.ts` walks the graph
+ * from the headless entries through `host.ts` into this file and would fail on a
+ * single runtime `electron` import. The launch and the pipe are behind seams
+ * (`launch`) so a test drives a fake Chromium and a fake `CdpPipe` — this module
+ * never downloads a browser or spawns a debugger in a test, per the wave-2 house
+ * rules.
+ */
+
+import { randomUUID } from 'node:crypto'
+import { join } from 'node:path'
+import { userDataDir } from './platform/paths'
+import { CdpPipe } from './browser-cdp-pipe'
+import type { CdpEvent } from './browser-cdp-pipe'
+import { cdpDrivenPage, type CdpTransport } from './browser-driven-cdp'
+import { launchChromium } from './browser-chromium-launch'
+import { installChromium } from './browser-chromium-install'
+import {
+  CDP_GUEST_WORLD,
+  cdpGuestDispatchExpression,
+  installCdpGuestPreload,
+  parseGuestBinding,
+  type GuestMessage,
+} from './browser-preload-cdp'
+import { installCdpDownloads, type CdpDownloadChannel, type CdpDownloadHandle } from './browser-downloads-cdp'
+import { cdpAssetFetchFor, type AssetOpen, type CdpAssetChannel } from './browser-asset-session-cdp'
+import {
+  attach,
+  slotName,
+  windowClosed,
+  type BoundWindow,
+} from './browser-binding'
+import { captureDir } from './browser-capture-store'
+import { blockShotDirFor } from './browser-scrape-paths'
+import {
+  captureBoundsOf,
+  fetchRulesOf,
+  scrapeSettingsFor,
+} from './browser-scrape-settings'
+import type { DriveHost, DrivenPage } from './browser-driver'
+import type { DriveStatus } from './browser-drive'
+
+/**
+ * The channel the desktop's `DriveStatus` rides, restated here as a literal.
+ *
+ * It is `browser-drive-ipc.ts`'s `DRIVE_STATE_CHANNEL`, and it is copied rather
+ * than imported for the reason this whole file exists: that module reaches
+ * Electron at its first line, so importing one string from it would drag the
+ * renderer bridge into the headless bundle. Both ends agree on the string; the
+ * seam test is what keeps them from having to agree on the module.
+ */
+export const HEADLESS_DRIVE_STATE_CHANNEL = 'browser:drive-state'
+
+/**
+ * The id of the profile whose partition predates this feature — `browser-profiles.ts`'s
+ * `DEFAULT_PROFILE_ID`, inlined.
+ *
+ * It is copied as a literal rather than imported for the reason
+ * `HEADLESS_DRIVE_STATE_CHANNEL` above is: `browser-profiles.ts` reaches Electron
+ * (`app`, `session`) at its first line and drags the whole desktop profile stack
+ * with it, so importing one string would break the seam. The value is a fixed id
+ * that module's own header calls *"never minted"* — it does not change — and it is
+ * what the desktop files a default-profile capture under, so `captureFolder` here
+ * writes to the same place.
+ */
+const DEFAULT_PROFILE_ID = 'default'
+
+/* ------------------------------------------------------------- the launch -- */
+
+/** A launched browser, reduced to the two things this host holds it by. */
+export interface HeadlessBrowserHandle {
+  /** The CDP channel, framed. `CdpPipe` is the production one. */
+  transport: CdpTransport
+  /** Stop the browser process. The pipe closing does not do this — the launcher owns the child. */
+  stop(): void
+}
+
+/** Resolve, launch and wrap a Chromium for one profile, or say why it could not. */
+export type LaunchBrowser = (input: {
+  userDataDir: string
+  extensionDirs: readonly string[]
+}) => Promise<{ ok: true; handle: HeadlessBrowserHandle } | { ok: false; why: string }>
+
+/**
+ * The production launch: the installed pinned Chromium, over `--remote-debugging-pipe`.
+ *
+ * `installChromium` is idempotent and honours `TERMINALDECK_CHROMIUM_PATH` for an
+ * air-gapped side-load; a missing binary comes back as a named error rather than
+ * a crash, exactly the discipline `platform/paths.ts` keeps. The default is
+ * fetch-on-first-run — the `terminaldeck browser install` step primes it, and a
+ * server that never ran it pays the download here on first drive.
+ */
+const defaultLaunch: LaunchBrowser = async ({ userDataDir: dir, extensionDirs }) => {
+  const install = await installChromium()
+  if (!install.ok) return { ok: false, why: install.why }
+  const launched = launchChromium({
+    executablePath: install.path,
+    userDataDir: dir,
+    extensionDirs,
+  })
+  if (!launched.ok) return { ok: false, why: launched.why }
+  const pipe = new CdpPipe(launched.handle.pipeWrite, launched.handle.pipeRead)
+  return { ok: true, handle: { transport: pipe, stop: () => launched.handle.close() } }
+}
+
+/* -------------------------------------------------------------- the deps -- */
+
+export interface HeadlessDriveHostDeps {
+  /** Where profiles, captures and downloads live. Defaults to `userDataDir()`. */
+  userData?: string
+  /** Epoch ms. Injected so a test can freeze it. */
+  now?: () => number
+  /**
+   * Push the drive's banner state at the attached devices.
+   *
+   * Absent on a build with no fanout — a no-op — which is honest: a server with
+   * nobody connected has no banner to draw. The desktop hands its renderer's
+   * `send`; `src/headless/host.ts` hands the relay's per-device push.
+   */
+  publish?: (status: DriveStatus) => void
+  /** Resolve + launch Chromium. Injected for tests; defaults to {@link defaultLaunch}. */
+  launch?: LaunchBrowser
+  /**
+   * Unpacked extension directories to load into a profile's browser, by profile id.
+   *
+   * Real Chromium loads these with `--load-extension`; the shim
+   * (`browser-extension-compat.ts`) is still injected so the catalogue's
+   * verdicts match. Empty for a profile with none.
+   */
+  extensionDirsFor?: (profileId: string) => readonly string[]
+  /**
+   * A guest page reported something — an element clicked while inspecting, a
+   * login form found. Routed here from `Runtime.bindingCalled`; the consumer is
+   * the inspection surface, which on a server is a connected device.
+   *
+   * Absent means the messages are dropped, which is what a server with no
+   * inspection surface should do rather than hold them.
+   */
+  onGuestMessage?: (input: { targetId: string; message: GuestMessage }) => void
+}
+
+/* -------------------------------------------------------- internal state -- */
+
+/** One launched browser process and everything opened inside it. */
+interface BrowserInstance {
+  handle: HeadlessBrowserHandle
+  downloads: CdpDownloadHandle | null
+}
+
+/** The host's own session onto a target's guest world, for the inspection bridge. */
+interface GuestBridge {
+  sessionId: string
+  /** The guest world's execution context, once Chromium has reported it. */
+  contextId?: number
+  send(method: string, params: Record<string, unknown>): Promise<Record<string, unknown>>
+}
+
+/** One open target, and the facts the `DriveHost` answers about it. */
+interface Target {
+  targetId: string
+  profileId: string
+  /** The in-memory context an isolated target lives in, disposed with it. `''` for the default context. */
+  browserContextId: string
+  page: DrivenPage
+  /** The renderer-equivalent shell id, for a window attached to a session. `''` for the copilot's own tab. */
+  browserTabId: string
+  isolated: boolean
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {}
+}
+
+/* --------------------------------------------------------------- the host -- */
+
+/**
+ * The server's `DriveHost`. One per host process; `src/headless/host.ts` builds
+ * it and hands it to `new BrowserDrive(...)`.
+ */
+export class HeadlessDriveHost implements DriveHost {
+  /**
+   * The allow-list axis. Every command the driver screens for a page of this
+   * host is checked against `CDP_ALLOWED` rather than the Electron tables — see
+   * `DriveHost.transport` and `screenCommand`.
+   */
+  readonly transport = 'cdp' as const
+
+  private readonly userData: string
+  private readonly nowFn: () => number
+  private readonly publishFn: (status: DriveStatus) => void
+  private readonly launch: LaunchBrowser
+  private readonly extensionDirsFor: (profileId: string) => readonly string[]
+  private readonly onGuestMessage: ((input: { targetId: string; message: GuestMessage }) => void) | null
+
+  /** One browser per profile, launched on first use. */
+  private readonly browsers = new Map<string, Promise<BrowserInstance>>()
+  /** Settled instances, filled as each launch resolves, for the synchronous {@link browserFor}. */
+  private readonly settledBrowsers = new Map<string, BrowserInstance>()
+  /** The guest bridge for each armed target, by target id. */
+  private readonly guests = new Map<string, GuestBridge>()
+  /** Every open target, by its id (which is also the driver's view id). */
+  private readonly targets = new Map<string, Target>()
+  /** Shell tab id → target id, for the two verbs that take a `browserTabId`. */
+  private readonly byBrowserTab = new Map<string, string>()
+
+  constructor(deps: HeadlessDriveHostDeps = {}) {
+    this.userData = deps.userData ?? userDataDir()
+    this.nowFn = deps.now ?? Date.now
+    this.publishFn = deps.publish ?? (() => {})
+    this.launch = deps.launch ?? defaultLaunch
+    this.extensionDirsFor = deps.extensionDirsFor ?? (() => [])
+    this.onGuestMessage = deps.onGuestMessage ?? null
+  }
+
+  /* ----------------------------------------------------------- the browser -- */
+
+  /**
+   * The profile directory for one profile id.
+   *
+   * `<userData>/Partitions/<profileId>` so each profile's jar, localStorage and
+   * cache persist on disk exactly as `browser-profiles.ts` describes — one
+   * long-lived `--user-data-dir` process per persistent profile. The default
+   * profile keeps its own directory under the same root; its partition name is
+   * unchanged, which matters to the desktop and not here.
+   */
+  private profileDir(profileId: string): string {
+    return join(this.userData, 'Partitions', profileId)
+  }
+
+  /** Where a finished download waits under its GUID before the move. */
+  private downloadsDir(): string {
+    return join(this.userData, 'downloads')
+  }
+
+  /**
+   * The browser for a profile, launched at most once.
+   *
+   * Held as a promise so two calls that race the first launch wait on the one
+   * process rather than starting two. A launch that fails rejects and is not
+   * cached, so the next call tries again — a browser that failed to install once
+   * may install on the retry that primed it.
+   */
+  private ensureBrowser(profileId: string): Promise<BrowserInstance> {
+    const existing = this.browsers.get(profileId)
+    if (existing !== undefined) return existing
+    const started = this.startBrowser(profileId)
+    this.browsers.set(profileId, started)
+    started.then(
+      // Recorded for the synchronous {@link browserFor}, which every caller
+      // reaches only while holding a target — and a target is cached after this
+      // has resolved, so the record is always there by then.
+      (instance) => this.settledBrowsers.set(profileId, instance),
+      // Drop a failed launch so it is retried rather than remembered as broken.
+      () => this.browsers.delete(profileId),
+    )
+    return started
+  }
+
+  private async startBrowser(profileId: string): Promise<BrowserInstance> {
+    const result = await this.launch({
+      userDataDir: this.profileDir(profileId),
+      extensionDirs: this.extensionDirsFor(profileId),
+    })
+    if (!result.ok) {
+      // A named error, never a crash — the tool turns it into a sentence the
+      // agent can read, the same posture `openTab` returning null takes.
+      throw new Error(`the server's browser could not start: ${result.why}`)
+    }
+    // Multiplex every target's session on the one pipe by sessionId.
+    await result.handle.transport
+      .command({
+        method: 'Target.setAutoAttach',
+        params: { autoAttach: true, flatten: true, waitForDebuggerOnStart: false },
+      })
+      .catch(() => undefined)
+    const downloads = this.armDownloads(result.handle.transport)
+    return { handle: result.handle, downloads }
+  }
+
+  /**
+   * Arm downloads for a browser: pin `allowAndName` at the host's downloads dir
+   * and feed the ledger from `Browser.downloadWillBegin` / `downloadProgress`.
+   *
+   * Best-effort — a browser that refuses the arming still drives; the ledger just
+   * gains no rows for it, which the download tool reports rather than inventing.
+   */
+  private armDownloads(transport: CdpTransport): CdpDownloadHandle | null {
+    const channel: CdpDownloadChannel = {
+      send: (method, params) => transport.command({ method, params }),
+      on: (method, handler) =>
+        transport.on(undefined, (event: CdpEvent) => {
+          if (event.method === method) handler(asRecord(event.params))
+        }),
+    }
+    try {
+      return installCdpDownloads({ channel, downloadsDir: this.downloadsDir() })
+    } catch {
+      return null
+    }
+  }
+
+  /* ----------------------------------------------------------- the targets -- */
+
+  /**
+   * Open a target for the given profile, in a fresh in-memory context when
+   * `isolate`, and cache the page the driver will steer.
+   *
+   * Returns null on any failure, publishing the reason — the `DriveHost.openTab`
+   * contract: the tool says "no browser to open" rather than inventing a tab.
+   */
+  private async makeTarget(input: {
+    url: string
+    isolate: boolean
+    profileId: string
+    browserTabId: string
+  }): Promise<Target | null> {
+    let browser: BrowserInstance
+    try {
+      browser = await this.ensureBrowser(input.profileId)
+    } catch (error) {
+      this.publishError(error)
+      return null
+    }
+    const transport = browser.handle.transport
+
+    let browserContextId = ''
+    if (input.isolate) {
+      // A throwaway jar that dies with the context — the server's equivalent of
+      // the desktop's in-memory partition.
+      const created = asRecord(
+        await transport
+          .command({ method: 'Target.createBrowserContext', params: { disposeOnDetach: true } })
+          .catch(() => ({})),
+      )
+      if (typeof created.browserContextId === 'string') browserContextId = created.browserContextId
+    }
+
+    const created = asRecord(
+      await transport
+        .command({
+          method: 'Target.createTarget',
+          params: {
+            url: input.url,
+            ...(browserContextId === '' ? {} : { browserContextId }),
+          },
+        })
+        .catch(() => ({})),
+    )
+    const targetId = created.targetId
+    if (typeof targetId !== 'string' || targetId === '') {
+      this.publishError(new Error('the server’s browser did not open a page'))
+      return null
+    }
+
+    const page = cdpDrivenPage(transport, { targetId, url: input.url })
+    const target: Target = {
+      targetId,
+      profileId: input.profileId,
+      browserContextId,
+      page,
+      browserTabId: input.browserTabId,
+      isolated: input.isolate,
+    }
+    this.targets.set(targetId, target)
+    if (input.browserTabId !== '') this.byBrowserTab.set(input.browserTabId, targetId)
+    return target
+  }
+
+  /* --------------------------------------------------------- DriveHost API -- */
+
+  async openTab(input: { url: string; isolate: boolean }): Promise<string | null> {
+    // The copilot's own tab has no shell id — its number is never minted, the
+    // way `OWN_TARGET` has an empty `browserTabId` on the desktop.
+    const target = await this.makeTarget({
+      url: input.url,
+      isolate: input.isolate,
+      profileId: DEFAULT_PROFILE_ID,
+      browserTabId: '',
+    })
+    return target?.targetId ?? null
+  }
+
+  contentsFor(tabId: string): DrivenPage | null {
+    const target = this.targets.get(tabId)
+    if (target === undefined) return null
+    if (target.page.isGone()) {
+      this.forget(tabId)
+      return null
+    }
+    return target.page
+  }
+
+  publish(status: DriveStatus): void {
+    this.publishFn(status)
+  }
+
+  now(): number {
+    return this.nowFn()
+  }
+
+  async openForSession(input: {
+    url: string
+    sessionId: string
+    newWindow?: boolean
+    machineId?: string
+  }): Promise<{ line: string; attached: boolean }> {
+    // A window a session can see and hand back: a target attached to that
+    // session in the same `browser-binding` store the desktop mints B1/B2 from,
+    // so a window opened on the server means the same thing to the phone.
+    const browserTabId = `browser:${this.nowFn()}:${randomUUID().slice(0, 8)}`
+    const target = await this.makeTarget({
+      url: input.url,
+      isolate: false,
+      profileId: DEFAULT_PROFILE_ID,
+      browserTabId,
+    })
+    if (target === null) {
+      return {
+        line: 'the server could not open a browser window for this session.',
+        attached: false,
+      }
+    }
+    const window: BoundWindow = attach({
+      sessionId: input.sessionId,
+      machineId: input.machineId ?? '',
+      browserTabId,
+      viewId: target.targetId,
+      url: input.url,
+    })
+    return { line: `Opened ${slotName(window.n)} on the server`, attached: true }
+  }
+
+  async closeWindow(browserTabId: string): Promise<boolean> {
+    const targetId = this.byBrowserTab.get(browserTabId)
+    if (targetId === undefined) {
+      // Still tell the binding store — a window row must not outlive the target.
+      windowClosed(browserTabId)
+      return false
+    }
+    const target = this.targets.get(targetId)
+    if (target !== undefined) {
+      await this.browserFor(target.profileId)
+        ?.handle.transport.command({ method: 'Target.closeTarget', params: { targetId } })
+        .catch(() => undefined)
+      if (target.browserContextId !== '') {
+        await this.browserFor(target.profileId)
+          ?.handle.transport.command({
+            method: 'Target.disposeBrowserContext',
+            params: { browserContextId: target.browserContextId },
+          })
+          .catch(() => undefined)
+      }
+    }
+    this.forget(targetId)
+    windowClosed(browserTabId)
+    return true
+  }
+
+  /**
+   * Bring a window to the front — a success no-op on this host.
+   *
+   * See the class header: every headless target composites and accepts input
+   * regardless of front/back, so there is no hidden 0×0 viewport to raise. The
+   * desktop's `showWindow` exists only to defeat that, and its absence here is
+   * the measured reason a 16-worker fleet is drivable at once.
+   */
+  async showWindow(_browserTabId: string): Promise<boolean> {
+    return true
+  }
+
+  captureFolder(input: { viewId: string; runId: string }): string | null {
+    const profileId = this.profileOf(input.viewId)
+    if (profileId === null) return null
+    return captureDir(this.userData, profileId === '' ? 'isolated' : profileId, input.runId)
+  }
+
+  blockCapture(viewId: string): { dir: string; on: boolean } | null {
+    const profileId = this.profileOf(viewId)
+    if (profileId === null) return null
+    const id = profileId === '' ? 'isolated' : profileId
+    // The panel's store wins for a real profile, exactly as the desktop resolves
+    // it; an isolated target has no stored settings, so its camera is on.
+    const on =
+      profileId === ''
+        ? true
+        : scrapeSettingsFor(this.userData, profileId).checks.screenshotOnBlock !== false
+    return { dir: blockShotDirFor(this.userData, id), on }
+  }
+
+  scrapeDefaults(viewId: string): {
+    rules: ReturnType<typeof fetchRulesOf>
+    capture: boolean | null
+    bounds: ReturnType<typeof captureBoundsOf>
+    blockShots: boolean | null
+  } | null {
+    const profileId = this.profileOf(viewId)
+    if (profileId === null || profileId === '') return null
+    const settings = scrapeSettingsFor(this.userData, profileId)
+    return {
+      rules: fetchRulesOf(settings),
+      capture: settings.capture.on,
+      bounds: captureBoundsOf(settings),
+      blockShots: settings.checks.screenshotOnBlock,
+    }
+  }
+
+  /* --------------------------------------------------- profile-cookied fetch -- */
+
+  /**
+   * The profile-cookied `AssetOpen` for one open target.
+   *
+   * A single-URL `Network.getCookies` read off that target's own page, replayed
+   * onto an undici fetch — the server's stand-in for the desktop's implicit
+   * partition jar, behind the same seam `browser-asset-fetch.ts` already takes.
+   * Null when the target is gone. The page must be attached (it is while the
+   * drive is harvesting), because the cookie read is a page-session command.
+   */
+  assetOpenFor(viewId: string): AssetOpen | null {
+    const target = this.targets.get(viewId)
+    if (target === undefined || target.page.isGone()) return null
+    const channel: CdpAssetChannel = {
+      send: (method, params) => target.page.send(method, (params ?? {}) as Record<string, unknown>),
+    }
+    return cdpAssetFetchFor({ channel })
+  }
+
+  /* ---------------------------------------------------------- guest bridge -- */
+
+  /**
+   * Deliver the guest preload to a target and route its messages back.
+   *
+   * The server's equivalent of the desktop's `wireGuestEvents`: over CDP there
+   * is no preload path, so this re-delivers `GUEST_PRELOAD_SOURCE` via
+   * `Page.addScriptToEvaluateOnNewDocument` + `Runtime.addBinding`
+   * (`installCdpGuestPreload`), then routes the guest's `__deckGuest` calls —
+   * which arrive as `Runtime.bindingCalled` — through {@link parseGuestBinding}
+   * to {@link HeadlessDriveHostDeps.onGuestMessage}. The host opens its own
+   * session to the target so the bridge is independent of the drive's session.
+   *
+   * Called by the inspection surface when it wants a target's guest reporting;
+   * the surface itself — a connected device asking to inspect — is where this
+   * bridge's other end lands, and is the follow-up this mechanism waits for.
+   */
+  async armGuestPreload(viewId: string): Promise<boolean> {
+    const target = this.targets.get(viewId)
+    if (target === undefined || target.page.isGone()) return false
+    if (this.guests.has(viewId)) return true
+    const transport = this.browserFor(target.profileId)?.handle.transport
+    if (transport === undefined) return false
+
+    const attached = asRecord(
+      await transport
+        .command({ method: 'Target.attachToTarget', params: { targetId: viewId, flatten: true } })
+        .catch(() => ({})),
+    )
+    const sessionId = attached.sessionId
+    if (typeof sessionId !== 'string' || sessionId === '') return false
+
+    const bridge: GuestBridge = {
+      sessionId,
+      send: (method, params) =>
+        transport.command({ method, params, sessionId }).then((result) => asRecord(result)),
+    }
+    this.guests.set(viewId, bridge)
+
+    transport.on(sessionId, (event: CdpEvent) => {
+      const params = asRecord(event.params)
+      if (event.method === 'Runtime.bindingCalled') {
+        // Guest → main: `__deckGuest(json)` routed to the same handlers
+        // `wireGuestEvents` wires on the desktop.
+        const message = parseGuestBinding(params.name, params.payload)
+        if (message !== null) this.onGuestMessage?.({ targetId: viewId, message })
+        return
+      }
+      if (event.method === 'Runtime.executionContextCreated') {
+        // Learn the guest world's context so {@link dispatchToGuest} can name it
+        // rather than the page's main world.
+        const context = asRecord(params.context)
+        if (context.name === CDP_GUEST_WORLD && typeof context.id === 'number') {
+          bridge.contextId = context.id
+        }
+        return
+      }
+      if (event.method === 'Runtime.executionContextsCleared') {
+        bridge.contextId = undefined
+      }
+    })
+
+    // Runtime on so bindingCalled and executionContextCreated fire; Page on so
+    // the on-new-document script takes. Both best-effort — a target that refuses
+    // one is reported by the install's own failure rather than here.
+    await bridge.send('Runtime.enable', {}).catch(() => undefined)
+    await bridge.send('Page.enable', {}).catch(() => undefined)
+    try {
+      await installCdpGuestPreload(bridge)
+      return true
+    } catch {
+      this.guests.delete(viewId)
+      return false
+    }
+  }
+
+  /**
+   * Send one main → guest message, the mirror of {@link armGuestPreload}'s
+   * inbound routing.
+   *
+   * `GUEST_INSPECT` / `GUEST_LOGIN_FILL` on the desktop go over `webContents.send`;
+   * here they are a `Runtime.evaluate` of {@link cdpGuestDispatchExpression} in
+   * the guest world's own execution context — never the page's main world, the
+   * same property the drive's reads keep — with arguments carried as JSON so
+   * there is no path from a value to executable text. Best-effort: a target with
+   * no guest bridge armed, or none navigated far enough for the world to exist
+   * yet, simply does nothing, which is what the desktop's `send` to a gone
+   * window does.
+   */
+  async dispatchToGuest(viewId: string, channel: string, args: readonly unknown[]): Promise<void> {
+    const bridge = this.guests.get(viewId)
+    if (bridge === undefined || bridge.contextId === undefined) return
+    await bridge
+      .send('Runtime.evaluate', {
+        expression: cdpGuestDispatchExpression(channel, args),
+        contextId: bridge.contextId,
+        returnByValue: true,
+      })
+      .catch(() => undefined)
+  }
+
+  /* ------------------------------------------------------------- teardown -- */
+
+  /**
+   * Stop every browser this host launched.
+   *
+   * The host's own lifecycle owns the child processes — the pipe closing never
+   * kills them, so this is the one place they end. Idempotent.
+   */
+  async stop(): Promise<void> {
+    const instances = [...this.browsers.values()]
+    this.browsers.clear()
+    this.settledBrowsers.clear()
+    this.targets.clear()
+    this.byBrowserTab.clear()
+    this.guests.clear()
+    for (const pending of instances) {
+      try {
+        const instance = await pending
+        instance.downloads?.dispose()
+        instance.handle.stop()
+      } catch {
+        /* A browser that never came up has nothing to stop. */
+      }
+    }
+  }
+
+  /* -------------------------------------------------------------- helpers -- */
+
+  private forget(targetId: string): void {
+    const target = this.targets.get(targetId)
+    this.targets.delete(targetId)
+    this.guests.delete(targetId)
+    if (target !== undefined && target.browserTabId !== '') {
+      this.byBrowserTab.delete(target.browserTabId)
+    }
+  }
+
+  /** The profile a view belongs to: `''` for an isolated target, the id else, null when unknown. */
+  private profileOf(viewId: string): string | null {
+    const target = this.targets.get(viewId)
+    if (target === undefined) return null
+    return target.isolated ? '' : target.profileId
+  }
+
+  /** The already-launched browser for a profile, or undefined before it is up. Never launches. */
+  private browserFor(profileId: string): BrowserInstance | undefined {
+    return this.settledBrowsers.get(profileId)
+  }
+
+  private publishError(error: unknown): void {
+    const message = error instanceof Error ? error.message : 'the server’s browser is unavailable'
+    // The banner carries the reason so a connected device shows why nothing
+    // moved rather than a spinner that never resolves.
+    this.publishFn({ state: 'idle', tabId: null, step: message, prompt: '', url: '' })
+  }
+}

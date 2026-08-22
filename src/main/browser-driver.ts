@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import type { BlockWatchDeps } from './browser-block-watch'
 import { maskFrame, type RawFrame } from './browser-png'
 import { userDataDir } from './platform/paths'
-import { screenCommand, type DriveState } from './browser-cdp'
+import { screenCommand, type DriveState, type Transport } from './browser-cdp'
 import {
   EMPTY_DRIVE_STATUS,
   HANDOVER_WINDOW_MS,
@@ -379,6 +379,21 @@ export interface DrivenPage {
  * exercisable if it constructs its own Electron objects.
  */
 export interface DriveHost {
+  /**
+   * Which command allow-list the driver screens this host's page against.
+   *
+   * The one axis `browser-cdp.ts` grew for the server. The desktop's pages are
+   * driven over an Electron `WebContents` debugger, whose reads go through
+   * `executeJavaScriptInIsolatedWorld` and whose screenshots go through
+   * `capturePage()`, so its allow-list denies the CDP verbs a headless target is
+   * driven with — `Page.navigate`, `Page.captureScreenshot`, `Target.*`. A host
+   * whose pages are real Chromium targets over a pipe declares `'cdp'` so the
+   * screen consults `CDP_ALLOWED`; every other host leaves it absent and is
+   * screened exactly as before, which is the property this field must keep — see
+   * {@link BrowserDrive.send}. It is read per call rather than captured so there
+   * is one answer and it is this host's, never a stale one.
+   */
+  transport?: Transport
   /**
    * Ask the window to open a browser tab for the agent, and tell us its id.
    *
@@ -1107,7 +1122,7 @@ export class BrowserDrive {
     method: string,
     params: Record<string, unknown> = {},
   ): Promise<Record<string, unknown>> {
-    const verdict = screenCommand({ state: slot.state, method, params })
+    const verdict = screenCommand({ transport: this.host.transport, state: slot.state, method, params })
     if (!verdict.ok) throw new DriveRefused(verdict.reason)
     return page.send(method, params)
   }

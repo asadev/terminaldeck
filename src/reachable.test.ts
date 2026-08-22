@@ -121,18 +121,27 @@ function corpus(except: readonly string[] = []): string {
 
 /** Unreachable on purpose, each with the reason it is not a lie. */
 const KNOWN_UNREACHABLE: Record<string, string> = {
-  'src/main/browser-cdp-pipe.ts':
-    'unreachable until wave-2 Lane C/D wire it: the CDP-over-pipe adapter (fds 3/4, NUL-delimited JSON) that browser-driven-cdp.ts will send through and the headless tab authority will spawn into. It lives in src/ so tsc checks it against the allow-list it enforces. REMOVE when a headless entry reaches it — reachable.test flags a stale entry.',
-  'src/main/browser-chromium-launch.ts':
-    'unreachable until wave-2 Lane B lands: it spawns chrome-for-testing over --remote-debugging-pipe and hands back fds 3/4, but the CDP codec that consumes those fds (`browser-cdp-pipe.ts`) is not built yet. It lives in src/ so tsc checks the launch flags and the fd stdio shape against the pipe adapter it will feed. REMOVE THIS ENTRY when Lane B wires it — a stale allowlist entry is its own lie.',
-  'src/main/browser-driven-cdp.ts':
-    'unreachable until wave-2 Lane D wires it: the CDP implementation of the DrivenPage seam — one Chromium target spoken to over browser-cdp-pipe.ts — that the headless tab authority will hand back from contentsFor. It lives in src/ so tsc checks it against the DrivenPage interface it implements and the pipe it sends through. REMOVE THIS ENTRY when a headless entry reaches it — reachable.test flags a stale one.',
-  'src/main/browser-preload-cdp.ts':
-    'unreachable until wave-2 Lane D wires it: the guest-preload bridge that re-delivers browser-preload.ts over Page.addScriptToEvaluateOnNewDocument + Runtime.addBinding once a CDP page is being driven. It lives in src/ so tsc checks its shim against the guest script it reuses. REMOVE THIS ENTRY when a headless entry reaches it — a stale allowlist entry is its own lie.',
-  'src/main/browser-downloads-cdp.ts':
-    'unreachable until wave-2 Lane C/D wire it: the CDP download path (Browser.setDownloadBehavior allowAndName + downloadWillBegin/downloadProgress) that feeds the headless-safe ledger in `browser-downloads-store.ts`. The store and its Electron transport ARE reached (index.ts, through `browser-downloads.ts`); only this CDP transport waits for the host to arm it against a real browser context. It lives in src/ so tsc checks it against the store feed and the CDP channel it will be handed. REMOVE when a headless entry reaches it — reachable.test flags a stale entry.',
-  'src/main/browser-asset-session-cdp.ts':
-    'unreachable until wave-2 Lane D wires it: the profile-cookied AssetOpen implementation for the server — a single-URL Network.getCookies read replayed onto an undici fetch, behind the same seam `browser-asset-fetch.ts`/`browser-asset-probe.ts` already take on the desktop. It is deliberately free of any import from `browser-asset-session.ts` (which reaches for electron) so it can enter the headless closure once the host binds it to a profile’s CDP channel. It lives in src/ so tsc checks it against that seam. REMOVE when a headless entry reaches it.',
+  // The six CDP browser files — `browser-cdp-pipe.ts`, `browser-chromium-launch.ts`,
+  // `browser-driven-cdp.ts`, `browser-preload-cdp.ts`, `browser-downloads-cdp.ts`
+  // and `browser-asset-session-cdp.ts` — were each listed here and none is any
+  // more, because the headless entry that reaches them landed. Every entry said,
+  // correctly at the time, that the file was built ahead of the wiring and warned
+  // in the same words that the stale entry would be "its own lie".
+  //
+  // What reaches them now is `src/headless/host.ts`, which constructs a
+  // `HeadlessDriveHost` (`browser-headless-host.ts`) — the server's tab authority
+  // — and a `BrowserDrive` over it. That host launches Chromium through
+  // `browser-chromium-launch.ts`, speaks to it over `browser-cdp-pipe.ts`, hands
+  // the driver a `browser-driven-cdp.ts` page per target, arms downloads through
+  // `browser-downloads-cdp.ts`, fetches profile-cookied assets through
+  // `browser-asset-session-cdp.ts`, and delivers the guest bridge through
+  // `browser-preload-cdp.ts`; and `remote/machines/window-serve.ts` serves a
+  // device's `window.call` against it. So the path from a device driving to these
+  // files is a real one, end to end.
+  //
+  // Deleted rather than reworded, per the note about `confine/appcontainer.ts`
+  // below: an entry that outlives its reason is documentation asserting the
+  // opposite of the code.
   'src/main/browser-extension-zip.fixture.ts':
     'unreachable on purpose: it builds the zip archives `browser-extension-unzip.test.ts` reads, ' +
     'including the malformed ones — path traversal, symlinks, a lying size, zip64 — that no real ' +

@@ -281,6 +281,21 @@ class CdpDrivenPage implements DrivenPage {
     await this.transport
       .command({ method: 'Inspector.enable', params: {}, sessionId })
       .catch(() => undefined)
+    // Network on, so the block watcher sees the main document's HTTP status.
+    //
+    // The desktop reads `did-navigate`'s response code straight off the
+    // `WebContents`; over CDP that status only exists in `Network.responseReceived`,
+    // and `CdpBlockWatchTarget` synthesises `did-navigate` from it — so without
+    // the domain enabled a challenge page returns a `0` status and the automatic
+    // block capture never fires. `attachBlockWatch` runs on every drivable page
+    // through the driver's `watch()`, and the drive attaches before it navigates,
+    // so enabling here covers every watched page. Idempotent with `PageNetwork`'s
+    // own `Network.enable` when a harvest is armed; best-effort like the two
+    // above, because a page that cannot take it is a page the watcher simply has
+    // no status for rather than one that fails to attach.
+    await this.transport
+      .command({ method: 'Network.enable', params: {}, sessionId })
+      .catch(() => undefined)
   }
 
   detach(): void {

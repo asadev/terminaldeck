@@ -173,6 +173,25 @@ describe('the headless build never reaches Electron', () => {
     // else — `ssh2` is a plain Node dependency, and neither file may reach past it.
     expect(files).toContain('src/main/remote/enroll.ts')
     expect(files).toContain('src/main/remote/ssh-verify.ts')
+    // The server's browser, now genuinely in the graph. `host.ts` builds a
+    // `HeadlessDriveHost` and a `BrowserDrive` over it and serves `window.call`
+    // against a browser-verb `DeckControl`, so the whole CDP browser stack — the
+    // tab authority, the driver and its PNG masking, the CDP page and pipe, the
+    // guest-preload bridge, the download ledger and its CDP transport, and the
+    // profile-cookied asset fetch — is reached from the headless entries and is
+    // checked for the Electron edge by the walk below rather than by name.
+    expect(files).toContain('src/main/browser-headless-host.ts')
+    expect(files).toContain('src/main/browser-headless-control.ts')
+    expect(files).toContain('src/main/browser-driver.ts')
+    expect(files).toContain('src/main/browser-png.ts')
+    expect(files).toContain('src/main/browser-driven-cdp.ts')
+    expect(files).toContain('src/main/browser-cdp-pipe.ts')
+    expect(files).toContain('src/main/browser-preload-cdp.ts')
+    expect(files).toContain('src/main/browser-downloads-store.ts')
+    expect(files).toContain('src/main/browser-downloads-cdp.ts')
+    expect(files).toContain('src/main/browser-asset-session-cdp.ts')
+    expect(files).toContain('src/main/browser-chromium-launch.ts')
+    expect(files).toContain('src/main/browser-chromium-install.ts')
   })
 
   it('imports nothing from electron at runtime', () => {
@@ -305,67 +324,31 @@ describe('the demo host actually approves the visitor it decided to approve', ()
 describe('the headless build can drive a browser without Electron', () => {
   /*
    * Wave-2 gives the headless server a real browser of its own and drives it
-   * over CDP. The first step (this lane) extracted a `DrivenPage` seam so the
-   * engine — the driver and the PNG masking it finishes a screenshot with — no
-   * longer reaches for Electron. The Electron half moved to
-   * `browser-driven-electron.ts`, which is reached only from
-   * `browser-drive-ipc.ts` and never from a headless entry.
-   *
-   * These two files become reachable from the server once the host wiring lands
-   * (a later lane adds them to the closure contains-list above). They must be
-   * clean before they can be, so this asserts the property directly on the
-   * source — the same detector the closure walk uses, pointed at the files by
-   * name rather than reached through the graph.
+   * over CDP. Every file that used to be asserted here by name — the driver and
+   * its PNG masking (`browser-driver.ts`, `browser-png.ts`), the CDP page and its
+   * preload bridge (`browser-driven-cdp.ts`, `browser-preload-cdp.ts`), the
+   * download ledger and its CDP transport (`browser-downloads-store.ts`,
+   * `browser-downloads-cdp.ts`) and the profile-cookied asset fetch
+   * (`browser-asset-session-cdp.ts`) — is now genuinely reachable from the
+   * headless entries through `host.ts`'s `HeadlessDriveHost`, so it is checked
+   * for the Electron edge by the closure walk above (`imports nothing from
+   * electron at runtime`) like every other file in the graph. The by-name
+   * assertions that stood in while the wiring was still ahead of the graph have
+   * been folded into that walk's contains-list, which is the stronger check: it
+   * fails if any of these ever *leaves* the closure as well as if one reaches
+   * Electron. The Electron halves — `browser-driven-electron.ts`,
+   * `browser-downloads-electron.ts`, `browser-drive-ipc.ts` — are reached only
+   * from `src/main/index.ts` and stay out of this closure, which the walk also
+   * enforces by never listing them.
    */
-  it('keeps the driver and its PNG masking free of runtime Electron imports', () => {
-    for (const file of ['src/main/browser-driver.ts', 'src/main/browser-png.ts']) {
-      expect(runtimeElectronImports(readSource(file)), file).toEqual([])
-    }
-  })
-
-  /*
-   * The CDP `DrivenPage` and the guest-preload bridge that re-delivers the
-   * guest script over `Page.addScriptToEvaluateOnNewDocument`. These are the
-   * server's implementation of the seam — one target spoken to over the pipe —
-   * and become reachable once the host wiring lands (a later lane adds them to
-   * the closure contains-list above). They must be Electron-free before they
-   * can be, so this asserts it on the source now, the same way the driver's is
-   * asserted before the graph reaches it.
-   */
-  it('keeps the CDP page and its preload bridge free of runtime Electron imports', () => {
-    for (const file of ['src/main/browser-driven-cdp.ts', 'src/main/browser-preload-cdp.ts']) {
-      expect(runtimeElectronImports(readSource(file)), file).toEqual([])
-    }
-  })
-})
-
-describe('the headless build can carry downloads and profile-cookied fetch without Electron', () => {
-  /*
-   * Wave-2 Lane E splits downloads so the server can keep the same ledger the
-   * desktop does. `browser-downloads-store.ts` is the ledger — the rows, the
-   * dedup, the digest and the move-to-another-machine logic — with no Electron
-   * under it; `browser-downloads-electron.ts` is the desktop `will-download`
-   * transport and stays out of this closure; `browser-downloads-cdp.ts` is the
-   * server's transport, driven from `Browser.downloadWillBegin` /
-   * `downloadProgress`. `browser-asset-session-cdp.ts` is the server's
-   * profile-cookied `AssetOpen`: a single-URL cookie read replayed onto an
-   * undici fetch, deliberately declaring its own copy of the seam's shapes so it
-   * never imports the electron-backed `browser-asset-session.ts`.
-   *
-   * The store is already reached (index.ts, through `browser-downloads.ts`); the
-   * two CDP files become reachable once the host wiring lands (a later lane adds
-   * them to the closure contains-list above and drops their KNOWN_UNREACHABLE
-   * entries). They must be clean before they can be, so this asserts the property
-   * on the source directly — the same detector the closure walk uses, pointed at
-   * the files by name.
-   */
-  it('keeps the download ledger, its CDP transport and the CDP asset fetch free of runtime Electron imports', () => {
+  it('keeps the desktop-only browser halves out of the headless closure', () => {
+    const files = closure()
     for (const file of [
-      'src/main/browser-downloads-store.ts',
-      'src/main/browser-downloads-cdp.ts',
-      'src/main/browser-asset-session-cdp.ts',
+      'src/main/browser-driven-electron.ts',
+      'src/main/browser-downloads-electron.ts',
+      'src/main/browser-drive-ipc.ts',
     ]) {
-      expect(runtimeElectronImports(readSource(file)), file).toEqual([])
+      expect(files, file).not.toContain(file)
     }
   })
 })

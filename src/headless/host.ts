@@ -42,8 +42,12 @@ import { createHostCore, type HostCore } from '../main/host-core'
 import { IdleController, type IdleReport } from '../main/idle'
 import { logger } from '../main/app-log'
 import { bootMapFor, writeAppContext } from '../main/app-context'
-import { hookContext, MID_TURN_EVENTS, takeAnnouncement } from '../main/browser-binding'
+import { hookContext, MID_TURN_EVENTS, takeAnnouncement, view as bindingView } from '../main/browser-binding'
 import { noVerbsLine } from '../main/session-verbs'
+import { HeadlessDriveHost } from '../main/browser-headless-host'
+import { BrowserDrive } from '../main/browser-driver'
+import { createHeadlessBrowserControl } from '../main/browser-headless-control'
+import { serveWindowCall } from '../main/remote/machines/window-serve'
 import { installHooksWhereConfigured } from '../main/hooks'
 import { resetDevPortsCache } from '../main/dev-ports'
 import { currentHookEndpoint, startHookServer, stopHookServer } from '../main/hook-server'
@@ -466,6 +470,32 @@ export async function createHeadlessHost(
     platform,
   })
 
+  /*
+   * The server's own browser, and the door a device drives it through. [wave-2 Lane D]
+   *
+   * This is the whole of what makes "the server is the machine" true for the
+   * browser: a real headless Chromium of this host's own, behind the same
+   * `DriveHost`/`BrowserDrive` seam the desktop uses, and a `DeckControl` holding
+   * the browser verbs over it. `HeadlessDriveHost` launches Chromium lazily on
+   * the first drive — a missing binary is a named error, never a crash — so
+   * building it here costs nothing until a device actually opens a page.
+   *
+   * It is NOT wired to *local* sessions on this host: giving a session on this
+   * machine the browser verbs needs a `deck-control` MCP endpoint here, which is
+   * the copilot-tool-surface change the decline below still defers. What this
+   * lands is the cross-machine half — a device that dialled in drives a window
+   * this server holds, over `window.call`/`hostWindows`, served by
+   * `serveWindowCall` in the `registerRemoteIpc` options just below. So the
+   * `cannotDrive` sentence on this host's own sessions stays truthful and is left
+   * as it is.
+   */
+  const browserHost = new HeadlessDriveHost({ userData: stateDir })
+  const browserDrive = new BrowserDrive(browserHost)
+  const browserControl = createHeadlessBrowserControl({
+    drive: browserDrive,
+    logDir: join(stateDir, 'browser-actions'),
+  })
+
   const remote = registerRemoteIpc(desk, {
     sessions: core.sessions,
     // The two settings this machine owns, served over the wire like everything
@@ -587,6 +617,46 @@ export async function createHeadlessHost(
     ...(options.relayEnabled === undefined ? {} : { relayEnabled: options.relayEnabled }),
     ...(options.readTailnet ? { readTailnet: options.readTailnet } : {}),
     ...(options.serve ? { serve: options.serve } : {}),
+    /*
+     * A browser verb arriving from a device, for a window this server holds. [wave-2 Lane D]
+     *
+     * The serving half of `hostWindows` — providing it is what makes
+     * `registerRemoteIpc` advertise the capability at all (see `server.ts`, where
+     * `hostWindows` is offered exactly when `serveWindows` is present). One
+     * decider, the same `serveWindowCall` the desktop uses, so the two doors can
+     * never come to allow what each other refuses:
+     *  - `allowed` is the default-closed grant axis already on the core —
+     *    `WindowGrants`, open for a device approved as the owner's own and closed
+     *    for a guest until ticked. A device the grant does not cover is refused
+     *    with the sentence that names where to turn it on.
+     *  - `control` is this host's browser-verb `DeckControl`, so every forwarded
+     *    call carries the real tier check, budget and action log — none of it
+     *    re-implemented here.
+     *  - `attended` is false: there is no person at the server to answer an
+     *    `alter`-tier confirmation, so those steps are refused rather than put to
+     *    a broker that cannot reach anyone. Reading and navigating cross the wire;
+     *    typing into a public site waits on routing the confirmation to the
+     *    connected owner's device.
+     */
+    serveWindows: (deviceId, call) =>
+      serveWindowCall(
+        {
+          allowed: (id) => core.windowGrants.drives(id),
+          grantSwitch:
+            'for this device in its remote settings, under the browser-windows permission',
+          control: () => browserControl,
+          attended: () => false,
+        },
+        deviceId,
+        call,
+      ),
+    // Which of that device's sessions this server is holding a window for, read
+    // from the one binding map at the moment of sending — the same filter the
+    // desktop makes, keyed on the same `machineId` field. [wave-2 Lane D]
+    windowsHeldFor: (deviceId) =>
+      bindingView()
+        .sessions.filter((binding) => binding.machineId === deviceId && binding.windows.length > 0)
+        .map((binding) => binding.sessionId),
     broadcast,
   })
 
@@ -963,6 +1033,9 @@ export async function createHeadlessHost(
     // instant this resolves would race those writes. See `PtyManager.drain`.
     await core.ptys.drain()
     machines.stop()
+    // The server's browser is this host's to end — the CDP pipe closing never
+    // kills Chromium, so this is the one place the child processes stop. [wave-2 Lane D]
+    await browserHost.stop().catch(() => undefined)
     await remote.server.stop().catch(() => undefined)
     await stopHookServer().catch(() => undefined)
     await core.credentials.stop().catch(() => undefined)
