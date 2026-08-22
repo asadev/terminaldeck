@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 import {
+  MAX_FRAME_DATA_CHARS,
   MAX_INPUT_BYTES,
   MAX_MESSAGE_BYTES,
   PROTOCOL_VERSION,
@@ -705,5 +706,95 @@ describe('the localhost frames', () => {
     expect(code, 'this client now sends net.open — it has no socket to serve').not.toContain(
       'net.open',
     )
+  })
+})
+
+/*
+ * The type-aware delivery cap, on the receive side.
+ *
+ * Every other frame on this wire is held at `MAX_MESSAGE_BYTES` (64 KiB), and a
+ * megabyte from a captive portal is refused before it is parsed. A
+ * `browser.frame` is the one exception: it carries a base64 JPEG larger than a
+ * message but smaller than what a relay will carry, so the receive side lets it
+ * through up to its own `MAX_FRAME_DATA_CHARS` while still refusing anything
+ * else that size. This is the client half of the split the sender sizes frames
+ * to fit; the two must agree, so both are tested.
+ */
+function browserFrame(patch: Record<string, unknown> = {}): string {
+  // `t` first, so the serialised bytes begin `{"t":"browser.frame"` — the exact
+  // prefix the receive cap keys on, which is what `JSON.stringify` of a real
+  // frame produces.
+  return JSON.stringify({
+    t: 'browser.frame',
+    window: '',
+    seq: 1,
+    w: 800,
+    h: 1400,
+    dw: 800,
+    dh: 1400,
+    scale: 1,
+    offsetTop: 0,
+    pageScale: 1,
+    scrollX: 0,
+    scrollY: 0,
+    data: 'A'.repeat(MAX_FRAME_DATA_CHARS),
+    ...patch,
+  })
+}
+
+describe('the type-aware delivery cap', () => {
+  it('lets a maximal browser.frame through where the 64 KiB gate would refuse it', () => {
+    const raw = browserFrame()
+    // The proof it is genuinely over the ordinary cap: as bytes, it is far past
+    // the 64 KiB every other frame is held to.
+    expect(raw.length).toBeGreaterThan(MAX_MESSAGE_BYTES)
+    const result = decodeServerMessage(raw)
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.message.t).toBe('browser.frame')
+      if (result.message.t === 'browser.frame') {
+        expect(result.message.data.length).toBe(MAX_FRAME_DATA_CHARS)
+        expect(result.message.seq).toBe(1)
+      }
+    }
+  })
+
+  it('refuses a browser.frame over its own data cap, at the message gate', () => {
+    // A frame whose data runs past `MAX_FRAME_DATA_CHARS` by more than the
+    // metadata budget is over even the raised ceiling, so it is stopped by the
+    // message cap before it is ever decoded — the frame's own limit, enforced on
+    // this side too.
+    const raw = browserFrame({ data: 'A'.repeat(MAX_FRAME_DATA_CHARS + 4096) })
+    const result = decodeServerMessage(raw)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason).toBe('larger than the message cap')
+  })
+
+  it('still holds every other frame at 64 KiB', () => {
+    // An `output` frame the same size as a maximal browser.frame is refused: the
+    // raised ceiling is for the one type that earned it, not for anything large.
+    const raw = JSON.stringify({ t: 'output', id: 'sess-1', data: 'x'.repeat(MAX_MESSAGE_BYTES) })
+    expect(raw.length).toBeGreaterThan(MAX_MESSAGE_BYTES)
+    const result = decodeServerMessage(raw)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason).toBe('larger than the message cap')
+  })
+
+  it('cannot be fooled by a browser.frame prefix on a smaller-capped frame', () => {
+    /*
+     * The cap keys on the leading `{"t":"browser.frame"` because a quote inside
+     * any string value is escaped `\"`, so those bytes can only be a real frame's
+     * first key. An `output` frame that merely mentions the type in its data does
+     * not begin with them and stays held at 64 KiB.
+     */
+    const raw = JSON.stringify({
+      t: 'output',
+      id: 'sess-1',
+      data: '"t":"browser.frame" ' + 'x'.repeat(MAX_MESSAGE_BYTES),
+    })
+    expect(raw.startsWith('{"t":"browser.frame"')).toBe(false)
+    const result = decodeServerMessage(raw)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason).toBe('larger than the message cap')
   })
 })

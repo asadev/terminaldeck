@@ -177,8 +177,11 @@ describe('the handshake', () => {
       // client anything, and a push from a folder it was granted fails with
       // "your device isn't reachable" about a tab that is open and connected.
       // `devices` is named for the same shape of reason: the host sends
-      // `devices.changed` only to a connection that claimed it.
-      capabilities: ['credential', 'devices', 'settings'],
+      // `devices.changed` only to a connection that claimed it. `watch` is the
+      // same again — the host streams `browser.frame` only to a connection that
+      // said it renders them — and the host still withholds it from a guest, so
+      // naming it does not widen what a guest may see.
+      capabilities: ['credential', 'devices', 'settings', 'watch'],
     })
   })
 
