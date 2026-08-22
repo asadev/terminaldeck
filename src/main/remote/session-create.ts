@@ -75,6 +75,7 @@
 
 import { posix, win32 } from 'node:path'
 import type { ProviderId, SessionMeta } from '../../shared/types'
+import { AgentUnavailableError } from '../agent-unavailable'
 import { ConfinementUnavailableError } from '../confine'
 import { currentPlatform, isWindows, machineNoun, type Platform } from '../platform/host'
 import type { CreateOutcome, CreateRequest } from './server'
@@ -459,6 +460,39 @@ export function remoteSessionCreator(
           ok: false,
           code: 'unavailable',
           message: `${here} could not keep a session inside that folder, so it did not start one. Check it on the machine itself.`,
+        }
+      }
+      /*
+       * The agent is not installed on that machine, and the error already says
+       * so in the words a person needs.
+       *
+       * This branch is worth as much as the one above it and for the same
+       * reason: two failures, two remedies. Without it the throw fell into the
+       * generic case below and a phone was told the *folder* may have moved —
+       * measured on a rented Ubuntu server on 2026-08-22, on a host installed
+       * from `install-headless.sh` and signed in to from the browser client. A
+       * fresh server has no `claude` on it, a client that names no provider gets
+       * the host's default, and the default is an agent; so on that machine
+       * every New Session was refused with a sentence about a folder that was
+       * perfectly fine. The one true account went to `console.error`, which a
+       * detached daemon has pointed at `/dev/null`.
+       *
+       * `unauthorized`, not `unavailable`, matching the sibling refusal for a
+       * provider this machine does not have at all: retrying changes nothing
+       * until somebody installs something, and a client that reads
+       * `unavailable` as "worth another go" would spin on a wall. The message is
+       * the error's own — it names the agent by the label the person picked and
+       * says where this looked, which is the whole remedy — with one sentence
+       * appended saying which of the two machines to act on. "That machine"
+       * rather than `here`'s "This machine": the sentence is read on the client,
+       * where "this" is the thing in your hand.
+       */
+      if (error instanceof AgentUnavailableError) {
+        console.error('[remote] the agent for this session is not installed:', error.message)
+        return {
+          ok: false,
+          code: 'unauthorized',
+          message: `${error.message} Install it on that ${machineNoun(platform)}, or choose a different one in its settings.`,
         }
       }
       // The realistic failure is a folder that was listed and has since been

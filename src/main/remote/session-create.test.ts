@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, type Mock } from 'vitest'
 import { ConfinementUnavailableError } from '../confine'
+import { AgentUnavailableError } from '../agent-unavailable'
 import {
   knownProvider,
   providerNames,
@@ -347,6 +348,40 @@ describe('when it cannot start one', () => {
       // room: it names a program and a profile and nobody holding a phone can
       // act on either.
       expect(outcome.message).not.toContain('sandbox-exec')
+    }
+  })
+
+  it('says the agent is missing rather than blaming the folder', async () => {
+    /*
+     * Measured end to end on a rented Ubuntu server on 2026-08-22: a host
+     * installed from `install-headless.sh`, signed in to from the browser
+     * client over the live relay, New session pressed. The box had no `claude`
+     * on it — no rented box does on day one — the client named no provider, the
+     * host filled that with its default, and `startSession` threw
+     * `AgentUnavailableError`. This file had no branch for it, so the phone read
+     * "This machine could not start a session there. The folder may have moved."
+     * about a folder that was fine, while the only true sentence went to
+     * `console.error` — `/dev/null` on a detached daemon.
+     *
+     * The agent's own name has to survive into the message: it is the whole
+     * remedy, and a person cannot install "the agent".
+     */
+    const failing = starter({
+      spawn: async () => {
+        throw new AgentUnavailableError('claude', 'Claude Code', false)
+      },
+    })
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const outcome = await remoteSessionCreator(failing)({ deviceId: PHONE })
+    quiet.mockRestore()
+
+    // Not `unavailable`: nothing about this changes on a retry, and a client
+    // that reads it as "worth another go" spins against a wall.
+    expect(outcome).toMatchObject({ ok: false, code: 'unauthorized' })
+    if (!outcome.ok) {
+      expect(outcome.message).toContain('Claude Code')
+      expect(outcome.message).not.toContain('may have moved')
+      expect(outcome.message).not.toContain('keep a session inside')
     }
   })
 
