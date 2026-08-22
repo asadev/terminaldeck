@@ -56,6 +56,7 @@ function extension(over: Partial<StoreExtension> = {}): StoreExtension {
     needs: [],
     works: 'works',
     noRelease: '',
+    logo: '',
     measured: 'Watched working.',
     url: 'https://github.com/darkreader/releases/a.zip',
     sha256: 'a'.repeat(64),

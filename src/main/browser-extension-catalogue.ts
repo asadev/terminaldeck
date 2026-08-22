@@ -123,6 +123,16 @@ import type { ExtensionEntry } from './browser-extensions'
  * `browser-extension-catalogue.test.ts` holds the shape to that: a row cannot
  * claim `works` without a `measured` sentence, and a row that cannot work cannot
  * carry a download.
+ *
+ * ## The marks
+ *
+ * Every row names one in `logo`, and the picture behind that name lives in
+ * `renderer/store/logo-data.ts` — inside this app, never at the end of a URL, for
+ * the reason that module's header gives. `node scripts/store-logos.mjs` is what
+ * fetched them and what refreshes them; `--check` re-fetches and names any whose
+ * upstream bytes have moved. A row added without one draws this app's own
+ * monogram rather than nothing, so the field is optional and adding a row does
+ * not require the network.
  */
 export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
   {
@@ -142,6 +152,7 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
       'worker does log errors here — it reaches for chrome.storage.sync, which this browser has ' +
       'none of — so its saved settings and site list may not survive a restart. It darkens pages ' +
       'regardless; that was checked rather than assumed.',
+    logo: 'dark-reader',
     source: {
       url: 'https://github.com/darkreader/darkreader/releases/download/v4.9.129/darkreader-chrome-mv3.zip',
       bytes: 831_273,
@@ -164,6 +175,7 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
     measured:
       'Watched working: a page opened at ?utm_source=newsletter&utm_medium=email&fbclid=abc123&id=7 ' +
       'arrived at the server as ?id=7, and the server never saw the stripped parameters at all.',
+    logo: 'clearurls',
     source: {
       url: 'https://github.com/ClearURLs/Addon/releases/download/1.27.3/ClearURLs.zip',
       bytes: 1_080_297,
@@ -184,6 +196,7 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
     measured:
       'Loads. Its background page runs with no uncaught error. It was not watched applying a ' +
       'style, so this app does not claim it does.',
+    logo: 'stylus',
     source: {
       url: 'https://github.com/openstyles/stylus/releases/download/v2.4.11/stylus-mv2-v2.4.11-id.zip',
       bytes: 1_214_092,
@@ -204,6 +217,7 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
     measured:
       'Loads. Its background page runs with no uncaught error. It was not watched running a ' +
       'userscript, so this app does not claim it does.',
+    logo: 'violentmonkey',
     source: {
       url: 'https://github.com/violentmonkey/violentmonkey/releases/download/v2.48.0/Violentmonkey-webext-v2.48.0.zip',
       bytes: 680_783,
@@ -232,6 +246,7 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
       'What it does not get: its toolbar badge and icon are not drawn, its right-click “Block ' +
       'element” entry is not in the page menu, its keyboard shortcuts are not bound, and it is ' +
       'told about main-frame navigations only.',
+    logo: 'ublock-origin',
     source: {
       url: 'https://github.com/gorhill/uBlock/releases/download/1.73.0/uBlock0_1.73.0.chromium.zip',
       bytes: 4_675_783,
@@ -256,6 +271,7 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
       'lists where it answered [] before. Without the layer it threw on ' +
       'chrome.permissions.onRemoved before it finished starting and all three ads were served. ' +
       'Its keyboard shortcuts are not bound.',
+    logo: 'ublock-origin-lite',
     source: {
       url: 'https://github.com/uBlockOrigin/uBOL-home/releases/download/2026.820.1159/uBOLite_2026.820.1159.chromium.zip',
       bytes: 9_723_591,
@@ -287,6 +303,7 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
       'its service worker, which used to throw “window is not defined” and then time out waiting ' +
       'for itself: without it the panel opens with “sync” is not available on the console and ' +
       'nothing you change there is kept.',
+    logo: 'sponsorblock',
     source: {
       url: 'https://github.com/ajayyy/SponsorBlock/releases/download/6.1.7/ChromeExtension.zip',
       bytes: 1_845_183,
@@ -318,6 +335,7 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
       'exists to do. What the layer fixes is everything around it: without it, its panel opened ' +
       'with “sync” is not available on the console and every setting undefined, and with it the ' +
       'panel opens whole and its options save.',
+    logo: 'return-youtube-dislike',
     source: {
       url: 'https://github.com/Anarios/return-youtube-dislike/releases/download/v4.0.4/chrome.zip',
       bytes: 1_273_186,
@@ -343,6 +361,7 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
       'chrome.webNavigation.onCommitted before it started, and getEnabledRulesets() answers with ' +
       'its ruleset where it answered [] before. Its desktop notifications do not appear, and it ' +
       'is told about main-frame navigations only.',
+    logo: 'isdcac',
     source: {
       url: 'https://github.com/OhMyGuus/I-Still-Dont-Care-About-Cookies/releases/download/v1.1.9/ISDCAC-chrome-source.zip',
       bytes: 539_792,
@@ -370,6 +389,7 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
       'still fetching filter updates, served the ad — its first seconds after an install are not ' +
       'covered by this. Its own panel is broken here: it opens and throws on options being ' +
       'undefined, and its polyfill logs that chrome.tabs.create is not a function.',
+    logo: 'adguard',
     source: {
       url: 'https://github.com/AdguardTeam/AdguardBrowserExtension/releases/download/v5.5.1.0/chrome-mv3.zip',
       bytes: 29_210_647,
@@ -400,6 +420,7 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
       'chrome.tabs.create, none of which exist in this browser — and all 33 of its filter ' +
       'rulesets ship marked disabled in its own manifest, so the layer that switches on the ones ' +
       'a manifest enables has nothing to switch on and getEnabledRulesets() answers [].',
+    logo: 'ghostery',
     source: null,
   },
   {
@@ -422,6 +443,7 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
       'answers those. Its panel opens and then throws reading .url of undefined: an extension ' +
       'page in this browser gets [] from chrome.tabs.query for the active tab. chrome.tabs.create ' +
       'is also missing, which it logs on start-up.',
+    logo: 'consent-o-matic',
     source: {
       url: 'https://github.com/cavi-au/Consent-O-Matic/releases/download/v1.1.5/consent-o-matic-v1.1.5-unpacked-release-chromium.zip',
       bytes: 88_188,
@@ -447,6 +469,7 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
       'redirect was watched happening, so this app claims none. Its panel opens and throws ' +
       'reading .url of undefined, which is the empty answer this browser gives an extension page ' +
       'asking which tab is in front.',
+    logo: 'libredirect',
     source: {
       url: 'https://github.com/libredirect/browser_extension/releases/download/v3.4.0/libredirect-3.4.0.zip',
       bytes: 1_122_989,
@@ -470,6 +493,7 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
       'no chrome.cookies at all — and its panel throws on cookieStoreId for the same reason. ' +
       'Reading and deleting cookies is the whole of what it does, and there is no cookie API here ' +
       'to do it with, so there is nothing this app could fill in that would help.',
+    logo: 'cookie-autodelete',
     source: null,
   },
   {
@@ -491,6 +515,7 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
       'with every control undefined. Note what it reaches: it asks for no host permissions at all ' +
       'and declares content scripts on every http and https page and on local files, which is the ' +
       'same thing by another route.',
+    logo: 'video-speed-controller',
     source: {
       url: 'https://github.com/igrigorik/videospeed/releases/download/v0.11.1/videospeed-0.11.1.zip',
       bytes: 101_763,
@@ -517,6 +542,7 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
       'it, which no check of a manifest could ever predict. Nothing else opens it: this browser ' +
       'draws no toolbar button and binds no keyboard shortcut, so a vault that cannot open is all ' +
       'there is.',
+    logo: 'bitwarden',
     source: null,
   },
   {
@@ -538,6 +564,7 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
       'with “Access to the native messaging host was disabled by the system administrator.” That ' +
       'was measured by connecting. Native messaging is switched off in this browser, and talking ' +
       'to the KeePassXC application over it is how this extension gets every password it has.',
+    logo: 'keepassxc-browser',
     source: null,
   },
   {
@@ -557,6 +584,7 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
       'search: it is begun from the right-click menu, which is chrome.contextMenus, which this ' +
       'app accepts and cannot draw, or from a toolbar button this browser does not have. An ' +
       'extension nobody can invoke is not a working extension, however cleanly it loads.',
+    logo: 'search-by-image',
     source: null,
   },
   {
@@ -576,6 +604,7 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
       'the only ways to ask it for an archived page are the right-click menu, which is ' +
       'chrome.contextMenus and is not drawn here, and a toolbar button this browser does not ' +
       'have. There is no third way to reach it and this app will not pretend there is.',
+    logo: 'web-archives',
     source: null,
   },
   {
@@ -598,6 +627,7 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
       'Nothing was measured. This app has never run Privacy Badger, so it says nothing about ' +
       'whether it would work here — which is a different sentence from the ones on the rows above ' +
       'and below, and it is the only true one this app has.',
+    logo: 'privacy-badger',
     source: null,
   },
   {
@@ -620,6 +650,7 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
       'started from a toolbar button, a keyboard shortcut or the right-click menu, and this ' +
       'browser draws none of the three — so the shape of it is unpromising here even though ' +
       'nobody has run it.',
+    logo: 'singlefile',
     source: null,
   },
   {
@@ -641,6 +672,7 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
       'is the part of the extension API this browser has most of; its own commands, which are ' +
       'chrome.commands, are not bound here. Neither of those is a measurement and neither is a ' +
       'claim — nobody has run it.',
+    logo: 'vimium',
     source: null,
   },
   {
@@ -661,6 +693,7 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
     measured:
       'Nothing was measured, and nothing can be until there is something to run. The row is here ' +
       'because being asked for by name and not being findable are different from being absent.',
+    logo: 'wappalyzer',
     source: null,
   },
   {
@@ -681,6 +714,7 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
       'Nothing was measured. If you want folded JSON in the meantime, the browser here already ' +
       'renders a JSON response as text and the page-reading tools in the other half of this store ' +
       'will parse one — that is this app’s own code and a different thing from an extension.',
+    logo: 'json-formatter',
     source: null,
   },
 ]

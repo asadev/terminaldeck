@@ -48,6 +48,7 @@ const ROW: McpStoreRow = {
   scope: '',
   taken: '',
   blocked: '',
+  logo: '',
   caveat: '',
 }
 

@@ -1,5 +1,3 @@
-import type { ReactNode } from 'react'
-import { StoreLogo } from './StoreLogo'
 import './store-page.css'
 
 /**
@@ -33,17 +31,14 @@ interface Props {
   name: string
   /** The row's own class for its name, so each department keeps its own type. */
   className: string
-  /** Real artwork when the catalogue has some. */
-  art?: ReactNode
   /** Open this row on its own, when there is a page that can show it. */
   onOpen?: () => void
 }
 
-export function StoreRowName({ name, className, art, onOpen }: Props) {
+export function StoreRowName({ name, className, onOpen }: Props) {
   const label = <span className={className}>{name}</span>
   return (
     <span className="store-rowname">
-      <StoreLogo name={name} art={art} />
       {onOpen === undefined ? (
         label
       ) : (

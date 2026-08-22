@@ -254,6 +254,31 @@ export interface McpCatalogueEntry {
   inputs: readonly McpCatalogueInput[]
   origin: McpOrigin
   /**
+   * Which mark the store draws on this row, as a key into
+   * `renderer/store/logo-data.ts`.
+   *
+   * A key rather than the picture, for the reason `ExtensionEntry.logo` gives:
+   * the row crosses the IPC bridge every time the store opens, and the picture
+   * is already in the renderer's own bundle.
+   *
+   * Not a per-row key either. Six of the rows below share
+   * `modelcontextprotocol`, and that is the true answer rather than a shortcut:
+   * `filesystem`, `memory`, `sequential-thinking`, `everything`, `fetch` and
+   * `time` are one project's reference servers, published together out of one
+   * repository, and the Model Context Protocol mark identifies all six exactly
+   * as well as it identifies any of them. Drawing six different invented marks
+   * would be this store making up six brands that do not exist.
+   *
+   * **Optional, and it stays optional** — see `ExtensionEntry.logo`. A row with
+   * none draws the monogram in `StoreLogo.tsx`.
+   *
+   * `node scripts/store-logos.mjs` is what fetched the pictures and what
+   * refreshes them; `--check` names any whose upstream bytes have moved. The
+   * marks are third-party trademarks shown to identify the products, and the
+   * generated module's header carries the notice and the removal undertaking.
+   */
+  logo?: string
+  /**
    * Something true about this row that pressing Install does not fix.
    * Rendered verbatim on the row, above the button. `null` when there is none.
    */
@@ -295,6 +320,7 @@ export const MCP_CATALOGUE: McpCatalogue = [
       },
     ],
     origin: 'reference',
+    logo: 'modelcontextprotocol',
     caveat: null,
   },
   {
@@ -312,6 +338,7 @@ export const MCP_CATALOGUE: McpCatalogue = [
     token: '@modelcontextprotocol/server-memory',
     inputs: [],
     origin: 'reference',
+    logo: 'modelcontextprotocol',
     caveat: null,
   },
   {
@@ -329,6 +356,7 @@ export const MCP_CATALOGUE: McpCatalogue = [
     token: '@modelcontextprotocol/server-sequential-thinking',
     inputs: [],
     origin: 'reference',
+    logo: 'modelcontextprotocol',
     caveat: null,
   },
   {
@@ -346,6 +374,7 @@ export const MCP_CATALOGUE: McpCatalogue = [
     token: '@modelcontextprotocol/server-everything',
     inputs: [],
     origin: 'reference',
+    logo: 'modelcontextprotocol',
     caveat:
       'For checking that MCP works here, not for doing anything. Its tools are demonstrations — ' +
       'echo, add, a progress bar.',
@@ -376,6 +405,7 @@ export const MCP_CATALOGUE: McpCatalogue = [
       },
     ],
     origin: 'reference',
+    logo: 'git',
     caveat: 'It can commit. Point it at a repository you are willing to have written to.',
   },
   {
@@ -393,6 +423,7 @@ export const MCP_CATALOGUE: McpCatalogue = [
     token: 'mcp-server-fetch',
     inputs: [],
     origin: 'reference',
+    logo: 'modelcontextprotocol',
     caveat: 'It reaches the open internet from this machine, at the agent’s choosing.',
   },
   {
@@ -410,6 +441,7 @@ export const MCP_CATALOGUE: McpCatalogue = [
     token: 'mcp-server-time',
     inputs: [],
     origin: 'reference',
+    logo: 'modelcontextprotocol',
     caveat: null,
   },
 
@@ -431,6 +463,7 @@ export const MCP_CATALOGUE: McpCatalogue = [
     token: '@playwright/mcp',
     inputs: [],
     origin: 'third-party',
+    logo: 'playwright',
     caveat:
       'The first run downloads a browser build, which is hundreds of megabytes and takes a while ' +
       'before the server answers anything.',
@@ -459,6 +492,7 @@ export const MCP_CATALOGUE: McpCatalogue = [
       },
     ],
     origin: 'third-party',
+    logo: 'github',
     caveat:
       'It runs in a container, so Docker has to be running as well as installed. The invocation ' +
       'here is the one GitHub’s own README gives for this app’s CLI.',
@@ -487,6 +521,7 @@ export const MCP_CATALOGUE: McpCatalogue = [
       },
     ],
     origin: 'third-party',
+    logo: 'notion',
     caveat: null,
   },
   {
@@ -513,6 +548,7 @@ export const MCP_CATALOGUE: McpCatalogue = [
       },
     ],
     origin: 'third-party',
+    logo: 'context7',
     caveat: 'It sends the library name you ask about to Upstash’s service.',
   },
   {
@@ -539,6 +575,7 @@ export const MCP_CATALOGUE: McpCatalogue = [
       },
     ],
     origin: 'third-party',
+    logo: 'tavily',
     caveat: 'Every search leaves this machine and is billed to that key.',
   },
   {
@@ -565,6 +602,7 @@ export const MCP_CATALOGUE: McpCatalogue = [
       },
     ],
     origin: 'third-party',
+    logo: 'firecrawl',
     caveat: 'Pages are fetched by Firecrawl’s servers, not by this machine, and are billed to that key.',
   },
 
@@ -593,6 +631,7 @@ export const MCP_CATALOGUE: McpCatalogue = [
       },
     ],
     origin: 'reference-archived',
+    logo: 'sqlite',
     caveat: ARCHIVED_NOTE + ' It can write, not only read.',
   },
   {
@@ -619,6 +658,7 @@ export const MCP_CATALOGUE: McpCatalogue = [
       },
     ],
     origin: 'reference-archived',
+    logo: 'postgres',
     caveat:
       ARCHIVED_NOTE +
       ' And the connection string is an argument, not a variable, so a password in it cannot be ' +
@@ -656,6 +696,7 @@ export const MCP_CATALOGUE: McpCatalogue = [
       },
     ],
     origin: 'reference-archived',
+    logo: 'slack',
     caveat: ARCHIVED_NOTE + ' It can post as the bot, not only read.',
   },
   {
@@ -682,6 +723,7 @@ export const MCP_CATALOGUE: McpCatalogue = [
       },
     ],
     origin: 'reference-archived',
+    logo: 'brave',
     caveat: ARCHIVED_NOTE,
   },
   {
@@ -699,6 +741,7 @@ export const MCP_CATALOGUE: McpCatalogue = [
     token: '@modelcontextprotocol/server-puppeteer',
     inputs: [],
     origin: 'reference-archived',
+    logo: 'puppeteer',
     caveat:
       ARCHIVED_NOTE +
       ' The playwright row above is the maintained answer to the same question — install that one ' +

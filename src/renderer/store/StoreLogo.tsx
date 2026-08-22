@@ -1,106 +1,122 @@
-import type { CSSProperties, ReactNode } from 'react'
+import { useState } from 'react'
+import { STORE_LOGO_ASSETS } from './logo-data'
+import './StoreLogo.css'
 
 /**
- * The tile a row wears where its logo goes.
+ * The mark on a store row.
  *
- * ## Why there is a component here at all, and not just an `<img>`
+ * ## Why a store needs one at all
  *
- * Asad asked for logos — *"with logos"* — and a store with a logo on some rows
- * and a hole on the others looks broken in a way a store with no logos does not.
- * The catalogues are the place artwork will arrive from, one row at a time, over
- * more than one release; this is what stands in the gap in the meantime, and it
- * is a **monogram**, not a placeholder.
+ * Asad, looking at both stores:
  *
- * A monogram is honest. It is derived from the row's own name, so it is stable
- * across launches, distinct between neighbours, and it never claims to be
- * somebody's brand. A grey box with a broken-image glyph claims a logo failed to
- * load; a question mark claims the app does not know what this is. Neither is
- * true, and both look like a defect. The initial of the thing you are reading
- * about is just the initial of the thing you are reading about.
+ *   > *"store must be like a proper store … with logos"*
  *
- * ## The hue is computed, not chosen
+ * Forty-two rows of name-and-paragraph is a spreadsheet. The mark is what makes
+ * it a store: it is how somebody finds Bitwarden without reading, and it is the
+ * difference between scanning a shelf and reading a list. Nothing else on the
+ * row does that job — the name is set in the same type as every other name, and
+ * by the time you have read it you have already done the work the picture was
+ * supposed to save you.
  *
- * From the name, so the same tool is the same colour everywhere it appears — the
- * shelf, the detail view, the installed list — and two rows next to each other
- * are almost never the same colour. It is a **tint of the surface**, not a
- * saturated brand colour: these sit in a grid of twenty and a grid of twenty
- * saturated squares is a toy, not a tool. The text on it is the app's own
- * primary colour rather than white, so it reads in either theme without the tile
- * having to know which one it is in.
+ * ## Where the picture comes from
  *
- * ## When artwork arrives
+ * `logo-data.ts`, which is inside this app. Never a URL. An `<img>` pointed at a
+ * vendor's server is a request to that vendor every time the store opens — an IP
+ * address and a referrer handed to twenty companies for the privilege of drawing
+ * a 40-pixel square — and it draws nothing at all with no network. A store whose
+ * argument is that every byte it offers was pinned in advance cannot then fetch
+ * its own furniture at render time. `scripts/store-logos.mjs` fetched each one
+ * once, and recorded where from and what it hashed to.
  *
- * Pass it as `art`. Nothing else changes: the tile keeps its size, its radius
- * and its place in the row, so a catalogue that has one logo and nineteen
- * monograms still draws twenty rows of the same shape. Artwork must be something
- * the app already has on disk or has fetched and checked — this component will
- * not reach for a URL, because a store that fetches an image from a project's
- * own server on every render tells that server who is browsing and when.
+ * ## The row with no mark
+ *
+ * There will always be one. An extension somebody added from a folder is not in
+ * any catalogue and has no logo, and a row another lane adds tomorrow will not
+ * have one until the script is next run. Those rows get {@link monogram}: the
+ * first letter of the name on one of this app's own `--bind-*` fills, which is
+ * the same palette the machine chips use and is guaranteed readable with
+ * `--bind-fg` ink on both themes. Four fills, chosen from the row's own id, so
+ * a shelf of them is not one colour repeated — and stable, so the same row is
+ * the same colour every time it is drawn.
+ *
+ * It is deliberately not a grey square with a broken-image glyph, and not a
+ * generic "extension" icon either: a placeholder that pretends to be a logo is
+ * the store-row version of a button that does nothing. A letter on a colour is
+ * honestly this app's own drawing, and reads as one.
  */
 
-interface Props {
-  /** The row's name. The monogram and the hue are both taken from it. */
-  name: string
-  /**
-   * Real artwork, when the catalogue has some. An `<img>` or an inline `<svg>`
-   * — anything that draws itself inside the tile.
-   */
-  art?: ReactNode
-  /** `lg` for the detail view, where the tile is the first thing on the page. */
-  size?: 'sm' | 'lg'
+/** How many fills the monogram chooses between. See `tokens.css` `--bind-*`. */
+const MONOGRAM_FILLS = 4
+
+/**
+ * Which fill a row without a mark gets, from its own id.
+ *
+ * A sum of code points rather than anything cleverer: the requirement is only
+ * that it is stable and spreads a shelf across four values, and a hash with
+ * better avalanche would be a bigger promise than "these two rows are usually
+ * different colours". Pure, and pinned by `StoreLogo.test.ts`.
+ */
+export function monogramFill(id: string): number {
+  let total = 0
+  for (const point of id) total += point.codePointAt(0) ?? 0
+  return (total % MONOGRAM_FILLS) + 1
 }
 
 /**
- * The one or two letters on the tile.
+ * The letter a row without a mark wears.
  *
- * Two when the name is two words — *Dark Reader* is `DR`, which is a better
- * mark than `D` beside *Decentraleyes*. One otherwise, upper-cased, because
- * `se` for `sequential-thinking` reads as a typo. Punctuation and digits are
- * skipped rather than printed: `1Password` would otherwise wear a `1`.
+ * The first thing in the name that is a letter or a digit, upper-cased —
+ * skipping past the punctuation some of these names start with, so a row called
+ * `@scope/thing` wears an S and not an at-sign. `?` when there is nothing at
+ * all,
+ * which happens only for a row with an empty name and is at least visibly a
+ * placeholder rather than a blank square.
  */
 export function monogram(name: string): string {
-  const words = name
-    .split(/[\s\-_/.]+/)
-    .map((word) => word.replace(/[^\p{L}]/gu, ''))
-    .filter((word) => word !== '')
-  if (words.length === 0) return '·'
-  if (words.length === 1) return words[0].slice(0, 1).toUpperCase()
-  return (words[0].slice(0, 1) + words[1].slice(0, 1)).toUpperCase()
+  for (const point of name) {
+    if (/[\p{L}\p{N}]/u.test(point)) return point.toUpperCase()
+  }
+  return '?'
 }
 
-/**
- * A hue in degrees, from the name.
- *
- * A small deterministic hash rather than an index into a palette, because an
- * index has to be kept in step with a list that changes every release and a hash
- * does not. Exported so a test can pin that it is stable — a colour that moved
- * between launches would be worse than no colour, since the whole value of it is
- * recognising a row you have seen before.
- */
-export function hueOf(name: string): number {
-  let hash = 0
-  for (const character of name.toLowerCase()) hash = (hash * 31 + character.charCodeAt(0)) % 360
-  return hash
+interface Props {
+  /** The row's display name. Only its first letter is used, for the fallback. */
+  name: string
+  /** The row's own id, which decides the fallback's colour. */
+  id: string
+  /** The key into `logo-data.ts`. `''` or unknown falls back to the monogram. */
+  logo?: string
 }
 
-export function StoreLogo({ name, art, size = 'sm' }: Props) {
-  if (art !== undefined) {
+export function StoreLogo({ name, id, logo }: Props) {
+  /* A data URI cannot 404, but it can be a file that does not parse — so the
+     fallback is wired to the image's own failure as well as to its absence.
+     One state, set once, never read back: a mark that failed to draw will not
+     start drawing. */
+  const [broken, setBroken] = useState(false)
+  const asset = logo === undefined || logo === '' ? undefined : STORE_LOGO_ASSETS[logo]
+
+  if (asset === undefined || broken) {
     return (
-      <span className="store-logo" data-size={size} aria-hidden="true">
-        {art}
+      <span
+        className="storelogo storelogo-monogram"
+        data-fill={monogramFill(id)}
+        aria-hidden="true"
+      >
+        {monogram(name)}
       </span>
     )
   }
+
   return (
-    <span
-      className="store-logo store-logo-monogram"
-      data-size={size}
-      /* Decorative: the name is printed beside it in full, and a screen reader
-         announcing "D R" before "Dark Reader" is noise. */
-      aria-hidden="true"
-      style={{ '--store-logo-hue': hueOf(name) } as CSSProperties}
-    >
-      {monogram(name)}
+    <span className={asset.plate ? 'storelogo storelogo-plate' : 'storelogo'}>
+      {/*
+        `alt=""`, deliberately. The name is the next thing in the row and a
+        screen reader that said "Bitwarden logo, Bitwarden" would be reading the
+        decoration twice. The picture carries nothing the row does not also say
+        in words.
+      */}
+      <img src={asset.src} alt="" draggable={false} onError={() => setBroken(true)} />
     </span>
   )
 }

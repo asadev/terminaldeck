@@ -38,6 +38,7 @@ function row(over: Partial<Row> = {}): Row {
     scope: '',
     taken: '',
     blocked: '',
+    logo: 'modelcontextprotocol',
     caveat: '',
     ...over,
   }

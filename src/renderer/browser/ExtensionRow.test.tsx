@@ -40,6 +40,7 @@ function row(over: Partial<StoreExtension> = {}): StoreExtension {
     works: 'works',
     measured: 'Watched working: a white page came back with background rgb(24, 26, 27).',
     noRelease: '',
+    logo: 'dark-reader',
     url: 'https://example.com/a.zip',
     sha256: 'a'.repeat(64),
     bytes: 100,
