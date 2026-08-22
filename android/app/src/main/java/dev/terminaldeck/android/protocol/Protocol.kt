@@ -202,6 +202,33 @@ object Protocol {
     const val MIN_PORT = 1
     const val MAX_PORT = 65_535
 
+    /* ---- capability `copilot`: the bounds its frames carry ---------------------------------- */
+
+    /**
+     * The longest a `copilot.say` may be, in **bytes**.
+     *
+     * The same cap `input` gets, and for the same reason: the text ends up typed into a live agent's
+     * pty. One emoji is four bytes and the cap is about what gets written into a terminal.
+     */
+    const val MAX_COPILOT_SAY_BYTES = MAX_INPUT_BYTES
+
+    /** The most rows one `copilot.log` may ask for, or be answered with. */
+    const val MAX_COPILOT_LOG_ROWS = 200
+
+    /** How long one chat message may be before the desktop marks it truncated. */
+    const val MAX_COPILOT_MESSAGE_CHARS = 8 * 1024
+
+    /**
+     * Whether a `copilot.say` carries a control character, which is **refused rather than stripped**.
+     *
+     * This is the security check on that frame rather than a tidiness one. The text is written into a
+     * pty holding an agent CLI: a carriage return inside it would submit early and turn the rest of
+     * the message into a *second* prompt, and an escape sequence would drive the CLI's own key
+     * handling. Stripping would turn a hostile value into a different, legal-looking message — and
+     * the result of that is a turn somebody pays for.
+     */
+    fun hasControlCharacters(value: String): Boolean = value.any { it.isISOControl() }
+
     /** WebSocket close codes, RFC 6455 §7.4.1 plus the desktop's own reasons. */
     object Close {
         const val NORMAL = 1000

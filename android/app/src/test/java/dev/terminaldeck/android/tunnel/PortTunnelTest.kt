@@ -183,7 +183,10 @@ class PortTunnelTest {
             waitFor("net.open") { wire.only<ClientMessage.NetOpen>().isNotEmpty() }
             val opened = wire.only<ClientMessage.NetOpen>().single()
             assertEquals(tunnel.id, opened.tunnel)
-            assertEquals(1, tunnel.streamCount)
+            // `net.open` is sent *before* the stream is registered — deliberately, so a send the
+            // wire refuses creates nothing — which means the frame can be observed a moment before
+            // the count moves. Waited for rather than asserted on the same tick.
+            waitFor("the stream to be counted") { tunnel.streamCount == 1 }
 
             socket.getOutputStream().write("GET / HTTP/1.1\r\n\r\n".toByteArray())
             socket.getOutputStream().flush()

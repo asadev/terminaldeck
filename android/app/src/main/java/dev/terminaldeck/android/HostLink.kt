@@ -180,6 +180,14 @@ class HostLink(
      */
     var tunnels: dev.terminaldeck.android.tunnel.TunnelController? = null
 
+    /**
+     * The machine's own agent, as this phone drives it. Created once per link; the tab is drawn only
+     * when the machine advertises [dev.terminaldeck.android.protocol.Capability.COPILOT] **and** the
+     * grant it handed this device is not empty — see
+     * [dev.terminaldeck.android.protocol.CopilotAccess].
+     */
+    var copilot: CopilotController? = null
+
     /** The user's name for this machine, or enough of its id to tell it apart. */
     val label: String get() = record.label
 
@@ -226,6 +234,7 @@ class HostLink(
         localhost?.stop()
         devServer?.stop()
         tunnels?.stop()
+        copilot?.stop()
         sessions = emptyList()
         live = false
         loaded = false

@@ -374,6 +374,11 @@ class DeckViewModel(
             scope = viewModelScope,
             onChange = { publish() },
         )
+        link.copilot = CopilotController(
+            send = { link.transport.send(it) },
+            capabilities = { link.capabilities },
+            onChange = { publish() },
+        )
         // Collected per machine, with the link captured, so a frame cannot arrive without the
         // answer to "which computer said this" already in hand.
         viewModelScope.launch { link.transport.state.collect { onState(link, it) } }
@@ -429,6 +434,7 @@ class DeckViewModel(
             // against a socket that will never answer is exactly the lie this client is written not
             // to tell.
             link.tunnels?.connectionLost(next.detail)
+            link.copilot?.dropped()
         }
         publish()
     }
@@ -535,6 +541,7 @@ class DeckViewModel(
                 link.watch?.renew()
                 link.localhost?.renew()
                 link.devServer?.renew()
+                link.copilot?.renew()
                 link.loaded = message.sessions.isNotEmpty() || link.loaded
                 link.live = true
                 // The first list after a connection came back. What is in it happened while this
@@ -732,6 +739,22 @@ class DeckViewModel(
             -> {
                 link.tunnels?.receive(message)
                 return
+            }
+
+            // The copilot's own family. Routed together for the reason the bar's four are: the
+            // controller keeps the bookkeeping, and a frame about a run this device no longer has is
+            // dropped there rather than in a `when` that would have to know about runs.
+            is ServerMessage.CopilotStateFrame,
+            is ServerMessage.CopilotChat,
+            is ServerMessage.CopilotTool,
+            is ServerMessage.CopilotSessionsRows,
+            is ServerMessage.CopilotLogRows,
+            is ServerMessage.CopilotPendingRows,
+            is ServerMessage.CopilotGrant,
+            is ServerMessage.CopilotAsk,
+            is ServerMessage.CopilotSettled,
+            -> {
+                link.copilot?.receive(message)
             }
         }
         publish()
@@ -1317,6 +1340,50 @@ class DeckViewModel(
         selected?.tunnels?.close()
     }
 
+    /* ---------------------------------------------------------------------- copilot -- */
+
+    /** The tab opened. `hello` and `attach` — both `read`, and neither spends anything. */
+    fun openCopilot() {
+        selected?.copilot?.open()
+    }
+
+    /** The tab closed. Detach, never stop: leaving a screen is not asking for a run to be killed. */
+    fun closeCopilot() {
+        selected?.copilot?.close()
+    }
+
+    /** Start this device's run. The one verb that spends money, and only ever a tap. */
+    fun startCopilot() {
+        selected?.copilot?.start()
+    }
+
+    fun cancelCopilotTurn() {
+        selected?.copilot?.cancel()
+    }
+
+    fun stopCopilotRun() {
+        selected?.copilot?.stopRun()
+    }
+
+    /** Returns whether the composer may clear its draft. False keeps it in the box. */
+    fun sayToCopilot(text: String): Boolean = selected?.copilot?.say(text) ?: false
+
+    fun answerCopilot(approved: Boolean) {
+        selected?.copilot?.answer(approved)
+    }
+
+    fun readCopilotLog(before: String? = null) {
+        selected?.copilot?.readLog(before)
+    }
+
+    fun refreshCopilotSessions() {
+        selected?.copilot?.refreshSessions()
+    }
+
+    fun dismissCopilotNotice() {
+        selected?.copilot?.dismissNotice()
+    }
+
     /* ---------------------------------------------------------------- the dev server -- */
 
     /**
@@ -1648,6 +1715,7 @@ class DeckViewModel(
             localhost = current?.localhost?.view(),
             devServers = current?.devServer?.view(),
             tunnel = current?.tunnels?.view(),
+            copilot = current?.copilot?.view(),
             awayReport = awayReport,
             addServer = if (addingServer) {
                 AddServerView(working = serverSignInWorking, error = serverSignInError)
@@ -1819,6 +1887,12 @@ data class DeckUiState(
     val devServers: DevServerView? = null,
     /** The page this phone is serving from the machine, or null when none is open. */
     val tunnel: TunnelView? = null,
+    /**
+     * The machine's copilot, or null when it offers none to this phone.
+     *
+     * Null is what makes the fourth pill *absent* rather than empty — iOS's own rule for that tab.
+     */
+    val copilot: CopilotView? = null,
     /**
      * What changed while the app was away, as one line at the top of the session list.
      *

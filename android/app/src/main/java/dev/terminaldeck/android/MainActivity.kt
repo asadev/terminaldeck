@@ -38,10 +38,13 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.Icon
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
@@ -60,6 +63,9 @@ import dev.terminaldeck.android.ui.WatchViewerScreen
 import dev.terminaldeck.android.transfer.PickedFile
 import dev.terminaldeck.android.ui.AddServerScreen
 import dev.terminaldeck.android.ui.AlertsScreen
+import dev.terminaldeck.android.ui.CopilotConsentSheet
+import dev.terminaldeck.android.ui.CopilotScreen
+import dev.terminaldeck.android.ui.CopilotSessionsSheet
 import dev.terminaldeck.android.ui.AppearanceScreen
 import dev.terminaldeck.android.ui.ArchivedSessionsSheet
 import dev.terminaldeck.android.ui.LocalhostBrowser
@@ -196,18 +202,22 @@ class MainActivity : ComponentActivity() {
  * back leaves Machines where it was. That is the Android shape of the per-tab `NavigationStack` iOS
  * uses, and `saveState`/`restoreState` on the tab hop is the whole of it.
  *
- * ## Three tabs, where iOS has three or four
+ * ## Four tabs, and the leftmost comes and goes
  *
  * iOS draws Copilot · Sessions · Localhost · Settings, the first of those only while the machine on
  * screen has a copilot this device may drive. This build draws **Sessions · Localhost · Settings**.
  *
  * Localhost is here now: the port list, the dev servers, and a real tunnel that serves one of the
  * machine's ports on this phone's own loopback at the same number, so a page's own absolute links
- * keep working. **Copilot is not built on Android** — no conversation, no run log, no consent
- * questions — and a fourth pill that opened an empty screen would be worse than three. It is named
- * in the gap list rather than drawn, which is also iOS's own rule for that pill: conditional, never
- * an empty tab.
+ * keep working.
+ *
+ * **Copilot is here too, and it is conditional.** *"If the copilot is not connecting, this icon
+ * should not be inside the pill — then it will be three icon pill. Otherwise if the copilot is
+ * connected, then four icon pill, automatically."* `DeckUiState.copilot` is null over a machine that
+ * offers none to this phone, and the pill is simply absent — never an empty tab. It is added and
+ * removed on the **left**, where the copilot lives, so the three that survive keep their order.
  */
+private const val GRAPH_COPILOT = "graph.copilot"
 private const val GRAPH_SESSIONS = "graph.sessions"
 private const val GRAPH_LOCALHOST = "graph.localhost"
 private const val GRAPH_SETTINGS = "graph.settings"
@@ -245,6 +255,9 @@ private const val ROUTE_LOCALHOST_PAGE = "localhost/page"
 
 /** The conversation of the session a terminal is showing, as bubbles rather than as a pty. */
 private const val ROUTE_CHAT = "chat/{hostId}/{sessionId}"
+
+/** The machine's own agent. The leftmost pill, drawn only while the machine offers one. */
+private const val ROUTE_COPILOT = "copilot"
 
 /**
  * One watched surface, full screen.
@@ -416,6 +429,16 @@ fun TerminalDeckApp(
         route != ROUTE_LOCALHOST_PAGE && route != ROUTE_CHAT
     val onSessions = route == ROUTE_SESSIONS || route == ROUTE_TERMINAL || route == ROUTE_CHAT
     val onLocalhost = route == ROUTE_LOCALHOST || route == ROUTE_LOCALHOST_PAGE
+    val onCopilot = route == ROUTE_COPILOT
+    /*
+     * The pill follows the machine — except while somebody is standing on it.
+     *
+     * A tab that disappears underneath a thumb is worse than one that stays and explains: a
+     * disconnect mid-read would drop the whole graph and land the person on the session list with no
+     * idea why. `CopilotScreen` draws its own sentence for every state including the one where the
+     * machine has stopped offering it.
+     */
+    val showCopilot = state.copilot != null || onCopilot
 
     /** Hop to a tab, keeping what was pushed on the one being left. */
     val showTab: (String) -> Unit = { graph ->
@@ -442,6 +465,33 @@ fun TerminalDeckApp(
         bottomBar = {
             if (bar) {
                 NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
+                    if (showCopilot) {
+                        NavigationBarItem(
+                            selected = onCopilot,
+                            onClick = { showTab(GRAPH_COPILOT) },
+                            icon = {
+                                /*
+                                 * The count of questions waiting on an answer, on the pill.
+                                 *
+                                 * A question raised while somebody is reading a terminal has a
+                                 * two-minute deadline and expires into a **refusal**, and a badge is
+                                 * on screen from every tab. Zero draws nothing at all, so there is no
+                                 * empty dot on a machine with nothing pending.
+                                 */
+                                val waiting = state.copilot?.waitingCount ?: 0
+                                BadgedBox(
+                                    badge = {
+                                        if (waiting > 0) {
+                                            Badge { Text("$waiting") }
+                                        }
+                                    }
+                                ) {
+                                    Icon(Icons.Filled.AutoAwesome, contentDescription = null)
+                                }
+                            },
+                            label = { Text("Copilot") },
+                        )
+                    }
                     NavigationBarItem(
                         selected = onSessions,
                         onClick = { showTab(GRAPH_SESSIONS) },
@@ -455,7 +505,7 @@ fun TerminalDeckApp(
                         label = { Text("Localhost") },
                     )
                     NavigationBarItem(
-                        selected = !onSessions && !onLocalhost,
+                        selected = !onSessions && !onLocalhost && !onCopilot,
                         onClick = { showTab(GRAPH_SETTINGS) },
                         icon = { Icon(Icons.Filled.Settings, contentDescription = null) },
                         label = { Text("Settings") },
@@ -518,111 +568,16 @@ fun TerminalDeckApp(
                 navArgument(ARG_SESSION_ID) { type = NavType.StringType },
             ),
         ) { entry ->
-            val hostId = entry.arguments?.getString(ARG_HOST_ID)
-            val sessionId = entry.arguments?.getString(ARG_SESSION_ID)
-            // Looked up in the machine the route names rather than in whatever is on screen. Those
-            // are the same thing by the frame after `open`, and are not on the frame of it.
-            val host = state.hosts.firstOrNull { it.hostId == hostId }
-            val known = host?.sessions?.firstOrNull { it.id == sessionId }
-            val binding = if (hostId != null && sessionId != null) viewModel.open(hostId, sessionId) else null
-
-            /*
-             * The noun for *this route's* machine, not for whichever one is selected.
-             *
-             * The two are the same the moment after a session is opened and are not the same on a
-             * phone with a Mac and a PC in its switcher, which is precisely the case that produced
-             * the bug this field exists to end. Falls back to the neutral word when the route names
-             * a machine that has been forgotten — by then there is nothing left to ask.
-             */
-            val hostNoun = host?.hostPlatform?.noun ?: HostPlatform.UNKNOWN.noun
-
-            // The route arguments are strings from the back stack, and the back stack survives
-            // process death, a machine restart and a machine being forgotten — so an id that no
-            // longer names anything is a normal thing to arrive with, not a bug to crash on.
-            //
-            // The pop happens in an effect rather than inline. Calling `popBackStack` *during*
-            // composition is a mutation in the middle of the frame that produced it: the
-            // navigation does not take, this composable returns nothing, and what is left on
-            // screen is a black rectangle with no bar, no keys and no explanation. That is
-            // exactly what happened the first time the Mac was restarted underneath the app.
-            if (hostId == null || binding == null || known == null) {
-                LaunchedEffect(hostId, sessionId) {
-                    hostId?.let(viewModel::closeSession)
-                    navController.popBackStack()
-                }
-                LeavingSession(hostNoun)
-                return@composable
-            }
-
-            /*
-             * The control cluster follows the session, and only while its screen is up.
-             *
-             * `follow` after the route has resolved a binding, because the question it asks is about
-             * a session this socket has been told is on screen; `forget` on the way out, because
-             * nothing about a session nobody is looking at is worth holding — a reading from a
-             * minute ago is a claim about now that has stopped being true.
-             */
-            // `sessionId` is non-null past the guard above — `binding` is only built when both ids
-            // are — but the compiler cannot carry that through a lambda capture, so it is named once
-            // here rather than asserted at the call.
-            val liveSession = known.id
-            DisposableEffect(hostId, liveSession) {
-                viewModel.followControls(hostId, liveSession)
-                onDispose { viewModel.forgetControls(hostId) }
-            }
-            var controlsOpen by remember(liveSession) { mutableStateOf(false) }
-
-            TerminalScreen(
-                binding = binding,
-                title = known.title,
-                subtitle = known.cwd,
+            TerminalRoute(
+                entry = entry,
+                state = state,
                 screenTick = screenTick,
-                transport = state.transport,
-                hostNoun = hostNoun,
-                onBack = {
-                    viewModel.closeSession(hostId)
-                    navController.popBackStack()
-                },
-                onKey = { text -> viewModel.type(hostId, text) },
-                onCopy = { selection -> viewModel.copy(hostId, selection) },
-                onPaste = { viewModel.paste(hostId) },
-                canSendFiles = state.canSendFiles,
-                onSendPhoto = {
-                    photoPicker.launch(
-                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
-                    )
-                },
-                // Everything, because the point is handing a file to an agent and there is no
-                // useful subset of "a file a developer might want on their machine". A filter here
-                // would grey out the one thing somebody came to send.
-                onSendFile = { documentPicker.launch(arrayOf("*/*")) },
-                upload = state.upload,
-                onCancelUpload = viewModel::cancelUpload,
-                onDismissUpload = viewModel::dismissUpload,
-                notice = state.notice,
-                // Absent, not disabled, when this machine does not serve `controls` or this session
-                // has no agent drawing it — see [SessionControls.clusterShown].
-                hasControls = SessionControls.clusterShown(state.controls?.reading),
-                onControls = { controlsOpen = true },
-                // Null over a machine that advertises none of usage/account/chat/send, which gets a
-                // terminal exactly as it was rather than a bar with nothing in it.
-                bar = state.bar,
-                onRefreshUsage = viewModel::refreshUsage,
-                onSwitchAccount = viewModel::switchAccount,
-                onOpenChat = { navController.navigate("chat/$hostId/$liveSession") },
-                onDetails = { detailFor = known },
+                viewModel = viewModel,
+                navController = navController,
+                photoPicker = photoPicker,
+                documentPicker = documentPicker,
+                onDetails = { detailFor = it },
             )
-
-            if (controlsOpen) {
-                state.controls?.let { controls ->
-                    SessionControlsSheet(
-                        view = controls,
-                        onApply = { control, value -> viewModel.applyControl(hostId, control, value) },
-                        onDismissNotice = { viewModel.dismissControlsNotice(hostId) },
-                        onDismiss = { controlsOpen = false },
-                    )
-                }
-            }
         }
 
         /*
@@ -665,6 +620,100 @@ fun TerminalDeckApp(
             )
         }
 
+    }
+
+    /*
+     * The copilot, on its own graph so a session opened from it comes back here.
+     *
+     * A run that starts a session and a person who taps it are two different stacks: the Sessions tab
+     * keeps what was pushed on it, and a terminal opened from the copilot has to come back to the
+     * copilot rather than to a list somebody was not reading.
+     */
+    navigation(startDestination = ROUTE_COPILOT, route = GRAPH_COPILOT) {
+        composable(ROUTE_COPILOT) {
+            val view = state.copilot
+            // The machine stopped offering one — a switch, a downgrade, a revoke. The screen draws
+            // its own sentence for that while it is up, and this is the case where it has gone
+            // entirely: there is nothing to attach to, so the tab pops rather than draws.
+            if (view == null) {
+                LaunchedEffect(Unit) { navController.popBackStack() }
+                return@composable
+            }
+            var sessionsOpen by remember { mutableStateOf(false) }
+            CopilotScreen(
+                view = view,
+                machineLabel = state.hostLabel,
+                onStart = viewModel::startCopilot,
+                onCancel = viewModel::cancelCopilotTurn,
+                onStopRun = viewModel::stopCopilotRun,
+                onSay = viewModel::sayToCopilot,
+                onCopy = viewModel::copyText,
+                onOpened = viewModel::openCopilot,
+                onClosed = viewModel::closeCopilot,
+                onSessions = {
+                    viewModel.refreshCopilotSessions()
+                    sessionsOpen = true
+                },
+                onLog = { viewModel.readCopilotLog() },
+                onDismissNotice = viewModel::dismissCopilotNotice,
+            )
+
+            /*
+             * The confirmation, above the timeline rather than in it.
+             *
+             * A question with a two-minute deadline that expires into a refusal is not a row somebody
+             * scrolls to. `decidable` is true here because a `copilot.ask` only ever reaches the
+             * surface that owns the run that raised it — arriving is itself the permission.
+             */
+            view.question?.let { question ->
+                CopilotConsentSheet(
+                    question = question,
+                    decidable = view.access.canAct,
+                    onAnswer = viewModel::answerCopilot,
+                    // Dismissing does not answer it. The machine keeps it until it is answered or it
+                    // expires, and a sheet that answered "no" on a swipe would be the reflex refusal
+                    // this design refuses as hard as it refuses a reflex yes.
+                    onDismiss = { viewModel.dismissCopilotNotice() },
+                )
+            }
+
+            if (sessionsOpen) {
+                CopilotSessionsSheet(
+                    sessions = view.sessions,
+                    machineLabel = state.hostLabel,
+                    onOpen = { sessionId ->
+                        sessionsOpen = false
+                        state.host?.let { host ->
+                            navController.navigate("terminal/${host.hostId}/$sessionId")
+                        }
+                    },
+                    onDismiss = { sessionsOpen = false },
+                )
+            }
+        }
+
+        composable(
+            route = ROUTE_TERMINAL,
+            arguments = listOf(
+                navArgument(ARG_HOST_ID) { type = NavType.StringType },
+                navArgument(ARG_SESSION_ID) { type = NavType.StringType },
+            ),
+        ) { entry ->
+            // The same terminal, on this graph's stack. Navigation-Compose has no way to share one
+            // destination between two graphs, so the route is declared twice and the screen is one
+            // composable called from both — which is the arrangement iOS reaches by giving each
+            // `NavigationStack` its own `navigationDestination` for the same case.
+            TerminalRoute(
+                entry = entry,
+                state = state,
+                screenTick = screenTick,
+                viewModel = viewModel,
+                navController = navController,
+                photoPicker = photoPicker,
+                documentPicker = documentPicker,
+                onDetails = { detailFor = it },
+            )
+        }
     }
 
     /*
@@ -1038,4 +1087,133 @@ private fun LeavingSession(hostNoun: String) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
+}
+
+/**
+ * One open session, on whichever tab's stack it was opened from.
+ *
+ * Extracted so the same screen can be a destination of the Sessions graph **and** of the Copilot
+ * graph. Navigation-Compose has no way to share one destination between two graphs — each declares
+ * its own `composable(ROUTE_TERMINAL)` — so the route is declared twice and the screen is one
+ * function called from both. That is the arrangement iOS reaches by giving each `NavigationStack`
+ * its own `navigationDestination` for the same case, and it matters because a terminal the copilot
+ * started has to come back to the copilot rather than to a list nobody was reading.
+ */
+@Composable
+private fun TerminalRoute(
+    entry: androidx.navigation.NavBackStackEntry,
+    state: DeckUiState,
+    screenTick: Long,
+    viewModel: DeckViewModel,
+    navController: androidx.navigation.NavHostController,
+    photoPicker: androidx.activity.compose.ManagedActivityResultLauncher<PickVisualMediaRequest, android.net.Uri?>,
+    documentPicker: androidx.activity.compose.ManagedActivityResultLauncher<Array<String>, android.net.Uri?>,
+    onDetails: (dev.terminaldeck.android.protocol.RemoteSessionView) -> Unit,
+) {
+
+        val hostId = entry.arguments?.getString(ARG_HOST_ID)
+        val sessionId = entry.arguments?.getString(ARG_SESSION_ID)
+        // Looked up in the machine the route names rather than in whatever is on screen. Those
+        // are the same thing by the frame after `open`, and are not on the frame of it.
+        val host = state.hosts.firstOrNull { it.hostId == hostId }
+        val known = host?.sessions?.firstOrNull { it.id == sessionId }
+        val binding = if (hostId != null && sessionId != null) viewModel.open(hostId, sessionId) else null
+
+        /*
+         * The noun for *this route's* machine, not for whichever one is selected.
+         *
+         * The two are the same the moment after a session is opened and are not the same on a
+         * phone with a Mac and a PC in its switcher, which is precisely the case that produced
+         * the bug this field exists to end. Falls back to the neutral word when the route names
+         * a machine that has been forgotten — by then there is nothing left to ask.
+         */
+        val hostNoun = host?.hostPlatform?.noun ?: HostPlatform.UNKNOWN.noun
+
+        // The route arguments are strings from the back stack, and the back stack survives
+        // process death, a machine restart and a machine being forgotten — so an id that no
+        // longer names anything is a normal thing to arrive with, not a bug to crash on.
+        //
+        // The pop happens in an effect rather than inline. Calling `popBackStack` *during*
+        // composition is a mutation in the middle of the frame that produced it: the
+        // navigation does not take, this composable returns nothing, and what is left on
+        // screen is a black rectangle with no bar, no keys and no explanation. That is
+        // exactly what happened the first time the Mac was restarted underneath the app.
+        if (hostId == null || binding == null || known == null) {
+            LaunchedEffect(hostId, sessionId) {
+                hostId?.let(viewModel::closeSession)
+                navController.popBackStack()
+            }
+            LeavingSession(hostNoun)
+            return
+        }
+
+        /*
+         * The control cluster follows the session, and only while its screen is up.
+         *
+         * `follow` after the route has resolved a binding, because the question it asks is about
+         * a session this socket has been told is on screen; `forget` on the way out, because
+         * nothing about a session nobody is looking at is worth holding — a reading from a
+         * minute ago is a claim about now that has stopped being true.
+         */
+        // `sessionId` is non-null past the guard above — `binding` is only built when both ids
+        // are — but the compiler cannot carry that through a lambda capture, so it is named once
+        // here rather than asserted at the call.
+        val liveSession = known.id
+        DisposableEffect(hostId, liveSession) {
+            viewModel.followControls(hostId, liveSession)
+            onDispose { viewModel.forgetControls(hostId) }
+        }
+        var controlsOpen by remember(liveSession) { mutableStateOf(false) }
+
+        TerminalScreen(
+            binding = binding,
+            title = known.title,
+            subtitle = known.cwd,
+            screenTick = screenTick,
+            transport = state.transport,
+            hostNoun = hostNoun,
+            onBack = {
+                viewModel.closeSession(hostId)
+                navController.popBackStack()
+            },
+            onKey = { text -> viewModel.type(hostId, text) },
+            onCopy = { selection -> viewModel.copy(hostId, selection) },
+            onPaste = { viewModel.paste(hostId) },
+            canSendFiles = state.canSendFiles,
+            onSendPhoto = {
+                photoPicker.launch(
+                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
+                )
+            },
+            // Everything, because the point is handing a file to an agent and there is no
+            // useful subset of "a file a developer might want on their machine". A filter here
+            // would grey out the one thing somebody came to send.
+            onSendFile = { documentPicker.launch(arrayOf("*/*")) },
+            upload = state.upload,
+            onCancelUpload = viewModel::cancelUpload,
+            onDismissUpload = viewModel::dismissUpload,
+            notice = state.notice,
+            // Absent, not disabled, when this machine does not serve `controls` or this session
+            // has no agent drawing it — see [SessionControls.clusterShown].
+            hasControls = SessionControls.clusterShown(state.controls?.reading),
+            onControls = { controlsOpen = true },
+            // Null over a machine that advertises none of usage/account/chat/send, which gets a
+            // terminal exactly as it was rather than a bar with nothing in it.
+            bar = state.bar,
+            onRefreshUsage = viewModel::refreshUsage,
+            onSwitchAccount = viewModel::switchAccount,
+            onOpenChat = { navController.navigate("chat/$hostId/$liveSession") },
+            onDetails = { onDetails(known) },
+        )
+
+        if (controlsOpen) {
+            state.controls?.let { controls ->
+                SessionControlsSheet(
+                    view = controls,
+                    onApply = { control, value -> viewModel.applyControl(hostId, control, value) },
+                    onDismissNotice = { viewModel.dismissControlsNotice(hostId) },
+                    onDismiss = { controlsOpen = false },
+                )
+            }
+        }
 }

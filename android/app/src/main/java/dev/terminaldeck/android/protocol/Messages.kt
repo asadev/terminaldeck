@@ -751,6 +751,118 @@ sealed interface ClientMessage {
     @SerialName("dev.start")
     data class DevStart(val folder: String) : ClientMessage
 
+    /* ---- capability `copilot`. The machine's own agent, driven from here. ---------------- */
+
+    /**
+     * Open the copilot on this socket.
+     *
+     * **It carries nothing.** There was a `copilot.connect` until 2026-08-19 — redeem a six-digit
+     * copilot code, receive a credential — and this frame used to present that credential on every
+     * socket. Both are gone. The second factor is *having been paired as one of the owner's own
+     * devices*, which is decided at the machine, cannot be changed without pairing again, and is what
+     * makes it honest for a device to hold `alter` and answer its own confirmations.
+     */
+    @Serializable
+    @SerialName("copilot.hello")
+    data object CopilotHello : ClientMessage
+
+    /**
+     * Close the copilot connection on this socket, and keep the terminals.
+     *
+     * Not a disconnect: the record survives, so the next `copilot.hello` works. It is what this
+     * client sends when a person leaves the Copilot tab on a device they share.
+     */
+    @Serializable
+    @SerialName("copilot.bye")
+    data object CopilotBye : ClientMessage
+
+    /**
+     * Watch this device's copilot surface, and replay what exists.
+     *
+     * Starts nothing and spends nothing, which is why it is the `read` tier. Answered with
+     * `copilot.state`, then — if this device already has a run — a `copilot.chat` carrying `reset`.
+     */
+    @Serializable
+    @SerialName("copilot.attach")
+    data object CopilotAttach : ClientMessage
+
+    /**
+     * Stop the stream. **The run keeps going**, for a grace window, and that is deliberate: a phone
+     * that locks its screen in a lift has not asked for its agent to be killed mid-turn.
+     */
+    @Serializable
+    @SerialName("copilot.detach")
+    data object CopilotDetach : ClientMessage
+
+    /** Read the state without attaching. Answered with `copilot.state`. */
+    @Serializable
+    @SerialName("copilot.state")
+    data object CopilotState : ClientMessage
+
+    /** The sessions the copilot started, each linked back to the turn that made it. */
+    @Serializable
+    @SerialName("copilot.sessions")
+    data object CopilotSessions : ClientMessage
+
+    /**
+     * The tail of the copilot's action log, newest last.
+     *
+     * [before] pages backwards by row id rather than by index, because the file is appended to while
+     * somebody is reading it and an index-based page would skip or repeat rows exactly when the
+     * copilot is busiest. [limit] is refused rather than clamped over there — a client asking for a
+     * thousand rows has misunderstood the cap, and being silently answered with two hundred while it
+     * believes it has the whole log is how a phone draws "that is everything the copilot did today"
+     * over a window.
+     */
+    @Serializable
+    @SerialName("copilot.log")
+    data class CopilotLog(val limit: Int? = null, val before: String? = null) : ClientMessage
+
+    /** Confirmations waiting at the desk. Watch-only — a row that is not this device's has no buttons. */
+    @Serializable
+    @SerialName("copilot.pending")
+    data object CopilotPending : ClientMessage
+
+    /**
+     * Start this device's own run.
+     *
+     * Deliberately not folded into `copilot.attach`: it spawns an agent process and that spends
+     * money, so it is a thing a person taps rather than a side effect of opening a tab. A second one
+     * against a live run is answered with the run that already exists rather than a second process.
+     */
+    @Serializable
+    @SerialName("copilot.start")
+    data object CopilotStart : ClientMessage
+
+    /** Say something to it. The `act` tier, because talking to an agent *is* acting. */
+    @Serializable
+    @SerialName("copilot.say")
+    data class CopilotSay(val text: String) : ClientMessage
+
+    /** Interrupt the current turn of **this device's own run**, and nothing else. */
+    @Serializable
+    @SerialName("copilot.cancel")
+    data object CopilotCancel : ClientMessage
+
+    /** End this device's own run. */
+    @Serializable
+    @SerialName("copilot.stop")
+    data object CopilotStop : ClientMessage
+
+    /**
+     * Answer a confirmation.
+     *
+     * The `alter` tier, and refused unless this connection owns the run that raised the question.
+     * First answer wins; the loser is told where it was answered rather than having its dialog
+     * vanish.
+     *
+     * [approved] carries no default: only a literal boolean is read over there, and a client whose
+     * wiring sent nothing must not approve somebody's settings being rewritten.
+     */
+    @Serializable
+    @SerialName("copilot.answer")
+    data class CopilotAnswer(val id: String, val approved: Boolean) : ClientMessage
+
     companion object {
         /**
          * Attach with a size when there is one, without when there is not.
@@ -1432,6 +1544,102 @@ sealed interface ServerMessage {
     @Serializable
     @SerialName("dev.state")
     data class DevState(val state: DevServerReport) : ServerMessage
+
+    /* ---- capability `copilot` ---------------------------------------------------------------- */
+
+    /** Answer to `copilot.state`, and pushed whenever any of it changes. */
+    @Serializable
+    @SerialName("copilot.state")
+    data class CopilotStateFrame(val state: CopilotStateReport = CopilotStateReport()) : ServerMessage
+
+    /**
+     * The conversation, as **parsed messages** and never as terminal bytes.
+     *
+     * Merge by id: replace a match, append otherwise. [reset] means drop everything held and take
+     * this frame as the whole conversation — which is what arrives on a fresh attach and when a run
+     * is replaced.
+     *
+     * [run] rides along so a frame from a previous run is *dropped* rather than merged into the new
+     * one. Without it a phone that reconnected after the grace window expired would splice the end of
+     * a dead conversation onto the start of a live one, and the person would read an answer to a
+     * question they never asked in this run.
+     */
+    @Serializable
+    @SerialName("copilot.chat")
+    data class CopilotChat(
+        val run: String,
+        val messages: kotlin.collections.List<CopilotChatMessage> = emptyList(),
+        val reset: Boolean = false,
+    ) : ServerMessage
+
+    /**
+     * One tool call as it happens, already scrubbed.
+     *
+     * This is the frame that makes a refusal visible: a call this device's grant did not cover
+     * arrives here with `outcome: refused`, in the copilot's own words rather than as silence.
+     */
+    @Serializable
+    @SerialName("copilot.tool")
+    data class CopilotTool(val row: CopilotActionRow) : ServerMessage
+
+    /** The sessions the copilot started. */
+    @Serializable
+    @SerialName("copilot.sessions")
+    data class CopilotSessionsRows(
+        val sessions: kotlin.collections.List<CopilotSessionRow> = emptyList(),
+    ) : ServerMessage
+
+    /**
+     * Answer to `copilot.log` only, never pushed — the live view of the log is `copilot.tool`.
+     *
+     * [more] says the tail was bounded, in the same spirit the desktop's own trail reports its window
+     * rather than pretending to be the whole file.
+     */
+    @Serializable
+    @SerialName("copilot.log")
+    data class CopilotLogRows(
+        val rows: kotlin.collections.List<CopilotActionRow> = emptyList(),
+        val more: Boolean = false,
+    ) : ServerMessage
+
+    /** Confirmations waiting anywhere. A row that is not this device's is news, not a decision. */
+    @Serializable
+    @SerialName("copilot.pending")
+    data class CopilotPendingRows(
+        val questions: kotlin.collections.List<CopilotPendingRow> = emptyList(),
+    ) : ServerMessage
+
+    /**
+     * This connection's copilot state changed: opened, closed, regranted, or disconnected.
+     *
+     * Pushed, so a disconnected device's Copilot tab goes away without a reconnect. The *rule* is
+     * already live without this frame, because the grant is read per message and per tool call —
+     * which is exactly what makes this push honest rather than load bearing.
+     */
+    @Serializable
+    @SerialName("copilot.grant")
+    data class CopilotGrant(val link: CopilotLinkWire = CopilotLinkWire()) : ServerMessage
+
+    /**
+     * A confirmation **this connection may answer**. Pushed the moment it is raised.
+     *
+     * Only ever sent to the surface that owns the run that raised it. Everybody else who is watching
+     * sees it as a `copilot.pending` row.
+     */
+    @Serializable
+    @SerialName("copilot.ask")
+    data class CopilotAsk(val question: CopilotConsentQuestion) : ServerMessage
+
+    /**
+     * A confirmation closed, and where it was answered.
+     *
+     * Pushed to every connection that was told about it, including the one that answered: a dialog
+     * that vanishes without saying where the answer came from is the app doing something behind a
+     * person's back.
+     */
+    @Serializable
+    @SerialName("copilot.settled")
+    data class CopilotSettled(val settled: CopilotSettledRow) : ServerMessage
 }
 
 /**
