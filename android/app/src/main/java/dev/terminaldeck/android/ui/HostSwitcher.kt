@@ -51,6 +51,8 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.terminaldeck.android.HostSummary
+import dev.terminaldeck.android.ui.theme.DeckTheme
+import dev.terminaldeck.android.ui.theme.DeckType
 import dev.terminaldeck.android.protocol.HostVersion
 import dev.terminaldeck.android.transport.TransportState
 import dev.terminaldeck.android.transport.detail
@@ -187,7 +189,11 @@ private fun HostRow(
             .heightIn(min = 64.dp)
             .clickable(onClick = onClick)
             .background(
-                if (host.selected) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent
+                // The accent as a wash rather than a grey. A selected row tinted with the next
+                // surface up is a row that looks slightly wrong rather than chosen; `accent-soft` is
+                // the token the desktop uses for exactly this and it says *this one* without
+                // becoming a button.
+                if (host.selected) DeckTheme.colors.accentSoft else Color.Transparent
             )
             .padding(start = 20.dp, end = 8.dp, top = 10.dp, bottom = 10.dp),
     ) {
@@ -198,8 +204,8 @@ private fun HostRow(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = host.label,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurface,
+                    style = DeckType.rowTitle,
+                    color = DeckTheme.colors.primary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false),
@@ -209,21 +215,22 @@ private fun HostRow(
                     Spacer(Modifier.width(8.dp))
                     Text(
                         text = if (count == 1) "1 session" else "$count sessions",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        // Outlined rather than filled. The selected row is already tinted with
-                        // `surfaceVariant`, so a chip filled with it vanished into exactly the row
-                        // whose session count matters most.
+                        style = DeckType.monoSmall,
+                        color = DeckTheme.colors.secondary,
+                        // Outlined rather than filled. The selected row is already tinted, so a chip
+                        // filled with the same tint vanished into exactly the row whose session
+                        // count matters most — which is why this is the one tag in the app that is a
+                        // line rather than a fill.
                         modifier = Modifier
-                            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(6.dp))
-                            .padding(horizontal = 7.dp, vertical = 3.dp),
+                            .border(1.dp, DeckTheme.colors.hairlineStrong, RoundedCornerShape(5.dp))
+                            .padding(horizontal = 7.dp, vertical = 2.dp),
                     )
                 }
             }
             Spacer(Modifier.height(3.dp))
             Text(
                 text = host.connection.detail,
-                style = MaterialTheme.typography.bodySmall,
+                style = DeckType.caption,
                 color = tint,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
@@ -232,9 +239,8 @@ private fun HostRow(
             // the same, and this is the string the desktop shows next to its own pairing code.
             Text(
                 text = host.hostId,
-                style = MaterialTheme.typography.labelSmall,
-                fontFamily = FontFamily.Monospace,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = DeckType.monoSmall,
+                color = DeckTheme.colors.faint,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -245,8 +251,8 @@ private fun HostRow(
                 ?.let { line ->
                     Text(
                         text = line,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = DeckType.caption,
+                        color = DeckTheme.colors.faint,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -257,7 +263,7 @@ private fun HostRow(
             Icon(
                 Icons.Filled.Check,
                 contentDescription = "On screen",
-                tint = MaterialTheme.colorScheme.primary,
+                tint = DeckTheme.colors.accent,
                 modifier = Modifier.size(18.dp),
             )
         }
@@ -363,12 +369,12 @@ fun ForgetDialog(
 private val SCRIM = Color(0xB3000000)
 
 @Composable
-fun connectionTint(state: TransportState): Color = when (state) {
-    is TransportState.Online -> MaterialTheme.colorScheme.primary
-    is TransportState.Connecting, is TransportState.Pending -> MaterialTheme.colorScheme.secondary
-    is TransportState.Waiting,
-    is TransportState.Rejected,
-    is TransportState.Incompatible,
-    -> MaterialTheme.colorScheme.error
-    else -> MaterialTheme.colorScheme.onSurfaceVariant
+fun connectionTint(state: TransportState): Color {
+    val colors = DeckTheme.colors
+    return when (state) {
+        is TransportState.Online -> colors.positive
+        is TransportState.Connecting, is TransportState.Pending, is TransportState.Waiting -> colors.warning
+        is TransportState.Rejected, is TransportState.Incompatible -> colors.critical
+        else -> colors.faint
+    }
 }

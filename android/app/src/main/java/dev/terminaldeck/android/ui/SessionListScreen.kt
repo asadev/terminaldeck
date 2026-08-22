@@ -26,6 +26,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.ExpandMore
@@ -65,6 +66,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import dev.terminaldeck.android.DeckUiState
+import dev.terminaldeck.android.ui.kit.DeckEmptyState
+import dev.terminaldeck.android.ui.kit.DeckGroup
+import dev.terminaldeck.android.ui.kit.DeckStatusDot
+import dev.terminaldeck.android.ui.kit.DeckTag
+import dev.terminaldeck.android.ui.theme.DeckTheme
+import dev.terminaldeck.android.ui.theme.DeckType
+import dev.terminaldeck.android.ui.theme.Space
 import dev.terminaldeck.android.protocol.RemoteSessionView
 import dev.terminaldeck.android.transport.TransportState
 import dev.terminaldeck.android.transport.detail
@@ -148,13 +156,13 @@ fun SessionListScreen(
     Box(modifier = Modifier.fillMaxSize()) {
 
     Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
+        containerColor = DeckTheme.colors.background,
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background,
-                    titleContentColor = MaterialTheme.colorScheme.onBackground,
+                    containerColor = DeckTheme.colors.background,
+                    titleContentColor = DeckTheme.colors.primary,
                 ),
                 title = {
                     /*
@@ -175,12 +183,13 @@ fun SessionListScreen(
                         modifier = Modifier
                             .clip(RoundedCornerShape(10.dp))
                             .then(if (switchable) Modifier.clickable { switcher = true } else Modifier)
-                            .padding(horizontal = 6.dp, vertical = 4.dp),
+                            .padding(horizontal = Space.x15, vertical = Space.x1),
                     ) {
                         Column(modifier = Modifier.weight(1f, fill = false)) {
                             Text(
                                 text = if (switchable) state.hostLabel else "Terminal Deck",
-                                style = MaterialTheme.typography.titleLarge,
+                                style = DeckType.title,
+                                color = DeckTheme.colors.primary,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
@@ -192,8 +201,8 @@ fun SessionListScreen(
                                 } else {
                                     state.pairing?.hostId ?: "not paired"
                                 },
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = DeckType.caption,
+                                color = DeckTheme.colors.faint,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
@@ -203,7 +212,7 @@ fun SessionListScreen(
                             Icon(
                                 Icons.Filled.ExpandMore,
                                 contentDescription = "Your machines",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                tint = DeckTheme.colors.faint,
                                 modifier = Modifier.size(20.dp),
                             )
                         }
@@ -230,7 +239,7 @@ fun SessionListScreen(
                                 Icon(
                                     Icons.Filled.MoreVert,
                                     contentDescription = "More",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    tint = DeckTheme.colors.faint,
                                 )
                             }
                             DropdownMenu(expanded = overflow, onDismissRequest = { overflow = false }) {
@@ -287,8 +296,8 @@ fun SessionListScreen(
                                 else -> folderMenu = true
                             }
                         },
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                        containerColor = DeckTheme.colors.accent,
+                        contentColor = DeckTheme.colors.onAccent,
                         icon = { Icon(Icons.Filled.Add, contentDescription = null) },
                         text = { Text("New session") },
                     )
@@ -349,8 +358,15 @@ fun SessionListScreen(
                     EmptyState(state)
                 } else {
                     LazyColumn(
-                        contentPadding = PaddingValues(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        contentPadding = PaddingValues(
+                            start = Space.screen,
+                            end = Space.screen,
+                            top = Space.x2,
+                            // Room for the New Session button to float over without covering the
+                            // last row, which it did — measured on a 5.0" screen with four sessions.
+                            bottom = 96.dp,
+                        ),
+                        verticalArrangement = Arrangement.spacedBy(Space.x2),
                         modifier = Modifier
                             .fillMaxSize()
                             .alpha(if (state.live) 1f else 0.55f),
@@ -415,21 +431,26 @@ private fun CloseSessionDialog(
 ) {
     androidx.compose.material3.AlertDialog(
         onDismissRequest = onCancel,
-        containerColor = MaterialTheme.colorScheme.surface,
+        containerColor = DeckTheme.colors.surface,
+        titleContentColor = DeckTheme.colors.primary,
+        textContentColor = DeckTheme.colors.secondary,
         title = { Text("Close ${session.title}?") },
         text = {
             Text(
                 text = "The session stops on the $machineNoun and does not come back.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = DeckType.footnote,
             )
         },
         confirmButton = {
             TextButton(onClick = onConfirm) {
-                Text("Close session", color = MaterialTheme.colorScheme.error)
+                Text("Close session", style = DeckType.control, color = DeckTheme.colors.critical)
             }
         },
-        dismissButton = { TextButton(onClick = onCancel) { Text("Keep") } },
+        dismissButton = {
+            TextButton(onClick = onCancel) {
+                Text("Keep", style = DeckType.control, color = DeckTheme.colors.accent)
+            }
+        },
     )
 }
 
@@ -465,11 +486,11 @@ private fun FolderNote(state: DeckUiState) {
 
     Text(
         text = text,
-        style = MaterialTheme.typography.bodySmall,
+        style = DeckType.caption,
         // Deliberately not the error colour. Nothing has gone wrong: somebody made a choice at a
         // keyboard, and this is that choice being reported rather than a fault being raised.
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+        color = DeckTheme.colors.faint,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = Space.screen, vertical = Space.x2),
     )
 }
 
@@ -484,18 +505,27 @@ private fun ConnectionBanner(state: TransportState, onReconnect: () -> Unit) {
 
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = Space.screen, top = Space.x15, end = Space.x2, bottom = Space.x15),
     ) {
         Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(tint))
-        Spacer(Modifier.width(8.dp))
+        Spacer(Modifier.width(Space.x2))
         Text(
+            // A sentence, in the app's own face. It was set in the mono face — not by choice, but
+            // because the theme this replaces defined `bodySmall` as monospaced, so every quiet
+            // line in the app came out looking like program output. Mono is reserved for strings
+            // whose characters are meant to be counted, and "Could not reach that desktop" is not
+            // one of them.
             text = state.detail + countdown(retryAt),
-            style = MaterialTheme.typography.bodySmall,
+            style = DeckType.caption,
             color = tint,
             modifier = Modifier.weight(1f),
         )
         if (state !is TransportState.Online && state !is TransportState.Connecting) {
-            TextButton(onClick = onReconnect) { Text("Retry") }
+            TextButton(onClick = onReconnect) {
+                Text("Retry", style = DeckType.value, color = DeckTheme.colors.accent)
+            }
         }
     }
 }
@@ -525,26 +555,24 @@ private fun remaining(retryAt: Long): Int =
 @Composable
 private fun EmptyState(state: DeckUiState) {
     // Scrollable even with nothing in it, so the pull gesture above has something to pull.
-    Box(
-        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
-        contentAlignment = Alignment.Center,
-    ) {
-        if (!state.loaded && state.transport is TransportState.Connecting) {
-            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-        } else {
-            Text(
-                text = if (state.transport.isOnline) {
-                    // Named, because with two machines paired "no sessions" does not say whose.
-                    "No sessions on ${state.hostLabel}."
-                } else {
-                    // Not "no sessions": nothing is known either way while the socket is down, and
-                    // an empty list would read as a machine with nothing running on it.
-                    "Not connected to ${state.hostLabel}, so there is nothing to show yet."
-                },
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
+    /*
+     * A **sentence in all three cases**, never a spinner.
+     *
+     * A spinner is indistinguishable from a hang, which is the same reason the connection banner
+     * counts down rather than spinning. The three sentences say three genuinely different things:
+     * the socket is being opened, the machine has nothing running, or nothing is known either way
+     * because there is no socket. Every one names the machine, because with two paired "no sessions"
+     * does not say whose.
+     */
+    Box(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        DeckEmptyState(
+            text = when {
+                !state.loaded && state.transport is TransportState.Connecting ->
+                    "Reaching ${state.hostLabel}…"
+                state.transport.isOnline -> "No sessions on ${state.hostLabel}."
+                else -> "Not connected to ${state.hostLabel}, so there is nothing to show yet."
+            }
+        )
     }
 }
 
@@ -576,47 +604,105 @@ private fun SessionCard(
     onDetails: () -> Unit = {},
 ) {
     var menu by remember { mutableStateOf(false) }
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surface)
-            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp))
-            .combinedClickable(onClick = onClick, onLongClick = { menu = true })
-            .padding(start = 14.dp, top = 14.dp, end = if (onClose != null) 4.dp else 14.dp, bottom = 14.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            StatusDot(session)
-            Spacer(Modifier.width(10.dp))
-            Text(
-                text = session.title,
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
-            if (pinned) {
-                Icon(
-                    Icons.Filled.PushPin,
-                    contentDescription = "Pinned",
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(14.dp),
+    val colors = DeckTheme.colors
+    /*
+     * A fill and a radius, no outline.
+     *
+     * It was outlined, and on a dark ground a 9%-alpha border around a 3%-lighter fill is two
+     * nearly-invisible edges doing one job — it reads as a rectangle somebody forgot to finish
+     * rather than as a raised surface.
+     */
+    DeckGroup {
+        Row(
+            verticalAlignment = Alignment.Top,
+            modifier = Modifier
+                .fillMaxWidth()
+                .combinedClickable(onClick = onClick, onLongClick = { menu = true })
+                .padding(
+                    start = Space.card,
+                    top = Space.x3,
+                    end = if (onClose != null) Space.x1 else Space.card,
+                    bottom = Space.x3,
+                ),
+        ) {
+            // Aligned with the first line of the title rather than centred on the whole row, so a
+            // long path on the second line does not push the dot away from the name it belongs to.
+            DeckStatusDot(session.status, modifier = Modifier.padding(top = 7.dp))
+            Spacer(Modifier.width(Space.x3))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = session.title,
+                        style = DeckType.rowTitle,
+                        color = colors.primary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    if (pinned) {
+                        Spacer(Modifier.width(Space.x15))
+                        Icon(
+                            Icons.Filled.PushPin,
+                            contentDescription = "Pinned",
+                            tint = colors.accent,
+                            modifier = Modifier.size(13.dp),
+                        )
+                    }
+                }
+                Spacer(Modifier.height(Space.x15))
+                Text(
+                    text = session.cwd,
+                    style = DeckType.mono,
+                    color = colors.faint,
+                    maxLines = 1,
+                    // Tail-truncated, and it is the wrong end: what matters in a path is the folder
+                    // at the end, not the `/Users/…` every row shares. Compose gained
+                    // `TextOverflow.StartEllipsis` in 1.8 and this build is on an older BOM, so it
+                    // is noted rather than faked — a hand-rolled head-truncation would need a text
+                    // measurement pass per row in a lazy list to be correct at any width.
+                    overflow = TextOverflow.Ellipsis,
                 )
-                Spacer(Modifier.width(6.dp))
-            }
-            ProviderChip(session.provider)
-            if (onClose != null) {
-                Spacer(Modifier.width(4.dp))
-                IconButton(onClick = onClose, modifier = Modifier.size(32.dp)) {
-                    Icon(
-                        Icons.Filled.Close,
-                        contentDescription = "Close ${session.title}",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(18.dp),
+                Spacer(Modifier.height(Space.x2))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    DeckTag(session.provider)
+                    Spacer(Modifier.width(Space.x2))
+                    Text(
+                        // `status` is free-form on the wire, so it is shown rather than mapped. A
+                        // phone that renders an unrecognised status as "unknown" is worse than one
+                        // that renders the word the desktop actually sent. When the socket is down
+                        // the word is qualified rather than dropped: it was true when it arrived.
+                        text = buildString {
+                            append(session.status)
+                            session.exitCode?.let { append(" · exit $it") }
+                            if (!live) append(" · as of the last connection")
+                        },
+                        style = DeckType.caption,
+                        color = statusColor(session),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
+
+            if (onClose != null) {
+                IconButton(onClick = onClose, modifier = Modifier.size(36.dp)) {
+                    Icon(
+                        Icons.Filled.Close,
+                        contentDescription = "Close ${session.title}",
+                        tint = colors.faint,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            } else {
+                Icon(
+                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    contentDescription = null,
+                    tint = colors.faint,
+                    modifier = Modifier.padding(top = 2.dp).size(18.dp),
+                )
+            }
+
             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                 DropdownMenuItem(
                     text = { Text("Details") },
@@ -632,33 +718,6 @@ private fun SessionCard(
                 )
             }
         }
-
-        Spacer(Modifier.height(8.dp))
-
-        Text(
-            text = session.cwd,
-            style = MaterialTheme.typography.bodySmall,
-            fontFamily = FontFamily.Monospace,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-
-        Spacer(Modifier.height(6.dp))
-
-        Text(
-            // `status` is free-form on the wire, so it is shown rather than mapped. A phone that
-            // renders an unrecognised status as "unknown" is worse than one that renders the word
-            // the desktop actually sent. When the socket is down the word is qualified rather than
-            // dropped: it was true when it arrived.
-            text = buildString {
-                append(session.status)
-                session.exitCode?.let { append(" · exit $it") }
-                if (!live) append(" · as of the last connection")
-            },
-            style = MaterialTheme.typography.labelSmall,
-            color = statusColor(session),
-        )
     }
 }
 
@@ -682,49 +741,41 @@ private fun AwayLine(text: String?, onDismiss: () -> Unit) {
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 6.dp)
             .clip(RoundedCornerShape(10.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .background(DeckTheme.colors.surfaceHigh)
             .clickable(onClick = onDismiss)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
+            .padding(horizontal = Space.x3, vertical = Space.x2),
     ) {
         Text(
             text = text,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurface,
+            style = DeckType.footnote,
+            color = DeckTheme.colors.primary,
             modifier = Modifier.weight(1f),
         )
-        Spacer(Modifier.width(8.dp))
+        Spacer(Modifier.width(Space.x2))
         Icon(
             Icons.Filled.Close,
             contentDescription = "Dismiss",
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            tint = DeckTheme.colors.faint,
             modifier = Modifier.size(16.dp),
         )
     }
 }
 
+/**
+ * The colour of the status *word*, which is not always the colour of the dot.
+ *
+ * The dot asks `DeckColors.status` and gets the vocabulary's own answer. The word has one extra fact
+ * available to it — the exit code — and a session that exited non-zero is critical whatever word
+ * came with it, while one that exited cleanly is finished rather than failed. That is the only
+ * divergence, and it is here rather than in the palette because an exit code is a property of this
+ * client's [RemoteSessionView] and not of the colour table.
+ */
 @Composable
-private fun StatusDot(session: RemoteSessionView) {
-    Box(modifier = Modifier.size(9.dp).clip(CircleShape).background(statusColor(session)))
-}
-
-@Composable
-private fun ProviderChip(provider: String) {
-    Text(
-        text = provider.uppercase(),
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier
-            .clip(RoundedCornerShape(6.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
-            .padding(horizontal = 7.dp, vertical = 3.dp),
-    )
-}
-
-@Composable
-private fun statusColor(session: RemoteSessionView): Color = when {
-    session.exitCode != null && session.exitCode != 0 -> MaterialTheme.colorScheme.error
-    session.exitCode != null -> MaterialTheme.colorScheme.onSurfaceVariant
-    session.status == "running" -> MaterialTheme.colorScheme.primary
-    session.status == "waiting" -> MaterialTheme.colorScheme.secondary
-    else -> MaterialTheme.colorScheme.onSurfaceVariant
+private fun statusColor(session: RemoteSessionView): Color {
+    val colors = DeckTheme.colors
+    return when {
+        session.exitCode != null && session.exitCode != 0 -> colors.critical
+        session.exitCode != null -> colors.completed
+        else -> colors.status(session.status)
+    }
 }

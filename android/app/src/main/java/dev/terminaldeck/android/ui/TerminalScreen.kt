@@ -58,7 +58,14 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.viewinterop.AndroidView
+import dev.terminaldeck.android.ui.theme.DeckTheme
+import dev.terminaldeck.android.ui.theme.DeckType
+import dev.terminaldeck.android.ui.theme.installTerminalPalette
+import dev.terminaldeck.android.ui.theme.refreshLiveSession
 import com.termux.terminal.KeyHandler
 import com.termux.terminal.TerminalSession
 import com.termux.view.TerminalView
@@ -177,6 +184,21 @@ fun TerminalScreen(
     var ctrlArmed by remember(binding) { mutableStateOf(false) }
     var attachOpen by remember { mutableStateOf(false) }
 
+    /*
+     * The terminal's paper, and it is not the app's canvas.
+     *
+     * `--terminal-bg`: `#e8e8e8` on paper and `#121212` in the dark, which are the same two hexes the
+     * desktop paints. In the light theme it is deliberately *not* `--bg-primary`, in the words of the
+     * person who reported it on the desktop: a terminal painted the canvas colour *"is pure white,
+     * and inside the terminal itself it is a little bit different, like kind of grey"* — it stops
+     * being a terminal and becomes an empty document with a cursor in it.
+     *
+     * This was one hard-coded `#0B0D10`, a blue-tinted near-black that exists nowhere else in the
+     * product and had no light half at all.
+     */
+    val paper = DeckTheme.colors.terminalPaper
+    val paperIsDark = DeckTheme.colors.isDark
+
     val terminalView = remember(binding) {
         TerminalView(context, null).apply {
             setTerminalViewClient(client)
@@ -186,10 +208,25 @@ fun TerminalScreen(
             isFocusable = true
             isFocusableInTouchMode = true
             keepScreenOn = true
-            setBackgroundColor(TERMINAL_BACKGROUND)
             client.view = this
             attachSession(binding.session)
         }
+    }
+
+    /*
+     * Re-applied on every appearance change, on the view *and* on the emulator.
+     *
+     * The `View` keeps whatever `setBackgroundColor` was last given, and the emulator's colour table
+     * is a copy taken from the process-wide scheme when the session was constructed — so a session
+     * already open when somebody switches to Light keeps the dark palette until it is told to
+     * re-read. `refreshLiveSession` is that telling. iOS needs the identical pass for the identical
+     * reason: SwiftTerm flattens a colour at the instant it is handed one.
+     */
+    LaunchedEffect(paperIsDark, binding) {
+        installTerminalPalette(paperIsDark)
+        refreshLiveSession(binding.session)
+        terminalView.setBackgroundColor(paper.toArgb())
+        terminalView.onScreenUpdated()
     }
 
     // The key row's Ctrl has to reach the typing path too: a letter from the soft keyboard or a
@@ -205,13 +242,22 @@ fun TerminalScreen(
     LaunchedEffect(terminalView) { terminalView.requestFocus() }
 
     Scaffold(
-        containerColor = Color(TERMINAL_BACKGROUND),
+        /*
+         * The chrome is the app's canvas; the terminal is the well cut into it.
+         *
+         * Both were `paper` before, which made the 6dp inset and the 8dp radius below invisible — a
+         * rounded rectangle drawn in the same colour as what is behind it is not a rounded
+         * rectangle. On paper the difference is `#ffffff` against `#e8e8e8` and the terminal finally
+         * reads as recessed, which is the whole reason `--terminal-bg` is its own token rather than
+         * a reuse of a surface.
+         */
+        containerColor = DeckTheme.colors.background,
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.background)
+                    .background(DeckTheme.colors.background)
                     // A hand-rolled top bar under `enableEdgeToEdge` gets no insets for free the
                     // way `TopAppBar` does, so without this the title draws under the clock.
                     .statusBarsPadding(),
@@ -225,7 +271,7 @@ fun TerminalScreen(
                         Icon(
                             Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Back to sessions",
-                            tint = MaterialTheme.colorScheme.onBackground,
+                            tint = DeckTheme.colors.primary,
                         )
                     }
                     Column(modifier = Modifier.weight(1f)) {
@@ -235,24 +281,26 @@ fun TerminalScreen(
                                     .size(7.dp)
                                     .clip(CircleShape)
                                     .background(
-                                        if (transport.isOnline) MaterialTheme.colorScheme.primary
-                                        else MaterialTheme.colorScheme.error
+                                        // Green for connected, matching the switcher's dots and the
+                                        // session list's banner. It was the accent blue, which is
+                                        // the colour this app spends on *the thing to press*.
+                                        if (transport.isOnline) DeckTheme.colors.positive
+                                        else DeckTheme.colors.critical
                                     )
                             )
                             Spacer(Modifier.width(7.dp))
                             Text(
                                 text = title,
-                                style = MaterialTheme.typography.titleMedium,
-                                color = MaterialTheme.colorScheme.onBackground,
+                                style = DeckType.rowTitle,
+                                color = DeckTheme.colors.primary,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
                         }
                         Text(
                             text = subtitle,
-                            style = MaterialTheme.typography.bodySmall,
-                            fontFamily = FontFamily.Monospace,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = DeckType.mono,
+                            color = DeckTheme.colors.faint,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
@@ -271,14 +319,14 @@ fun TerminalScreen(
                             // silently is one people stop trusting. Long-press is discoverable in
                             // the same breath rather than being a gesture nobody is told about.
                             contentDescription = "Copy the selection, or the screen. Long-press the terminal to select.",
-                            tint = MaterialTheme.colorScheme.onBackground,
+                            tint = DeckTheme.colors.primary,
                         )
                     }
                     IconButton(onClick = onPaste) {
                         Icon(
                             Icons.Filled.ContentPaste,
                             contentDescription = "Paste into the session",
-                            tint = MaterialTheme.colorScheme.onBackground,
+                            tint = DeckTheme.colors.primary,
                         )
                     }
                     if (canSendFiles) {
@@ -290,7 +338,7 @@ fun TerminalScreen(
                                     // screen a blind user hears in full — and the one that named the
                                     // wrong computer for as long as the noun was a literal here.
                                     contentDescription = "Send a photo, video or file to the $hostNoun",
-                                    tint = MaterialTheme.colorScheme.onBackground,
+                                    tint = DeckTheme.colors.primary,
                                 )
                             }
                             DropdownMenu(expanded = attachOpen, onDismissRequest = { attachOpen = false }) {
@@ -318,7 +366,7 @@ fun TerminalScreen(
                             Icon(
                                 Icons.Filled.Tune,
                                 contentDescription = "Model, effort, fast mode and permission for this session",
-                                tint = MaterialTheme.colorScheme.onBackground,
+                                tint = DeckTheme.colors.primary,
                             )
                         }
                     }
@@ -330,7 +378,7 @@ fun TerminalScreen(
                         Icon(
                             Icons.Filled.Keyboard,
                             contentDescription = "Show keyboard",
-                            tint = MaterialTheme.colorScheme.onBackground,
+                            tint = DeckTheme.colors.primary,
                         )
                     }
                 }
@@ -350,12 +398,14 @@ fun TerminalScreen(
                 if (!transport.isOnline) {
                     Text(
                         text = transport.detail,
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.onPrimary,
+                        style = DeckType.caption,
+                        // White on the critical *fill*, not the critical ink on the canvas: this is
+                        // a band rather than a sentence, and `--critical-fill-ink` is white in both
+                        // appearances because the fill is dark enough in both.
+                        color = DeckTheme.colors.onCriticalFill,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(MaterialTheme.colorScheme.error)
+                            .background(DeckTheme.colors.criticalFill)
                             .padding(horizontal = 12.dp, vertical = 4.dp),
                     )
                 }
@@ -387,7 +437,7 @@ fun TerminalScreen(
                 .padding(padding)
                 .padding(horizontal = 6.dp, vertical = 4.dp)
                 .clip(RoundedCornerShape(8.dp))
-                .background(Color(TERMINAL_BACKGROUND)),
+                .background(paper),
         ) {
             AndroidView(
                 factory = { terminalView },
@@ -422,20 +472,24 @@ private fun UploadRow(upload: UploadView, onCancel: () -> Unit, onDismiss: () ->
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surface)
+            .background(DeckTheme.colors.surface)
             .padding(horizontal = 12.dp, vertical = 8.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = upload.name,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface,
+                style = DeckType.value,
+                color = DeckTheme.colors.primary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
             TextButton(onClick = if (upload.isRunning) onCancel else onDismiss) {
-                Text(if (upload.isRunning) "Cancel" else "Dismiss")
+                Text(
+                    text = if (upload.isRunning) "Cancel" else "Dismiss",
+                    style = DeckType.value,
+                    color = DeckTheme.colors.accent,
+                )
             }
         }
         if (upload.isRunning) {
@@ -446,9 +500,8 @@ private fun UploadRow(upload: UploadView, onCancel: () -> Unit, onDismiss: () ->
         }
         Text(
             text = upload.detail,
-            style = MaterialTheme.typography.bodySmall,
-            fontFamily = FontFamily.Monospace,
-            color = if (failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+            style = DeckType.mono,
+            color = if (failed) DeckTheme.colors.critical else DeckTheme.colors.faint,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
@@ -469,34 +522,53 @@ private fun KeyRow(
     onPress: (KeyBarKey) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val colors = DeckTheme.colors
     Row(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
         modifier = modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.background)
+            .background(DeckTheme.colors.background)
             .horizontalScroll(rememberScrollState())
             .padding(horizontal = 8.dp, vertical = 6.dp),
     ) {
         for (key in KEY_BAR) {
             val armed = key == KeyBarKey.Ctrl && ctrl
+            val interaction = remember { MutableInteractionSource() }
+            val pressed by interaction.collectIsPressedAsState()
             Text(
                 text = key.label,
-                style = MaterialTheme.typography.titleMedium,
+                style = DeckType.control,
+                /*
+                 * A cap is a **tint of the ink**, not a named grey.
+                 *
+                 * Which means the bar picks up whatever is behind it and works over the light
+                 * keyboard as well as the dark one — the same reason `Palette.key` on iOS is an
+                 * alpha rather than a surface. The disabled state is its own value rather than the
+                 * resting one at a lower alpha, because a disabled cap drawn that way came out as an
+                 * outline colour used as *text*, which at 9% alpha is a label nobody can read.
+                 *
+                 * There is a pressed state, and there did not used to be. Every key felt dead even
+                 * when it worked, which is the one thing a key row must never do.
+                 */
                 color = when {
-                    !enabled -> MaterialTheme.colorScheme.outline
-                    armed -> MaterialTheme.colorScheme.onPrimary
-                    else -> MaterialTheme.colorScheme.onSurface
+                    !enabled -> colors.faint
+                    armed -> colors.onAccent
+                    else -> colors.keyLabel
                 },
                 modifier = Modifier
                     .clip(RoundedCornerShape(8.dp))
                     .background(
                         when {
-                            armed -> MaterialTheme.colorScheme.primary
-                            else -> MaterialTheme.colorScheme.surfaceVariant
+                            !enabled -> colors.keyDisabled
+                            armed -> colors.accent
+                            pressed -> colors.keyPressed
+                            else -> colors.key
                         }
                     )
-                    .clickable(enabled = enabled) { onPress(key) }
+                    .clickable(interactionSource = interaction, indication = null, enabled = enabled) {
+                        onPress(key)
+                    }
                     .padding(horizontal = 14.dp, vertical = 10.dp),
             )
         }
@@ -660,4 +732,3 @@ private class DeckTerminalViewClient(
 // the only thing that sets them: the Settings row writes the same number, and two copies of a bound
 // is how a stepper and a gesture end up disagreeing about the maximum.
 
-private const val TERMINAL_BACKGROUND = 0xFF0B0D10.toInt()
