@@ -115,3 +115,25 @@ describe('the sentences are the shape a pane can print', () => {
     }
   })
 })
+
+/**
+ * One line that has now been wrong twice.
+ *
+ * **Primary account** shipped as *"This app hands a shell on a server no
+ * account, so…"*; the repair on 2026-08-22 added the missing words and left the
+ * sentence broken — *"…on a server no account of its own, so…"* — which is how
+ * it was still rendering on the pane that afternoon. Both wordings share one
+ * shape: a bare noun phrase parked straight after *on a server*, so a shell is
+ * being handed an account.
+ *
+ * The shape is what is pinned, not the sentence. `ServerControl.test.tsx` states
+ * the rule this follows — nothing here asserts copy by re-typing it — and a
+ * rewrite is free to say this any way that reads.
+ */
+describe('the sentences parse', () => {
+  it('does not park a noun phrase after “on a server”', () => {
+    for (const entry of SERVER_CONTROLS) {
+      expect(entry.say, entry.local).not.toMatch(/\bon a server\s+(?:no|an?|the)\b/i)
+    }
+  })
+})

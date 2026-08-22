@@ -209,7 +209,19 @@ export const SERVER_CONTROLS: readonly ServerControlEntry[] = [
     local: 'Primary account',
     mirrors: [],
     verdict: 'cannot',
-    say: 'This app hands a shell on a server no account of its own, so a session runs as whichever login that server’s own home already holds.',
+    /*
+     * Read it aloud before changing it. This line has been wrong twice: it
+     * shipped as *“hands a shell on a server no account”*, was repaired on
+     * 2026-08-22 to *“no account of its own”* — and the repair fixed the
+     * missing words without fixing the sentence, which still had a shell being
+     * handed *an account*. Rendered on the pane the same day, it printed:
+     * “This app hands a shell on a server no account of its own, so…”
+     *
+     * The fact underneath is one clause long — nothing of ours has a login on
+     * that machine — so it is now said in one clause instead of hung off a
+     * verb that cannot carry it.
+     */
+    say: 'This app keeps no account of its own on a server, so a session runs as whichever login that server’s own home already holds.',
     traced: { file: 'src/main/profiles.ts', says: 'export function supportsProfiles' },
     group: 'coding',
   },

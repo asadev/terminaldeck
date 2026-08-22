@@ -389,3 +389,59 @@ describe('spacing groups the rows now that the card does not', () => {
     expect(betweenEntries).toBe(betweenRows)
   })
 })
+
+/* ------------------------------------------------- nothing runs off the pane */
+
+/**
+ * Two rules that only fail once somebody's own data is longer than the mock's.
+ *
+ * Both were found by rendering the packaged app against a scratch profile on
+ * 2026-08-22 rather than by reading this sheet, and both are invisible until the
+ * content grows: a pane with two short servers and a one-word value looks
+ * finished. The pins are here, beside the rest of this sheet's claims, because
+ * the failure is a *layout* one and jsdom applies no layout — the same argument
+ * the header of this file makes for reading the stylesheet as text.
+ */
+describe('the pane holds its own width', () => {
+  const scope = only(SETTINGS_RULES, (selector) => selector === '.settings-scope', 'the pill row')
+  const value = only(SETTINGS_RULES, (selector) => selector === '.settings-value', 'a stated value')
+
+  it('wraps the pill row instead of pushing the pane sideways', () => {
+    /*
+     * Measured before the fix, with five servers of ordinary length in the
+     * Servers pane: the run was 720px wide inside a 709px column, the last pill
+     * sat past the pane's right margin, and the whole panel reported
+     * `scrollWidth` 844 against `clientWidth` 833 — a horizontal scrollbar in
+     * Settings. `width: fit-content` cannot cause that on its own; the absence
+     * of a wrap and of a cap is what does.
+     */
+    expect(decl(scope, 'flex-wrap')).toBe('wrap')
+    expect(decl(scope, 'max-width')).toBe('100%')
+  })
+
+  it('lets a stated value be two lines rather than one that overflows', () => {
+    // `height` would clip. Servers puts whole sentences through this class —
+    // "A key, sealed by this computer and never shown on any screen." — and a
+    // fixed height means the second line is drawn over the row beneath.
+    expect(value.body).not.toMatch(/(?:^|;|\{)\s*height\s*:/)
+    expect(decl(value, 'min-height')).toBe('var(--control-h)')
+    expect(decl(value, 'text-align')).toBe('right')
+  })
+
+  it('makes the value give ground before the label does', () => {
+    /*
+     * `.settings-row-control` refuses to shrink, which is right for a control
+     * with a size of its own and wrong for a sentence: at an 820px window —
+     * legal, the app's minimum is 720 — **Kept on this computer** broke into
+     * three lines with its ⓘ orphaned on a fourth while the sentence beside it
+     * sat on one.
+     */
+    const control = only(
+      SETTINGS_RULES,
+      (selector) => selector === '.settings-row-control:has(> .settings-value)',
+      'a row whose control is a stated value',
+    )
+    expect(Number(decl(control, 'flex-shrink'))).toBeGreaterThanOrEqual(2)
+    expect(decl(control, 'min-width')).toBe('0')
+  })
+})

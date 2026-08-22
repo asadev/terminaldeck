@@ -383,6 +383,22 @@
   margin-top: 0;
 }
 
+/*
+ * The same cancellation, one window over.
+ *
+ * `ServerRecord` in Settings reuses this class for its **What to call it here**
+ * row, because the shape is genuinely the same one — a field and the button
+ * that saves it, side by side. What does not travel with the shape is the
+ * `margin-top` above, which exists to hold a card's buttons off the sentence
+ * over them and here has nothing over it at all: inside a settings row it just
+ * pushed the field down. Rendered on 2026-08-22 against the rows either side of
+ * it, the field and **Save** sat 6px below the centre of the label they belong
+ * to and the row stood 40px tall where every other row in the group is 34px.
+ */
+.settings-row-control > .servers-card-actions {
+  margin-top: 0;
+}
+
 /* ------------------------------------------------ zone one: is it OK -- */
 
 /* The calm zone. One fill, no outline, and the only pressable thing in it is
