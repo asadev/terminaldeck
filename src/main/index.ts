@@ -81,6 +81,7 @@ import { serveWindowCall } from './remote/machines/window-serve'
 import { createWindowAsks } from './remote/window-asks'
 import { routeWindowVerb, type WindowRoute } from './window-owner'
 import { registerServersIpc, type ServersIpc } from './servers/ipc'
+import { serverSummary } from './servers/summary'
 import { findHostPackage } from './servers/host-package'
 import { registerServerReachIpc, type ServerReachIpc } from './servers/reach'
 import { registerBrowserReachIpc, type ReachLedger } from './browser-reach'
@@ -2730,25 +2731,15 @@ function registerIpc(): void {
     /*
      * Named fields rather than the stored row, so that a field added to the
      * store later has to be *chosen* to cross the bridge instead of arriving
-     * because nobody stopped it. What crosses is the identity the server hands
-     * every client that dials it — public, and the thing §3.6's screen exists
-     * to let a person compare — and which *kind* of sign-in is kept, which is
-     * not the sign-in.
+     * because nobody stopped it.
+     *
+     * That field list used to be written out here. It is `serverSummary` in
+     * `servers/summary.ts` now — same list, same rule, one import — because
+     * nothing in the suite can reach inside this file, so the one place that
+     * decides which facts about a server a person may see was the one place
+     * with no test. It duly lost `port` for the whole life of the servers area.
      */
-    servers: () =>
-      serverStore.list().map((row) => ({
-        id: row.id,
-        name: row.name,
-        address: row.address,
-        username: row.username,
-        credential: row.credential,
-        ...(row.hostKey === null ? {} : { hostKey: row.hostKey }),
-        // Whether sessions on it may act on browser windows here. Chosen to
-        // cross, like the two above it: the page draws a tick for it, and a
-        // permission the screen cannot see the state of is a control that
-        // cannot be trusted.
-        drivesWindows: row.drivesWindows,
-      })),
+    servers: () => serverStore.list().map(serverSummary),
     store: serverStore,
     credentials: serverCredentials,
     facts: (serverId) => serverConnections.probe(serverId),

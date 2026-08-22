@@ -807,7 +807,8 @@ const api = {
    * **Nothing here ever carries a credential in either direction except the one
    * moment it is offered.** `addServer` takes the draft a person just typed and
    * hands it straight to the secure store; every other method names a server by
-   * id, and `listServers` answers names and addresses. A screen that held a
+   * id, and `listServers` answers names, addresses and the port each is reached
+   * on — where a machine is, never how to get in. A screen that held a
    * password would be a screenshot away from publishing it — the same argument
    * `renderer/machines/types.ts` already makes for paired devices.
    */

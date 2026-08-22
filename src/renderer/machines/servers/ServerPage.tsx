@@ -10,6 +10,7 @@ import { useServerSessionOpener } from './session-context'
 import { useServerRoom } from './useServers'
 import { asLogLines, asOutcome, asRefusal, succeeded } from './types'
 import { asOf, GROUP_HEADING, linkSentence, NOTHING_FOUND, overallSentence, readings } from './words'
+import { serverWhere } from '../../../shared/server-where'
 import type { ServerSessionOpener } from './session-context'
 import type {
   AbsentAction,
@@ -148,9 +149,10 @@ export function ServerPage({
         <Button onClick={onBack}>Back to machines</Button>
         <div className="servers-page-title">
           <h3 className="servers-page-name">{server.name}</h3>
-          <p className="servers-page-where">
-            {server.username === '' ? server.address : `${server.username} at ${server.address}`}
-          </p>
+          {/* The same line the list draws, from the same composer — this
+              page and the row under Machines are the two places a person
+              checks an address against each other. */}
+          <p className="servers-page-where">{serverWhere(server)}</p>
         </div>
         {state?.identityChanged !== true && link !== 'failed' && (
           /*

@@ -296,6 +296,22 @@ export interface Server {
   id: string
   name: string
   address: string
+  /**
+   * Which port it is reached on. **Absent means 22.**
+   *
+   * Absent is the ordinary reading for a main process older than the field —
+   * which, until this was fixed, was every build ever shipped: `ServerSummary`
+   * carried no port at all, so every surface in this window printed a bare
+   * address for a server on 2222 and there was nothing it could have done about
+   * it. See `shared/server-where.ts`, which owns the one rule for drawing it.
+   *
+   * Never composed into `address` on the way in. The two are separate facts on
+   * the wire and separate facts in the store, and folding them together here
+   * would leave the window holding a string it cannot take apart again —
+   * `AddServer` needs the address on its own, and so does anything that later
+   * wants to say *"this one is not on the usual port"* rather than print it.
+   */
+  port?: number
   username: string
   /** Absent when the list did not say. Never the credential itself. */
   credential?: CredentialKind
@@ -1330,6 +1346,17 @@ function asServer(value: unknown): Server | null {
   if (id === '' || address === '') return null
   const credential = CREDENTIALS.find((known) => known === value.credential)
   const fingerprint = isRecord(value.hostKey) ? text(value.hostKey.fingerprint) : ''
+  /*
+   * A port only when it is one a machine could be listening on, and otherwise
+   * *absent* rather than zero or `NaN`. Absent already means "the usual one"
+   * everywhere it is read, which is the right answer for a build that never
+   * sent the field; a number that survived narrowing but cannot be dialled
+   * would be printed after an address and would be a second wrong address.
+   */
+  const port =
+    typeof value.port === 'number' && Number.isInteger(value.port) && value.port >= 1 && value.port <= 65535
+      ? value.port
+      : undefined
   return {
     id,
     // A server with no name of its own is called by its address, which is what
@@ -1337,6 +1364,7 @@ function asServer(value: unknown): Server | null {
     // row nobody can tell apart from another empty row.
     name: text(value.name) || address,
     address,
+    ...(port === undefined ? {} : { port }),
     username: text(value.username),
     ...(credential === undefined ? {} : { credential }),
     ...(fingerprint === '' ? {} : { fingerprint }),

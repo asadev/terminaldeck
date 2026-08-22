@@ -33,6 +33,7 @@ import { randomUUID } from 'node:crypto'
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { protectSecretFile, writeSecretFile } from '../remote/secret-file'
+import { DEFAULT_SSH_PORT } from '../../shared/server-where'
 import {
   SERVER_WINDOW_DENIES_FILE,
   WindowDenies,
@@ -66,8 +67,16 @@ const MAX_SERVERS = 64
  */
 const MAX_PATH_LENGTH = 4096
 
-/** The port a server is reached on when nobody says otherwise. */
-export const DEFAULT_PORT = 22
+/**
+ * The port a server is reached on when nobody says otherwise.
+ *
+ * Re-exported rather than declared, under the name this file's callers and its
+ * own tests already use. The number itself lives in `shared/server-where.ts`,
+ * because the same 22 decides two things — what is *stored* when a person
+ * leaves the port box empty, and whether a screen prints `:22` after an address
+ * — and two literals is how a screen comes to disagree with a file.
+ */
+export const DEFAULT_PORT = DEFAULT_SSH_PORT
 
 /**
  * Which kind of sign-in is stored for a server, without any of it.

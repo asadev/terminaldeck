@@ -1299,6 +1299,24 @@ export interface ServerSummary {
   id: string
   name: string
   address: string
+  /**
+   * Which port it is reached on. **Absent means 22.**
+   *
+   * This field was missing for the whole life of the servers area, and its
+   * absence was not cosmetic: `StoredServer` has carried a port since the store
+   * was written and the add form has asked for one since the channel was, so
+   * the app dialled Asad's Office PC on 2222 correctly and then told every
+   * screen it was at `192.0.2.11`. Nothing downstream could have drawn the
+   * number, because nothing downstream was ever given it. An address that a
+   * person cannot paste into `ssh` is a wrong answer, not a short one.
+   *
+   * Optional for the same reason `credential` and `hostKey` are: a host with no
+   * store — a test, the headless build — has nothing to say about it, and
+   * absent reads as the default rather than as a blank. `serverAddress` in
+   * `shared/server-where.ts` composes every line drawn from it and states the
+   * rule: a default port is not printed, any other port always is.
+   */
+  port?: number
   username: string
   credential?: 'password' | 'key' | 'none'
   hostKey?: { algorithm: string; fingerprint: string }

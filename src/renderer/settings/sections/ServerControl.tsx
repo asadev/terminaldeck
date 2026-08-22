@@ -10,6 +10,7 @@ import {
   ServerDrivesWindows,
 } from '../../machines/servers/ServerAdvanced'
 import { ServerFolderPicker } from '../../machines/servers/ServerFolderPicker'
+import { serverAddress } from '../../../shared/server-where'
 import { ServerHost } from '../../machines/servers/ServerHost'
 import { ServerSetup } from '../../machines/servers/ServerSetup'
 import { useServerRoom, useServers } from '../../machines/servers/useServers'
@@ -555,7 +556,19 @@ export function ServerRecord({
 
   return (
     <Group title="This server">
-      <Row label="Address" control={<span className="settings-value">{server.address}</span>} />
+      {/*
+        `serverAddress`, not `server.address`. This row is the one this window
+        makes the strongest claim with — it is labelled **Address** and nothing
+        else on the pane qualifies it — and for a server on a non-default port
+        it printed a string that reaches a different machine, or nothing at all.
+        The composer prints `example.com` for the usual port and
+        `example.com:2222` for anything else; the rule and the argument for it
+        are in `shared/server-where.ts`.
+
+        No username here, unlike the row in Machines: the name signed in with is
+        the next row down, and this pane has the room to keep them apart.
+      */}
+      <Row label="Address" control={<span className="settings-value">{serverAddress(server)}</span>} />
       <Row
         label="Name you sign in with"
         control={<span className="settings-value">{server.username}</span>}

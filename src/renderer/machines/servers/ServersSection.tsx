@@ -1,6 +1,7 @@
 import { Button, Group, Notice } from '../../settings/controls'
 import { SERVER_ICON } from './glyph'
 import { asOf, overallSentence } from './words'
+import { serverWhere } from '../../../shared/server-where'
 import type { Server, ServerState } from './types'
 
 /**
@@ -183,9 +184,12 @@ export function ServerRow({
         </svg>
         <span className="servers-row-text">
           <span className="servers-row-name">{server.name}</span>
-          <span className="servers-row-where">
-            {server.username === '' ? server.address : `${server.username} at ${server.address}`}
-          </span>
+          {/* The composer, not a ternary written here. It was a ternary
+              written here and byte-identical on the server's own page, and
+              both were wrong the same way: a server on 2222 read as one on 22.
+              See `shared/server-where.ts` for the rule about which ports are
+              printed. */}
+          <span className="servers-row-where">{serverWhere(server)}</span>
         </span>
         {summary !== '' && (
           <span className="servers-row-state">

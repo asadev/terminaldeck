@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { AGENT_CATALOG } from '../../../shared/agent-catalog'
+import { serverWhere } from '../../../shared/server-where'
 import type { ProviderId } from '@shared/types'
 import { ProviderBadge } from '../../components/ProviderBadge'
 import { Notice } from '../controls'
@@ -188,10 +189,13 @@ export function ServerAccounts() {
             <span className="settings-server-name">{server.name}</span>
             {/* The address, because two servers can be called the same thing and
                 the address is what tells them apart — the same argument the
-                account rows make for printing a login rather than a slug. */}
-            <span className="settings-server-where">
-              {server.username} at {server.address}
-            </span>
+                account rows make for printing a login rather than a slug.
+
+                Which is exactly why it goes through the composer: two servers
+                on one box, told apart only by their port, were drawn here as
+                two identical lines. And this row's own ternary was missing
+                too — an empty username left the line starting with " at ". */}
+            <span className="settings-server-where">{serverWhere(server)}</span>
           </summary>
           <ServerLogins name={server.name} look={looks[server.id]} />
           {/*
