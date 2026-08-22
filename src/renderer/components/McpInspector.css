@@ -928,3 +928,267 @@ button.mcp-item-head:hover {
    in anywhere… We want simplicity. Let the smart people use it."* The one caption
    worth keeping is behind the dot beside **Save it for**, and the confirmation of
    an add is the row appearing. */
+
+/* ----------------------------------------------------------------- store -- */
+
+/* The store is the second tab of this page, so it inherits the page's
+   vocabulary rather than bringing its own: the same `.mcp-head` bar, the same
+   `.mcp-tag` chips, the same two-press Remove. What is new below is only what
+   the servers list has no equivalent of — a row that is a product rather than a
+   process, a run of facts under it, and the fields a row needs before it can be
+   installed.
+
+   The class names deliberately rhyme with `browser/BrowserWorkspace.css`'s
+   `.bw-store-*`, because the two stores are meant to read as one product —
+   *"add one like in our MCP store"* — and a reader moving between the two files
+   should find the same nouns. They are not shared: that stylesheet is scoped to
+   the browser window's own chrome and this page's tokens are the settings
+   window's. Two identical-looking rules with different parents is the honest
+   arrangement; one rule reaching across two windows is not. */
+
+.mcp-store {
+  display: flex;
+  flex-direction: column;
+}
+
+/* What was looked for on this machine and what was found — three binaries and
+   the environment probe. A statement, not a warning, so nothing here is
+   coloured until something is actually missing. */
+.mcp-store-runtimes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-4);
+  margin: var(--sp-2) 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--t-footnote);
+}
+
+.mcp-store-runtimes > li {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-15);
+  min-width: 0;
+}
+
+.mcp-store-runtimes code {
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+}
+
+/* A runtime that is not here is stated in the warning colour rather than the
+   critical one: a person with no Docker is not doing anything wrong, and half
+   this catalogue does not care. */
+.mcp-store-runtimes > li[data-found='false'] code {
+  color: var(--color-warning);
+}
+
+.mcp-store-section {
+  margin-top: var(--sp-6);
+}
+
+.mcp-store-heading {
+  margin: 0;
+  font-size: var(--t-callout);
+  font-weight: var(--w-semibold);
+  color: var(--text-primary);
+}
+
+.mcp-store-note {
+  max-width: 78ch;
+  margin: var(--sp-1) 0 0;
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}
+
+.mcp-store-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-05);
+  margin: var(--sp-3) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* The same row geometry as `.mcp-server` next door, so the two tabs do not read
+   as two applications. */
+.mcp-store-row {
+  padding: var(--sp-3);
+  border-radius: var(--radius-lg);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.mcp-store-row:hover {
+  background: var(--bg-hover);
+}
+
+/* A row with nothing to press is quieter, and quieter is the whole message: it
+   is not broken, it is not for this machine. */
+.mcp-store-row[data-state='unavailable'],
+.mcp-store-row[data-state='taken'] {
+  opacity: 0.75;
+}
+
+.mcp-store-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.mcp-store-name {
+  font-family: var(--font-mono);
+  font-size: var(--t-body);
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.mcp-store-version {
+  font-size: var(--t-caption);
+  letter-spacing: var(--t-caption-ls);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+/* Installed is said on the row, not implied by which button is drawn. */
+.mcp-store-state {
+  flex-shrink: 0;
+  padding: 0 var(--sp-15);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  font-size: var(--t-caption);
+  letter-spacing: var(--t-caption-ls);
+  color: var(--accent);
+}
+
+.mcp-grow {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* The one accent on a row: the thing you came here to press. Same metrics as
+   `.mcp-add-open`, which is this page's other primary. */
+.mcp-store-install {
+  flex-shrink: 0;
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-3);
+  border: none;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: var(--t-footnote);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    opacity var(--dur-fast) var(--ease);
+}
+
+.mcp-store-install:hover:not(:disabled) {
+  background: var(--accent-dim);
+}
+
+.mcp-store-install:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.mcp-store-install:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.mcp-store-summary {
+  max-width: 78ch;
+  margin: var(--sp-1) 0 0;
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}
+
+/* Source, package, how it runs, what it needs, and the exact command. Two
+   columns of label-and-value, because these are read by scanning down the
+   labels rather than across the sentence. */
+.mcp-store-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(24rem, 1fr));
+  gap: var(--sp-1) var(--sp-6);
+  margin: var(--sp-2) 0 0;
+  font-size: var(--t-footnote);
+}
+
+.mcp-store-facts > div {
+  display: flex;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.mcp-store-facts dt {
+  flex: 0 0 6.5rem;
+  color: var(--text-muted);
+}
+
+.mcp-store-facts dd {
+  margin: 0;
+  min-width: 0;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.mcp-store-facts code {
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+}
+
+.mcp-store-facts a {
+  color: var(--text-secondary);
+  text-decoration-color: var(--border-strong);
+}
+
+.mcp-store-facts a:hover {
+  color: var(--accent);
+}
+
+/* The fields a row needs, on the row, above the button — never behind a
+   disclosure. A required token is the first thing somebody has to decide about
+   and hiding it one click away is how a store ends up with an Install that
+   fails. */
+.mcp-store-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(20rem, 1fr));
+  gap: var(--sp-3) var(--sp-6);
+  margin: var(--sp-3) 0 0;
+}
+
+.mcp-field-hint {
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+  color: var(--text-muted);
+}
+
+/* Something true about a row that Install does not fix — archived, metered,
+   writes to your repository. Warning-coloured because it is a thing to weigh,
+   not a failure. */
+.mcp-store-caveat {
+  max-width: 78ch;
+  margin: var(--sp-2) 0 0;
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+  color: var(--color-warning);
+}
+
+/* What the last press on this row said. It stays until the next press, and it
+   is the only place a success is ever printed — the row redrawing as installed
+   is the other half of the confirmation. */
+.mcp-store-said {
+  max-width: 78ch;
+  margin: var(--sp-2) 0 0;
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}
+
+.mcp-store-row > .mcp-note,
+.mcp-store-row > .mcp-run-hint {
+  max-width: 78ch;
+}

@@ -996,6 +996,12 @@ describe('registerMcpIpc', () => {
       // The panel's second write. It exists because the page could add a server
       // and then had to tell the reader to open a terminal to remove one.
       'mcp:remove',
+      // The store's two: what this machine can run, and installing one of them.
+      // There is deliberately no `mcp:store-remove` — `mcp:remove` above already
+      // takes the name and the scope a store row has once it is installed, and
+      // two paths to one file are two chances to write it differently.
+      'mcp:store',
+      'mcp:store-install',
     ])
   })
 
@@ -1003,7 +1009,7 @@ describe('registerMcpIpc', () => {
     const ipc = fakeIpcMain()
     registerMcpIpc(ipc as unknown as Electron.IpcMain)
     expect(() => registerMcpIpc(ipc as unknown as Electron.IpcMain)).not.toThrow()
-    expect(ipc.handlers.size).toBe(9)
+    expect(ipc.handlers.size).toBe(11)
   })
 
   it('refuses a relative project path instead of resolving it against the app cwd', () => {

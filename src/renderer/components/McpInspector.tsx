@@ -18,6 +18,8 @@ import { PageEmpty, PageNote } from './PageEmpty'
 import { PageScope } from './PageScope'
 import { HoverNote } from './HoverNote'
 import { pickSurvives, reportableMachines, useMachineServers, type MachineTarget } from './mcp-machines'
+import { McpStore } from './McpStore'
+import { mcpStoreAvailable, resolveMcpStoreApi, type McpStoreApi } from './mcp-store-bridge'
 import './McpInspector.css'
 
 /* ------------------------------------------------------------------ types -- */
@@ -137,6 +139,16 @@ export interface McpInspectorProps {
   projectPath?: string | null
   /** Injectable for tests; defaults to the preload bridge on `window.deck`. */
   bridge?: McpBridge
+  /**
+   * The store's slice of the bridge, resolved separately from {@link bridge}.
+   *
+   * Separately, and that is the whole point: `resolveBridge` above returns
+   * `null` unless every one of `BRIDGE_METHODS` is present, which is right for
+   * the methods this page cannot draw without and would be catastrophic for a
+   * new one — a preload older than the store would cost the whole MCP page
+   * rather than one tab. See `mcp-store-bridge.ts`.
+   */
+  store?: McpStoreApi
 }
 
 /* ---------------------------------------------------------------- helpers -- */
@@ -594,8 +606,22 @@ function MachineServerList({ target }: { target: MachineTarget }) {
   )
 }
 
-export function McpInspector({ projectPath = null, bridge }: McpInspectorProps) {
+/** The MCP page's two tabs: what is configured, and what can be. */
+export type McpView = 'servers' | 'store'
+
+export function McpInspector({ projectPath = null, bridge, store }: McpInspectorProps) {
   const api = useMemo(() => bridge ?? resolveBridge(), [bridge])
+  const storeApi = useMemo(() => store ?? resolveMcpStoreApi(), [store])
+  const storeWired = mcpStoreAvailable(storeApi)
+  /**
+   * Which tab is showing.
+   *
+   * State rather than a route, for the same reason `machinePick` is: it is a
+   * question about what you are reading now, and a page restored into a Store
+   * tab pointed at a build whose preload no longer carries it would be worse
+   * than one that starts on the list.
+   */
+  const [view, setView] = useState<McpView>('servers')
 
   const [servers, setServers] = useState<McpServerStatus[]>([])
   const [loading, setLoading] = useState(true)
@@ -872,8 +898,59 @@ export function McpInspector({ projectPath = null, bridge }: McpInspectorProps) 
   if (target !== null) {
     return (
       <div className="mcp">
+        {/*
+          No tab switch here, and the omission is the same argument
+          `MachineServerList` already makes about Add and Remove: installing a
+          server runs a command line tool in a folder on the machine that owns
+          the file, and nothing on this wire can do that. A Store tab pointed at
+          another computer would be a store whose only button cannot be pressed.
+        */}
         <MachinePills targets={targets} here={here} pick={target.machineId} onPick={setMachinePick} />
         <MachineServerList target={target} />
+      </div>
+    )
+  }
+
+  /**
+   * The two tabs, drawn only when the store is actually in this build.
+   *
+   * A run of buttons of which one is on — the same control the machine row
+   * above uses, for the same reason it does: this asks *which view of MCP
+   * servers am I reading*, which is the question `.settings-scope` answers
+   * everywhere else in the window. A build whose preload predates the store
+   * draws nothing here rather than a tab that opens an apology, which is his
+   * standing rule: *"a dropdown only when some exist. Hide it when empty."*
+   */
+  const tabs = storeWired ? (
+    <SegmentedSwitch
+      options={[
+        { id: 'servers' as McpView, label: 'Your servers', title: `What is configured on ${here}` },
+        { id: 'store' as McpView, label: 'Store', title: `Servers you can install on ${here}` },
+      ]}
+      value={view}
+      onChange={(next) => {
+        // Back to this machine on the way into the store: the store installs
+        // here, and a pick left pointing at a PC would send the page straight
+        // back out to that machine's read-only list the moment the tab changed.
+        if (next === 'store') setMachinePick(null)
+        setView(next)
+      }}
+      label="Which view of MCP servers to show"
+    />
+  ) : null
+
+  if (view === 'store' && storeWired) {
+    return (
+      <div className="mcp">
+        {tabs}
+        <McpStore
+          api={storeApi}
+          projectPath={projectPath}
+          here={here}
+          /* Anything written in the store changes the list on the other tab, so
+             the other tab is re-read rather than left stale behind it. */
+          onChanged={() => void refresh()}
+        />
       </div>
     )
   }
@@ -882,6 +959,7 @@ export function McpInspector({ projectPath = null, bridge }: McpInspectorProps) 
 
   return (
     <div className="mcp">
+      {tabs}
       {/* Null, always: past the return above, the page is this machine's. */}
       <MachinePills targets={targets} here={here} pick={null} onPick={setMachinePick} />
       {/* What this list is: the configuration on this machine, for this folder.
