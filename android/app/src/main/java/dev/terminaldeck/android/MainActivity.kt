@@ -34,8 +34,10 @@ import androidx.navigation.navArgument
 import dev.terminaldeck.android.protocol.HostPlatform
 import dev.terminaldeck.android.transfer.PickedFile
 import dev.terminaldeck.android.ui.CredentialPromptSheet
+import dev.terminaldeck.android.ui.DevicesScreen
 import dev.terminaldeck.android.ui.GitHubSheet
 import dev.terminaldeck.android.ui.PairingScreen
+import dev.terminaldeck.android.ui.ServerSettingsScreen
 import dev.terminaldeck.android.ui.SessionListScreen
 import dev.terminaldeck.android.ui.TerminalScreen
 import dev.terminaldeck.android.ui.theme.TerminalDeckTheme
@@ -105,6 +107,15 @@ private const val ROUTE_SESSIONS = "sessions"
 private const val ROUTE_TERMINAL = "terminal/{hostId}/{sessionId}"
 private const val ARG_HOST_ID = "hostId"
 private const val ARG_SESSION_ID = "sessionId"
+
+/**
+ * Devices and This-server act on whichever machine is selected — the same machine the session list
+ * is showing — so they are plain routes without an id in them. If the selection changes underneath
+ * to a machine that does not serve one, the screen reads a null view and pops itself, the same way
+ * the terminal route handles a session that has gone.
+ */
+private const val ROUTE_DEVICES = "devices"
+private const val ROUTE_SETTINGS = "server-settings"
 
 @Composable
 fun TerminalDeckApp(
@@ -224,8 +235,49 @@ fun TerminalDeckApp(
                 onRenameHost = viewModel::rename,
                 onForgetHost = viewModel::forget,
                 onAddHost = viewModel::beginAddingHost,
+                onCloseSession = { session -> viewModel.endSession(session.id) },
+                // The read is triggered by the screen itself, keyed on the live connection, so it
+                // also re-reads if the socket drops and returns while the screen is open.
+                onDevices = { navController.navigate(ROUTE_DEVICES) },
+                onServerSettings = { navController.navigate(ROUTE_SETTINGS) },
                 gitHubLogin = state.gitHubAccount?.login,
                 onGitHub = { github = true },
+            )
+        }
+
+        composable(ROUTE_DEVICES) {
+            // The selected machine's roster. Null when the machine on screen does not serve one —
+            // which can happen if the selection changed to an older machine while this was open — so
+            // it pops itself rather than showing an empty shell, the terminal route's own rule.
+            val view = state.devices
+            if (view == null) {
+                LaunchedEffect(Unit) { navController.popBackStack() }
+                return@composable
+            }
+            // Read on entry, and again if the socket drops and comes back while this is open — a
+            // no-op when the roster is already in hand. See DeviceRosterController.ensureRead.
+            LaunchedEffect(state.live) { if (state.live) viewModel.openDevices() }
+            DevicesScreen(
+                view = view,
+                machineLabel = state.hostLabel,
+                onBack = { navController.popBackStack() },
+                onRefresh = viewModel::refreshDevices,
+                onRevoke = viewModel::revokeDevice,
+            )
+        }
+
+        composable(ROUTE_SETTINGS) {
+            val view = state.serverSettings
+            if (view == null) {
+                LaunchedEffect(Unit) { navController.popBackStack() }
+                return@composable
+            }
+            LaunchedEffect(state.live) { if (state.live) viewModel.openServerSettings() }
+            ServerSettingsScreen(
+                view = view,
+                machineLabel = state.hostLabel,
+                onBack = { navController.popBackStack() },
+                onApply = viewModel::applyServerSetting,
             )
         }
 

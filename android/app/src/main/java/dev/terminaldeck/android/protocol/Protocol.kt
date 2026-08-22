@@ -210,6 +210,18 @@ object Capability {
     /** The desktop can start a session. Answers `create` with `created`. */
     const val CREATE = "create"
 
+    /**
+     * The desktop can end a session this phone asks it to. Answers `close` with `closed`.
+     *
+     * Gated like every other verb the phone sends: the ✕ is drawn only when this appeared in
+     * `welcome.capabilities`. It matters more here than anywhere else because closing is not
+     * undoable — a Close that turned out to be refused would be a control that either did nothing or
+     * destroyed something, with no way to tell which until afterwards. Two hosts withhold it and both
+     * are real: a session layer that cannot end a session, and the public demo box that hands
+     * strangers a shell and offers `create` without this one.
+     */
+    const val CLOSE = "close"
+
     /** The desktop can list its own listening ports and tunnel to one. Not implemented here yet. */
     const val LOCALHOST = "localhost"
 
@@ -233,6 +245,28 @@ object Capability {
      * exactly the thirty-second stall on a `git push` the feature exists to not have.
      */
     const val CREDENTIAL = "credential"
+
+    /**
+     * The roster of every device signed in here, and the one verb that takes one away.
+     *
+     * A desktop lists it in `welcome.capabilities` for one of the owner's own devices only — never a
+     * guest — and a phone that sees it may ask for the list (`devices.list`), remove a device
+     * (`devices.revoke`), and hear the unsolicited `devices.changed` when the roster moves. There is
+     * no approve verb: a device is admitted at the trusted surface and nowhere else, so the wire
+     * carries revoke, which doubles as deny, and never an approve.
+     */
+    const val DEVICES = "devices"
+
+    /**
+     * The two settings this machine owns rather than each device: the coding tool a fresh session
+     * starts with, and whether the last layout is restored at launch.
+     *
+     * Changing one from the phone is changing the *server*, not the phone's own copy of it — the
+     * same on every device that reaches it. The closed allowlist is [dev.terminaldeck.android
+     * .protocol.ServerSetting], which is the whole reason `remote.*` and `advanced.*` are
+     * unrepresentable here rather than merely refused.
+     */
+    const val SETTINGS = "settings"
 
     /**
      * What this build tells a desktop it can do, in `hello.capabilities`.

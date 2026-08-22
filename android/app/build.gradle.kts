@@ -92,6 +92,10 @@ android {
 
     buildFeatures {
         compose = true
+        // For BuildConfig.VERSION_NAME — the one number HostVersion compares against the host's
+        // `welcome.appVersion` to decide the single honest "update this server from a desktop"
+        // sentence. Nothing else reads BuildConfig.
+        buildConfig = true
     }
 
     packaging {

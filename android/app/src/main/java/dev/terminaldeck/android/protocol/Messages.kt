@@ -41,6 +41,114 @@ data class RemoteSession(
         RemoteSessionView(id = id, title = title, cwd = cwd, provider = provider, status = status, exitCode = exitCode)
 }
 
+/**
+ * The two settings this machine owns rather than each device, on the wire.
+ *
+ * Transcribed from `SERVER_SETTINGS` / `ServerSettingKey` in `src/main/remote/protocol.ts`. It is a
+ * **closed allowlist**, and that is the point rather than a convenience: the desktop's parser
+ * narrows `settings.apply.key` to exactly these two, refusing any other as `bad-message`, which is
+ * what makes `remote.*` and `advanced.debugMode` unrepresentable here rather than merely rejected. A
+ * key this phone cannot even spell is a key it cannot send by accident.
+ *
+ * The enum order is the order the section draws in and the order [ServerSetting.merge] keeps, so the
+ * two rows never reshuffle between one push and the next.
+ */
+@Serializable
+enum class ServerSettingKey {
+    @SerialName("agents.defaultProvider")
+    DefaultProvider,
+
+    @SerialName("general.restoreSessions")
+    RestoreSessions,
+}
+
+/**
+ * One server-owned setting, on the wire.
+ *
+ * `value` is stringly, like `controls.apply` over there — `"true"`/`"false"` for the boolean, a
+ * provider id for the chooser. `options` is present only for a chooser and holds the provider ids
+ * this host can actually start, so the picker offers what will run rather than a fixed set that then
+ * fails after the tap. Null and absent are the same fact — no chooser — and `explicitNulls = false`
+ * keeps a null off the wire.
+ */
+@Serializable
+data class ServerSettingWire(
+    /**
+     * The wire key, left a **free string** rather than a [ServerSettingKey] on purpose.
+     *
+     * Decoding it as the enum would fail the whole `settings.state` frame the day a future desktop
+     * adds a third server-owned setting — turning the additive rule this file teaches everywhere else
+     * into a phone that cannot read its two known settings because a third one it has never heard of
+     * rode along. So an inbound row keeps its raw key and [known] maps it; [merge] drops the ones
+     * this build cannot draw. Outbound, `settings.apply` carries a typed [ServerSettingKey] and so
+     * cannot name a key the desktop's parser would refuse.
+     */
+    val key: String,
+    val value: String,
+    val options: kotlin.collections.List<String>? = null,
+) {
+    /** The typed key when this build knows it, or null for a setting added after this build. */
+    val known: ServerSettingKey? get() = keyOf(key)
+
+    companion object {
+        /** Map a wire key onto [ServerSettingKey], or null when this build does not know it. */
+        fun keyOf(wire: String): ServerSettingKey? = when (wire) {
+            "agents.defaultProvider" -> ServerSettingKey.DefaultProvider
+            "general.restoreSessions" -> ServerSettingKey.RestoreSessions
+            else -> null
+        }
+
+        /**
+         * Merge machine-sent rows into a held set, replacing by key and keeping [ServerSettingKey]'s
+         * declaration order so the section never reshuffles on a push.
+         *
+         * A pure function so the one piece of receiving with a decision in it can be tested where a
+         * composable cannot. Rows whose key this build does not [known] are dropped here rather than
+         * failing the frame — the additive rule the whole protocol is built on.
+         */
+        fun merge(
+            current: kotlin.collections.List<ServerSettingWire>?,
+            next: kotlin.collections.List<ServerSettingWire>,
+        ): kotlin.collections.List<ServerSettingWire> {
+            val byKey = LinkedHashMap<ServerSettingKey, ServerSettingWire>()
+            current?.forEach { row -> row.known?.let { byKey[it] = row } }
+            next.forEach { row -> row.known?.let { byKey[it] = row } }
+            return ServerSettingKey.entries.mapNotNull { byKey[it] }
+        }
+    }
+}
+
+/**
+ * One row of the device roster, on the wire.
+ *
+ * Transcribed from `DeviceRosterRow`. [kind] and [status] are left as free strings rather than
+ * enums for the same reason [RemoteSession.status] is: the vocabulary belongs to the desktop's trust
+ * store, and modelling a closed set here would turn the desktop adding a state into a phone that
+ * cannot parse the roster at all. The two values each has today are read through the predicates
+ * below.
+ *
+ * `addedAt` and `lastSeenAt` are epoch milliseconds; `lastSeenAt` is null until the device has
+ * attached at least once. `fingerprint` is the six-group key form a person can read and compare
+ * against what the device itself shows, or null for a device paired before it had one.
+ */
+@Serializable
+data class DeviceRosterRow(
+    val id: String,
+    val name: String,
+    val kind: String,
+    val status: String,
+    val addedAt: Long = 0,
+    val lastSeenAt: Long? = null,
+    val connected: Boolean = false,
+    val fingerprint: String? = null,
+) {
+    /** Waiting to be approved at the desk — the only thing to do about it is Remove, which denies. */
+    val isPending: Boolean get() = status == "pending"
+
+    /** One of the owner's own devices, as opposed to a guest lent a folder. */
+    val isMine: Boolean get() = kind == "mine"
+}
+
 @OptIn(ExperimentalSerializationApi::class)
 @Serializable
 @JsonClassDiscriminator("t")
@@ -138,6 +246,25 @@ sealed interface ClientMessage {
         val cols: Int? = null,
         val rows: Int? = null,
     ) : ClientMessage
+
+    /* ---- capability `close`. Never sent unless the desktop offered it. -------------------- */
+
+    /**
+     * End a session on the desktop.
+     *
+     * Sent **only** when `welcome.capabilities` contained [Capability.CLOSE]; the ✕ is absent
+     * otherwise, and a client that sent this to a host which never advertised it would be closed for
+     * `bad-message`.
+     *
+     * There is deliberately no reason string and no choice of signal. How a session exits is the
+     * desktop's own ✕ behaviour, one behaviour rather than two that can drift, and a reason would be
+     * attacker-chosen text about to be printed in the desktop's own chrome for nothing. A refusal —
+     * the host cannot close, or this device may not touch that session — comes back as a plain
+     * `error`, not a `close.failed`.
+     */
+    @Serializable
+    @SerialName("close")
+    data class Close(val id: String) : ClientMessage
 
     /* ---- capability `upload`. Never sent unless the desktop offered it. ------------------- */
 
@@ -242,6 +369,62 @@ sealed interface ClientMessage {
     @SerialName("credential.deny")
     data class CredentialDeny(val id: String, val reason: CredentialDenial) : ClientMessage
 
+    /* ---- capability `devices`. The roster, and the one verb that removes a row. ---------- */
+
+    /**
+     * List every device signed in on the desktop.
+     *
+     * Sent only when `welcome.capabilities` named [Capability.DEVICES] — which the desktop puts there
+     * for one of the owner's own devices and never a guest, so a phone that sees it is both able to
+     * manage the roster and entitled to. [rid] names *this* question so two screens over one machine
+     * cannot resolve each other's reads. Answered with `devices.rows`.
+     */
+    @Serializable
+    @SerialName("devices.list")
+    data class DevicesList(val rid: String) : ClientMessage
+
+    /**
+     * Remove one device from the desktop's roster.
+     *
+     * Its credential is revoked and its sockets dropped — the same cascade the desktop's own Settings
+     * runs. [device] is the id to remove; revoke doubles as deny for a pending row, because there is
+     * no approve verb on this wire. Answered with `devices.revoked`, carrying the fresh roster —
+     * unless the phone revoked *itself*, in which case the socket simply closes and that is the
+     * confirmation.
+     */
+    @Serializable
+    @SerialName("devices.revoke")
+    data class DevicesRevoke(val rid: String, val device: String) : ClientMessage
+
+    /* ---- capability `settings`. The two settings the machine owns. ----------------------- */
+
+    /**
+     * Read the machine's two server-owned settings.
+     *
+     * Sent only when `welcome.capabilities` named [Capability.SETTINGS]. [rid] names this read.
+     * Answered with `settings.state`, and the `settings.changed` push then keeps the rows fresh
+     * without a poll.
+     */
+    @Serializable
+    @SerialName("settings.read")
+    data class SettingsRead(val rid: String) : ClientMessage
+
+    /**
+     * Change one of the machine's server-owned settings, over there.
+     *
+     * [key] is narrowed to [ServerSettingKey] by construction, so a frame naming any other key is
+     * unrepresentable here rather than merely refused. [value] is stringly, like `controls.apply`:
+     * `"true"`/`"false"` for the boolean, a provider id for the chooser. The outcome comes back as
+     * `settings.applied`; every other eligible connection hears a `settings.changed`.
+     */
+    @Serializable
+    @SerialName("settings.apply")
+    data class SettingsApply(
+        val rid: String,
+        val key: ServerSettingKey,
+        val value: String,
+    ) : ClientMessage
+
     companion object {
         /**
          * Attach with a size when there is one, without when there is not.
@@ -340,6 +523,34 @@ sealed interface ServerMessage {
          * explains why nothing starts.
          */
         val folders: kotlin.collections.List<String>? = null,
+        /**
+         * What build this desktop is running, e.g. `"0.10.0"`. **Absent means older.**
+         *
+         * Additive and optional like [capabilities] and [hostPlatform], and read defensively: it is
+         * display text and nothing else — never an identity, never a thing to act on — bounded on
+         * arrival because it renders on a chip beside terminal output. There is deliberately no
+         * update verb anywhere on this wire to pair it with; what it buys a client is the one honest
+         * sentence it can say when its own build is ahead — *update this server from a desktop*. See
+         * [HostVersion].
+         */
+        val appVersion: String? = null,
+        /**
+         * Which shell is serving — `"desktop"` or `"headless"`. **Absent, or any other value, means
+         * older.**
+         *
+         * Left a free string rather than an enum so an unrecognised value drops to "no noun" instead
+         * of failing the whole `welcome` parse — the same rule [hostPlatform] keeps. Read through
+         * [HostVersion.hostKindNoun], which turns `headless` into *server* and `desktop` into
+         * *desktop* and anything else into nothing.
+         */
+        val hostKind: String? = null,
+        /**
+         * What this machine calls **itself** — its hostname. Display text, never an identity.
+         *
+         * Optional and additive; a client that reads nothing here keeps whatever name it already had
+         * for the machine (the platform noun, or the relay slot).
+         */
+        val hostName: String? = null,
     ) : ServerMessage
 
     @Serializable
@@ -402,6 +613,21 @@ sealed interface ServerMessage {
     @Serializable
     @SerialName("created")
     data class Created(val session: RemoteSession) : ServerMessage
+
+    /* ---- capability `close` --------------------------------------------------------------- */
+
+    /**
+     * The desktop ended the session this phone asked it to end.
+     *
+     * The whole row is not carried — just the id — because the phone already holds the row and this
+     * only removes it. It is removed on *this* frame and never on the tap: an optimistic removal over
+     * a refusal (a folder taken back, a session that had already exited) would leave a live session
+     * missing from the list with no way back but a reconnect. Every other device is told with a plain
+     * `sessions`. A refusal is a plain `error`, not a `close.failed`.
+     */
+    @Serializable
+    @SerialName("closed")
+    data class Closed(val id: String) : ServerMessage
 
     /**
      * This device's folder list changed while it was connected.
@@ -519,6 +745,78 @@ sealed interface ServerMessage {
         val repo: String? = null,
         val operation: CredentialOperation = CredentialOperation.Write,
         val prompt: Boolean = false,
+    ) : ServerMessage
+
+    /* ---- capability `devices` ------------------------------------------------------------- */
+
+    /** The answer to one `devices.list`, and only ever to one. [rid] is echoed. */
+    @Serializable
+    @SerialName("devices.rows")
+    data class DevicesRows(
+        val rid: String,
+        val devices: kotlin.collections.List<DeviceRosterRow> = emptyList(),
+    ) : ServerMessage
+
+    /**
+     * The answer to one `devices.revoke`.
+     *
+     * [ok] is false when the id named nothing or was already revoked; [message] is a sentence for
+     * either outcome, written by the desktop; the fresh roster rides along so the screen redraws
+     * without a second ask. Not sent when the phone revoked itself — that socket is already closing.
+     */
+    @Serializable
+    @SerialName("devices.revoked")
+    data class DevicesRevoked(
+        val rid: String,
+        val ok: Boolean = false,
+        val message: String = "",
+        val devices: kotlin.collections.List<DeviceRosterRow> = emptyList(),
+    ) : ServerMessage
+
+    /**
+     * The roster moved — a device paired, was approved, or was revoked — pushed without being asked.
+     *
+     * Sent only to a connection that named [Capability.DEVICES] and whose device is one of the
+     * owner's own, so a build that never claimed it never sees the frame.
+     */
+    @Serializable
+    @SerialName("devices.changed")
+    data class DevicesChanged(
+        val devices: kotlin.collections.List<DeviceRosterRow> = emptyList(),
+    ) : ServerMessage
+
+    /* ---- capability `settings` ------------------------------------------------------------ */
+
+    /** The answer to one `settings.read`. [settings] is the whole server-owned set. */
+    @Serializable
+    @SerialName("settings.state")
+    data class SettingsState(
+        val rid: String,
+        val settings: kotlin.collections.List<ServerSettingWire> = emptyList(),
+    ) : ServerMessage
+
+    /**
+     * What happened to one `settings.apply`, in the machine's own words.
+     *
+     * [ok] says whether the write took; [message] is the sentence to show either way — a refused
+     * provider id comes back here with `ok=false` and the reason, never a silent swap. [setting] is
+     * the row as it stands now, so the pane settles on the machine's truth rather than on what was
+     * pressed, and a refused apply reverts by construction.
+     */
+    @Serializable
+    @SerialName("settings.applied")
+    data class SettingsApplied(
+        val rid: String,
+        val ok: Boolean = false,
+        val message: String = "",
+        val setting: ServerSettingWire,
+    ) : ServerMessage
+
+    /** A server-owned setting changed here — pushed, unsolicited, to every device that may hear it. */
+    @Serializable
+    @SerialName("settings.changed")
+    data class SettingsChanged(
+        val settings: kotlin.collections.List<ServerSettingWire> = emptyList(),
     ) : ServerMessage
 }
 

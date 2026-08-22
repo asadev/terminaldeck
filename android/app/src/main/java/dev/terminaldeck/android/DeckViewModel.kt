@@ -23,6 +23,8 @@ import dev.terminaldeck.android.pairing.Rendezvous
 import dev.terminaldeck.android.protocol.Capability
 import dev.terminaldeck.android.protocol.ClientMessage
 import dev.terminaldeck.android.protocol.HostPlatform
+import dev.terminaldeck.android.protocol.HostVersion
+import dev.terminaldeck.android.protocol.ServerSettingKey
 import dev.terminaldeck.android.protocol.pasteRefusal
 import dev.terminaldeck.android.protocol.RemoteSessionView
 import dev.terminaldeck.android.protocol.ServerMessage
@@ -119,6 +121,13 @@ class DeckViewModel(
      * test that reached it would dial the internet from whatever machine ran the suite.
      */
     private val lookup: suspend (String, String) -> Rendezvous.Offer? = Rendezvous::lookupAt,
+    /**
+     * This app's own build number, for the one comparison [DeckUiState.serverBehindSentence] makes
+     * against the machine's `welcome.appVersion`. A plain string so a test can drive both sides of
+     * it; the real one is `BuildConfig.VERSION_NAME`, injected by [factory]. Empty is the honest
+     * non-answer a build with no stamp gives, and [HostVersion] refuses to compare against it.
+     */
+    private val clientVersion: String = "",
     private val transportFactory: (CoroutineScope, String, DeviceVault) -> DeckTransport,
 ) : ViewModel() {
 
@@ -229,6 +238,22 @@ class DeckViewModel(
             record = record,
         )
         links[record.hostId] = link
+        // The two request clusters, one per machine. They read this link's live capability set
+        // through a lambda rather than a snapshot, so a cluster created before the welcome draws
+        // nothing until the welcome names its capability and lights up the moment it does. Their
+        // timers run on the view model's scope and are torn down by [HostLink.stop].
+        link.devices = DeviceRosterController(
+            send = { link.transport.send(it) },
+            capabilities = { link.capabilities },
+            expiry = coroutineExpiry(viewModelScope),
+            onChange = { publish() },
+        )
+        link.settings = ServerSettingsController(
+            send = { link.transport.send(it) },
+            capabilities = { link.capabilities },
+            expiry = coroutineExpiry(viewModelScope),
+            onChange = { publish() },
+        )
         // Collected per machine, with the link captured, so a frame cannot arrive without the
         // answer to "which computer said this" already in hand.
         viewModelScope.launch { link.transport.state.collect { onState(link, it) } }
@@ -312,6 +337,22 @@ class DeckViewModel(
                 // is a machine that has been downgraded, and holding the old list would leave the
                 // picker enforcing a rule that is no longer there.
                 link.grantedFolders = message.folders
+                // What build the machine is, so the phone can say the one honest thing it has to say
+                // when its own build is ahead — see [HostVersion]. Bounded on arrival because it
+                // renders on a chip beside terminal output; "" is a machine older than the field.
+                link.appVersion = message.appVersion?.take(64).orEmpty()
+                link.hostKind = message.hostKind?.take(32)
+                link.hostName = message.hostName?.take(64)
+                // This phone's own device id here, so the roster can name the row that is the device
+                // in your hand and warn that removing it signs *this* phone out.
+                link.myDeviceId = message.deviceId
+                link.devices?.onWelcome(message.deviceId)
+                // A welcome is a fresh connection — possibly to a different machine after a switch or
+                // a re-pair — so the request clusters forget what the last one said and re-read on
+                // the next visit. The `settings.changed`/`devices.changed` pushes keep them fresh
+                // after that first read without a poll.
+                link.devices?.renew()
+                link.settings?.renew()
                 link.loaded = message.sessions.isNotEmpty() || link.loaded
                 link.live = true
             }
@@ -407,6 +448,34 @@ class DeckViewModel(
                 // unclaimed frame belongs to one this phone has already forgotten — a cancel that
                 // crossed with the last of its slices — and there is nothing to do but not act.
                 link.upload?.onFrame(message)
+            }
+
+            // The machine ended the session this phone asked it to end. The row is removed here, on
+            // the answer, and never on the tap — an optimistic removal over a refusal would leave a
+            // live session missing with no way back but a reconnect. If this is the session on
+            // screen, the terminal route reads the row's absence and pops itself: the machine noun
+            // stays right because the route names its own machine. A refusal is a plain `error`.
+            is ServerMessage.Closed -> {
+                link.sessions = link.sessions.filter { it.id != message.id }
+            }
+
+            // The device roster and the two server-owned settings are request/response clusters with
+            // their own `rid` bookkeeping, so the frame is handed to the cluster that asked. It
+            // returns whether it claimed the frame; an unclaimed one answers a request this phone has
+            // already forgotten — a switch or a reconnect that raced the reply — and there is nothing
+            // to do but not act. The cluster publishes for itself; the fold below is harmless twice.
+            is ServerMessage.DevicesRows,
+            is ServerMessage.DevicesRevoked,
+            is ServerMessage.DevicesChanged,
+            -> {
+                link.devices?.receive(message)
+            }
+
+            is ServerMessage.SettingsState,
+            is ServerMessage.SettingsApplied,
+            is ServerMessage.SettingsChanged,
+            -> {
+                link.settings?.receive(message)
             }
         }
         publish()
@@ -705,6 +774,50 @@ class DeckViewModel(
         links[hostId]?.closeSession()
     }
 
+    /**
+     * End a session on the machine on screen, for good.
+     *
+     * Only reachable when it advertised [Capability.CLOSE]; the ✕ is absent otherwise, and this is
+     * confirmed once in the UI before it is called — closing does not come back. The row is not
+     * removed here: it goes when the machine answers `closed`, for the reason its handler gives. A
+     * refusal arrives as a plain `error` and is shown by the banner.
+     */
+    fun endSession(sessionId: String) {
+        val link = selected ?: return
+        if (!_uiState.value.canCloseSessions) {
+            notify("This machine cannot close sessions from the phone.")
+            return
+        }
+        if (!link.transport.send(ClientMessage.Close(sessionId))) notify("Not connected.")
+    }
+
+    /* --------------------------------------------------- devices & server settings -- */
+
+    /** Ask for the roster once when the Devices screen opens. The `devices.changed` push keeps it fresh. */
+    fun openDevices() {
+        selected?.devices?.ensureRead()
+    }
+
+    /** The user asked to re-read the roster now. */
+    fun refreshDevices() {
+        selected?.devices?.refresh()
+    }
+
+    /** Remove one device from the machine on screen. Confirmed once in the UI first — it does not come back. */
+    fun revokeDevice(deviceId: String) {
+        selected?.devices?.revoke(deviceId)
+    }
+
+    /** Ask for the machine's two server-owned settings once when the Settings screen opens. */
+    fun openServerSettings() {
+        selected?.settings?.ensureRead()
+    }
+
+    /** Change one of the machine's server-owned settings. The outcome is the machine's own sentence. */
+    fun applyServerSetting(key: ServerSettingKey, value: String) {
+        selected?.settings?.apply(key, value)
+    }
+
     /** Type text into the session open on one machine: the key bar, and paste. */
     fun type(hostId: String, text: String) {
         val link = links[hostId] ?: return
@@ -933,6 +1046,11 @@ class DeckViewModel(
             credentialPrompt = credentials.asking,
             credentialsQueued = credentials.queued,
             signInPhase = signIn.phase,
+            clientVersion = clientVersion,
+            hostAppVersion = current?.appVersion ?: "",
+            hostKind = current?.hostKind,
+            devices = current?.devices?.view(),
+            serverSettings = current?.settings?.view(),
         )
     }
 
@@ -976,6 +1094,9 @@ class DeckViewModel(
                         accounts = KeystoreGitHubStore(application),
                         gitHubEndpoints = endpoints,
                         network = AndroidNetworkWatch(application),
+                        // This app's build, so a phone can say "update this server from a desktop"
+                        // only when it is genuinely ahead. `BuildConfig` is enabled for this one read.
+                        clientVersion = BuildConfig.VERSION_NAME,
                     ) { scope, hostId, store ->
                         WebSocketDeckTransport(scope = scope, hostId = hostId, vault = store)
                     }
@@ -1059,6 +1180,16 @@ data class DeckUiState(
     val credentialsQueued: Int = 0,
     /** Where the GitHub sign-in has got to, when a sheet is showing it. */
     val signInPhase: SignInPhase = SignInPhase.Idle,
+    /** This app's own build, for the comparison [serverBehindSentence] makes. */
+    val clientVersion: String = "",
+    /** What build the machine on screen is running, from `welcome.appVersion`, or "" if it never said. */
+    val hostAppVersion: String = "",
+    /** `"desktop"` / `"headless"` for the machine on screen, or null. Read through [HostVersion]. */
+    val hostKind: String? = null,
+    /** The device roster of the machine on screen, or null when it does not serve one. */
+    val devices: DeviceRosterView? = null,
+    /** The two server-owned settings of the machine on screen, or null when it does not serve them. */
+    val serverSettings: ServerSettingsView? = null,
 ) {
     /** The machine on screen, if there is one. */
     val host: HostSummary? get() = hosts.firstOrNull { it.hostId == selectedHostId } ?: hosts.firstOrNull()
@@ -1135,6 +1266,39 @@ data class DeckUiState(
     val hostUnreachable: Boolean get() = hasUnapprovedPairing && transport !is TransportState.Pending
 
     val canCreateSessions: Boolean get() = live && capabilities.contains(Capability.CREATE)
+
+    /**
+     * Whether the machine will let this phone end a session. Absent rather than disabled in the UI
+     * when false, the same rule New Session and Send File follow: a ✕ that only ever refuses is a
+     * fake control, and closing is the one that is not undoable if it does not.
+     */
+    val canCloseSessions: Boolean get() = live && capabilities.contains(Capability.CLOSE)
+
+    /**
+     * The line that names the machine's build and kind — `version 0.10.0 · server` — or "" for a
+     * machine that never reported one, in which case nothing is drawn rather than a blank row.
+     */
+    val hostVersionLine: String get() = HostVersion.hostVersionLine(hostAppVersion, hostKind)
+
+    /**
+     * The one sentence to show when this app is newer than the machine, naming the right kind of
+     * box, or null when there is nothing honest to say. Default-closed: shown only when this build is
+     * genuinely ahead, with no button under it, because nothing on this wire carries an update verb.
+     */
+    val serverBehindSentence: String?
+        get() = HostVersion.behindSentence(clientVersion, hostAppVersion, hostKind)
+
+    /**
+     * Whether to draw the Devices entry: the machine offers the roster **and** is reachable now.
+     *
+     * Live-gated like New Session and Send File, and for the same reason: these are request/response
+     * screens that need a live socket to read anything, so an entry shown over a dropped connection
+     * would open onto a spinner that never resolves. It comes back the moment the socket does.
+     */
+    val devicesOffered: Boolean get() = live && capabilities.contains(Capability.DEVICES)
+
+    /** Whether to draw the "This server" entry: the machine offers the settings and is reachable now. */
+    val serverSettingsOffered: Boolean get() = live && capabilities.contains(Capability.SETTINGS)
 
     /**
      * The machine said which folders this phone may use, and the answer was **none**.
