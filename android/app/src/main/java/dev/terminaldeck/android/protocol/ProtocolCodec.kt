@@ -103,7 +103,8 @@ object ServerFrames {
     /**
      * The checks the serializer cannot express, applied after it has done the shape.
      *
-     * Only [ServerMessage.CredentialRequest] needs one today, and it needs one because it is the
+     * Two frames need one, for opposite reasons. [ServerMessage.Enrolled] is handled first and is
+     * covered where it is checked. [ServerMessage.CredentialRequest] needs one because it is the
      * single frame in this protocol whose contents are **drawn on a screen somebody reads before
      * approving a push**. Two strings on it are bounded on the wire, and an unbounded one here
      * would be a prompt whose last line — the machine that asked — can be pushed off the bottom by
@@ -115,6 +116,22 @@ object ServerFrames {
      * prompt says out loud rather than papering over.
      */
     private fun narrow(message: ServerMessage): Result {
+        // The other frame the serializer's shape check is not enough for, and the reason is
+        // different: `enrolled` is what a **sign-in** comes back as, pre-authentication, from a
+        // machine this phone has never spoken to before. All three fields are required — a minted
+        // device with no id or no credential is not one this phone can reconnect as, so a frame
+        // missing either is refused rather than stored half-formed — and the credential is bounded
+        // so a hostile host cannot hand this phone a megabyte to keep behind the Keystore. Every
+        // check is `parseServerMessage`'s own, in the same order.
+        if (message is ServerMessage.Enrolled) {
+            if (message.deviceId.isEmpty() || message.deviceName.isEmpty() || message.credential.isEmpty()) {
+                return Result.Bad("incomplete enrolled")
+            }
+            if (message.credential.length > Protocol.MAX_ENROLL_CREDENTIAL_LENGTH) {
+                return Result.Bad("enrolled with an oversized credential")
+            }
+            return Result.Ok(message)
+        }
         if (message !is ServerMessage.CredentialRequest) return Result.Ok(message)
         if (message.id.isEmpty()) return Result.Bad("credential.request without an id")
         if (message.host.isEmpty() || message.host.length > Protocol.MAX_CREDENTIAL_HOST_LENGTH) {

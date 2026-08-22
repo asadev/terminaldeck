@@ -37,6 +37,7 @@
  *
  * Usage:
  *   node android/tools/dev-host.cjs [--port 8787] [--relay ws://10.0.2.2:8787]
+ *                                   [--sign-in user:secret|none]
  *
  * Keys: p = new pairing code · a = approve every waiting device · l = list · r = revoke all ·
  *       c = ask every connected phone for a GitHub login (push) · f = the same, as a silent fetch ·
@@ -110,6 +111,25 @@ function option(name, fallback) {
 const PORT = Number(option('port', '8787'))
 /** What goes in the pairing code. `10.0.2.2` is the host machine as seen from an AVD. */
 const RELAY_URL = option('relay', `ws://10.0.2.2:${PORT}`)
+/**
+ * The login this host will accept for sign-in, as `user:secret`.
+ *
+ * **Not real, and this is the one place it matters most.** A product host runs
+ * `verifyLoopbackSsh` — an actual SSH login against its own sshd — and this compares two strings.
+ * That difference is deliberate: making this rig depend on Remote Login being switched on, on a
+ * real account with a real password, would make the sign-in path untestable on most machines, which
+ * is how a path ends up shipped unlooked-at. What is real either side of the comparison is
+ * everything else: the frame, the parser that narrows it, the mint, the device row bound to the
+ * handshake key, and the `hello` that has to follow on the same socket.
+ *
+ * `--sign-in none` turns sign-in off, which is how the client's "this server does not offer
+ * sign-in" path gets exercised.
+ */
+const SIGN_IN = option('sign-in', 'asad:hunter2')
+const signInServed = SIGN_IN !== 'none'
+const signInLogin = signInServed
+  ? { username: SIGN_IN.slice(0, SIGN_IN.indexOf(':')), secret: SIGN_IN.slice(SIGN_IN.indexOf(':') + 1) }
+  : null
 
 const PROTOCOL_VERSION = wire.PROTOCOL_VERSION
 const OUTPUT_CHUNK_BYTES = wire.OUTPUT_CHUNK_BYTES
@@ -326,6 +346,8 @@ function onProtocol(client, raw) {
   const message = parsed.message
 
   if (!client.deviceId) {
+    // Two doors before a welcome and no others, which is `server.ts`'s rule exactly.
+    if (message.t === 'enroll') return enrol(client, message)
     if (message.t !== 'hello') return refuse(client, 'unauthenticated', 'Say hello first.')
     return hello(client, message)
   }
@@ -470,6 +492,69 @@ function resize(session, cols, rows) {
   } catch {
     // A resize on a dead pty is not worth a disconnection.
   }
+}
+
+/**
+ * Sign-in: a login this machine trusts, traded for a credential.
+ *
+ * The other pre-authentication door, and the whole reason a phone can add a machine nobody is
+ * sitting at. The order below is `enroll.ts`'s: refuse if this host does not serve sign-in, refuse
+ * a login it does not accept, then mint a device that is **approved on arrival** — the sign-in was
+ * the approval; a login this machine accepts is a human at this machine, which is the exact thing
+ * the pending state waits for on the pairing path — bound to the key that shook hands.
+ *
+ * Nothing is sent back but `enrolled`. The socket is still unauthenticated: the phone stores the
+ * credential and says `hello` with it here, on this same socket, and that hello is the door.
+ */
+function enrol(client, message) {
+  if (message.protocol !== PROTOCOL_VERSION) {
+    return refuse(client, 'version', `This desktop speaks protocol ${PROTOCOL_VERSION}.`)
+  }
+  if (!signInServed) {
+    // The product's own sentence, so the phone is read the same words it would get from a real one.
+    return refuse(client, 'unavailable', 'Sign-in is not available on this machine. Pair it with a code instead.')
+  }
+  if (message.username !== signInLogin.username || message.secret !== signInLogin.secret) {
+    // One sentence for a wrong login and a rate-limited one alike — collapsed on purpose over
+    // there, so the wire cannot tell a bad guess from a lockout, and collapsed here for the same
+    // reason a stand-in copies anything: a client tuned against a more talkative host is a client
+    // tuned against the wrong host.
+    log(`sign-in refused for "${message.username}" (${message.method})`)
+    return refuse(client, 'unauthorized', 'That sign-in was refused. Check the username, and the password or key, then try again.')
+  }
+
+  const id = crypto.randomUUID()
+  const secret = crypto.randomBytes(32).toString('base64url')
+  const credential = `${id}.${secret}`
+  const device = {
+    id,
+    name: message.device?.name || 'Signed-in device',
+    platform: message.device?.platform || 'unknown',
+    publicKey: client.devicePublicKey.toString('hex'),
+    credential: digestOf(credential),
+    approved: true,
+    pairedAt: Date.now(),
+  }
+  identity.devices = identity.devices.filter((entry) => entry.publicKey !== device.publicKey)
+  identity.devices.push(device)
+  saveIdentity(identity)
+
+  log(`${device.name} signed in as ${message.username} · fingerprint ${sealed.fingerprint(client.devicePublicKey)}`)
+  sendJson(client, { t: 'enrolled', deviceId: id, deviceName: device.name, credential })
+}
+
+/**
+ * The pasteable address, in the two shapes a person actually moves one in.
+ *
+ * The canonical line is what a server prints and a person copies. The one-token form is the same
+ * three facts base64url'd, and it exists because a line with spaces in it cannot be typed into a
+ * phone by a script — the Android rig drives the field with `adb shell input text`.
+ */
+function serverAddressText() {
+  const key = identity.static.publicKey.toString('base64url')
+  const json = JSON.stringify({ kind: 'relay', url: RELAY_URL, hostId, hostKey: key })
+  const packed = Buffer.from(json, 'utf8').toString('base64url')
+  return `td1 ${RELAY_URL} ${hostId} ${key}\n\n  or, as one token:\n\n  td1:${packed}`
 }
 
 function hello(client, message) {
@@ -665,7 +750,14 @@ function connectAsHost() {
           }
           try {
             const answered = sealed.respondToHandshake(identity.static, opened.message, (publicKey) => {
-              return Boolean(deviceByKey(publicKey)) || pairingOpen()
+              // Three narrow doors, and they are `server.ts`'s own three. A device this host
+              // already knows; any device at all while a pairing code is on screen, because a
+              // phone pairing for the first time has no key here to be known by; and any device at
+              // all while sign-in is served, because a phone *signing in* for the first time is in
+              // exactly the same position and its `enroll` frame is the thing that then proves the
+              // login. None of the three grants anything: what follows still has to prove a
+              // credential or a login.
+              return Boolean(deviceByKey(publicKey)) || pairingOpen() || signInServed
             })
             client.channel = answered.transport
             client.devicePublicKey = answered.devicePublicKey
@@ -722,7 +814,13 @@ relay.server.listen(PORT, () => {
   const code = newPairingCode()
   log(`fingerprint of this Mac: ${sealed.fingerprint(identity.static.publicKey)}`)
   log(`pairing code (5 min):\n\n${pairingCodeText()}\n`)
-  log('keys: p = new pairing code · a = approve · l = list · r = revoke all · q = quit')
+  if (signInServed) {
+    log(`sign-in served for ${signInLogin.username}:${signInLogin.secret} (fake check — see SIGN_IN)`)
+    log(`server address:\n\n  ${serverAddressText()}\n`)
+  } else {
+    log('sign-in is off (--sign-in none): an enroll frame is refused "unavailable"')
+  }
+  log('keys: p = new pairing code · s = print the server address · a = approve · l = list · r = revoke all · q = quit')
 })
 
 // Keys are read whether or not stdin is a terminal: the Android verification rig drives this
@@ -736,6 +834,9 @@ process.stdin.on('data', (data) => {
     if (key === 'p') {
       newPairingCode()
       log(`pairing code (5 min):\n\n${pairingCodeText()}\n`)
+    }
+    if (key === 's') {
+      log(signInServed ? `server address:\n\n  ${serverAddressText()}\n` : 'sign-in is off (--sign-in none)')
     }
     if (key === 'a') {
       let approved = 0

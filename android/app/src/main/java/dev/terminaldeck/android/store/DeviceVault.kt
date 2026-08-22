@@ -104,6 +104,29 @@ interface DeviceVault {
      */
     fun beginPairing(hostId: String, hostStaticPublicKey: ByteArray, relayUrl: String, pairingToken: String)
 
+    /**
+     * A sign-in succeeded. Stores the server, its credential, and the fact that it is already in.
+     *
+     * The other way a machine gets into this vault, and the difference from [beginPairing] is the
+     * whole point of the feature: there is no pairing token and no approval to wait for. A server
+     * that accepted an SSH login has *already* decided — `enrollDevice` mints the device row
+     * approved, because a login this machine accepts is a human at this machine, which is the exact
+     * thing the pending state exists to wait for on the pairing path. A record written here is
+     * therefore complete on arrival.
+     *
+     * Adds or updates that one record and leaves every other machine exactly as it was, for the
+     * reason the class header gives. Signing in again to a server already in the list — after a
+     * revoke, or from a second phone — keeps its place and the name it was given.
+     */
+    fun signedIn(
+        hostId: String,
+        hostStaticPublicKey: ByteArray,
+        relayUrl: String,
+        credential: String,
+        deviceId: String,
+        deviceName: String,
+    )
+
     /** That machine minted a durable credential in `welcome`. Replaces its pairing token. */
     fun storeCredential(hostId: String, token: String, deviceId: String, deviceName: String)
 
@@ -428,6 +451,32 @@ open class FileDeviceVault(
         write(data.copy(hosts = data.hosts.replacingOrAdding(record)))
     }
 
+    override fun signedIn(
+        hostId: String,
+        hostStaticPublicKey: ByteArray,
+        relayUrl: String,
+        credential: String,
+        deviceId: String,
+        deviceName: String,
+    ): Unit = synchronized(lock) {
+        val data = state()
+        val existing = data.hosts.firstOrNull { it.hostId == hostId }
+        val record = StoredHost(
+            hostId = hostId,
+            hostStaticPublicKey = encodeBase64(hostStaticPublicKey),
+            relayUrl = relayUrl,
+            token = credential,
+            deviceId = deviceId,
+            deviceName = deviceName,
+            // Approved on arrival, and not optimism: the credential in hand was already spent on a
+            // `hello` that the server answered with a `welcome`. See [EnrollExchange].
+            approved = true,
+            pairedAt = existing?.pairedAt ?: System.currentTimeMillis(),
+            nickname = existing?.nickname,
+        )
+        write(data.copy(hosts = data.hosts.replacingOrAdding(record)))
+    }
+
     override fun storeCredential(hostId: String, token: String, deviceId: String, deviceName: String) {
         update(hostId) { it.copy(token = token, deviceId = deviceId, deviceName = deviceName) }
     }
@@ -607,6 +656,28 @@ class InMemoryDeviceVault(private val key: StaticKeyPair = Sealed.generateStatic
             deviceId = null,
             deviceName = null,
             approved = false,
+            pairedAt = existing?.pairedAt ?: System.currentTimeMillis(),
+            nickname = existing?.nickname,
+        )
+    }
+
+    override fun signedIn(
+        hostId: String,
+        hostStaticPublicKey: ByteArray,
+        relayUrl: String,
+        credential: String,
+        deviceId: String,
+        deviceName: String,
+    ) {
+        val existing = records[hostId]
+        records[hostId] = PairingRecord(
+            hostId = hostId,
+            hostStaticPublicKey = hostStaticPublicKey,
+            relayUrl = relayUrl,
+            token = credential,
+            deviceId = deviceId,
+            deviceName = deviceName,
+            approved = true,
             pairedAt = existing?.pairedAt ?: System.currentTimeMillis(),
             nickname = existing?.nickname,
         )

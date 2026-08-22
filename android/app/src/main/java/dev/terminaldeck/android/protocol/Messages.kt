@@ -22,6 +22,26 @@ data class DeviceDescriptor(
 )
 
 /**
+ * Which kind of secret an `enroll` frame is carrying.
+ *
+ * An enum rather than a string because the desktop's parser narrows it to exactly these two and
+ * refuses anything else as `bad-message` — which closes the socket. A typo in a string literal
+ * would be a sign-in that fails with an unexplained disconnect; a spelling this type cannot
+ * produce is one nobody has to test for.
+ *
+ * The host chooses nothing from it: it hands the secret to sshd either way. What the value decides
+ * is *how* it is offered — as a password, or as a private key.
+ */
+@Serializable
+enum class EnrollMethod {
+    @SerialName("password")
+    Password,
+
+    @SerialName("key")
+    Key,
+}
+
+/**
  * A session as it arrives in `welcome` and `sessions`.
  *
  * `status` is free-form on purpose: the status vocabulary belongs to the desktop's session layer,
@@ -180,6 +200,40 @@ sealed interface ClientMessage {
          * capability list echoed back: everything in that one is something this phone asks for and
          * is gated on the desktop having offered it.
          */
+        val capabilities: kotlin.collections.List<String>,
+    ) : ClientMessage
+
+    /**
+     * Sign in with a login this server already trusts, instead of a pairing code.
+     *
+     * The other door before a `welcome`, and the whole reason a phone can add a server nobody is
+     * sitting at. The host verifies `username` + `secret` against its own sshd on loopback, mints a
+     * pre-approved device bound to *this connection's handshake key*, and answers
+     * [ServerMessage.Enrolled] with a credential — which this client stores and then presents in an
+     * ordinary [Hello] on the same socket. `enroll` never authenticates the socket itself.
+     *
+     * `protocol` and `capabilities` carry no defaults, for the reason [Hello] states at length:
+     * [dev.terminaldeck.android.protocol.ProtocolJson] is configured with `encodeDefaults = false`,
+     * so a field holding its default is a field that never reaches the wire — and a host that saw
+     * no protocol version here would close the socket.
+     *
+     * `capabilities` is [Capability.CLAIMED] and is here rather than only on the follow-up hello
+     * because the desktop may need it before that hello lands. It grants nothing, exactly as on
+     * [Hello].
+     *
+     * A host too old to know this frame hits its parser's default case, refuses `bad-message` and
+     * closes — which [dev.terminaldeck.android.signin.EnrollExchange] reads as "this server is too
+     * old for sign-in" rather than as a bad password.
+     */
+    @Serializable
+    @SerialName("enroll")
+    data class Enroll(
+        val protocol: Int,
+        val device: DeviceDescriptor,
+        val username: String,
+        /** A password or a private-key PEM, depending on [method]. Never stored, never logged. */
+        val secret: String,
+        val method: EnrollMethod,
         val capabilities: kotlin.collections.List<String>,
     ) : ClientMessage
 
@@ -551,6 +605,28 @@ sealed interface ServerMessage {
          * for the machine (the platform noun, or the relay slot).
          */
         val hostName: String? = null,
+    ) : ServerMessage
+
+    /**
+     * The device that was just signed in, with the credential to reconnect as.
+     *
+     * The answer to [ClientMessage.Enroll], sent exactly once, pre-authentication, and only ever
+     * inside the sealed channel. `credential` is the plaintext bearer secret — unlike a pairing
+     * code it is shown to nobody — and the client's job is to store it and immediately say [Hello]
+     * with it on the **same socket**. The host does not special-case that hello: the new device row
+     * is already approved and already bound to this connection's key, so it comes in through the
+     * ordinary door.
+     *
+     * A refused sign-in is not this frame. It is an ordinary [Error] — `unauthorized` for a bad
+     * login or a rate-limited one, collapsed into one sentence on purpose, or `unavailable` when
+     * the machine cannot offer sign-in at all.
+     */
+    @Serializable
+    @SerialName("enrolled")
+    data class Enrolled(
+        val deviceId: String,
+        val deviceName: String,
+        val credential: String,
     ) : ServerMessage
 
     @Serializable
