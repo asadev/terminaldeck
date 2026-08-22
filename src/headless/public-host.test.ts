@@ -485,6 +485,14 @@ describe('what a public host offers', () => {
        */
       CAPABILITY.logins,
       /*
+       * `devices` is withheld on the demo box: it lists every device signed
+       * in to this host and lets one be revoked. A stranger handed a throwaway
+       * shell must never enumerate the owner's real devices, let alone cut one
+       * off. Sign-in on the demo box is off (public-host serves no enroll), so
+       * there is no roster a guest could have any business reading.
+       */
+      CAPABILITY.devices,
+      /*
        * `chat` is withheld, and it is the plainest one on this list.
        *
        * It hands over **what the owner said to their agent**, in words, read off
@@ -501,6 +509,13 @@ describe('what a public host offers', () => {
        * that stops it being advertised.
        */
       CAPABILITY.chat,
+      /*
+       * `settings` is withheld: it changes the two settings this machine owns
+       * — the default agent and whether sessions restore. On a box handed to a
+       * stranger for review, letting a guest rewrite the host's own behaviour
+       * is exactly the class of act this list exists to keep off the wire.
+       */
+      CAPABILITY.settings,
       /*
        * `windows` is withheld, and on this box it is the least defensible one to
        * get wrong.
