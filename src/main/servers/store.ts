@@ -33,6 +33,11 @@ import { randomUUID } from 'node:crypto'
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { protectSecretFile, writeSecretFile } from '../remote/secret-file'
+import {
+  SERVER_WINDOW_DENIES_FILE,
+  WindowDenies,
+  applyWindowDenies,
+} from '../remote/window-denies'
 
 export const SERVERS_FILE = 'servers.json'
 
@@ -170,6 +175,19 @@ export interface StoredServer {
    * drivesWindows` makes the same reading for a machine the person paired, and
    * `WindowGrants` keeps the closed default for the one kind of peer nobody at
    * this keyboard vouched for: a device approved as a guest.
+   *
+   * ## The `false` is written twice, and this is the copy that can be erased
+   *
+   * An open default has a failure mode a closed one does not: the refusal is
+   * the *presence* of a key, so anything that drops the key grants the
+   * capability back. 0.9.1 drops it. Its `readServers` rebuilds this record
+   * from a fixed field list that predates the field, and its writer rewrites
+   * the whole list on any change — so renaming one server under 0.9.1 turns
+   * every stored refusal on the machine into a yes, silently, and 0.10.0 reads
+   * them all as on when it comes back. `remote/window-denies.ts` holds the
+   * other copy, in a file 0.9.1 has no reader and no writer for, and
+   * `ServerStore` folds it in on load. `downgrade-to-0-9-1.test.ts` reproduces
+   * the whole round trip against 0.9.1's own transcribed reader.
    */
   drivesWindows: boolean
 }
@@ -304,9 +322,19 @@ export function readServers(raw: unknown): StoredServer[] {
 export class ServerStore {
   private readonly path: string
   private cache: StoredServer[] | null = null
+  /**
+   * The refusals, in the one place an older build cannot rewrite them.
+   *
+   * The `drivesWindows: false` in the row above is still the record; this is
+   * the copy that outlives 0.9.1 having reconstructed that row without the
+   * field it has never heard of. See `window-denies.ts` for why a sidecar and
+   * not a schema version, and why this is one-sided — it holds noes only.
+   */
+  private readonly denies: WindowDenies
 
   constructor(private readonly storageDir: string) {
     this.path = join(storageDir, SERVERS_FILE)
+    this.denies = new WindowDenies(storageDir, SERVER_WINDOW_DENIES_FILE)
   }
 
   private load(): StoredServer[] {
@@ -323,7 +351,17 @@ export class ServerStore {
         this.cache = []
         return this.cache
       }
-      this.cache = readServers(JSON.parse(readFileSync(this.path, 'utf8')) as unknown)
+      // Reconciled here rather than at every reader, so `list`, `get`,
+      // `drivesWindows` and every `persist` built on this cache all see one
+      // answer. It goes both ways — a refusal only the sidecar has is restored
+      // into the cache, and a refusal only the record has is copied out to the
+      // sidecar, which is the one write on this path and happens once per
+      // profile. See `applyWindowDenies` for both halves.
+      this.cache = applyWindowDenies(
+        readServers(JSON.parse(readFileSync(this.path, 'utf8')) as unknown),
+        this.denies,
+        'server',
+      )
     } catch {
       // Unreadable is the same as absent from here. The alternative is a panel
       // that will not open because a file it cannot parse exists.
@@ -434,6 +472,13 @@ export class ServerStore {
    * nothing behind it holds is the defect this round is about.
    */
   setDrivesWindows(id: string, allowed: boolean): boolean {
+    if (this.get(id) === null) return false
+    // The durable copy first, then the record. If the second write fails, a
+    // refusal is on file and the row still says the old thing — and the reader
+    // resolves that disagreement closed, which is the direction a half-finished
+    // "no" has to fail in. Doing it the other way round would leave a refusal
+    // that only the record holds, which is precisely what a downgrade erases.
+    this.denies.set(id, !allowed)
     if (!this.update(id, (server) => ({ ...server, drivesWindows: allowed }))) return false
     return allowed
   }
@@ -478,6 +523,11 @@ export class ServerStore {
     const next = list.filter((server) => server.id !== id)
     if (next.length === list.length) return false
     this.persist(next)
+    // After the row is gone, so a failed write leaves the refusal standing over
+    // a server that is still here. A forgotten server's id is never reissued —
+    // `add` mints a fresh UUID — so the entry could not be reached again and
+    // keeping it would mean the file only ever grows.
+    this.denies.forget(id)
     return true
   }
 

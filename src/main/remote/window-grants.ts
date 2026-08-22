@@ -58,6 +58,16 @@
  * hand-edited entry that cannot be read is dropped rather than guessed — a typo
  * must not hand somebody's browser to a machine across a relay.
  *
+ * The `denied` set is also the one copy of a refusal on this axis that survives
+ * a **downgrade**, and that is worth keeping deliberately rather than by luck.
+ * `remote-windows.json` is a 0.10.0 file end to end — 0.9.1 has no reader and
+ * no writer for it — so an older build run over this profile leaves it exactly
+ * as it found it. The other two axes had to be given the same property after
+ * the fact, because their refusals live inside records 0.9.1 *does* rewrite;
+ * `window-denies.ts` is that sidecar and its header is the argument. So: do not
+ * move `denied` into a file an older release parses, and do not make a person's
+ * no on this axis depend on a field in one.
+ *
  * ## Why its own file
  *
  * The argument `folder-grants.ts` makes about `remote-auth.json`: that parser
