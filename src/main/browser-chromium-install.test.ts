@@ -13,7 +13,9 @@ import {
   defaultPinnedSha256,
   downloadUrlFor,
   installChromium,
+  linkageProblem,
   md5FromGoogHash,
+  missingLibraries,
   resolveChromeDownload,
   verifyChecksum,
   type CftPlatform,
@@ -260,6 +262,59 @@ describe('reading the md5 out of a GCS x-goog-hash header', () => {
 
 /* ------------------------------------------------------------- installing -- */
 
+/* ------------------------------------------------- can the binary actually run -- */
+
+/*
+ * The real `ldd` output from the reference server, trimmed to the shape that
+ * matters. This is not a paraphrase: on a stock Ubuntu 24.04 Hetzner box on
+ * 2026-08-22, thirteen of the twenty-three libraries a chrome-for-testing build
+ * links were absent, and the install said nothing about it.
+ */
+const LDD_MISSING = [
+  '\tlinux-vdso.so.1 (0x00007ffd3f5f8000)',
+  '\tlibatk-1.0.so.0 => not found',
+  '\tlibatk-bridge-2.0.so.0 => not found',
+  '\tlibgbm.so.1 => not found',
+  '\tlibnss3.so => /lib/x86_64-linux-gnu/libnss3.so (0x00007f0f2a800000)',
+  '\tlibcups.so.2 => not found',
+  '\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007f0f2a000000)',
+].join('\n')
+
+const LDD_COMPLETE = [
+  '\tlinux-vdso.so.1 (0x00007ffd3f5f8000)',
+  '\tlibatk-1.0.so.0 => /lib/x86_64-linux-gnu/libatk-1.0.so.0 (0x00007f0f2b000000)',
+  '\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007f0f2a000000)',
+].join('\n')
+
+describe('reading which libraries the machine is missing', () => {
+  it('picks the names out of real ldd output, in order, without duplicates', () => {
+    expect(missingLibraries(LDD_MISSING)).toEqual([
+      'libatk-1.0.so.0',
+      'libatk-bridge-2.0.so.0',
+      'libgbm.so.1',
+      'libcups.so.2',
+    ])
+  })
+
+  it('is empty when every library resolves', () => {
+    expect(missingLibraries(LDD_COMPLETE)).toEqual([])
+    expect(missingLibraries('')).toEqual([])
+  })
+
+  it('is a sentence naming the libraries and the packages that supply them', () => {
+    const problem = linkageProblem('/x/chrome', 'linux64', () => LDD_MISSING)
+    expect(problem).not.toBeNull()
+    expect(problem).toContain('libatk-1.0.so.0')
+    expect(problem).toContain('apt-get install -y')
+  })
+
+  it('is silent for a build that runs, for a non-Linux build, and where ldd cannot be asked', () => {
+    expect(linkageProblem('/x/chrome', 'linux64', () => LDD_COMPLETE)).toBeNull()
+    expect(linkageProblem('/x/chrome', 'mac-arm64', () => LDD_MISSING)).toBeNull()
+    expect(linkageProblem('/x/chrome', 'linux64', () => null)).toBeNull()
+  })
+})
+
 describe('installing Chromium end to end', () => {
   it('downloads a build with no app-owned pin, falls back to the md5, unpacks, and returns the executable', async () => {
     // A version this app pins no sha256 for, so the server md5 is the authority
@@ -463,5 +518,54 @@ describe('installing Chromium end to end', () => {
     })
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.why).toContain('1.2.3.4')
+  })
+
+  /*
+   * The measured lie, closed.
+   *
+   * Before this, the install downloaded 183 MB, verified it against the
+   * app-owned sha256, unpacked 372 MB, printed a version and a path, and exited
+   * 0 — over a binary that could not execute one instruction. A command that
+   * reports success and leaves something broken is the failure this product
+   * refuses everywhere else.
+   */
+  it('refuses a fresh install whose binary cannot run here, and says which libraries are missing', async () => {
+    const zip = fakeChromeZip()
+    const result = await installChromium({
+      root,
+      platform: 'linux64',
+      version: UNPINNED_VERSION,
+      env: {},
+      fetchJson: fetchJsonReturning(versionsIndex(UNPINNED_VERSION)),
+      fetchZip: fetchZipReturning(zip, md5Base64(zip)),
+      readLinkage: () => LDD_MISSING,
+    })
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.why).toContain('libatk-1.0.so.0')
+    expect(result.why).toContain('apt-get install -y')
+  })
+
+  it('re-checks on reuse, because the libraries live on the machine and not in the install', async () => {
+    const zip = fakeChromeZip()
+    const options = {
+      root,
+      platform: 'linux64' as const,
+      version: UNPINNED_VERSION,
+      env: {},
+      fetchJson: fetchJsonReturning(versionsIndex(UNPINNED_VERSION)),
+      fetchZip: fetchZipReturning(zip, md5Base64(zip)),
+    }
+    // Installed on a machine that had everything…
+    const first = await installChromium({ ...options, readLinkage: () => LDD_COMPLETE })
+    expect(first.ok).toBe(true)
+
+    // …and reused on a day when it does not. The bytes on disk are identical and
+    // the record still matches; only the machine changed, which is exactly the
+    // case a check that ran once at install time would miss.
+    const second = await installChromium({ ...options, readLinkage: () => LDD_MISSING })
+    expect(second.ok).toBe(false)
+    if (second.ok) return
+    expect(second.why).toContain('libgbm.so.1')
   })
 })

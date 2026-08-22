@@ -324,3 +324,140 @@ describe('watching a driven page', () => {
     expect(watch.captured).toHaveLength(0)
   })
 })
+
+
+/* --------------------------------------------- a challenge met in the wild -- */
+
+/**
+ * The text a real search engine served a real server-side browser.
+ *
+ * Captured verbatim on 2026-08-22 from a headless Chromium 146 on a Hetzner box,
+ * driving `duckduckgo.com` over the production CDP path. It is trimmed only at
+ * the ends; the wording, the ordering and the length are the page's own. Pinned
+ * as bytes rather than paraphrased, because a paraphrase of a challenge page is
+ * a fixture that agrees with whatever the rules already say.
+ */
+const REAL_CHALLENGE_TEXT = [
+  'All Results',
+  'DuckDuckGo',
+  'Open menu',
+  'Duck.ai',
+  ' All',
+  'Images',
+  'Videos',
+  'News',
+  'Maps',
+  'Shopping',
+  'Search Settings',
+  'Protected',
+  'Germany',
+  'Safe search',
+  'Date',
+  'Close menu',
+  'SEARCH',
+  'Homepage',
+  'Themes',
+  'Settings',
+  'SHARE FEEDBACK',
+  'DOWNLOADS',
+  'iOS Browser',
+  'Android Browser',
+  'Mac Browser',
+  'Windows Browser',
+  'Browser Extensions',
+  'MORE FROM DUCKDUCKGO',
+  'DuckDuckGo Subscription',
+  'Duck.ai',
+  'Email Protection',
+  'Newsletter',
+  'Blog',
+  'Podcast',
+  'Collaborations',
+  'LEARN MORE',
+  'What\u2019s New',
+  'Compare Privacy',
+  'About Our Browser',
+  'About DuckDuckGo',
+  'OTHER RESOURCES',
+  'Help',
+  'Community',
+  'Careers',
+  'Privacy Policy',
+  'Terms of Service',
+  'Press Kit',
+  'Advertise on Search',
+  'Introducing DuckDuckGo Collaborations',
+  '',
+  'Expertly crafted products for people who give a duck about privacy.',
+  '',
+  'See More',
+  'Unfortunately, bots use DuckDuckGo too.',
+  'Please complete the following challenge to confirm this search was made by a human.',
+  'Select all squares containing a duck:',
+  'Submit',
+  'Share Feedback',
+].join('\n')
+
+describe('a real challenge page, from a real datacenter IP', () => {
+  /*
+   * Everything about this page says "fine" to the strong rules. The status is
+   * 200 — the site answered, it just refused to answer the question. The URL is
+   * duckduckgo.com's own, with none of the challenge-platform paths in it. The
+   * title is the ordinary search title. Only the words on the page give it away,
+   * which is precisely the case the body markers exist for, and before this they
+   * did not cover it.
+   */
+  it('is caught, on the words, when nothing else about it looks wrong', () => {
+    const verdict = classifyBlock({
+      requestedUrl: 'https://duckduckgo.com/?q=terminal+deck&ia=web',
+      finalUrl: 'https://duckduckgo.com/?q=terminal+deck&ia=web',
+      httpStatus: 200,
+      statusText: 'OK',
+      title: 'terminal deck at DuckDuckGo',
+      text: REAL_CHALLENGE_TEXT,
+      failed: null,
+    })
+    expect(verdict.blocked).toBe(true)
+    expect(verdict.signals.join(' ')).toContain('complete the following challenge')
+  })
+
+  it('is short enough for the body markers to be consulted at all', () => {
+    // The length gate is what keeps these phrases from firing on articles, so a
+    // real challenge being comfortably under it is part of the claim.
+    expect(REAL_CHALLENGE_TEXT.length).toBeLessThan(DEFAULT_BLOCK_RULES.bodyMarkerMaxChars)
+  })
+
+  it('does not fire on a long page that merely discusses challenges', () => {
+    const article = `${REAL_CHALLENGE_TEXT} `.repeat(40)
+    expect(article.length).toBeGreaterThan(DEFAULT_BLOCK_RULES.bodyMarkerMaxChars)
+    const verdict = classifyBlock({
+      requestedUrl: 'https://example.com/blog/how-captchas-work',
+      finalUrl: 'https://example.com/blog/how-captchas-work',
+      httpStatus: 200,
+      statusText: 'OK',
+      title: 'How CAPTCHAs work',
+      text: article,
+      failed: null,
+    })
+    expect(verdict.blocked).toBe(false)
+  })
+
+  it('catches the other plain wordings a picture puzzle uses', () => {
+    for (const text of [
+      'Select all squares containing a bus',
+      "I am not a robot",
+      'This request was made by a human? Please confirm it was made by a human.',
+    ]) {
+      const verdict = classifyBlock({
+        requestedUrl: 'https://example.com/',
+        finalUrl: 'https://example.com/',
+        httpStatus: 200,
+        statusText: 'OK',
+        title: '',
+        text,
+        failed: null,
+      })
+      expect(verdict.blocked).toBe(true)
+    }
+  })
+})
