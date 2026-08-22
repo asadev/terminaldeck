@@ -69,6 +69,7 @@ import {
   MAX_CREDENTIAL_HOST_LENGTH,
   MAX_CREDENTIAL_REPO_LENGTH,
   MAX_CWD_BYTES,
+  MAX_FRAME_DATA_CHARS,
   MAX_INPUT_BYTES,
   MAX_MESSAGE_BYTES,
   PROTOCOL_VERSION,
@@ -245,16 +246,56 @@ function rowActivity(parsed: unknown): ReadonlyMap<string, number> | null {
 }
 
 /**
- * Whether a frame is past the shared message cap, decided the cheap way first.
+ * The one frame allowed past {@link MAX_MESSAGE_BYTES}, recognised the cheapest
+ * way that a non-frame cannot pass.
+ *
+ * A `browser.frame` carries a base64 JPEG up to {@link MAX_FRAME_DATA_CHARS} —
+ * larger than a keystroke message, deliberately, because it is bounded by what a
+ * *relay* will carry rather than by the 64 KiB text cap (see the frame's own
+ * note). Every other frame on this wire is tens of bytes to a few kilobytes, so
+ * the split is: this one type earns the larger ceiling, everything else is held
+ * at 64 KiB.
+ *
+ * The test is `startsWith`, not a search: `serialize` is `JSON.stringify` of an
+ * object whose `t` is its first field, so a real frame's bytes begin exactly
+ * `{"t":"browser.frame"`. A quote inside any string value is escaped `\"`, so
+ * these bytes cannot appear inside another frame's `data` — only a genuine
+ * frame's leading key produces them. And even a string that somehow began this
+ * way wins nothing but a larger cap: `parseServerFrame` still reads `data`
+ * against {@link MAX_FRAME_DATA_CHARS} and `BASE64_RE` field by field, which is
+ * where a frame is really bounded.
+ */
+const FRAME_MESSAGE_PREFIX = '{"t":"browser.frame"'
+
+/**
+ * The metadata a full-data frame carries around its `data` — a dozen small
+ * numbers and two short strings — budgeted at the ~1 KiB the frame's own note
+ * reserves, so the whole message stays under what a relay carries (96 KiB) with
+ * the same margin the sender sized `MAX_FRAME_DATA_CHARS` to leave.
+ */
+const FRAME_METADATA_BUDGET = 1024
+
+/**
+ * Whether a frame is past the cap that applies to it, decided the cheap way
+ * first.
  *
  * A UTF-16 code unit is never fewer than one UTF-8 byte, so `length > cap`
  * already proves it. Below that the count has to be exact: 8,192 emoji are 8,192
  * units and 32,768 bytes. The desktop's own `overBytes` makes the same argument;
  * it is not imported because it is not exported, and a browser has `TextEncoder`
  * where that file may not.
+ *
+ * The cap is type-aware: 64 KiB for the whole wire, except a `browser.frame`,
+ * which is let through up to its own data cap plus its metadata. This is the
+ * receive side of the delivery-cap split — the send side sizes the frame under a
+ * relay's ceiling; this side agrees to accept it, while still refusing anything
+ * else that large.
  */
 function overMessageCap(raw: string): boolean {
-  return raw.length > MAX_MESSAGE_BYTES || encoder.encode(raw).byteLength > MAX_MESSAGE_BYTES
+  const cap = raw.startsWith(FRAME_MESSAGE_PREFIX)
+    ? MAX_FRAME_DATA_CHARS + FRAME_METADATA_BUDGET
+    : MAX_MESSAGE_BYTES
+  return raw.length > cap || encoder.encode(raw).byteLength > cap
 }
 
 /**

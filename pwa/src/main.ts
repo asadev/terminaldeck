@@ -110,6 +110,7 @@ import {
   type DevState,
 } from './dev-server'
 import { deviceStanding, devicesOffered, fingerprintText, lastSeenSentence } from './devices'
+import { MAX_WATCH_WINDOWS, WATCH_UNAVAILABLE, WatchCanvas, watchOffered } from './browser-view'
 import { folderOffer, foldersAfter, noFoldersSentence, pickerRows } from './folders'
 import { machineNoun, readHostPlatform, type HostPlatform } from './host-platform'
 import { createKeyBar, type KeyBarHandle } from './keybar'
@@ -273,7 +274,19 @@ function socketUrl(location: Location): string {
  * `localhost.ts` for what that screen can honestly do from a browser tab and
  * what it deliberately does not pretend to.
  */
-type Screen = 'copilot' | 'pair' | 'sessions' | 'localhost' | 'settings' | 'machines' | 'devices' | 'terminal'
+type Screen =
+  | 'copilot'
+  | 'pair'
+  | 'sessions'
+  | 'localhost'
+  | 'settings'
+  | 'machines'
+  | 'devices'
+  | 'browser'
+  | 'terminal'
+
+/** One watchable surface, as the host reports it in `browser.surfaces.rows`. */
+type WatchSurface = { window: string; url: string; title: string; live: boolean }
 
 /**
  * The tabs, and why Machines is not one of them.
@@ -298,7 +311,15 @@ type Screen = 'copilot' | 'pair' | 'sessions' | 'localhost' | 'settings' | 'mach
  * carried a copilot for *this* device, which never happens for a guest — see
  * `CopilotState.offered`.
  */
-const LISTING_SCREENS: readonly Screen[] = ['copilot', 'sessions', 'localhost', 'settings', 'machines', 'devices']
+const LISTING_SCREENS: readonly Screen[] = [
+  'copilot',
+  'sessions',
+  'localhost',
+  'settings',
+  'machines',
+  'devices',
+  'browser',
+]
 
 /**
  * Text on its way into the terminal rather than into the DOM.
@@ -760,6 +781,18 @@ class Deck {
    * so a hopeful button is a broken client rather than an optimistic one.
    */
   private capabilities: string[] = []
+  /**
+   * The live view. One {@link WatchCanvas} per window being watched, the tab
+   * strip the host last reported, and the size-observers that renegotiate width
+   * on a rotation. All three leave with the socket — a screencast is
+   * per-connection on the host, so a reconnect starts fresh rather than assuming
+   * a subscription the host has already dropped. `main.ts` owns the mounting; the
+   * canvas owns the paint/ack loop and the coordinate math. See `browser-view.ts`.
+   */
+  private readonly browserCanvases = new Map<string, WatchCanvas>()
+  private readonly browserObservers = new Map<string, ResizeObserver>()
+  private browserSurfaces: readonly WatchSurface[] = []
+  private browserRid = 0
   /**
    * The build the connected host said it is running, and which shell serves it,
    * from its last `welcome`. Connection-only, like {@link capabilities}: a
@@ -1253,6 +1286,7 @@ class Deck {
     this.attachedId = null
     this.destroyTerminal()
     this.forgetLocalhost()
+    this.stopAllWatch()
     // The copilot goes with the machine, and it is the sharpest case of the rule
     // this method is: a conversation, a run and a grant are each a statement
     // about *one* desktop, and carrying any of them across would put the previous
@@ -1577,6 +1611,10 @@ class Deck {
       // that no longer recognises this browser, and it must not still be on
       // screen behind the pair form.
       this.forgetLocalhost()
+      // And any live view of its browser: the casts are already dead with the
+      // socket, and the canvases hold this machine's pages, which a device it no
+      // longer trusts should not still be showing.
+      this.stopAllWatch()
       // Not merely hidden: the terminal holds this machine's scrollback, and a
       // device that has just been told it is no longer trusted should not still
       // be carrying it around in memory.
@@ -1942,6 +1980,24 @@ class Deck {
     // The two server-owned settings, and the unsolicited push when one changes.
     if (this.serverSettings.receive(message)) return
     /*
+     * And the live view, which owns two frame types the switch below has a case
+     * for none of. A `browser.frame` is drawn by the canvas for its window and
+     * acked from the paint callback — routed by window, never broadcast, so one
+     * device's frames cannot reach another. A `browser.surfaces.rows` is the tab
+     * strip, kept and redrawn only while it is the screen being looked at; it
+     * arrives both as an answer and as an unsolicited push, which is why it is
+     * here rather than in a `case` waiting on a request.
+     */
+    if (message.t === 'browser.frame') {
+      void this.browserCanvases.get(message.window)?.onFrame(message)
+      return
+    }
+    if (message.t === 'browser.surfaces.rows') {
+      this.browserSurfaces = message.surfaces
+      if (this.screen === 'browser') this.renderContent()
+      return
+    }
+    /*
      * And the conversation, routed by `rid` for the reason the transfer and the
      * bar above are: an answer belongs to the request that asked for it, and a
      * router that matched on `t` alone would hand a reply to whichever surface
@@ -2045,6 +2101,21 @@ class Deck {
         // what asks otherwise.
         if (this.screen === 'localhost' && localhostOffered(this.capabilities)) this.localhostDo({ t: 'list' })
         if (this.screen === 'localhost') this.askDevServers()
+        // The watch screen, on the same argument as the copilot and device tabs:
+        // a device re-paired as a guest is no longer told `watch`, so the screen
+        // it may have been on has to close rather than sit there refusing every
+        // tap. Its canvases go too — a screencast is per-connection, and this is
+        // a new one that may watch nothing.
+        if (this.screen === 'browser' && !watchOffered(this.capabilities)) {
+          this.stopAllWatch()
+          this.screen = 'sessions'
+        } else if (this.screen === 'browser') {
+          // Still allowed, and this is a fresh connection: the host dropped the
+          // old screencast with the old socket, so re-ask the strip and re-watch
+          // whatever was on screen so a reconnect refills rather than freezes.
+          this.requestSurfaces()
+          for (const view of this.browserCanvases.values()) view.watch()
+        }
         this.render()
         return
 
@@ -2299,6 +2370,10 @@ class Deck {
       ...(this.copilot.offered ? [{ screen: 'copilot' as Screen, label: 'Copilot' }] : []),
       { screen: 'sessions', label: 'Sessions' },
       ...(this.servesLocalhost ? [{ screen: 'localhost' as Screen, label: 'Localhost' }] : []),
+      // Absent — not disabled — for a guest, the same rule the Copilot tab
+      // follows: the capability is withheld at the source, so a device that was
+      // not told `watch` is not shown a door to it.
+      ...(watchOffered(this.capabilities) ? [{ screen: 'browser' as Screen, label: 'Browser' }] : []),
       { screen: 'settings', label: 'Settings' },
     ]
     this.tabs.replaceChildren(
@@ -2332,6 +2407,10 @@ class Deck {
    */
   private goTo(screen: Screen): void {
     if (this.screen === screen) return
+    // Leaving the watch screen stops every cast: a screencast nobody is looking
+    // at is the host's compositor spending itself for nothing, and the strip is
+    // asked for again on the way back in.
+    if (this.screen === 'browser' && screen !== 'browser') this.stopAllWatch()
     this.screen = screen
     // A menu or a rename field belongs to the row it was opened on, and that row
     // is not on this screen. Left set, the next visit to the screen it came from
@@ -2351,6 +2430,10 @@ class Deck {
     // push keeps it current after, but only for a device that was connected when
     // the change happened.
     if (screen === 'devices') this.askDevices()
+    // The tab strip is asked for on arrival — it reads state the host already
+    // holds, and the ask is also what subscribes this connection to the pushes
+    // that follow when a tab opens or closes on the machine.
+    if (screen === 'browser' && watchOffered(this.capabilities)) this.requestSurfaces()
     if (
       screen === 'localhost' &&
       this.localhost.ports === null &&
@@ -2579,7 +2662,132 @@ class Deck {
       case 'copilot':
         this.content.replaceChildren(this.copilotScreen())
         return
+      case 'browser':
+        this.content.replaceChildren(this.browserScreen())
+        return
     }
+  }
+
+  /* --------------------------------------------------------- live view -- */
+
+  /**
+   * The watch screen: the machine's open pages as a strip, and a canvas for each
+   * one being watched.
+   *
+   * The tab strip is data — `browser.surfaces.rows`, not pixels — because it is
+   * our own UI; only the page *contents* are a screencast. A guest is never sent
+   * a frame and never offered this tab, so reaching it at all means the host said
+   * yes; the sentence for a withheld capability is here only for the edge where a
+   * reconnect narrowed what this device may do while the screen was open.
+   *
+   * The canvases are reused across renders rather than rebuilt: each carries a
+   * `WatchCanvas` with its listeners and its last-drawn frame, so re-appending
+   * the same node moves it into the fresh screen without tearing the stream down.
+   */
+  private browserScreen(): HTMLElement {
+    const screen = element('div', 'screen screen--watch')
+    if (!watchOffered(this.capabilities)) {
+      screen.append(element('p', 'note note--plain', WATCH_UNAVAILABLE))
+      return screen
+    }
+
+    if (this.browserSurfaces.length === 0) {
+      const note =
+        this.state.phase === 'online'
+          ? `Asking the ${this.noun} which pages it has open…`
+          : `Reconnecting to the ${this.noun} to show its open pages…`
+      screen.append(element('p', 'note note--plain', note))
+    } else {
+      const strip = element('ul', 'watch-strip')
+      for (const surface of this.browserSurfaces) strip.append(this.surfaceRow(surface))
+      screen.append(strip)
+    }
+
+    const stage = element('div', 'watch-stage')
+    for (const view of this.browserCanvases.values()) stage.append(view.element)
+    if (this.browserCanvases.size > 0) screen.append(stage)
+    return screen
+  }
+
+  /** One row of the tab strip: what the page is, and whether it is being watched. */
+  private surfaceRow(surface: WatchSurface): HTMLElement {
+    const row = element('li', 'watch-row')
+    const label = element('div', 'watch-row__label')
+    label.append(element('span', 'watch-row__title', surface.title || surface.url || 'Untitled page'))
+    if (surface.url !== '') label.append(element('span', 'watch-row__url', surface.url))
+    row.append(label)
+
+    const watching = this.browserCanvases.has(surface.window)
+    const action = element('button', 'watch-row__action', watching ? 'Stop' : 'Watch')
+    action.type = 'button'
+    action.addEventListener('click', () =>
+      watching ? this.stopWatch(surface.window) : this.startWatch(surface.window),
+    )
+    row.append(action)
+    return row
+  }
+
+  /**
+   * Start watching one window: mount a canvas, then ask the host to stream it.
+   *
+   * The watch is sent *after* the canvas is in the DOM, because the width it
+   * negotiates is the canvas's own laid-out width — asked before it is on screen,
+   * that width is zero. A `ResizeObserver` renegotiates it when the box changes,
+   * which is what a rotation or a split-screen resize is.
+   */
+  private startWatch(window: string): void {
+    if (this.browserCanvases.has(window)) return
+    if (this.browserCanvases.size >= MAX_WATCH_WINDOWS) return
+    const canvas = element('canvas', 'watch-canvas')
+    // Focusable, so a hardware keyboard drives the page rather than the tab.
+    canvas.tabIndex = 0
+    const view = new WatchCanvas({ window, canvas, send: (message) => this.connection?.send(message) === true })
+    view.attach()
+    this.browserCanvases.set(window, view)
+    if (typeof ResizeObserver !== 'undefined') {
+      const observer = new ResizeObserver(() => view.onResize())
+      observer.observe(canvas)
+      this.browserObservers.set(window, observer)
+    }
+    // Mount first (so the canvas has a width), then negotiate the stream.
+    if (this.screen === 'browser') this.renderContent()
+    view.watch()
+  }
+
+  /** Stop watching one window: drop the stream, the canvas and its observer. */
+  private stopWatch(window: string): void {
+    const view = this.browserCanvases.get(window)
+    if (view === undefined) return
+    view.unwatch()
+    view.dispose()
+    this.browserCanvases.delete(window)
+    this.browserObservers.get(window)?.disconnect()
+    this.browserObservers.delete(window)
+    if (this.screen === 'browser') this.renderContent()
+  }
+
+  /**
+   * Stop every cast — on leaving the screen, on a disconnect, on a machine that
+   * no longer offers the view.
+   *
+   * A screencast is per-connection on the host and is dropped when the socket
+   * closes, so holding canvases past that point would be canvases waiting on
+   * frames that will never come; re-entering the screen asks again from scratch.
+   */
+  private stopAllWatch(): void {
+    for (const [window, view] of this.browserCanvases) {
+      view.unwatch()
+      view.dispose()
+      this.browserObservers.get(window)?.disconnect()
+    }
+    this.browserCanvases.clear()
+    this.browserObservers.clear()
+  }
+
+  /** Ask the host for its open pages — the tab strip, as data. */
+  private requestSurfaces(): void {
+    this.browserRid += 1
+    this.connection?.send({ t: 'browser.surfaces', rid: `sf-${this.browserRid}` })
   }
 
   /**
@@ -6161,6 +6369,7 @@ class Deck {
     this.picking = false
     this.awaitingCreate = false
     this.forgetLocalhost()
+    this.stopAllWatch()
     // One secret now, not two, and `clearPairing`/`clearMachineBook` at the top
     // of this method already took it. A browser somebody has just said is not
     // theirs used to be left holding a second credential — the more powerful
