@@ -154,6 +154,54 @@ object Protocol {
     /** The longest a control's value may be on the wire. A model name is the long one. */
     const val MAX_CONTROL_VALUE_LENGTH = 64
 
+    /* ---- capability `web`, `account`, `chat`: the bounds their frames carry ----------------- */
+
+    /**
+     * The longest a `web.open` URL may be. Transcribed from `MAX_URL_LENGTH`.
+     *
+     * Checked on this side for the reason every other cap is: the host answers an over-long field by
+     * closing the socket, so a client that sends one spends the connection instead of getting a
+     * sentence back.
+     */
+    const val MAX_URL_LENGTH = 2048
+
+    /** Longest account id on an `account.switch`. Transcribed from `MAX_ACCOUNT_ID_LENGTH`. */
+    const val MAX_ACCOUNT_ID_LENGTH = 200
+
+    /** The most account rows one `account.state` may carry. */
+    const val MAX_ACCOUNTS_REPORTED = 64
+
+    /**
+     * The most bubbles one `chat.rows` may carry, **newest kept**.
+     *
+     * Trimmed from the end, matching `rows.slice(-MAX_CHAT_ROWS)` over there: a chat view shows the
+     * newest of a conversation, and trimming the head of an over-long answer would keep the oldest
+     * bubbles and drop the reply somebody is waiting to read.
+     */
+    const val MAX_CHAT_ROWS = 200
+
+    /* ---- capability `localhost`: the tunnel's own bounds ------------------------------------ */
+
+    /** Largest chunk of tunnelled bytes in one `net.data`, before base64. */
+    const val MAX_NET_CHUNK_BYTES = 24 * 1024
+
+    /** The encoded length of a maximal chunk: base64 is four characters per three bytes. */
+    const val MAX_NET_DATA_CHARS = ((MAX_NET_CHUNK_BYTES + 2) / 3) * 4
+
+    /**
+     * How many bytes one side may have in flight on a stream before it stops reading.
+     *
+     * A tunnelled socket has no window of its own, so without this a phone pulling a 40 MB source
+     * map would have the whole file buffered in the desktop's heap and the desktop would answer by
+     * dropping the phone. Each side acknowledges what it has written to its own socket and the
+     * sender pauses when the unacknowledged total passes this.
+     */
+    const val NET_WINDOW_BYTES = 256 * 1024
+
+    /** A TCP port, as the wire will accept one. */
+    const val MIN_PORT = 1
+    const val MAX_PORT = 65_535
+
     /** WebSocket close codes, RFC 6455 §7.4.1 plus the desktop's own reasons. */
     object Close {
         const val NORMAL = 1000
@@ -346,6 +394,55 @@ object Capability {
      * never a guest, because watching a signed-in browser is an owner act.
      */
     const val WATCH = "watch"
+
+    /**
+     * The plan and context figures a session's bar draws.
+     *
+     * Three readings behind one name, and they do not cost the same: `context` is a transcript read
+     * on the far side, `plan` is memory the desktop already holds, and `refresh` boots a whole
+     * Claude Code over there — which is why the last is only ever sent because a finger pressed the
+     * ring. See [dev.terminaldeck.android.protocol.UsageWant].
+     */
+    const val USAGE = "usage"
+
+    /** Which login a session runs as, and the verb that switches it. */
+    const val ACCOUNT = "account"
+
+    /**
+     * Typing a whole message at a session as one act, rather than as keystrokes.
+     *
+     * What a chat composer sends. It is not `input`: `input` is bytes at a pty and carries no
+     * request id, so nothing can say whether they landed; `session.send` is answered with
+     * `session.sent`, which is what lets a composer keep a draft on a refusal instead of losing it
+     * into a socket.
+     */
+    const val SEND = "send"
+
+    /**
+     * The conversation, as a chat rather than as a terminal.
+     *
+     * A bounded tail of the JSONL the agent is already writing, collapsed on the far side by the
+     * desktop's own `ChatCollapser`. What travels is the collapsed bubbles, never the file — a
+     * transcript runs to tens of megabytes and this is a relay.
+     */
+    const val CHAT = "chat"
+
+    /** Open a page **on the machine**, in its own browser. A tap here is a tab over there. */
+    const val WEB = "web"
+
+    /** One project's dev server: what it is doing, and the one verb that starts it. */
+    const val DEVSERVER = "devserver"
+
+    /**
+     * The machine's own agent, driven from here.
+     *
+     * The one capability that is advertised and can still be refused: the host names it when it
+     * *has* a copilot, and a device is admitted to it by a separate grant the owner approves at the
+     * desk. A client that treated the capability as the permission would draw a tab whose every
+     * button answered "not allowed" — which is why [dev.terminaldeck.android.protocol.CopilotAccess]
+     * is a second reading rather than a boolean derived from this string.
+     */
+    const val COPILOT = "copilot"
 
     /**
      * What this build tells a desktop it can do, in `hello.capabilities`.

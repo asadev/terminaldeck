@@ -1,24 +1,59 @@
 <!--
-  A prompt caret and a cursor block, on the adaptive icon's 108dp canvas with everything inside the
-  66dp safe zone. Drawn as paths rather than shipped as a PNG so it stays sharp at every density and
-  the repo stays free of binary assets nobody can diff.
+  The mark: a workspace card with the deck's blue spine down its left edge, and a shell prompt on
+  its face.
+
+  This replaces a green chevron. The green was #3DDC84 — Android's own brand colour — which is a
+  stranger's logo worn as if it were ours, and it appeared nowhere else in this product. The shapes
+  and the four colours here are `build/art/icon.mjs`'s, which is what the desktop tile, the disk
+  image and the site all already use: the card is the workspace, the spine is the sidebar, and the
+  chevron is what is in it.
+
+  Drawn as paths rather than shipped as a PNG so it stays sharp at every density and the repo stays
+  free of binary assets nobody can diff. Everything is inside the 66dp safe zone (x and y from 21 to
+  87), because a launcher may mask this to a circle, a squircle or a teardrop and anything outside
+  that square is a shape that survives on some phones and is cut off on others.
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- ❯ -->
+    <!-- The card. -->
+    <path android:pathData="M32,31 h44 a7,7 0 0 1 7,7 v32 a7,7 0 0 1 -7,7 h-44 a7,7 0 0 1 -7,-7 v-32 a7,7 0 0 1 7,-7 z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="0" android:startY="31"
+                android:endX="0" android:endY="77">
+                <item android:offset="0" android:color="#FFF6F7F9" />
+                <item android:offset="1" android:color="#FFDFE3E9" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- The spine: the sidebar, rounded on the outside edge and square where the card continues. -->
+    <path android:pathData="M32,31 h11 v46 h-11 a7,7 0 0 1 -7,-7 v-32 a7,7 0 0 1 7,-7 z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="0" android:startY="31"
+                android:endX="0" android:endY="77">
+                <item android:offset="0" android:color="#FF3B8FEE" />
+                <item android:offset="1" android:color="#FF2371D6" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- The prompt. -->
     <path
-        android:strokeColor="#3DDC84"
-        android:strokeWidth="7"
+        android:strokeColor="#FF1B1F26"
+        android:strokeWidth="4.5"
         android:strokeLineCap="round"
         android:strokeLineJoin="round"
-        android:pathData="M 36,42 L 50,54 L 36,66" />
-
-    <!-- cursor block -->
+        android:pathData="M53,45 L61,54 L53,63" />
     <path
-        android:fillColor="#3DDC84"
-        android:pathData="M 58,60 h 16 v 7 h -16 z" />
+        android:fillColor="#FF1B1F26"
+        android:pathData="M67,59 h9 v4.5 h-9 z" />
 </vector>

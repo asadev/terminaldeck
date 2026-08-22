@@ -44,9 +44,17 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import dev.terminaldeck.android.DeckUiState
 import dev.terminaldeck.android.pairing.PairingCodes
+import dev.terminaldeck.android.ui.kit.DeckGroup
+import dev.terminaldeck.android.ui.kit.DeckPrimaryButton
+import dev.terminaldeck.android.ui.kit.DeckTextField
+import dev.terminaldeck.android.ui.kit.FieldLabel
+import dev.terminaldeck.android.ui.theme.DeckTheme
+import dev.terminaldeck.android.ui.theme.DeckType
+import dev.terminaldeck.android.ui.theme.Space
 import dev.terminaldeck.android.transport.TransportState
 import dev.terminaldeck.android.transport.detail
 
@@ -165,23 +173,26 @@ fun PairingScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
+            .background(DeckTheme.colors.background)
             .statusBarsPadding()
             .navigationBarsPadding()
             .imePadding()
             .verticalScroll(rememberScrollState())
-            .padding(24.dp),
+            .padding(horizontal = Space.screen)
+            .padding(top = Space.x5, bottom = Space.x8),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
             Text(
                 text = if (adding) "Add a machine" else "Terminal Deck",
-                style = MaterialTheme.typography.titleLarge,
-                color = MaterialTheme.colorScheme.onBackground,
+                style = DeckType.largeTitle,
+                color = DeckTheme.colors.primary,
                 modifier = Modifier.weight(1f),
             )
             // Only when there is somewhere to go back to. See `onCancel`.
             onCancel?.let {
-                TextButton(onClick = it) { Text("Your machines") }
+                TextButton(onClick = it) {
+                    Text("Your machines", style = DeckType.control, color = DeckTheme.colors.accent)
+                }
             }
         }
         Spacer(Modifier.height(6.dp))
@@ -207,11 +218,15 @@ fun PairingScreen(
                 unreachable -> "This phone has a code for a $noun it cannot reach."
                 else -> "Pair this phone with your $noun."
             },
-            style = MaterialTheme.typography.bodyMedium,
-            color = if (unreachable) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+            style = DeckType.footnote,
+            // Amber rather than red for the unreachable cases. Nothing is broken: a machine is
+            // asleep, or a code has expired, and both are recovered from on this screen. Red is
+            // kept for the two states that genuinely cannot be recovered from here: a refusal and
+            // a version mismatch, which the card below says in its own words.
+            color = if (unreachable) DeckTheme.colors.warning else DeckTheme.colors.faint,
         )
 
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(Space.x5))
 
         when {
             awaitingApproval -> WaitingCard(state, noun, onRetry, onForget)
@@ -240,19 +255,21 @@ fun PairingScreen(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "Adding a server?",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurface,
+                        style = DeckType.body,
+                        color = DeckTheme.colors.primary,
                     )
                     Text(
                         // Says the difference in one line, because "server" and "machine" are not
                         // words a person is required to have learned before opening this app.
                         text = "A machine nobody sits at has no code to show. Sign in to it instead.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = DeckType.caption,
+                        color = DeckTheme.colors.faint,
                     )
                 }
                 Spacer(Modifier.width(10.dp))
-                TextButton(onClick = addServer) { Text("Add a server") }
+                TextButton(onClick = addServer) {
+                    Text("Add a server", style = DeckType.control, color = DeckTheme.colors.accent)
+                }
             }
         }
 
@@ -312,66 +329,59 @@ private fun EnterCard(
         Text(
             text = "On the $noun, open Terminal Deck \u2192 Remote \u2192 Pair a device. " +
                 "Type the six digits it shows.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = DeckType.footnote,
+            color = DeckTheme.colors.secondary,
         )
-        Spacer(Modifier.height(16.dp))
-        OutlinedTextField(
+        Spacer(Modifier.height(Space.x4))
+        FieldLabel("Pairing code")
+        DeckTextField(
             value = code,
             onValueChange = { typed ->
                 val digits = typed.filter { it in '0'..'9' }.take(PairingCodes.CODE_LENGTH)
                 onCode(digits)
                 if (digits.length == PairingCodes.CODE_LENGTH && !busy) onPair()
             },
-            label = { Text("Pairing code") },
-            placeholder = { Text("000000") },
-            singleLine = true,
-            isError = error != null,
-            supportingText = error?.let { { Text(it, color = MaterialTheme.colorScheme.error) } },
+            placeholder = "000000",
             keyboardOptions = KeyboardOptions(
                 keyboardType = KeyboardType.NumberPassword,
                 imeAction = ImeAction.Done,
             ),
-            textStyle = LocalTextStyle.current.copy(
+            // Big, mono and let out: six digits somebody is copying off another screen one at a
+            // time, and the one string in this app that most wants to be countable at a glance.
+            textStyle = DeckType.largeTitle.copy(
                 fontFamily = FontFamily.Monospace,
-                fontSize = 28.sp,
-                letterSpacing = 8.sp,
+                letterSpacing = 0.28.em,
                 textAlign = TextAlign.Center,
             ),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedTextColor = MaterialTheme.colorScheme.onSurface,
-                unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
-                focusedBorderColor = MaterialTheme.colorScheme.primary,
-                unfocusedBorderColor = MaterialTheme.colorScheme.outline,
-            ),
-            modifier = Modifier.fillMaxWidth(),
         )
-        Spacer(Modifier.height(14.dp))
-        Button(
+        error?.let {
+            Spacer(Modifier.height(Space.x1))
+            Text(text = it, style = DeckType.caption, color = DeckTheme.colors.critical)
+        }
+        Spacer(Modifier.height(Space.x3))
+        DeckPrimaryButton(
+            label = if (busy) "Looking for that machine\u2026" else "Pair",
             onClick = onPair,
             enabled = code.isNotBlank() && !busy,
-            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
             // A spinner rather than the word alone. Finding the machine is a memory-hard derivation
             // and a round trip over a relay, and a button whose only sign of life is a changed
             // caption reads as one that has stuck.
-            if (busy) {
-                CircularProgressIndicator(
-                    strokeWidth = 2.dp,
-                    color = MaterialTheme.colorScheme.onPrimary,
-                    modifier = Modifier.size(16.dp),
-                )
-                Spacer(Modifier.width(10.dp))
-            }
-            Text(if (busy) "Looking for that machine\u2026" else "Pair")
-        }
-        Spacer(Modifier.height(10.dp))
+            leading = if (busy) {
+                {
+                    CircularProgressIndicator(
+                        strokeWidth = 2.dp,
+                        color = DeckTheme.colors.onAccent,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+            } else null,
+        )
+        Spacer(Modifier.height(Space.x2))
         Text(
             text = "A code is good for one minute and one use. Pairing alone does not grant access " +
                 "\u2014 the $noun still asks somebody to approve this phone.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = DeckType.caption,
+            color = DeckTheme.colors.faint,
         )
     }
 }
@@ -391,14 +401,14 @@ private fun WaitingCard(state: DeckUiState, noun: String, onRetry: () -> Unit, o
         Row(verticalAlignment = Alignment.CenterVertically) {
             CircularProgressIndicator(
                 strokeWidth = 2.dp,
-                color = MaterialTheme.colorScheme.secondary,
+                color = DeckTheme.colors.warning,
                 modifier = Modifier.size(16.dp),
             )
             Spacer(Modifier.width(12.dp))
             Text(
                 text = state.transport.detail,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface,
+                style = DeckType.body,
+                color = DeckTheme.colors.primary,
             )
         }
         Spacer(Modifier.height(12.dp))
@@ -410,16 +420,16 @@ private fun WaitingCard(state: DeckUiState, noun: String, onRetry: () -> Unit, o
             // reproduces that omission on purpose rather than being more generous than the product.
             text = "Approve this phone in Terminal Deck on the $noun. It keeps checking on its own " +
                 "— there is nothing to do here.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = DeckType.footnote,
+            color = DeckTheme.colors.secondary,
         )
-        Spacer(Modifier.height(14.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Button(
-                onClick = onRetry,
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-            ) { Text("Check now") }
-            TextButton(onClick = onForget) { Text("Use a different code") }
+        Spacer(Modifier.height(Space.x3))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            DeckPrimaryButton(label = "Check now", onClick = onRetry, modifier = Modifier.weight(1f))
+            Spacer(Modifier.width(Space.x2))
+            TextButton(onClick = onForget) {
+                Text("Use a different code", style = DeckType.value, color = DeckTheme.colors.accent)
+            }
         }
     }
 }
@@ -444,8 +454,14 @@ private fun UnreachableCard(state: DeckUiState, noun: String, onRetry: () -> Uni
     Card {
         Text(
             text = transport.detail,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.error,
+            style = DeckType.body,
+            // Red only for the two states that are genuinely a refusal; amber for a machine that
+            // has simply not answered, which is the ordinary case and is recovered from by waiting.
+            color = if (transport is TransportState.Rejected || transport is TransportState.Incompatible) {
+                DeckTheme.colors.critical
+            } else {
+                DeckTheme.colors.warning
+            },
         )
         Spacer(Modifier.height(12.dp))
         Text(
@@ -468,38 +484,33 @@ private fun UnreachableCard(state: DeckUiState, noun: String, onRetry: () -> Uni
                         "Check that Terminal Deck is running and awake on the $noun, that both are " +
                         "online, and that the code has not expired."
             },
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = DeckType.footnote,
+            color = DeckTheme.colors.secondary,
         )
         (transport as? TransportState.Waiting)?.let {
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(Space.x2))
             Text(
                 text = "Tried ${it.attempts} time${if (it.attempts == 1) "" else "s"} so far.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = DeckType.caption,
+                color = DeckTheme.colors.faint,
             )
         }
-        Spacer(Modifier.height(14.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Button(
-                onClick = onRetry,
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-            ) { Text("Try again") }
-            TextButton(onClick = onForget) { Text("Use a different code") }
+        Spacer(Modifier.height(Space.x3))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            DeckPrimaryButton(label = "Try again", onClick = onRetry, modifier = Modifier.weight(1f))
+            Spacer(Modifier.width(Space.x2))
+            TextButton(onClick = onForget) {
+                Text("Use a different code", style = DeckType.value, color = DeckTheme.colors.accent)
+            }
         }
     }
 }
 
 @Composable
 private fun Card(content: @Composable ColumnScope.() -> Unit) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(MaterialTheme.colorScheme.surface)
-            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(14.dp))
-            .padding(18.dp),
-    ) { content() }
+    DeckGroup {
+        Column(modifier = Modifier.padding(18.dp), content = content)
+    }
 }
 
 @Composable
@@ -509,20 +520,19 @@ private fun FingerprintRow(label: String, value: String) {
             modifier = Modifier
                 .size(6.dp)
                 .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.outline)
+                .background(DeckTheme.colors.hairlineStrong)
         )
         Spacer(Modifier.width(10.dp))
         Column {
             Text(
                 text = label.uppercase(),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = DeckType.overline,
+                color = DeckTheme.colors.faint,
             )
             Text(
                 text = value,
-                style = MaterialTheme.typography.bodySmall,
-                fontFamily = FontFamily.Monospace,
-                color = MaterialTheme.colorScheme.onSurface,
+                style = DeckType.mono,
+                color = DeckTheme.colors.secondary,
             )
         }
     }

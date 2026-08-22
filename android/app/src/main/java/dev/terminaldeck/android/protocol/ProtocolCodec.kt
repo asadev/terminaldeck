@@ -161,6 +161,50 @@ object ServerFrames {
             }
             return Result.Ok(message)
         }
+        // A roster the machine sent, bounded rather than refused: a list that is one row too long is
+        // a machine with a lot of logins, not a hostile frame, and the honest answer is the rows this
+        // client will draw.
+        if (message is ServerMessage.AccountState && message.accounts.size > Protocol.MAX_ACCOUNTS_REPORTED) {
+            return Result.Ok(message.copy(accounts = message.accounts.take(Protocol.MAX_ACCOUNTS_REPORTED)))
+        }
+        // Kept from the **end**, matching `rows.slice(-MAX_CHAT_ROWS)` over there: a chat view shows
+        // the newest of a conversation, and trimming the head of an over-long answer would keep the
+        // oldest bubbles and drop the reply somebody is waiting to read.
+        if (message is ServerMessage.ChatRows && message.rows.size > Protocol.MAX_CHAT_ROWS) {
+            return Result.Ok(message.copy(rows = message.rows.takeLast(Protocol.MAX_CHAT_ROWS)))
+        }
+        // A tunnelled chunk is validated as base64 before an allocator is handed it, exactly as
+        // `net.data` is on the desktop: the alphabet, and a length that is a multiple of four.
+        // Refused rather than repaired — invented bytes in the middle of somebody's HTTP response
+        // are worse than a stream that ends.
+        if (message is ServerMessage.NetData) {
+            if (message.ch.isEmpty()) return Result.Bad("net.data without a channel id")
+            if (message.data.length > Protocol.MAX_NET_DATA_CHARS) {
+                return Result.Bad("net.data over the chunk limit")
+            }
+            if (message.data.isNotEmpty() && !isBase64(message.data)) {
+                return Result.Bad("net.data is not base64")
+            }
+            return Result.Ok(message)
+        }
+        if (message is ServerMessage.NetAck) {
+            if (message.ch.isEmpty()) return Result.Bad("net.ack without a channel id")
+            if (message.bytes < 0) return Result.Bad("net.ack out of range")
+            return Result.Ok(message)
+        }
+        if (message is ServerMessage.NetClose && message.ch.isEmpty()) {
+            return Result.Bad("net.close without a channel id")
+        }
+        if (message is ServerMessage.TunnelOpened) {
+            if (message.id.isEmpty()) return Result.Bad("incomplete tunnel.opened")
+            if (message.port < Protocol.MIN_PORT || message.port > Protocol.MAX_PORT) {
+                return Result.Bad("tunnel.opened with an unusable port")
+            }
+            return Result.Ok(message)
+        }
+        if (message is ServerMessage.TunnelClosed && message.id.isEmpty()) {
+            return Result.Bad("tunnel.closed without an id")
+        }
         if (message !is ServerMessage.CredentialRequest) return Result.Ok(message)
         if (message.id.isEmpty()) return Result.Bad("credential.request without an id")
         if (message.host.isEmpty() || message.host.length > Protocol.MAX_CREDENTIAL_HOST_LENGTH) {
@@ -168,6 +212,33 @@ object ServerFrames {
         }
         val repo = message.repo?.takeIf { it.isNotEmpty() && it.length <= Protocol.MAX_CREDENTIAL_REPO_LENGTH }
         return Result.Ok(if (repo == message.repo) message else message.copy(repo = repo))
+    }
+
+    /**
+     * Whether a string is base64 the way the desktop's `BASE64_RE` means it.
+     *
+     * Checked rather than decoded-and-caught, because the point is to refuse before the bytes are
+     * allocated: a 32 KiB string that turns out not to be base64 should cost a scan, not a decode
+     * and an exception on the socket's own thread.
+     */
+    private fun isBase64(value: String): Boolean {
+        if (value.isEmpty() || value.length % 4 != 0) return false
+        var padding = 0
+        for (index in value.indices) {
+            val ch = value[index]
+            when {
+                ch == '=' -> {
+                    padding += 1
+                    // Padding is only ever the last one or two characters. A `=` anywhere else is a
+                    // string that decodes to something other than what it looks like.
+                    if (padding > 2 || index < value.length - 2) return false
+                }
+                padding > 0 -> return false
+                ch in 'A'..'Z' || ch in 'a'..'z' || ch in '0'..'9' || ch == '+' || ch == '/' -> Unit
+                else -> return false
+            }
+        }
+        return true
     }
 
     /**

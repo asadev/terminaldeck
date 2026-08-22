@@ -1,6 +1,7 @@
 package dev.terminaldeck.android
 
 import android.graphics.Color
+import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
 import android.provider.OpenableColumns
 import androidx.activity.ComponentActivity
@@ -62,7 +63,12 @@ import dev.terminaldeck.android.ui.GitHubSheet
 import dev.terminaldeck.android.ui.PairingScreen
 import dev.terminaldeck.android.ui.SessionListScreen
 import dev.terminaldeck.android.ui.TerminalScreen
+import androidx.compose.ui.platform.LocalConfiguration
+import dev.terminaldeck.android.ui.theme.AppearanceStore
+import dev.terminaldeck.android.ui.theme.DeckTheme
 import dev.terminaldeck.android.ui.theme.TerminalDeckTheme
+import dev.terminaldeck.android.ui.theme.currentAppearance
+import dev.terminaldeck.android.ui.theme.installTerminalPalette
 
 class MainActivity : ComponentActivity() {
 
@@ -80,24 +86,74 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Both bars declared dark with a transparent scrim. The default asks the system to pick,
-        // and the system picks from the *system* light/dark setting — which on a light phone puts
-        // a white navigation bar under a black terminal.
-        enableEdgeToEdge(
-            statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
-            navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
-        )
+
+        /*
+         * The appearance is read before anything is drawn, and the window is painted from it.
+         *
+         * `values/themes.xml` and `values-night/themes.xml` already give the launch frame the right
+         * colour *for the system setting*, which is the right answer for everyone who has left this
+         * on System. It is the wrong answer for somebody who chose Light on a phone that is dark,
+         * and the symptom is a black rectangle for one frame before a white app appears. Repainting
+         * the window here closes that gap: this runs before `setContent`, so nothing has been drawn
+         * yet and there is nothing to flash.
+         */
+        val appearance = AppearanceStore.prime(this)
+        val dark = appearance.isDark(resources.configuration)
+        window.setBackgroundDrawable(ColorDrawable(deckWindowColor(dark)))
+
+        /*
+         * The terminal's palette, installed before the first session can be attached.
+         *
+         * The vendored emulator holds its colour scheme in process-wide static state and a session
+         * copies from it at construction, so this has to happen before any session exists — and
+         * again on every appearance change, which is what the effect below does.
+         */
+        installTerminalPalette(dark)
+
         setContent {
             TerminalDeckTheme {
+                /*
+                 * The system bars follow the theme, and they are re-declared whenever it changes.
+                 *
+                 * This used to be one `enableEdgeToEdge` pair in `onCreate` pinned to one
+                 * appearance, which was correct for an app that was only ever dark and is a bug for
+                 * one that is not: a light app under dark bar styles draws white icons on white.
+                 * `enableEdgeToEdge` is idempotent and cheap, so calling it from an effect keyed on
+                 * the resolved appearance is the documented way to keep it honest — `auto` picks
+                 * the icon colour from the flag it is given rather than from the system setting,
+                 * which is the distinction that matters for somebody who has chosen Light on a dark
+                 * phone.
+                 */
+                val nowDark = currentAppearance().isDark(LocalConfiguration.current)
+                val scrim = deckWindowColor(nowDark)
+                DisposableEffect(nowDark) {
+                    enableEdgeToEdge(
+                        statusBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT) { nowDark },
+                        navigationBarStyle = SystemBarStyle.auto(scrim, scrim) { nowDark },
+                    )
+                    installTerminalPalette(nowDark)
+                    onDispose { }
+                }
+
                 Surface(
                     modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background,
+                    color = DeckTheme.colors.background,
                 ) {
                     TerminalDeckApp(onRegisterResume = { onResumed = it })
                 }
             }
         }
     }
+
+    /**
+     * `--bg-primary` as an `android.graphics` int.
+     *
+     * The one place in the app outside `ui/theme` that names a colour, and it has to be: the window
+     * background is set on a `Window` before any composition exists, so there is no theme to ask.
+     * It reads the same two hexes `Ink.background` carries and `PaletteParityTest` checks that they
+     * still agree.
+     */
+    private fun deckWindowColor(dark: Boolean): Int = if (dark) 0xFF191919.toInt() else 0xFFFFFFFF.toInt()
 
     /**
      * Reconnect when the app comes back.

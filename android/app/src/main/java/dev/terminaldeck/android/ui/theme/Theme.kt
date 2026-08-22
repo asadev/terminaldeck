@@ -1,63 +1,101 @@
 package dev.terminaldeck.android.ui.theme
 
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.LocalTextSelectionColors
+import androidx.compose.foundation.text.selection.TextSelectionColors
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
-import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.sp
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.ReadOnlyComposable
+import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalConfiguration
 
 /**
- * Terminal Deck's palette, such as it is.
+ * The theme, and the only place a screen may learn a colour, a size or a radius.
  *
- * Dark, and dark regardless of the system setting. That is a deliberate refusal rather than an
- * unfinished light theme: the whole screen below the app bar is a terminal, terminals are dark, and
- * a white chrome wrapped around a black rectangle reads as two applications sharing a window. Apps
- * that own a single dark canvas — editors, video players, camera viewfinders — all make the same
- * call.
+ * Three things are provided together and none of them works alone:
  *
- * The colours are here rather than pulled from `src/shared/brand.ts` because that file is
- * TypeScript in the desktop build and there is no shared source of truth across the two yet.
+ *  1. **[LocalDeckColors]** — this product's vocabulary. `DeckTheme.colors.faint` rather than a
+ *     Material slot that happens to be the right grey today.
+ *  2. **A Material `ColorScheme` derived from the same values** — so the framework's own controls
+ *     (ripple, snackbar, dialog, text-field cursor, progress indicator) are drawn in this palette
+ *     rather than in Material's purple, and so the forty-odd `MaterialTheme.colorScheme.*` reads
+ *     already written across these screens resolve to the right thing.
+ *  3. **The type ladder and the corner radii**, for the same reason.
+ *
+ * ## The appearance is resolved here and nowhere else
+ *
+ * One call site decides light or dark for the whole window. That rule is the change rather than a
+ * tidiness: the client this replaces stated *dark* in four places, and every one of them was an
+ * override that would have silently ignored a person's choice. `ThemeRuleTest` walks the source and
+ * fails if a `darkColorScheme(`, a `lightColorScheme(` or a `SystemBarStyle.dark(` comes back
+ * anywhere outside this package.
  */
-private val DeckGreen = Color(0xFF3DDC84)
-private val DeckInk = Color(0xFF0B0D10)
-private val DeckSurface = Color(0xFF14171C)
-private val DeckSurfaceHigh = Color(0xFF1D2128)
-private val DeckOutline = Color(0xFF2A2F38)
-private val DeckText = Color(0xFFE6E9EF)
-private val DeckMuted = Color(0xFF8B93A1)
-private val DeckAmber = Color(0xFFE3B341)
-
-private val DarkColors = darkColorScheme(
-    primary = DeckGreen,
-    onPrimary = DeckInk,
-    secondary = DeckAmber,
-    background = DeckInk,
-    onBackground = DeckText,
-    surface = DeckSurface,
-    onSurface = DeckText,
-    surfaceVariant = DeckSurfaceHigh,
-    onSurfaceVariant = DeckMuted,
-    outline = DeckOutline,
-    outlineVariant = DeckOutline,
-)
-
-private val DeckTypography = Typography(
-    titleLarge = TextStyle(fontSize = 20.sp, fontWeight = FontWeight.SemiBold),
-    titleMedium = TextStyle(fontSize = 15.sp, fontWeight = FontWeight.Medium),
-    bodyMedium = TextStyle(fontSize = 14.sp),
-    bodySmall = TextStyle(fontSize = 12.sp, fontFamily = FontFamily.Monospace),
-    labelSmall = TextStyle(fontSize = 11.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.6.sp),
-)
-
 @Composable
-fun TerminalDeckTheme(content: @Composable () -> Unit) {
-    MaterialTheme(
-        colorScheme = DarkColors,
-        typography = DeckTypography,
-        content = content,
-    )
+fun TerminalDeckTheme(
+    appearance: Appearance = currentAppearance(),
+    content: @Composable () -> Unit,
+) {
+    val configuration = LocalConfiguration.current
+    val dark = appearance.isDark(configuration)
+    val colors = if (dark) DeckDarkColors else DeckLightColors
+    val scheme = remember(dark) { deckColorScheme(dark) }
+
+    /*
+     * Selected text is the accent at half strength, with the handles at full.
+     *
+     * Compose's default derives both from `primary`, which is already right — but the *background*
+     * default is `primary` at 40%, and this app sets selections over a terminal's ground where 40%
+     * of a blue does not read as a selection at all. Half, matching `Palette.selection` on iOS, and
+     * stated rather than inherited so the two clients cannot drift.
+     */
+    val selection = remember(dark) {
+        TextSelectionColors(handleColor = colors.accent, backgroundColor = colors.accent.copy(alpha = 0.5f))
+    }
+
+    CompositionLocalProvider(
+        LocalDeckColors provides colors,
+        LocalTextSelectionColors provides selection,
+    ) {
+        MaterialTheme(
+            colorScheme = scheme,
+            typography = DeckTypography,
+            shapes = DeckShapes,
+            content = content,
+        )
+    }
+}
+
+/**
+ * The radii, seen from Material.
+ *
+ * `extraSmall` through `extraLarge` are what a `Card`, an `AlertDialog`, a `DropdownMenu` and a
+ * `Button` reach for when nothing overrides them. Material's defaults run rounder than this product
+ * at the large end (28dp on a dialog) and squarer at the small end, and both are visible next to a
+ * hand-drawn 14dp card on the same screen.
+ */
+private val DeckShapes = Shapes(
+    extraSmall = RoundedCornerShape(Radius.sm),
+    small = RoundedCornerShape(Radius.md),
+    medium = RoundedCornerShape(Radius.field),
+    large = RoundedCornerShape(Radius.group),
+    extraLarge = RoundedCornerShape(Radius.sheet),
+)
+
+/**
+ * `DeckTheme.colors` — the accessor a screen uses.
+ *
+ * An object rather than a bare `LocalDeckColors.current` at every call site, because the name is
+ * what makes the rule readable: *colours come from the theme*. It reads the same way
+ * `MaterialTheme.colorScheme` does, which is deliberate — the two sit next to each other in this
+ * codebase and should look like siblings rather than like one of them being a workaround.
+ */
+object DeckTheme {
+    val colors: DeckColors
+        @Composable @ReadOnlyComposable get() = LocalDeckColors.current
+
+    val type: Typography
+        @Composable @ReadOnlyComposable get() = MaterialTheme.typography
 }

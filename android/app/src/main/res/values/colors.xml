@@ -1,5 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="deck_ink">#FF0B0D10</color>
-    <color name="deck_green">#FF3DDC84</color>
+    <!--
+      The window background, before the first Compose frame exists.
+
+      Two values and two files: this one is the light theme's `bg-primary`, and `values-night/`
+      carries the dark theme's. They are here as well as in `DeckPalette.kt` because a resource is
+      the only thing the window manager can read *before* the process has drawn anything, and the
+      gap between the window appearing and the first frame landing is exactly where a white flash
+      happens.
+
+      They are a fallback, not the decision. `MainActivity.onCreate` reads the stored preference and
+      paints the window itself, which is what makes the "Light" choice hold on a phone whose system
+      setting is dark. These two only decide the frame before that runs, and on a device where the
+      preference is System they are already the right answer.
+    -->
+    <color name="deck_window">#FFFFFFFF</color>
 </resources>

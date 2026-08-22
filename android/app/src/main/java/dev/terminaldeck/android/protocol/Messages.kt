@@ -585,6 +585,172 @@ sealed interface ClientMessage {
     @SerialName("browser.surfaces")
     data class BrowserSurfaces(val rid: String) : ClientMessage
 
+    /* ---- capability `usage`. The two figures a session's bar draws. ---------------------- */
+
+    /**
+     * Read one usage figure for one session.
+     *
+     * The three [UsageWant]s are not interchangeable and do not cost the same, which is why the
+     * question names one rather than a client asking for "usage" and sorting out the answer.
+     * [force] is true only for [UsageWant.Refresh], which boots a whole agent on the far machine,
+     * and it is therefore only ever sent because a finger pressed the ring.
+     *
+     * [force] carries no default: `encodeDefaults = false` would drop a literal `false`, and the
+     * desktop's parser reads `force === true` and nothing else — so writing it every time is a field
+     * that says what it means rather than one that sometimes disappears.
+     */
+    @Serializable
+    @SerialName("usage.read")
+    data class UsageRead(
+        val rid: String,
+        val id: String,
+        val want: UsageWant,
+        val force: Boolean,
+    ) : ClientMessage
+
+    /* ---- capability `account`. Which login a session runs as. ---------------------------- */
+
+    /** Which login this session runs as, and every login the machine has. Answered `account.state`. */
+    @Serializable
+    @SerialName("account.read")
+    data class AccountRead(val rid: String, val id: String) : ClientMessage
+
+    /**
+     * Run this session as a different login.
+     *
+     * The far end decides whether the switch took, and this client never renames a chip on the press
+     * — it re-reads. A row of a *different agent* is refused over there with a sentence, and nothing
+     * on this bar draws sentences, so such a row is not pressable in the first place; see
+     * [foreignAccount].
+     */
+    @Serializable
+    @SerialName("account.switch")
+    data class AccountSwitch(
+        val rid: String,
+        val id: String,
+        val accountId: String,
+    ) : ClientMessage
+
+    /* ---- capability `send`. A whole message, rather than keystrokes. --------------------- */
+
+    /**
+     * Type a whole message at a session as one act.
+     *
+     * Not [Input]. `input` is bytes at a pty and carries no request id, so nothing can say whether
+     * they landed; this is answered with `session.sent`, which is what lets a composer keep the
+     * draft on a refusal instead of losing it into a socket. Bounded by the same cap `input` gets,
+     * in bytes, because it is the same paste going into the same pty.
+     */
+    @Serializable
+    @SerialName("session.send")
+    data class SessionSend(val rid: String, val id: String, val data: String) : ClientMessage
+
+    /* ---- capability `chat`. The conversation, as a chat. --------------------------------- */
+
+    /**
+     * Read the conversation of one session.
+     *
+     * [tail] false is what opening the view asks — the whole bounded tail; true is what a session
+     * going quiet asks, which is the cheap follow-up. Answered with `chat.rows`, whose `reset` says
+     * whether what comes back extends what is held or replaces it.
+     */
+    @Serializable
+    @SerialName("chat.read")
+    data class ChatRead(val rid: String, val id: String, val tail: Boolean) : ClientMessage
+
+    /* ---- capability `web`. A page, opened on the machine. -------------------------------- */
+
+    /**
+     * Open this page **on the machine**, in its own browser.
+     *
+     * A phone cannot serve through a port on somebody else's computer, and the honest version of
+     * "drive localhost" is that the page opens *there* and the device that asked is driving rather
+     * than viewing. The host refuses anything that is not http(s) and refuses a guest outright; a
+     * refusal is a plain `error`, and success is `web.opened`, which is sent only once a tab was
+     * actually made.
+     */
+    @Serializable
+    @SerialName("web.open")
+    data class WebOpen(val url: String) : ClientMessage
+
+    /* ---- capability `localhost`. What is listening, and a tunnel to one of them. --------- */
+
+    /** What is listening on the machine right now. Answered with `ports`. */
+    @Serializable
+    @SerialName("ports")
+    data object Ports : ClientMessage
+
+    /**
+     * Open a tunnel to one port on the machine. Answered `tunnel.opened`, refused `tunnel.closed`.
+     *
+     * **This message is the consent.** There is no standing permission and no allowlist of ports: a
+     * tunnel exists between a tap and the moment the view closes, and `tunnel.close` — from either
+     * end — is the whole of the teardown.
+     */
+    @Serializable
+    @SerialName("tunnel.open")
+    data class TunnelOpen(val id: String, val port: Int) : ClientMessage
+
+    /** Tear one down. Idempotent over there: closing a tunnel that has gone is not an error. */
+    @Serializable
+    @SerialName("tunnel.close")
+    data class TunnelClose(val id: String) : ClientMessage
+
+    /**
+     * A new byte stream inside a tunnel: one browser connection, one [ch].
+     *
+     * Only legal after `tunnel.opened` has been heard. Opening a tunnel waits on a port scan on the
+     * far side, so a client that sent both in one breath would be refused for naming a tunnel that
+     * does not exist yet — which is why this client binds its listening socket on the confirmation,
+     * not on the request.
+     */
+    @Serializable
+    @SerialName("net.open")
+    data class NetOpen(val ch: String, val tunnel: String) : ClientMessage
+
+    /** Bytes for one stream, base64. Bounded by [Protocol.MAX_NET_DATA_CHARS]. */
+    @Serializable
+    @SerialName("net.data")
+    data class NetData(val ch: String, val data: String) : ClientMessage
+
+    /** "I have written this many bytes to my socket." See [Protocol.NET_WINDOW_BYTES]. */
+    @Serializable
+    @SerialName("net.ack")
+    data class NetAck(val ch: String, val bytes: Int) : ClientMessage
+
+    /** One stream is finished. The tunnel outlives it. */
+    @Serializable
+    @SerialName("net.close")
+    data class NetClose(val ch: String) : ClientMessage
+
+    /* ---- capability `devserver`. One project's dev server. ------------------------------- */
+
+    /**
+     * What is this project's dev server doing?
+     *
+     * [folder] is a folder *this client* named and nothing has checked yet — the same rule and the
+     * same wording as `create.cwd`, because it is the same question with the same answer. The
+     * desktop accepts only a folder it is already offering this device in `welcome.folders`, so the
+     * value has an honest source on the phone (a row that is on screen) and naming it grants nothing
+     * the device could not already do.
+     */
+    @Serializable
+    @SerialName("dev.status")
+    data class DevStatus(val folder: String) : ClientMessage
+
+    /**
+     * Start it. **This message is the consent, and there is no standing one.**
+     *
+     * Nothing runs on the desktop because of this feature until one of these arrives, and one only
+     * arrives because a person tapped a row for a folder their desktop has granted them. The command
+     * is not on the wire and cannot be: the desktop reads the folder's own `package.json` and runs
+     * the script it declares, and a client that could name a command would be a client that could
+     * run one.
+     */
+    @Serializable
+    @SerialName("dev.start")
+    data class DevStart(val folder: String) : ClientMessage
+
     companion object {
         /**
          * Attach with a size when there is one, without when there is not.
@@ -1105,6 +1271,167 @@ sealed interface ServerMessage {
         val rid: String? = null,
         val surfaces: kotlin.collections.List<BrowserSurfaceWire> = emptyList(),
     ) : ServerMessage
+
+    /* ---- capability `usage` ---------------------------------------------------------------- */
+
+    /**
+     * One usage figure, or the far end's sentence for why there is none.
+     *
+     * [want] is echoed because the three readings are not interchangeable and a client that folded
+     * them would draw a context bar out of a plan report. [answer] holds the machine's **own**
+     * record — see [UsageAnswerWire] — narrowed to figures by [UsageReadings] and never by the
+     * serializer.
+     */
+    @Serializable
+    @SerialName("usage.reading")
+    data class UsageReading(
+        val rid: String,
+        val id: String,
+        val want: UsageWant,
+        val answer: UsageAnswerWire = UsageAnswerWire(),
+    ) : ServerMessage
+
+    /* ---- capability `account` -------------------------------------------------------------- */
+
+    /**
+     * Which login this session runs as, and every login the machine has.
+     *
+     * [current] is null when the machine could not say — which draws no chip rather than an empty
+     * one. The list is bounded on arrival by [ServerFrames.parse] rather than trusted.
+     */
+    @Serializable
+    @SerialName("account.state")
+    data class AccountState(
+        val rid: String,
+        val id: String,
+        val current: AccountWire? = null,
+        val accounts: kotlin.collections.List<AccountWire> = emptyList(),
+    ) : ServerMessage
+
+    /**
+     * What happened to one `account.switch`.
+     *
+     * [session] is the session the switch landed on, or null. Nothing is renamed on this side from
+     * this frame: the chip is re-read, because the far end decides whether the switch took and a
+     * chip that renamed itself on the press would be the one surface that disagrees with the
+     * machine.
+     */
+    @Serializable
+    @SerialName("account.switched")
+    data class AccountSwitched(
+        val rid: String,
+        val id: String,
+        val ok: Boolean = false,
+        val message: String = "",
+        val session: String? = null,
+    ) : ServerMessage
+
+    /* ---- capability `send` ----------------------------------------------------------------- */
+
+    /**
+     * Whether a whole message reached the session, and the machine's sentence if it did not.
+     *
+     * The reason `session.send` exists rather than `input`: a composer can keep its draft on a
+     * refusal instead of losing it into a socket that said nothing.
+     */
+    @Serializable
+    @SerialName("session.sent")
+    data class SessionSent(
+        val rid: String,
+        val id: String,
+        val ok: Boolean = false,
+        val message: String = "",
+    ) : ServerMessage
+
+    /* ---- capability `chat` ----------------------------------------------------------------- */
+
+    /**
+     * A bounded tail of the conversation.
+     *
+     * [reset] cannot be ignored: it means the far side's document is not the one this view holds a
+     * prefix of, and appending through one draws the conversation twice. [found] is false when the
+     * folder has no transcript at all — a different empty from a session that has not spoken yet,
+     * and the reason a chat toggle is absent rather than opening an empty screen.
+     */
+    @Serializable
+    @SerialName("chat.rows")
+    data class ChatRows(
+        val rid: String,
+        val id: String,
+        val rows: kotlin.collections.List<ChatMessageWire> = emptyList(),
+        val reset: Boolean = false,
+        val found: Boolean = false,
+    ) : ServerMessage
+
+    /* ---- capability `web` ------------------------------------------------------------------ */
+
+    /**
+     * The page is open on the machine.
+     *
+     * Sent only when a tab was actually made, never on the request being received, so the sentence
+     * this client draws is about something that happened. A refusal is an ordinary [Error].
+     */
+    @Serializable
+    @SerialName("web.opened")
+    data class WebOpened(val url: String) : ServerMessage
+
+    /* ---- capability `localhost` ------------------------------------------------------------ */
+
+    /** What is listening on the machine right now. The answer to one `ports`. */
+    @Serializable
+    @SerialName("ports")
+    data class Ports(val ports: kotlin.collections.List<LocalPort> = emptyList()) : ServerMessage
+
+    /**
+     * The tunnel is up: bind a local socket and start opening streams inside it.
+     *
+     * [port] is echoed because a client may have more than one open and the id alone does not say
+     * which page it is serving.
+     */
+    @Serializable
+    @SerialName("tunnel.opened")
+    data class TunnelOpened(val id: String, val port: Int) : ServerMessage
+
+    /**
+     * There is nothing behind that page any more, and [message] says why in the machine's words.
+     *
+     * The same frame answers a refusal, a teardown this client asked for and a Stop pressed at the
+     * desk, because to this side they are one event. Which of the three it was is in the sentence,
+     * not in a code — the only thing that differs is what gets printed.
+     */
+    @Serializable
+    @SerialName("tunnel.closed")
+    data class TunnelClosed(val id: String, val message: String = "") : ServerMessage
+
+    /** Bytes for one stream, base64, checked into shape by [ServerFrames.parse]. */
+    @Serializable
+    @SerialName("net.data")
+    data class NetData(val ch: String, val data: String) : ServerMessage
+
+    /** "I have written this many bytes to my socket." The other half of [Protocol.NET_WINDOW_BYTES]. */
+    @Serializable
+    @SerialName("net.ack")
+    data class NetAck(val ch: String, val bytes: Int = 0) : ServerMessage
+
+    /** That stream is finished. The tunnel is not. */
+    @Serializable
+    @SerialName("net.close")
+    data class NetClose(val ch: String) : ServerMessage
+
+    /* ---- capability `devserver` ------------------------------------------------------------ */
+
+    /**
+     * One project's dev server, now.
+     *
+     * The single frame for the whole capability: it answers `dev.status`, it answers `dev.start`,
+     * and it arrives **unsolicited** every time the state changes after a start. **Handle it
+     * idempotently — the same state can arrive twice**, because a `dev.start` gets the state as its
+     * direct answer *and* as a push. **Replace, do not merge**: the fields are not independent, so
+     * folding a new state into an old one leaves a dead address under a live row.
+     */
+    @Serializable
+    @SerialName("dev.state")
+    data class DevState(val state: DevServerReport) : ServerMessage
 }
 
 /**

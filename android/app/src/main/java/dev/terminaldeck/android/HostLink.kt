@@ -158,6 +158,28 @@ class HostLink(
      */
     var watch: WatchController? = null
 
+    /**
+     * The bar behind one session on this machine: the plan and context figures, the login it runs
+     * as, the conversation, and the composer. Four capabilities behind one object, because they are
+     * four questions about the same session and every one of them is dropped when another session
+     * is opened.
+     */
+    var bar: SessionBarController? = null
+
+    /** What is listening on this machine, and the verb that opens one of them over there. */
+    var localhost: LocalhostController? = null
+
+    /** One dev server per folder this machine has granted this device. */
+    var devServer: DevServerController? = null
+
+    /**
+     * The tunnel behind whatever page this phone is showing from this machine.
+     *
+     * Created once per link, like the rest, and holds at most one tunnel: a phone shows one page,
+     * and a table of them would be a socket on somebody's machine for every port ever tapped.
+     */
+    var tunnels: dev.terminaldeck.android.tunnel.TunnelController? = null
+
     /** The user's name for this machine, or enough of its id to tell it apart. */
     val label: String get() = record.label
 
@@ -169,6 +191,12 @@ class HostLink(
     fun closeSession() {
         binding?.close()
         binding = null
+        // Everything that was about *that* session goes with it. A chip carrying the last session's
+        // model, or a ring drawn from the last session's context, is worse than no chip and no ring
+        // — it is the one surface that would disagree with the machine about which session is on
+        // screen.
+        controls?.forget()
+        bar?.forget()
     }
 
     /**
@@ -194,6 +222,10 @@ class HostLink(
         // keeps rendering JPEGs for a phone that is no longer listening.
         controls?.stop()
         watch?.stop()
+        bar?.forget()
+        localhost?.stop()
+        devServer?.stop()
+        tunnels?.stop()
         sessions = emptyList()
         live = false
         loaded = false

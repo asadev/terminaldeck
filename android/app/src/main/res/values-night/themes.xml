@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The dark half of the launch theme. See values/themes.xml. -->
+    <style name="Theme.TerminalDeck" parent="android:Theme.DeviceDefault.NoActionBar">
+        <item name="android:windowBackground">@color/deck_window</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>

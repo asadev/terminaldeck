@@ -5,7 +5,9 @@ import dev.terminaldeck.android.protocol.Capability
 import dev.terminaldeck.android.protocol.ClientMessage
 import dev.terminaldeck.android.protocol.ControlName
 import dev.terminaldeck.android.protocol.ControlsReadingWire
+import dev.terminaldeck.android.protocol.Protocol
 import dev.terminaldeck.android.protocol.ServerMessage
+import dev.terminaldeck.android.protocol.SessionControls
 
 /**
  * One session's control cluster on a phone — model, effort, fast mode, permission.
@@ -76,7 +78,19 @@ class SessionControlsController(
      */
     fun view(): SessionControlsView? {
         if (!offered() || sessionId == null) return null
-        return SessionControlsView(reading = reading, busy = busy, notice = notice)
+        /*
+         * Nothing at all until a reading has landed, and nothing at all over a plain shell.
+         *
+         * Three different reasons fold to null and all three mean *absent, not greyed*: the machine
+         * never advertised `controls`, no reading has arrived yet, or the session is not running an
+         * agent — a model menu over `/bin/zsh` is the defect the desktop's own cluster withdraws
+         * itself for. Decided here rather than only at the sheet so that every reader of this view
+         * gets the same answer; the sheet keeps its own check because it also has to survive a
+         * reading going stale while it is open.
+         */
+        val held = reading ?: return null
+        if (!SessionControls.clusterShown(held)) return null
+        return SessionControlsView(reading = held, busy = busy, notice = notice)
     }
 
     private fun rid(): String {
@@ -158,7 +172,12 @@ class SessionControlsController(
         val id = sessionId ?: return
         if (busy != null) return
         val requestId = rid()
-        if (!send(ClientMessage.ControlsApply(requestId, id, control, value))) {
+        // Bounded before it is spent. The desktop refuses an over-long value by **closing the
+        // socket**, so a phone that sent one would lose the connection rather than get a sentence
+        // back — and the values this cluster sends are ids off the far end's own catalog, so a
+        // string longer than the cap is a bug on this side rather than a person's input.
+        val bounded = value.take(Protocol.MAX_CONTROL_VALUE_LENGTH)
+        if (!send(ClientMessage.ControlsApply(requestId, id, control, bounded))) {
             say(ActionNotice(false, NOT_CONNECTED))
             onChange()
             return

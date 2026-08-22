@@ -1,19 +1,26 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!--
-      A bare Material 3 theme. The real palette is Compose's, in ui/theme/Theme.kt — this exists so
-      the window background matches before the first frame, which is the difference between a launch
-      that fades in and one that flashes white.
+      A bare theme whose only job is the frame before Compose draws.
+
+      The real palette is Compose's, in `ui/theme/`. This exists so the window background matches
+      before the first frame, which is the difference between a launch that fades in and one that
+      flashes.
+
+      `Theme.DeviceDefault.Light.NoActionBar` rather than `Material.NoActionBar`: the old style was
+      the *dark* Material theme, hard-coded, which is one of the four places this app used to be
+      pinned dark. `values-night/themes.xml` carries the dark half, so the launch frame follows the
+      phone; the stored preference is applied a moment later in `MainActivity.onCreate`, which is
+      what makes an explicit Light or Dark choice hold against the system setting.
+
+      The bar appearance is set through `enableEdgeToEdge` rather than here: `windowLightStatusBar`
+      is API 23 but `windowLightNavigationBar` is API 27 and `enforceNavigationBarContrast` is API
+      29, so as theme attributes they would need a values-v29 fork to stay honest at minSdk 26 — and
+      they would still be wrong for a person who has chosen Light on a phone set to dark.
     -->
-    <style name="Theme.TerminalDeck" parent="android:Theme.Material.NoActionBar">
-        <item name="android:windowBackground">@color/deck_ink</item>
+    <style name="Theme.TerminalDeck" parent="android:Theme.DeviceDefault.Light.NoActionBar">
+        <item name="android:windowBackground">@color/deck_window</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
-        <!--
-          The bar appearance is set in MainActivity through `enableEdgeToEdge` rather than here:
-          `windowLightNavigationBar` is API 27 and `enforceNavigationBarContrast` is API 29, so as
-          theme attributes they would need a values-v29 fork to stay honest at minSdk 26.
-        -->
-        <item name="android:windowLightStatusBar">false</item>
     </style>
 </resources>

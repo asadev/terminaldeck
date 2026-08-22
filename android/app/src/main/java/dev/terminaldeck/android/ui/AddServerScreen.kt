@@ -3,7 +3,6 @@ package dev.terminaldeck.android.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -19,23 +18,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ContentPaste
-import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material.icons.filled.VisibilityOff
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LocalTextStyle
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -49,15 +39,25 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import dev.terminaldeck.android.AddServerView
 import dev.terminaldeck.android.protocol.EnrollMethod
 import dev.terminaldeck.android.signin.INSTALL_COMMAND
+import dev.terminaldeck.android.ui.kit.DeckFootnote
+import dev.terminaldeck.android.ui.kit.DeckGroup
+import dev.terminaldeck.android.ui.kit.DeckPrimaryButton
+import dev.terminaldeck.android.ui.kit.DeckSecretField
+import dev.terminaldeck.android.ui.kit.DeckSegmented
+import dev.terminaldeck.android.ui.kit.DeckTextField
+import dev.terminaldeck.android.ui.kit.FieldLabel
+import dev.terminaldeck.android.ui.kit.InfoDot
+import dev.terminaldeck.android.ui.theme.DeckTheme
+import dev.terminaldeck.android.ui.theme.DeckType
+import dev.terminaldeck.android.ui.theme.Radius
+import dev.terminaldeck.android.ui.theme.Space
 
 /**
  * Adding a **server**: an address, a login it already trusts, and no desktop anywhere in it.
@@ -117,11 +117,11 @@ fun AddServerScreen(
      */
     var secret by remember { mutableStateOf("") }
     var method by rememberSaveable { mutableStateOf(EnrollMethod.Password) }
-    var revealed by remember { mutableStateOf(false) }
     var showInstall by rememberSaveable { mutableStateOf(false) }
 
     val clipboard = LocalClipboardManager.current
     val busy = view.busy
+    val colors = DeckTheme.colors
 
     // Back means cancel, and while a sign-in is in flight it means cancel that too — the view model
     // says out loud that the server may still finish its half, because a phone cannot call an SSH
@@ -131,193 +131,214 @@ fun AddServerScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
+            .background(colors.background)
             .statusBarsPadding()
             .navigationBarsPadding()
             .imePadding()
             .verticalScroll(rememberScrollState())
-            .padding(24.dp),
+            .padding(horizontal = Space.screen)
+            .padding(top = Space.x5, bottom = Space.x8),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
             Text(
                 text = "Add a server",
-                style = MaterialTheme.typography.titleLarge,
-                color = MaterialTheme.colorScheme.onBackground,
-                modifier = Modifier.weight(1f),
+                style = DeckType.largeTitle,
+                color = colors.primary,
             )
-            TextButton(onClick = onCancel) { Text("Cancel") }
+            /*
+             * The paragraph that used to be under this title is behind the ⓘ.
+             *
+             * Three lines of prose above the first field, explaining what the screen is to somebody
+             * who has already tapped "Add a server" and can therefore be assumed to know. *"I don't
+             * want any kind of long descriptions anywhere. Just if somewhere it's very required,
+             * give the i icon."* This is the shape that instruction asks for, and it is the same
+             * shape `AddServerView.swift` uses beside every one of its labels.
+             */
+            InfoDot(
+                about = "adding a server",
+                text = "Sign in to a server with the username and password — or key — you already " +
+                    "use for it. Nothing has to be running on a desktop, and nobody has to be " +
+                    "sitting at it.",
+            )
+            Spacer(Modifier.weight(1f))
+            TextButton(onClick = onCancel) {
+                Text("Cancel", style = DeckType.control, color = colors.accent)
+            }
         }
 
-        Spacer(Modifier.height(6.dp))
-        Text(
-            text = "Sign in to a server with the username and password — or key — you already use " +
-                "for it. Nothing has to be running on a desktop, and nobody has to be sitting at it.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(Space.x5))
 
         /* -------------------------------------------------------------- the address -- */
 
         SectionCard {
-            FieldLabel("Server address")
-            Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
+            FieldLabel(
+                title = "Server address",
+                about = "server addresses",
+                note = "A server prints this. It carries three things — where to meet it, which " +
+                    "machine it is, and the key that proves it is that machine — and no password " +
+                    "or token, so it is safe to send yourself. Paste the whole block.",
+            )
+            DeckTextField(
                 value = address,
                 onValueChange = { address = it },
-                placeholder = { Text("td1 wss://…  HOSTID…  key…") },
+                placeholder = "td1 wss://…  HOSTID…  key…",
                 // Several lines, because an address is long and a single-line field shows a person
                 // the last thirty characters of what they pasted and nothing else — which is no way
                 // to check whether the whole thing arrived.
+                singleLine = false,
                 minLines = 2,
                 maxLines = 4,
                 enabled = !busy,
+                // Mono, because an address is data: a thing somebody checks character by character.
+                mono = true,
                 keyboardOptions = KeyboardOptions(
                     keyboardType = KeyboardType.Uri,
                     imeAction = ImeAction.Next,
+                    capitalization = KeyboardCapitalization.None,
+                    autoCorrectEnabled = false,
                 ),
-                // Mono, because an address is data: a thing somebody checks character by character.
-                textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace),
-                colors = fieldColors(),
-                modifier = Modifier.fillMaxWidth(),
             )
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(Space.x2))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 TextButton(
-                    onClick = { clipboard.getText()?.text?.let { address = it } },
+                    onClick = { clipboard.getText()?.text?.trim()?.let { address = it } },
                     enabled = !busy,
                 ) {
-                    Icon(Icons.Filled.ContentPaste, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text("Paste")
+                    Icon(
+                        Icons.Filled.ContentPaste,
+                        contentDescription = null,
+                        tint = if (busy) colors.faint else colors.accent,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(Modifier.width(Space.x2))
+                    Text(
+                        text = "Paste",
+                        style = DeckType.value,
+                        color = if (busy) colors.faint else colors.accent,
+                    )
                 }
                 Spacer(Modifier.weight(1f))
                 TextButton(onClick = { showInstall = !showInstall }) {
-                    Text(if (showInstall) "Hide" else "Where do I get this?")
+                    Text(
+                        text = if (showInstall) "Hide" else "Where do I get this?",
+                        style = DeckType.value,
+                        color = colors.accent,
+                    )
                 }
             }
             if (showInstall) {
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = "A server address is three things printed together: the relay address " +
-                        "(wss://…), the server's 26-character host id, and its key. Terminal Deck " +
-                        "on the server prints all three — copy the whole line.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(Space.x1))
                 Text(
                     // Said plainly rather than offered as a button. This phone cannot SSH, so an
                     // Install button here would be a control that can only ever fail — the same
                     // reason the browser client shows this line instead of a button.
                     text = "Nothing installed on it yet? Run this on the server itself, then come " +
                         "back and paste the address it prints:",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = DeckType.caption,
+                    color = colors.faint,
                 )
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(Space.x2))
                 CommandRow(INSTALL_COMMAND) { clipboard.setText(AnnotatedString(INSTALL_COMMAND)) }
             }
         }
 
-        Spacer(Modifier.height(14.dp))
+        Spacer(Modifier.height(Space.x3))
 
         /* ---------------------------------------------------------------- the login -- */
 
         SectionCard {
-            FieldLabel("Username")
-            Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
+            FieldLabel(
+                title = "Username",
+                about = "the username",
+                note = "The account you would use to SSH into that server. The server checks it " +
+                    "against its own SSH — this app never sees whether it was right, only that " +
+                    "the server said so.",
+            )
+            DeckTextField(
                 value = username,
                 onValueChange = { username = it },
-                placeholder = { Text("root") },
-                singleLine = true,
+                placeholder = "root, ubuntu, asad…",
                 enabled = !busy,
+                mono = true,
                 keyboardOptions = KeyboardOptions(
                     // No autocorrect and no capitalisation: a login is not a word, and a phone
                     // keyboard that helpfully capitalises the first letter of one is a sign-in that
                     // fails for a reason nobody can see.
                     keyboardType = KeyboardType.Ascii,
                     imeAction = ImeAction.Next,
+                    capitalization = KeyboardCapitalization.None,
+                    autoCorrectEnabled = false,
                 ),
-                textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace),
-                colors = fieldColors(),
-                modifier = Modifier.fillMaxWidth(),
             )
 
-            Spacer(Modifier.height(18.dp))
-            FieldLabel("Sign in with")
-            Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                MethodChip(
-                    label = "Password",
-                    selected = method == EnrollMethod.Password,
-                    enabled = !busy,
-                ) {
+            Spacer(Modifier.height(Space.x5))
+            FieldLabel(
+                title = "How you sign in",
+                about = "the two ways in",
+                note = "Whichever that account already accepts. A key must be an unencrypted " +
+                    "private key — one with a passphrase on it cannot be used here, because " +
+                    "nothing on this screen can ask you for the passphrase on the server's " +
+                    "behalf. Terminal Deck keeps neither: what it keeps is the credential the " +
+                    "server mints in exchange for it, which that server can revoke on its own.",
+            )
+            /*
+             * A segmented control rather than two chips.
+             *
+             * There are exactly two answers to one question and they are mutually exclusive, which
+             * is the definition of this control and not of a chip row — two chips are two things
+             * that could each be on. The pair this replaces were outlined pills, of which the
+             * chosen one had a tinted fill and an accent border, and photographed on a phone they
+             * read as *enabled* beside *disabled* rather than as a choice.
+             */
+            DeckSegmented(
+                options = listOf("Password", "Private key"),
+                selectedIndex = if (method == EnrollMethod.Password) 0 else 1,
+                enabled = !busy,
+                onSelect = { index ->
+                    val next = if (index == 0) EnrollMethod.Password else EnrollMethod.Key
                     // The secret is cleared with the method rather than carried across. A password
                     // left in the field after switching to Key is a password that gets sent as a
                     // private key and refused, and the sentence that comes back is about the wrong
                     // thing entirely.
-                    if (method != EnrollMethod.Password) secret = ""
-                    method = EnrollMethod.Password
-                }
-                MethodChip(
-                    label = "Private key",
-                    selected = method == EnrollMethod.Key,
-                    enabled = !busy,
-                ) {
-                    if (method != EnrollMethod.Key) secret = ""
-                    method = EnrollMethod.Key
-                }
-            }
+                    if (next != method) secret = ""
+                    method = next
+                },
+            )
 
-            Spacer(Modifier.height(14.dp))
-            OutlinedTextField(
+            Spacer(Modifier.height(Space.x3))
+            DeckSecretField(
                 value = secret,
                 onValueChange = { secret = it },
-                label = { Text(if (method == EnrollMethod.Password) "Password" else "Private key") },
-                placeholder = {
-                    Text(
-                        if (method == EnrollMethod.Password) "" else "-----BEGIN OPENSSH PRIVATE KEY-----",
-                    )
+                placeholder = if (method == EnrollMethod.Password) {
+                    "The password for that account"
+                } else {
+                    "-----BEGIN OPENSSH PRIVATE KEY-----"
                 },
+                enabled = !busy,
+                mono = true,
                 singleLine = method == EnrollMethod.Password,
                 minLines = if (method == EnrollMethod.Password) 1 else 3,
-                maxLines = if (method == EnrollMethod.Password) 1 else 6,
-                enabled = !busy,
-                visualTransformation = if (revealed) {
-                    VisualTransformation.None
-                } else {
-                    PasswordVisualTransformation()
-                },
-                keyboardOptions = KeyboardOptions(
-                    keyboardType = KeyboardType.Password,
-                    imeAction = ImeAction.Done,
-                ),
-                textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace),
-                colors = fieldColors(),
-                trailingIcon = {
-                    IconButton(onClick = { revealed = !revealed }) {
-                        Icon(
-                            imageVector = if (revealed) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
-                            contentDescription = if (revealed) "Hide" else "Show",
-                        )
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
             )
             if (method == EnrollMethod.Key) {
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(Space.x2))
                 // A key cannot be typed on a phone. Without this the Key option would be a control
                 // that exists and cannot be used, which is the same thing as one that does not work.
                 TextButton(
                     onClick = { clipboard.getText()?.text?.let { secret = it } },
                     enabled = !busy,
                 ) {
-                    Icon(Icons.Filled.ContentPaste, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text("Paste key")
+                    Icon(
+                        Icons.Filled.ContentPaste,
+                        contentDescription = null,
+                        tint = if (busy) colors.faint else colors.accent,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(Modifier.width(Space.x2))
+                    Text(
+                        text = "Paste key",
+                        style = DeckType.value,
+                        color = if (busy) colors.faint else colors.accent,
+                    )
                 }
             }
         }
@@ -325,148 +346,110 @@ fun AddServerScreen(
         /* --------------------------------------------------------------- the outcome -- */
 
         view.error?.let { sentence ->
-            Spacer(Modifier.height(14.dp))
-            SectionCard(border = MaterialTheme.colorScheme.error) {
+            Spacer(Modifier.height(Space.x3))
+            /*
+             * A card, not a red-bordered box.
+             *
+             * The failure this screen reports is almost always one wrong character in one of the
+             * fields above, and the fields are still filled in. A red outline around the sentence
+             * makes the whole screen read as broken; the sentence in the warning ink inside an
+             * ordinary card says *this did not work* without saying *start again*. Same shape iOS
+             * uses, for the same reason.
+             */
+            SectionCard {
                 Text(
                     // The server's own words wherever it gave any. A refused login and a
                     // rate-limited one are one sentence over there on purpose — the wire must not be
                     // usable to tell a bad guess from a lockout — and nothing here tries to take
                     // them apart again.
                     text = sentence,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.error,
+                    style = DeckType.footnote,
+                    color = colors.warning,
                 )
             }
         }
 
-        Spacer(Modifier.height(18.dp))
+        Spacer(Modifier.height(Space.x5))
 
-        Button(
+        DeckPrimaryButton(
+            label = if (busy) "Signing in…" else "Sign in",
             onClick = { onSignIn(address, username, secret, method) },
             enabled = !busy && address.isNotBlank() && username.isNotBlank() && secret.isNotEmpty(),
-            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            if (busy) {
-                CircularProgressIndicator(
-                    strokeWidth = 2.dp,
-                    color = MaterialTheme.colorScheme.onPrimary,
-                    modifier = Modifier.size(16.dp),
-                )
-                Spacer(Modifier.width(10.dp))
-            }
-            Text(if (busy) "Signing in…" else "Sign in")
-        }
+            leading = if (busy) {
+                {
+                    CircularProgressIndicator(
+                        strokeWidth = 2.dp,
+                        color = colors.onAccent,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+            } else null,
+        )
 
         view.working?.let { sentence ->
-            Spacer(Modifier.height(10.dp))
-            Text(
+            DeckFootnote(
                 // The sentence, not just the spinner. This wait is seconds long — the server runs a
                 // real SSH probe against its own sshd and then a memory-hard hash to mint the
                 // credential — and a spinner with nothing beside it is indistinguishable from one
                 // that has stuck.
-                text = "$sentence It is checking the login on the server itself, which takes a moment.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                "$sentence It is checking the login on the server itself, which takes a moment."
             )
         }
 
-        Spacer(Modifier.height(16.dp))
-        Text(
-            text = "The password or key is sent once, encrypted end to end, to prove the login. It " +
-                "is not saved on this phone. What is saved is the credential the server hands back, " +
-                "behind the Android Keystore — the same as a paired machine's.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        Spacer(Modifier.height(Space.x2))
+        DeckFootnote(
+            "The password or key is sent once, encrypted end to end, to prove the login. It is not " +
+                "saved on this phone. What is saved is the credential the server hands back, behind " +
+                "the Android Keystore — the same as a paired machine's."
         )
-        Spacer(Modifier.height(24.dp))
     }
 }
 
 /* -------------------------------------------------------------------------- */
 
-@Composable
-private fun SectionCard(
-    border: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.outline,
-    content: @Composable ColumnScope.() -> Unit,
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(MaterialTheme.colorScheme.surface)
-            .border(1.dp, border, RoundedCornerShape(14.dp))
-            .padding(18.dp),
-    ) { content() }
-}
-
-@Composable
-private fun FieldLabel(text: String) {
-    Text(
-        text = text.uppercase(),
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-}
-
 /**
- * One of the two ways to prove a login.
+ * A card on this screen.
  *
- * A pair of chips rather than a dropdown: there are exactly two, both are one word, and a menu that
- * hides one of two choices behind a tap is a menu that hides the one somebody needs.
+ * Eighteen points of inset rather than sixteen, because these cards hold *fields* rather than rows
+ * and a field's own border needs room to not look like it is touching the card's edge. The border
+ * the card itself used to carry is gone — see [DeckGroup].
  */
 @Composable
-private fun MethodChip(label: String, selected: Boolean, enabled: Boolean, onClick: () -> Unit) {
-    val border = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .clip(RoundedCornerShape(10.dp))
-            .background(
-                if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
-                else MaterialTheme.colorScheme.surface
-            )
-            .border(1.dp, border, RoundedCornerShape(10.dp))
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 10.dp),
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodyMedium,
-            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-        )
+private fun SectionCard(content: @Composable ColumnScope.() -> Unit) {
+    DeckGroup {
+        Column(modifier = Modifier.padding(18.dp), content = content)
     }
 }
 
 /** A line to run somewhere else, with the one button that makes it usable from a phone. */
 @Composable
 private fun CommandRow(command: String, onCopy: () -> Unit) {
+    val colors = DeckTheme.colors
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
-            .background(MaterialTheme.colorScheme.background)
-            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(10.dp))
-            .padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+            .clip(Radius.fieldShape)
+            // The sunken surface: a command to run somewhere else is the one thing on this screen
+            // that is not of this screen, and a well reads as quoted where a raised card reads as
+            // offered.
+            .background(colors.sunken)
+            .border(1.dp, colors.hairline, Radius.fieldShape)
+            .padding(start = Space.x3, end = Space.x1, top = Space.x2, bottom = Space.x2),
     ) {
         Text(
             text = command,
-            style = MaterialTheme.typography.bodySmall,
-            fontFamily = FontFamily.Monospace,
-            color = MaterialTheme.colorScheme.onSurface,
+            style = DeckType.mono,
+            color = colors.primary,
             modifier = Modifier.weight(1f),
         )
         IconButton(onClick = onCopy) {
-            Icon(Icons.Filled.ContentCopy, contentDescription = "Copy", modifier = Modifier.size(18.dp))
+            Icon(
+                Icons.Filled.ContentCopy,
+                contentDescription = "Copy",
+                tint = colors.accent,
+                modifier = Modifier.size(18.dp),
+            )
         }
     }
 }
-
-@Composable
-private fun fieldColors() = OutlinedTextFieldDefaults.colors(
-    focusedTextColor = MaterialTheme.colorScheme.onSurface,
-    unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
-    focusedBorderColor = MaterialTheme.colorScheme.primary,
-    unfocusedBorderColor = MaterialTheme.colorScheme.outline,
-)

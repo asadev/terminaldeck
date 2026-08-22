@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -45,6 +46,10 @@ import androidx.compose.ui.unit.sp
 import dev.terminaldeck.android.credential.CredentialQuestion
 import dev.terminaldeck.android.github.GitHubAccount
 import dev.terminaldeck.android.protocol.CredentialOperation
+import dev.terminaldeck.android.ui.kit.DeckPrimaryButton
+import dev.terminaldeck.android.ui.kit.DeckQuietButton
+import dev.terminaldeck.android.ui.theme.DeckTheme
+import dev.terminaldeck.android.ui.theme.DeckType
 
 /**
  * The approval prompt — the one screen that is the entire explanation of the credential proxy.
@@ -122,16 +127,26 @@ fun CredentialPromptSheet(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    /*
+                     * The sheet can never run under the status bar.
+                     *
+                     * It grew past the height of the screen once its sections were filled in, and a
+                     * bottom-anchored `Column` in a full-size `Box` is measured against the whole
+                     * window — so the top of it slid under the clock and the sheet stopped reading
+                     * as a sheet and started reading as a page with rows behind the status icons.
+                     * This is *outside* the clip and the fill, so it shortens the sheet itself
+                     * rather than padding its contents.
+                     */
+                    .statusBarsPadding()
                     .clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
-                    .background(MaterialTheme.colorScheme.surface)
+                    .background(DeckTheme.colors.surface)
                     .navigationBarsPadding()
                     .padding(start = 24.dp, end = 24.dp, top = 26.dp, bottom = 18.dp),
             ) {
                 Text(
                     text = title(question),
-                    fontSize = 21.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface,
+                    style = DeckType.question,
+                    color = DeckTheme.colors.primary,
                 )
 
                 if (question.repo != null) {
@@ -140,10 +155,8 @@ fun CredentialPromptSheet(
                     // check character by character, which is exactly what this line is for.
                     Text(
                         text = question.repo,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Medium,
-                        fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.onSurface,
+                        style = DeckType.monoBody,
+                        color = DeckTheme.colors.primary,
                     )
                 }
 
@@ -164,39 +177,19 @@ fun CredentialPromptSheet(
                         // question on screen, and a sheet that reappeared unannounced reads as a
                         // tap that did not take.
                         text = if (queued == 1) "1 more question after this one." else "$queued more questions after this one.",
-                        fontSize = 13.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = DeckType.footnote,
+                        color = DeckTheme.colors.faint,
                     )
                 }
 
                 Spacer(Modifier.height(24.dp))
 
-                Button(
-                    onClick = { onApprove(false) },
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 50.dp),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary,
-                    ),
-                ) {
-                    Text("Approve", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-                }
+                DeckPrimaryButton(label = "Approve", onClick = { onApprove(false) })
 
                 // Only when there is a repository to remember. See the header.
                 if (question.repo != null) {
                     Spacer(Modifier.height(10.dp))
-                    Button(
-                        onClick = { onApprove(true) },
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                            contentColor = MaterialTheme.colorScheme.onSurface,
-                        ),
-                    ) {
-                        Text("Always for this repo", fontSize = 15.sp, fontWeight = FontWeight.Medium)
-                    }
+                    DeckQuietButton(label = "Always for this repo", onClick = { onApprove(true) })
                 }
 
                 Spacer(Modifier.height(4.dp))
@@ -206,9 +199,11 @@ fun CredentialPromptSheet(
                 ) {
                     Text(
                         text = "Deny",
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = DeckType.control.copy(fontWeight = FontWeight.Medium),
+                        // Not red. Denying is the safe answer and the one a careful person picks
+                        // when they are not sure; painting it as destructive would make the
+                        // cautious choice look like the dangerous one.
+                        color = DeckTheme.colors.secondary,
                     )
                 }
             }
@@ -238,17 +233,15 @@ private fun PromptRow(label: String, value: String, mono: Boolean) {
     Row(verticalAlignment = Alignment.Top, modifier = Modifier.fillMaxWidth()) {
         Text(
             text = label,
-            fontSize = 12.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = DeckType.caption,
+            color = DeckTheme.colors.faint,
             modifier = Modifier.width(78.dp),
         )
         Spacer(Modifier.width(12.dp))
         Text(
             text = value,
-            fontSize = if (mono) 13.sp else 14.sp,
-            fontWeight = if (mono) FontWeight.Medium else FontWeight.Normal,
-            fontFamily = if (mono) FontFamily.Monospace else null,
-            color = MaterialTheme.colorScheme.onSurface,
+            style = if (mono) DeckType.monoFootnote else DeckType.value,
+            color = DeckTheme.colors.primary,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),

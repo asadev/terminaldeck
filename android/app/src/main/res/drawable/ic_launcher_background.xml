@@ -1,0 +1,27 @@
+<!--
+  The tile the mark sits on.
+
+  A vertical gradient from #262b33 to #0f1114 — the same two stops `build/art/icon.mjs` rasterises
+  for the desktop tile, so the phone's launcher icon and the Mac's Dock icon are the same object
+  rather than two drawings of the same idea. The background layer of an adaptive icon is scaled and
+  masked by the launcher, so it is a full-bleed rectangle with nothing near its edges to lose.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <path android:pathData="M0,0 h108 v108 h-108 z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="0" android:startY="0"
+                android:endX="0" android:endY="108">
+                <item android:offset="0" android:color="#FF262B33" />
+                <item android:offset="1" android:color="#FF0F1114" />
+            </gradient>
+        </aapt:attr>
+    </path>
+</vector>

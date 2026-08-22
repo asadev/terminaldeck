@@ -44,6 +44,8 @@ import dev.terminaldeck.android.transfer.shellQuoted
 import dev.terminaldeck.android.transport.DeckTransport
 import dev.terminaldeck.android.transport.Heartbeat
 import dev.terminaldeck.android.transport.TransportState
+import dev.terminaldeck.android.tunnel.TunnelController
+import dev.terminaldeck.android.tunnel.TunnelView
 import dev.terminaldeck.android.transport.WebSocketDeckTransport
 import dev.terminaldeck.android.transport.detail
 import dev.terminaldeck.android.transport.isOnline
@@ -315,6 +317,31 @@ class DeckViewModel(
             capabilities = { link.capabilities },
             onChange = { publish() },
         )
+        link.bar = SessionBarController(
+            send = { link.transport.send(it) },
+            capabilities = { link.capabilities },
+            expiry = coroutineExpiry(viewModelScope),
+            onChange = { publish() },
+        )
+        link.localhost = LocalhostController(
+            send = { link.transport.send(it) },
+            capabilities = { link.capabilities },
+            expiry = coroutineExpiry(viewModelScope),
+            onChange = { publish() },
+        )
+        link.devServer = DevServerController(
+            send = { link.transport.send(it) },
+            capabilities = { link.capabilities },
+            expiry = coroutineExpiry(viewModelScope),
+            onChange = { publish() },
+        )
+        link.tunnels = TunnelController(
+            send = { link.transport.send(it) },
+            capabilities = { link.capabilities },
+            expiry = coroutineExpiry(viewModelScope),
+            scope = viewModelScope,
+            onChange = { publish() },
+        )
         // Collected per machine, with the link captured, so a frame cannot arrive without the
         // answer to "which computer said this" already in hand.
         viewModelScope.launch { link.transport.state.collect { onState(link, it) } }
@@ -362,7 +389,14 @@ class DeckViewModel(
             // A reading is a claim about now, and nothing over a dead channel will correct it. The
             // cast stops with it: the host is holding a screencast for a socket that has gone.
             link.controls?.dropped()
+            link.bar?.dropped()
             link.watch?.renew()
+            link.localhost?.renew()
+            link.devServer?.renew()
+            // A tunnel cannot survive the connection carrying its bytes, and a page left spinning
+            // against a socket that will never answer is exactly the lie this client is written not
+            // to tell.
+            link.tunnels?.connectionLost(next.detail)
         }
         publish()
     }
@@ -387,6 +421,9 @@ class DeckViewModel(
                 // and the permission footer are all read from what the far pty writes. A timer, not
                 // a read per frame — see [SessionControlsController.noteOutput].
                 link.controls?.noteOutput()
+                // The same event moves the context window: it is read from what the far pty writes,
+                // and the bar debounces it internally exactly as the cluster does.
+                link.bar?.noteOutput()
                 return
             }
 
@@ -435,7 +472,10 @@ class DeckViewModel(
                 // is on screen. What a welcome does is drop what the last connection said, for the
                 // reason `dropped` gives: a reading is a claim about now.
                 link.controls?.dropped()
+                link.bar?.dropped()
                 link.watch?.renew()
+                link.localhost?.renew()
+                link.devServer?.renew()
                 link.loaded = message.sessions.isNotEmpty() || link.loaded
                 link.live = true
             }
@@ -475,6 +515,10 @@ class DeckViewModel(
                 // stayed armed would jump into the *next* session it was told about, whoever
                 // started it.
                 link.openWhenCreated = false
+                // There is no `web.failed` — the three ways `web.open` can fail are all things
+                // `error` already says — so a refusal has to reach the row that asked, or it sits at
+                // "Opening…" forever. A no-op when nothing was opening.
+                link.localhost?.failed(message.message.ifEmpty { "That was refused." })
             }
 
             is ServerMessage.Attached -> link.binding?.takeIf { it.sessionId == message.id }?.onAttached()
@@ -580,6 +624,47 @@ class DeckViewModel(
              */
             is ServerMessage.BrowserFrame -> {
                 link.watch?.receive(message)
+                return
+            }
+
+            // The session bar's four capabilities, routed the same way and for the same reason: it
+            // keeps its own `rid` bookkeeping, and an unclaimed frame answers a request this phone
+            // has already forgotten — a session closed, a switch or a reconnect that raced the reply.
+            is ServerMessage.UsageReading,
+            is ServerMessage.AccountState,
+            is ServerMessage.AccountSwitched,
+            is ServerMessage.ChatRows,
+            is ServerMessage.SessionSent,
+            -> {
+                link.bar?.receive(message)
+            }
+
+            is ServerMessage.Ports,
+            is ServerMessage.WebOpened,
+            -> {
+                link.localhost?.receive(message)
+            }
+
+            is ServerMessage.DevState -> {
+                link.devServer?.receive(message)
+            }
+
+            /*
+             * The tunnel, which belongs to whatever is showing the page rather than to this fold.
+             *
+             * `net.data` is the second-chattiest thing on this socket after `output` — every byte of
+             * every asset of a page being served through the relay — so it returns before the fold
+             * for the reason output does. The tunnel is claimed by a screen through
+             * [tunnelController]; over a machine no page is open on there is nothing holding one and
+             * the frames are dropped, which is the honest answer to bytes for a stream nobody has.
+             */
+            is ServerMessage.TunnelOpened,
+            is ServerMessage.TunnelClosed,
+            is ServerMessage.NetData,
+            is ServerMessage.NetAck,
+            is ServerMessage.NetClose,
+            -> {
+                link.tunnels?.receive(message)
                 return
             }
         }
@@ -1095,6 +1180,104 @@ class DeckViewModel(
         selected?.settings?.apply(key, value)
     }
 
+    /* ------------------------------------------------------------- the session bar -- */
+
+    /** The ring was pressed. The one reading that boots an agent on the other machine. */
+    fun refreshUsage() {
+        links.values.firstOrNull { it.bar?.view() != null }?.bar?.refresh()
+    }
+
+    fun switchAccount(accountId: String) {
+        links.values.firstOrNull { it.bar?.view() != null }?.bar?.switchAccount(accountId)
+    }
+
+    /** The conversation opened or closed. Only a screen that is up asks for a transcript. */
+    fun chatting(on: Boolean) {
+        links.values.firstOrNull { it.bar != null }?.bar?.chatting(on)
+    }
+
+    /**
+     * Send a whole message at the open session.
+     *
+     * Returns whether the draft may be cleared: false keeps it in the box, which is the whole reason
+     * a composer rides `session.send` rather than `input`.
+     */
+    fun sendMessage(text: String): Boolean =
+        links.values.firstOrNull { it.bar?.chatView() != null }?.bar?.sendMessage(text) ?: false
+
+    fun dismissChatNotice() {
+        links.values.firstOrNull { it.bar != null }?.bar?.dismissNotice()
+    }
+
+    /* -------------------------------------------------------------- localhost + web -- */
+
+    fun openLocalhost() {
+        selected?.localhost?.ensureRead()
+    }
+
+    fun refreshPorts() {
+        selected?.localhost?.refresh()
+    }
+
+    /** Open a listening port on the machine, in that machine's own browser. */
+    fun openPort(port: Int) {
+        selected?.localhost?.open(port)
+    }
+
+    /** Open an address on the machine — what a ready dev server's own url is opened through. */
+    fun openOnMachine(url: String) {
+        selected?.localhost?.openUrl(url)
+    }
+
+    /* ------------------------------------------------------------------ the tunnel -- */
+
+    /**
+     * Serve one of the machine's ports **here**, on this phone's own loopback.
+     *
+     * The other half of [openPort], and the two are different acts rather than two spellings of
+     * one: `web.open` puts a tab on the machine's screen, this puts the page in your hand. Both are
+     * offered because both are the right answer to different questions — a dev server you want to
+     * *look at* and a page you want to *use*.
+     */
+    fun servePort(port: Int) {
+        selected?.tunnels?.open(port)
+    }
+
+    /** The page closed. The machine is told, so it is not left holding a socket. */
+    fun closeServedPort() {
+        selected?.tunnels?.close()
+    }
+
+    /* ---------------------------------------------------------------- the dev server -- */
+
+    /**
+     * Ask what each granted folder's dev server is doing.
+     *
+     * Only the folders the machine itself published — anything else is refused over there, and
+     * asking would spend a frame to be told off.
+     */
+    fun openDevServers() {
+        val link = selected ?: return
+        link.devServer?.ensureRead(_uiState.value.startableFolders)
+    }
+
+    fun startDevServer(folder: String) {
+        selected?.devServer?.start(folder)
+    }
+
+    /**
+     * Copy one thing, from a screen that already knows exactly what it wants copied.
+     *
+     * Not [copy], which decides between a selection and the visible screen because only the terminal
+     * has that choice to make. A chat bubble is one message and the copy button on it means that
+     * message, so there is nothing to decide and nothing to fall back to.
+     */
+    fun copyText(text: String) {
+        if (text.isEmpty()) return
+        copyToClipboard(text)
+        notify("Copied.")
+    }
+
     /* ---------------------------------------------------------------- controls -- */
 
     /**
@@ -1387,7 +1570,15 @@ class DeckViewModel(
              * than by remembering to keep a second id in step.
              */
             controls = links.values.firstNotNullOfOrNull { it.controls?.view() },
+            // The bar and the conversation follow the same rule as the control cluster, and for the
+            // same reason: they are about the session on screen, which on a phone with two machines
+            // paired need not be the machine the switcher is pointing at.
+            bar = links.values.firstNotNullOfOrNull { it.bar?.view() },
+            chat = links.values.firstNotNullOfOrNull { it.bar?.chatView() },
             watch = current?.watch?.view(),
+            localhost = current?.localhost?.view(),
+            devServers = current?.devServer?.view(),
+            tunnel = current?.tunnels?.view(),
             addServer = if (addingServer) {
                 AddServerView(working = serverSignInWorking, error = serverSignInError)
             } else {
@@ -1544,6 +1735,16 @@ data class DeckUiState(
      * for whether the Controls button exists rather than three.
      */
     val controls: SessionControlsView? = null,
+    /** The open session's bar: the two figures and the login it runs as. Null over an older machine. */
+    val bar: SessionBarView? = null,
+    /** The open session's conversation and composer. Null when this machine serves no transcript. */
+    val chat: SessionChatView? = null,
+    /** What is listening on the machine, and whether a row may be opened over there. */
+    val localhost: LocalhostView? = null,
+    /** One dev-server row per granted folder a status has arrived for. */
+    val devServers: DevServerView? = null,
+    /** The page this phone is serving from the machine, or null when none is open. */
+    val tunnel: TunnelView? = null,
     /** The watchable browser windows of the machine on screen, or null when it does not offer any. */
     val watch: WatchView? = null,
     /**
@@ -1662,6 +1863,32 @@ data class DeckUiState(
 
     /** Whether to draw the "This server" entry: the machine offers the settings and is reachable now. */
     val serverSettingsOffered: Boolean get() = live && capabilities.contains(Capability.SETTINGS)
+
+    /**
+     * Whether this machine can list what is listening on it.
+     *
+     * Gated on [live] like every other offer on this screen: a capability is what the machine said
+     * on the connection it currently has, and a row drawn off a dead socket is a tap that cannot
+     * land.
+     */
+    val localhostOffered: Boolean get() = live && capabilities.contains(Capability.LOCALHOST)
+
+    /** Whether a page may be opened on the machine, in that machine's own browser. */
+    val webOffered: Boolean get() = live && capabilities.contains(Capability.WEB)
+
+    /** Whether this machine will say what a project's dev server is doing, and start one. */
+    val devServerOffered: Boolean get() = live && capabilities.contains(Capability.DEVSERVER)
+
+    /** Whether the open session's conversation can be read as a chat rather than as a terminal. */
+    val chatOffered: Boolean get() = live && capabilities.contains(Capability.CHAT)
+
+    /**
+     * Whether this machine holds an agent of its own that this device may drive.
+     *
+     * The capability alone is not the permission — see [Capability.COPILOT] — so this says only
+     * that the tab has something behind it, and the grant decides what the tab may do.
+     */
+    val copilotOffered: Boolean get() = live && capabilities.contains(Capability.COPILOT)
 
     /**
      * The machine said which folders this phone may use, and the answer was **none**.
