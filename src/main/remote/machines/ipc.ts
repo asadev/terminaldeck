@@ -793,10 +793,12 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
    * redraws from one truth rather than from what it thinks it just set.
    */
   ipcMain.handle('machines:drive-windows', (_event, id: unknown, allowed: unknown): MachinesView => {
-    // Only the literal `true` grants. See `asStoredMachine`: this is the whole
-    // of the permission, and a truthy value arriving from a bridge is not a
-    // person pressing a switch.
-    if (typeof id === 'string') store.setDrivesWindows(id, allowed === true)
+    // Only a literal boolean is a person pressing the switch. Now that the
+    // default is open, mapping a garbled value to `false` would let a bug on
+    // the bridge quietly untick a machine — a write nobody asked for — so
+    // anything that is not an answer changes nothing, and the view answers
+    // what is actually stored.
+    if (typeof id === 'string' && typeof allowed === 'boolean') store.setDrivesWindows(id, allowed)
     return view()
   })
 

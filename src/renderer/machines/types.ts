@@ -30,12 +30,15 @@ export interface Machine {
   /**
    * May sessions on that machine act on browser windows in this app?
    *
-   * Its own axis, and it starts closed — see `MachineStore.drivesWindows` in the
-   * main process for why a machine whose folders and sessions this desktop can
-   * reach has not thereby been handed the browser on this screen.
+   * Its own axis, and it starts **on** for a machine the person paired with
+   * their own hands — the connection is the authorization (T30). The switch on
+   * the card is the off-switch; see `Machine.drivesWindows` in the main
+   * process, where the answer actually lives.
    *
    * Optional so that a view read from a build older than the field draws the
-   * switch off rather than crashing; `asView` fills it in.
+   * switch off rather than crashing; `asView` fills it in, and the main process
+   * always sends the resolved answer rather than leaving a default to be
+   * guessed on this side.
    */
   drivesWindows?: boolean
 }

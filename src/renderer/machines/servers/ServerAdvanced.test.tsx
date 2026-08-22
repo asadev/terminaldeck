@@ -8,10 +8,13 @@ import type { Server } from './types'
  * reaching in.
  *
  * Everything else under Advanced lets this machine act on that one. This lets an
- * agent on that machine act on the browser here, so the three things worth
- * pinning are the three that would be a permission nobody granted: that it draws
- * closed, that it is absent rather than dead when the press would land nowhere,
- * and that it says what it actually covers.
+ * agent on that machine act on the browser here — and since T30 it is the
+ * **off**-switch: a server the person added drives by default, because the
+ * connection is the authorization. What is worth pinning: that it draws what the
+ * main process resolved rather than a default of its own, that it is absent
+ * rather than dead when the press would land nowhere, and that its words name
+ * what is actually handed out — opening windows here, and the ones the person
+ * attaches.
  */
 
 const SERVER: Server = { id: 's1', name: 'Office PC', address: 'example.com', username: 'admin' }
@@ -27,19 +30,24 @@ function html(server: Server, onChange?: (allowed: boolean) => void): string {
 }
 
 describe('letting a server’s terminals act on browser windows here', () => {
-  it('draws unticked for a server nobody has said anything about', () => {
-    const drawn = html(SERVER, () => {})
-    expect(drawn).toContain('act on browser windows here')
-    /*
-     * Rendered unticked, not merely defaulted unticked in a store somewhere. A
-     * screen that failed open here would be a browser holding somebody's logins
-     * reachable from a machine they once added to a list.
-     */
-    expect(drawn).not.toContain('checked=""')
+  it('draws the resolved answer, and ticked means the default the person was told about', () => {
+    // The main process resolves the default — a server the person added drives
+    // unless they unticked it — and always sends the boolean, so a ticked box
+    // here is a stored fact rather than this side guessing a permission.
+    expect(html({ ...SERVER, drivesWindows: true }, () => {})).toContain('checked=""')
+    expect(html({ ...SERVER, drivesWindows: false }, () => {})).not.toContain('checked=""')
   })
 
-  it('draws ticked once it has been allowed', () => {
-    expect(html({ ...SERVER, drivesWindows: true }, () => {})).toContain('checked=""')
+  it('draws unticked when an older main process never said', () => {
+    /*
+     * `drivesWindows` absent from the wire means a build older than the field.
+     * Rendered unticked, not merely defaulted unticked in a store somewhere:
+     * the one side that may not invent the open default is the one that did
+     * not resolve it.
+     */
+    const drawn = html(SERVER, () => {})
+    expect(drawn).toContain('browser windows here')
+    expect(drawn).not.toContain('checked=""')
   })
 
   it('is not drawn at all when the press would land nowhere', () => {
@@ -49,9 +57,16 @@ describe('letting a server’s terminals act on browser windows here', () => {
     expect(html(SERVER)).toBe('')
   })
 
-  it('says what it covers, and does not overstate it', () => {
+  it('names the feature and the default, and does not overstate the reach', () => {
     const drawn = html(SERVER, () => {})
-    // What it hands out is bounded by the attaching, so the sentence says so.
+    // The heading names what is handed out — the audit found the old words
+    // never mentioned opening or driving a browser at all.
+    expect(drawn).toContain('open and drive browser windows here')
+    // The default is said in words, with the reason it is on.
+    expect(drawn).toContain('On, because you added this server yourself')
+    // The off direction is a sentence, because the switch is the off-switch.
+    expect(drawn).toContain('Untick it')
+    // What it hands out is bounded by the opening and the attaching.
     expect(drawn).toContain('you</em> attach')
     // And it names the one agent this can reach, rather than implying all three.
     expect(drawn).toContain('Claude Code')

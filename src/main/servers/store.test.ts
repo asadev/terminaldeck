@@ -130,22 +130,34 @@ describe('reading a file that may not be ours', () => {
 })
 
 describe('whether its sessions may drive a browser window here', () => {
-  it('is closed for a server nobody has said anything about', () => {
+  it('is open for a server the person just added — adding it is the allowing', () => {
+    // T30: the connection IS the authorization. The person typed this server's
+    // address and their own sign-in; there is no second switch to find.
     const server = store.add({ name: 'x', address: 'example.com', username: 'ada' })
-    expect(store.list()[0].drivesWindows).toBe(false)
-    expect(store.drivesWindows(server.id)).toBe(false)
+    expect(store.list()[0].drivesWindows).toBe(true)
+    expect(store.drivesWindows(server.id)).toBe(true)
   })
 
   it('is closed for a server this store has never heard of', () => {
     expect(store.drivesWindows('nothing like this')).toBe(false)
   })
 
+  it('is open for a row written before the field existed, which is his own servers.json', () => {
+    /*
+     * "Office PC" in his real file has no `drivesWindows` key at all — every
+     * server stored before the field existed looks like this — and reading
+     * that as closed is exactly how he reproduced his own filmed complaint.
+     * Absent is the default, and the default is on.
+     */
+    expect(readServers({ servers: [row()] })[0].drivesWindows).toBe(true)
+  })
+
   it('survives a restart, because the agent using it does', () => {
     const server = store.add({ name: 'x', address: 'example.com', username: 'ada' })
-    expect(store.setDrivesWindows(server.id, true)).toBe(true)
-    expect(new ServerStore(dir).drivesWindows(server.id)).toBe(true)
     expect(store.setDrivesWindows(server.id, false)).toBe(false)
     expect(new ServerStore(dir).drivesWindows(server.id)).toBe(false)
+    expect(store.setDrivesWindows(server.id, true)).toBe(true)
+    expect(new ServerStore(dir).drivesWindows(server.id)).toBe(true)
   })
 
   it('answers false for a server it could not store the answer against', () => {
@@ -154,12 +166,13 @@ describe('whether its sessions may drive a browser window here', () => {
     expect(store.setDrivesWindows('no such server', true)).toBe(false)
   })
 
-  it('reads anything that is not exactly true as closed', () => {
-    // A hand-edited file, or one written by a version that spelled it
-    // differently. The direction to be wrong in is off.
-    expect(readServers({ servers: [row({ drivesWindows: 'yes' })] })[0].drivesWindows).toBe(false)
-    expect(readServers({ servers: [row()] })[0].drivesWindows).toBe(false)
+  it('reads only the literal false as the person having said no', () => {
+    // The app only ever writes booleans, so anything else in the file is not
+    // an answer a person gave through a control — it reads as the default
+    // rather than being parsed by truthiness.
+    expect(readServers({ servers: [row({ drivesWindows: false })] })[0].drivesWindows).toBe(false)
     expect(readServers({ servers: [row({ drivesWindows: true })] })[0].drivesWindows).toBe(true)
+    expect(readServers({ servers: [row({ drivesWindows: 'yes' })] })[0].drivesWindows).toBe(true)
   })
 })
 

@@ -715,17 +715,6 @@ export function createHostCore(options: HostCoreOptions): HostCore {
   const accountGrants = new AccountGrants(options.storageDir)
 
   /**
-   * And which devices may move the browser on this screen.
-   *
-   * The fourth axis, built here for the same reason as the third: one instance
-   * of the file, and a rule the Electron shell cannot be the only build to
-   * install. Unlike the three above it, this one **defaults closed** — see
-   * `WindowGrants` for why the argument that makes the others fail open does not
-   * apply to a capability nothing has ever had.
-   */
-  const windowGrants = new WindowGrants(options.storageDir)
-
-  /**
    * Whether each paired device is one of the owner's own or a guest.
    *
    * Beside the folder grants and for the same reason — one instance, because two
@@ -735,8 +724,27 @@ export function createHostCore(options: HostCoreOptions): HostCore {
    * the same protocol from the same fanout, cannot be the build where the rule
    * is missing. `session-fanout.ts` says the same thing about `hidden`: a rule a
    * shell has to remember to install is a rule the other shell forgets.
+   *
+   * Built before the window grants below it, because the kind is now where a
+   * device's window default comes from.
    */
   const kinds = new DeviceKinds(options.storageDir)
+
+  /**
+   * And which devices may move the browser on this screen.
+   *
+   * The fourth axis, built here for the same reason as the third: one instance
+   * of the file, and a rule the Electron shell cannot be the only build to
+   * install. The kind seam is what makes T30's rule land on this axis — a
+   * device approved as one of the owner's **own** drives by default, a guest
+   * stays off until ticked — and it is read per call so a kind decided while
+   * the device is connected answers its very next verb. See `WindowGrants` for
+   * the whole argument, including why a build with no kinds store reads
+   * everyone as a guest.
+   */
+  const windowGrants = new WindowGrants(options.storageDir, {
+    kindOf: (deviceId) => kinds.kindOf(deviceId),
+  })
 
   /**
    * What one device may touch, computed once and read by three doors.

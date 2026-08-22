@@ -148,14 +148,28 @@ export interface StoredServer {
    * hands out is bounded by what the person attached, window by window, with
    * their own hands.
    *
-   * ## And why it defaults closed
+   * ## And why it defaults open
    *
-   * The same argument `MachineStore.drivesWindows` makes and it is worth
-   * repeating rather than referring to: the other things a server can be told
-   * fail open because they were added to a feature that already worked without
-   * them. Nothing has ever driven a browser window from a server, so there is no
-   * working behaviour to preserve — `false` is what every server already does,
-   * and the first thing a person does after ticking it is watch it work.
+   * It defaulted closed for one release, on the argument that nothing had ever
+   * driven a window from a server and so there was nothing to preserve — and
+   * that argument lost to the accepted requirement it was contradicting. T30's
+   * done-when is *"the connection IS the authorization"*, and Asad's sentence
+   * behind it: *"Other sessions can drive any connected browser which we allow
+   * to the session"* — allowing a browser to a session is attaching it, not a
+   * second switch three levels deep. Every row in this store is a machine the
+   * person at this keyboard added themselves, with their own credentials; the
+   * act of adding it is the authorization, exactly as it is for the folders and
+   * sessions the same sign-in already reaches. What the grant is bounded by is
+   * unchanged — the windows the person attached, window by window, with their
+   * own hands.
+   *
+   * So the switch under Advanced is an **off**-switch: `false` here is a person
+   * having said no about this one server, and absent — every `servers.json`
+   * written before this field existed, which is how his own Office PC row
+   * reproduced the filmed complaint — reads as **on**. `MachineStore.
+   * drivesWindows` makes the same reading for a machine the person paired, and
+   * `WindowGrants` keeps the closed default for the one kind of peer nobody at
+   * this keyboard vouched for: a device approved as a guest.
    */
   drivesWindows: boolean
 }
@@ -271,10 +285,14 @@ export function readServers(raw: unknown): StoredServer[] {
       // same as an empty string: no default, so a session lands wherever the
       // sign-in does.
       startIn: folderPath(record.startIn),
-      // `=== true` rather than truthiness: absent is the ordinary case — every
-      // server stored before this existed — and the answer for absent has to be
-      // the closed one. See {@link StoredServer.drivesWindows}.
-      drivesWindows: record.drivesWindows === true,
+      // `!== false` rather than truthiness: absent is the ordinary case — every
+      // server stored before this field existed — and absent reads as **on**,
+      // because the person added this server with their own credentials and the
+      // connection is the authorization. Only the literal `false` — a person
+      // having turned it off under Advanced — closes it; a truthy string or a
+      // `1` in a hand-edited file still reads as the default rather than as an
+      // answer. See {@link StoredServer.drivesWindows}.
+      drivesWindows: record.drivesWindows !== false,
     })
     if (out.length >= MAX_SERVERS) break
   }
@@ -358,9 +376,10 @@ export class ServerStore {
       addedAt: Date.now(),
       lastConnectedAt: null,
       startIn: null,
-      // A server nobody has said anything about drives nothing. See
-      // {@link StoredServer.drivesWindows} for why the answer is no.
-      drivesWindows: false,
+      // The person adding this server *is* the authorization — see
+      // {@link StoredServer.drivesWindows}. The switch under Advanced is the
+      // way to say no about this one server.
+      drivesWindows: true,
     }
     this.persist([...list, server])
     return { ...server }

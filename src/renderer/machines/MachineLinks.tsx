@@ -501,18 +501,21 @@ export function MachineRow({
  * > *"i need full capability for all sessions to drive browsers the ones they
  * > open or the ones we connect to the session"*
  *
- * — and it is not something a machine should have because it was paired. The
- * host side of this app already keeps folders, sessions and coding logins on
- * three separate axes for exactly that reason; windows are the fourth, and the
- * one whose subject is on this screen rather than on that machine's disk.
+ * — and windows are still their own axis, beside folders, sessions and coding
+ * logins, because attaching a window and driving one are different acts. What
+ * changed is where the yes comes from.
  *
- * ## Why it starts off and why that is not a hidden feature
+ * ## Why it starts on, and what the tick is for
  *
- * The other three grants fail open, because they were added to a product that
- * already worked without them and taking a working chip away would be the worse
- * bug. Nothing has ever driven a window from another machine, so there is no
- * behaviour to preserve — and the first thing anybody does after ticking this is
- * watch it work.
+ * T30: *"the connection IS the authorization."* Every machine on this page is
+ * one the person paired with their own hands — they read the code off its
+ * screen and typed it here — and that act is the allowing, the same reading
+ * `Machine.drivesWindows` makes at the store. So the tick is the **off**-switch
+ * for one machine: unticking it keeps that machine's sessions out of the
+ * browser here, and what a ticked machine reaches is still bounded window by
+ * window by what the person attaches. The closed default lives on for the peer
+ * nobody here vouched for — a device approved as a guest, in Settings →
+ * Remote.
  *
  * ## Why it is drawn while the machine is offline, and what it says when it is on
  *

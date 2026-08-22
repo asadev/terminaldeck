@@ -228,47 +228,64 @@ describe('the rest of the list', () => {
     expect(store.list()[0].platform).toBe('darwin')
   })
 
-  it('lets no machine act on browser windows here until somebody says so', () => {
+  it('lets a machine the person paired act on browser windows here, until somebody says no', () => {
     /*
-     * The fourth grant axis, and the only one that fails closed.
-     *
-     * Folders, sessions and logins all fail open, because each was added to a
-     * product that already worked without it and a store whose empty state
-     * silently took a working chip away would be the worse bug. Nothing has ever
-     * driven a browser window from another machine, so `false` is what every
-     * machine already does and there is nothing to preserve.
+     * T30: the connection IS the authorization. Every row in this store is a
+     * machine the person paired with their own hands — they read the code off
+     * its screen and typed it here — so pairing it is the allowing, and the
+     * switch on the card is the way to say no about one machine. The closed
+     * default lives on in `window-grants.ts`, for a device approved as a guest.
      */
     const dir = tempDir()
     const store = new MachineStore(dir)
     const machine = store.remember(candidate())
-    expect(store.list()[0].drivesWindows).toBe(false)
-    expect(store.drivesWindows(machine.id)).toBe(false)
-    // And an id nobody has ever heard of is not a machine that may drive.
+    expect(store.list()[0].drivesWindows).toBe(true)
+    expect(store.drivesWindows(machine.id)).toBe(true)
+    // But an id nobody has ever heard of is not a machine that may drive.
     expect(store.drivesWindows('someone-else')).toBe(false)
 
-    expect(store.setDrivesWindows(machine.id, true)).toBe(true)
-    expect(store.drivesWindows(machine.id)).toBe(true)
-    // It outlives the process, because it is a decision rather than a session.
-    expect(new MachineStore(dir).drivesWindows(machine.id)).toBe(true)
-
     expect(store.setDrivesWindows(machine.id, false)).toBe(false)
+    expect(store.drivesWindows(machine.id)).toBe(false)
+    // It outlives the process, because it is a decision rather than a session.
     expect(new MachineStore(dir).drivesWindows(machine.id)).toBe(false)
+
+    expect(store.setDrivesWindows(machine.id, true)).toBe(true)
+    expect(new MachineStore(dir).drivesWindows(machine.id)).toBe(true)
     // A machine that is not there cannot be granted anything, and says so
     // rather than answering with the value it was handed.
     expect(store.setDrivesWindows('someone-else', true)).toBe(false)
   })
 
-  it('grants on the literal true and on nothing else', () => {
-    // The whole of the permission is one boolean in a file. A truthy string in a
-    // hand-edited list must not be a browser opened to another machine — the
-    // same rule `credential.answer`'s `remember` is read by.
+  it('reads a row written before the field existed as allowed — his own machines.json', () => {
+    /*
+     * DESKTOP-DDGMNCV in his real file has no `drivesWindows` key, because the
+     * release that paired it predates the field. Reading absent as closed is
+     * how every forwarded cross-machine window verb came back refused on the
+     * machine he tests against. Absent is the default, and the default is on.
+     */
     const dir = tempDir()
     const store = new MachineStore(dir)
     const machine = store.remember(candidate())
     const parsed = JSON.parse(readFileSync(store.file, 'utf8')) as {
       machines: Record<string, unknown>[]
     }
-    parsed.machines[0].drivesWindows = 'yes'
+    delete parsed.machines[0].drivesWindows
+    writeFileSync(store.file, JSON.stringify(parsed))
+    expect(new MachineStore(dir).drivesWindows(machine.id)).toBe(true)
+  })
+
+  it('closes on the literal false and on nothing else', () => {
+    // The app only writes booleans, so a truthy string in a hand-edited list is
+    // not an answer a person gave through a control — it reads as the default
+    // rather than being parsed by truthiness, the same refusal to guess that
+    // `credential.answer`'s `remember` makes.
+    const dir = tempDir()
+    const store = new MachineStore(dir)
+    const machine = store.remember(candidate())
+    const parsed = JSON.parse(readFileSync(store.file, 'utf8')) as {
+      machines: Record<string, unknown>[]
+    }
+    parsed.machines[0].drivesWindows = false
     writeFileSync(store.file, JSON.stringify(parsed))
     expect(new MachineStore(dir).drivesWindows(machine.id)).toBe(false)
   })

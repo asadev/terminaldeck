@@ -31,15 +31,16 @@ import './DeviceSessions.css'
  * answers are yes and no. A mode row would be two buttons where one of them can
  * never mean anything.
  *
- * ## Why it starts off, unlike the other three
+ * ## Where a device's default comes from: its kind
  *
- * Folders, sessions and logins fail open, because they narrow something that
- * already worked and an empty store must not silently take a working chip away.
- * Nothing has ever been able to drive a window in this app from another
- * computer, so there is no behaviour to preserve — `false` is what every device
- * already does, and the first thing anybody does after ticking this is watch it
- * work. `WindowGrants` in the main process makes the same argument at the file
- * that stores it.
+ * T30: *"the connection IS the authorization."* A device approved as one of the
+ * owner's **own** was vouched for by the person at this keyboard — the same act
+ * that adding a server or pairing out to a machine is — so it drives by
+ * default, and the tick here is its off-switch. A **guest** is the one peer
+ * nobody here vouched for and stays off until ticked; so does a device whose
+ * kind nobody recorded. `WindowGrants` in the main process holds the whole
+ * argument, and what any allowed device reaches is still bounded window by
+ * window by what the person attaches.
  *
  * ## What a change does to a device that is already connected
  *
@@ -96,10 +97,12 @@ export function resolveDeviceWindowsBridge(host?: unknown): Partial<DeviceWindow
 /**
  * What the main process sent, as a set, dropping anything unreadable.
  *
- * A device missing from the answer is not allowed — the store holds only the
- * yeses, so absence is the answer rather than a gap, and an entry this side
- * cannot read is dropped in the fail-closed direction for the same reason the
- * store reads its own file that way.
+ * The channel answers the **effective** set — every paired device whose verbs
+ * would actually land, whether by a tick or by its kind's default — so a device
+ * missing from the answer is not allowed, and the ticks on this panel are the
+ * truth rather than the raw file. An entry this side cannot read is dropped in
+ * the fail-closed direction for the same reason the store reads its own file
+ * that way.
  */
 export function toWindowGrants(raw: unknown): Set<string> {
   const allowed = new Set<string>()
@@ -161,10 +164,10 @@ export function DeviceWindowsView({
               <input
                 type="checkbox"
                 /*
-                 * Unticked until the first read lands, and that is the honest
-                 * draw rather than a flicker to be avoided: this grant's absent
-                 * state *is* "no", so an unread store and a device nobody has
-                 * allowed look the same because they mean the same thing.
+                 * Unticked until the first read lands — the fail-closed draw. A
+                 * device of the owner's own ticks itself the moment the answer
+                 * arrives; drawing the default before the main process confirms
+                 * it would be this panel guessing a permission.
                  */
                 checked={allowed?.has(device.id) === true}
                 disabled={busy !== null}

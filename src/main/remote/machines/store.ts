@@ -109,14 +109,27 @@ export interface Machine {
    * bank and GitHub. Attaching a window and driving one are two different acts
    * and the second is not implied by any of the first three.
    *
-   * ## And why this one defaults closed while the other three default open
+   * ## And why this one now defaults open, like the three beside it
    *
-   * The other three fail open because they were added to a product that already
-   * worked without them, and a store whose empty state silently took a working
-   * chip away would be a worse bug than the one it fixed. Nothing has ever been
-   * able to drive a window from another machine, so there is no working
-   * behaviour to preserve: `false` is what every machine already does, and the
-   * first thing a person does after ticking this is watch it work.
+   * It defaulted closed for one release, on the argument that nothing had ever
+   * driven a window from another machine and so there was nothing to preserve.
+   * That argument lost to the requirement it contradicted: T30's accepted
+   * done-when is *"the connection IS the authorization"*, and Asad's sentence —
+   * *"Other sessions can drive any connected browser which we allow to the
+   * session"* — allowing is connecting, not a second switch. Every row in this
+   * store is a machine the person at this keyboard paired with their own hands:
+   * they read the code off its screen and typed it here. That act is the
+   * authorization, and it is bounded exactly as before by which windows they
+   * attach, window by window.
+   *
+   * So the switch on the machine card is an **off**-switch — `false` is a
+   * person having said no about this one machine — and absent, which is every
+   * `machines.json` written before the field existed (his own DESKTOP row
+   * reproduced the filmed refusal that way), reads as **on**.
+   * `StoredServer.drivesWindows` makes the identical reading for a server the
+   * person added; the closed default lives on where it belongs, in
+   * `window-grants.ts`, for the one peer nobody at this keyboard vouched for —
+   * a device approved as a guest.
    */
   drivesWindows: boolean
 }
@@ -227,11 +240,14 @@ function asStoredMachine(value: unknown): StoredMachine | null {
       typeof value.lastConnectedAt === 'number' && Number.isFinite(value.lastConnectedAt)
         ? value.lastConnectedAt
         : null,
-    // Only the literal `true` grants it. A truthy string or a `1` in a file
-    // somebody hand-edited would be a browser opened to another machine on the
-    // strength of a JSON quirk — the same rule `credential.answer`'s `remember`
-    // is read by, and here it is the whole of the grant.
-    drivesWindows: value.drivesWindows === true,
+    // Only the literal `false` closes it. Absent is every file written before
+    // the field existed, and it reads as **on** — the person paired this
+    // machine with their own hands, and the connection is the authorization
+    // (see {@link Machine.drivesWindows}). A truthy string or a `1` in a
+    // hand-edited file reads as the default rather than as an answer, the same
+    // refusal to parse by truthiness that `credential.answer`'s `remember`
+    // makes.
+    drivesWindows: value.drivesWindows !== false,
   }
 }
 
@@ -247,9 +263,9 @@ function toPublic(machine: StoredMachine): Machine {
     platform: machine.platform,
     pairedAt: machine.pairedAt,
     lastConnectedAt: machine.lastConnectedAt,
-    // Absent reads as `false`, which is the same answer a machine paired before
-    // this field existed already gives on the wire: this desktop never
-    // advertised `windows` to it, so nothing over there has ever asked.
+    // The reader above has already resolved absent to the open default, so
+    // what the screen sees is what every forwarded verb is checked against —
+    // one answer, not a second parse.
     drivesWindows: machine.drivesWindows === true,
   }
 }
@@ -346,9 +362,10 @@ export class MachineStore {
       pairedAt: this.now(),
       lastConnectedAt: null,
       // Written explicitly rather than left off, so a row this run created and a
-      // row it read back off disk are the same shape. See
-      // {@link Machine.drivesWindows} for why the answer is no.
-      drivesWindows: false,
+      // row it read back off disk are the same shape. `true`, because pairing it
+      // was the authorization — see {@link Machine.drivesWindows}; the switch on
+      // the card is the way to say no.
+      drivesWindows: true,
     }
 
     const next = this.machines.filter((existing) => existing.id !== machine.id)

@@ -45,6 +45,7 @@ import type { RemoteSession } from './protocol'
 import { FolderGrants } from './folder-grants'
 import { AccountGrants } from './account-grants'
 import { DeviceKinds, type DeviceKindRecord } from './device-kind'
+import { WindowGrants } from './window-grants'
 
 function tempDir(): string {
   return mkdtempSync(join(tmpdir(), 'td-approve-'))
@@ -81,6 +82,7 @@ function harness(): {
   kinds: DeviceKinds
   grants: FolderGrants
   accounts: AccountGrants
+  windows: WindowGrants
 } {
   const handlers = new Map<string, (...args: unknown[]) => unknown>()
   const dir = tempDir()
@@ -88,6 +90,9 @@ function harness(): {
   const kinds = new DeviceKinds(dir)
   const grants = new FolderGrants(dir)
   const accounts = new AccountGrants(dir)
+  // Wired the way `host-core.ts` wires it: the kind is where a device's window
+  // default comes from, read per call through the live kinds store.
+  const windows = new WindowGrants(dir, { kindOf: (id) => kinds.kindOf(id) })
 
   // Wrapped rather than subclassed, so the real stores do the real writing and
   // this only watches. A stub would let the assertion pass against a store that
@@ -133,6 +138,7 @@ function harness(): {
     folders: watchedGrants,
     accountGrants: watchedAccounts,
     kinds: watchedKinds,
+    windowGrants: windows,
     webRoot: join(dir, 'nowhere'),
     storageDir: dir,
     broadcast: () => {},
@@ -164,6 +170,7 @@ function harness(): {
     kinds,
     grants,
     accounts,
+    windows,
   }
 }
 
@@ -261,6 +268,40 @@ describe('nothing is reachable before the choice is made', () => {
     await h.call('remote:device:approve', 'dev-9', 'guest', [])
     expect(h.accounts.granted('dev-9')).toEqual({ deviceId: 'dev-9', mode: 'selected', accounts: [] })
     expect(h.accounts.any('dev-9')).toBe(false)
+  })
+})
+
+describe('the window axis follows the kind', () => {
+  it('lets an approved "mine" drive with no tick, keeps a guest off, and lets an untick win', async () => {
+    /*
+     * T30, on the fourth axis. Approving a device as one of your own is the
+     * person vouching for it — the connection is the authorization — so it
+     * drives with nothing written in `remote-windows.json` at all. A guest is
+     * the peer nobody vouched for and stays off until ticked. Both the
+     * approval and the tick go through the real registrations, against the
+     * real stores, wired the way `host-core.ts` wires them.
+     */
+    const h = harness()
+    await h.call('remote:device:approve', 'dev-own', 'mine', [], 'all', [])
+    await h.call('remote:device:approve', 'dev-guest', 'guest', [], 'all', [])
+    expect(h.windows.drives('dev-own')).toBe(true)
+    expect(h.windows.drives('dev-guest')).toBe(false)
+
+    // The settings row is a real off-switch for a device driving on its
+    // default: the untick writes a no that beats the kind.
+    await h.call('remote:windows:set', 'dev-own', false)
+    expect(h.windows.drives('dev-own')).toBe(false)
+    // And the guest's tick is a real on-switch, exactly as before.
+    await h.call('remote:windows:set', 'dev-guest', true)
+    expect(h.windows.drives('dev-guest')).toBe(true)
+  })
+
+  it('reads a device nobody decided a kind for as a guest', async () => {
+    // A device paired before kinds existed has no record, and a host that
+    // cannot tell its own laptop from a stranger's phone treats both as the
+    // phone — the browser here must not fail open on a missing row.
+    const h = harness()
+    expect(h.windows.drives('dev-undecided')).toBe(false)
   })
 })
 

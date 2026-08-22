@@ -864,18 +864,19 @@ describe('letting a machine act on browser windows here', () => {
    */
   const withSwitch: MachineActions = { ...NOTHING, setDrivesWindows: () => {} }
 
-  it('is off until somebody says otherwise', () => {
+  it('draws unticked when the main process never sent an answer', () => {
     const html = renderToStaticMarkup(
       <MachineRow machine={machine()} link={link()} actions={withSwitch} />,
     )
     expect(html).toContain('act on browser windows here')
-    // An unchecked box, and it has to be *rendered* unchecked: a store that
-    // failed open here would be a browser reachable from another computer
-    // because two machines were once paired.
+    // The store resolves the default — since T30 a paired machine drives
+    // unless unticked — and always sends the boolean. Absent therefore means a
+    // main process older than the field, and the side that did not resolve the
+    // open default may not invent it: rendered unticked, not guessed ticked.
     expect(html).not.toContain('checked=""')
   })
 
-  it('draws it ticked when it has been allowed', () => {
+  it('draws the resolved answer ticked, which is what a machine the person paired gets', () => {
     const html = renderToStaticMarkup(
       <MachineRow
         machine={machine({ drivesWindows: true })}

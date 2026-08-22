@@ -16,10 +16,12 @@ import {
  * on this screen, holding this person's signed-in mail, bank and source control
  * — and the only two answers are yes and no.
  *
- * The one thing worth pinning hardest is which way it fails. Unread, unreadable
- * and never-chosen all draw the same unticked box, because they all mean the
- * same thing, and a panel that guessed otherwise would be a permission somebody
- * believes they gave.
+ * The wire carries the **effective** set — a device of the owner's own drives
+ * by its kind's default and arrives ticked, a guest arrives ticked only once
+ * ticked — so this view draws exactly what it is handed and adds no default of
+ * its own. The thing worth pinning hardest is which way the unknowns fail:
+ * unread and unreadable both draw unticked, because a panel that guessed would
+ * be a permission somebody believes they gave.
  *
  * `renderToStaticMarkup` never runs an effect, which is why the view takes its
  * grants as a prop.
