@@ -770,6 +770,7 @@ class Deck {
    */
   private hostAppVersion = ''
   private hostKind: HostKind | null = null
+  /**
    * The "This server" section of the Settings screen — the two settings this
    * machine owns rather than this browser. Built once and app-global (it is a
    * screen section, not a per-session cluster), it reads the socket and the
@@ -4022,6 +4023,7 @@ class Deck {
       devicesRow.addEventListener('click', () => this.goTo('devices'))
       devices.append(devicesRow)
       screen.append(devices)
+    }
     // The two settings this machine owns, over the `settings` capability. Drawn
     // only when the host advertised it (an owner's own device, a host new enough
     // to serve it); a guest or an older desktop gets nothing here rather than a
