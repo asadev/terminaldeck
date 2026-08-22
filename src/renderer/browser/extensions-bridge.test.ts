@@ -3,7 +3,12 @@ import {
   canAct,
   extensionActionLabel,
   extensionActionVerb,
+  extensionCompat,
+  extensionFacets,
+  extensionSource,
   extensionsAvailable,
+  linkOut,
+  linkOutLabel,
   reachWords,
   readExtensionResult,
   readExtensionsView,
@@ -20,6 +25,8 @@ function row(over: Partial<StoreExtension> = {}): StoreExtension {
     licence: 'MIT',
     version: '1.0',
     category: 'appearance',
+    tags: [],
+    needs: [],
     works: 'works',
     noRelease: '',
     measured: 'Watched working.',
@@ -188,5 +195,89 @@ describe('the button', () => {
     expect(canAct(row({ state: 'unavailable', works: 'no' }))).toBe(false)
     expect(canAct(row({ state: 'available' }))).toBe(true)
     expect(canAct(row({ state: 'installed' }))).toBe(true)
+  })
+})
+
+describe('the storefront projection', () => {
+  it('reads `partly` as unknown rather than as working', () => {
+    /*
+     * The honest reading of what the catalogue says about those rows: *"Loads.
+     * Its background page runs with no uncaught error. It was not watched
+     * applying a style, so this app does not claim it does."* A filter called
+     * "Works here" that returned it would be making the claim the row refuses.
+     */
+    expect(extensionCompat(row({ works: 'partly' }))).toBe('unknown')
+    expect(extensionCompat(row({ works: 'unmeasured' }))).toBe('unknown')
+    expect(extensionCompat(row({ works: 'works' }))).toBe('works')
+    expect(extensionCompat(row({ works: 'no' }))).toBe('cannot')
+  })
+
+  it('derives where a row comes from rather than carrying a new field for it', () => {
+    // All three answers are already facts on the row: a `noRelease` sentence is
+    // a project that publishes through a browser web store, a sideloaded row
+    // came off this machine, and everything else has releases of its own.
+    expect(extensionSource(row())).toBe('release')
+    expect(extensionSource(row({ noRelease: 'Chrome Web Store only.' }))).toBe('web-store')
+    expect(extensionSource(row({ sideloaded: true }))).toBe('your-own')
+  })
+
+  it('searches tags and the shelf name, and never the measured paragraph', () => {
+    /*
+     * Those paragraphs mention `chrome.tabs`, `ads.doubleclick.net` and every
+     * namespace this browser lacks, so searching them would make a search for
+     * "cookies" return the ad blockers and one for "tabs" return most of the
+     * catalogue. A search that answers with almost everything is the same as one
+     * that answers with nothing, and slower to disbelieve.
+     */
+    const facets = extensionFacets(
+      row({ tags: ['adblock'], measured: 'It reaches for chrome.cookies, which is not here.' }),
+    )
+    expect(facets.tags).toEqual(['adblock'])
+    expect([facets.name, facets.summary, facets.categoryName, ...facets.tags].join(' ')).not.toContain(
+      'chrome.cookies',
+    )
+  })
+
+  it('counts a damaged install as installed, because the files are on the disk', () => {
+    expect(extensionFacets(row({ state: 'damaged' })).installed).toBe(true)
+    expect(extensionFacets(row({ state: 'installed' })).installed).toBe(true)
+    expect(extensionFacets(row({ state: 'available' })).installed).toBe(false)
+  })
+})
+
+describe('the link out', () => {
+  it('is offered only where there is no Install, so no row carries both', () => {
+    const project = 'https://github.com/example/thing'
+    expect(linkOut(row({ homepage: project, state: 'available' }))).toBe('')
+    expect(linkOut(row({ homepage: project, state: 'installed' }))).toBe('')
+    expect(linkOut(row({ homepage: project, state: 'unavailable', works: 'no' }))).toBe(project)
+    expect(linkOut(row({ homepage: project, state: 'not-offered', works: 'unmeasured' }))).toBe(
+      project,
+    )
+  })
+
+  it('is not offered for something a person added themselves', () => {
+    // A folder on this machine has no project page, and `homepage` on such a row
+    // is empty by construction. A button to nowhere is the dead control this
+    // whole store is written against.
+    expect(
+      linkOut(row({ state: 'not-offered', sideloaded: true, homepage: 'https://example.com' })),
+    ).toBe('')
+  })
+
+  it('refuses anything that is not an http address', () => {
+    expect(linkOut(row({ state: 'unavailable', homepage: 'file:///etc/passwd' }))).toBe('')
+    expect(linkOut(row({ state: 'unavailable', homepage: '' }))).toBe('')
+  })
+
+  it('says Open project for a row measured failing and Get it for one with no release', () => {
+    /*
+     * *Get it* on a row this app watched fail here would be a small lie — you
+     * cannot get it here, and the sentence underneath says why. On a row whose
+     * project simply publishes somewhere this app cannot fetch from, the
+     * destination really is where you get it.
+     */
+    expect(linkOutLabel(row({ state: 'unavailable' }))).toBe('Open project')
+    expect(linkOutLabel(row({ state: 'not-offered' }))).toBe('Get it')
   })
 })

@@ -11,6 +11,7 @@ import {
   type McpCatalogue,
   type McpCatalogueEntry,
   type McpCatalogueInput,
+  type McpCategory,
   type McpOrigin,
   type McpRuntime,
 } from './mcp-catalogue'
@@ -111,6 +112,10 @@ export interface McpStoreRow {
   id: string
   name: string
   summary: string
+  /** Which shelf it sits on, so the store browses by subject rather than state. */
+  category: McpCategory
+  /** Words to search on that are in neither the name nor the summary. */
+  tags: string[]
   homepage: string
   registry: string
   licence: string
@@ -361,6 +366,8 @@ export function buildStoreView(input: {
       id: entry.id,
       name: entry.name,
       summary: entry.summary,
+      category: entry.category,
+      tags: [...entry.tags],
       homepage: entry.homepage,
       registry: entry.registry,
       licence: entry.licence,

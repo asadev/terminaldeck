@@ -35,6 +35,8 @@ function row(over: Partial<StoreExtension> = {}): StoreExtension {
     licence: 'MIT',
     version: '4.9.129',
     category: 'appearance',
+    tags: [],
+    needs: [],
     works: 'works',
     measured: 'Watched working: a white page came back with background rgb(24, 26, 27).',
     noRelease: '',
@@ -121,11 +123,17 @@ describe('what will be fetched, and what was', () => {
 })
 
 describe('a row this app measured failing', () => {
-  it('draws no button at all', () => {
+  it('offers no Install — not even a disabled one — and links out instead', () => {
     /*
-     * Not a disabled one: a disabled Install with a tooltip is still a store
-     * offering something. There is no download pinned to this row, so the
+     * Not a disabled Install: a disabled Install with a tooltip is still a store
+     * offering something. There is no download pinned to this row, so that
      * button could only ever refuse.
+     *
+     * What the row does carry now is one control that does exactly what it says.
+     * *"or maybe only link of the application from github or wherever they can
+     * go and download it, it will just redirect them"* — so the dead end became
+     * a way onward, and it is worded **Open project** rather than Get it,
+     * because you cannot get this one here and the sentence underneath says why.
      */
     const html = render({
       id: 'ublock-origin',
@@ -134,10 +142,27 @@ describe('a row this app measured failing', () => {
       state: 'unavailable',
       url: '',
       sha256: '',
+      homepage: 'https://github.com/gorhill/uBlock',
       measured: 'It loads, and then blocks nothing.',
     })
-    expect(html).not.toContain('<button')
+    expect(html).not.toContain('Install')
+    expect(html).not.toContain('Download')
+    expect(html).toContain('Open project')
+    expect(html).toContain('https://github.com/gorhill/uBlock')
     expect(html).toContain('blocks nothing')
+  })
+
+  it('has no link-out when the row carries no project address', () => {
+    // A button whose destination is an empty string is the dead control this
+    // whole store is written against, so it is not drawn at all.
+    const html = render({
+      works: 'no',
+      state: 'unavailable',
+      url: '',
+      sha256: '',
+      homepage: '',
+    })
+    expect(html).not.toContain('storefront-getit')
   })
 
   it('is still on screen, because "where is uBlock Origin" has a true answer', () => {

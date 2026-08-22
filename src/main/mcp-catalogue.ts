@@ -137,6 +137,55 @@ export interface McpCatalogueInput {
   required: boolean
 }
 
+/**
+ * Which shelf a row sits on, so nineteen servers browse instead of scrolling.
+ *
+ * ## Why these nine and not the obvious ones
+ *
+ * The tempting split is by **runtime** — npx, uvx, docker — because that is a
+ * field already on every row and it partitions perfectly. It is also useless:
+ * nobody has ever wanted "the Python ones". The other tempting split is by
+ * **origin**, and that one is already a facet of its own, so making it the
+ * shelves too would mean one fact drawn twice and a store with a single axis.
+ *
+ * These are by **what the server does for you**, which is the question somebody
+ * opens a store with. Each row names one and only one, for the reason
+ * `browser-extension-catalogue.ts` gives about its own: *"a row that appeared
+ * under three headings would make a catalogue of twenty-four look like a
+ * catalogue of forty, and a store overstating its own size is the first thing
+ * that makes the rest of it unbelievable."*
+ *
+ * Two shelves hold one row each — `files` and `messaging` — and they were left
+ * alone rather than merged into a bin called *Other*. `filesystem` is the server
+ * most people install first and folding it in with the SQL ones would bury it
+ * under a heading nobody looking for it would read; `slack` has no honest
+ * neighbour in this catalogue and inventing one would be a shelf that means
+ * nothing the day a second chat server arrives.
+ */
+export type McpCategory =
+  | 'files'
+  | 'code'
+  | 'data'
+  | 'web'
+  | 'browser'
+  | 'knowledge'
+  | 'thinking'
+  | 'messaging'
+  | 'utility'
+
+/** The shelves, in the order the store draws them, with the name each wears. */
+export const MCP_CATEGORIES: readonly { id: McpCategory; name: string }[] = [
+  { id: 'files', name: 'Files on this machine' },
+  { id: 'code', name: 'Code and repositories' },
+  { id: 'data', name: 'Databases' },
+  { id: 'web', name: 'Searching and reading the web' },
+  { id: 'browser', name: 'Driving a browser' },
+  { id: 'knowledge', name: 'Notes and documentation' },
+  { id: 'thinking', name: 'What the agent remembers' },
+  { id: 'messaging', name: 'Chat and messaging' },
+  { id: 'utility', name: 'Time, testing and odds and ends' },
+]
+
 /** Where the row comes from, which is a fact about its maintenance. */
 export type McpOrigin =
   /** In `modelcontextprotocol/servers` today. */
@@ -158,6 +207,17 @@ export interface McpCatalogueEntry {
   summary: string
   /** The project. Every row has one and every row shows it. */
   homepage: string
+  /** Which shelf it sits on. One, never three. */
+  category: McpCategory
+  /**
+   * Words somebody might type that are nowhere in the name or the summary.
+   *
+   * `postgres` is called `postgres`, but nobody types that looking for *sql*,
+   * and `brave-search` says nothing about *web search* in either field. Search
+   * over name and summary alone answers those with an empty list, which reads as
+   * a store that does not have the thing rather than one that was asked wrong.
+   */
+  tags: readonly string[]
   /** Read from the registry on the date in this file's header, verbatim. */
   licence: string
   /** Likewise. The row prints it so "how old is this" is answerable on sight. */
@@ -216,6 +276,8 @@ export const MCP_CATALOGUE: McpCatalogue = [
     name: 'filesystem',
     summary: 'Reads, writes and searches files, under directories you name and nowhere else.',
     homepage: 'https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem',
+    category: 'files',
+    tags: ['files', 'directory', 'folder', 'read', 'write', 'search', 'disk', 'local'],
     licence: 'MIT',
     version: '2026.7.10',
     registry: 'https://www.npmjs.com/package/@modelcontextprotocol/server-filesystem',
@@ -240,6 +302,8 @@ export const MCP_CATALOGUE: McpCatalogue = [
     name: 'memory',
     summary: 'A knowledge graph the agent writes to and reads back, kept in one JSON file.',
     homepage: 'https://github.com/modelcontextprotocol/servers/tree/main/src/memory',
+    category: 'thinking',
+    tags: ['knowledge graph', 'remember', 'recall', 'notes', 'entities'],
     licence: 'MIT',
     version: '2026.7.4',
     registry: 'https://www.npmjs.com/package/@modelcontextprotocol/server-memory',
@@ -255,6 +319,8 @@ export const MCP_CATALOGUE: McpCatalogue = [
     name: 'sequential-thinking',
     summary: 'Lets the agent break a problem into numbered steps it can revise as it goes.',
     homepage: 'https://github.com/modelcontextprotocol/servers/tree/main/src/sequentialthinking',
+    category: 'thinking',
+    tags: ['reasoning', 'plan', 'steps', 'think', 'revise'],
     licence: 'MIT',
     version: '2026.7.4',
     registry: 'https://www.npmjs.com/package/@modelcontextprotocol/server-sequential-thinking',
@@ -270,6 +336,8 @@ export const MCP_CATALOGUE: McpCatalogue = [
     name: 'everything',
     summary: 'The protocol’s own test server — one of every tool, resource and prompt kind.',
     homepage: 'https://github.com/modelcontextprotocol/servers/tree/main/src/everything',
+    category: 'utility',
+    tags: ['test', 'demo', 'example', 'protocol', 'reference'],
     licence: 'MIT',
     version: '2026.8.18',
     registry: 'https://www.npmjs.com/package/@modelcontextprotocol/server-everything',
@@ -289,6 +357,8 @@ export const MCP_CATALOGUE: McpCatalogue = [
     name: 'git',
     summary: 'Reads a repository’s history, diffs and branches, and can stage and commit.',
     homepage: 'https://github.com/modelcontextprotocol/servers/tree/main/src/git',
+    category: 'code',
+    tags: ['repository', 'commit', 'diff', 'branch', 'version control', 'staging'],
     licence: 'MIT',
     version: '2026.8.18',
     registry: 'https://pypi.org/project/mcp-server-git/',
@@ -313,6 +383,8 @@ export const MCP_CATALOGUE: McpCatalogue = [
     name: 'fetch',
     summary: 'Fetches a URL and converts the page to markdown for the agent to read.',
     homepage: 'https://github.com/modelcontextprotocol/servers/tree/main/src/fetch',
+    category: 'web',
+    tags: ['url', 'http', 'markdown', 'read a page', 'scrape'],
     licence: 'MIT',
     version: '2026.8.18',
     registry: 'https://pypi.org/project/mcp-server-fetch/',
@@ -328,6 +400,8 @@ export const MCP_CATALOGUE: McpCatalogue = [
     name: 'time',
     summary: 'The current time in any zone, and conversions between zones.',
     homepage: 'https://github.com/modelcontextprotocol/servers/tree/main/src/time',
+    category: 'utility',
+    tags: ['clock', 'timezone', 'date', 'convert', 'utc'],
     licence: 'MIT',
     version: '2026.8.18',
     registry: 'https://pypi.org/project/mcp-server-time/',
@@ -345,6 +419,10 @@ export const MCP_CATALOGUE: McpCatalogue = [
     name: 'playwright',
     summary: 'Drives a real browser — clicks, types, reads the page as an accessibility tree.',
     homepage: 'https://github.com/microsoft/playwright-mcp',
+    category: 'browser',
+    tags: [
+      'browser', 'automation', 'click', 'type', 'screenshot', 'accessibility tree', 'end to end',
+    ],
     licence: 'Apache-2.0',
     version: '0.0.79',
     registry: 'https://www.npmjs.com/package/@playwright/mcp',
@@ -362,6 +440,8 @@ export const MCP_CATALOGUE: McpCatalogue = [
     name: 'github',
     summary: 'GitHub’s own server: issues, pull requests, code search, actions, releases.',
     homepage: 'https://github.com/github/github-mcp-server',
+    category: 'code',
+    tags: ['issues', 'pull requests', 'repository', 'actions', 'releases', 'code search', 'pr'],
     licence: 'MIT',
     version: 'ghcr.io/github/github-mcp-server:latest',
     registry: 'https://github.com/github/github-mcp-server/pkgs/container/github-mcp-server',
@@ -388,6 +468,8 @@ export const MCP_CATALOGUE: McpCatalogue = [
     name: 'notion',
     summary: 'Notion’s own server: search, read and write pages and databases.',
     homepage: 'https://github.com/makenotion/notion-mcp-server',
+    category: 'knowledge',
+    tags: ['notes', 'wiki', 'pages', 'database', 'documents'],
     licence: 'MIT',
     version: '2.5.1',
     registry: 'https://www.npmjs.com/package/@notionhq/notion-mcp-server',
@@ -412,6 +494,8 @@ export const MCP_CATALOGUE: McpCatalogue = [
     name: 'context7',
     summary: 'Up-to-date documentation for a library, fetched by name and version.',
     homepage: 'https://github.com/upstash/context7',
+    category: 'knowledge',
+    tags: ['documentation', 'docs', 'library', 'api reference', 'versions'],
     licence: 'MIT',
     version: '4.0.3',
     registry: 'https://www.npmjs.com/package/@upstash/context7-mcp',
@@ -436,6 +520,8 @@ export const MCP_CATALOGUE: McpCatalogue = [
     name: 'tavily',
     summary: 'Web search and page extraction through Tavily’s API.',
     homepage: 'https://github.com/tavily-ai/tavily-mcp',
+    category: 'web',
+    tags: ['search', 'web search', 'extract', 'research', 'answers'],
     licence: 'MIT',
     version: '0.2.22',
     registry: 'https://www.npmjs.com/package/tavily-mcp',
@@ -460,6 +546,8 @@ export const MCP_CATALOGUE: McpCatalogue = [
     name: 'firecrawl',
     summary: 'Scrapes and crawls sites, returning markdown, through Firecrawl’s API.',
     homepage: 'https://github.com/firecrawl/firecrawl-mcp-server',
+    category: 'web',
+    tags: ['scrape', 'crawl', 'markdown', 'website', 'extract'],
     licence: 'MIT',
     version: '3.24.0',
     registry: 'https://www.npmjs.com/package/firecrawl-mcp',
@@ -486,6 +574,8 @@ export const MCP_CATALOGUE: McpCatalogue = [
     name: 'sqlite',
     summary: 'Queries a SQLite database file and describes its schema.',
     homepage: 'https://github.com/modelcontextprotocol/servers-archived/tree/main/src/sqlite',
+    category: 'data',
+    tags: ['sql', 'database', 'query', 'schema', 'db file'],
     licence: 'MIT',
     version: '2025.4.25',
     registry: 'https://pypi.org/project/mcp-server-sqlite/',
@@ -510,6 +600,8 @@ export const MCP_CATALOGUE: McpCatalogue = [
     name: 'postgres',
     summary: 'Runs read-only SQL against a Postgres database and reads its schema.',
     homepage: 'https://github.com/modelcontextprotocol/servers-archived/tree/main/src/postgres',
+    category: 'data',
+    tags: ['sql', 'database', 'query', 'schema', 'postgresql', 'read only'],
     licence: 'MIT',
     version: '0.6.2',
     registry: 'https://www.npmjs.com/package/@modelcontextprotocol/server-postgres',
@@ -537,6 +629,8 @@ export const MCP_CATALOGUE: McpCatalogue = [
     name: 'slack',
     summary: 'Reads channels and threads in a Slack workspace and posts messages.',
     homepage: 'https://github.com/modelcontextprotocol/servers-archived/tree/main/src/slack',
+    category: 'messaging',
+    tags: ['chat', 'messages', 'channels', 'threads', 'workspace'],
     licence: 'MIT',
     version: '2025.4.25',
     registry: 'https://www.npmjs.com/package/@modelcontextprotocol/server-slack',
@@ -569,6 +663,8 @@ export const MCP_CATALOGUE: McpCatalogue = [
     name: 'brave-search',
     summary: 'Web and local search through the Brave Search API.',
     homepage: 'https://github.com/modelcontextprotocol/servers-archived/tree/main/src/brave-search',
+    category: 'web',
+    tags: ['search', 'web search', 'local search', 'maps'],
     licence: 'MIT',
     version: '0.6.2',
     registry: 'https://www.npmjs.com/package/@modelcontextprotocol/server-brave-search',
@@ -593,6 +689,8 @@ export const MCP_CATALOGUE: McpCatalogue = [
     name: 'puppeteer',
     summary: 'Drives a headless Chrome — navigate, click, type, screenshot.',
     homepage: 'https://github.com/modelcontextprotocol/servers-archived/tree/main/src/puppeteer',
+    category: 'browser',
+    tags: ['browser', 'headless chrome', 'automation', 'click', 'type', 'screenshot'],
     licence: 'MIT',
     version: '2025.5.12',
     registry: 'https://www.npmjs.com/package/@modelcontextprotocol/server-puppeteer',

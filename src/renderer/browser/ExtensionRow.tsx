@@ -3,9 +3,12 @@ import {
   extensionActionLabel,
   extensionActionVerb,
   hasReach,
+  linkOut,
+  linkOutLabel,
   reachWords,
   type StoreExtension,
 } from './extensions-bridge'
+import { StoreLinkOut } from '../store/StoreLinkOut'
 
 /**
  * One row of the store's download half — an open-source browser extension.
@@ -22,10 +25,14 @@ import {
  * answer to a person for whom the second is true, and they will go and install
  * it by hand and get the same nothing with no explanation attached.
  *
- * Those rows have **no button**. Not a disabled one either: a disabled Install
+ * Those rows have **no Install**. Not a disabled one either: a disabled Install
  * with a tooltip is still a store offering something, and this app's rule is that
  * a control which looks like it works and does not is the defect. What they have
- * instead is the sentence describing what was measured.
+ * instead is the sentence describing what was measured, and one control that
+ * does exactly what it says — **Get it** / **Open project**, which opens the
+ * project's own page in a tab of this app's browser and puts nothing on the
+ * disk. See `store/StoreLinkOut.tsx` for why the label differs between the two
+ * kinds of buttonless row.
  *
  * ## The Download and sha256 facts
  *
@@ -81,6 +88,9 @@ export function ExtensionRow({
 }: RowProps) {
   const actionable = canAct(extension)
   const isInstalled = extension.state === 'installed'
+  /* Where to send somebody this app cannot install it for. `''` for every row
+     that has a real Install, so no row ever carries both. */
+  const elsewhere = linkOut(extension)
   return (
     <li className="bw-store-row">
       <div className="bw-store-head">
@@ -149,6 +159,21 @@ export function ExtensionRow({
           >
             {extensionActionLabel(extension, busy)}
           </button>
+        )}
+        {/*
+          The honest fallback. A row this app watched failing here, and a row
+          whose project publishes nothing this app can fetch, both had no
+          control at all — which reads as a dead end rather than as the two
+          different true things they are. This opens the project's own page, in
+          a tab of this app's browser, and installs nothing. See
+          `store/StoreLinkOut.tsx`.
+        */}
+        {elsewhere !== '' && (
+          <StoreLinkOut
+            url={elsewhere}
+            label={linkOutLabel(extension)}
+            describes={`open the ${extension.name} project`}
+          />
         )}
       </div>
 

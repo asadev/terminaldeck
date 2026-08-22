@@ -10,17 +10,28 @@ import {
 import {
   CATEGORY_NAMES,
   CATEGORY_ORDER,
+  EXTENSION_FACETS,
+  extensionFacets,
   extensionsAvailable,
-  matchesSearch,
   readExtensionResult,
   readExtensionsView,
-  type ExtensionCategory,
   type ExtensionsApi,
   type ExtensionsView,
   type StoreExtension,
 } from './extensions-bridge'
 import { ToolRow } from './ToolRow'
 import { ExtensionRow } from './ExtensionRow'
+import { StoreFilterBar } from '../store/StoreFilterBar'
+import {
+  facetControls,
+  filtering as anyFilter,
+  matchesFilter,
+  NO_FILTER,
+  shelve,
+  withFacet,
+  type StoreFacet,
+  type StoreFilter,
+} from '../store/storefront'
 
 /**
  * The tools store. One door, one dialog, both kinds of thing — with the line
@@ -61,10 +72,27 @@ import { ExtensionRow } from './ExtensionRow'
  * name and no file on disk.
  *
  * **Cannot work in this browser.** A row this app measured failing keeps its
- * verdict and gets no button. That honesty was hard-won — every verdict in the
+ * verdict and gets no Install. That honesty was hard-won — every verdict in the
  * catalogue was earned by running the release in this app's own Electron — and
  * a store that softened it to look fuller would be lying at exactly the moment
  * somebody is deciding what to trust.
+ *
+ * What such a row does get is **Get it**, which opens the project's own page and
+ * installs nothing. *"or maybe only link of the application from github or
+ * wherever they can go and download it, it will just redirect them and they can
+ * install if not possible to bring button to install."* The refusal is kept and
+ * the dead end is not, which is also what lets the catalogue hold everything
+ * worth holding rather than only what this browser can run.
+ *
+ * ## Browsing: one bar, shared with the MCP store
+ *
+ * The search, the five filters and their counts are `store/StoreFilterBar.tsx`
+ * over `store/storefront.ts`, and the MCP store draws the same component over
+ * the same model. This panel had a search box and a row of category chips
+ * written out here; the MCP store had neither. Copying the box across would have
+ * been the last moment the two agreed — see `store/storefront.ts` for the whole
+ * argument, and for the one rule every control obeys: an option that would leave
+ * nothing on screen is not drawn at all.
  *
  * ## Why every failure lands on the row
  *
@@ -119,10 +147,15 @@ export function StorePanel({ open, store, extensions, profileId, onClose }: Prop
   const [said, setSaid] = useState<Record<string, string>>({})
   /** The row with something in flight, so its button can say so. */
   const [busy, setBusy] = useState('')
-  /** What has been typed into the search box. */
-  const [query, setQuery] = useState('')
-  /** Which shelf is being looked at, or `'all'`. */
-  const [category, setCategory] = useState<ExtensionCategory | 'all'>('all')
+  /**
+   * What is being searched and filtered for, as one value.
+   *
+   * One piece of state rather than five, and it is the same shape the MCP store
+   * keeps — `store/storefront.ts` owns every decision made from it, so the two
+   * stores cannot end up disagreeing about what a partial word is or when a chip
+   * should be drawn.
+   */
+  const [filter, setFilter] = useState<StoreFilter>(NO_FILTER)
 
   useEffect(() => {
     if (open) setShowing(profileId)
@@ -301,11 +334,9 @@ export function StorePanel({ open, store, extensions, profileId, onClose }: Prop
           canOpenOptions={typeof extensions.browserExtensionOptions === 'function'}
           canAddFolder={typeof extensions.browserExtensionAddFolder === 'function'}
           canAddCrx={typeof extensions.browserExtensionAddCrx === 'function'}
-          query={query}
-          category={category}
+          filter={filter}
           onShowProfile={setShowing}
-          onQuery={setQuery}
-          onCategory={setCategory}
+          onFilter={setFilter}
           onTool={(id, verb) => void actTool(id, verb)}
           onExtension={(id, verb) => void actExtension(id, verb)}
           onEnable={(id, on) => void setEnabled(id, on)}
@@ -339,11 +370,9 @@ export interface StoreBodyProps {
   /** Whether this build's preload carries each Add-your-own door. */
   canAddFolder: boolean
   canAddCrx: boolean
-  query: string
-  category: ExtensionCategory | 'all'
+  filter: StoreFilter
   onShowProfile(id: string): void
-  onQuery(next: string): void
-  onCategory(next: ExtensionCategory | 'all'): void
+  onFilter(next: StoreFilter): void
   onTool(id: string, verb: 'install' | 'remove'): void
   onExtension(id: string, verb: 'install' | 'remove'): void
   onEnable(id: string, on: boolean): void
@@ -374,11 +403,9 @@ export function StoreBody({
   canOpenOptions,
   canAddFolder,
   canAddCrx,
-  query,
-  category,
+  filter,
   onShowProfile,
-  onQuery,
-  onCategory,
+  onFilter,
   onTool,
   onExtension,
   onEnable,
@@ -386,9 +413,18 @@ export function StoreBody({
   onOpenOptions,
   onAddOwn,
 }: StoreBodyProps) {
-  const installed = ext.extensions.filter(
-    (one) => one.state === 'installed' || one.state === 'damaged',
-  )
+  /*
+   * The whole catalogue, as the shared storefront sees it, computed once.
+   *
+   * Once because it feeds three things — the filter chips' counts, the Installed
+   * section and the shelves below it — and three call sites deriving the same
+   * projection is three chances for one of them to drift.
+   */
+  const facets = new Map(ext.extensions.map((one) => [one.id, extensionFacets(one)]))
+  const facetsOf = (one: StoreExtension) => facets.get(one.id) ?? extensionFacets(one)
+  const kept = ext.extensions.filter((one) => matchesFilter(facetsOf(one), filter))
+
+  const installed = kept.filter((one) => one.state === 'installed' || one.state === 'damaged')
 
   const extensionRow = (extension: StoreExtension) => (
     <ExtensionRow
@@ -406,14 +442,14 @@ export function StoreBody({
   )
 
   /*
-   * Everything that is not already installed, in shelf order, filtered by
-   * whatever is typed and whichever shelf is chosen.
+   * Everything that is not already installed, in shelf order.
    *
    * Within a shelf: what can be installed, then what was measured failing, then
    * what nothing was measured on. That order is the store being honest about
-   * itself twice over — the useful rows come first, and the two kinds of
-   * buttonless row stay apart rather than being swept into one bin at the
-   * bottom that reads as *the broken ones*.
+   * itself twice over — the useful rows come first, and the two kinds of row
+   * with no Install stay apart rather than being swept into one bin at the
+   * bottom that reads as *the broken ones*. Neither kind is a dead end any more:
+   * both carry a Get it that opens the project's own page.
    */
   const rank: Record<string, number> = {
     available: 0,
@@ -422,18 +458,15 @@ export function StoreBody({
     unavailable: 1,
     'not-offered': 2,
   }
-  const browsing = ext.extensions
-    .filter((one) => one.state !== 'installed' && one.state !== 'damaged')
-    .filter((one) => category === 'all' || one.category === category)
-    .filter((one) => matchesSearch(one, query))
-  const shelves = CATEGORY_ORDER.map((id) => ({
-    id,
-    name: CATEGORY_NAMES[id],
-    rows: browsing
-      .filter((one) => one.category === id)
-      .sort((a, b) => (rank[a.state] ?? 0) - (rank[b.state] ?? 0)),
-  })).filter((shelf) => shelf.rows.length > 0)
-  const filtering = query.trim() !== '' || category !== 'all'
+  const browsing = kept.filter((one) => one.state !== 'installed' && one.state !== 'damaged')
+  const shelves = shelve(
+    browsing,
+    CATEGORY_ORDER.map((id) => ({ id, name: CATEGORY_NAMES[id] })),
+    facetsOf,
+    (one) => rank[one.state] ?? 0,
+  )
+  const controls = facetControls([...facets.values()], filter, EXTENSION_FACETS)
+  const isFiltering = anyFilter(filter)
 
   /* Installed first, so "do I have this" is answered by order as well as by
      the chip on the row — the built-in half is one list, not two sections. */
@@ -488,6 +521,33 @@ export function StoreBody({
             </label>
           )}
 
+          {/*
+            The browsing controls. A catalogue this size stopped being a list
+            somebody reads top to bottom, and a store that cannot be searched is
+            a list with a nicer name.
+
+            The bar itself is `store/StoreFilterBar.tsx`, shared with the MCP
+            store, and every count and every "is this chip worth drawing" answer
+            in it comes from `store/storefront.ts`. This used to be a search box
+            and one row of category chips written out here; the MCP store had
+            neither, and the cheap fix — copy the box across — would have been
+            the last moment the two agreed with each other.
+          */}
+          <section className="bw-store-section bw-store-browse">
+            <StoreFilterBar
+              idPrefix="bw-ext"
+              placeholder="blocker, dark, password, youtube…"
+              filter={filter}
+              controls={controls}
+              showing={kept.length}
+              total={ext.extensions.length}
+              active={isFiltering}
+              onQuery={(next) => onFilter({ ...filter, query: next })}
+              onFacet={(facet: StoreFacet, value) => onFilter(withFacet(filter, facet, value))}
+              onClear={() => onFilter(NO_FILTER)}
+            />
+          </section>
+
           {installed.length > 0 && (
             <section className="bw-store-section">
               <h3 className="bw-store-heading">
@@ -498,76 +558,43 @@ export function StoreBody({
           )}
 
           {/*
-            The browsing controls. A catalogue this size stopped being a list
-            somebody reads top to bottom, and a store that cannot be searched is
-            a list with a nicer name.
+            The three things every shelf below mixes, said once rather than
+            under each heading. A row's button is the row's own fact and the
+            reason for it differs by row — so the sentence points at the row
+            rather than trying to say it for all of them.
+
+            Directly above the first shelf rather than up with the controls,
+            because it is about the rows and the controls are about the whole
+            screen.
           */}
-          <section className="bw-store-section bw-store-browse">
-            <label className="bw-store-search" htmlFor="bw-ext-search">
-              <span className="bw-store-note">Search</span>
-              <input
-                id="bw-ext-search"
-                type="search"
-                value={query}
-                placeholder="blocker, dark, password…"
-                onChange={(event) => onQuery(event.target.value)}
-              />
-            </label>
-            <div className="bw-store-chips">
-              <button
-                type="button"
-                className={category === 'all' ? 'bw-chip bw-chip-on' : 'bw-chip'}
-                aria-pressed={category === 'all'}
-                onClick={() => onCategory('all')}
-              >
-                Everything
-              </button>
-              {/*
-                Only the shelves that have something on them to browse. Built
-                from what is *browsable* rather than from the whole catalogue,
-                because everything installed is drawn above this and a chip that
-                filtered down to "nothing matches that" would be a control that
-                does nothing — which is the thing this app keeps being about.
-              */}
-              {CATEGORY_ORDER.filter((id) =>
-                ext.extensions.some(
-                  (one) =>
-                    one.category === id &&
-                    one.state !== 'installed' &&
-                    one.state !== 'damaged',
-                ),
-              ).map((id) => (
-                <button
-                  key={id}
-                  type="button"
-                  className={category === id ? 'bw-chip bw-chip-on' : 'bw-chip'}
-                  aria-pressed={category === id}
-                  onClick={() => onCategory(id)}
-                >
-                  {CATEGORY_NAMES[id]}
-                </button>
-              ))}
-            </div>
-            {/*
-              The two things every shelf below mixes, said once rather than under
-              each heading. A row with no Install is not an oversight and the
-              reason it has none differs by row — so the sentence points at the
-              row rather than trying to say it for all of them.
-            */}
+          {shelves.length > 0 && (
             <p className="bw-store-note">
               Nothing here ships inside this app. Install fetches it from the address on its row
               and checks it against the fingerprint beside it before a byte is saved. Some rows
-              have no Install at all: either this app ran them here and watched them fail, or
-              their project publishes nothing this app could fetch and fingerprint. Each of those
-              rows says which.
+              have no Install: either this app ran them here and watched them fail, or their
+              project publishes nothing this app could fetch and fingerprint. Those rows carry
+              <strong> Get it</strong> instead, which opens the project&rsquo;s own page — nothing
+              is installed by pressing it, and each row still says which of the two it is.
             </p>
-          </section>
+          )}
 
+          {/*
+            Three different true sentences, and the middle one had to be added
+            after rendering this and looking at it. Filtering to a shelf whose
+            only row is installed drew *"Nothing in the store matches that"* over
+            a row that plainly matched and was sitting a few pixels above, under
+            Installed. What is empty in that case is the browsing area, not the
+            store — and those are not the same claim.
+          */}
           {shelves.length === 0 ? (
             <p className="bw-muted">
-              {filtering
-                ? 'Nothing in the store matches that.'
-                : 'Everything this app can install is already installed in this profile.'}
+              {kept.length === 0
+                ? isFiltering
+                  ? 'Nothing in the store matches that.'
+                  : 'There is nothing in the store to browse.'
+                : isFiltering
+                  ? 'Everything that matches is already installed in this profile — it is above.'
+                  : 'Everything this app can install is already installed in this profile.'}
             </p>
           ) : (
             shelves.map((shelf) => (

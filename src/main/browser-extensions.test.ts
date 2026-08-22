@@ -40,6 +40,7 @@ function entryFor(id: string, archive: Buffer, over: Partial<ExtensionEntry> = {
     licence: 'MIT',
     version: '1.0.0',
     category: 'scripting',
+    tags: ['test'],
     works: 'works',
     measured: 'Watched working.',
     reach: ['https://example.com/*'],

@@ -60,6 +60,56 @@ describe('every row', () => {
     }
   })
 
+  it('carries tags, in the words somebody would actually type', () => {
+    /*
+     * Not decoration and not a second set of shelves. A search over name and
+     * summary alone answers "adblock" — the single most likely thing anybody
+     * types into an extension store — with an empty list, because uBlock
+     * Origin's whole summary is "The wide-spectrum content blocker".
+     *
+     * Lower-case and free of punctuation, because that is the form the shared
+     * search squashes a typed word into, and a tag of "Ad-Block" would be one
+     * that only matches when somebody guesses the hyphen.
+     */
+    for (const entry of BROWSER_EXTENSION_CATALOGUE) {
+      expect(entry.tags.length, `${entry.id} has no tags`).toBeGreaterThan(2)
+      for (const tag of entry.tags) {
+        expect(tag, `${entry.id}: ${tag}`).toBe(tag.toLowerCase())
+        expect(tag.trim(), `${entry.id}: ${tag}`).toBe(tag)
+      }
+      expect(new Set(entry.tags).size, `${entry.id} repeats a tag`).toBe(entry.tags.length)
+    }
+  })
+
+  it('answers the searches people actually arrive with', () => {
+    // The point of the tags, stated as the searches rather than as a rule about
+    // the field. Each of these matched nothing before they existed.
+    const finds = (word: string): string[] =>
+      BROWSER_EXTENSION_CATALOGUE.filter((entry) =>
+        [entry.name, entry.summary, ...entry.tags].join(' ').toLowerCase().includes(word),
+      ).map((entry) => entry.id)
+
+    expect(finds('adblock')).toContain('ublock-origin')
+    expect(finds('password manager')).toContain('bitwarden')
+    expect(finds('dark mode')).toContain('dark-reader')
+    expect(finds('youtube')).toContain('sponsorblock')
+    expect(finds('cookies')).toContain('isdcac')
+    expect(finds('keyboard')).toContain('vimium')
+  })
+
+  it('asks a person for something only where that is true', () => {
+    /*
+     * A browser extension needs nothing from you: you install it and it runs.
+     * Two here are exceptions and they are exceptions of different kinds — an
+     * account somewhere else, and a second program running on this machine — so
+     * the filter has two values rather than one called "setup". A catalogue that
+     * marked more rows than that would be inventing obstacles.
+     */
+    const needy = BROWSER_EXTENSION_CATALOGUE.filter((entry) => (entry.needs ?? []).length > 0)
+    expect(needy.map((entry) => entry.id).sort()).toEqual(['bitwarden', 'keepassxc-browser'])
+    expect(needy.map((entry) => entry.needs?.[0]).sort()).toEqual(['account', 'companion-app'])
+  })
+
   it('carries a measurement, whatever its verdict', () => {
     /*
      * A verdict with no observation behind it is an opinion, and this store

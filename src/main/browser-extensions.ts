@@ -137,6 +137,28 @@ export type ExtensionVerdict = 'works' | 'partly' | 'no' | 'unmeasured'
  * that appeared under three headings would make the store look bigger than it
  * is, which is the one thing a store must never do about itself.
  */
+/**
+ * Something a person has to bring before a row can do its job — not something
+ * this browser is missing.
+ *
+ * Deliberately narrow, and it stays narrow. A browser extension needs nothing
+ * from you: you install it and it runs. Two in this catalogue are exceptions and
+ * they are exceptions of two different kinds — one wants an account somewhere
+ * else, one wants a second program running on this machine — so they are two
+ * values rather than one called `setup`, which would have made the filter answer
+ * a question nobody asked.
+ *
+ * The MCP store's version of this facet has different values for the same
+ * reason: an MCP server genuinely can want an API key or a directory, and
+ * pretending both catalogues need the same vocabulary would mean one of them
+ * offering a filter that matches nothing.
+ */
+export type ExtensionNeed =
+  /** An account with a service, signed into inside the extension. */
+  | 'account'
+  /** A second program running on this machine that it talks to. */
+  | 'companion-app'
+
 export type ExtensionCategory =
   | 'blocking'
   | 'privacy'
@@ -169,6 +191,18 @@ export interface ExtensionEntry {
   version: string
   /** Which shelf it sits on. */
   category: ExtensionCategory
+  /**
+   * Words somebody might type that are in neither the name nor the summary.
+   *
+   * Not a second set of shelves — a row still sits on exactly one of those. This
+   * is what makes *adblock* find uBlock Origin, whose summary is the four words
+   * "The wide-spectrum content blocker" and contains neither *ad* nor *block* as
+   * a word anybody would type. Before this, the single most likely thing to type
+   * into an extension store matched nothing at all.
+   */
+  tags: readonly string[]
+  /** What a person has to bring. Absent on almost everything, and that is the point. */
+  needs?: readonly ExtensionNeed[]
   works: ExtensionVerdict
   /** What was observed, in a sentence. Never a claim about what should happen. */
   measured: string
@@ -242,6 +276,10 @@ export interface StoreExtension {
   version: string
   works: ExtensionVerdict
   category: ExtensionCategory
+  /** Words to search on that are in neither the name nor the summary. */
+  tags: string[]
+  /** What a person has to bring before it can do its job. Usually empty. */
+  needs: ExtensionNeed[]
   measured: string
   /** Why there is no download for a row nothing was measured on, or `''`. */
   noRelease: string
@@ -776,6 +814,7 @@ export function createExtensionStore(options: ExtensionStoreOptions): ExtensionS
           licence: '',
           version: typeof parsed.manifest.version === 'string' ? parsed.manifest.version : '',
           category: 'your-own',
+          tags: [],
           works: 'unmeasured',
           measured:
             'This app has measured nothing about it. It was not fetched, no fingerprint was ' +
@@ -808,6 +847,11 @@ export function createExtensionStore(options: ExtensionStoreOptions): ExtensionS
         version: disk?.version ?? '',
         works: 'unmeasured',
         category: 'your-own',
+        /* Its own name is the only thing anybody could search for. Nothing was
+           measured about it, and inventing tags for a folder somebody dropped in
+           would be this app describing a program it has never read. */
+        tags: [],
+        needs: [],
         measured: '',
         noRelease: '',
         url: '',
@@ -1009,6 +1053,8 @@ export function createExtensionStore(options: ExtensionStoreOptions): ExtensionS
           version: entry.version,
           works: entry.works,
           category: entry.category,
+          tags: [...entry.tags],
+          needs: [...(entry.needs ?? [])],
           measured: entry.measured,
           noRelease: entry.noRelease ?? '',
           url: entry.source?.url ?? '',

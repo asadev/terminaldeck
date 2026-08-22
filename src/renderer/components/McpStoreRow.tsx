@@ -1,5 +1,6 @@
 import { HoverNote } from './HoverNote'
 import {
+  mcpLinkOut,
   needsWords,
   ORIGIN_WORDS,
   RUNTIME_WORDS,
@@ -7,6 +8,7 @@ import {
   type McpStoreInput,
   type McpStoreRow as Row,
 } from './mcp-store-bridge'
+import { StoreLinkOut } from '../store/StoreLinkOut'
 
 /**
  * One row of the MCP store.
@@ -39,9 +41,19 @@ import {
  * A row whose runtime is not on this machine, or whose name is already taken by
  * a server this store did not write, carries **no Install** — not a disabled one
  * — and one sentence saying which of those it is. That is the browser store's
- * rule for its "cannot work in this browser" section, and it exists because a
+ * rule for its "cannot work in this browser" rows, and it exists because a
  * greyed-out button is a thing people press repeatedly and a sentence is a thing
  * they read once.
+ *
+ * It carries **Get it** instead, which opens the project's own page and writes
+ * nothing. The refusal is unchanged; what it stops being is a dead end.
+ *
+ * ## The chip
+ *
+ * The store browses by shelf now — Databases, Driving a browser — so a row with
+ * no Install sits under a heading about what it does rather than under one about
+ * why it cannot be had. One word in the head says which kind it is; the sentence
+ * below still says why, in the main process's own words.
  */
 
 /** What one press will do, in the word the button wears. Pure, so a test pins it. */
@@ -90,6 +102,9 @@ export function McpStoreRow({ row, busy, values, said, arming, onValue, onAct, o
   const missing = unfilled(row, values)
   const verb = actionVerb(row)
   const blocked = missing.length > 0
+  /* Where to send somebody this store cannot install it for. `''` on every row
+     that has a real Install, so no row ever carries both. */
+  const elsewhere = mcpLinkOut(row)
 
   return (
     <li className="mcp-store-row" data-state={row.state}>
@@ -103,6 +118,18 @@ export function McpStoreRow({ row, busy, values, said, arming, onValue, onAct, o
             Installed{row.scope === '' ? '' : ` · ${row.scope}`}
           </span>
         )}
+        {/*
+          The one-word version of why this row has no Install, because the
+          sections that used to carry it are gone. The store browses by shelf now
+          — Databases, Driving a browser — and a row with no button sitting inside
+          one of those would otherwise be a row somebody has to read a paragraph
+          of to understand. The chip says which kind; the paragraph underneath
+          still says why, in the main process's own words.
+        */}
+        {row.state === 'unavailable' && (
+          <span className="mcp-store-chip mcp-store-chip-no">Cannot run here</span>
+        )}
+        {row.state === 'taken' && <span className="mcp-store-chip">Name taken</span>}
         <span className="mcp-grow" />
 
         {/* Remove is armed, exactly as it is on the servers list: this deletes a
@@ -139,6 +166,17 @@ export function McpStoreRow({ row, busy, values, said, arming, onValue, onAct, o
           >
             {actionLabel(row, busy)}
           </button>
+        )}
+        {/*
+          The honest fallback. A row whose runtime is missing, and a row whose
+          name is taken by somebody else's server, both correctly get no Install
+          — and used to get no control at all, which reads as a dead end rather
+          than as the two different true things they are. This opens the
+          project's own page, in a tab of this app's browser, and writes nothing
+          anywhere. See `store/StoreLinkOut.tsx`.
+        */}
+        {elsewhere !== '' && (
+          <StoreLinkOut url={elsewhere} describes={`open the ${row.name} project`} />
         )}
       </div>
 

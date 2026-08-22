@@ -15,6 +15,7 @@ function installed(id: string, manifest: Partial<ExtensionManifest>): InstalledE
       licence: 'MIT',
       version: '1.0',
       category: 'scripting',
+      tags: [],
       works: 'works',
       measured: 'Watched working.',
       reach: [],

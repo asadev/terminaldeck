@@ -23,6 +23,8 @@ const ROW: Row = {
   id: 'guarded',
   name: 'guarded',
   summary: 'Reads the thing.',
+  category: 'utility',
+  tags: [],
   homepage: 'https://example.com/guarded',
   registry: 'https://www.npmjs.com/package/guarded',
   licence: 'MIT',

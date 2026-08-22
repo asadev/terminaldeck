@@ -1,3 +1,11 @@
+import {
+  NEEDS_NOTHING,
+  type FacetVocabulary,
+  type StoreCompat,
+  type StoreFacet,
+  type StoreFacets,
+} from '../store/storefront'
+
 /**
  * The renderer's half of the MCP store.
  *
@@ -24,6 +32,52 @@ export type McpInputKind = 'secret' | 'path' | 'text'
 /** Mirrors `McpOrigin`. */
 export type McpOrigin = 'reference' | 'reference-archived' | 'third-party'
 
+/** Mirrors `McpCategory` in `src/main/mcp-catalogue.ts`. */
+export type McpCategory =
+  | 'files'
+  | 'code'
+  | 'data'
+  | 'web'
+  | 'browser'
+  | 'knowledge'
+  | 'thinking'
+  | 'messaging'
+  | 'utility'
+
+/**
+ * The shelves, and the name each wears. Mirrors `MCP_CATEGORIES`.
+ *
+ * Written out here rather than sent down the wire with the rows, for the reason
+ * `browser/extensions-bridge.ts` gives about its own copy: a heading is a label
+ * on a screen, and sending it would let a build of the panel draw a heading that
+ * no longer matched what the panel does with it. A *measurement* — which runtime
+ * was found, and where — travels, because it belongs to the module that took it.
+ */
+export const MCP_CATEGORY_NAMES: Readonly<Record<McpCategory, string>> = {
+  files: 'Files on this machine',
+  code: 'Code and repositories',
+  data: 'Databases',
+  web: 'Searching and reading the web',
+  browser: 'Driving a browser',
+  knowledge: 'Notes and documentation',
+  thinking: 'What the agent remembers',
+  messaging: 'Chat and messaging',
+  utility: 'Time, testing and odds and ends',
+}
+
+/** The order the store draws them in. */
+export const MCP_CATEGORY_ORDER: readonly McpCategory[] = [
+  'files',
+  'code',
+  'data',
+  'web',
+  'browser',
+  'knowledge',
+  'thinking',
+  'messaging',
+  'utility',
+]
+
 /** Mirrors `McpStoreState` in `src/main/mcp-store.ts`. */
 export type McpStoreState = 'available' | 'installed' | 'taken' | 'unavailable'
 
@@ -43,6 +97,10 @@ export interface McpStoreRow {
   id: string
   name: string
   summary: string
+  /** Which shelf it sits on. */
+  category: McpCategory
+  /** Words to search on that are in neither the name nor the summary. */
+  tags: string[]
   homepage: string
   registry: string
   licence: string
@@ -185,6 +243,10 @@ function readRow(raw: unknown): McpStoreRow | null {
     id,
     name: text(record.name) || id,
     summary: text(record.summary),
+    category: oneOf(record.category, MCP_CATEGORY_ORDER, 'utility'),
+    tags: Array.isArray(record.tags)
+      ? record.tags.filter((one): one is string => typeof one === 'string').slice(0, 16)
+      : [],
     homepage: text(record.homepage),
     registry: text(record.registry),
     licence: text(record.licence),
@@ -307,4 +369,153 @@ export function unfilled(row: McpStoreRow, values: Record<string, string>): stri
     .filter((input) => input.required)
     .filter((input) => (values[input.key] ?? '').trim() === '' && !input.inEnvironment)
     .map((input) => input.label)
+}
+
+/* ------------------------------------------------------------- storefront -- */
+
+/**
+ * What this row needs a person to bring, as ids the shared filter can match.
+ *
+ * Three values, and each is a different kind of obstacle:
+ *
+ *  - `token` — a key or an account somewhere else. Only for a `secret` input,
+ *    because that is the one the catalogue verified by reading the package's own
+ *    README: `NOTION_TOKEN`, `TAVILY_API_KEY` and the rest are the packages' own
+ *    spellings rather than plausible ones.
+ *  - `setting` — something on this machine it has to be pointed at. A directory
+ *    for `filesystem`, a repository for `git`, a connection string for postgres.
+ *  - `docker` — a container runtime, which is a separate install that also has
+ *    to be *running*, not only present. `npx` and `uvx` are not on this list:
+ *    every row needs one of those, so a filter for them would keep the whole
+ *    catalogue and answer nothing.
+ *
+ * A set rather than one winner, because the GitHub row needs a token **and**
+ * Docker, and a single value would have hidden one of those from whichever
+ * filter somebody chose.
+ */
+export function mcpNeeds(row: McpStoreRow): string[] {
+  const needs: string[] = []
+  if (row.inputs.some((input) => input.required && input.kind === 'secret')) needs.push('token')
+  if (row.inputs.some((input) => input.required && input.kind !== 'secret')) needs.push('setting')
+  if (row.runtime === 'docker') needs.push('docker')
+  return needs
+}
+
+/**
+ * How much this app knows about the row working here.
+ *
+ * Never `works`, and that is not an oversight — it is `mcp-catalogue.ts`'s own
+ * standing statement, kept: *"Nothing here was watched working, and no row says
+ * it was."* The browser store can claim `works` because it loaded the artifact
+ * into this app's own Electron and watched it; here the artifact is a process
+ * fetched from a registry at spawn time and run by the agent, not by this app.
+ *
+ * So the two live values are `cannot` — the runtime was looked for on this
+ * machine with the same `which` this app uses everywhere else, and was not there
+ * — and `unknown`, which is *the runtime is here and nothing further is
+ * claimed*. `facetControls` drops a group with fewer than two live options, so
+ * on a machine with every runtime present this facet simply is not drawn.
+ */
+export function mcpCompat(row: McpStoreRow): StoreCompat {
+  return row.state === 'unavailable' ? 'cannot' : 'unknown'
+}
+
+/**
+ * One MCP row as the shared storefront sees it.
+ *
+ * The whole of what `components/` contributes to searching and filtering; every
+ * decision made from it lives in `store/storefront.ts`, which is what stops the
+ * two stores drifting into two different ideas of what a partial word is.
+ *
+ * `taken` does **not** count as installed, and the line is worth drawing there
+ * rather than anywhere else. A server of that name is in the configuration and
+ * it is not this one — this row is a thing you do not have, sitting behind a
+ * name collision — so *Installed* would answer *do I have this* with somebody
+ * else's server. It stays on its shelf, with a chip and the sentence naming the
+ * command line already wearing the name.
+ */
+export function mcpFacets(row: McpStoreRow): StoreFacets {
+  return {
+    id: row.id,
+    name: row.name,
+    summary: row.summary,
+    category: row.category,
+    categoryName: MCP_CATEGORY_NAMES[row.category],
+    tags: row.tags,
+    compat: mcpCompat(row),
+    installed: row.state === 'installed',
+    source: row.origin,
+    needs: mcpNeeds(row),
+  }
+}
+
+/**
+ * What the MCP store's filter chips say.
+ *
+ * The `source` group is where the requirement *"the archived distinction must
+ * survive"* lands, and it survives with the fact behind it intact: the catalogue
+ * established on a dated day that `modelcontextprotocol/servers-archived` is a
+ * repository GitHub reports as `archived: true`, and six rows are in it. A
+ * filter that quietly folded those into *reference* would be throwing away the
+ * one maintenance fact this catalogue actually checked.
+ */
+export const MCP_FACETS: Partial<Record<StoreFacet, FacetVocabulary>> = {
+  category: {
+    label: 'Category',
+    anyName: 'Everything',
+    options: MCP_CATEGORY_ORDER.map((id) => ({ id, name: MCP_CATEGORY_NAMES[id] })),
+  },
+  compat: {
+    label: 'On this machine',
+    anyName: 'Any',
+    options: [
+      { id: 'unknown', name: 'Its runtime is here' },
+      { id: 'cannot', name: 'Runtime missing' },
+    ],
+  },
+  installed: {
+    label: 'Installed',
+    anyName: 'Any',
+    options: [
+      { id: 'yes', name: 'In your configuration' },
+      { id: 'no', name: 'Not configured' },
+    ],
+  },
+  source: {
+    label: 'Where it comes from',
+    anyName: 'Anywhere',
+    options: [
+      { id: 'reference', name: 'Official reference' },
+      { id: 'third-party', name: 'Community' },
+      { id: 'reference-archived', name: 'Archived — unmaintained' },
+    ],
+  },
+  needs: {
+    label: 'What it needs',
+    anyName: 'Any',
+    options: [
+      { id: NEEDS_NOTHING, name: 'Nothing' },
+      { id: 'token', name: 'A key or token' },
+      { id: 'setting', name: 'A path or setting' },
+      { id: 'docker', name: 'Docker' },
+    ],
+  },
+}
+
+/**
+ * The project page a row with no Install sends somebody to, or `''`.
+ *
+ * The same third answer the browser store now gives, for the same reason: a row
+ * whose runtime is missing, or whose name is already taken by somebody else's
+ * server, correctly gets no Install and used to get no control at all. The
+ * project page is on the row already; making it a button costs nothing and turns
+ * a dead end into a way onward.
+ *
+ * Never on a row that has an Install, and never on an installed one. Two
+ * controls on one row where one of them quietly does something else is exactly
+ * what this store refuses elsewhere.
+ */
+export function mcpLinkOut(row: McpStoreRow): string {
+  if (row.state === 'installed' || row.blocked === '') return ''
+  return /^https?:\/\//i.test(row.homepage) ? row.homepage : ''
 }

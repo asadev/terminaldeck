@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
+  mcpCompat,
+  mcpFacets,
+  mcpLinkOut,
+  mcpNeeds,
   mcpStoreAvailable,
   needsWords,
   readMcpStoreResult,
@@ -19,6 +23,8 @@ const ROW: McpStoreRow = {
   id: 'guarded',
   name: 'guarded',
   summary: 'Does a thing.',
+  category: 'utility',
+  tags: [],
   homepage: 'https://example.com',
   registry: 'https://npmjs.com/package/guarded',
   licence: 'MIT',
@@ -154,5 +160,123 @@ describe('unfilled', () => {
   it('counts a value already in the shell as filled', () => {
     const inherited = { ...ROW, inputs: [{ ...ROW.inputs[0], inEnvironment: true }] }
     expect(unfilled(inherited, {})).toEqual([])
+  })
+})
+
+/** The fixture with one thing changed, so each test states only its own point. */
+function row(over: Partial<McpStoreRow> = {}): McpStoreRow {
+  return { ...ROW, ...over }
+}
+
+describe('the storefront projection', () => {
+  it('never claims a server works, because nothing here watched one work', () => {
+    /*
+     * `mcp-catalogue.ts`'s own standing statement, kept: *"Nothing here was
+     * watched working, and no row says it was."* The browser store can claim
+     * `works` because it loaded the artifact into this app's Electron and
+     * watched it; here the artifact is a process fetched at spawn time and run
+     * by the agent. The two live values are *its runtime is here* and *the
+     * runtime is missing*.
+     */
+    for (const state of ['available', 'installed', 'taken'] as const) {
+      expect(mcpCompat(row({ state }))).toBe('unknown')
+    }
+    expect(mcpCompat(row({ state: 'unavailable' }))).toBe('cannot')
+  })
+
+  it('does not call a name collision "installed"', () => {
+    // A server of that name is configured and it is not this one, so this row is
+    // a thing you do not have sitting behind a collision. Answering *do I have
+    // this* with somebody else's server is the wrong yes.
+    expect(mcpFacets(row({ state: 'taken' })).installed).toBe(false)
+    expect(mcpFacets(row({ state: 'installed' })).installed).toBe(true)
+  })
+
+  it('reports every need a row has, not the first one', () => {
+    // The GitHub row wants a personal access token *and* Docker. A single winner
+    // would have hidden one from whichever filter somebody chose.
+    const both = row({
+      runtime: 'docker',
+      inputs: [
+        {
+          key: 'GITHUB_PERSONAL_ACCESS_TOKEN',
+          label: 'Token',
+          hint: '',
+          kind: 'secret',
+          into: 'env',
+          required: true,
+          inEnvironment: false,
+        },
+      ],
+    })
+    expect(mcpNeeds(both).sort()).toEqual(['docker', 'token'])
+  })
+
+  it('does not count npx or uvx as a need, because every row has one', () => {
+    // A filter that keeps the whole catalogue answers nothing.
+    expect(mcpNeeds(row({ runtime: 'node', inputs: [] }))).toEqual([])
+    expect(mcpNeeds(row({ runtime: 'python', inputs: [] }))).toEqual([])
+  })
+
+  it('separates a path or a setting from a key', () => {
+    const rooted = row({
+      inputs: [
+        {
+          key: 'ROOT',
+          label: 'Directory',
+          hint: '',
+          kind: 'path',
+          into: 'arg',
+          required: true,
+          inEnvironment: false,
+        },
+      ],
+    })
+    expect(mcpNeeds(rooted)).toEqual(['setting'])
+  })
+
+  it('ignores an optional field, which is not something a person has to bring', () => {
+    const optional = row({
+      inputs: [
+        {
+          key: 'MAYBE',
+          label: 'Maybe',
+          hint: '',
+          kind: 'secret',
+          into: 'env',
+          required: false,
+          inEnvironment: false,
+        },
+      ],
+    })
+    expect(mcpNeeds(optional)).toEqual([])
+  })
+
+  it('keeps the archived origin as its own value on the row', () => {
+    // The one maintenance fact this catalogue checked, on a dated day, against
+    // GitHub's own `archived: true`.
+    expect(mcpFacets(row({ origin: 'reference-archived' })).source).toBe('reference-archived')
+    expect(mcpFacets(row({ origin: 'reference' })).source).toBe('reference')
+  })
+})
+
+describe('the link out', () => {
+  it('is offered only where the row has no Install, so no row carries both', () => {
+    const project = 'https://github.com/example/server'
+    expect(mcpLinkOut(row({ homepage: project, state: 'available', blocked: '' }))).toBe('')
+    expect(mcpLinkOut(row({ homepage: project, state: 'installed', blocked: '' }))).toBe('')
+    expect(
+      mcpLinkOut(row({ homepage: project, state: 'unavailable', blocked: 'docker is missing.' })),
+    ).toBe(project)
+    expect(
+      mcpLinkOut(row({ homepage: project, state: 'taken', blocked: 'A server called x exists.' })),
+    ).toBe(project)
+  })
+
+  it('refuses anything that is not an http address', () => {
+    expect(mcpLinkOut(row({ homepage: 'file:///etc/passwd', state: 'unavailable', blocked: 'x' }))).toBe(
+      '',
+    )
+    expect(mcpLinkOut(row({ homepage: '', state: 'unavailable', blocked: 'x' }))).toBe('')
   })
 })

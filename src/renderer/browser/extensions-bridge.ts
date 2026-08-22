@@ -1,3 +1,11 @@
+import {
+  NEEDS_NOTHING,
+  type FacetVocabulary,
+  type StoreCompat,
+  type StoreFacet,
+  type StoreFacets,
+} from '../store/storefront'
+
 /**
  * The renderer's half of the browser extension store.
  *
@@ -22,6 +30,9 @@ export type ExtensionState =
   | 'damaged'
   | 'unavailable'
   | 'not-offered'
+
+/** Mirrors `ExtensionNeed`. */
+export type ExtensionNeed = 'account' | 'companion-app'
 
 /** Mirrors `ExtensionCategory`. */
 export type ExtensionCategory =
@@ -77,6 +88,10 @@ export interface StoreExtension {
   version: string
   works: ExtensionVerdict
   category: ExtensionCategory
+  /** Words to search on that are in neither the name nor the summary. */
+  tags: string[]
+  /** What a person has to bring before it can do its job. Usually empty. */
+  needs: ExtensionNeed[]
   measured: string
   /** Why nothing was measured and nothing is offered, or `''`. */
   noRelease: string
@@ -242,6 +257,10 @@ function readExtension(raw: unknown): StoreExtension | null {
     version: text(record.version),
     works: readVerdict(record.works),
     category: readCategory(record.category),
+    tags: words(record.tags, 16),
+    needs: words(record.needs, 4).filter((one): one is ExtensionNeed =>
+      NEEDS.some((known) => known === one),
+    ),
     measured: text(record.measured),
     noRelease: text(record.noRelease),
     url: text(record.url),
@@ -367,6 +386,46 @@ export function canAct(extension: StoreExtension): boolean {
 }
 
 /**
+ * The link-out a row with no Install offers instead, or `''`.
+ *
+ * Asad, on both stores: *"or maybe only link of the application from github or
+ * wherever they can go and download it, it will just redirect them and they can
+ * install if not possible to bring button to install — so at least we have the
+ * store categorizing, search and everything so it feels like a proper store
+ * system."*
+ *
+ * The catalogue's refusal to draw an Install that cannot work is kept exactly as
+ * it was. What changes is that the refusal is no longer a dead end: a row this
+ * app watched failing, and a row whose project publishes nothing this app can
+ * fetch, both have a project page somebody can go and look at, and that page is
+ * on the row already. It is not offered for a row that *can* be installed —
+ * two controls on one row, one of which quietly does nothing you asked for, is
+ * the confusion this store keeps being about.
+ */
+export function linkOut(extension: StoreExtension): string {
+  if (canAct(extension) || extension.sideloaded) return ''
+  return /^https?:\/\//i.test(extension.homepage) ? extension.homepage : ''
+}
+
+/**
+ * The word that link-out wears, which is not the same word on both kinds of row.
+ *
+ * **Get it** for a row whose project simply publishes somewhere this app cannot
+ * fetch from — Vimium, SingleFile, Privacy Badger. Nothing is wrong with those
+ * extensions; the destination really is where you get them, and this browser
+ * would run them if there were a file to pin a fingerprint to.
+ *
+ * **Open project** for a row this app ran here and watched fail. *Get it* would
+ * be a small lie on that row: you cannot get it *here*, and the reason is the
+ * sentence directly underneath. What the link is honestly for is going and
+ * looking at the project — in another browser, on another day, when this
+ * app's compatibility layer has grown a namespace it currently lacks.
+ */
+export function linkOutLabel(extension: StoreExtension): string {
+  return extension.state === 'unavailable' ? 'Open project' : 'Get it'
+}
+
+/**
  * Does this row's `Reaches` line mean anything yet?
  *
  * False for a row nothing was measured on. There is no release, so there is no
@@ -378,25 +437,129 @@ export function hasReach(extension: StoreExtension): boolean {
   return extension.state !== 'not-offered'
 }
 
+/* ------------------------------------------------------------- storefront -- */
+
+/** The `ExtensionNeed`s this build knows, for narrowing what arrives. */
+const NEEDS: readonly ExtensionNeed[] = ['account', 'companion-app']
+
 /**
- * Which rows a typed word keeps.
+ * Where this row comes from, as the store's *source* facet.
  *
- * Name, summary and category, and deliberately **not** the measured sentence:
- * those paragraphs mention `chrome.tabs`, `ads.doubleclick.net` and every
- * namespace this browser lacks, so searching them would make a search for
- * "cookies" return the ad blockers and a search for "tabs" return most of the
- * catalogue. A search that answers with almost everything is the same as one
- * that answers with nothing, and slower to disbelieve.
+ * Derived, never a new catalogue field, because all three answers are already
+ * facts on the row. A row with a `noRelease` sentence is one whose project
+ * publishes through a browser web store and nowhere this app can fetch from —
+ * that is what the sentence says. A sideloaded row came off this machine. Every
+ * other row is one whose project publishes releases of its own, whether or not
+ * this app pins one of them.
+ *
+ * The MCP store's three answers are *official / community / archived*, and they
+ * are not these. That distinction is real over there — GitHub reports
+ * `modelcontextprotocol/servers-archived` archived, and the catalogue checked it
+ * on a dated day — and there is nothing measured that would put an extension in
+ * any of those three bins. Copying the words across would have been a filter
+ * that sorted rows by a fact nobody established, so this facet answers the
+ * question this catalogue can actually answer.
  */
-export function matchesSearch(extension: StoreExtension, query: string): boolean {
-  const needle = query.trim().toLowerCase()
-  if (needle === '') return true
-  const haystack = [
-    extension.name,
-    extension.summary,
-    CATEGORY_NAMES[extension.category],
-  ]
-    .join(' ')
-    .toLowerCase()
-  return needle.split(/\s+/).every((word) => haystack.includes(word))
+export type ExtensionSourceKind = 'release' | 'web-store' | 'your-own'
+
+export function extensionSource(extension: StoreExtension): ExtensionSourceKind {
+  if (extension.sideloaded) return 'your-own'
+  return extension.noRelease !== '' ? 'web-store' : 'release'
+}
+
+/**
+ * How much this app knows about the row working *here*.
+ *
+ * `partly` lands on `unknown` rather than `works`, and that is the honest
+ * reading of what the catalogue says about those rows: *"Loads. Its background
+ * page runs with no uncaught error. It was not watched applying a style, so this
+ * app does not claim it does."* A filter called "Works here" that returned it
+ * would be making the claim the row refuses to.
+ */
+export function extensionCompat(extension: StoreExtension): StoreCompat {
+  if (extension.works === 'works') return 'works'
+  return extension.works === 'no' ? 'cannot' : 'unknown'
+}
+
+/**
+ * One extension as the shared storefront sees it.
+ *
+ * The whole of what `browser/` contributes to searching and filtering. Every
+ * decision above this line is `store/storefront.ts`'s, so the two stores cannot
+ * end up with two different ideas of what a partial word is.
+ */
+export function extensionFacets(extension: StoreExtension): StoreFacets {
+  return {
+    id: extension.id,
+    name: extension.name,
+    summary: extension.summary,
+    category: extension.category,
+    categoryName: CATEGORY_NAMES[extension.category],
+    /*
+     * Name, summary, category and tags — and deliberately **not** the measured
+     * sentence. Those paragraphs mention `chrome.tabs`, `ads.doubleclick.net`
+     * and every namespace this browser lacks, so searching them would make a
+     * search for "cookies" return the ad blockers and a search for "tabs" return
+     * most of the catalogue. A search that answers with almost everything is the
+     * same as one that answers with nothing, and slower to disbelieve.
+     */
+    tags: extension.tags,
+    compat: extensionCompat(extension),
+    installed: extension.state === 'installed' || extension.state === 'damaged',
+    source: extensionSource(extension),
+    needs: extension.needs,
+  }
+}
+
+/**
+ * What the browser store's filter chips say.
+ *
+ * Its own words, not the MCP store's, because this catalogue measured its rows
+ * running inside this app's own Electron and can say *works here* — a sentence
+ * the MCP catalogue states outright that it will never say about anything.
+ * `facetControls` drops any group that would be left with fewer than two live
+ * options, so a build whose catalogue lost its last web-store row simply stops
+ * drawing that control.
+ */
+export const EXTENSION_FACETS: Partial<Record<StoreFacet, FacetVocabulary>> = {
+  category: {
+    label: 'Category',
+    anyName: 'Everything',
+    options: CATEGORY_ORDER.map((id) => ({ id, name: CATEGORY_NAMES[id] })),
+  },
+  compat: {
+    label: 'In this browser',
+    anyName: 'Any',
+    options: [
+      { id: 'works', name: 'Works here' },
+      { id: 'unknown', name: 'Not measured' },
+      { id: 'cannot', name: 'Cannot work here' },
+    ],
+  },
+  installed: {
+    label: 'Installed',
+    anyName: 'Any',
+    options: [
+      { id: 'yes', name: 'Installed' },
+      { id: 'no', name: 'Not installed' },
+    ],
+  },
+  source: {
+    label: 'Where it comes from',
+    anyName: 'Anywhere',
+    options: [
+      { id: 'release', name: 'The project’s own releases' },
+      { id: 'web-store', name: 'A browser web store' },
+      { id: 'your-own', name: 'Added by you' },
+    ],
+  },
+  needs: {
+    label: 'What it needs',
+    anyName: 'Any',
+    options: [
+      { id: NEEDS_NOTHING, name: 'Nothing' },
+      { id: 'account', name: 'An account' },
+      { id: 'companion-app', name: 'Another app running here' },
+    ],
+  },
 }

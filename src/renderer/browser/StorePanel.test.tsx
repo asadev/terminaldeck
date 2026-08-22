@@ -1,3 +1,4 @@
+import { NO_FILTER, withFacet } from '../store/storefront'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { StoreBody, type StoreBodyProps } from './StorePanel'
@@ -51,6 +52,8 @@ function extension(over: Partial<StoreExtension> = {}): StoreExtension {
     licence: 'MIT',
     version: '4.9.129',
     category: 'appearance',
+    tags: [],
+    needs: [],
     works: 'works',
     noRelease: '',
     measured: 'Watched working.',
@@ -112,11 +115,9 @@ function render(over: Partial<StoreBodyProps> = {}): string {
       canOpenOptions
       canAddFolder
       canAddCrx
-      query=""
-      category="all"
+      filter={NO_FILTER}
       onShowProfile={noop}
-      onQuery={noop}
-      onCategory={noop}
+      onFilter={noop}
       onTool={noop}
       onExtension={noop}
       onEnable={noop}
@@ -242,16 +243,139 @@ describe('the honesty that must not regress', () => {
   })
 
   it('searches by name, and says so when a search matches nothing', () => {
-    expect(render({ query: 'dark' })).toContain('Dark Reader')
-    const nothing = render({ query: 'wombat' })
+    expect(render({ filter: { ...NO_FILTER, query: 'dark' } })).toContain('Dark Reader')
+    const nothing = render({ filter: { ...NO_FILTER, query: 'wombat' } })
     expect(nothing).not.toContain('Dark Reader')
     expect(nothing).toContain('Nothing in the store matches that')
   })
 
+  it('finds a row by a tag that is in neither its name nor its summary', () => {
+    // The whole reason tags exist: uBlock Origin's summary is "The
+    // wide-spectrum content blocker", and *adblock* is what somebody types.
+    const ublock = extension({
+      id: 'ublock-origin',
+      name: 'uBlock Origin',
+      summary: 'The wide-spectrum content blocker.',
+      category: 'blocking',
+      tags: ['ads', 'adblock', 'trackers'],
+    })
+    const markup = render({
+      ext: { ...EXT, extensions: [extension(), ublock] },
+      filter: { ...NO_FILTER, query: 'adblock' },
+    })
+    expect(markup).toContain('uBlock Origin')
+    expect(markup).not.toContain('Dark Reader')
+  })
+
+  it('filters on what cannot work here, and the row still says why', () => {
+    const ghostery = extension({
+      id: 'ghostery',
+      name: 'Ghostery',
+      summary: 'Blocks ads and trackers.',
+      category: 'blocking',
+      works: 'no',
+      state: 'unavailable',
+      url: '',
+      sha256: '',
+      bytes: 0,
+      homepage: 'https://github.com/ghostery/ghostery-extension',
+      measured: 'Watched failing: it reaches for chrome.cookies, which is not here.',
+    })
+    const markup = render({
+      ext: { ...EXT, extensions: [extension(), ghostery] },
+      filter: withFacet(NO_FILTER, 'compat', 'cannot'),
+    })
+    expect(markup).toContain('Ghostery')
+    expect(markup).not.toContain('Dark Reader')
+    expect(markup).toContain('Cannot work here')
+  })
+
+  it('a row with no Install carries a link out rather than nothing at all', () => {
+    /*
+     * *"or maybe only link of the application from github or wherever they can
+     * go and download it, it will just redirect them and they can install if not
+     * possible to bring button to install."* The refusal to draw an Install that
+     * cannot work is kept; the dead end is not.
+     */
+    const vimium = extension({
+      id: 'vimium',
+      name: 'Vimium',
+      summary: 'Drives the browser from the keyboard.',
+      category: 'scripting',
+      works: 'unmeasured',
+      state: 'not-offered',
+      url: '',
+      sha256: '',
+      bytes: 0,
+      version: '',
+      homepage: 'https://github.com/philc/vimium',
+      noRelease: 'Its project publishes through the Chrome Web Store.',
+      measured: '',
+    })
+    const markup = render({ ext: { ...EXT, extensions: [vimium] } })
+    expect(markup).toContain('Get it')
+    expect(markup).toContain('https://github.com/philc/vimium')
+  })
+
+  it('draws a facet only when it has more than one live option', () => {
+    /*
+     * Absent rather than disabled, and the rule now lives in
+     * `store/storefront.ts` rather than in this panel's own hand-written chip
+     * loop. With one extension in the catalogue there is one shelf, one source
+     * and one verdict, and none of those groups is worth a control.
+     */
+    const one = render()
+    expect(one).not.toContain('Where it comes from')
+    expect(one).not.toContain('In this browser')
+
+    const many = render({
+      ext: {
+        ...EXT,
+        extensions: [
+          extension(),
+          extension({ id: 'vimium', name: 'Vimium', category: 'scripting', noRelease: 'x',
+            works: 'unmeasured', state: 'not-offered', url: '', sha256: '', bytes: 0 }),
+        ],
+      },
+    })
+    expect(many).toContain('Where it comes from')
+  })
+
+  it('counts on a chip are never zero, because such a chip is not drawn', () => {
+    const markup = render({
+      ext: {
+        ...EXT,
+        extensions: [extension(), extension({ id: 'stylus', name: 'Stylus', category: 'appearance' })],
+      },
+    })
+    // Two rows, one shelf: no category control, because one chip is not a choice.
+    expect(markup).not.toContain('storefront-chip-count">0<')
+  })
+
   it('narrows to one shelf when a category is chosen', () => {
-    const markup = render({ category: 'passwords' })
+    const markup = render({ filter: { ...NO_FILTER, category: 'passwords' } })
     expect(markup).not.toContain('Dark Reader')
     expect(markup).toContain('Nothing in the store matches that')
+  })
+
+  it('puts the search and the filters above everything they govern', () => {
+    // Including the Installed section: choosing "Not installed" has to be able
+    // to empty it, and a control that filters what is above it reads as broken.
+    const markup = render({
+      ext: { ...EXT, extensions: [extension({ state: 'installed', enabled: true })] },
+    })
+    expect(markup.indexOf('storefront-search')).toBeLessThan(markup.indexOf('Installed in Default'))
+  })
+
+  it('does not say nothing matched when what matched is installed and shown above', () => {
+    // The browsing area is empty; the store is not, and the installed row that
+    // matched is a few pixels above. Two different claims.
+    const markup = render({
+      ext: { ...EXT, extensions: [extension({ state: 'installed', enabled: true })] },
+      filter: { ...NO_FILTER, query: 'dark' },
+    })
+    expect(markup).not.toContain('Nothing in the store matches that')
+    expect(markup).toContain('already installed in this profile — it is above')
   })
 
   it('a download row shows URL and fingerprint on this screen, not in a detail view', () => {

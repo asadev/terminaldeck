@@ -7,12 +7,27 @@ import { panelSpec } from '../shell/panels'
 import { SegmentedSwitch } from './SegmentedSwitch'
 import {
   EMPTY_STORE_VIEW,
+  MCP_CATEGORY_NAMES,
+  MCP_CATEGORY_ORDER,
+  MCP_FACETS,
+  mcpFacets,
   readMcpStoreResult,
   readMcpStoreView,
   type McpStoreApi,
   type McpStoreRow as Row,
   type McpStoreView,
 } from './mcp-store-bridge'
+import { StoreFilterBar } from '../store/StoreFilterBar'
+import {
+  facetControls,
+  filtering as anyFilter,
+  matchesFilter,
+  NO_FILTER,
+  shelve,
+  withFacet,
+  type StoreFacet,
+  type StoreFilter,
+} from '../store/storefront'
 
 /**
  * The MCP store: a catalogue of servers, and a form for anything not in it.
@@ -49,6 +64,25 @@ import {
  * store that buried the second under the first would be offering a walled
  * garden with a suggestion box.
  *
+ * ## Why it browses by shelf rather than by state
+ *
+ *   > *"make a proper search page and everything proper filters and search and
+ *   > separation of the categories … so they can categorize and choose which
+ *   > specific tool they want."*
+ *
+ * This used to draw four sections named after a row's **state**: Installed,
+ * Ready to install, A server already has this name, Cannot run on this machine.
+ * Nineteen rows in four bins, sorted by an answer to a question nobody arrives
+ * with. State did not disappear — it moved onto the row, as a chip and a
+ * sentence, which is where the browser store has always carried it — and the
+ * headings are now the nine things a server can do for you.
+ *
+ * The search box, the five filters and their counts are
+ * `store/StoreFilterBar.tsx` over `store/storefront.ts`, which is the *same*
+ * component and the same model the browser's store draws. Two stores in one
+ * release have to read as one product, and two nearly-identical search boxes is
+ * how that stops being true by the third change to either.
+ *
  * ## What the machine report is for
  *
  * One line naming `npx`, `uvx` and `docker` and whether each was found, with the
@@ -68,36 +102,21 @@ interface Props {
   onChanged(): void
 }
 
-/** Which section a row belongs to. The order below is the order on screen. */
-const SECTIONS: ReadonlyArray<{ key: Row['state']; heading: string; note: string }> = [
-  {
-    key: 'installed',
-    heading: 'Installed',
-    note: 'Configured on this machine. Remove takes the line back out of the configuration.',
-  },
-  {
-    key: 'available',
-    heading: 'Ready to install',
-    note:
-      'Nothing here ships inside this app. Install writes the command onto the row into your ' +
-      'configuration; the server itself is fetched by npx, uvx or docker the first time it runs.',
-  },
-  {
-    key: 'taken',
-    heading: 'A server already has this name',
-    note:
-      'Something with this name is configured and it is not this row, so nothing is offered — ' +
-      'overwriting somebody else’s server is not this store’s business. Add it under another ' +
-      'name from “Add your own” if you want both.',
-  },
-  {
-    key: 'unavailable',
-    heading: 'Cannot run on this machine',
-    note:
-      'The runtime each of these needs was looked for on this machine and not found. There is no ' +
-      'Install for them, because installing one would only write a command that cannot start.',
-  },
-]
+/**
+ * Where a row sits *within* its shelf.
+ *
+ * What can be installed first, then a name collision, then a runtime this
+ * machine does not have. The same shape as the browser store's ordering and for
+ * the same reason: the useful rows come first, and the two kinds of row with no
+ * Install stay apart rather than being swept into one bin that reads as *the
+ * broken ones*. Neither is a dead end now — both carry a Get it.
+ */
+const RANK: Readonly<Record<Row['state'], number>> = {
+  available: 0,
+  installed: 0,
+  taken: 1,
+  unavailable: 2,
+}
 
 export function McpStore({ api, projectPath, here, onChanged }: Props) {
   const [view, setView] = useState<McpStoreView>(EMPTY_STORE_VIEW)
@@ -111,6 +130,15 @@ export function McpStore({ api, projectPath, here, onChanged }: Props) {
   const [said, setSaid] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState('')
   const [arming, setArming] = useState('')
+  /**
+   * What is being searched and filtered for, as one value.
+   *
+   * The same shape the browser's store keeps, and every decision made from it
+   * lives in `store/storefront.ts` — so a change to how search treats a partial
+   * word lands on both stores at once, which is the only way two stores stay one
+   * product.
+   */
+  const [filter, setFilter] = useState<StoreFilter>(NO_FILTER)
 
   const scopes = useMemo(() => scopeChoices(projectPath), [projectPath])
 
@@ -238,6 +266,8 @@ export function McpStore({ api, projectPath, here, onChanged }: Props) {
         values={values}
         said={said}
         arming={arming}
+        filter={filter}
+        onFilter={setFilter}
         onValue={setValue}
         onAct={(row, verb) => void act(row, verb)}
         onArm={(id, on) => setArming(on ? id : '')}
@@ -258,6 +288,8 @@ export interface StoreBodyProps {
   said: Record<string, string>
   /** The row whose Remove is waiting for its second press. */
   arming: string
+  filter: StoreFilter
+  onFilter(next: StoreFilter): void
   onValue(id: string, key: string, value: string): void
   onAct(row: Row, verb: 'install' | 'remove'): void
   onArm(id: string, on: boolean): void
@@ -278,37 +310,127 @@ export function StoreBody({
   values,
   said,
   arming,
+  filter,
+  onFilter,
   onValue,
   onAct,
   onArm,
 }: StoreBodyProps) {
+  /*
+   * The whole catalogue as the shared storefront sees it, computed once. Once
+   * because it feeds the chips' counts, the Installed section and the shelves,
+   * and three call sites deriving the same projection is three chances for one
+   * of them to drift.
+   */
+  const facets = new Map(view.rows.map((row) => [row.id, mcpFacets(row)]))
+  const facetsOf = (row: Row) => facets.get(row.id) ?? mcpFacets(row)
+  const kept = view.rows.filter((row) => matchesFilter(facetsOf(row), filter))
+  const installed = kept.filter((row) => row.state === 'installed')
+  const browsing = kept.filter((row) => row.state !== 'installed')
+  const shelves = shelve(
+    browsing,
+    MCP_CATEGORY_ORDER.map((id) => ({ id, name: MCP_CATEGORY_NAMES[id] })),
+    facetsOf,
+    (row) => RANK[row.state],
+  )
+  const controls = facetControls([...facets.values()], filter, MCP_FACETS)
+  const isFiltering = anyFilter(filter)
+
+  const line = (row: Row) => (
+    <McpStoreRow
+      key={row.id}
+      row={row}
+      busy={busy === row.id}
+      values={values[row.id] ?? {}}
+      said={said[row.id] ?? ''}
+      arming={arming === row.id}
+      onValue={(key, value) => onValue(row.id, key, value)}
+      onAct={(verb) => onAct(row, verb)}
+      onArm={(on) => onArm(row.id, on)}
+    />
+  )
+
   return (
     <>
-      {SECTIONS.map((section) => {
-        const rows = view.rows.filter((row) => row.state === section.key)
-        if (rows.length === 0) return null
-        return (
-          <section className="mcp-store-section" key={section.key}>
-            <h3 className="mcp-store-heading">{section.heading}</h3>
-            <p className="mcp-store-note">{section.note}</p>
-            <ul className="mcp-store-list">
-              {rows.map((row) => (
-                <McpStoreRow
-                  key={row.id}
-                  row={row}
-                  busy={busy === row.id}
-                  values={values[row.id] ?? {}}
-                  said={said[row.id] ?? ''}
-                  arming={arming === row.id}
-                  onValue={(key, value) => onValue(row.id, key, value)}
-                  onAct={(verb) => onAct(row, verb)}
-                  onArm={(on) => onArm(row.id, on)}
-                />
-              ))}
-            </ul>
+      {/*
+        The browsing controls, shared with the browser's store — same component,
+        same search, same rule about not drawing a chip that would leave nothing.
+
+        This store used to group by *state*: Installed, Ready to install, A
+        server already has this name, Cannot run on this machine. That is four
+        bins holding nineteen rows and it answers only one question, which is one
+        nobody arrives with. Asad: *"make a proper search page and everything
+        proper filters and search and separation of the categories … so they can
+        categorize and choose which specific tool they want."* State did not
+        disappear — it moved onto the row, as a chip and a sentence, which is
+        where the browser store has always carried it.
+      */}
+      <section className="mcp-store-section">
+        <StoreFilterBar
+          idPrefix="mcp"
+          placeholder="files, search, postgres, github…"
+          filter={filter}
+          controls={controls}
+          showing={kept.length}
+          total={view.rows.length}
+          active={isFiltering}
+          onQuery={(next) => onFilter({ ...filter, query: next })}
+          onFacet={(facet: StoreFacet, value) => onFilter(withFacet(filter, facet, value))}
+          onClear={() => onFilter(NO_FILTER)}
+        />
+      </section>
+
+      {installed.length > 0 && (
+        <section className="mcp-store-section">
+          <h3 className="mcp-store-heading">Installed</h3>
+          <p className="mcp-store-note">
+            Configured on this machine. Remove takes the line back out of the configuration.
+          </p>
+          <ul className="mcp-store-list">{installed.map(line)}</ul>
+        </section>
+      )}
+
+      {/*
+        The one thing every shelf below mixes, said once rather than under each
+        heading. Directly above the first shelf rather than up with the controls,
+        because it is about the rows and the controls are about the whole screen.
+      */}
+      {shelves.length > 0 && (
+        <p className="mcp-store-note">
+          Nothing here ships inside this app. Install writes the command on the row into your
+          configuration; the server itself is fetched by npx, uvx or docker the first time it
+          runs. A row with no Install says which of two things is true of it — the runtime it
+          needs is not on this machine, or a server of that name is already configured and is not
+          this one — and carries <strong>Get it</strong>, which opens the project&rsquo;s own page
+          and installs nothing.
+        </p>
+      )}
+
+      {/*
+        Three different true sentences. The middle one had to be added after
+        rendering this and looking at it: filtering to *Files on this machine*,
+        whose one row is installed, drew "Nothing in the catalogue matches that"
+        directly under the row that matched. What is empty there is the browsing
+        area, not the catalogue.
+      */}
+      {shelves.length === 0 ? (
+        <p className="mcp-note">
+          {kept.length === 0
+            ? isFiltering
+              ? 'Nothing in the catalogue matches that.'
+              : 'There is nothing in the catalogue to browse.'
+            : isFiltering
+              ? 'Everything that matches is already in your configuration — it is above.'
+              : 'Everything in the catalogue is already in your configuration.'}
+        </p>
+      ) : (
+        shelves.map((shelf) => (
+          <section className="mcp-store-section" key={shelf.id}>
+            <h3 className="mcp-store-heading">{shelf.name}</h3>
+            <ul className="mcp-store-list">{shelf.rows.map(line)}</ul>
           </section>
-        )
-      })}
+        ))
+      )}
     </>
   )
 }

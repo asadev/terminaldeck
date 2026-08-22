@@ -1,0 +1,159 @@
+/* ============================================================================
+   The storefront bar — search, facets, counts.
+
+   One stylesheet, imported by `StoreFilterBar.tsx`, so both stores get the same
+   controls wherever they are drawn: the browser's store is a modal inside the
+   browser chrome and the MCP store is a tab on a page, and neither one's
+   stylesheet is loaded on the other's screen. Everything here is
+   `storefront-` prefixed and self-contained for that reason — a chip that
+   borrowed `.bw-chip` would be an unstyled rectangle on the MCP page.
+
+   Colour, spacing and type all come from `styles/tokens.css`, so the bar takes
+   whichever surface it is sitting on with it.
+   ============================================================================ */
+
+.storefront {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.storefront-top {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.storefront-search {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex: 1;
+  min-width: 0;
+}
+
+.storefront-search-label {
+  color: var(--text-muted);
+  font-size: var(--t-caption);
+}
+
+.storefront-search input {
+  flex: 1;
+  min-width: 0;
+  height: var(--control-h);
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--t-caption);
+}
+
+.storefront-search input:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.storefront-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  white-space: nowrap;
+}
+
+.storefront-count {
+  color: var(--text-muted);
+  font-size: var(--t-caption);
+  font-variant-numeric: tabular-nums;
+}
+
+.storefront-clear {
+  height: var(--control-h);
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+  font-size: var(--t-caption);
+}
+
+.storefront-clear:hover {
+  background: var(--fill-tertiary);
+}
+
+/* One facet: its name, then its chips. The label is a column on wide surfaces
+   and folds above the chips when there is no room, which is what the modal in
+   the browser chrome does at its narrowest. */
+.storefront-facet {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+
+.storefront-facet-label {
+  min-width: 7.5rem;
+  color: var(--text-muted);
+  font-size: var(--t-caption);
+}
+
+.storefront-chips {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: var(--sp-15);
+}
+
+.storefront-chip {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-15);
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--t-footnote);
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.storefront-chip:hover {
+  background: var(--fill-secondary);
+  color: var(--text-primary);
+}
+
+/* The chosen one. A pressed chip rather than a highlight, and `aria-pressed`
+   carries the same fact for anything not reading the colour. */
+.storefront-chip-on,
+.storefront-chip-on:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* How many rows the chip would leave. Never zero — an option that would leave
+   nothing is not drawn at all, which is decided in `storefront.ts`. */
+.storefront-chip-count {
+  color: inherit;
+  opacity: 0.65;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The link-out. Deliberately not shaped like Install: pressing it opens a page,
+   it does not put anything on the disk, and two controls that do different
+   things must not wear the same button. */
+.storefront-getit {
+  height: var(--control-h);
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-primary);
+  font-size: var(--t-caption);
+  white-space: nowrap;
+}
+
+.storefront-getit:hover {
+  background: var(--fill-tertiary);
+  border-color: var(--border-strong);
+}

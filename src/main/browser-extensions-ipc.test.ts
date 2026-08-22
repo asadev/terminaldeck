@@ -125,6 +125,7 @@ const ENTRY: ExtensionEntry = {
   licence: 'MIT',
   version: '1.0.0',
   category: 'scripting',
+  tags: ['test'],
   works: 'works',
   measured: 'Watched working.',
   reach: ['<all_urls>'],

@@ -28,6 +28,8 @@ const NEEDS_NOTHING: McpCatalogueEntry = {
   name: 'plain',
   summary: 'Does a thing.',
   homepage: 'https://example.com/plain',
+  category: 'utility',
+  tags: ['plain'],
   licence: 'MIT',
   version: '1.0.0',
   registry: 'https://www.npmjs.com/package/plain',

@@ -3,6 +3,7 @@ import {
   catalogueEntry,
   environmentKeys,
   MCP_CATALOGUE,
+  MCP_CATEGORIES,
   requiredRuntimes,
   RUNTIME_BINARY,
   RUNTIME_NEEDS,
@@ -115,6 +116,61 @@ describe('the MCP catalogue', () => {
       expect(RUNTIME_BINARY[runtime]).toBeTruthy()
       expect(RUNTIME_NEEDS[runtime]).toBeTruthy()
     }
+  })
+
+  it('sits on exactly one shelf, and one the store draws', () => {
+    /*
+     * One, never three. `browser-extension-catalogue.ts` gives the reason and it
+     * holds here: *"a row that appeared under three headings would make a
+     * catalogue of twenty-four look like a catalogue of forty, and a store
+     * overstating its own size is the first thing that makes the rest of it
+     * unbelievable."*
+     */
+    const known = new Set(MCP_CATEGORIES.map((category) => category.id))
+    for (const entry of MCP_CATALOGUE) {
+      expect(known.has(entry.category), `${entry.name} is in ${entry.category}`).toBe(true)
+    }
+  })
+
+  it('leaves no shelf empty, so every heading the store can draw has something under it', () => {
+    // A heading with nothing under it is the section-shaped version of a chip
+    // that filters to nothing. Every one of the nine is used.
+    const used = new Set(MCP_CATALOGUE.map((entry) => entry.category))
+    for (const category of MCP_CATEGORIES) {
+      expect(used.has(category.id), `nothing is in ${category.id}`).toBe(true)
+    }
+  })
+
+  it('carries tags, in the words somebody would actually type', () => {
+    for (const entry of MCP_CATALOGUE) {
+      expect(entry.tags.length, `${entry.name} has no tags`).toBeGreaterThan(2)
+      for (const tag of entry.tags) {
+        expect(tag, `${entry.name}: ${tag}`).toBe(tag.toLowerCase())
+        expect(tag.trim(), `${entry.name}: ${tag}`).toBe(tag)
+      }
+      expect(new Set(entry.tags).size, `${entry.name} repeats a tag`).toBe(entry.tags.length)
+    }
+  })
+
+  it('answers the searches people arrive with rather than the names it happens to use', () => {
+    /*
+     * A server is written into the configuration under a short name, because
+     * that name is typed — so the names are `postgres`, `fetch`, `git`. None of
+     * those is what somebody looking for one types, and the summaries do not
+     * rescue it: `brave-search`'s says "Web and local search through the Brave
+     * Search API", so *web search* finds it, and `postgres`'s says nothing about
+     * *sql* at all.
+     */
+    const finds = (word: string): string[] =>
+      MCP_CATALOGUE.filter((entry) =>
+        [entry.name, entry.summary, ...entry.tags].join(' ').toLowerCase().includes(word),
+      ).map((entry) => entry.id)
+
+    expect(finds('sql')).toEqual(expect.arrayContaining(['postgres', 'sqlite']))
+    expect(finds('screenshot')).toEqual(expect.arrayContaining(['playwright', 'puppeteer']))
+    expect(finds('documentation')).toContain('context7')
+    expect(finds('folder')).toContain('filesystem')
+    expect(finds('pull requests')).toContain('github')
   })
 
   it('says what an archived row is, on the row', () => {

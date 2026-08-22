@@ -1192,3 +1192,29 @@ button.mcp-item-head:hover {
 .mcp-store-row > .mcp-run-hint {
   max-width: 78ch;
 }
+
+/* The one-word version of why a row has no Install, in the row's head.
+
+   The store browses by shelf now — Databases, Driving a browser — so a row with
+   no button sits inside a heading about what it does rather than under one about
+   why it cannot be had. The chip carries that fact where the section heading
+   used to; the sentence under the row still carries the reason. Shaped after
+   `.bw-store-chip` in `browser/BrowserWorkspace.css`, because the two stores are
+   one product and a person should not have to learn two vocabularies of chip. */
+.mcp-store-chip {
+  flex-shrink: 0;
+  padding: 1px var(--sp-2);
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  color: var(--text-secondary);
+  font-size: var(--t-footnote);
+  font-weight: var(--w-medium);
+}
+
+/* The runtime was looked for on this machine and was not found. Warmer than the
+   neutral chip beside it because it is a different sentence, and quieter than an
+   error, because nothing is wrong: the store is telling the truth. */
+.mcp-store-chip-no {
+  background: color-mix(in srgb, var(--color-critical) 14%, transparent);
+  color: var(--color-critical);
+}
