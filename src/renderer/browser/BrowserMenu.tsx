@@ -64,22 +64,16 @@ interface Props {
    */
   onDownloads?: () => void
   /**
-   * Open the browser tools store.
+   * Open the tools store — one dialog holding both the open-source extension
+   * downloads and the built-in page-reading tools, `StorePanel.tsx`.
    *
-   * Absent when the preload has not wired all three of its channels — see
-   * `storeAvailable`. Absent rather than disabled, for the reason `onHistory`
-   * gives above: disabled says *"not now"*, and the truth in that build is
-   * *"not at all"*.
+   * Absent when the preload can wire neither half — see `storeAvailable` and
+   * `extensionsAvailable`; either half alone earns the row, and the panel
+   * draws only what is wired. Absent rather than disabled, for the reason
+   * `onHistory` gives above: disabled says *"not now"*, and the truth in that
+   * build is *"not at all"*.
    */
   onTools?: () => void
-  /**
-   * Open the browser extension store.
-   *
-   * Absent rather than disabled when the preload does not carry the channels,
-   * for the same reason `onTools` is — see `extensions-bridge.ts` for what
-   * counts as wired.
-   */
-  onExtensions?: () => void
   onClose(): void
 }
 
@@ -144,7 +138,6 @@ export function BrowserMenu({
   onCookies,
   onDownloads,
   onTools,
-  onExtensions,
   onClose,
 }: Props) {
   const isStartPage = url !== '' && url === startUrl
@@ -210,12 +203,21 @@ export function BrowserMenu({
         )}
 
         {/*
-          Tools, and the store behind it.
+          The tools store — the one door to it.
 
           *"i think we can have a tools store for extensions to this browser with
           all open source best tools in the market so people can use the tool of
           their choice in the browser, which tools will not be here only when they
           download."*
+
+          One row where there were two. Tools held six built-in recipes and
+          Extensions held the open-source downloads, which was his one ask split
+          so that the surface called the tools store contained nothing that
+          downloads. The store is one dialog now — `StorePanel.tsx` — and the
+          real difference the second row used to carry (a tool is selectors this
+          app runs; an extension is a program somebody else wrote) is drawn by
+          that dialog's sections, on the rows themselves, where it is beside the
+          Install it qualifies rather than out here as two doors.
 
           Beside Downloads because it is the same kind of row — about this browser
           rather than about this page — and it is the **only** door to the store,
@@ -232,34 +234,7 @@ export function BrowserMenu({
               onClose()
             }}
           >
-            Tools
-          </button>
-        )}
-
-        {/*
-          Extensions, and the store behind them.
-
-          *"extensions store needs to be a proper store from where we can see
-          most famous open source tools to attach to the browser and use there
-          with session ai."*
-
-          A separate row from Tools rather than a section inside it, because they
-          install different kinds of thing and the difference matters to whoever
-          presses one: a tool is selectors this app runs, an extension is a
-          program somebody else wrote that runs on every page of a profile. One
-          panel holding both would have to keep saying which half it was talking
-          about.
-        */}
-        {onExtensions && (
-          <button
-            type="button"
-            className="bw-menu-item"
-            onClick={() => {
-              onExtensions()
-              onClose()
-            }}
-          >
-            Extensions
+            Tools store
           </button>
         )}
 

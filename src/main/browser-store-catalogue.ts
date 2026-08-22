@@ -35,6 +35,13 @@ import type { StoreCatalogue, StoreEntry } from './browser-store'
  * So the fetch path is real and exercised, and the day there is a registry the
  * change is a row in this table rather than a feature.
  *
+ * None of which leaves the store he asked for without downloads: the store on
+ * screen is one dialog (`StorePanel.tsx`) whose download half is
+ * `browser-extension-catalogue.ts` — real, famous open-source tools fetched
+ * from their own releases on Install — while this table is its clearly-labelled
+ * built-in section, and the screen says which is which. A bundled recipe never
+ * wears the word Download; a fetched extension shows its URL and its digest.
+ *
  * ## What is deliberately absent
  *
  * A recipe for any particular website. They are the most useful thing this

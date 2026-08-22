@@ -73,7 +73,7 @@ import { manifestPrefix, unzip } from './browser-extension-unzip'
  * manifest asks for, so the honest arrangement is to say exactly what it will
  * have and let somebody decide, not to imply a ceiling that does not exist.
  * {@link installedExtensions} therefore reports `reach` on every row, always,
- * and `ExtensionsPanel` prints it before the button rather than after.
+ * and `ExtensionRow` prints it before the button rather than after.
  *
  * **Do install and remove both work?** {@link ExtensionStore.remove} deletes the
  * directory and then reads the disk back, for the reason its neighbour gives:

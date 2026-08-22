@@ -35,6 +35,8 @@ export interface StoreTool {
   origins: string[]
   url: string
   fetched: boolean
+  /** The hex sha256 the artifact is pinned to. `''` from an older build. */
+  sha256: string
   state: ToolState
   installedVersion: string
   installedAt: number
@@ -134,6 +136,7 @@ function readTool(raw: unknown): StoreTool | null {
     origins: words(record.origins, 40),
     url: text(record.url),
     fetched: record.fetched === true,
+    sha256: text(record.sha256),
     state: readState(record.state),
     installedVersion: text(record.installedVersion),
     installedAt: count(record.installedAt),
