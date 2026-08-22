@@ -16,6 +16,8 @@ function installed(id: string, manifest: Partial<ExtensionManifest>): InstalledE
       version: '1.0',
       category: 'scripting',
       tags: [],
+      cost: 'free',
+      costNote: '',
       works: 'works',
       measured: 'Watched working.',
       reach: [],

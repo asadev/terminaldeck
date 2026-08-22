@@ -37,6 +37,8 @@ function row(over: Partial<StoreExtension> = {}): StoreExtension {
     category: 'appearance',
     tags: [],
     needs: [],
+    cost: 'free',
+    costNote: '',
     works: 'works',
     measured: 'Watched working: a white page came back with background rgb(24, 26, 27).',
     noRelease: '',
@@ -294,5 +296,34 @@ describe('the compatibility layer, on the row', () => {
     // say. A row that guessed would be guessing about somebody else's release.
     const html = render(row({ state: 'available' }))
     expect(html).not.toContain('Filled in by this app')
+  })
+})
+
+describe('what it costs', () => {
+  it('is on the row before anything is pressed, in the catalogue’s own sentence', () => {
+    /*
+     * Every extension in a browser store is a free download, which is why this
+     * cannot be left to the licence field: 1Password's row is a free download of
+     * a thing with no free plan, and a store that stayed quiet would be letting
+     * *free to install* stand in for *free to use*.
+     */
+    const html = render({
+      cost: 'paid',
+      costNote: '1Password has no free plan; the extension does nothing without a subscription.',
+    })
+    expect(html).toContain('What it costs')
+    expect(html).toContain('has no free plan')
+    expect(html).toContain('Paid')
+  })
+
+  it('draws a price on every row, free ones included', () => {
+    expect(render({ cost: 'free', costNote: '' })).toContain('Free')
+    expect(render({ cost: 'metered', costNote: 'Free to a limit.' })).toContain(
+      'Free to a limit, then paid',
+    )
+  })
+
+  it('says nothing extra about a row that is simply free', () => {
+    expect(render({ cost: 'free', costNote: '' })).not.toContain('What it costs')
   })
 })

@@ -104,9 +104,58 @@ import type { ExtensionEntry } from './browser-extensions'
  * ## Categories
  *
  * Every row names one, and one only. A row that appeared under three headings
- * would make a catalogue of twenty-four look like a catalogue of forty, and a
+ * would make a catalogue of thirty-six look like a catalogue of sixty, and a
  * store overstating its own size is the first thing that makes the rest of it
  * unbelievable.
+ *
+ * Three shelves were added on 2026-08-23 — *Writing and language*, *Documents
+ * and work*, *Shopping* — because Grammarly, Google Docs Offline and Honey had
+ * no honest home among the eight that were here, and filing a coupon finder
+ * under *Scripting and the keyboard* would have been the store pretending its
+ * old shape still fitted.
+ *
+ * ## The mainstream half, 2026-08-23
+ *
+ * Twelve rows were added for extensions people have actually heard of, and not
+ * one of them can be installed here:
+ *
+ *   > *"also all other regular tools too like google's ones or like this."*
+ *
+ * Every one is a closed product published through the Chrome Web Store and
+ * nowhere else — no release file, so nothing to fetch and nothing to fingerprint
+ * — which puts all twelve in the third state this file already argued for over
+ * Vimium: **nothing was measured**, no button, and a *Get it* that opens the
+ * listing. Each listing was fetched on the day and the name on the row is the
+ * name that came back in its page title, which is why one of them says *PayPal
+ * Honey*.
+ *
+ * Two things had to give, and both were tests rather than rows. The catalogue
+ * used to assert that exactly two rows may want anything from a person, on the
+ * ground that *"a browser extension needs nothing from you"* — which stopped
+ * being true the moment the store held clients for accounts. And *"is a store
+ * rather than a shelf of refusals"* counted rows with a download; kept as it
+ * was, it would have argued that answering *where is Grammarly* makes the store
+ * worse. Both now check what they were always about: refusals stay a minority,
+ * and every row has somewhere to go.
+ *
+ * ## What it costs
+ *
+ * Every row carries a price, and it is the field this half of the catalogue
+ * could not have been added without. Every extension in a browser store is a
+ * free download — that is what a browser store is — so *free to install* had
+ * been quietly standing in for *free to use*. It is true of uBlock Origin and
+ * false of 1Password, whose extension is a free download of a thing with no free
+ * plan at all. The rule, in Asad's words: **never imply free when a key costs
+ * money.**
+ *
+ * The prices were checked the same way the listings were, on the same day, and
+ * against each vendor's own plans page rather than from memory: 1Password
+ * answers *"Yes. You can try 1Password Individual or Families free for 14 days
+ * before choosing a plan"* and prices the Individual plan at $2.99 a month, so
+ * that row is `paid`; LastPass's free plan says *"Limited to 1 device type"*;
+ * Loom's Starter is $0 with *"25 videos, 5 minute screen recordings"*, which is
+ * a cap rather than a trial and therefore `metered`; Grammarly lists Free at $0
+ * beside Pro at $12. Each of those sentences is on the row it came from.
  *
  * ## Keeping this honest across releases
  *
@@ -124,7 +173,317 @@ import type { ExtensionEntry } from './browser-extensions'
  * claim `works` without a `measured` sentence, and a row that cannot work cannot
  * carry a download.
  */
+/**
+ * Why a mainstream extension gets a row and no button.
+ *
+ * One sentence, shared by twelve rows, because it is one fact: they are closed
+ * products published through the Chrome Web Store, there is no release file to
+ * fetch, and *"this store installs nothing it cannot check"*. Writing twelve
+ * paraphrases of that would have made twelve different-looking reasons out of
+ * the same one, which is how a catalogue starts sounding like it is arguing.
+ */
+const WEB_STORE_ONLY =
+  'A closed-source product, published through the Chrome Web Store and nowhere else. There is no ' +
+  'release file for this app to fetch and no fingerprint to pin one against, so there is nothing ' +
+  'here to install — the button opens its own listing instead.'
+
+/**
+ * And what this app therefore knows about it: nothing.
+ *
+ * The word `Watched` is the currency of this file and a row nobody ran must not
+ * spend it. Several rows extend this with a *"worth knowing"* clause about the
+ * **shape** of the extension — a toolbar button this browser does not draw, a
+ * new tab it cannot hand over — which is the same hedge the SingleFile row
+ * already makes, and is still not a measurement.
+ */
+const NOT_RUN_HERE =
+  'Nothing was measured. This app has never run it, because there is no artifact to run, so it ' +
+  'says nothing about whether it would work in this browser.'
+
 export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
+  /* ------------------------- the ones people arrive looking for, 2026-08-23 -- */
+  /*
+   * Twelve rows nobody can install here, and the store is better for every one
+   * of them.
+   *
+   * Asad, widening both catalogues:
+   *
+   *   > *"also all other regular tools too like google's ones or like this."*
+   *
+   * These are the extensions a person has actually heard of, and every one is
+   * published through the Chrome Web Store and nowhere else — closed source,
+   * with no release file to fetch and no fingerprint to check one against. So
+   * none of them carries an Install, and each carries **Get it**, which opens
+   * its own listing in a tab of this browser and installs nothing.
+   *
+   * That is the third answer this file already argued for over Vimium and
+   * Privacy Badger, applied where it matters most: *"never heard of it"* and
+   * *"it cannot work here"* and *"nothing was measured"* are three different
+   * sentences, and the only one that is true of Grammarly is the third.
+   *
+   * Every listing below was fetched on **2026-08-23** and the name on the row is
+   * the name that came back in its page title — which is why this row says
+   * *PayPal Honey* rather than *Honey*, and why the Google Keep row is not
+   * called what its own product page calls it.
+   */
+  {
+    id: 'google-translate',
+    category: 'writing',
+    name: 'Google Translate',
+    summary: 'Translates a whole page, or just the phrase you selected on it.',
+    homepage: 'https://chromewebstore.google.com/detail/aapbdbdomjkkjkaonfhkkikfgjllcleb',
+    tags: ['translate', 'translation', 'language', 'google', 'phrase', 'foreign'],
+    licence: 'Proprietary',
+    version: '',
+    reach: [],
+    cost: 'free',
+    costNote: 'Free, and it asks for no account. Google’s own extension for its own free service.',
+    works: 'unmeasured',
+    noRelease: WEB_STORE_ONLY,
+    measured: NOT_RUN_HERE,
+    source: null,
+  },
+  {
+    id: 'grammarly',
+    category: 'writing',
+    name: 'Grammarly',
+    summary: 'Checks spelling, grammar and tone as you type, in text boxes on any site.',
+    homepage: 'https://chromewebstore.google.com/detail/kbfnbcaeplbcioakkpcpgfkobkghlhen',
+    tags: ['grammar', 'spelling', 'writing', 'proofread', 'tone', 'ai'],
+    needs: ['account'],
+    licence: 'Proprietary',
+    version: '',
+    reach: [],
+    cost: 'account',
+    costNote:
+      'Free to use with a free Grammarly account — its own plans page lists Free at $0 a month ' +
+      'beside Pro. Pro is a paid subscription the extension will keep offering, and what you get ' +
+      'without it is real rather than a trial.',
+    works: 'unmeasured',
+    noRelease: WEB_STORE_ONLY,
+    measured:
+      NOT_RUN_HERE +
+      ' Worth knowing if you go looking for it another way: it signs in through its own account ' +
+      'and works inside the pages you type on, which is the half of the extension API this ' +
+      'browser has most of — and that is a shape, not a measurement.',
+    source: null,
+  },
+  {
+    id: 'google-docs-offline',
+    category: 'work',
+    name: 'Google Docs Offline',
+    summary: 'Lets Google Docs, Sheets and Slides open and edit with no network.',
+    homepage: 'https://chromewebstore.google.com/detail/ghbmnnjooekpmoecnnnilnnbdlolhkhi',
+    tags: ['google', 'docs', 'sheets', 'slides', 'offline', 'editing'],
+    needs: ['account'],
+    licence: 'Proprietary',
+    version: '',
+    reach: [],
+    cost: 'account',
+    costNote:
+      'Free, and it does nothing without a Google account — it is the offline half of Google’s ' +
+      'own free editors rather than a product of its own.',
+    works: 'unmeasured',
+    noRelease: WEB_STORE_ONLY,
+    measured: NOT_RUN_HERE,
+    source: null,
+  },
+  {
+    id: 'todoist',
+    category: 'work',
+    name: 'Todoist for Chrome',
+    summary: 'Adds a task from whatever page you are on, and keeps today’s list a click away.',
+    homepage: 'https://chromewebstore.google.com/detail/jldhpllghnbhlbpcmnajkpdmadaolakh',
+    tags: ['tasks', 'todo', 'planner', 'reminders', 'productivity', 'list'],
+    needs: ['account'],
+    licence: 'Proprietary',
+    version: '',
+    reach: [],
+    cost: 'account',
+    costNote:
+      'Free to use with a free Todoist account. That free plan is limited rather than a trial, ' +
+      'and the paid plans lift the limits — the extension itself is not what costs.',
+    works: 'unmeasured',
+    noRelease: WEB_STORE_ONLY,
+    measured:
+      NOT_RUN_HERE +
+      ' Worth knowing: adding a task is started from a toolbar button, and this browser draws ' +
+      'none — so the shape of it is unpromising here even though nobody has run it.',
+    source: null,
+  },
+  {
+    id: 'honey',
+    category: 'shopping',
+    name: 'PayPal Honey',
+    summary: 'Tries known discount codes at the checkout of a shop you are already buying from.',
+    homepage: 'https://chromewebstore.google.com/detail/bmnlcjabgnpnenekpadlanbbkooimhnj',
+    tags: ['coupons', 'discount', 'deals', 'shopping', 'checkout', 'cashback'],
+    licence: 'Proprietary',
+    version: '',
+    reach: [],
+    cost: 'free',
+    costNote:
+      'Free, and that is worth a sentence rather than a word: nothing is charged to you, and ' +
+      'PayPal is paid a commission by the shops you buy through it. Free of charge is not the ' +
+      'same as free of an interest in what you buy.',
+    works: 'unmeasured',
+    noRelease: WEB_STORE_ONLY,
+    measured: NOT_RUN_HERE,
+    source: null,
+  },
+  {
+    id: 'lastpass',
+    category: 'passwords',
+    name: 'LastPass',
+    summary: 'Fills logins out of a LastPass vault and saves new ones as you make them.',
+    homepage: 'https://chromewebstore.google.com/detail/hdokiejnpimakedhajhdlcegeplioahd',
+    tags: ['password manager', 'vault', 'logins', 'autofill', 'passwords'],
+    needs: ['account'],
+    licence: 'Proprietary',
+    version: '',
+    reach: [],
+    cost: 'account',
+    costNote:
+      'Free to install, and its free tier covers one kind of device — computers or phones, not ' +
+      'both. Using the same vault across the two is a paid plan.',
+    works: 'unmeasured',
+    noRelease: WEB_STORE_ONLY,
+    measured:
+      NOT_RUN_HERE +
+      ' Worth knowing: this app did run Bitwarden, whose whole interface is a panel, and watched ' +
+      'it die on chrome.tabs.getCurrent — a method this browser does not have. That says nothing ' +
+      'about this extension and everything about the shape it shares.',
+    source: null,
+  },
+  {
+    id: 'onepassword',
+    category: 'passwords',
+    name: '1Password',
+    summary: 'Fills logins out of a 1Password account, unlocking in the browser rather than a separate app.',
+    homepage: 'https://chromewebstore.google.com/detail/aeblfdkhhhdcdjpifhhbdiojplfjncoa',
+    tags: ['password manager', 'vault', 'logins', 'autofill', 'passwords'],
+    needs: ['account'],
+    licence: 'Proprietary',
+    version: '',
+    reach: [],
+    cost: 'paid',
+    costNote:
+      'Paid, and it is the row this field was added for. 1Password has no free plan: the ' +
+      'extension is a free download that does nothing at all once the trial ends. A store that ' +
+      'let “free to install” stand in for “free” would be lying about exactly this row.',
+    works: 'unmeasured',
+    noRelease: WEB_STORE_ONLY,
+    measured: NOT_RUN_HERE,
+    source: null,
+  },
+  {
+    id: 'loom',
+    category: 'media',
+    name: 'Loom',
+    summary: 'Records the screen and camera into a video with a link, without leaving the browser.',
+    homepage: 'https://chromewebstore.google.com/detail/liecbddmkiiihnedobmlmillhodjkdmb',
+    tags: ['screen recording', 'video', 'camera', 'capture', 'screencast', 'share'],
+    needs: ['account'],
+    licence: 'Proprietary',
+    version: '',
+    reach: [],
+    cost: 'metered',
+    costNote:
+      'Free to a limit, then paid. Loom’s free plan caps how long a recording may be and how ' +
+      'many you may keep; its paid plans lift both.',
+    works: 'unmeasured',
+    noRelease: WEB_STORE_ONLY,
+    measured: NOT_RUN_HERE,
+    source: null,
+  },
+  {
+    id: 'notion-web-clipper',
+    category: 'research',
+    name: 'Notion Web Clipper',
+    summary: 'Saves the page you are on into a Notion page or database, with its text.',
+    homepage: 'https://chromewebstore.google.com/detail/knheggckgoiihginacbkhaalnibhilkk',
+    tags: ['clip', 'save page', 'notes', 'notion', 'bookmark', 'research'],
+    needs: ['account'],
+    licence: 'Proprietary',
+    version: '',
+    reach: [],
+    cost: 'account',
+    costNote:
+      'Free. Notion’s free personal plan is enough for it; its paid plans buy team features ' +
+      'rather than this.',
+    works: 'unmeasured',
+    noRelease: WEB_STORE_ONLY,
+    measured:
+      NOT_RUN_HERE +
+      ' Worth knowing: clipping is started from a toolbar button, and this browser draws none — ' +
+      'the same shape that leaves SingleFile unpromising here.',
+    source: null,
+  },
+  {
+    id: 'save-to-google-drive',
+    category: 'research',
+    name: 'Save to Google Drive',
+    summary: 'Saves a page, an image or a link straight into Google Drive.',
+    homepage: 'https://chromewebstore.google.com/detail/gmbmikajjgmnabiglmofipeabaddhgne',
+    tags: ['google', 'drive', 'save page', 'screenshot', 'bookmark', 'cloud storage'],
+    needs: ['account'],
+    licence: 'Proprietary',
+    version: '',
+    reach: [],
+    cost: 'account',
+    costNote:
+      'Free. It saves into a Google account’s Drive, so what can cost is Drive storage past the ' +
+      'free allowance, not this.',
+    works: 'unmeasured',
+    noRelease: WEB_STORE_ONLY,
+    measured:
+      NOT_RUN_HERE +
+      ' Worth knowing: saving is started from the right-click menu or a toolbar button, and this ' +
+      'browser draws neither — which is what stopped Web Archives and Search by Image after they ' +
+      'had loaded perfectly.',
+    source: null,
+  },
+  {
+    id: 'google-keep',
+    category: 'research',
+    name: 'Google Keep Chrome Extension',
+    summary: 'Clips a page, an image or a quote into a Google Keep note.',
+    homepage: 'https://chromewebstore.google.com/detail/lpcaedmchfhocbbapmcbpinfpgnhiddi',
+    tags: ['google', 'keep', 'notes', 'clip', 'save page', 'bookmark'],
+    needs: ['account'],
+    licence: 'Proprietary',
+    version: '',
+    reach: [],
+    cost: 'account',
+    costNote: 'Free with a Google account.',
+    works: 'unmeasured',
+    noRelease: WEB_STORE_ONLY,
+    measured: NOT_RUN_HERE,
+    source: null,
+  },
+  {
+    id: 'momentum',
+    category: 'appearance',
+    name: 'Momentum',
+    summary: 'Replaces the new-tab page with a photograph, a clock and one thing to do today.',
+    homepage: 'https://chromewebstore.google.com/detail/laookkfknpbbblfpciffpaejjkokdgca',
+    tags: ['new tab', 'dashboard', 'focus', 'wallpaper', 'clock', 'todo'],
+    licence: 'Proprietary',
+    version: '',
+    reach: [],
+    cost: 'free',
+    costNote:
+      'Free to install and use. Momentum Plus is a paid subscription for its extra features, and ' +
+      'the free version is not a trial of it.',
+    works: 'unmeasured',
+    noRelease:
+      WEB_STORE_ONLY +
+      ' It also replaces the new-tab page, which is `chrome_url_overrides` — a part of a manifest ' +
+      'this browser has no new tab to hand over, so even a file to fetch would not have made it ' +
+      'a row with a button.',
+    measured: NOT_RUN_HERE,
+    source: null,
+  },
   {
     id: 'dark-reader',
     category: 'appearance',
@@ -135,6 +494,8 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
     licence: 'MIT',
     version: '4.9.129',
     reach: ['*://*/*', '<all_urls>'],
+    cost: 'free',
+    costNote: '',
     works: 'works',
     measured:
       'Watched working: a plain white test page came back with background rgb(24, 26, 27) and a ' +
@@ -160,6 +521,8 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
     licence: 'LGPL-3.0',
     version: '1.27.3',
     reach: ['<all_urls>'],
+    cost: 'free',
+    costNote: '',
     works: 'works',
     measured:
       'Watched working: a page opened at ?utm_source=newsletter&utm_medium=email&fbclid=abc123&id=7 ' +
@@ -180,6 +543,8 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
     licence: 'GPL-3.0',
     version: '2.4.11',
     reach: ['<all_urls>', 'https://userstyles.org/*'],
+    cost: 'free',
+    costNote: '',
     works: 'partly',
     measured:
       'Loads. Its background page runs with no uncaught error. It was not watched applying a ' +
@@ -200,6 +565,8 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
     licence: 'MIT',
     version: '2.48.0',
     reach: ['<all_urls>'],
+    cost: 'free',
+    costNote: '',
     works: 'partly',
     measured:
       'Loads. Its background page runs with no uncaught error. It was not watched running a ' +
@@ -220,6 +587,8 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
     licence: 'GPL-3.0',
     version: '1.73.0',
     reach: ['<all_urls>'],
+    cost: 'free',
+    costNote: '',
     works: 'works',
     measured:
       'Watched blocking. Three requests to ads.doubleclick.net were sent from a test page: with ' +
@@ -248,6 +617,8 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
     licence: 'GPL-3.0',
     version: '2026.820.1159',
     reach: ['<all_urls>'],
+    cost: 'free',
+    costNote: '',
     works: 'works',
     measured:
       'Watched blocking, by the same three requests to ads.doubleclick.net: none of them reached ' +
@@ -277,6 +648,8 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
       'https://www.youtube-nocookie.com/embed/*',
     ],
     mayAskToReach: ['*://*/*'],
+    cost: 'free',
+    costNote: '',
     works: 'works',
     measured:
       'Watched skipping: on a video with a sponsor segment from 0:00 to 1:28 the player was past ' +
@@ -309,6 +682,8 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
       '*://www.youtube.com/*',
       '*://youtube.com/*',
     ],
+    cost: 'free',
+    costNote: '',
     works: 'works',
     measured:
       'Watched working: on a real video the dislike button read 518K, fetched live from ' +
@@ -334,6 +709,8 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
     licence: 'GPL-3.0',
     version: '1.1.9',
     reach: ['http://*/*', 'https://*/*'],
+    cost: 'free',
+    costNote: '',
     works: 'works',
     measured:
       'Watched blocking a consent manager. A test page asked for a script whose path matches one ' +
@@ -359,6 +736,10 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
     licence: 'GPL-3.0',
     version: '5.5.1.0',
     reach: ['<all_urls>'],
+    cost: 'free',
+    costNote:
+      'Free. The AdGuard browser extension costs nothing; what AdGuard sells is its desktop ' +
+      'and mobile applications, which this is not one of.',
     works: 'works',
     measured:
       'Watched blocking. Three requests went out of a test page — ads.doubleclick.net, a ' +
@@ -392,6 +773,8 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
       'ws://*/*',
       'wss://*/*',
     ],
+    cost: 'free',
+    costNote: '',
     works: 'no',
     measured:
       'Watched not blocking. The same three requests every blocker here is measured with were all ' +
@@ -414,6 +797,8 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
     licence: 'MIT',
     version: '1.1.5',
     reach: ['<all_urls>'],
+    cost: 'free',
+    costNote: '',
     works: 'partly',
     measured:
       'Loads and runs. Its service worker fetched its rule list, searched the test page and ' +
@@ -439,6 +824,8 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
     licence: 'GPL-3.0',
     version: '3.4.0',
     reach: ['<all_urls>'],
+    cost: 'free',
+    costNote: '',
     works: 'partly',
     measured:
       'Loads. Its background page runs and its blocking webRequest listener is attached — and it ' +
@@ -463,6 +850,8 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
     licence: 'MIT',
     version: '3.8.2',
     reach: ['<all_urls>'],
+    cost: 'free',
+    costNote: '',
     works: 'no',
     measured:
       'Watched failing before it started. Its background page throws Cannot read properties of ' +
@@ -482,6 +871,8 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
     licence: 'MIT',
     version: '0.11.1',
     reach: ['file:///*', 'http://*/*', 'https://*/*'],
+    cost: 'free',
+    costNote: '',
     works: 'works',
     measured:
       'Watched speeding a video up. On a page playing a video its own vsc-controller element was ' +
@@ -508,6 +899,10 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
     licence: 'GPL-3.0',
     version: '2026.8.0',
     reach: ['*://*/*', 'file:///*', 'http://*/*', 'https://*/*'],
+    cost: 'account',
+    costNote:
+      'Free. Bitwarden’s free plan is enough for a personal vault and the extension is the ' +
+      'free client for it; the paid plans buy sharing and extras.',
     works: 'no',
     measured:
       'Watched failing. Its service worker starts properly — WebAssembly loads, its SDK loads, its ' +
@@ -530,6 +925,8 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
     licence: 'GPL-3.0',
     version: '1.10.3',
     reach: ['<all_urls>', 'http://*/*', 'https://*/*'],
+    cost: 'free',
+    costNote: '',
     works: 'no',
     measured:
       'Watched failing at the one thing it exists for. It loads with no error anywhere — service ' +
@@ -550,6 +947,8 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
     licence: 'GPL-3.0',
     version: '8.5.4',
     reach: ['<all_urls>', 'file:///*', 'http://*/*', 'https://*/*'],
+    cost: 'free',
+    costNote: '',
     works: 'no',
     measured:
       'Watched loading perfectly and then having no way in. Its service worker ran its whole ' +
@@ -569,6 +968,8 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
     licence: 'GPL-3.0',
     version: '7.3.3',
     reach: ['<all_urls>', 'http://*/*', 'https://*/*'],
+    cost: 'free',
+    costNote: '',
     works: 'no',
     measured:
       'Watched loading cleanly and then having no way in, exactly as its sibling does. Its ' +
@@ -589,6 +990,8 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
     licence: 'GPL-3.0',
     version: '',
     reach: [],
+    cost: 'free',
+    costNote: '',
     works: 'unmeasured',
     noRelease:
       'The EFF ships Privacy Badger through the browser stores and its GitHub releases carry no ' +
@@ -610,6 +1013,8 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
     licence: 'AGPL-3.0',
     version: '',
     reach: [],
+    cost: 'free',
+    costNote: '',
     works: 'unmeasured',
     noRelease:
       'Its releases carry no built extension: the project publishes through the browser stores ' +
@@ -632,6 +1037,8 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
     licence: 'MIT',
     version: '',
     reach: [],
+    cost: 'free',
+    costNote: '',
     works: 'unmeasured',
     noRelease:
       'philc/vimium publishes no GitHub releases at all — its distribution is the Chrome Web ' +
@@ -653,6 +1060,10 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
     licence: 'unknown',
     version: '',
     reach: [],
+    cost: 'unknown',
+    costNote:
+      'Not known. The open-source repository this row named answers 404, there is nothing ' +
+      'left to read, and this app is no more willing to price it than to licence it.',
     works: 'unmeasured',
     noRelease:
       'The open-source repository this app knew, github.com/wappalyzer/wappalyzer, answers 404. ' +
@@ -673,6 +1084,8 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
     licence: 'BSD-3-Clause',
     version: '',
     reach: [],
+    cost: 'free',
+    costNote: '',
     works: 'unmeasured',
     noRelease:
       'Its releases carry no built file — the project ships through the Chrome Web Store. There ' +

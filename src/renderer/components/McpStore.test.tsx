@@ -32,6 +32,8 @@ function row(over: Partial<Row> = {}): Row {
     runtime: 'node',
     runtimeBinary: 'npx',
     origin: 'reference',
+    cost: 'free',
+    costNote: '',
     command: 'npx -y @modelcontextprotocol/server-filesystem ${ROOT}',
     inputs: [],
     state: 'available',

@@ -38,6 +38,8 @@ const NEEDS_NOTHING: McpCatalogueEntry = {
   token: 'plain-server',
   inputs: [],
   origin: 'third-party',
+  cost: 'free',
+  costNote: '',
   caveat: null,
 }
 

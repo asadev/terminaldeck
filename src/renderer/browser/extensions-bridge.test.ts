@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  EXTENSION_FACETS,
   canAct,
   extensionActionLabel,
   extensionActionVerb,
@@ -27,6 +28,8 @@ function row(over: Partial<StoreExtension> = {}): StoreExtension {
     category: 'appearance',
     tags: [],
     needs: [],
+    cost: 'free',
+    costNote: '',
     works: 'works',
     noRelease: '',
     measured: 'Watched working.',
@@ -279,5 +282,39 @@ describe('the link out', () => {
      */
     expect(linkOutLabel(row({ state: 'unavailable' }))).toBe('Open project')
     expect(linkOutLabel(row({ state: 'not-offered' }))).toBe('Get it')
+  })
+})
+
+describe('price on an extension row', () => {
+  it('travels as its own facet, because every extension is a free download', () => {
+    // *Free to install* is true of every row in a browser store and says nothing
+    // about 1Password, whose extension does nothing at all without a paid
+    // account.
+    expect(extensionFacets(row({ cost: 'paid' })).cost).toBe('paid')
+    expect(extensionFacets(row({ cost: 'free' })).cost).toBe('free')
+  })
+
+  it('lands on "not known" when nothing was sent, never on free', () => {
+    /*
+     * `unknown` is a real answer here rather than a hedge: a sideloaded folder
+     * is something this app has never seen, and pricing it would be inventing a
+     * fact. That makes it the right thing to fall back to when a main process
+     * one version behind sends no price at all — the alternative, `free`, is the
+     * one guess that can cost somebody money.
+     */
+    const view = readExtensionsView({ view: { extensions: [{ id: 'a' }] } })
+    expect(view.extensions[0]?.cost).toBe('unknown')
+    expect(
+      readExtensionsView({ view: { extensions: [{ id: 'a', cost: 'cheap' }] } }).extensions[0]?.cost,
+    ).toBe('unknown')
+    expect(
+      readExtensionsView({ view: { extensions: [{ id: 'a', cost: 'metered' }] } }).extensions[0]
+        ?.cost,
+    ).toBe('metered')
+  })
+
+  it('keeps "not known" as a chip, because a folder somebody added really is one', () => {
+    const ids = (EXTENSION_FACETS.cost?.options ?? []).map((option) => option.id)
+    expect(ids).toEqual(['free', 'account', 'metered', 'paid', 'unknown'])
   })
 })

@@ -1,7 +1,10 @@
 import {
+  COST_ORDER,
+  COST_WORDS,
   NEEDS_NOTHING,
   type FacetVocabulary,
   type StoreCompat,
+  type StoreCost,
   type StoreFacet,
   type StoreFacets,
 } from '../store/storefront'
@@ -34,6 +37,9 @@ export type ExtensionState =
 /** Mirrors `ExtensionNeed`. */
 export type ExtensionNeed = 'account' | 'companion-app'
 
+/** Mirrors `ExtensionCost`. */
+export type ExtensionCost = 'free' | 'account' | 'metered' | 'paid' | 'unknown'
+
 /** Mirrors `ExtensionCategory`. */
 export type ExtensionCategory =
   | 'blocking'
@@ -41,6 +47,9 @@ export type ExtensionCategory =
   | 'appearance'
   | 'media'
   | 'passwords'
+  | 'writing'
+  | 'work'
+  | 'shopping'
   | 'research'
   | 'scripting'
   | 'your-own'
@@ -61,6 +70,9 @@ export const CATEGORY_NAMES: Readonly<Record<ExtensionCategory, string>> = {
   appearance: 'How pages look',
   media: 'Video and audio',
   passwords: 'Passwords',
+  writing: 'Writing and language',
+  work: 'Documents and work',
+  shopping: 'Shopping',
   research: 'Saving and research',
   scripting: 'Scripting and the keyboard',
   'your-own': 'Added by you',
@@ -73,6 +85,9 @@ export const CATEGORY_ORDER: readonly ExtensionCategory[] = [
   'appearance',
   'media',
   'passwords',
+  'writing',
+  'work',
+  'shopping',
   'research',
   'scripting',
   'your-own',
@@ -92,6 +107,10 @@ export interface StoreExtension {
   tags: string[]
   /** What a person has to bring before it can do its job. Usually empty. */
   needs: ExtensionNeed[]
+  /** What using it costs. See `ExtensionCost`. */
+  cost: ExtensionCost
+  /** The price reality in a sentence, or `''`. */
+  costNote: string
   measured: string
   /** Why nothing was measured and nothing is offered, or `''`. */
   noRelease: string
@@ -261,6 +280,8 @@ function readExtension(raw: unknown): StoreExtension | null {
     needs: words(record.needs, 4).filter((one): one is ExtensionNeed =>
       NEEDS.some((known) => known === one),
     ),
+    cost: readCost(record.cost),
+    costNote: text(record.costNote),
     measured: text(record.measured),
     noRelease: text(record.noRelease),
     url: text(record.url),
@@ -442,6 +463,23 @@ export function hasReach(extension: StoreExtension): boolean {
 /** The `ExtensionNeed`s this build knows, for narrowing what arrives. */
 const NEEDS: readonly ExtensionNeed[] = ['account', 'companion-app']
 
+/** The `ExtensionCost`s this build knows. */
+const COSTS: readonly ExtensionCost[] = ['free', 'account', 'metered', 'paid', 'unknown']
+
+/**
+ * What arrived, or `unknown`.
+ *
+ * The fallback is not `free`, and that is the whole point of writing this out
+ * rather than defaulting. A main process one version behind sends no price at
+ * all; a row that read *Free* because a field was missing would be the one lie
+ * this field exists to stop. `unknown` is a real value here — a sideloaded
+ * extension is genuinely unpriceable by this app — so it costs nothing to land
+ * on it.
+ */
+function readCost(raw: unknown): ExtensionCost {
+  return COSTS.includes(raw as ExtensionCost) ? (raw as ExtensionCost) : 'unknown'
+}
+
 /**
  * Where this row comes from, as the store's *source* facet.
  *
@@ -504,6 +542,7 @@ export function extensionFacets(extension: StoreExtension): StoreFacets {
      * same as one that answers with nothing, and slower to disbelieve.
      */
     tags: extension.tags,
+    cost: extension.cost,
     compat: extensionCompat(extension),
     installed: extension.state === 'installed' || extension.state === 'damaged',
     source: extensionSource(extension),
@@ -526,6 +565,17 @@ export const EXTENSION_FACETS: Partial<Record<StoreFacet, FacetVocabulary>> = {
     label: 'Category',
     anyName: 'Everything',
     options: CATEGORY_ORDER.map((id) => ({ id, name: CATEGORY_NAMES[id] })),
+  },
+  cost: {
+    label: 'What it costs',
+    anyName: 'Any price',
+    /*
+     * The shared order and the shared words, so a price chip reads the same in
+     * both stores. `unknown` stays in this one — unlike the MCP store's, where
+     * no row can be it — because a sideloaded extension genuinely is one, and
+     * `facetControls` drops the option on any profile that has none.
+     */
+    options: COST_ORDER.map((id: StoreCost) => ({ id, name: COST_WORDS[id] })),
   },
   compat: {
     label: 'In this browser',

@@ -1,7 +1,10 @@
 import {
+  COST_ORDER,
+  COST_WORDS,
   NEEDS_NOTHING,
   type FacetVocabulary,
   type StoreCompat,
+  type StoreCost,
   type StoreFacet,
   type StoreFacets,
 } from '../store/storefront'
@@ -30,16 +33,23 @@ export type McpRuntime = 'node' | 'python' | 'docker'
 export type McpInputKind = 'secret' | 'path' | 'text'
 
 /** Mirrors `McpOrigin`. */
-export type McpOrigin = 'reference' | 'reference-archived' | 'third-party'
+export type McpOrigin = 'reference' | 'reference-archived' | 'vendor' | 'hosted' | 'third-party'
+
+/** Mirrors `McpCost`. A row's price is one of four things and never a guess. */
+export type McpCost = 'free' | 'account' | 'metered' | 'paid'
 
 /** Mirrors `McpCategory` in `src/main/mcp-catalogue.ts`. */
 export type McpCategory =
   | 'files'
   | 'code'
+  | 'work'
   | 'data'
+  | 'cloud'
   | 'web'
   | 'browser'
   | 'knowledge'
+  | 'design'
+  | 'business'
   | 'thinking'
   | 'messaging'
   | 'utility'
@@ -56,12 +66,16 @@ export type McpCategory =
 export const MCP_CATEGORY_NAMES: Readonly<Record<McpCategory, string>> = {
   files: 'Files on this machine',
   code: 'Code and repositories',
+  work: 'Issues, projects and tickets',
   data: 'Databases',
+  cloud: 'Hosting, cloud and what is running',
   web: 'Searching and reading the web',
   browser: 'Driving a browser',
   knowledge: 'Notes and documentation',
+  design: 'Design',
+  business: 'Payments and customers',
   thinking: 'What the agent remembers',
-  messaging: 'Chat and messaging',
+  messaging: 'Mail, chat and calendars',
   utility: 'Time, testing and odds and ends',
 }
 
@@ -69,10 +83,14 @@ export const MCP_CATEGORY_NAMES: Readonly<Record<McpCategory, string>> = {
 export const MCP_CATEGORY_ORDER: readonly McpCategory[] = [
   'files',
   'code',
+  'work',
   'data',
+  'cloud',
   'web',
   'browser',
   'knowledge',
+  'design',
+  'business',
   'thinking',
   'messaging',
   'utility',
@@ -108,6 +126,10 @@ export interface McpStoreRow {
   runtime: McpRuntime
   runtimeBinary: string
   origin: McpOrigin
+  /** What using it costs. See `McpCost`. */
+  cost: McpCost
+  /** The price reality in a sentence, or `''`. */
+  costNote: string
   command: string
   inputs: McpStoreInput[]
   state: McpStoreState
@@ -205,7 +227,14 @@ function flag(value: unknown): boolean {
 
 const KINDS: readonly McpInputKind[] = ['secret', 'path', 'text']
 const STATES: readonly McpStoreState[] = ['available', 'installed', 'taken', 'unavailable']
-const ORIGINS: readonly McpOrigin[] = ['reference', 'reference-archived', 'third-party']
+const ORIGINS: readonly McpOrigin[] = [
+  'reference',
+  'reference-archived',
+  'vendor',
+  'hosted',
+  'third-party',
+]
+const COSTS: readonly McpCost[] = ['free', 'account', 'metered', 'paid']
 const RUNTIMES: readonly McpRuntime[] = ['node', 'python', 'docker']
 const SOURCES: readonly McpEnvironmentSource[] = ['login-shell', 'process', 'unavailable']
 
@@ -254,6 +283,14 @@ function readRow(raw: unknown): McpStoreRow | null {
     runtime: oneOf(record.runtime, RUNTIMES, 'node'),
     runtimeBinary: text(record.runtimeBinary),
     origin: oneOf(record.origin, ORIGINS, 'third-party'),
+    /*
+     * A main process one version behind sends no price at all, and the fallback
+     * is `account` rather than `free`. Both are guesses; only one of them can
+     * cost somebody money, and a row that quietly reads *Free* because a field
+     * was missing is exactly the failure this field was added to prevent.
+     */
+    cost: oneOf(record.cost, COSTS, 'account'),
+    costNote: text(record.costNote),
     command: text(record.command),
     inputs: Array.isArray(record.inputs)
       ? record.inputs.map(readInput).filter((one): one is McpStoreInput => one !== null)
@@ -329,7 +366,26 @@ export function readMcpStoreResult(raw: unknown): McpStoreResult {
 export const ORIGIN_WORDS: Readonly<Record<McpOrigin, string>> = {
   reference: 'Reference server',
   'reference-archived': 'Archived reference server',
+  vendor: 'From the vendor',
+  hosted: 'Runs on the vendor’s servers',
   'third-party': 'Third party',
+}
+
+/**
+ * What a price wears on the row.
+ *
+ * Taken from `store/storefront.ts` rather than spelled again here, which is the
+ * one exception to this file's *"the words are the store's own"* rule and is
+ * argued there: a monthly bill is the same fact in both stores, and two names
+ * for it would be the drift the shared model exists to stop. The MCP row can
+ * never be `unknown` — every row of this catalogue is one this file wrote — so
+ * the type keeps it out.
+ */
+export const COST_LABELS: Readonly<Record<McpCost, string>> = {
+  free: COST_WORDS.free,
+  account: COST_WORDS.account,
+  metered: COST_WORDS.metered,
+  paid: COST_WORDS.paid,
 }
 
 /** How each runtime fetches and starts the server, on the row. */
@@ -442,6 +498,7 @@ export function mcpFacets(row: McpStoreRow): StoreFacets {
     category: row.category,
     categoryName: MCP_CATEGORY_NAMES[row.category],
     tags: row.tags,
+    cost: row.cost,
     compat: mcpCompat(row),
     installed: row.state === 'installed',
     source: row.origin,
@@ -465,6 +522,20 @@ export const MCP_FACETS: Partial<Record<StoreFacet, FacetVocabulary>> = {
     anyName: 'Everything',
     options: MCP_CATEGORY_ORDER.map((id) => ({ id, name: MCP_CATEGORY_NAMES[id] })),
   },
+  cost: {
+    label: 'What it costs',
+    anyName: 'Any price',
+    /*
+     * Drawn straight from the shared order, so the browser store's price chips
+     * and these are the same words in the same sequence. `unknown` is filtered
+     * out because no catalogue row can be it — and `facetControls` would drop
+     * an option with no rows anyway, so this is only saying so on purpose.
+     */
+    options: COST_ORDER.filter((id) => id !== 'unknown').map((id: StoreCost) => ({
+      id,
+      name: COST_WORDS[id],
+    })),
+  },
   compat: {
     label: 'On this machine',
     anyName: 'Any',
@@ -486,6 +557,8 @@ export const MCP_FACETS: Partial<Record<StoreFacet, FacetVocabulary>> = {
     anyName: 'Anywhere',
     options: [
       { id: 'reference', name: 'Official reference' },
+      { id: 'vendor', name: 'From the vendor' },
+      { id: 'hosted', name: 'Runs on the vendor’s servers' },
       { id: 'third-party', name: 'Community' },
       { id: 'reference-archived', name: 'Archived — unmaintained' },
     ],

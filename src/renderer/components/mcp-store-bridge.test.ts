@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  MCP_FACETS,
   mcpCompat,
   mcpFacets,
   mcpLinkOut,
@@ -25,6 +26,8 @@ const ROW: McpStoreRow = {
   summary: 'Does a thing.',
   category: 'utility',
   tags: [],
+  cost: 'free',
+  costNote: '',
   homepage: 'https://example.com',
   registry: 'https://npmjs.com/package/guarded',
   licence: 'MIT',
@@ -278,5 +281,38 @@ describe('the link out', () => {
       '',
     )
     expect(mcpLinkOut(row({ homepage: '', state: 'unavailable', blocked: 'x' }))).toBe('')
+  })
+})
+
+describe('price on an MCP row', () => {
+  it('travels as its own facet rather than being read out of the licence', () => {
+    // Nearly every row in the catalogue is MIT and several of them do nothing
+    // without a key that is billed. A store deriving price from licence would
+    // call every one of those free.
+    expect(mcpFacets(row({ cost: 'metered', licence: 'MIT' })).cost).toBe('metered')
+    expect(mcpFacets(row({ cost: 'paid' })).cost).toBe('paid')
+  })
+
+  it('lands on "needs an account" when a main process sends nothing, never on free', () => {
+    /*
+     * A preload or a main process one version behind sends no `cost` at all.
+     * Both possible fallbacks are guesses; only one of them can cost somebody
+     * money, so the narrowing picks the cautious one. A row that quietly read
+     * *Free* because a field was missing is the exact failure this field was
+     * added to prevent.
+     */
+    const view = readMcpStoreView({ rows: [{ id: 'a', name: 'a' }] })
+    expect(view.rows[0]?.cost).toBe('account')
+    expect(view.rows[0]?.costNote).toBe('')
+    expect(readMcpStoreView({ rows: [{ id: 'a', cost: 'gratis' }] }).rows[0]?.cost).toBe('account')
+    expect(readMcpStoreView({ rows: [{ id: 'a', cost: 'free' }] }).rows[0]?.cost).toBe('free')
+  })
+
+  it('offers a price chip for every value the catalogue can hold', () => {
+    const ids = (MCP_FACETS.cost?.options ?? []).map((option) => option.id)
+    expect(ids).toEqual(['free', 'account', 'metered', 'paid'])
+    // `unknown` is a browser-store answer — a folder somebody dropped in. No MCP
+    // row can be one, so the chip would filter to nothing.
+    expect(ids).not.toContain('unknown')
   })
 })

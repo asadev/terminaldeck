@@ -34,6 +34,7 @@ function row(over: Partial<StoreFacets> = {}): StoreFacets {
     category: 'blocking',
     categoryName: 'Blocking ads and trackers',
     tags: ['ads', 'adblock', 'trackers'],
+    cost: 'free',
     compat: 'works',
     installed: false,
     source: 'release',
@@ -70,10 +71,29 @@ const BITWARDEN = row({
   categoryName: 'Passwords',
   tags: ['vault', 'logins'],
   compat: 'cannot',
+  cost: 'account',
   needs: ['account'],
 })
 
-const ALL = [row(), DARK, VIMIUM, BITWARDEN]
+/*
+ * The row the price facet exists for: a free download of a thing that is not
+ * free to use. Every other fixture here is open source, which is exactly the
+ * catalogue this facet was added because the store had outgrown.
+ */
+const ONEPASSWORD = row({
+  id: 'onepassword',
+  name: '1Password',
+  summary: 'Fills logins out of a 1Password account.',
+  category: 'passwords',
+  categoryName: 'Passwords',
+  tags: ['vault', 'logins'],
+  compat: 'unknown',
+  cost: 'paid',
+  source: 'web-store',
+  needs: ['account'],
+})
+
+const ALL = [row(), DARK, VIMIUM, BITWARDEN, ONEPASSWORD]
 
 /* --------------------------------------------------------------- searching -- */
 
@@ -138,10 +158,12 @@ describe('filters', () => {
   it('filters on each facet independently', () => {
     const cases: Array<[StoreFacet, string, string[]]> = [
       ['category', 'appearance', ['dark-reader']],
+      ['cost', 'paid', ['onepassword']],
+      ['cost', 'free', ['ublock-origin', 'dark-reader', 'vimium']],
       ['compat', 'cannot', ['bitwarden']],
-      ['installed', 'no', ['ublock-origin', 'dark-reader', 'vimium', 'bitwarden']],
-      ['source', 'web-store', ['vimium']],
-      ['needs', 'account', ['bitwarden']],
+      ['installed', 'no', ['ublock-origin', 'dark-reader', 'vimium', 'bitwarden', 'onepassword']],
+      ['source', 'web-store', ['vimium', 'onepassword']],
+      ['needs', 'account', ['bitwarden', 'onepassword']],
     ]
     for (const [facet, value, expected] of cases) {
       const filter = withFacet(NO_FILTER, facet, value)
@@ -164,6 +186,27 @@ describe('filters', () => {
     const github = row({ id: 'github', needs: ['token', 'docker'] })
     expect(matchesFilter(github, withFacet(NO_FILTER, 'needs', 'token'))).toBe(true)
     expect(matchesFilter(github, withFacet(NO_FILTER, 'needs', 'docker'))).toBe(true)
+  })
+
+  it('separates the three kinds of free, because they are not the same offer', () => {
+    /*
+     * The whole argument for four values rather than two. `free` and `account`
+     * both cost nothing today and one of them does nothing until you sign up;
+     * `metered` and `paid` both end in a bill and one of them can be tried this
+     * afternoon. Collapsing any pair would answer *what does this cost* with
+     * something that is true of two different situations.
+     */
+    const metered = row({ id: 'loom', cost: 'metered' })
+    for (const [value, expected] of [
+      ['free', true],
+      ['account', false],
+      ['metered', false],
+      ['paid', false],
+    ] as const) {
+      expect(matchesFilter(row(), withFacet(NO_FILTER, 'cost', value)), value).toBe(expected)
+    }
+    expect(matchesFilter(metered, withFacet(NO_FILTER, 'cost', 'metered'))).toBe(true)
+    expect(matchesFilter(metered, withFacet(NO_FILTER, 'cost', 'paid'))).toBe(false)
   })
 
   it('combines the search with the facets', () => {

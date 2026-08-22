@@ -9,8 +9,8 @@
  *
  * Both halves are driven by the **real catalogues** — `MCP_CATALOGUE` and
  * `BROWSER_EXTENSION_CATALOGUE` — because a store's shelves are only worth
- * looking at over the number of rows it actually has. Twenty-four extensions
- * across seven shelves and eighteen servers across nine is the thing being
+ * looking at over the number of rows it actually has. Thirty-six extensions
+ * across ten shelves and thirty-nine servers across thirteen is the thing being
  * judged; three fixtures would have shown a bar with no work to do.
  *
  * `?store=browser|mcp` draws one; the default stacks both.
@@ -48,6 +48,8 @@ function extensionRows(): StoreExtension[] {
     category: entry.category,
     tags: [...entry.tags],
     needs: [...(entry.needs ?? [])],
+    cost: entry.cost,
+    costNote: entry.costNote,
     measured: entry.measured,
     noRelease: entry.noRelease ?? '',
     url: entry.source?.url ?? '',
@@ -150,6 +152,8 @@ function mcpRows(): McpStoreRow[] {
       runtime: entry.runtime,
       runtimeBinary: RUNTIME_BINARY[entry.runtime],
       origin: entry.origin,
+      cost: entry.cost,
+      costNote: entry.costNote,
       command: installed
         ? 'npx -y @modelcontextprotocol/server-filesystem /Users/apple/Projects'
         : entry.command,

@@ -57,8 +57,68 @@ export const ANY = 'all'
  */
 export type StoreCompat = 'works' | 'unknown' | 'cannot'
 
-/** Which of the five facets a control is filtering on. */
-export type StoreFacet = 'category' | 'compat' | 'installed' | 'source' | 'needs'
+/**
+ * What it costs to actually use the thing, once it is installed.
+ *
+ * ## Why this is a field and not a sentence somebody wrote in a summary
+ *
+ * Asad, widening both catalogues:
+ *
+ *   > *"maybe some other tools paid ones too not just open source"*
+ *
+ * The moment a store holds more than open source, the most important fact about
+ * a row stops being its licence. `tavily-mcp` is MIT and `firecrawl-mcp` is MIT
+ * and neither does anything at all without a key you buy — a row that printed
+ * *MIT* and stopped there would be telling the truth in a way that leaves
+ * somebody worse informed than saying nothing. So price is its own field, on
+ * every row of both catalogues, and it is filterable.
+ *
+ * ## Four values, because three of them are different kinds of free
+ *
+ *  - `free` — nothing to pay and nobody to sign up with. `filesystem`, `time`,
+ *    Google Translate.
+ *  - `account` — free to use, and it does nothing until you sign in somewhere.
+ *    The account itself costs nothing. Notion, Figma, Stripe's test keys.
+ *  - `metered` — free to a limit, then you pay. Tavily's free tier is a monthly
+ *    allowance; Google Maps bills past its credit; Loom's free plan caps how
+ *    long a recording may be. The distinction from `paid` is not pedantry: one
+ *    of these you can try today and one you cannot.
+ *  - `paid` — money before it does its job at all. Perplexity's API has no free
+ *    tier; 1Password has no free plan. A row like this that read *free* because
+ *    its extension is a free download would be the exact lie this field exists
+ *    to prevent.
+ *
+ * A fifth value, `unknown`, exists for the one row neither catalogue can answer
+ * for: something a person added themselves. This app has never seen it, does not
+ * know who wrote it, and is not going to guess what it costs.
+ */
+export type StoreCost = 'free' | 'account' | 'metered' | 'paid' | 'unknown'
+
+/**
+ * What each price wears on screen, shared by both stores.
+ *
+ * The one place this file's *"the words are deliberately not shared"* rule is
+ * suspended, and deliberately. The rule exists because the two catalogues know
+ * different things — one measured its rows running in this app's Electron, the
+ * other says outright it never will — so forcing one vocabulary would make one
+ * of them claim something it did not measure. Money is not like that. A monthly
+ * bill is the same fact in both stores, and calling it *Free to start, then
+ * paid* in one and something else in the other would be the drift this file was
+ * written to stop.
+ */
+export const COST_WORDS: Readonly<Record<StoreCost, string>> = {
+  free: 'Free',
+  account: 'Free, needs an account',
+  metered: 'Free to a limit, then paid',
+  paid: 'Paid',
+  unknown: 'Not known',
+}
+
+/** The order a price control draws its chips in: cheapest certainty first. */
+export const COST_ORDER: readonly StoreCost[] = ['free', 'account', 'metered', 'paid', 'unknown']
+
+/** Which of the six facets a control is filtering on. */
+export type StoreFacet = 'category' | 'cost' | 'compat' | 'installed' | 'source' | 'needs'
 
 /**
  * One row of either store, reduced to the things that can be searched, filtered
@@ -88,6 +148,15 @@ export interface StoreFacets {
    * `adblock`.
    */
   tags: readonly string[]
+  /**
+   * What using it costs. See {@link StoreCost}.
+   *
+   * A string rather than the union, for the same reason `category` and `source`
+   * are: {@link matchesFacet} compares facet values as ids, and a projection
+   * that narrowed here would make one store's vocabulary the shared model's
+   * business.
+   */
+  cost: string
   compat: StoreCompat
   installed: boolean
   /** Where the row comes from. A store-specific id; see this file's header. */
@@ -106,6 +175,8 @@ export interface StoreFacets {
 export interface StoreFilter {
   query: string
   category: string
+  /** A {@link StoreCost} id, or {@link ANY}. */
+  cost: string
   compat: StoreCompat | typeof ANY
   /** `'yes'` / `'no'` / {@link ANY}. A tri-state, because "not installed" is a real ask. */
   installed: 'yes' | 'no' | typeof ANY
@@ -117,6 +188,7 @@ export interface StoreFilter {
 export const NO_FILTER: StoreFilter = {
   query: '',
   category: ANY,
+  cost: ANY,
   compat: ANY,
   installed: ANY,
   source: ANY,
@@ -181,6 +253,8 @@ export function matchesFacet(facets: StoreFacets, filter: StoreFilter, facet: St
   switch (facet) {
     case 'category':
       return filter.category === ANY || facets.category === filter.category
+    case 'cost':
+      return filter.cost === ANY || facets.cost === filter.cost
     case 'compat':
       return filter.compat === ANY || facets.compat === filter.compat
     case 'installed':
@@ -195,7 +269,21 @@ export function matchesFacet(facets: StoreFacets, filter: StoreFilter, facet: St
   }
 }
 
-const FACETS: readonly StoreFacet[] = ['category', 'compat', 'installed', 'source', 'needs']
+/**
+ * The facets, in the order a store draws their controls.
+ *
+ * `cost` sits second, straight after the shelf. It is the question a person asks
+ * before *does it run here* and long before *who publishes it* — and a price
+ * control at the end of a row of six would be the one nobody scrolls to.
+ */
+const FACETS: readonly StoreFacet[] = [
+  'category',
+  'cost',
+  'compat',
+  'installed',
+  'source',
+  'needs',
+]
 
 /** Does this row survive the whole filter, search included? */
 export function matchesFilter(facets: StoreFacets, filter: StoreFilter): boolean {
@@ -215,6 +303,8 @@ export function valueOf(filter: StoreFilter, facet: StoreFacet): string {
   switch (facet) {
     case 'category':
       return filter.category
+    case 'cost':
+      return filter.cost
     case 'compat':
       return filter.compat
     case 'installed':
@@ -231,6 +321,8 @@ export function withFacet(filter: StoreFilter, facet: StoreFacet, value: string)
   switch (facet) {
     case 'category':
       return { ...filter, category: value }
+    case 'cost':
+      return { ...filter, cost: value }
     case 'compat':
       return { ...filter, compat: value as StoreCompat | typeof ANY }
     case 'installed':

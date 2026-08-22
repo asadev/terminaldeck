@@ -1,5 +1,6 @@
 import { HoverNote } from './HoverNote'
 import {
+  COST_LABELS,
   mcpLinkOut,
   needsWords,
   ORIGIN_WORDS,
@@ -111,6 +112,17 @@ export function McpStoreRow({ row, busy, values, said, arming, onValue, onAct, o
       <div className="mcp-store-head">
         <span className="mcp-store-name">{row.name}</span>
         <span className="mcp-tag">{ORIGIN_WORDS[row.origin]}</span>
+        {/*
+          What it costs, in the head, next to the licence rather than buried in
+          the facts below — because the two answer different questions and the
+          licence has been quietly answering both. Nearly every row here is MIT;
+          `tavily` is MIT and does nothing at all without a key that is billed.
+          A row that printed *MIT* and stopped would be telling the truth in a
+          way that leaves somebody worse informed.
+        */}
+        <span className="mcp-tag" data-cost={row.cost}>
+          {COST_LABELS[row.cost]}
+        </span>
         <span className="mcp-tag">{row.licence}</span>
         <span className="mcp-store-version">{row.version}</span>
         {row.state === 'installed' && (
@@ -207,6 +219,24 @@ export function McpStoreRow({ row, busy, values, said, arming, onValue, onAct, o
           <dt>Needs</dt>
           <dd>{needsWords(row)}</dd>
         </div>
+        {/*
+          The price reality, in the catalogue's own sentence, above the button.
+          On the facts list rather than under the measured line for the same
+          reason *Needs* is: **never imply free when a key costs money**, and a
+          sentence somebody reads after pressing Install is a sentence that
+          arrived too late.
+
+          Drawn only when there is one to draw. A row that is simply free — the
+          filesystem one, the clock — carries no note, and printing *Free.* under
+          a chip that already says *Free* would be the padding that teaches
+          people to stop reading this list.
+        */}
+        {row.costNote !== '' && (
+          <div>
+            <dt>What it costs</dt>
+            <dd>{row.costNote}</dd>
+          </div>
+        )}
         <div>
           <dt>Command</dt>
           <dd>
