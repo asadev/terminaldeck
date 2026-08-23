@@ -127,10 +127,6 @@ const ALLOWLIST = new Map<string, string>([
   ['--menu-room', 'the height left under an open settings menu, measured on open'],
   ['--sc-room', 'the width the session-control cluster is allowed, measured on resize'],
   ['--sheet-room', 'the height left above a sheet, measured when it opens'],
-  [
-    '--store-logo-hue',
-    'a store row’s monogram hue, hashed from its own name in store/StoreLogo.tsx',
-  ],
   ['--window-controls-inset', 'the space the traffic lights occupy, which only the OS knows'],
 ])
 

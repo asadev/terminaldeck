@@ -251,6 +251,7 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
     works: 'unmeasured',
     noRelease: WEB_STORE_ONLY,
     measured: NOT_RUN_HERE,
+    logo: 'google-translate',
     source: null,
   },
   {
@@ -276,6 +277,7 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
       ' Worth knowing if you go looking for it another way: it signs in through its own account ' +
       'and works inside the pages you type on, which is the half of the extension API this ' +
       'browser has most of — and that is a shape, not a measurement.',
+    logo: 'grammarly',
     source: null,
   },
   {
@@ -296,6 +298,7 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
     works: 'unmeasured',
     noRelease: WEB_STORE_ONLY,
     measured: NOT_RUN_HERE,
+    logo: 'google-docs',
     source: null,
   },
   {
@@ -319,6 +322,7 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
       NOT_RUN_HERE +
       ' Worth knowing: adding a task is started from a toolbar button, and this browser draws ' +
       'none — so the shape of it is unpromising here even though nobody has run it.',
+    logo: 'todoist',
     source: null,
   },
   {
@@ -339,6 +343,7 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
     works: 'unmeasured',
     noRelease: WEB_STORE_ONLY,
     measured: NOT_RUN_HERE,
+    logo: 'honey',
     source: null,
   },
   {
@@ -363,6 +368,7 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
       ' Worth knowing: this app did run Bitwarden, whose whole interface is a panel, and watched ' +
       'it die on chrome.tabs.getCurrent — a method this browser does not have. That says nothing ' +
       'about this extension and everything about the shape it shares.',
+    logo: 'lastpass',
     source: null,
   },
   {
@@ -384,6 +390,7 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
     works: 'unmeasured',
     noRelease: WEB_STORE_ONLY,
     measured: NOT_RUN_HERE,
+    logo: 'onepassword',
     source: null,
   },
   {
@@ -404,6 +411,7 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
     works: 'unmeasured',
     noRelease: WEB_STORE_ONLY,
     measured: NOT_RUN_HERE,
+    logo: 'loom',
     source: null,
   },
   {
@@ -427,6 +435,7 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
       NOT_RUN_HERE +
       ' Worth knowing: clipping is started from a toolbar button, and this browser draws none — ' +
       'the same shape that leaves SingleFile unpromising here.',
+    logo: 'notion',
     source: null,
   },
   {
@@ -451,6 +460,7 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
       ' Worth knowing: saving is started from the right-click menu or a toolbar button, and this ' +
       'browser draws neither — which is what stopped Web Archives and Search by Image after they ' +
       'had loaded perfectly.',
+    logo: 'google-drive',
     source: null,
   },
   {
@@ -469,6 +479,7 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
     works: 'unmeasured',
     noRelease: WEB_STORE_ONLY,
     measured: NOT_RUN_HERE,
+    logo: 'google-keep',
     source: null,
   },
   {
@@ -492,6 +503,7 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
       'this browser has no new tab to hand over, so even a file to fetch would not have made it ' +
       'a row with a button.',
     measured: NOT_RUN_HERE,
+    logo: 'momentum',
     source: null,
   },
   {

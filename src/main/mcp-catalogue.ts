@@ -785,6 +785,7 @@ export const MCP_CATALOGUE: McpCatalogue = [
     command: 'npx -y chrome-devtools-mcp@latest',
     token: 'chrome-devtools-mcp',
     inputs: [],
+    logo: 'chrome',
     origin: 'vendor',
     cost: 'free',
     costNote: '',
@@ -815,6 +816,7 @@ export const MCP_CATALOGUE: McpCatalogue = [
         required: true,
       },
     ],
+    logo: 'stripe',
     origin: 'vendor',
     cost: 'account',
     costNote:
@@ -847,6 +849,7 @@ export const MCP_CATALOGUE: McpCatalogue = [
         required: true,
       },
     ],
+    logo: 'hubspot',
     origin: 'vendor',
     cost: 'account',
     costNote:
@@ -887,6 +890,7 @@ export const MCP_CATALOGUE: McpCatalogue = [
         required: false,
       },
     ],
+    logo: 'sentry',
     origin: 'vendor',
     cost: 'account',
     costNote:
@@ -911,6 +915,7 @@ export const MCP_CATALOGUE: McpCatalogue = [
     command: 'npx -y @azure/mcp@latest server start',
     token: '@azure/mcp',
     inputs: [],
+    logo: 'azure',
     origin: 'vendor',
     cost: 'metered',
     costNote:
@@ -935,6 +940,7 @@ export const MCP_CATALOGUE: McpCatalogue = [
     command: 'npx -y mcp-remote https://bindings.mcp.cloudflare.com/mcp',
     token: 'bindings.mcp.cloudflare.com',
     inputs: [],
+    logo: 'cloudflare',
     origin: 'hosted',
     cost: 'account',
     costNote:
@@ -976,6 +982,7 @@ export const MCP_CATALOGUE: McpCatalogue = [
         required: true,
       },
     ],
+    logo: 'supabase',
     origin: 'vendor',
     cost: 'account',
     costNote:
@@ -1010,6 +1017,7 @@ export const MCP_CATALOGUE: McpCatalogue = [
         required: true,
       },
     ],
+    logo: 'mongodb',
     origin: 'vendor',
     cost: 'free',
     costNote:
@@ -1042,6 +1050,7 @@ export const MCP_CATALOGUE: McpCatalogue = [
         required: true,
       },
     ],
+    logo: 'postgres',
     origin: 'third-party',
     cost: 'free',
     costNote: '',
@@ -1072,6 +1081,7 @@ export const MCP_CATALOGUE: McpCatalogue = [
         required: true,
       },
     ],
+    logo: 'airtable',
     origin: 'third-party',
     cost: 'account',
     costNote:
@@ -1110,6 +1120,7 @@ export const MCP_CATALOGUE: McpCatalogue = [
         required: true,
       },
     ],
+    logo: 'bigquery',
     origin: 'third-party',
     cost: 'metered',
     costNote:
@@ -1150,6 +1161,7 @@ export const MCP_CATALOGUE: McpCatalogue = [
         required: false,
       },
     ],
+    logo: 'google-analytics',
     origin: 'vendor',
     cost: 'account',
     costNote:
@@ -1222,6 +1234,7 @@ export const MCP_CATALOGUE: McpCatalogue = [
         required: true,
       },
     ],
+    logo: 'figma',
     origin: 'third-party',
     cost: 'account',
     costNote:
@@ -1243,6 +1256,7 @@ export const MCP_CATALOGUE: McpCatalogue = [
     command: 'npx -y mcp-remote https://mcp.atlassian.com/v1/sse',
     token: 'mcp.atlassian.com',
     inputs: [],
+    logo: 'atlassian',
     origin: 'hosted',
     cost: 'account',
     costNote:
@@ -1264,6 +1278,7 @@ export const MCP_CATALOGUE: McpCatalogue = [
     command: 'npx -y mcp-remote https://mcp.linear.app/mcp',
     token: 'mcp.linear.app',
     inputs: [],
+    logo: 'linear',
     origin: 'hosted',
     cost: 'account',
     costNote: 'Free. Linear’s free workspace can sign in to this.',
@@ -1286,6 +1301,7 @@ export const MCP_CATALOGUE: McpCatalogue = [
     command: 'npx -y mcp-remote https://mcp.exa.ai/mcp',
     token: 'mcp.exa.ai',
     inputs: [],
+    logo: 'exa',
     origin: 'hosted',
     cost: 'metered',
     costNote:
@@ -1310,6 +1326,7 @@ export const MCP_CATALOGUE: McpCatalogue = [
     command: 'npx -y mcp-remote https://mcp.apify.com',
     token: 'mcp.apify.com',
     inputs: [],
+    logo: 'apify',
     origin: 'hosted',
     cost: 'metered',
     costNote:
@@ -1342,6 +1359,7 @@ export const MCP_CATALOGUE: McpCatalogue = [
         required: true,
       },
     ],
+    logo: 'perplexity',
     origin: 'vendor',
     cost: 'paid',
     costNote:
@@ -1542,6 +1560,7 @@ export const MCP_CATALOGUE: McpCatalogue = [
         required: false,
       },
     ],
+    logo: 'google-drive',
     origin: 'reference-archived',
     cost: 'account',
     costNote:
@@ -1576,6 +1595,7 @@ export const MCP_CATALOGUE: McpCatalogue = [
         required: true,
       },
     ],
+    logo: 'google-maps',
     origin: 'reference-archived',
     cost: 'metered',
     costNote:

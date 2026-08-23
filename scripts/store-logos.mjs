@@ -9,7 +9,7 @@
  * on screen is `<img src="https://vendor.example/logo.svg">`, and it is the one
  * thing this file exists to prevent: an `<img>` pointed at a third-party host is
  * a request to that host **every time the store opens**, carrying an IP address
- * and a referrer to eighteen companies at once, and it draws nothing at all on a
+ * and a referrer to fifty companies at once, and it draws nothing at all on a
  * laptop with no network. Neither is acceptable in a store whose whole argument
  * is that the bytes it offers were pinned in advance.
  *
@@ -18,15 +18,51 @@
  * the only place those bytes live. At runtime the store reads a data URI out of
  * its own bundle; it opens the same offline as online and asks nobody anything.
  *
+ * ## Why the list of marks is derived from the catalogues
+ *
+ * It was not, and that cost a red build the first time somebody widened the
+ * store. This script used to carry its own hardcoded list of thirty-seven marks
+ * with no idea what the catalogues contained; a lane added thirty-three rows,
+ * every one of them correct, and the marks for them simply did not exist. The
+ * script had nothing to say about it — it fetched its thirty-seven, reported
+ * success, and `store-logos.test.ts` went red on the join between two files
+ * neither of which was wrong on its own.
+ *
+ * So the list is no longer written here. {@link marks} is a table of *sources*,
+ * and the *work list* comes from the two catalogues themselves: this script
+ * imports them, collects every `logo` key any row names, and fetches exactly
+ * those. That makes the drift impossible in both directions and it makes each
+ * direction a sentence rather than a mystery:
+ *
+ *   - a row names a `logo` this file has no source for → the script **refuses
+ *     to write** and prints the row and the key, so adding a row makes the
+ *     script ask for its mark instead of silently shipping a broken name;
+ *   - a source here that no row names → the script refuses too, because a mark
+ *     nobody asks for is weight in the bundle and `store-logos.test.ts` fails
+ *     on it anyway. Better to hear it from the tool that could have avoided it.
+ *
+ * A row is still allowed to have **no mark at all**. `logo` is optional on both
+ * catalogue types on purpose — a row added without the network draws the
+ * monogram in `StoreLogo.tsx`, which is this app's own drawing and honestly a
+ * placeholder. The script prints those rows every run under *"no mark"*, so the
+ * fallback is a decision somebody can see rather than one nobody notices. What
+ * it will not tolerate is the third state: a row claiming a key that resolves
+ * to nothing, which draws the same monogram while its author believes otherwise.
+ *
+ * Reading the catalogues means reading TypeScript, which Node does by itself
+ * (type stripping, 22.6 and later) — the two files import nothing but types, so
+ * there is nothing to bundle and no dev dependency to add for a script that is
+ * run by hand a few times a year.
+ *
  * ## Why a generated module rather than files in a folder
  *
  * Because there is no other image in this renderer — not one `.png`, not one
  * `.svg`, checked before choosing — so files on disk would mean a new packaging
  * path (Vite emits some assets and inlines others under its 4 KB limit, and
  * `electron-builder.yml` would then be shipping two kinds of thing) invented for
- * a feature whose whole content is 42 small pictures. A module of data URIs is
- * one path: it is code, it is inside `out/**` like every other line of code, it
- * works identically in the app, in `vitest`, and in `.harness/stores.html`, and
+ * a feature whose whole content is a shelf of small pictures. A module of data
+ * URIs is one path: it is code, it is inside `out/**` like every other line of
+ * code, it works identically in the app, in `vitest`, and in `.harness/`, and
  * there is nothing to forget to copy.
  *
  * The cost is a large generated file, and it is capped rather than hoped about:
@@ -35,7 +71,7 @@
  *
  * ## What is recorded, so this is auditable and refreshable
  *
- * Every row of {@link LOGOS} names the exact URL it was fetched from, and the
+ * Every entry in {@link marks} names the exact URL it was fetched from, and the
  * generated file carries that URL back with the sha256 of the bytes that came
  * back and the date they came back. That is what makes a refresh checkable:
  *
@@ -45,7 +81,7 @@
  * ```
  *
  * `--check` reports every mark whose upstream bytes have changed and exits
- * non-zero if any did. It is not in CI: it is a network call to twenty hosts,
+ * non-zero if any did. It is not in CI: it is a network call to forty hosts,
  * and a red build because a vendor re-exported their SVG is a gate nobody would
  * keep. Run it when a logo looks wrong.
  *
@@ -75,6 +111,18 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
+/*
+ * Node prints MODULE_TYPELESS_PACKAGE_JSON once per stripped `.ts` file it
+ * loads, which would be two paragraphs of advice about `package.json` in front
+ * of this script's own output — and the advice is wrong for this repository,
+ * where `"type": "module"` would change how every `.js` in it is read. The
+ * default listener goes; anything else Node has to say still prints.
+ */
+process.removeAllListeners('warning')
+process.on('warning', (warning) => {
+  if (warning.code !== 'MODULE_TYPELESS_PACKAGE_JSON') console.warn(`${warning.name}: ${warning.message}`)
+})
+
 /** The widest a mark is ever drawn, times two for a retina panel. */
 const RASTER_PX = 96
 
@@ -91,67 +139,202 @@ const SOFT_CAP = 12_000
 const MAX_BYTES = 24_000
 
 /**
- * Where each mark comes from.
+ * Where each mark comes from, by the key a catalogue row's `logo` field names.
+ *
+ * This is a table of **sources**, not the work list — see the header. Nothing is
+ * fetched because it is written here; it is fetched because a row asks for it.
  *
  * `plate` marks the ones whose vendor drew them in a single dark ink on nothing,
  * for a light page — GitHub's Invertocat, SQLite's wordmark, Puppeteer's line
- * drawing. Rendered straight onto this app's dark surface those are a dark shape
- * on a dark shape, which is a row with no logo dressed up as a row with one. They
- * get the light tile their own brand guidelines assume. It is the background that
- * changes; the mark is never touched.
+ * drawing, Exa's square. Rendered straight onto this app's dark surface those
+ * are a dark shape on a dark shape, which is a row with no logo dressed up as a
+ * row with one. They get the light tile their own brand guidelines assume. It is
+ * the background that changes; the mark is never touched.
  *
  * Set by looking, not by guessing: every one of these was rendered on both
  * surfaces at 40px and 96px before the flag was decided. Marks that carry their
- * own background — Notion's white square, Context7's black one, the MCP
- * favicon — do **not** get a plate, because a plate behind a plate is a border
- * nobody drew.
+ * own background — Notion's white square, Context7's black one, Stripe's purple
+ * one, Linear's black one, the MCP favicon — do **not** get a plate, because a
+ * plate behind a plate is a border nobody drew.
  *
- * Six MCP reference servers share one mark, and that is not laziness: they are
- * one project's servers, published together, and the Model Context Protocol
- * mark is the true answer to "whose is this" for all six.
+ * Several keys are shared, and that is not laziness. Six MCP reference servers
+ * share `modelcontextprotocol`: they are one project's servers, published
+ * together, and that mark is the true answer to "whose is this" for all six. The
+ * Notion Web Clipper wears Notion's mark, `postgres-mcp` wears Postgres's, and
+ * the two Google Drive rows — one extension, one server — wear Drive's, because
+ * in each case the mark identifies the product the row is about and there is no
+ * second mark to identify.
  */
-const LOGOS = [
+const marks = {
   /* --------------------------------------------- browser extensions -- */
-  { key: 'dark-reader', url: 'https://raw.githubusercontent.com/darkreader/darkreader/2aa54873769577631695aa01206d05eacc952ce9/src/icons/dr_128.png' },
-  { key: 'clearurls', url: 'https://raw.githubusercontent.com/ClearURLs/Addon/6d904144eca14f71789180da4fe43f3c402be153/img/clearurls.svg' },
-  { key: 'stylus', url: 'https://raw.githubusercontent.com/openstyles/stylus/559949b267191067b73319752c910b407c5091c2/src/icon/128.png' },
-  { key: 'violentmonkey', url: 'https://raw.githubusercontent.com/violentmonkey/violentmonkey/b072d6ab52148a38eb6b39ab02d17c12b85de5da/src/resources/icon.svg' },
-  { key: 'ublock-origin', url: 'https://raw.githubusercontent.com/gorhill/uBlock/fe277a4ea6d18a0a62757826bb665a92c04a0745/src/img/ublock.svg' },
-  { key: 'ublock-origin-lite', url: 'https://raw.githubusercontent.com/uBlockOrigin/uBOL-home/c4c5127c0b69c1576b0f8a923c0f3dacaa0997d4/chromium/img/icon_128.png' },
-  { key: 'sponsorblock', url: 'https://raw.githubusercontent.com/ajayyy/SponsorBlock/6a306a09622170d0f7f733faa3172a58346650bd/public/icons/IconSponsorBlocker128px.png' },
-  { key: 'return-youtube-dislike', url: 'https://raw.githubusercontent.com/Anarios/return-youtube-dislike/4e6dfd1977fcf2d160142bf5c2e303d5cda2c685/Extensions/combined/icons/icon128.png' },
-  { key: 'isdcac', url: 'https://raw.githubusercontent.com/OhMyGuus/I-Still-Dont-Care-About-Cookies/d4728187136f973c9fd59266b7f629a8228ea144/src/icons/128.png' },
-  { key: 'adguard', url: 'https://raw.githubusercontent.com/AdguardTeam/AdguardBrowserExtension/496161c602ee787d23ee87f6ad3e681f8a0a7a4b/Extension/assets/images/logo-shield.svg' },
-  { key: 'ghostery', url: 'https://raw.githubusercontent.com/ghostery/ghostery-extension/ace6af39b02dcd16ce39566f0de292e3cda0d739/src/icons/icon.svg' },
-  { key: 'consent-o-matic', url: 'https://raw.githubusercontent.com/cavi-au/Consent-O-Matic/8ca8500d26434c586039e126ad091e1bfccd205d/Extension/logo.svg' },
-  { key: 'libredirect', url: 'https://raw.githubusercontent.com/libredirect/browser_extension/90729f5282502fd19ee8075dac2d6d9d2059ef60/src/assets/images/libredirect.svg' },
-  { key: 'cookie-autodelete', url: 'https://raw.githubusercontent.com/Cookie-AutoDelete/Cookie-AutoDelete/d9e01ba4acfeee7d49ef8edcc9a64b53d3fa568e/extension/icons/icon_128.png' },
-  { key: 'video-speed-controller', url: 'https://raw.githubusercontent.com/igrigorik/videospeed/8f9bc13cd1d8bad549795da265735159d9e9fad1/src/assets/icons/icon128.png' },
-  { key: 'bitwarden', url: 'https://raw.githubusercontent.com/bitwarden/clients/cce8a341c88790387fab9c5c6eb6dd3aa7e6491d/apps/browser/src/images/icon128.png' },
-  { key: 'keepassxc-browser', url: 'https://raw.githubusercontent.com/keepassxreboot/keepassxc-browser/5dc3a3622ee043da4718748a2821f81ad8d28748/keepassxc-browser/icons/keepassxc.svg' },
-  { key: 'search-by-image', url: 'https://raw.githubusercontent.com/dessant/search-by-image/d5d20a64be2fc0fccdedbf52becb0a5f80a83848/src/assets/icons/app/icon.svg' },
-  { key: 'web-archives', url: 'https://raw.githubusercontent.com/dessant/web-archives/3cc1989d4d714ccecef4914895f9255bcddcd36e/src/assets/icons/app/icon.svg' },
-  { key: 'privacy-badger', url: 'https://raw.githubusercontent.com/EFForg/privacybadger/dd1e9f75041a4ce2b08e4b224a4e200f38a9821f/src/icons/badger-128.png' },
-  { key: 'singlefile', url: 'https://raw.githubusercontent.com/gildas-lormeau/SingleFile/32931059bc6c125899068b9517d422008380488a/src/ui/resources/icon_128.png' },
-  { key: 'vimium', url: 'https://raw.githubusercontent.com/philc/vimium/5aa29614bf1dce05e0d316f8c38722e17f9b38c3/icons/icon128.png' },
-  { key: 'wappalyzer', url: 'https://www.wappalyzer.com/apple-touch-icon.png' },
-  { key: 'json-formatter', url: 'https://raw.githubusercontent.com/callumlocke/json-formatter/bfd63560efe2c91c899a68c49bc8eedf5a43a101/ext/icons/128.png' },
+  'dark-reader': { url: 'https://raw.githubusercontent.com/darkreader/darkreader/2aa54873769577631695aa01206d05eacc952ce9/src/icons/dr_128.png' },
+  'clearurls': { url: 'https://raw.githubusercontent.com/ClearURLs/Addon/6d904144eca14f71789180da4fe43f3c402be153/img/clearurls.svg' },
+  'stylus': { url: 'https://raw.githubusercontent.com/openstyles/stylus/559949b267191067b73319752c910b407c5091c2/src/icon/128.png' },
+  'violentmonkey': { url: 'https://raw.githubusercontent.com/violentmonkey/violentmonkey/b072d6ab52148a38eb6b39ab02d17c12b85de5da/src/resources/icon.svg' },
+  'ublock-origin': { url: 'https://raw.githubusercontent.com/gorhill/uBlock/fe277a4ea6d18a0a62757826bb665a92c04a0745/src/img/ublock.svg' },
+  'ublock-origin-lite': { url: 'https://raw.githubusercontent.com/uBlockOrigin/uBOL-home/c4c5127c0b69c1576b0f8a923c0f3dacaa0997d4/chromium/img/icon_128.png' },
+  'sponsorblock': { url: 'https://raw.githubusercontent.com/ajayyy/SponsorBlock/6a306a09622170d0f7f733faa3172a58346650bd/public/icons/IconSponsorBlocker128px.png' },
+  'return-youtube-dislike': { url: 'https://raw.githubusercontent.com/Anarios/return-youtube-dislike/4e6dfd1977fcf2d160142bf5c2e303d5cda2c685/Extensions/combined/icons/icon128.png' },
+  'isdcac': { url: 'https://raw.githubusercontent.com/OhMyGuus/I-Still-Dont-Care-About-Cookies/d4728187136f973c9fd59266b7f629a8228ea144/src/icons/128.png' },
+  'adguard': { url: 'https://raw.githubusercontent.com/AdguardTeam/AdguardBrowserExtension/496161c602ee787d23ee87f6ad3e681f8a0a7a4b/Extension/assets/images/logo-shield.svg' },
+  'ghostery': { url: 'https://raw.githubusercontent.com/ghostery/ghostery-extension/ace6af39b02dcd16ce39566f0de292e3cda0d739/src/icons/icon.svg' },
+  'consent-o-matic': { url: 'https://raw.githubusercontent.com/cavi-au/Consent-O-Matic/8ca8500d26434c586039e126ad091e1bfccd205d/Extension/logo.svg' },
+  'libredirect': { url: 'https://raw.githubusercontent.com/libredirect/browser_extension/90729f5282502fd19ee8075dac2d6d9d2059ef60/src/assets/images/libredirect.svg' },
+  'cookie-autodelete': { url: 'https://raw.githubusercontent.com/Cookie-AutoDelete/Cookie-AutoDelete/d9e01ba4acfeee7d49ef8edcc9a64b53d3fa568e/extension/icons/icon_128.png' },
+  'video-speed-controller': { url: 'https://raw.githubusercontent.com/igrigorik/videospeed/8f9bc13cd1d8bad549795da265735159d9e9fad1/src/assets/icons/icon128.png' },
+  'bitwarden': { url: 'https://raw.githubusercontent.com/bitwarden/clients/cce8a341c88790387fab9c5c6eb6dd3aa7e6491d/apps/browser/src/images/icon128.png' },
+  'keepassxc-browser': { url: 'https://raw.githubusercontent.com/keepassxreboot/keepassxc-browser/5dc3a3622ee043da4718748a2821f81ad8d28748/keepassxc-browser/icons/keepassxc.svg' },
+  'search-by-image': { url: 'https://raw.githubusercontent.com/dessant/search-by-image/d5d20a64be2fc0fccdedbf52becb0a5f80a83848/src/assets/icons/app/icon.svg' },
+  'web-archives': { url: 'https://raw.githubusercontent.com/dessant/web-archives/3cc1989d4d714ccecef4914895f9255bcddcd36e/src/assets/icons/app/icon.svg' },
+  'privacy-badger': { url: 'https://raw.githubusercontent.com/EFForg/privacybadger/dd1e9f75041a4ce2b08e4b224a4e200f38a9821f/src/icons/badger-128.png' },
+  'singlefile': { url: 'https://raw.githubusercontent.com/gildas-lormeau/SingleFile/32931059bc6c125899068b9517d422008380488a/src/ui/resources/icon_128.png' },
+  'vimium': { url: 'https://raw.githubusercontent.com/philc/vimium/5aa29614bf1dce05e0d316f8c38722e17f9b38c3/icons/icon128.png' },
+  'wappalyzer': { url: 'https://www.wappalyzer.com/apple-touch-icon.png' },
+  'json-formatter': { url: 'https://raw.githubusercontent.com/callumlocke/json-formatter/bfd63560efe2c91c899a68c49bc8eedf5a43a101/ext/icons/128.png' },
+
+  /* ------------------------------- the mainstream extensions, 2026-08-23 -- */
+  /*
+   * Twelve of the rows added in the widening round are closed products with no
+   * repository to fetch from, so their marks come from the vendor's own site or
+   * from the Chrome Web Store listing the row already links to — which is the
+   * vendor's own uploaded artwork, at the size the store draws it.
+   *
+   * Google's product marks come from `gstatic.com/images/branding`, which is the
+   * path Google's own properties draw them from. Translate is the one raster in
+   * that group: its SVG is 22 KB of gradients before encoding, which is most of
+   * this whole file's budget for one row, and the 96px PNG beside it is the same
+   * drawing at a twentieth of the weight.
+   */
+  'google-translate': { url: 'https://www.gstatic.com/images/branding/product/2x/translate_48dp.png' },
+  'google-docs': { url: 'https://www.gstatic.com/images/branding/productlogos/docs_2020q4/v12/192px.svg' },
+  'google-keep': { url: 'https://www.gstatic.com/images/branding/productlogos/keep_2020q4/v8/192px.svg' },
+  'google-drive': { url: 'https://www.gstatic.com/images/branding/productlogos/drive_2020q4/v10/192px.svg' },
+  'grammarly': { url: 'https://lh3.googleusercontent.com/Ywdz5mn9q2Mx76DU45LSH-Pv5OGpqk8QAOY3lT1AWScMTZYQtAhqhVjtY5I2JZK530QIycLZooe2a0k3quGqYUaZ=s128' },
+  'lastpass': { url: 'https://lh3.googleusercontent.com/2E-kdWD96KmPMAR7_XC6d_zWHio7n7skW8-9S5R42ZQvTX-djSt-qbwhuiM5znQ5Iqj9SWuP4fqfycgt_OD9aLWh=s128' },
+  'todoist': { url: 'https://todoist.com/apple-touch-icon.png' },
+  'honey': { url: 'https://www.joinhoney.com/apple-touch-icon.png' },
+  'onepassword': { url: 'https://1password.com/apple-touch-icon.png' },
+  'loom': { url: 'https://cdn.loom.com/assets/favicons-loom/android-chrome-192x192.png' },
+  'momentum': { url: 'https://momentumdash.com/img/logo.svg' },
 
   /* -------------------------------------------------- MCP servers -- */
-  { key: 'modelcontextprotocol', url: 'https://raw.githubusercontent.com/modelcontextprotocol/modelcontextprotocol/5b38eb170281b43f4683c764c0bb2d3ed7d95cd9/docs/favicon.svg' },
-  { key: 'git', url: 'https://git-scm.com/images/logos/downloads/Git-Icon-1788C.svg' },
-  { key: 'playwright', url: 'https://playwright.dev/img/playwright-logo.svg' },
-  { key: 'github', url: 'https://raw.githubusercontent.com/primer/octicons/0e21a4c2d8449102f10e533d241f04797af0914c/icons/mark-github-24.svg', plate: true },
-  { key: 'notion', url: 'https://www.notion.so/images/logo-ios.png' },
-  { key: 'context7', url: 'https://raw.githubusercontent.com/upstash/context7/c3248289c2ad431a9f34849a3f3d047fc4400373/public/context7-icon.svg' },
-  { key: 'tavily', url: 'https://tavily.com/icon.svg' },
-  { key: 'firecrawl', url: 'https://raw.githubusercontent.com/firecrawl/firecrawl-mcp-server/678c92a430849b8be90e70f3c0607ac1c8b0bee8/img/firecrawl-logo.png' },
-  { key: 'sqlite', url: 'https://upload.wikimedia.org/wikipedia/commons/3/38/SQLite370.svg', plate: true },
-  { key: 'postgres', url: 'https://wiki.postgresql.org/images/a/a4/PostgreSQL_logo.3colors.svg' },
-  { key: 'slack', url: 'https://a.slack-edge.com/80588/marketing/img/icons/icon_slack_hash_colored.png' },
-  { key: 'brave', url: 'https://brave.com/static-assets/images/brave-logo-sans-text.svg' },
-  { key: 'puppeteer', url: 'https://user-images.githubusercontent.com/10379601/29446482-04f7036a-841f-11e7-9872-91d1fc2ea683.png', plate: true },
-]
+  'modelcontextprotocol': { url: 'https://raw.githubusercontent.com/modelcontextprotocol/modelcontextprotocol/5b38eb170281b43f4683c764c0bb2d3ed7d95cd9/docs/favicon.svg' },
+  'git': { url: 'https://git-scm.com/images/logos/downloads/Git-Icon-1788C.svg' },
+  'playwright': { url: 'https://playwright.dev/img/playwright-logo.svg' },
+  'github': { url: 'https://raw.githubusercontent.com/primer/octicons/0e21a4c2d8449102f10e533d241f04797af0914c/icons/mark-github-24.svg', plate: true },
+  'notion': { url: 'https://www.notion.so/images/logo-ios.png' },
+  'context7': { url: 'https://raw.githubusercontent.com/upstash/context7/c3248289c2ad431a9f34849a3f3d047fc4400373/public/context7-icon.svg' },
+  'tavily': { url: 'https://tavily.com/icon.svg' },
+  'firecrawl': { url: 'https://raw.githubusercontent.com/firecrawl/firecrawl-mcp-server/678c92a430849b8be90e70f3c0607ac1c8b0bee8/img/firecrawl-logo.png' },
+  'sqlite': { url: 'https://upload.wikimedia.org/wikipedia/commons/3/38/SQLite370.svg', plate: true },
+  'postgres': { url: 'https://wiki.postgresql.org/images/a/a4/PostgreSQL_logo.3colors.svg' },
+  'slack': { url: 'https://a.slack-edge.com/80588/marketing/img/icons/icon_slack_hash_colored.png' },
+  'brave': { url: 'https://brave.com/static-assets/images/brave-logo-sans-text.svg' },
+  'puppeteer': { url: 'https://user-images.githubusercontent.com/10379601/29446482-04f7036a-841f-11e7-9872-91d1fc2ea683.png', plate: true },
+
+  /* ------------------------------------ the widened servers, 2026-08-23 -- */
+  /*
+   * Twenty-one servers were added the same day, and where the vendor publishes
+   * its own MCP server the mark comes out of that repository at a pinned commit
+   * — Microsoft's Azure icon, MongoDB's, Exa's, Apify's, Sentry's, Cloudflare's,
+   * Supabase's. Where the server is somebody else's work about a vendor's
+   * product, the mark still has to be the vendor's, so it comes from the
+   * vendor's own site or icon set: BigQuery's is out of Google's own Cloud icon
+   * set, and Chrome DevTools wears Chrome's mark because that is what it is part
+   * of and what its own repository is named after.
+   *
+   * `google-workspace` has no entry, deliberately: Google publishes no Workspace
+   * mark at a fetchable address the way it does for Docs, Drive and Keep, and
+   * the four-colour Google "G" would identify Google rather than Workspace. That
+   * row draws the monogram, and the script prints it every run.
+   */
+  'chrome': { url: 'https://www.gstatic.com/images/branding/productlogos/chrome/v7/192px.svg' },
+  'google-analytics': { url: 'https://www.gstatic.com/images/branding/productlogos/google_analytics/v6/192px.svg' },
+  'google-maps': { url: 'https://www.gstatic.com/images/branding/productlogos/maps/v7/192px.svg' },
+  'bigquery': { url: 'https://raw.githubusercontent.com/GoogleCloudPlatform/developer-journey-app/40022867d109b77364ca79ba72436a0c328baabe/public/google-cloud-icons/bigquery.svg' },
+  'azure': { url: 'https://raw.githubusercontent.com/microsoft/mcp/557fca14350b3e3ca8dc503fb149e092bb12d2d9/servers/Azure.Mcp.Server/images/azureicon.png' },
+  'sentry': { url: 'https://raw.githubusercontent.com/getsentry/sentry/9cca6d24b06f58bfccbda225aa543a6fd5319f59/src/sentry/static/sentry/images/favicon.png' },
+  'cloudflare': { url: 'https://raw.githubusercontent.com/cloudflare/cloudflare-docs/7a81a0f7aefc6160686b74652cfe54724a5e75a9/public/favicon.png' },
+  'supabase': { url: 'https://raw.githubusercontent.com/supabase/supabase/a18253f7c7d3a967bf91599c9dcf8ae704b7d686/apps/studio/public/supabase-logo.svg' },
+  'mongodb': { url: 'https://raw.githubusercontent.com/mongodb-js/mongodb-mcp-server/36a405e33817577f0c5a34d6d9479c0285fac5e4/packages/mongodb-mcp-server/packaging/mcpb/icon.png' },
+  'exa': { url: 'https://raw.githubusercontent.com/exa-labs/exa-mcp-server/15ffb50519e719dc791cdc750ce5ed1934c0a1ed/assets/Exa.svg', plate: true },
+  'apify': { url: 'https://raw.githubusercontent.com/apify/apify-mcp-server/91ee491b7337575f8ba747ad7b39d64815659d4c/docs/apify-logo.svg' },
+  'stripe': { url: 'https://images.stripeassets.com/fzn2n1nzq965/1hgcBNd12BfT9VLgbId7By/01d91920114b124fb4cf6d448f9f06eb/favicon.svg' },
+  'hubspot': { url: 'https://www.hubspot.com/hubfs/HubSpot_Logos/HubSpot-Inversed-Favicon.png' },
+  'airtable': { url: 'https://www.airtable.com/images/favicon/favicon-96x96.png' },
+  'figma': { url: 'https://static.figma.com/app/icon/2/icon-192.png' },
+  'atlassian': { url: 'https://www.atlassian.com/apple-touch-icon.png' },
+  'linear': { url: 'https://linear.app/static/favicon.svg' },
+  'perplexity': { url: 'https://www.perplexity.ai/apple-touch-icon.png' },
+}
+
+/* ------------------------------------------------------- the work list -- */
+
+/**
+ * Every catalogue row, as `{ store, id, logo }`.
+ *
+ * Imported rather than parsed: Node strips the types itself, the two catalogues
+ * import nothing but types, and a regex over somebody else's source is a second
+ * parser to be wrong in its own way. If this throws, the Node running it is
+ * older than 22.6.
+ */
+async function catalogueRows() {
+  const at = (file) => new URL(`../src/main/${file}`, import.meta.url).href
+  let browser
+  let mcp
+  try {
+    ;[browser, mcp] = await Promise.all([
+      import(at('browser-extension-catalogue.ts')),
+      import(at('mcp-catalogue.ts')),
+    ])
+  } catch (error) {
+    console.error(
+      `could not read the catalogues (${error instanceof Error ? error.message : String(error)}).\n` +
+        `This script reads them as TypeScript, which needs Node 22.6 or later; this is ${process.version}.`,
+    )
+    process.exit(1)
+  }
+  return [
+    ...browser.BROWSER_EXTENSION_CATALOGUE.map((row) => ({ store: 'browser', id: row.id, logo: row.logo })),
+    ...mcp.MCP_CATALOGUE.map((row) => ({ store: 'mcp', id: row.id, logo: row.logo })),
+  ]
+}
+
+/**
+ * What the catalogues ask for, against what {@link marks} can supply.
+ *
+ * Four answers, and each one is a different thing to do about it:
+ *
+ *   - `wanted` — keys a row names and this file has a source for, in the order
+ *     the store first mentions them. This is what gets fetched.
+ *   - `unsourced` — keys a row names and this file cannot supply. A refusal:
+ *     the row would ship a broken name and draw the monogram anyway.
+ *   - `spare` — sources no row names. Also a refusal, because the bytes would be
+ *     in the bundle for nobody, and `store-logos.test.ts` fails on them.
+ *   - `bare` — rows with no `logo` at all. Legitimate, and printed rather than
+ *     enforced: `logo` is optional on both catalogue types by design.
+ */
+function reconcile(rows) {
+  const wanted = []
+  const unsourced = []
+  const bare = []
+  const seen = new Set()
+  for (const row of rows) {
+    if (row.logo === undefined || row.logo === '') {
+      bare.push(`${row.store}/${row.id}`)
+      continue
+    }
+    if (!Object.hasOwn(marks, row.logo)) {
+      unsourced.push(`${row.store}/${row.id} names '${row.logo}'`)
+      continue
+    }
+    if (seen.has(row.logo)) continue
+    seen.add(row.logo)
+    wanted.push({ key: row.logo, ...marks[row.logo] })
+  }
+  const spare = Object.keys(marks).filter((key) => !seen.has(key))
+  return { wanted, unsourced, spare, bare }
+}
 
 /* ------------------------------------------------------------ fetching -- */
 
@@ -262,11 +445,21 @@ const HEADER = `/**
  *
  * Because \`<img src="https://vendor.example/logo.svg">\` is a request to a third
  * party every single time the store is opened — an IP address and a referrer
- * handed to twenty companies for the privilege of drawing a picture — and
+ * handed to fifty companies for the privilege of drawing a picture — and
  * because it draws nothing on an aeroplane. Neither belongs in a store whose
  * whole argument is that what it offers was pinned in advance. Each mark was
  * fetched once, by hand, and what ships is the result: the store reads these out
  * of its own bundle and asks nobody anything.
+ *
+ * ## Which marks are in here
+ *
+ * Exactly the ones the two catalogues ask for. The script reads
+ * \`browser-extension-catalogue.ts\` and \`mcp-catalogue.ts\`, collects every
+ * \`logo\` key any row names, and fetches those and nothing else — so this file
+ * cannot drift from the store in either direction, and a row added tomorrow
+ * makes the script ask for its mark rather than quietly shipping a broken name.
+ * A row is still allowed to name no mark at all and draw the monogram in
+ * \`StoreLogo.tsx\`; the script prints those rows every run.
  *
  * ## What each entry can be checked against
  *
@@ -303,8 +496,8 @@ export interface StoreLogoAsset {
    * Whether this mark needs a light tile behind it.
    *
    * True only for a mark its vendor drew in one dark ink for a light page —
-   * GitHub's Invertocat, Context7's wordmark. Without it they are invisible in
-   * the dark theme. The tile is a background; the mark itself is untouched.
+   * GitHub's Invertocat, Exa's square. Without it they are invisible in the dark
+   * theme. The tile is a background; the mark itself is untouched.
    */
   readonly plate: boolean
 }
@@ -316,12 +509,42 @@ async function main() {
   const onlyAt = argv.indexOf('--only')
   const only = onlyAt === -1 ? '' : argv[onlyAt + 1]
   const today = new Date().toISOString().slice(0, 10)
-  const wanted = only === '' ? LOGOS : LOGOS.filter((one) => one.key === only)
+
+  const rows = await catalogueRows()
+  const { wanted, unsourced, spare, bare } = reconcile(rows)
+  console.log(`  ${rows.length} catalogue rows, ${wanted.length} marks between them`)
+  if (bare.length > 0) console.log(`  no mark (the monogram draws these): ${bare.join(', ')}`)
+
+  /* Refused before a single byte is fetched, because neither of these is
+     something a successful run should be able to hide. */
+  if (unsourced.length > 0) {
+    console.error(
+      `\nrefusing to write: ${unsourced.length} row(s) name a mark this script has no source for.\n` +
+        unsourced.map((one) => `  ${one}`).join('\n') +
+        `\n\nAdd each key to \`marks\` in this file with the URL of the vendor's own mark, or drop\n` +
+        `the row's \`logo\` field and let it draw the monogram.`,
+    )
+    process.exit(1)
+  }
+  if (spare.length > 0) {
+    console.error(
+      `\nrefusing to write: ${spare.length} source(s) here that no catalogue row asks for:\n` +
+        spare.map((one) => `  ${one}`).join('\n') +
+        `\n\nEither a row should name it, or it should come out of \`marks\`.`,
+    )
+    process.exit(1)
+  }
+
+  const list = only === '' ? wanted : wanted.filter((one) => one.key === only)
+  if (only !== '' && list.length === 0) {
+    console.error(`\nno mark called '${only}'`)
+    process.exit(1)
+  }
 
   const out = []
   const problems = []
   let total = 0
-  for (const logo of wanted) {
+  for (const logo of list) {
     try {
       const raw = await get(logo.url)
       const sha256 = createHash('sha256').update(raw).digest('hex')
@@ -339,7 +562,7 @@ async function main() {
     }
   }
 
-  console.log(`\n  ${out.length}/${wanted.length} marks, ${total.toLocaleString('en-US')} bytes encoded in total`)
+  console.log(`\n  ${out.length}/${list.length} marks, ${total.toLocaleString('en-US')} bytes encoded in total`)
 
   if (check) {
     const current = new URL('../src/renderer/store/logo-data.ts', import.meta.url)

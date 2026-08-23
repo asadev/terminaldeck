@@ -19,29 +19,75 @@ import { STORE_LOGO_ASSETS } from '../renderer/store/logo-data'
  * the two renderer files it already lists. Nothing in `src/main` imports it, so
  * none of those bytes reach the main bundle; this file is where the two halves
  * of one feature are held to each other.
+ *
+ * ## Why this is no longer the only thing holding them together
+ *
+ * It used to be, and it went red the first time the store was widened. The fetch
+ * script carried its own hardcoded list of thirty-seven marks and never read the
+ * catalogues; a lane added thirty-three rows, correctly, and thirty-three keys
+ * resolved to nothing. Nobody had made a mistake — there was simply no point at
+ * which the two halves were compared until this file ran.
+ *
+ * `scripts/store-logos.mjs` now derives its work list from these same two
+ * catalogues and refuses to write when a row names a key it has no source for,
+ * so the failure arrives while somebody is adding the row rather than after.
+ * This file stays as the check on what actually **shipped**: the script proves
+ * the intent, and the generated module is what the app draws from.
  */
 
-/** Both catalogues as `{ id, logo }`, so one loop covers all forty-two rows. */
+/** Both catalogues as `{ id, logo }`, so one loop covers every row. */
 const ROWS: readonly { id: string; logo: string | undefined; store: string }[] = [
   ...BROWSER_EXTENSION_CATALOGUE.map((one) => ({ id: one.id, logo: one.logo, store: 'browser' })),
   ...MCP_CATALOGUE.map((one) => ({ id: one.id, logo: one.logo, store: 'mcp' })),
 ]
+
+/**
+ * The rows that deliberately have no mark, and why each one has none.
+ *
+ * `logo` is optional on both catalogue types on purpose — a row draws the
+ * monogram in `StoreLogo.tsx` rather than nothing, and requiring a picture would
+ * mean the only way to add a row was to have the network. But "optional" and
+ * "forgotten" look identical from here, so the exceptions are named: a row that
+ * loses the mark it had fails, and a new row without one is a line somebody
+ * wrote on purpose with a reason beside it.
+ */
+const NO_MARK = new Map<string, string>([
+  [
+    'mcp/google-workspace',
+    'Google publishes no Workspace mark at a fetchable address the way it does for Docs, Drive ' +
+      'and Keep, and the four-colour Google “G” identifies Google rather than Workspace.',
+  ],
+])
 
 describe('every catalogue row has a mark, and every mark has a row', () => {
   it('is the two catalogues this store was looked at with', () => {
     /* Not a magic number for its own sake: a change to either count should be
        something somebody did on purpose, not something they find out from a
        screenshot with a monogram in it. */
-    expect(BROWSER_EXTENSION_CATALOGUE.length).toBe(24)
-    expect(MCP_CATALOGUE.length).toBe(18)
+    expect(BROWSER_EXTENSION_CATALOGUE.length).toBe(36)
+    expect(MCP_CATALOGUE.length).toBe(39)
   })
 
   for (const row of ROWS) {
-    it(`${row.store}/${row.id} names a mark that is in the module`, () => {
+    const named = `${row.store}/${row.id}`
+    if (NO_MARK.has(named)) {
+      it(`${named} draws the monogram, on purpose`, () => {
+        expect(row.logo).toBeUndefined()
+      })
+      continue
+    }
+    it(`${named} names a mark that is in the module`, () => {
       expect(row.logo).toBeTruthy()
       expect(Object.keys(STORE_LOGO_ASSETS)).toContain(row.logo)
     })
   }
+
+  it('keeps the no-mark list to rows that exist', () => {
+    /* The half of an exception list that rots: a row is renamed or dropped, and
+       its excuse stays behind as precedent for the next person. */
+    const real = new Set(ROWS.map((row) => `${row.store}/${row.id}`))
+    expect([...NO_MARK.keys()].filter((named) => !real.has(named))).toEqual([])
+  })
 
   it('ships no mark that no row asks for', () => {
     const asked = new Set(ROWS.map((row) => row.logo))
@@ -64,5 +110,17 @@ describe('every catalogue row has a mark, and every mark has a row', () => {
       'fetch',
       'time',
     ])
+  })
+
+  it('lets a mark stand for more than one row where the product is the same', () => {
+    /* The other shared keys, pinned for the same reason as the six above: each
+       is one product wearing its own mark on two rows, not a mark borrowed to
+       fill a gap. Drive is an extension and a server; Notion is Notion and its
+       clipper; Postgres is the reference server and the community one. */
+    const rowsFor = (logo: string): string[] =>
+      ROWS.filter((row) => row.logo === logo).map((row) => `${row.store}/${row.id}`)
+    expect(rowsFor('google-drive')).toEqual(['browser/save-to-google-drive', 'mcp/google-drive'])
+    expect(rowsFor('notion')).toEqual(['browser/notion-web-clipper', 'mcp/notion'])
+    expect(rowsFor('postgres')).toEqual(['mcp/postgres-mcp', 'mcp/postgres'])
   })
 })

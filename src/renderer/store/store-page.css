@@ -292,45 +292,15 @@
   border-radius: var(--radius-sm);
 }
 
-.store-logo {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: none;
-  width: 1.75rem;
-  height: 1.75rem;
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-}
-
-.store-logo[data-size='lg'] {
-  width: 3.5rem;
-  height: 3.5rem;
-  border-radius: var(--radius-md);
-}
-
-.store-logo img,
-.store-logo svg {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-}
-
-/* The monogram. A tint of the surface rather than a saturated square: twenty of
-   these sit in one column, and twenty saturated squares is a toy. The hue is
-   computed from the name in `StoreLogo.tsx` so a tool keeps its colour
-   everywhere it appears. */
-.store-logo-monogram {
-  background: hsl(var(--store-logo-hue, 0) 45% 50% / 0.16);
-  color: var(--text-primary);
-  font-size: var(--t-footnote);
-  font-weight: 600;
-  letter-spacing: 0.02em;
-}
-
-.store-logo-monogram[data-size='lg'] {
-  font-size: var(--t-title2);
-}
+/* There is no `.store-logo` rule here any more, and that is the fix rather than
+   the omission. This file used to carry a whole tile — 1.75rem, a `data-size`
+   variant, and a monogram tinted with `hsl(var(--store-logo-hue) …)` — from the
+   version of the store where the mark was drawn by this page. The mark is now
+   `StoreLogo.tsx`, which brings `StoreLogo.css` with it and writes `.storelogo`;
+   nothing has rendered `.store-logo` since. The rules were dead, and the dead
+   monogram was the only reader of `--store-logo-hue`, a property no code had
+   published since the hue was replaced by the four `--bind-*` fills. `phantom-
+   tokens.test.ts` is what noticed. */
 
 /* ---------------------------------------------------------------- detail -- */
 
@@ -370,13 +340,18 @@
    tile, which is `StoreLogo.tsx`, and the name, which `StoreRowName.tsx` puts on
    screen. Nothing reaches into what a department's row *says*.
 */
-.store-detail .store-logo {
+.store-detail .storelogo {
   width: 3rem;
   height: 3rem;
   border-radius: var(--radius-md);
 }
 
-.store-detail .store-logo-monogram {
+.store-detail .storelogo img {
+  width: 2.25rem;
+  height: 2.25rem;
+}
+
+.store-detail .storelogo-monogram {
   font-size: var(--t-title3);
 }
 
