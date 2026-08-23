@@ -1,15 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
   EXTENSION_FACETS,
-  canAct,
   extensionActionLabel,
   extensionActionVerb,
   extensionCompat,
   extensionFacets,
   extensionSource,
   extensionsAvailable,
-  linkOut,
-  linkOutLabel,
   reachWords,
   readExtensionResult,
   readExtensionsView,
@@ -31,7 +28,6 @@ function row(over: Partial<StoreExtension> = {}): StoreExtension {
     cost: 'free',
     costNote: '',
     works: 'works',
-    noRelease: '',
     logo: '',
     measured: 'Watched working.',
     url: '',
@@ -190,15 +186,16 @@ describe('the button', () => {
     }
   })
 
-  it('is not drawn at all for something this app measured failing', () => {
+  it('is drawn on every row, because every row is one this browser installs', () => {
     /*
-     * Not disabled either: a disabled Install with a tooltip is still a store
-     * offering something. An `unavailable` row has no download pinned, so the
-     * button could only ever refuse.
+     * This replaces a test for `canAct`, which answered false for a row this app
+     * watched failing. There is no such row any more — `CatalogueEntry` refuses
+     * to hold one — so the function had one answer left and went. What is worth
+     * keeping is the pair of labels, which is what the button actually says.
      */
-    expect(canAct(row({ state: 'unavailable', works: 'no' }))).toBe(false)
-    expect(canAct(row({ state: 'available' }))).toBe(true)
-    expect(canAct(row({ state: 'installed' }))).toBe(true)
+    expect(extensionActionLabel(row({ state: 'available' }), false)).toBe('Install')
+    expect(extensionActionLabel(row({ state: 'installed' }), false)).toBe('Remove')
+    expect(extensionActionVerb(row({ state: 'damaged' }))).toBe('remove')
   })
 })
 
@@ -211,17 +208,25 @@ describe('the storefront projection', () => {
      * "Works here" that returned it would be making the claim the row refuses.
      */
     expect(extensionCompat(row({ works: 'partly' }))).toBe('unknown')
+    // `unmeasured` still arrives — it is what a sideloaded folder carries.
     expect(extensionCompat(row({ works: 'unmeasured' }))).toBe('unknown')
     expect(extensionCompat(row({ works: 'works' }))).toBe('works')
+    /*
+     * And `cannot` still has a reading, though no catalogue row can be it any
+     * more. This is a wire narrowing: an older main process, or a caller that
+     * sends something else entirely, must land somewhere defined rather than on
+     * `works`.
+     */
     expect(extensionCompat(row({ works: 'no' }))).toBe('cannot')
   })
 
   it('derives where a row comes from rather than carrying a new field for it', () => {
-    // All three answers are already facts on the row: a `noRelease` sentence is
-    // a project that publishes through a browser web store, a sideloaded row
-    // came off this machine, and everything else has releases of its own.
+    /*
+     * Two answers now, where there were three. `web-store` went with the rows
+     * that were it: a project publishing through the Chrome Web Store and
+     * nowhere this app can fetch from is not something the catalogue can hold.
+     */
     expect(extensionSource(row())).toBe('release')
-    expect(extensionSource(row({ noRelease: 'Chrome Web Store only.' }))).toBe('web-store')
     expect(extensionSource(row({ sideloaded: true }))).toBe('your-own')
   })
 
@@ -249,42 +254,14 @@ describe('the storefront projection', () => {
   })
 })
 
-describe('the link out', () => {
-  it('is offered only where there is no Install, so no row carries both', () => {
-    const project = 'https://github.com/example/thing'
-    expect(linkOut(row({ homepage: project, state: 'available' }))).toBe('')
-    expect(linkOut(row({ homepage: project, state: 'installed' }))).toBe('')
-    expect(linkOut(row({ homepage: project, state: 'unavailable', works: 'no' }))).toBe(project)
-    expect(linkOut(row({ homepage: project, state: 'not-offered', works: 'unmeasured' }))).toBe(
-      project,
-    )
-  })
-
-  it('is not offered for something a person added themselves', () => {
-    // A folder on this machine has no project page, and `homepage` on such a row
-    // is empty by construction. A button to nowhere is the dead control this
-    // whole store is written against.
-    expect(
-      linkOut(row({ state: 'not-offered', sideloaded: true, homepage: 'https://example.com' })),
-    ).toBe('')
-  })
-
-  it('refuses anything that is not an http address', () => {
-    expect(linkOut(row({ state: 'unavailable', homepage: 'file:///etc/passwd' }))).toBe('')
-    expect(linkOut(row({ state: 'unavailable', homepage: '' }))).toBe('')
-  })
-
-  it('says Open project for a row measured failing and Get it for one with no release', () => {
-    /*
-     * *Get it* on a row this app watched fail here would be a small lie — you
-     * cannot get it here, and the sentence underneath says why. On a row whose
-     * project simply publishes somewhere this app cannot fetch from, the
-     * destination really is where you get it.
-     */
-    expect(linkOutLabel(row({ state: 'unavailable' }))).toBe('Open project')
-    expect(linkOutLabel(row({ state: 'not-offered' }))).toBe('Get it')
-  })
-})
+/*
+ * `describe('the link out')` used to be here — four tests over `linkOut` and
+ * `linkOutLabel`, checking that a row with no Install offered **Get it** or
+ * **Open project** instead. Both functions are gone, and so is the reason for
+ * them: no row in this store lacks an Install, and the destination those
+ * buttons opened was, for most of them, the Chrome Web Store. See
+ * `extensions-bridge.ts` where they used to live.
+ */
 
 describe('price on an extension row', () => {
   it('travels as its own facet, because every extension is a free download', () => {

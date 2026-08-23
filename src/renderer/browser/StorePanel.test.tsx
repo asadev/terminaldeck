@@ -57,7 +57,6 @@ function extension(over: Partial<StoreExtension> = {}): StoreExtension {
     cost: 'free',
     costNote: '',
     works: 'works',
-    noRelease: '',
     logo: '',
     measured: 'Watched working.',
     url: 'https://github.com/darkreader/releases/a.zip',
@@ -163,72 +162,29 @@ describe('one screen, both halves, the seam in words', () => {
 })
 
 describe('the honesty that must not regress', () => {
-  it('a measured-failing extension keeps its section and gets no button', () => {
+  it('draws an Install on every catalogue row, because that is all it holds now', () => {
+    /*
+     * Two tests used to be here and both described rows this store no longer
+     * has: one watched failing, drawn with a *Cannot work here* chip and no
+     * button, and one nothing was measured on, drawn with *Nothing measured* and
+     * a **Get it**. Asad, on what the second one adds up to in practice: *"They
+     * click Get and it takes them to the Chrome store … we should not offer
+     * tools that don't work with our architecture."*
+     *
+     * So what is pinned instead is the rule that replaced them. A row is on its
+     * shelf, and it has something to press.
+     */
     const markup = render({
       toolsWired: false,
       canAddFolder: false,
       canAddCrx: false,
-      ext: {
-        ...EXT,
-        extensions: [
-          extension({
-            id: 'broken',
-            name: 'Broken Thing',
-            works: 'no',
-            state: 'unavailable',
-            url: '',
-            sha256: '',
-            bytes: 0,
-            measured: 'It loads, and then blocks nothing.',
-          }),
-        ],
-      },
+      ext: { ...EXT, extensions: [extension()] },
     })
-    expect(markup).toContain('Cannot work here')
-    expect(markup).toContain('It loads, and then blocks nothing.')
-    /*
-     * It keeps its place on the shelf it belongs to rather than being swept
-     * into a bin at the bottom, and it carries no button. The screen used to
-     * put every such row under one heading; a store that browses by category
-     * has to say it on the row instead, which is why the chip above is the
-     * thing asserted and why the row must still have nothing to press.
-     */
     expect(markup).toContain('How pages look')
-    expect(markup).not.toContain('>Install<')
-  })
-
-  it('a row nothing was measured on says so, and says why there is no download', () => {
-    /*
-     * The third answer to *where is Vimium*. It has to be visibly different
-     * from the row above it — that one was run and watched failing, this one
-     * was never run — or a person reads a measurement into a silence.
-     */
-    const markup = render({
-      toolsWired: false,
-      canAddFolder: false,
-      canAddCrx: false,
-      ext: {
-        ...EXT,
-        extensions: [
-          extension({
-            id: 'vimium',
-            name: 'Vimium',
-            works: 'unmeasured',
-            state: 'not-offered',
-            url: '',
-            sha256: '',
-            bytes: 0,
-            version: '',
-            measured: 'Nothing was measured.',
-            noRelease: 'Its project publishes no release this app could fetch and fingerprint.',
-          }),
-        ],
-      },
-    })
-    expect(markup).toContain('Nothing measured')
-    expect(markup).toContain('Its project publishes no release this app could fetch')
+    expect(markup).toContain('>Install<')
     expect(markup).not.toContain('Cannot work here')
-    expect(markup).not.toContain('>Install<')
+    expect(markup).not.toContain('Nothing measured')
+    expect(markup).not.toContain('Get it')
   })
 
   it('offers both doors for adding your own, and says what is not checked', () => {
@@ -278,54 +234,30 @@ describe('the honesty that must not regress', () => {
     expect(markup).not.toContain('Dark Reader')
   })
 
-  it('filters on what cannot work here, and the row still says why', () => {
-    const ghostery = extension({
-      id: 'ghostery',
-      name: 'Ghostery',
-      summary: 'Blocks ads and trackers.',
-      category: 'blocking',
-      works: 'no',
-      state: 'unavailable',
-      url: '',
-      sha256: '',
-      bytes: 0,
-      homepage: 'https://github.com/ghostery/ghostery-extension',
-      measured: 'Watched failing: it reaches for chrome.cookies, which is not here.',
+  it('sorts the two verdicts it still has, and never claims the weaker one works', () => {
+    /*
+     * This replaces a pair of tests over rows the catalogue can no longer hold —
+     * one filtered to *Cannot work here*, one asserted that a row with no
+     * Install carried a **Get it** link. Both states are gone. What survives is
+     * the distinction that still matters on a shelf: a row watched doing its job
+     * and a row that only started, which the compat facet reads as `works` and
+     * `unknown`.
+     */
+    const stylus = extension({
+      id: 'stylus',
+      name: 'Stylus',
+      summary: 'Write your own CSS for any site.',
+      category: 'scripting',
+      works: 'partly',
+      measured: 'Loads. It was not watched applying a style.',
     })
     const markup = render({
-      ext: { ...EXT, extensions: [extension(), ghostery] },
-      filter: withFacet(NO_FILTER, 'compat', 'cannot'),
+      ext: { ...EXT, extensions: [extension(), stylus] },
+      filter: withFacet(NO_FILTER, 'compat', 'unknown'),
     })
-    expect(markup).toContain('Ghostery')
+    expect(markup).toContain('Stylus')
     expect(markup).not.toContain('Dark Reader')
-    expect(markup).toContain('Cannot work here')
-  })
-
-  it('a row with no Install carries a link out rather than nothing at all', () => {
-    /*
-     * *"or maybe only link of the application from github or wherever they can
-     * go and download it, it will just redirect them and they can install if not
-     * possible to bring button to install."* The refusal to draw an Install that
-     * cannot work is kept; the dead end is not.
-     */
-    const vimium = extension({
-      id: 'vimium',
-      name: 'Vimium',
-      summary: 'Drives the browser from the keyboard.',
-      category: 'scripting',
-      works: 'unmeasured',
-      state: 'not-offered',
-      url: '',
-      sha256: '',
-      bytes: 0,
-      version: '',
-      homepage: 'https://github.com/philc/vimium',
-      noRelease: 'Its project publishes through the Chrome Web Store.',
-      measured: '',
-    })
-    const markup = render({ ext: { ...EXT, extensions: [vimium] } })
-    expect(markup).toContain('Get it')
-    expect(markup).toContain('https://github.com/philc/vimium')
+    expect(markup).toContain('not watched applying a style')
   })
 
   it('draws a facet only when it has more than one live option', () => {
@@ -339,13 +271,18 @@ describe('the honesty that must not regress', () => {
     expect(one).not.toContain('Where it comes from')
     expect(one).not.toContain('In this browser')
 
+    /*
+     * Two live options is what it takes, and *Where it comes from* gets its
+     * second one from a folder somebody added rather than from a second kind of
+     * catalogue row — there is only one kind now.
+     */
     const many = render({
       ext: {
         ...EXT,
         extensions: [
           extension(),
-          extension({ id: 'vimium', name: 'Vimium', category: 'scripting', noRelease: 'x',
-            works: 'unmeasured', state: 'not-offered', url: '', sha256: '', bytes: 0 }),
+          extension({ id: 'mine', name: 'Mine', category: 'your-own', sideloaded: true,
+            works: 'unmeasured', url: '', sha256: '', bytes: 0 }),
         ],
       },
     })

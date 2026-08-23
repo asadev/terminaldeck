@@ -64,7 +64,11 @@ describe('every catalogue row has a mark, and every mark has a row', () => {
     /* Not a magic number for its own sake: a change to either count should be
        something somebody did on purpose, not something they find out from a
        screenshot with a monogram in it. */
-    expect(BROWSER_EXTENSION_CATALOGUE.length).toBe(36)
+    /* Twelve, down from thirty-six on 2026-08-23: the browser catalogue now
+       holds only what installs in this browser and was watched running here.
+       Twenty-two marks came out of `logo-data.ts` with those rows — see
+       `browser-extension-catalogue.ts` for which rows went and why. */
+    expect(BROWSER_EXTENSION_CATALOGUE.length).toBe(12)
     expect(MCP_CATALOGUE.length).toBe(39)
   })
 
@@ -113,14 +117,19 @@ describe('every catalogue row has a mark, and every mark has a row', () => {
   })
 
   it('lets a mark stand for more than one row where the product is the same', () => {
-    /* The other shared keys, pinned for the same reason as the six above: each
-       is one product wearing its own mark on two rows, not a mark borrowed to
-       fill a gap. Drive is an extension and a server; Notion is Notion and its
-       clipper; Postgres is the reference server and the community one. */
+    /* Pinned for the same reason as the six above: each is one product wearing
+       its own mark on more than one row, not a mark borrowed to fill a gap.
+       Postgres is the reference server and the community one.
+
+       Two of these used to be pairs across the two stores — Drive was an
+       extension and a server, Notion was Notion and its clipper — and both
+       extensions were Chrome Web Store links that could not be installed here,
+       so both are gone. What is checked now is that neither mark is left
+       standing for a row that no longer exists. */
     const rowsFor = (logo: string): string[] =>
       ROWS.filter((row) => row.logo === logo).map((row) => `${row.store}/${row.id}`)
-    expect(rowsFor('google-drive')).toEqual(['browser/save-to-google-drive', 'mcp/google-drive'])
-    expect(rowsFor('notion')).toEqual(['browser/notion-web-clipper', 'mcp/notion'])
+    expect(rowsFor('google-drive')).toEqual(['mcp/google-drive'])
+    expect(rowsFor('notion')).toEqual(['mcp/notion'])
     expect(rowsFor('postgres')).toEqual(['mcp/postgres-mcp', 'mcp/postgres'])
   })
 })

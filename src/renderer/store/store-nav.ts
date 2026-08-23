@@ -65,7 +65,7 @@ export type StoreDepartmentId = 'extensions' | 'servers'
  * screenshot found immediately. `storefront.ts` says outright that a facet's
  * *id* is shared and the sentence it wears is not, because the two catalogues
  * genuinely know different things: an extension's source is `release` or
- * `web-store`, a server's is `reference` or `third-party`, and the two lists do
+ * `your-own`, a server's is `reference` or `third-party`, and the two lists do
  * not intersect. Pressing **The project's own releases** under Browser
  * extensions therefore set `source: 'release'` on a value the MCP department was
  * also reading, and emptied it — one department's chip silently blanking the

@@ -4,6 +4,8 @@ import {
   ELECTRON_MEASURED,
   EXTENSION_LIMITS,
   MISSING_APIS,
+  NEWEST_CHROMIUM_MEASURED,
+  NEWEST_ELECTRON_MEASURED,
   SUPPORTED_APIS,
   displayName,
   everywhere,
@@ -283,6 +285,34 @@ describe('the limits shown on screen', () => {
     expect(all).toContain('nothing updates itself')
     expect(all).toContain('chrome.storage.sync')
     expect(all).toContain('declarativenetrequest')
+  })
+
+  it('answers the version question with the build it was answered against', () => {
+    /*
+     * The question was *"either we should have the latest Chrome … and if the
+     * newer version gives that we go newer; otherwise we keep the version we
+     * have"*, and the honest answer turns out to be that it changes nothing.
+     * A limit that said only *this browser is Chromium 146* invites the opposite
+     * reading — that 150 would be better — so the newer build is named on screen
+     * beside the finding, or somebody has to take it on trust.
+     */
+    const all = EXTENSION_LIMITS.join(' ')
+    expect(all).toContain(NEWEST_ELECTRON_MEASURED)
+    expect(all).toContain(NEWEST_CHROMIUM_MEASURED)
+    expect(all.toLowerCase()).toContain('requires chromium version')
+  })
+
+  it('does not name a namespace as missing that this browser has', () => {
+    /*
+     * `idle` and `power` sat in MISSING_APIS and answer with their real methods
+     * on both builds — so the list on screen was naming two gaps that were not
+     * there, and `missingApis` would have printed the same thing on any row that
+     * asked for one. The check is the general shape of that mistake rather than
+     * those two names: nothing may be in both lists, in either direction.
+     */
+    for (const api of MISSING_APIS) expect(SUPPORTED_APIS).not.toContain(api)
+    expect(SUPPORTED_APIS).toContain('idle')
+    expect(SUPPORTED_APIS).toContain('power')
   })
 })
 

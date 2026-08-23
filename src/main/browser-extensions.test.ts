@@ -20,8 +20,8 @@ import {
   profileExtensionsRoot,
   safeProfileId,
   sideloadId,
+  type CatalogueEntry,
   type ExtensionCatalogue,
-  type ExtensionEntry,
 } from './browser-extensions'
 
 const PROFILE = 'default'
@@ -31,7 +31,7 @@ function digest(bytes: Buffer): string {
   return createHash('sha256').update(bytes).digest('hex')
 }
 
-function entryFor(id: string, archive: Buffer, over: Partial<ExtensionEntry> = {}): ExtensionEntry {
+function entryFor(id: string, archive: Buffer, over: Partial<CatalogueEntry> = {}): CatalogueEntry {
   return {
     id,
     name: 'Test Extension',
@@ -262,27 +262,21 @@ describe('installing', () => {
     expect(existsSync(join(root, 'browser-extensions', PROFILE, 'test'))).toBe(false)
   })
 
-  it('will not install an entry this app measured failing', async () => {
+  it('has no state for a row with nothing to install, because it cannot hold one', async () => {
     /*
-     * Reachable over IPC even though no button draws for it. The refusal repeats
-     * the measurement, so a caller that went round the screen gets exactly the
-     * sentence the screen would have given.
+     * This replaces a test that built a catalogue row with `source: null` and
+     * `works: 'no'` and asserted the store refused it. That row cannot be
+     * written any more — `CatalogueEntry` requires a source and forbids a
+     * refused verdict — so the refusal it checked has no caller and the two
+     * buttonless states are gone with it. What is worth pinning is the
+     * consequence: every row this store hands out is one somebody can act on.
      */
-    const store = storeWith(
-      [
-        {
-          ...entryFor('ublock-origin', Buffer.alloc(0)),
-          works: 'no',
-          measured: 'It loads, and then blocks nothing.',
-          source: null,
-        },
-      ],
-      null,
-    )
-    const result = await store.install(PROFILE, 'ublock-origin')
-    expect(result.ok).toBe(false)
-    expect(result.message).toContain('blocks nothing')
-    expect(store.view(PROFILE, 'Default').extensions[0].state).toBe('unavailable')
+    const archive = makeExtensionZip(plainManifest(), [])
+    const store = storeWith([entryFor('ublock-origin', archive)], archive)
+    const rows = store.view(PROFILE, 'Default').extensions
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.state).toBe('available')
+    expect(rows[0]?.url).not.toBe('')
   })
 
   it('replaces rather than merges when it is installed again', async () => {

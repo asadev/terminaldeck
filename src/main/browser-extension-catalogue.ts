@@ -1,7 +1,80 @@
-import type { ExtensionEntry } from './browser-extensions'
+import type { CatalogueEntry } from './browser-extensions'
 
 /**
- * The extensions this app offers, and what each one was measured doing.
+ * The extensions this app offers — and it offers nothing it cannot install and
+ * has not watched run.
+ *
+ * ## The rule, and the day it changed
+ *
+ * This catalogue used to hold thirty-six rows and install twelve of them. The
+ * other twenty-four carried a **Get it** button that opened the Chrome Web
+ * Store, on the argument that *"never heard of it"* and *"it cannot work here"*
+ * are different sentences and a store should be able to say the second one.
+ * That argument was about honesty and it was not wrong about honesty. It was
+ * wrong about what a store is. Asad, on the store as built:
+ *
+ *   > *"You have added everything. They click Get and it takes them to the
+ *   > Chrome store, which gives extensions that require a newer Chrome than the
+ *   > one we have in Terminal Deck. … we only give the option to install those
+ *   > tools that can actually install in this one, and it will not redirect
+ *   > them to the Chrome store. We should not offer tools that don't work with
+ *   > our architecture."*
+ *
+ * So the rule is now structural rather than editorial, and {@link
+ * CatalogueEntry} is where it lives: **a catalogue row has a pinned download and
+ * a verdict of `works` or `partly`.** A row with no artifact and a row watched
+ * failing cannot be written down here at all — the type refuses them, so this
+ * file cannot drift back into a shelf of things to go and get somewhere else.
+ * Twenty-four rows went; twelve stayed. What each one was and why it went is at
+ * the bottom of this header.
+ *
+ * ## The Chromium question, measured rather than assumed
+ *
+ * The complaint above contains a mechanism — *extensions that require a newer
+ * Chrome* — and it is a real one. An extension whose manifest declares
+ * `minimum_chrome_version` above this browser's is refused outright by
+ * `loadExtension`, with *"This extension requires Chromium version N or
+ * greater."* That was measured, not recalled: a probe manifest was loaded at
+ * 146, 148, 150 and 151 against both builds below, and the boundary is exact.
+ *
+ * What is **not** true is that a newer Chromium would let this store hold more.
+ * Both builds were run with the same probe extension — one asking for every
+ * namespace worth asking for — with their own `--user-data-dir`:
+ *
+ * ```
+ *                        Electron 41.10.5      Electron 43.4.1
+ *                        Chromium 146.0.7680   Chromium 150.0.7871
+ *   chrome.* present     14 namespaces         the same 14
+ *   chrome.* absent      20 namespaces         the same 20
+ *   chrome.tabs methods  no create/getCurrent  the same
+ *   storage.sync         throws                throws, same message
+ *   active-tab query     []                    []
+ *   connectNative        not a function        not a function
+ * ```
+ *
+ * Identical, in every field. The gap this catalogue is written around is
+ * **Electron's**, not Chromium's: Electron implements a deliberately small slice
+ * of the extension API and that slice did not grow between Chromium 146 and 150.
+ * Moving forward would raise the `minimum_chrome_version` ceiling from 146 to
+ * 150 and change nothing else — and not one row was excluded by that ceiling.
+ * See `browser-extension-support.ts`, which holds the measurement.
+ *
+ * ## What a verdict means
+ *
+ * Every row below was loaded into the Electron this app ships, with its own
+ * `--user-data-dir` — never into this app, which was in use at the time —
+ * pointed at a local HTTP server, and watched.
+ *
+ * - `works` — it was observed **doing its job**. Not "it loaded", not "it asks
+ *   for nothing missing": the thing it exists to do was seen happening.
+ * - `partly` — it installs, loads and runs with no uncaught error, and it asks
+ *   for `chrome.*` namespaces this Electron does not have. The row names them.
+ *   Three rows, and each says in its own words what was and was not watched.
+ *   Whether the parts that matter to a given person survive that is not
+ *   something this app can promise, so it does not.
+ *
+ * There is no third value, because a store that installs nothing else has no use
+ * for one.
  *
  * ## Why a list this app ships rather than one it fetches
  *
@@ -13,149 +86,27 @@ import type { ExtensionEntry } from './browser-extensions'
  * verification — it is asking the same network twice and believing it the second
  * time.
  *
- * There is a second reason particular to extensions. Every row below carries a
- * **verdict measured by running that exact release inside this app's Electron**,
- * and a verdict is not something a URL can be trusted to hand over. Only a
- * catalogue that ships alongside the app it was measured against can promise
- * that the sentence on the row and the binary underneath it are the same pair
- * that were tested.
- *
- * ## What the verdicts mean, and how each was arrived at
- *
- * Every one of these was loaded into a bare Electron **41.10.5** (Chromium
- * 146.0.7680.216) with its own `--user-data-dir` — never into this app, which
- * was in use at the time — pointed at a local HTTP server, and watched.
- *
- * - `works` — it was observed **doing its job**. Not "it loaded", not "it
- *   asks for nothing missing": the thing it exists to do was seen happening.
- * - `partly` — it loads and runs, and it asks for `chrome.*` namespaces this
- *   Electron does not have. The row names them. Whether the parts that matter to
- *   a given person survive that is not something this app can promise, so it does
- *   not.
- * - `no` — it was watched **failing**. These rows carry no download, no digest
- *   and no Install button, because there is nothing here worth installing and a
- *   button that put it on the disk anyway would be the exact defect this store
- *   is written against. They are listed rather than omitted because the first
- *   question anybody opens an extension store with is *where is uBlock Origin*,
- *   and "it is not in the list" and "it cannot work here" are different answers.
- *
- * ## The verdicts that changed, and why they were allowed to
- *
- * Five of these rows once said `no`, and two of those were the ad blockers —
- * the first thing anybody opens an extension store looking for. Every one of
- * the five has been re-measured against `browser-extension-compat.ts`, which
- * closes the part of the gap that can be closed, and four of them moved.
- *
- * The re-measurement was the same shape as the refusals it overturned: a bare
- * Electron with its own `--user-data-dir`, a local HTTP server, and
- * `ads.doubleclick.net` and a consent-manager script host both pointed at that
- * server with `--host-resolver-rules`, so **a blocked request is a request the
- * server never receives** rather than an error message somebody interpreted. A
- * script from an innocent third host loaded in every run, so "blocked" is never
- * confused with "the network broke". The table, requests received out of three:
- *
- * ```
- *                                  ads   consent script   control
- *   no extension at all             3          1             1
- *   uBlock Origin, before           3          –             1
- *   uBlock Origin, now              0          1             1
- *   uBlock Origin Lite, before      3          –             1
- *   uBlock Origin Lite, now         0          1             1
- *   I still don’t care…, before     3          1             1
- *   I still don’t care…, now        3          0             1
- * ```
- *
- * None of the three was failing at its job. Each died before starting one —
- * uBlock Origin on `chrome.browserAction` being undefined, uBlock Origin Lite
- * on `chrome.permissions`, I still don’t care about cookies on
- * `chrome.webNavigation` — and none of those three namespaces is what any of
- * them blocks with. That is the whole of why the verdicts could move without
- * anything being fudged: what changed is that the extension now reaches its own
- * first line, and what it does from there was watched, on this Electron, in
- * these runs.
- *
- * What that layer costs is on the row too, in {@link ExtensionEntry.measured}
- * and in the store view's `inert` line: a badge that is not drawn, a right-click
- * entry that is not shown, a keyboard shortcut that is not bound. Those are
- * stated rather than discovered, and they are a different kind of thing from a
- * control that pretends. See `browser-extension-compat.ts` for which parts of
- * the layer are backed by something real and which are only present.
- *
- * ## The three answers to “where is X”
- *
- * A store that only lists what it can sell answers *never heard of it* to
- * every question it cannot say yes to, and that is one answer doing the work of
- * three. This catalogue keeps them apart:
- *
- *  - **A row with an Install.** It was run here and it works, or it runs and the
- *    part that matters was not watched.
- *  - **A row that says it cannot work here, with no button.** It was run here
- *    and watched failing, and the row names the line it died on. Six of these,
- *    and no two for the same reason: a missing `chrome.cookies`, a missing
- *    `chrome.tabs.getCurrent`, native messaging switched off, rulesets that ship
- *    disabled, and two whose only trigger is a menu this browser does not draw.
- *  - **A row that says nothing was measured, with no button.** Added because the
- *    first two were both wrong for Vimium, Privacy Badger, SingleFile and
- *    Wappalyzer: their projects publish through the Chrome Web Store and their
- *    release pages carry no file this app could fetch and pin a fingerprint to.
- *    Nothing was run, so nothing is claimed — which is a different sentence from
- *    *it does not work here*, and the row says the one that is true.
+ * There is a second reason particular to extensions. Every row carries a verdict
+ * **measured by running that exact release inside this app's Electron**, and a
+ * verdict is not something a URL can be trusted to hand over. Only a catalogue
+ * that ships alongside the app it was measured against can promise that the
+ * sentence on the row and the binary underneath it are the same pair that were
+ * tested.
  *
  * ## Categories
  *
  * Every row names one, and one only. A row that appeared under three headings
- * would make a catalogue of thirty-six look like a catalogue of sixty, and a
- * store overstating its own size is the first thing that makes the rest of it
+ * would make a catalogue of twelve look like a catalogue of thirty, and a store
+ * overstating its own size is the first thing that makes the rest of it
  * unbelievable.
  *
- * Three shelves were added on 2026-08-23 — *Writing and language*, *Documents
- * and work*, *Shopping* — because Grammarly, Google Docs Offline and Honey had
- * no honest home among the eight that were here, and filing a coupon finder
- * under *Scripting and the keyboard* would have been the store pretending its
- * old shape still fitted.
- *
- * ## The mainstream half, 2026-08-23
- *
- * Twelve rows were added for extensions people have actually heard of, and not
- * one of them can be installed here:
- *
- *   > *"also all other regular tools too like google's ones or like this."*
- *
- * Every one is a closed product published through the Chrome Web Store and
- * nowhere else — no release file, so nothing to fetch and nothing to fingerprint
- * — which puts all twelve in the third state this file already argued for over
- * Vimium: **nothing was measured**, no button, and a *Get it* that opens the
- * listing. Each listing was fetched on the day and the name on the row is the
- * name that came back in its page title, which is why one of them says *PayPal
- * Honey*.
- *
- * Two things had to give, and both were tests rather than rows. The catalogue
- * used to assert that exactly two rows may want anything from a person, on the
- * ground that *"a browser extension needs nothing from you"* — which stopped
- * being true the moment the store held clients for accounts. And *"is a store
- * rather than a shelf of refusals"* counted rows with a download; kept as it
- * was, it would have argued that answering *where is Grammarly* makes the store
- * worse. Both now check what they were always about: refusals stay a minority,
- * and every row has somewhere to go.
- *
- * ## What it costs
- *
- * Every row carries a price, and it is the field this half of the catalogue
- * could not have been added without. Every extension in a browser store is a
- * free download — that is what a browser store is — so *free to install* had
- * been quietly standing in for *free to use*. It is true of uBlock Origin and
- * false of 1Password, whose extension is a free download of a thing with no free
- * plan at all. The rule, in Asad's words: **never imply free when a key costs
- * money.**
- *
- * The prices were checked the same way the listings were, on the same day, and
- * against each vendor's own plans page rather than from memory: 1Password
- * answers *"Yes. You can try 1Password Individual or Families free for 14 days
- * before choosing a plan"* and prices the Individual plan at $2.99 a month, so
- * that row is `paid`; LastPass's free plan says *"Limited to 1 device type"*;
- * Loom's Starter is $0 with *"25 videos, 5 minute screen recordings"*, which is
- * a cap rather than a trial and therefore `metered`; Grammarly lists Free at $0
- * beside Pro at $12. Each of those sentences is on the row it came from.
+ * Five shelves emptied when the rule above was applied — *Passwords*, *Writing
+ * and language*, *Documents and work*, *Shopping*, *Saving and research* — and
+ * they were deleted rather than left standing with nothing on them. A shelf
+ * whose every row was a link somewhere else is not a shelf this store has; the
+ * honest catalogue is five shelves and the one somebody fills themselves. What
+ * would put *Passwords* back is not a bigger list: it is native messaging, and
+ * `browser-extension-support.ts` says exactly why nothing here can fake it.
  *
  * ## Keeping this honest across releases
  *
@@ -169,9 +120,9 @@ import type { ExtensionEntry } from './browser-extensions'
  * either rebuilt it or quietly carried an old sentence forward. Run it twice,
  * plain and `--no-compat`, because the difference between the two runs is what
  * most of the sentences below are actually made of.
- * `browser-extension-catalogue.test.ts` holds the shape to that: a row cannot
- * claim `works` without a `measured` sentence, and a row that cannot work cannot
- * carry a download.
+ * `browser-extension-catalogue.test.ts` holds the shape to that: every row has a
+ * download and a measured sentence, and nothing that was watched failing can be
+ * written down here at all.
  *
  * ## The marks
  *
@@ -182,330 +133,44 @@ import type { ExtensionEntry } from './browser-extensions'
  * upstream bytes have moved. A row added without one draws this app's own
  * monogram rather than nothing, so the field is optional and adding a row does
  * not require the network.
- */
-/**
- * Why a mainstream extension gets a row and no button.
  *
- * One sentence, shared by twelve rows, because it is one fact: they are closed
- * products published through the Chrome Web Store, there is no release file to
- * fetch, and *"this store installs nothing it cannot check"*. Writing twelve
- * paraphrases of that would have made twelve different-looking reasons out of
- * the same one, which is how a catalogue starts sounding like it is arguing.
- */
-const WEB_STORE_ONLY =
-  'A closed-source product, published through the Chrome Web Store and nowhere else. There is no ' +
-  'release file for this app to fetch and no fingerprint to pin one against, so there is nothing ' +
-  'here to install — the button opens its own listing instead.'
-
-/**
- * And what this app therefore knows about it: nothing.
+ * ## The twenty-four that went, and why
  *
- * The word `Watched` is the currency of this file and a row nobody ran must not
- * spend it. Several rows extend this with a *"worth knowing"* clause about the
- * **shape** of the extension — a toolbar button this browser does not draw, a
- * new tab it cannot hand over — which is the same hedge the SingleFile row
- * already makes, and is still not a measurement.
+ * Nothing here was deleted for being unpopular. Each fell into one of three
+ * groups, and the group is the reason:
+ *
+ *  - **Seventeen had no artifact to install.** Google Translate, Grammarly,
+ *    Google Docs Offline, Todoist, PayPal Honey, LastPass, 1Password, Loom,
+ *    Notion Web Clipper, Save to Google Drive, Google Keep, Momentum, Privacy
+ *    Badger, SingleFile, Vimium, Wappalyzer, JSON Formatter. Every one publishes
+ *    through the Chrome Web Store and nowhere this app can fetch from, so every
+ *    one was a **Get it** that left this app for a store this app cannot install
+ *    from. Nothing was ever measured about any of them; nothing is claimed about
+ *    any of them now.
+ *  - **Six were watched failing here.** Ghostery (its service worker throws on
+ *    `chrome.extension.isAllowedIncognitoAccess`, `chrome.cookies` and
+ *    `chrome.tabs.create`, and all 33 of its rulesets ship disabled), Cookie
+ *    AutoDelete (there is no `chrome.cookies` at all and cookies are the whole
+ *    of its job), Bitwarden (`chrome.tabs.getCurrent is not a function` on the
+ *    first line of its own polyfill, and its panel is its entire interface),
+ *    KeePassXC-Browser (native messaging is off, which is how it gets every
+ *    password it has), Search by Image and Web Archives (both load cleanly and
+ *    are startable only from a right-click menu this browser does not draw).
+ *  - **One installed and ran and did not do its job.** LibRedirect's blocking
+ *    `webRequest` listener attaches and then throws inside its own `redirect()`
+ *    once per request — *Cannot read properties of undefined (reading
+ *    "redirectOnlyInIncognito")* — and no redirect was ever watched happening.
+ *    It loaded, which is why it used to read `partly`; loading is not the job.
+ *
+ * The three that stayed at `partly` differ from that last one in exactly one
+ * way: nothing in the path that does their job was watched throwing. Stylus and
+ * Violentmonkey load with no uncaught error and were not watched applying a
+ * style or running a userscript; Consent-O-Matic fetched its rule list and
+ * searched a page correctly, and no consent dialog was ever put in front of it.
+ * Each row says so in its own sentence rather than borrowing a neighbour's.
  */
-const NOT_RUN_HERE =
-  'Nothing was measured. This app has never run it, because there is no artifact to run, so it ' +
-  'says nothing about whether it would work in this browser.'
 
-export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
-  /* ------------------------- the ones people arrive looking for, 2026-08-23 -- */
-  /*
-   * Twelve rows nobody can install here, and the store is better for every one
-   * of them.
-   *
-   * Asad, widening both catalogues:
-   *
-   *   > *"also all other regular tools too like google's ones or like this."*
-   *
-   * These are the extensions a person has actually heard of, and every one is
-   * published through the Chrome Web Store and nowhere else — closed source,
-   * with no release file to fetch and no fingerprint to check one against. So
-   * none of them carries an Install, and each carries **Get it**, which opens
-   * its own listing in a tab of this browser and installs nothing.
-   *
-   * That is the third answer this file already argued for over Vimium and
-   * Privacy Badger, applied where it matters most: *"never heard of it"* and
-   * *"it cannot work here"* and *"nothing was measured"* are three different
-   * sentences, and the only one that is true of Grammarly is the third.
-   *
-   * Every listing below was fetched on **2026-08-23** and the name on the row is
-   * the name that came back in its page title — which is why this row says
-   * *PayPal Honey* rather than *Honey*, and why the Google Keep row is not
-   * called what its own product page calls it.
-   */
-  {
-    id: 'google-translate',
-    category: 'writing',
-    name: 'Google Translate',
-    summary: 'Translates a whole page, or just the phrase you selected on it.',
-    homepage: 'https://chromewebstore.google.com/detail/aapbdbdomjkkjkaonfhkkikfgjllcleb',
-    tags: ['translate', 'translation', 'language', 'google', 'phrase', 'foreign'],
-    licence: 'Proprietary',
-    version: '',
-    reach: [],
-    cost: 'free',
-    costNote: 'Free, and it asks for no account. Google’s own extension for its own free service.',
-    works: 'unmeasured',
-    noRelease: WEB_STORE_ONLY,
-    measured: NOT_RUN_HERE,
-    logo: 'google-translate',
-    source: null,
-  },
-  {
-    id: 'grammarly',
-    category: 'writing',
-    name: 'Grammarly',
-    summary: 'Checks spelling, grammar and tone as you type, in text boxes on any site.',
-    homepage: 'https://chromewebstore.google.com/detail/kbfnbcaeplbcioakkpcpgfkobkghlhen',
-    tags: ['grammar', 'spelling', 'writing', 'proofread', 'tone', 'ai'],
-    needs: ['account'],
-    licence: 'Proprietary',
-    version: '',
-    reach: [],
-    cost: 'account',
-    costNote:
-      'Free to use with a free Grammarly account — its own plans page lists Free at $0 a month ' +
-      'beside Pro. Pro is a paid subscription the extension will keep offering, and what you get ' +
-      'without it is real rather than a trial.',
-    works: 'unmeasured',
-    noRelease: WEB_STORE_ONLY,
-    measured:
-      NOT_RUN_HERE +
-      ' Worth knowing if you go looking for it another way: it signs in through its own account ' +
-      'and works inside the pages you type on, which is the half of the extension API this ' +
-      'browser has most of — and that is a shape, not a measurement.',
-    logo: 'grammarly',
-    source: null,
-  },
-  {
-    id: 'google-docs-offline',
-    category: 'work',
-    name: 'Google Docs Offline',
-    summary: 'Lets Google Docs, Sheets and Slides open and edit with no network.',
-    homepage: 'https://chromewebstore.google.com/detail/ghbmnnjooekpmoecnnnilnnbdlolhkhi',
-    tags: ['google', 'docs', 'sheets', 'slides', 'offline', 'editing'],
-    needs: ['account'],
-    licence: 'Proprietary',
-    version: '',
-    reach: [],
-    cost: 'account',
-    costNote:
-      'Free, and it does nothing without a Google account — it is the offline half of Google’s ' +
-      'own free editors rather than a product of its own.',
-    works: 'unmeasured',
-    noRelease: WEB_STORE_ONLY,
-    measured: NOT_RUN_HERE,
-    logo: 'google-docs',
-    source: null,
-  },
-  {
-    id: 'todoist',
-    category: 'work',
-    name: 'Todoist for Chrome',
-    summary: 'Adds a task from whatever page you are on, and keeps today’s list a click away.',
-    homepage: 'https://chromewebstore.google.com/detail/jldhpllghnbhlbpcmnajkpdmadaolakh',
-    tags: ['tasks', 'todo', 'planner', 'reminders', 'productivity', 'list'],
-    needs: ['account'],
-    licence: 'Proprietary',
-    version: '',
-    reach: [],
-    cost: 'account',
-    costNote:
-      'Free to use with a free Todoist account. That free plan is limited rather than a trial, ' +
-      'and the paid plans lift the limits — the extension itself is not what costs.',
-    works: 'unmeasured',
-    noRelease: WEB_STORE_ONLY,
-    measured:
-      NOT_RUN_HERE +
-      ' Worth knowing: adding a task is started from a toolbar button, and this browser draws ' +
-      'none — so the shape of it is unpromising here even though nobody has run it.',
-    logo: 'todoist',
-    source: null,
-  },
-  {
-    id: 'honey',
-    category: 'shopping',
-    name: 'PayPal Honey',
-    summary: 'Tries known discount codes at the checkout of a shop you are already buying from.',
-    homepage: 'https://chromewebstore.google.com/detail/bmnlcjabgnpnenekpadlanbbkooimhnj',
-    tags: ['coupons', 'discount', 'deals', 'shopping', 'checkout', 'cashback'],
-    licence: 'Proprietary',
-    version: '',
-    reach: [],
-    cost: 'free',
-    costNote:
-      'Free, and that is worth a sentence rather than a word: nothing is charged to you, and ' +
-      'PayPal is paid a commission by the shops you buy through it. Free of charge is not the ' +
-      'same as free of an interest in what you buy.',
-    works: 'unmeasured',
-    noRelease: WEB_STORE_ONLY,
-    measured: NOT_RUN_HERE,
-    logo: 'honey',
-    source: null,
-  },
-  {
-    id: 'lastpass',
-    category: 'passwords',
-    name: 'LastPass',
-    summary: 'Fills logins out of a LastPass vault and saves new ones as you make them.',
-    homepage: 'https://chromewebstore.google.com/detail/hdokiejnpimakedhajhdlcegeplioahd',
-    tags: ['password manager', 'vault', 'logins', 'autofill', 'passwords'],
-    needs: ['account'],
-    licence: 'Proprietary',
-    version: '',
-    reach: [],
-    cost: 'account',
-    costNote:
-      'Free to install, and its free tier covers one kind of device — computers or phones, not ' +
-      'both. Using the same vault across the two is a paid plan.',
-    works: 'unmeasured',
-    noRelease: WEB_STORE_ONLY,
-    measured:
-      NOT_RUN_HERE +
-      ' Worth knowing: this app did run Bitwarden, whose whole interface is a panel, and watched ' +
-      'it die on chrome.tabs.getCurrent — a method this browser does not have. That says nothing ' +
-      'about this extension and everything about the shape it shares.',
-    logo: 'lastpass',
-    source: null,
-  },
-  {
-    id: 'onepassword',
-    category: 'passwords',
-    name: '1Password',
-    summary: 'Fills logins out of a 1Password account, unlocking in the browser rather than a separate app.',
-    homepage: 'https://chromewebstore.google.com/detail/aeblfdkhhhdcdjpifhhbdiojplfjncoa',
-    tags: ['password manager', 'vault', 'logins', 'autofill', 'passwords'],
-    needs: ['account'],
-    licence: 'Proprietary',
-    version: '',
-    reach: [],
-    cost: 'paid',
-    costNote:
-      'Paid, and it is the row this field was added for. 1Password has no free plan: the ' +
-      'extension is a free download that does nothing at all once the trial ends. A store that ' +
-      'let “free to install” stand in for “free” would be lying about exactly this row.',
-    works: 'unmeasured',
-    noRelease: WEB_STORE_ONLY,
-    measured: NOT_RUN_HERE,
-    logo: 'onepassword',
-    source: null,
-  },
-  {
-    id: 'loom',
-    category: 'media',
-    name: 'Loom',
-    summary: 'Records the screen and camera into a video with a link, without leaving the browser.',
-    homepage: 'https://chromewebstore.google.com/detail/liecbddmkiiihnedobmlmillhodjkdmb',
-    tags: ['screen recording', 'video', 'camera', 'capture', 'screencast', 'share'],
-    needs: ['account'],
-    licence: 'Proprietary',
-    version: '',
-    reach: [],
-    cost: 'metered',
-    costNote:
-      'Free to a limit, then paid. Loom’s free plan caps how long a recording may be and how ' +
-      'many you may keep; its paid plans lift both.',
-    works: 'unmeasured',
-    noRelease: WEB_STORE_ONLY,
-    measured: NOT_RUN_HERE,
-    logo: 'loom',
-    source: null,
-  },
-  {
-    id: 'notion-web-clipper',
-    category: 'research',
-    name: 'Notion Web Clipper',
-    summary: 'Saves the page you are on into a Notion page or database, with its text.',
-    homepage: 'https://chromewebstore.google.com/detail/knheggckgoiihginacbkhaalnibhilkk',
-    tags: ['clip', 'save page', 'notes', 'notion', 'bookmark', 'research'],
-    needs: ['account'],
-    licence: 'Proprietary',
-    version: '',
-    reach: [],
-    cost: 'account',
-    costNote:
-      'Free. Notion’s free personal plan is enough for it; its paid plans buy team features ' +
-      'rather than this.',
-    works: 'unmeasured',
-    noRelease: WEB_STORE_ONLY,
-    measured:
-      NOT_RUN_HERE +
-      ' Worth knowing: clipping is started from a toolbar button, and this browser draws none — ' +
-      'the same shape that leaves SingleFile unpromising here.',
-    logo: 'notion',
-    source: null,
-  },
-  {
-    id: 'save-to-google-drive',
-    category: 'research',
-    name: 'Save to Google Drive',
-    summary: 'Saves a page, an image or a link straight into Google Drive.',
-    homepage: 'https://chromewebstore.google.com/detail/gmbmikajjgmnabiglmofipeabaddhgne',
-    tags: ['google', 'drive', 'save page', 'screenshot', 'bookmark', 'cloud storage'],
-    needs: ['account'],
-    licence: 'Proprietary',
-    version: '',
-    reach: [],
-    cost: 'account',
-    costNote:
-      'Free. It saves into a Google account’s Drive, so what can cost is Drive storage past the ' +
-      'free allowance, not this.',
-    works: 'unmeasured',
-    noRelease: WEB_STORE_ONLY,
-    measured:
-      NOT_RUN_HERE +
-      ' Worth knowing: saving is started from the right-click menu or a toolbar button, and this ' +
-      'browser draws neither — which is what stopped Web Archives and Search by Image after they ' +
-      'had loaded perfectly.',
-    logo: 'google-drive',
-    source: null,
-  },
-  {
-    id: 'google-keep',
-    category: 'research',
-    name: 'Google Keep Chrome Extension',
-    summary: 'Clips a page, an image or a quote into a Google Keep note.',
-    homepage: 'https://chromewebstore.google.com/detail/lpcaedmchfhocbbapmcbpinfpgnhiddi',
-    tags: ['google', 'keep', 'notes', 'clip', 'save page', 'bookmark'],
-    needs: ['account'],
-    licence: 'Proprietary',
-    version: '',
-    reach: [],
-    cost: 'account',
-    costNote: 'Free with a Google account.',
-    works: 'unmeasured',
-    noRelease: WEB_STORE_ONLY,
-    measured: NOT_RUN_HERE,
-    logo: 'google-keep',
-    source: null,
-  },
-  {
-    id: 'momentum',
-    category: 'appearance',
-    name: 'Momentum',
-    summary: 'Replaces the new-tab page with a photograph, a clock and one thing to do today.',
-    homepage: 'https://chromewebstore.google.com/detail/laookkfknpbbblfpciffpaejjkokdgca',
-    tags: ['new tab', 'dashboard', 'focus', 'wallpaper', 'clock', 'todo'],
-    licence: 'Proprietary',
-    version: '',
-    reach: [],
-    cost: 'free',
-    costNote:
-      'Free to install and use. Momentum Plus is a paid subscription for its extra features, and ' +
-      'the free version is not a trial of it.',
-    works: 'unmeasured',
-    noRelease:
-      WEB_STORE_ONLY +
-      ' It also replaces the new-tab page, which is `chrome_url_overrides` — a part of a manifest ' +
-      'this browser has no new tab to hand over, so even a file to fetch would not have made it ' +
-      'a row with a button.',
-    measured: NOT_RUN_HERE,
-    logo: 'momentum',
-    source: null,
-  },
+export const BROWSER_EXTENSION_CATALOGUE: readonly CatalogueEntry[] = [
   {
     id: 'dark-reader',
     category: 'appearance',
@@ -790,35 +455,6 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
     },
   },
   {
-    id: 'ghostery',
-    category: 'blocking',
-    name: 'Ghostery',
-    summary: 'Blocks ads and trackers and names what it found on each page.',
-    homepage: 'https://github.com/ghostery/ghostery-extension',
-    tags: ['ads', 'adblock', 'ad blocker', 'trackers', 'privacy'],
-    licence: 'GPL-3.0',
-    version: '10.5.57',
-    reach: [
-      '*://www.youtube.com/*',
-      'http://*/*',
-      'https://*/*',
-      'ws://*/*',
-      'wss://*/*',
-    ],
-    cost: 'free',
-    costNote: '',
-    works: 'no',
-    measured:
-      'Watched not blocking. The same three requests every blocker here is measured with were all ' +
-      'served, the one to ads.doubleclick.net included. Its service worker throws on ' +
-      'chrome.extension.isAllowedIncognitoAccess, on chrome.cookies.getAllCookieStores and on ' +
-      'chrome.tabs.create, none of which exist in this browser — and all 33 of its filter ' +
-      'rulesets ship marked disabled in its own manifest, so the layer that switches on the ones ' +
-      'a manifest enables has nothing to switch on and getEnabledRulesets() answers [].',
-    logo: 'ghostery',
-    source: null,
-  },
-  {
     id: 'consent-o-matic',
     category: 'privacy',
     name: 'Consent-O-Matic',
@@ -848,56 +484,6 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
     },
   },
   {
-    id: 'libredirect',
-    category: 'privacy',
-    name: 'LibRedirect',
-    summary:
-      'Sends links to popular sites to a privacy-respecting front end for the same content instead.',
-    homepage: 'https://github.com/libredirect/browser_extension',
-    tags: ['redirect', 'front ends', 'privacy', 'invidious', 'nitter', 'alternatives'],
-    licence: 'GPL-3.0',
-    version: '3.4.0',
-    reach: ['<all_urls>'],
-    cost: 'free',
-    costNote: '',
-    works: 'partly',
-    measured:
-      'Loads. Its background page runs and its blocking webRequest listener is attached — and it ' +
-      'threw inside that listener twice while the test page loaded, once per request: Cannot read ' +
-      'properties of undefined (reading “redirectOnlyInIncognito”) inside its own redirect(). No ' +
-      'redirect was watched happening, so this app claims none. Its panel opens and throws ' +
-      'reading .url of undefined, which is the empty answer this browser gives an extension page ' +
-      'asking which tab is in front.',
-    logo: 'libredirect',
-    source: {
-      url: 'https://github.com/libredirect/browser_extension/releases/download/v3.4.0/libredirect-3.4.0.zip',
-      bytes: 1_122_989,
-      sha256: '6e2d897457cfa85849b38664bc85ce24cf561a61955b5249cdb081235807c963',
-    },
-  },
-  {
-    id: 'cookie-autodelete',
-    category: 'privacy',
-    name: 'Cookie AutoDelete',
-    summary: 'Deletes the cookies of a site the moment you close its last tab.',
-    homepage: 'https://github.com/Cookie-AutoDelete/Cookie-AutoDelete',
-    tags: ['cookies', 'delete', 'clean up', 'privacy'],
-    licence: 'MIT',
-    version: '3.8.2',
-    reach: ['<all_urls>'],
-    cost: 'free',
-    costNote: '',
-    works: 'no',
-    measured:
-      'Watched failing before it started. Its background page throws Cannot read properties of ' +
-      'undefined (reading “onChanged”) — that is chrome.cookies.onChanged, and this browser has ' +
-      'no chrome.cookies at all — and its panel throws on cookieStoreId for the same reason. ' +
-      'Reading and deleting cookies is the whole of what it does, and there is no cookie API here ' +
-      'to do it with, so there is nothing this app could fill in that would help.',
-    logo: 'cookie-autodelete',
-    source: null,
-  },
-  {
     id: 'video-speed-controller',
     category: 'media',
     name: 'Video Speed Controller',
@@ -924,222 +510,5 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly ExtensionEntry[] = [
       bytes: 101_763,
       sha256: '511e977c0399afe8f14b724c7fcf4e673e2d648f895bc01a911b25ad84c4f18c',
     },
-  },
-  {
-    id: 'bitwarden',
-    category: 'passwords',
-    name: 'Bitwarden',
-    summary: 'The open-source password manager, with its vault in the browser.',
-    homepage: 'https://github.com/bitwarden/clients',
-    tags: ['password manager', 'vault', 'logins', 'autofill', 'passwords'],
-    needs: ['account'],
-    licence: 'GPL-3.0',
-    version: '2026.8.0',
-    reach: ['*://*/*', 'file:///*', 'http://*/*', 'https://*/*'],
-    cost: 'account',
-    costNote:
-      'Free. Bitwarden’s free plan is enough for a personal vault and the extension is the ' +
-      'free client for it; the paid plans buy sharing and extras.',
-    works: 'no',
-    measured:
-      'Watched failing. Its service worker starts properly — WebAssembly loads, its SDK loads, its ' +
-      'state initialises — and then its panel, which is the whole of its interface, throws ' +
-      'chrome.tabs.getCurrent is not a function on the first line of its own polyfill and again ' +
-      'inside Angular. chrome.tabs is present here and granted; that one method is simply not on ' +
-      'it, which no check of a manifest could ever predict. Nothing else opens it: this browser ' +
-      'draws no toolbar button and binds no keyboard shortcut, so a vault that cannot open is all ' +
-      'there is.',
-    logo: 'bitwarden',
-    source: null,
-  },
-  {
-    id: 'keepassxc-browser',
-    category: 'passwords',
-    name: 'KeePassXC-Browser',
-    summary: 'Fills logins out of a KeePassXC database running on this machine.',
-    homepage: 'https://github.com/keepassxreboot/keepassxc-browser',
-    tags: ['password manager', 'keepass', 'vault', 'logins', 'autofill'],
-    needs: ['companion-app'],
-    licence: 'GPL-3.0',
-    version: '1.10.3',
-    reach: ['<all_urls>', 'http://*/*', 'https://*/*'],
-    cost: 'free',
-    costNote: '',
-    works: 'no',
-    measured:
-      'Watched failing at the one thing it exists for. It loads with no error anywhere — service ' +
-      'worker clean, panel clean, settings saved — and then ' +
-      'chrome.runtime.connectNative("org.keepassxc.keepassxc_browser") disconnects immediately ' +
-      'with “Access to the native messaging host was disabled by the system administrator.” That ' +
-      'was measured by connecting. Native messaging is switched off in this browser, and talking ' +
-      'to the KeePassXC application over it is how this extension gets every password it has.',
-    logo: 'keepassxc-browser',
-    source: null,
-  },
-  {
-    id: 'search-by-image',
-    category: 'research',
-    name: 'Search by Image',
-    summary: 'Reverse-searches a picture on the page across a long list of image search engines.',
-    homepage: 'https://github.com/dessant/search-by-image',
-    tags: ['reverse image search', 'pictures', 'photos', 'lens', 'tineye'],
-    licence: 'GPL-3.0',
-    version: '8.5.4',
-    reach: ['<all_urls>', 'file:///*', 'http://*/*', 'https://*/*'],
-    cost: 'free',
-    costNote: '',
-    works: 'no',
-    measured:
-      'Watched loading perfectly and then having no way in. Its service worker ran its whole ' +
-      'storage migration without one error and its settings page opens — and nothing can start a ' +
-      'search: it is begun from the right-click menu, which is chrome.contextMenus, which this ' +
-      'app accepts and cannot draw, or from a toolbar button this browser does not have. An ' +
-      'extension nobody can invoke is not a working extension, however cleanly it loads.',
-    logo: 'search-by-image',
-    source: null,
-  },
-  {
-    id: 'web-archives',
-    category: 'research',
-    name: 'Web Archives',
-    summary: 'Opens the archived copy of a page at the Wayback Machine, Archive.today and others.',
-    homepage: 'https://github.com/dessant/web-archives',
-    tags: ['wayback machine', 'archive', 'cached', 'history', 'snapshot'],
-    licence: 'GPL-3.0',
-    version: '7.3.3',
-    reach: ['<all_urls>', 'http://*/*', 'https://*/*'],
-    cost: 'free',
-    costNote: '',
-    works: 'no',
-    measured:
-      'Watched loading cleanly and then having no way in, exactly as its sibling does. Its ' +
-      'service worker completes its storage migration with no error and its settings page opens; ' +
-      'the only ways to ask it for an archived page are the right-click menu, which is ' +
-      'chrome.contextMenus and is not drawn here, and a toolbar button this browser does not ' +
-      'have. There is no third way to reach it and this app will not pretend there is.',
-    logo: 'web-archives',
-    source: null,
-  },
-  {
-    id: 'privacy-badger',
-    category: 'blocking',
-    name: 'Privacy Badger',
-    summary:
-      'The EFF’s tracker blocker, which learns what is following you rather than reading a list.',
-    homepage: 'https://github.com/EFForg/privacybadger',
-    tags: ['trackers', 'privacy', 'eff', 'blocking'],
-    licence: 'GPL-3.0',
-    version: '',
-    reach: [],
-    cost: 'free',
-    costNote: '',
-    works: 'unmeasured',
-    noRelease:
-      'The EFF ships Privacy Badger through the browser stores and its GitHub releases carry no ' +
-      'built file — the tags are there, the assets are empty. There is nothing for this app to ' +
-      'fetch at a fixed byte count and check against a fingerprint, so there is no row to install.',
-    measured:
-      'Nothing was measured. This app has never run Privacy Badger, so it says nothing about ' +
-      'whether it would work here — which is a different sentence from the ones on the rows above ' +
-      'and below, and it is the only true one this app has.',
-    logo: 'privacy-badger',
-    source: null,
-  },
-  {
-    id: 'singlefile',
-    category: 'research',
-    name: 'SingleFile',
-    summary: 'Saves a whole page — images, styles and all — into one self-contained HTML file.',
-    homepage: 'https://github.com/gildas-lormeau/SingleFile',
-    tags: ['save page', 'archive', 'offline', 'snapshot', 'html'],
-    licence: 'AGPL-3.0',
-    version: '',
-    reach: [],
-    cost: 'free',
-    costNote: '',
-    works: 'unmeasured',
-    noRelease:
-      'Its releases carry no built extension: the project publishes through the browser stores ' +
-      'and its GitHub tags have no assets on them. Nothing to fetch means nothing to pin a ' +
-      'fingerprint to, and this store installs nothing it cannot check.',
-    measured:
-      'Nothing was measured. Worth knowing if you go looking for it another way: saving a page is ' +
-      'started from a toolbar button, a keyboard shortcut or the right-click menu, and this ' +
-      'browser draws none of the three — so the shape of it is unpromising here even though ' +
-      'nobody has run it.',
-    logo: 'singlefile',
-    source: null,
-  },
-  {
-    id: 'vimium',
-    category: 'scripting',
-    name: 'Vimium',
-    summary: 'Drives the browser from the keyboard, with vim’s keys.',
-    homepage: 'https://github.com/philc/vimium',
-    tags: ['keyboard', 'vim', 'shortcuts', 'navigation', 'hints'],
-    licence: 'MIT',
-    version: '',
-    reach: [],
-    cost: 'free',
-    costNote: '',
-    works: 'unmeasured',
-    noRelease:
-      'philc/vimium publishes no GitHub releases at all — its distribution is the Chrome Web ' +
-      'Store — so there is no versioned file for this app to fetch and fingerprint.',
-    measured:
-      'Nothing was measured. Much of what it does is a content script reading key presses, which ' +
-      'is the part of the extension API this browser has most of; its own commands, which are ' +
-      'chrome.commands, are not bound here. Neither of those is a measurement and neither is a ' +
-      'claim — nobody has run it.',
-    logo: 'vimium',
-    source: null,
-  },
-  {
-    id: 'wappalyzer',
-    category: 'research',
-    name: 'Wappalyzer',
-    summary: 'Names the framework, analytics and hosting a site is built on.',
-    homepage: 'https://www.wappalyzer.com/',
-    tags: ['technology', 'stack', 'framework', 'analytics', 'detect'],
-    licence: 'unknown',
-    version: '',
-    reach: [],
-    cost: 'unknown',
-    costNote:
-      'Not known. The open-source repository this row named answers 404, there is nothing ' +
-      'left to read, and this app is no more willing to price it than to licence it.',
-    works: 'unmeasured',
-    noRelease:
-      'The open-source repository this app knew, github.com/wappalyzer/wappalyzer, answers 404. ' +
-      'There is no release to fetch and no source to read, so this app pins nothing and claims ' +
-      'nothing — including about its licence.',
-    measured:
-      'Nothing was measured, and nothing can be until there is something to run. The row is here ' +
-      'because being asked for by name and not being findable are different from being absent.',
-    logo: 'wappalyzer',
-    source: null,
-  },
-  {
-    id: 'json-formatter',
-    category: 'scripting',
-    name: 'JSON Formatter',
-    summary: 'Turns a raw JSON response in the browser into something you can read and fold.',
-    homepage: 'https://github.com/callumlocke/json-formatter',
-    tags: ['json', 'pretty print', 'viewer', 'api', 'format'],
-    licence: 'BSD-3-Clause',
-    version: '',
-    reach: [],
-    cost: 'free',
-    costNote: '',
-    works: 'unmeasured',
-    noRelease:
-      'Its releases carry no built file — the project ships through the Chrome Web Store. There ' +
-      'is no versioned artifact for this app to fetch and check a fingerprint against.',
-    measured:
-      'Nothing was measured. If you want folded JSON in the meantime, the browser here already ' +
-      'renders a JSON response as text and the page-reading tools in the other half of this store ' +
-      'will parse one — that is this app’s own code and a different thing from an extension.',
-    logo: 'json-formatter',
-    source: null,
   },
 ]

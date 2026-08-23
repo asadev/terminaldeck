@@ -10,9 +10,16 @@ const COSTS: readonly ExtensionCost[] = ['free', 'account', 'metered', 'paid', '
  *
  * These are not style checks. Every one of them is a way the catalogue could
  * start telling somebody something untrue while every other test in the repo
- * stayed green — a row claiming to work with nothing behind the claim, a row
- * that cannot work still offering a download, a digest that would refuse every
- * byte it was ever compared against.
+ * stayed green — a row claiming to work with nothing behind the claim, a digest
+ * that would refuse every byte it was ever compared against, a row offering a
+ * button that leaves for somebody else's store.
+ *
+ * Several tests that used to live here are gone, and they were not deleted for
+ * being inconvenient: they described the two kinds of row this store no longer
+ * holds. A row watched failing and a row with no artifact cannot be written down
+ * at all now — `CatalogueEntry` requires a `source` and forbids either verdict —
+ * so the checks that policed how such rows behaved have nothing left to police.
+ * The type does that job earlier and more completely than a test could.
  */
 describe('every row', () => {
   it('has an id that is a safe directory name and is unique', () => {
@@ -36,18 +43,14 @@ describe('every row', () => {
     }
   })
 
-  it('names a version for everything this app has actually got hold of', () => {
+  it('names the exact version this app got hold of and ran', () => {
     /*
-     * Not for every row. A version on a row this app pins is a version somebody
-     * ran; a version on a row whose project publishes nothing here would be a
-     * number copied off a web page, which is the kind of true-sounding detail
-     * that makes the rest of a catalogue less believable rather than more.
+     * Every row now, where this used to skip the rows with nothing to fetch. A
+     * version here is a version somebody ran — the catalogue's header promises
+     * that and this is what holds it, because a blank version would mean a row
+     * pinning bytes nobody can name.
      */
     for (const entry of BROWSER_EXTENSION_CATALOGUE) {
-      if (entry.works === 'unmeasured') {
-        expect(entry.version, `${entry.id} names a version for a release nobody has`).toBe('')
-        continue
-      }
       expect(entry.version.trim(), entry.id).not.toBe('')
     }
   })
@@ -85,70 +88,67 @@ describe('every row', () => {
   })
 
   it('answers the searches people actually arrive with', () => {
-    // The point of the tags, stated as the searches rather than as a rule about
-    // the field. Each of these matched nothing before they existed.
+    /*
+     * The point of the tags, stated as the searches rather than as a rule about
+     * the field. Each of these matched nothing before they existed.
+     *
+     * Two searches that used to be here are gone with their rows — *password
+     * manager* found Bitwarden, *keyboard* found Vimium — and putting them back
+     * would mean putting back a row that cannot be installed. That the store
+     * answers *password manager* with nothing is now the true answer, and
+     * `browser-extension-support.ts` says which single missing thing would
+     * change it.
+     */
     const finds = (word: string): string[] =>
       BROWSER_EXTENSION_CATALOGUE.filter((entry) =>
         [entry.name, entry.summary, ...entry.tags].join(' ').toLowerCase().includes(word),
       ).map((entry) => entry.id)
 
     expect(finds('adblock')).toContain('ublock-origin')
-    expect(finds('password manager')).toContain('bitwarden')
     expect(finds('dark mode')).toContain('dark-reader')
     expect(finds('youtube')).toContain('sponsorblock')
     expect(finds('cookies')).toContain('isdcac')
-    expect(finds('keyboard')).toContain('vimium')
+    expect(finds('userscripts')).toContain('violentmonkey')
+    expect(finds('tracking')).toContain('clearurls')
   })
 
-  it('asks a person for something only where that is true', () => {
+  it('asks a person for nothing, because everything left is a program that just runs', () => {
     /*
-     * This test used to name the only two rows allowed to want anything, and
-     * the reasoning behind it was sound for the catalogue it was written
-     * against: *"a browser extension needs nothing from you: you install it and
-     * it runs"*, and a catalogue that marked more rows than that would be
-     * inventing obstacles.
+     * This test has been rewritten twice and the history is the point.
      *
-     * It stopped being true on 2026-08-23, when the mainstream half arrived.
-     * Grammarly, LastPass, 1Password, Loom, Todoist and the Google rows are not
-     * inventions: every one of them is a client for an account, and a store that
-     * stayed quiet about that to keep a list of two would be hiding the single
-     * most useful thing it knows about those rows.
+     * It began as *"a browser extension needs nothing from you: you install it
+     * and it runs"*, naming the two rows allowed an exception. It was widened on
+     * 2026-08-23, when the catalogue gained clients for accounts — Grammarly,
+     * LastPass, 1Password, Loom, the Google rows — because a store that stayed
+     * quiet about an account would be hiding the most useful thing it knew.
      *
-     * So the rule is enforced instead of the list. Both values still have to
-     * mean something — `companion-app` is still exactly one row, because a
-     * second program running on this machine really is rare — and a row that
-     * claims an obstacle still has to be one this file can point at.
+     * Every one of those rows was a link to the Chrome Web Store, and they are
+     * gone. What is left is twelve programs that install here and run, and not
+     * one of them wants anything from anybody. So the original sentence is true
+     * again — not because the rule was tightened, but because the rows that
+     * broke it were the rows that could not be installed.
+     *
+     * The values stay on {@link ExtensionNeed}, because a measured row could
+     * want an account tomorrow; what is checked is that no row claims one it
+     * does not have.
      */
-    const needy = BROWSER_EXTENSION_CATALOGUE.filter((entry) => (entry.needs ?? []).length > 0)
     const known: readonly ExtensionNeed[] = ['account', 'companion-app']
+    const needy = BROWSER_EXTENSION_CATALOGUE.filter((entry) => (entry.needs ?? []).length > 0)
     for (const entry of needy) {
       for (const need of entry.needs ?? []) {
         expect(known, `${entry.id} needs ${need}`).toContain(need)
       }
       expect(new Set(entry.needs).size, `${entry.id} repeats a need`).toBe(entry.needs?.length)
     }
-    // The rare one stays rare, or the value has stopped separating anything.
-    const companions = needy.filter((entry) => entry.needs?.includes('companion-app'))
-    expect(companions.map((entry) => entry.id)).toEqual(['keepassxc-browser'])
-    /*
-     * And the majority still needs nothing, which is the fact the old list was
-     * really protecting. An extension store where most rows want an account
-     * would be a store of services with a browser attached.
-     */
-    expect(needy.length).toBeLessThan(BROWSER_EXTENSION_CATALOGUE.length / 2)
+    expect(needy.map((entry) => entry.id)).toEqual([])
   })
 
   it('names a price on every row, and says more than the word when it is not free', () => {
     /*
      * The rule Asad set for both catalogues: **never imply free when a key costs
-     * money**. Every extension in a browser store is a free download, so *free
-     * to install* was quietly standing in for *free to use* — true of uBlock
-     * Origin, false of 1Password, whose extension does nothing at all once its
-     * trial ends.
-     *
-     * A bare `paid` would be almost as bad as silence, so anything that is not
-     * plainly free owes a sentence, and it is checked here rather than left to
-     * whoever adds the next row.
+     * money**. It is kept even though every row here is now free, because the
+     * next row added may not be — and the failure this guards is a row that says
+     * `paid` and nothing else, which is almost as bad as silence.
      */
     for (const entry of BROWSER_EXTENSION_CATALOGUE) {
       expect(COSTS, `${entry.id} has no price`).toContain(entry.cost)
@@ -158,51 +158,52 @@ describe('every row', () => {
     }
   })
 
-  it('has more than one answer about price, or the field is decoration', () => {
-    /*
-     * A facet whose every row answers the same thing is a control that does
-     * nothing — `facetControl` refuses to draw one, and a catalogue that drifted
-     * back to all-free would be quietly turning this off rather than saying so.
-     */
-    const prices = new Set(BROWSER_EXTENSION_CATALOGUE.map((entry) => entry.cost))
-    expect(prices.size).toBeGreaterThan(2)
-    expect(prices.has('paid'), 'nothing here costs money and one thing does').toBe(true)
-  })
-
-  it('never lets a row that costs money read as free', () => {
-    /*
-     * The specific lie, named. 1Password is the row this field was added for:
-     * its extension is a free download and its service has no free plan at all.
-     * A catalogue that priced it `free` — or left the note off — would be
-     * telling somebody they can use it today.
-     */
-    const one = BROWSER_EXTENSION_CATALOGUE.find((entry) => entry.id === 'onepassword')
-    expect(one?.cost).toBe('paid')
-    expect(one?.costNote.toLowerCase()).toContain('no free plan')
-  })
-
-  it('carries a measurement, whatever its verdict', () => {
+  it('carries a measurement, and one that starts with the word that was earned', () => {
     /*
      * A verdict with no observation behind it is an opinion, and this store
      * exists because a store full of opinions is what somebody was handed
      * before. The length floor is there because "works" is not a measurement.
+     *
+     * `Watched` is the currency of this file. A `works` row spends it; a `partly`
+     * row must not, because what it says is *it loaded and I did not see it do
+     * its job*, and starting that sentence with the same word would make the two
+     * verdicts read alike on the shelf.
      */
     for (const entry of BROWSER_EXTENSION_CATALOGUE) {
       expect(entry.measured.trim().length, `${entry.id} has no measurement`).toBeGreaterThan(40)
+      if (entry.works === 'works') expect(entry.measured, entry.id).toMatch(/^Watched \w+/)
+      else expect(entry.measured, entry.id).not.toMatch(/^Watched/)
     }
   })
 })
 
-describe('a row that can be installed', () => {
+describe('every row is one this browser can install', () => {
+  /*
+   * The rule of the whole file, and the reason it is a `describe` rather than a
+   * paragraph. Asad, on the store as it was: *"we only give the option to
+   * install those tools that can actually install in this one, and it will not
+   * redirect them to the Chrome store."*
+   */
   it('pins an https URL, an exact byte count and a real sha256', () => {
     for (const entry of BROWSER_EXTENSION_CATALOGUE) {
-      if (entry.source === null) continue
       expect(entry.source.url, entry.id).toMatch(/^https:\/\//)
       // `digestMatches` refuses anything that is not 64 hex characters, so a row
       // whose digest is not that could never install — a control that can only
       // ever fail, which is the thing this store is written against.
       expect(entry.source.sha256, entry.id).toMatch(/^[0-9a-f]{64}$/)
       expect(entry.source.bytes, entry.id).toBeGreaterThan(0)
+    }
+  })
+
+  it('carries a verdict that means it ran here, and never one that means it did not', () => {
+    /*
+     * `CatalogueEntry` already refuses `no` and `unmeasured` at the type level,
+     * so this cannot fail while the types hold. It is here for the day somebody
+     * widens the type back: the sentence that would have to be deleted to do it
+     * is right underneath the reason it exists.
+     */
+    for (const entry of BROWSER_EXTENSION_CATALOGUE) {
+      expect(['works', 'partly'], `${entry.id} is ${entry.works}`).toContain(entry.works)
     }
   })
 
@@ -215,7 +216,6 @@ describe('a row that can be installed', () => {
      * actually ask for.
      */
     for (const entry of BROWSER_EXTENSION_CATALOGUE) {
-      if (entry.source === null) continue
       expect(entry.reach.length, `${entry.id} states no reach`).toBeGreaterThan(0)
       for (const pattern of entry.reach) {
         expect(pattern, entry.id).toMatch(/^(<all_urls>|[a-z*]+:\/\/[^\s]+)$/)
@@ -225,40 +225,27 @@ describe('a row that can be installed', () => {
 
   it('never points at a .crx, which this browser cannot open', () => {
     for (const entry of BROWSER_EXTENSION_CATALOGUE) {
-      expect(entry.source?.url.endsWith('.crx'), entry.id).not.toBe(true)
-    }
-  })
-})
-
-describe('a row that cannot work here', () => {
-  it('carries no download at all', () => {
-    /*
-     * The rule that keeps "cannot work here" from being a button. No source
-     * means no Install can be drawn and none could succeed if it were.
-     */
-    for (const entry of BROWSER_EXTENSION_CATALOGUE) {
-      if (entry.works !== 'no') continue
-      expect(entry.source, `${entry.id} says it cannot work and still offers a download`).toBeNull()
+      expect(entry.source.url.endsWith('.crx'), entry.id).not.toBe(true)
     }
   })
 
-  it('names what it was watched failing at, not just that it failed', () => {
+  it('never points at the Chrome Web Store, in a download or in a homepage', () => {
     /*
-     * "It does not work" is the sentence this store exists to replace. A row in
-     * this state is somebody's dead end, and the only thing that makes it worth
-     * printing instead of omitting is that it says which thing gave way.
+     * The specific thing that was wrong, pinned so it cannot come back quietly.
+     * Twenty-four rows used to carry a **Get it** that opened a listing on
+     * chromewebstore.google.com — a shop sending somebody down the road to a
+     * shop this browser cannot buy from, since a `.crx` from there cannot be
+     * installed here at all.
      */
     for (const entry of BROWSER_EXTENSION_CATALOGUE) {
-      if (entry.works !== 'no') continue
-      expect(entry.measured, `${entry.id} refuses without saying what broke`).toMatch(
-        /chrome\.|storage\.|service worker|background|throws|threw/i,
-      )
+      expect(entry.source.url, entry.id).not.toMatch(/chromewebstore|chrome\.google\.com/i)
+      expect(entry.homepage, entry.id).not.toMatch(/chromewebstore|chrome\.google\.com/i)
     }
   })
 })
 
 describe('the famous names', () => {
-  it('answers "where is uBlock Origin" with a row rather than a silence', () => {
+  it('answers "where is uBlock Origin" with a row that installs', () => {
     /*
      * The first question anybody opens an extension store with. It was listed
      * here while it still could not work, because "never heard of it" and "it
@@ -286,128 +273,50 @@ describe('the famous names', () => {
   })
 })
 
-describe('a row that says it works', () => {
-  it('has a download to install and something that was watched happening', () => {
-    const working = BROWSER_EXTENSION_CATALOGUE.filter((entry) => entry.works === 'works')
-    // A store whose every row is a refusal is not a store. If this ever reaches
-    // zero, the feature has stopped being one and should say so out loud.
-    expect(working.length).toBeGreaterThan(0)
-    for (const entry of working) {
-      expect(entry.source, entry.id).not.toBeNull()
-      /*
-       * "Watched", not "watched working". The word that matters is the one that
-       * says somebody looked; what they were looking at differs by row — a page
-       * turning dark, a parameter never reaching a server, a request that was
-       * not sent — and pinning the whole phrase once cost this file a true row
-       * that said "Watched blocking" and had the three-request table behind it.
-       */
-      expect(entry.measured, entry.id).toMatch(/^Watched \w+/)
-    }
-  })
-})
-
-describe('a row nothing was measured on', () => {
-  it('has no download, and says why there is none', () => {
-    /*
-     * The third answer to *where is Vimium*. It exists because the other two
-     * were both false for it: this app has not "never heard of it", and it did
-     * not "watch it fail" — there was nothing to run. A row in this state that
-     * carried a source would be claiming a fetch nobody can make; one with no
-     * `noRelease` would be a shrug.
-     */
-    const unmeasured = BROWSER_EXTENSION_CATALOGUE.filter((entry) => entry.works === 'unmeasured')
-    expect(unmeasured.length).toBeGreaterThan(0)
-    for (const entry of unmeasured) {
-      expect(entry.source, `${entry.id} was not measured and still offers a download`).toBeNull()
-      expect((entry.noRelease ?? '').length, `${entry.id} says nothing about why`).toBeGreaterThan(40)
-    }
-  })
-
-  it('never borrows the word a measured row earned', () => {
-    /*
-     * `Watched` is the word every working row starts with, and it is the whole
-     * currency of this file. A row nobody ran must not spend it.
-     */
-    for (const entry of BROWSER_EXTENSION_CATALOGUE) {
-      if (entry.works !== 'unmeasured') continue
-      expect(entry.measured, entry.id).not.toMatch(/^Watched/)
-      expect(entry.measured.toLowerCase(), entry.id).toContain('nothing was measured')
-    }
-  })
-
-  it('answers the famous names that have no release to pin', () => {
-    const ids = BROWSER_EXTENSION_CATALOGUE.map((entry) => entry.id)
-    for (const id of ['privacy-badger', 'singlefile', 'vimium']) expect(ids).toContain(id)
-  })
-})
-
 describe('the store as a whole', () => {
-  it('is a store rather than a shelf of refusals', () => {
+  it('is mostly things that were watched doing their job', () => {
     /*
-     * A number rather than a feeling — but the number moved, and it is worth
-     * saying why rather than quietly loosening it.
+     * A number rather than a feeling, and the number it replaced is worth
+     * naming. This used to check that refusals stayed a minority, which was the
+     * right question while the catalogue held refusals. It cannot hold one now,
+     * so the question moved up: of the rows that install, most must be rows
+     * somebody watched *working* rather than rows that merely started.
      *
-     * This counted rows with a download and required half the catalogue to have
-     * one, under the heading *a shelf of refusals*. Those were the same thing
-     * while every row was an open-source project with a release: no download
-     * meant this app had watched it fail.
-     *
-     * They are not the same thing now. Twelve rows were added on 2026-08-23 for
-     * extensions people actually arrive looking for — Grammarly, 1Password,
-     * Google Translate — and every one is closed source, published through the
-     * Chrome Web Store, with no file to fetch and nothing measured. None of them
-     * is a refusal; each carries **Get it**, which opens its own listing. Kept
-     * as it was, this test would have argued that answering *where is Grammarly*
-     * makes the store worse.
-     *
-     * So it measures what its own name says. A refusal is a row this app ran and
-     * watched fail, and those must stay a minority — and separately, every row
-     * must have somewhere to go, which is the thing that stops a listing without
-     * an Install from being a dead end.
+     * If `partly` ever became the majority, this would be a store of programs
+     * nobody checked, which is a slower version of the same problem.
      */
-    const refusals = BROWSER_EXTENSION_CATALOGUE.filter((entry) => entry.works === 'no')
-    expect(refusals.length).toBeLessThan(BROWSER_EXTENSION_CATALOGUE.length / 3)
-    // And it is still a store: something has to be installable from it.
-    const installable = BROWSER_EXTENSION_CATALOGUE.filter((entry) => entry.source !== null)
-    expect(installable.length).toBeGreaterThan(BROWSER_EXTENSION_CATALOGUE.length / 4)
+    const working = BROWSER_EXTENSION_CATALOGUE.filter((entry) => entry.works === 'works')
+    expect(working.length).toBeGreaterThan(BROWSER_EXTENSION_CATALOGUE.length / 2)
   })
 
-  it('gives every row a way onward, so no row is a dead end', () => {
+  it('is a store rather than an empty room', () => {
     /*
-     * The rule that lets the catalogue hold what it cannot install. A row either
-     * installs here or links to its own page — `StoreLinkOut.tsx` draws that
-     * from `homepage` — and a row with neither would be the silence this store
-     * was written against.
+     * The floor under the whole feature. Cutting twenty-four rows was right;
+     * cutting to nothing would mean the browser has no extension story and the
+     * app should say that out loud rather than draw a shop with no stock.
      */
-    for (const entry of BROWSER_EXTENSION_CATALOGUE) {
-      const onward = entry.source !== null || /^https:\/\//.test(entry.homepage)
-      expect(onward, `${entry.id} has neither a download nor a page`).toBe(true)
-    }
-  })
-
-  it('answers the names people arrive with, whoever publishes them', () => {
-    /*
-     * The mainstream half, stated as the searches rather than as a rule. Every
-     * one of these answered with an empty list before 2026-08-23, which reads as
-     * *never heard of it* — and this store's whole argument is that *never heard
-     * of it*, *it cannot work here* and *nothing was measured* are three
-     * different sentences.
-     */
-    const finds = (word: string): string[] =>
-      BROWSER_EXTENSION_CATALOGUE.filter((entry) =>
-        [entry.name, entry.summary, ...entry.tags].join(' ').toLowerCase().includes(word),
-      ).map((entry) => entry.id)
-
-    expect(finds('translate')).toContain('google-translate')
-    expect(finds('grammar')).toContain('grammarly')
-    expect(finds('coupons')).toContain('honey')
-    expect(finds('screen recording')).toContain('loom')
-    expect(finds('autofill')).toEqual(expect.arrayContaining(['lastpass', 'onepassword']))
+    expect(BROWSER_EXTENSION_CATALOGUE.length).toBeGreaterThanOrEqual(10)
   })
 
   it('spreads across categories, so the sections are worth drawing', () => {
     const used = new Set(BROWSER_EXTENSION_CATALOGUE.map((entry) => entry.category))
     expect(used.size).toBeGreaterThanOrEqual(5)
+  })
+
+  it('leaves no shelf standing with nothing on it', () => {
+    /*
+     * Five shelves emptied when the rule arrived — Passwords, Writing and
+     * language, Documents and work, Shopping, Saving and research — and they
+     * were deleted rather than kept as headings over nothing. This holds the
+     * pair together: a category this app draws must be one a row is on, apart
+     * from *Added by you*, which is filled by the person rather than by this
+     * file.
+     */
+    const used = new Set<string>(BROWSER_EXTENSION_CATALOGUE.map((entry) => entry.category))
+    for (const category of EXTENSION_CATEGORIES) {
+      if (category.id === 'your-own') continue
+      expect(used.has(category.id), `${category.id} is a shelf with nothing on it`).toBe(true)
+    }
   })
 
   it('states a reach that covers what each release actually declares', () => {
@@ -420,7 +329,6 @@ describe('the store as a whole', () => {
      * or to enumerate.
      */
     for (const entry of BROWSER_EXTENSION_CATALOGUE) {
-      if (entry.source === null) continue
       const everywhere = entry.reach.some(
         (pattern) => pattern === '<all_urls>' || /^(\*|https?):\/\/\*\/\*$/.test(pattern),
       )

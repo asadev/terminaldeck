@@ -41,7 +41,6 @@ function row(over: Partial<StoreExtension> = {}): StoreExtension {
     costNote: '',
     works: 'works',
     measured: 'Watched working: a white page came back with background rgb(24, 26, 27).',
-    noRelease: '',
     logo: 'dark-reader',
     url: 'https://example.com/a.zip',
     sha256: 'a'.repeat(64),
@@ -116,63 +115,26 @@ describe('what will be fetched, and what was', () => {
     expect(html).toContain('matched this before it was unpacked')
   })
 
-  it('offers no provenance on a row with no download pinned', () => {
-    // A "cannot work here" row pins nothing, so a URL under it would be
-    // provenance for a fetch that can never happen.
-    const html = render({ works: 'no', state: 'unavailable', url: '', sha256: '', bytes: 0 })
-    expect(html).not.toContain('Download')
-    expect(html).not.toContain('sha256')
-  })
-})
-
-describe('a row this app measured failing', () => {
-  it('offers no Install — not even a disabled one — and links out instead', () => {
+  it('offers provenance on every row, because every row has bytes to fetch', () => {
     /*
-     * Not a disabled Install: a disabled Install with a tooltip is still a store
-     * offering something. There is no download pinned to this row, so that
-     * button could only ever refuse.
-     *
-     * What the row does carry now is one control that does exactly what it says.
-     * *"or maybe only link of the application from github or wherever they can
-     * go and download it, it will just redirect them"* — so the dead end became
-     * a way onward, and it is worded **Open project** rather than Get it,
-     * because you cannot get this one here and the sentence underneath says why.
+     * This replaces a test that rendered a row with no download and checked that
+     * no URL was printed under it. Such a row cannot exist any more, so what is
+     * worth pinning is the opposite: the fetch is disclosed before the button,
+     * not after it.
      */
-    const html = render({
-      id: 'ublock-origin',
-      name: 'uBlock Origin',
-      works: 'no',
-      state: 'unavailable',
-      url: '',
-      sha256: '',
-      homepage: 'https://github.com/gorhill/uBlock',
-      measured: 'It loads, and then blocks nothing.',
-    })
-    expect(html).not.toContain('Install')
-    expect(html).not.toContain('Download')
-    expect(html).toContain('Open project')
-    expect(html).toContain('https://github.com/gorhill/uBlock')
-    expect(html).toContain('blocks nothing')
-  })
-
-  it('has no link-out when the row carries no project address', () => {
-    // A button whose destination is an empty string is the dead control this
-    // whole store is written against, so it is not drawn at all.
-    const html = render({
-      works: 'no',
-      state: 'unavailable',
-      url: '',
-      sha256: '',
-      homepage: '',
-    })
-    expect(html).not.toContain('storefront-getit')
-  })
-
-  it('is still on screen, because "where is uBlock Origin" has a true answer', () => {
-    const html = render({ id: 'ublock-origin', name: 'uBlock Origin', works: 'no', state: 'unavailable' })
-    expect(html).toContain('uBlock Origin')
+    const html = render()
+    expect(html).toContain('https://example.com/a.zip')
+    expect(html).toContain('sha256')
   })
 })
+
+/*
+ * `describe('a row this app measured failing')` used to be here — three tests
+ * over a row with no Install and an **Open project** link in its place. The
+ * catalogue cannot hold such a row now, so the rendering they described is gone
+ * along with `linkOut` and `linkOutLabel`. Asad: *"we should not offer tools
+ * that don't work with our architecture."*
+ */
 
 describe('a row that can be installed', () => {
   it('offers Install and says so on the button', () => {
