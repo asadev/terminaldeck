@@ -85,7 +85,11 @@ describe('a message is never sent as one write', () => {
     const offenders: string[] = []
     for (const path of sources(RENDERER)) {
       const text = readFileSync(path, 'utf8')
-      for (const [index, line] of text.split('\n').entries()) {
+      // `/\r?\n/`, not `'\n'`. Git checks this repository out with CRLF on
+      // Windows, so splitting on the newline alone leaves a `\r` on the end of
+      // EVERY line — and this case hunts for a `\r` on the end of a line. It
+      // matched all of them and failed the Windows job while macOS stayed green.
+      for (const [index, line] of text.split(/\r?\n/).entries()) {
         // A line of prose describing the defect is not the defect. Comments are
         // where this rule is explained, so they have to be allowed to quote it.
         const code = line.replace(/^\s*(\/\/|\*|\/\*).*$/, '')
@@ -108,7 +112,7 @@ describe('a message is never sent as one write', () => {
     // If that line moves or goes away, this fails and somebody has to decide
     // again rather than inheriting a stale exemption.
     const [file, line] = [...ALLOWED][0].split(':')
-    const text = readFileSync(join(RENDERER, file), 'utf8').split('\n')[Number(line) - 1]
+    const text = readFileSync(join(RENDERER, file), 'utf8').split(/\r?\n/)[Number(line) - 1]
     expect(ONE_WRITE_SUBMIT.test(text)).toBe(true)
     expect(text).toContain('runCommand')
   })
