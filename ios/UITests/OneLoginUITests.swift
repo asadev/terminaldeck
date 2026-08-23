@@ -305,24 +305,94 @@ final class OneLoginUITests: XCTestCase {
         // rather than a wait on somebody's real machine.
         address.typeText("nothing.invalid")
 
-        let port = app.textFields["serverLogin.port"]
-        port.tap()
-        port.typeText("2222")
-        // A number pad has no return key. The Done bar is how a finger gets off
-        // it, and it is asserted here because without it the keypad covers the
-        // password field and the next tap lands on the keyboard — which is
-        // exactly how this case failed once.
-        XCTAssertTrue(app.buttons["serverLogin.portDone"].waitForExistence(timeout: 5),
-                      "a number pad with no way off it is a screen somebody is stuck on")
-        app.buttons["serverLogin.portDone"].tap()
+        /*
+         * **Filled both ways somebody can fill it**: the bar over the keyboard,
+         * and a finger on the field.
+         *
+         * Tapping each field in turn failed twice, on the password, with
+         * "neither element nor any descendant has keyboard focus". Two faults
+         * stacked: `scrollDismissesKeyboard(.interactively)` read the downward
+         * tap from Username into Password as the dismiss gesture, and the
+         * password field sits at y=532 on an 852-point phone with the keyboard
+         * taking the bottom ~380 — so it was *covered*, and the tap landed on a
+         * key. Both are fixed in the screen: `.never` for the gesture, `reveal`
+         * for the covering.
+         *
+         * The bar is asserted first because it is the new control and the one a
+         * finger reaches for in a form. But a walk that only ever presses Next
+         * would pass over a screen whose fields still cannot be touched —
+         * `app.typeText` goes wherever focus already is and never needs the
+         * field to be visible at all — so the password below is reached with a
+         * tap, which is the assertion this case exists for.
+         */
+        let previous = app.buttons["serverLogin.keyboardPrevious"]
+        let next = app.buttons["serverLogin.keyboardNext"]
+        XCTAssertTrue(next.waitForExistence(timeout: 5),
+                      "a form of five fields with no way between them is a form somebody is "
+                          + "stuck in")
+        XCTAssertFalse(previous.isEnabled,
+                       "there is nothing above the first field, and the control has to say so")
 
+        next.tap()                                  // → port
+        /*
+         * Typed **into the field**, not into the application.
+         *
+         * `app.typeText` sends the characters wherever focus happens to be, and
+         * to find out where that is it asks for every element in the hierarchy
+         * matching `hasKeyboardFocus == 1` — a full-tree scan that hung this
+         * walk for thirty seconds and took the runner with it. `element.typeText`
+         * needs no scan, and it refuses outright on a field that did not take
+         * focus, which is the thing being asserted.
+         */
+        let port = app.textFields["serverLogin.port"]
+        port.typeText("2222")
+
+        // Backwards, and it lands on the field directly above rather than
+        // wherever focus happened to be before. Previous going dead is the
+        // proof: it is disabled only on the first field, so this is the address
+        // field having taken focus and nothing else.
+        previous.tap()                              // → address
+        XCTAssertFalse(previous.isEnabled,
+                       "Previous did not put the cursor back in the address field")
+
+        next.tap()                                  // → port
+        next.tap()                                  // → username
         let username = app.textFields["serverLogin.username"]
-        username.tap()
         username.typeText("asad")
 
+        /*
+         * **And now the tap that could not be made.**
+         *
+         * The bar is the fix for a form somebody has to get through; it is not
+         * the fix for the field itself, and a screen that can only be filled by
+         * pressing Next is still broken. So the password is reached the way a
+         * finger reaches it. It works now because focusing Username scrolled the
+         * form: the field that was at y=532, under a keyboard whose top edge is
+         * ~472, is on screen by the time the tap lands.
+         *
+         * `typeText` fails outright on a field that did not take focus — that is
+         * the failure this whole item is about — so the value read back out of
+         * the field is the assertion doing the work. A secure field reports its
+         * contents as one bullet per character, which is how a password can be
+         * counted without being read.
+         */
         let password = app.secureTextFields["serverLogin.password"]
         password.tap()
         password.typeText("hunter2")
+        capture("06-the-form-under-a-raised-keyboard")
+        XCTAssertEqual((password.value as? String)?.count, 7,
+                       "the password went to the keyboard instead of into the field")
+        // And nothing landed in the field above it on the way. A character lost
+        // between two fields is a character that went *somewhere*, and the only
+        // somewhere available is whatever held focus a moment earlier.
+        XCTAssertEqual(username.value as? String, "asad",
+                       "a keystroke meant for the password went into the username")
+
+        // And Done gets a finger off it — including off the number pad, which
+        // has no return key of its own.
+        XCTAssertTrue(app.buttons["serverLogin.keyboardDone"].exists,
+                      "a keyboard with no way off it is a screen somebody is stuck on")
+        app.buttons["serverLogin.keyboardDone"].tap()
 
         app.buttons["serverLogin.submit"].tap()
 
@@ -336,7 +406,7 @@ final class OneLoginUITests: XCTestCase {
         // The port survived, which is the point of it being a field: the one
         // thing somebody would go back and correct must still be there.
         XCTAssertEqual(port.value as? String, "2222")
-        capture("06-refused")
+        capture("07-refused")
     }
 
     /// Written beside the assertions when `TD_SHOTS` names a directory, and

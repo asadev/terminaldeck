@@ -1151,6 +1151,35 @@ final class DeckModel {
      */
     var loggingIntoServer = false
 
+    /**
+     * Whether the login screen is holding the window **past the moment it
+     * succeeded**.
+     *
+     * ## The bug this exists to fix, watched happening
+     *
+     * `RootView` shows the login as the gate while there is no machine and no
+     * server. Logging in creates a server — so `hasServers` flips true inside
+     * the sign-in, `RootView` swaps the gate for `DeckTabs` on the very next
+     * frame, and the screen that was about to show the fingerprint receipt, the
+     * Face ID offer and the check-and-install step is torn down at the instant
+     * it had something to show. What a person saw was the form, a spinner, and
+     * then an empty Sessions tab: *"right after logging in we need to have the
+     * step for checking/installing"* — and the step existed, drawn by a view
+     * that no longer had a window.
+     *
+     * It is the same trap `loggingIntoServer` above was written for, one level
+     * up: there, a sheet died with the screen presenting it; here, the gate is
+     * the thing that dies. Photographed on a simulator against a real server,
+     * which is the only way it shows — every test passed, because a test that
+     * waits for `serverLogin.signedIn` simply times out and reports a slow
+     * login.
+     *
+     * So the gate keeps the window from the moment **Log in** is pressed until
+     * the person leaves that screen themselves. `hasServers` decides where they
+     * go next, not whether they are allowed to finish.
+     */
+    var holdingTheLoginGate = false
+
     var serverSignIn: ServerSignIn {
         if let flow = serverFlow { return flow }
         let flow = ServerSignIn(credentials: credentials, device: device) { [weak self] record in

@@ -78,7 +78,19 @@ struct RootView: View {
 
     var body: some View {
         Group {
-            if !model.isPaired && !model.hasServers {
+            /*
+             * The gate, and the one clause that keeps it alive long enough to
+             * finish what it started.
+             *
+             * `holdingTheLoginGate` is set the moment **Log in** is pressed and
+             * cleared when the person leaves the screen. Without it, succeeding
+             * at the login is what destroys the login: it creates a server,
+             * `hasServers` flips, and this `if` swaps the whole screen out
+             * before the receipt, the Face ID offer or the check-and-install
+             * step has drawn a single frame. See `DeckModel.holdingTheLoginGate`
+             * — it was photographed, not reasoned about.
+             */
+            if (!model.isPaired && !model.hasServers) || model.holdingTheLoginGate {
                 /*
                  * **The gate is the login, not the pairing code.**
                  *

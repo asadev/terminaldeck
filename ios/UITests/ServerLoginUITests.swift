@@ -144,6 +144,112 @@ final class ServerLoginUITests: XCTestCase {
             NSPredicate(format: "label CONTAINS[c] %@", "curl")).count, 0)
     }
 
+    /**
+     * **The whole of it, on a bare server**: log in, be offered Face ID, be told
+     * there is no host here, install one, and connect — without leaving this
+     * screen and without a command to copy.
+     *
+     * > *"If it does not exist, it gives the option to install — you click, it
+     * > installs, then you can connect, and disconnect if you want."*
+     *
+     * Gated on `TD_SERVER_MAY_INSTALL=1` on top of the usual variables, because
+     * this one **changes the far end**: it puts the headless host into that
+     * account's home folder. Every other case in this file is read-only against
+     * somebody's machine, and that default does not move for a screenshot.
+     *
+     *     TD_SERVER_ADDRESS=… TD_SERVER_USER=root \
+     *     TD_SERVER_KEY_BASE64="$(base64 < ~/.ssh/id_ed25519)" \
+     *     TD_SERVER_MAY_INSTALL=1 TD_SHOTS=/tmp/shots xcodebuild test …
+     */
+    func testInstallsOntoABareServerAndConnects() throws {
+        try XCTSkipIf(env("TD_SERVER_MAY_INSTALL") != "1",
+                      "this case installs software on the far end; opt in explicitly")
+
+        openTheLoginForm()
+        shoot("live-01-form-filled")
+        XCTAssertTrue(app.buttons["serverLogin.submit"].isEnabled)
+        app.buttons["serverLogin.submit"].tap()
+
+        /*
+         * Three minutes, and the failure says what was on screen.
+         *
+         * A login here is a real SSH handshake followed by two probe scripts
+         * over the same connection, and a small VPS on the other side of the
+         * world takes as long as it takes. The first version waited 90 seconds
+         * and then tried to read `serverLogin.errorHeadline` to explain itself —
+         * which does not exist while the screen is still *working*, so the
+         * timeout came back as "no matches found for predicate" and said nothing
+         * about the app at all. `whatIsOnScreen` reads only what is there.
+         */
+        let signedIn = app.staticTexts["serverLogin.signedIn"].waitForExistence(timeout: 180)
+        shoot("live-02-after-login")
+        XCTAssertTrue(signedIn, "the login never finished — " + whatIsOnScreen())
+
+        // The receipt, the Face ID offer and the check step are one screen.
+        XCTAssertTrue(app.staticTexts["server.hostLine"].waitForExistence(timeout: 120),
+                      "the check step never ran — " + whatIsOnScreen())
+        shoot("live-02-logged-in-and-checked")
+
+        // The offer, if this simulator has biometry enrolled. Not asserted —
+        // a device with none must show nothing rather than an empty card, and
+        // that is itself the correct behaviour to photograph.
+        if app.staticTexts["biometry.offer"].exists {
+            shoot("live-03-faceid-offer")
+        }
+
+        let install = app.buttons["server.install"]
+        XCTAssertTrue(install.waitForExistence(timeout: 30),
+                      "a bare server must be offered an install, not a command — "
+                          + whatIsOnScreen())
+        shoot("live-04-no-host-yet")
+        install.tap()
+
+        // Progress, watched. The line is written by the connector, never by a
+        // view, so this is the real one.
+        XCTAssertTrue(app.staticTexts["server.installLine"].waitForExistence(timeout: 30))
+        shoot("live-05-installing")
+
+        /*
+         * Twelve minutes, and that is not padding.
+         *
+         * A server with no Node 22 fetches a runtime and checks it against
+         * Node's own checksum, and node-pty ships no Linux binary so it
+         * compiles. `ServerConnector.installTimeout` is the same twelve minutes;
+         * a shorter wait here would fail the test on an install that is working.
+         */
+        let finished = app.buttons["server.connect"].waitForExistence(timeout: 800)
+            || app.buttons["server.startConnect"].waitForExistence(timeout: 5)
+        shoot("live-06-after-install")
+        XCTAssertTrue(finished, "the install did not end in something to press — " + whatIsOnScreen())
+
+        if app.buttons["server.startConnect"].exists {
+            app.buttons["server.startConnect"].tap()
+        } else {
+            app.buttons["server.connect"].tap()
+        }
+
+        let connected = app.staticTexts["serverLogin.connected"].waitForExistence(timeout: 120)
+        shoot("live-07-connected")
+        XCTAssertTrue(connected, "connect ended nowhere — " + whatIsOnScreen())
+    }
+
+    /**
+     * Everything readable on screen, for a failure message.
+     *
+     * Written because the obvious thing — naming the label you *expected* — is
+     * exactly what cannot be read when the expectation failed: XCUITest throws
+     * "no matches found for predicate" and the reason for the failure is
+     * replaced by a complaint about the failure message. This asks for what is
+     * there.
+     */
+    private func whatIsOnScreen() -> String {
+        let labels = app.staticTexts.allElementsBoundByIndex
+            .prefix(14)
+            .map(\.label)
+            .filter { !$0.isEmpty }
+        return labels.isEmpty ? "nothing readable on screen" : labels.joined(separator: " | ")
+    }
+
     // MARK: - Walking
 
     /// `TabNavigation.swift` owns the walk — and there is one of it now, because

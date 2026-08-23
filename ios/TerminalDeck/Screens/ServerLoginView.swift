@@ -88,6 +88,16 @@ struct ServerLoginView: View {
     @State private var declinedBiometry = false
     @FocusState private var focused: Field?
 
+    /**
+     * The four things somebody types, as one type.
+     *
+     * It is doing two jobs at once and that is deliberate: it is the value
+     * `@FocusState` holds, and it is the `.id` each field carries inside the
+     * scroll view. One case means one field means one place to scroll to, so
+     * "which field has focus" and "where on the form is it" can never disagree.
+     * `.secret` is the password field or the key field, whichever the picker is
+     * showing — never both at once, so the id stays unique.
+     */
     private enum Field: Hashable { case address, port, username, secret }
 
     private var connector: ServerConnector { model.serverConnector }
@@ -139,25 +149,67 @@ struct ServerLoginView: View {
         NavigationStack {
             ZStack {
                 Theme.background.ignoresSafeArea()
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 0) {
-                        switch stage {
-                        case .form:
-                            form
-                        case .working:
-                            working
-                        case let .arrived(server):
-                            arrived(server)
-                        case let .connected(name):
-                            connected(name)
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 0) {
+                            switch stage {
+                            case .form:
+                                form
+                            case .working:
+                                working
+                            case let .arrived(server):
+                                arrived(server)
+                            case let .connected(name):
+                                connected(name)
+                            }
                         }
+                        .padding(.horizontal, 20)
+                        .padding(.top, 8)
+                        .padding(.bottom, 40)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .padding(.horizontal, 20)
-                    .padding(.top, 8)
-                    .padding(.bottom, 40)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    /*
+                     * `.never`, not `.interactively`, and the difference is a
+                     * form.
+                     *
+                     * Interactive dismissal reads a downward touch as the start
+                     * of the gesture that puts the keyboard away, which is what
+                     * you want in something you scroll and read. This is five
+                     * fields somebody fills in order, and a tap from Username
+                     * into Password IS a downward touch: it was being taken as
+                     * the dismiss gesture and never reaching the field, so the
+                     * next keystrokes went nowhere. XCUITest reported it as
+                     * "neither element nor any descendant has keyboard focus";
+                     * a person just finds that their password did not go in.
+                     *
+                     * That was the gesture half of the fault. The other half is
+                     * geometry, and it is `reveal` below.
+                     */
+                    .scrollDismissesKeyboard(.never)
+                    /*
+                     * **And the field that just took focus is moved out from
+                     * under the keyboard.**
+                     *
+                     * Measured on an iPhone 17 Pro: 852 points tall, and the
+                     * keyboard with its bar over it takes the bottom ~380. The
+                     * password field sits at y=532 with the form scrolled to the
+                     * top — under the keyboard, by fifty points. A tap there
+                     * lands on the keyboard, and both a test and a person get
+                     * the same nothing: XCUITest says "neither element nor any
+                     * descendant has keyboard focus", and a person finds their
+                     * password did not go in and is given no reason.
+                     *
+                     * SwiftUI's own keyboard avoidance did not do it — the
+                     * `ScrollView` takes the safe-area inset, so the field stops
+                     * being *reachable by scrolling*, but nothing scrolls to it.
+                     * This does, on every focus change, however focus arrived:
+                     * a tap, the bar's Next, or Previous.
+                     */
+                    .onChange(of: focused) { was, field in
+                        guard let field else { return }
+                        reveal(field, proxy, keyboardIsArriving: was == nil)
+                    }
                 }
-                .scrollDismissesKeyboard(.interactively)
             }
             /*
              * One headline, not two.
@@ -182,11 +234,33 @@ struct ServerLoginView: View {
                             .accessibilityIdentifier("serverLogin.done")
                     }
                 }
+                keyboardBar
             }
         }
         .tint(Theme.accent)
         #if DEBUG
-        .task { prefillFromEnvironment() }
+        .task {
+            prefillFromEnvironment()
+            /*
+             * **Press it too**, when a walk asks for that.
+             *
+             * `TD_SERVER_AUTOSUBMIT=1`, DEBUG only, beside the prefill and for
+             * the same reason: the interesting half of this screen is what
+             * happens *after* the button — the handshake, the host key, the
+             * probe, the offer of Face ID, the check-and-install step — and none
+             * of it can be reached without a finger. With this, the whole flow
+             * can be driven by `simctl launch` and photographed, which is the
+             * only way to look at it on a machine that cannot afford to run the
+             * UI-test host.
+             *
+             * It presses the button; it does not bypass it. Everything the tap
+             * does — the validation, the two transports, the phases — happens
+             * exactly as it does for a finger.
+             */
+            guard ProcessInfo.processInfo.environment["TD_SERVER_AUTOSUBMIT"] == "1",
+                  canSubmit else { return }
+            submit()
+        }
         #endif
     }
 
@@ -233,6 +307,15 @@ struct ServerLoginView: View {
         return connector.isSigningIn || model.serverSignIn.isBusy ? "Close" : "Cancel"
     }
 
+    /**
+     * Leaving — and, from the gate, going somewhere rather than nowhere.
+     *
+     * A sheet hands its server back to `RootView`, which pushes the server's own
+     * page. The gate has no presenter to hand anything to, so it does that
+     * itself: releasing the window with nothing else said would drop somebody on
+     * an empty Sessions tab after they had just logged in to a machine —
+     * *"then all the server-related stuff comes up."*
+     */
     private func leave() {
         // The secret is spent by the time anything gets here and has no reason
         // to outlive the view.
@@ -241,7 +324,178 @@ struct ServerLoginView: View {
         if case let .added(server) = connector.login { added = server }
         connector.resetLogin()
         if case .signedIn = model.serverSignIn.phase { model.serverSignIn.edit() }
+        if isGate {
+            if let added {
+                model.show(.settings)
+                // Machines under it, not just the server: Back has to land
+                // somewhere that makes sense, and the list this server is now on
+                // is that place.
+                model.settingsRoute = [.machines, .server(added.id)]
+            }
+            // Released last, so the screen this replaces is already chosen.
+            model.holdingTheLoginGate = false
+        }
         close?(added)
+    }
+
+    /* ------------------------------------------------------------ keyboard -- */
+
+    /**
+     * **A bar over the keyboard, and the field it is covering scrolled up.**
+     *
+     * ## The bug, in one measurement
+     *
+     * The password field is at y=532 on an iPhone 17 Pro. The phone is 852
+     * points tall and the keyboard takes the bottom ~336 of them — ~380 with
+     * this bar on top — so everything below y≈472 is under it. The field is not
+     * hidden, it is *covered*: it draws, XCUITest finds it, `.tap()` reports
+     * success, and the touch lands on a key of the keyboard instead. What comes
+     * back is "Neither element nor any descendant has keyboard focus", and what
+     * a person gets is a password that did not go in, with nothing on screen
+     * saying so. On an iPhone SE, where the frame is 667 points, it is worse:
+     * the *username* field goes under too.
+     *
+     * ## The two halves of the answer
+     *
+     * A bar, so nobody has to reach a covered field at all — Previous, Next and
+     * Done, the ordinary iOS answer to a form. And `reveal`, so the field that
+     * took focus is scrolled out from under the keyboard whichever way focus
+     * got there, including a finger on a field that *is* visible.
+     *
+     * Done replaces `serverLogin.portDone`, which existed because a number pad
+     * has no return key of its own. It still does not — the same button now
+     * gets a finger off every keyboard on the screen rather than off one of
+     * them, and a bar that changes its controls per field is a bar people stop
+     * reading.
+     */
+    @ToolbarContentBuilder
+    private var keyboardBar: some ToolbarContent {
+        ToolbarItemGroup(placement: .keyboard) {
+            Button { movePrevious() } label: {
+                Image(systemName: "chevron.up")
+            }
+            .disabled(!canGoPrevious)
+            .accessibilityLabel("Previous field")
+            .accessibilityIdentifier("serverLogin.keyboardPrevious")
+
+            Button { moveNext() } label: {
+                Image(systemName: "chevron.down")
+            }
+            .disabled(!canGoNext)
+            .accessibilityLabel("Next field")
+            .accessibilityIdentifier("serverLogin.keyboardNext")
+
+            Spacer()
+
+            Button("Done") { focused = nil }
+                .accessibilityIdentifier("serverLogin.keyboardDone")
+        }
+    }
+
+    /**
+     * The fields in the order a finger goes through them — and only the ones
+     * somebody can actually type in.
+     *
+     * The port is dropped when a pasted server address has disabled it. A Next
+     * that lands on a disabled field is a Next that looks broken: the keyboard
+     * stays up, nothing gets focus, and the next keystroke goes nowhere — which
+     * is the fault this whole bar exists to end, reintroduced by the fix for it.
+     */
+    private var order: [Field] {
+        var fields: [Field] = [.address]
+        if !pastedAddress { fields.append(.port) }
+        fields.append(.username)
+        fields.append(.secret)
+        return fields
+    }
+
+    private var focusedIndex: Int? {
+        guard let focused else { return nil }
+        return order.firstIndex(of: focused)
+    }
+
+    private var canGoPrevious: Bool {
+        guard let index = focusedIndex else { return false }
+        return index > 0
+    }
+
+    private var canGoNext: Bool {
+        guard let index = focusedIndex else { return false }
+        return index + 1 < order.count
+    }
+
+    private func movePrevious() {
+        guard let index = focusedIndex, index > 0 else { return }
+        focused = order[index - 1]
+    }
+
+    private func moveNext() {
+        guard let index = focusedIndex, index + 1 < order.count else { return }
+        focused = order[index + 1]
+    }
+
+    /**
+     * Put the focused field where somebody can see it.
+     *
+     * ## Why it scrolls twice
+     *
+     * The keyboard takes about a quarter of a second to come up, and until it
+     * has, the scroll view's visible height is still the whole screen. A scroll
+     * issued now centres the field against a viewport that is about to shrink
+     * out from under it — which lands the field roughly where it started. So it
+     * is issued twice: once immediately, so the movement happens *with* the
+     * keyboard rather than after it and does not read as a jump, and once when
+     * the keyboard has landed and the height is true.
+     *
+     * The second pass runs **only** while the keyboard is on its way up, and
+     * that restriction was paid for. Moving between two fields with the
+     * keyboard already standing, the height is already true and the extra pass
+     * is not a correction but a second animation starting 400ms after the first
+     * — which is 400ms after somebody's finger left the field and about when
+     * their first character arrives. Measured: tapping Password and typing
+     * `hunter2` put **six** characters in the field. A form that eats the first
+     * letter of a password is the same complaint as one that eats all of them,
+     * only harder to notice.
+     *
+     * ## Why 0.35 rather than the middle
+     *
+     * A field's own label sits above it, and centring the field puts the label
+     * on the edge or off it. A third of the way down keeps the label, the field
+     * and the sentence under the field all in the visible strip — and for the
+     * key field, which is up to eighteen lines tall, it keeps the BEGIN line on
+     * screen rather than the middle of the base64.
+     */
+    private func reveal(_ field: Field, _ proxy: ScrollViewProxy, keyboardIsArriving: Bool) {
+        let anchor = UnitPoint(x: 0.5, y: 0.35)
+        Task { @MainActor in
+            /*
+             * **After** the focus change has finished, never inside it.
+             *
+             * Scrolling synchronously from `onChange` puts the scroll view's
+             * relayout in the same transaction as the old field resigning first
+             * responder, and the keystroke that field had not committed yet is
+             * lost in it. Measured, twice, on the walk: `asad` typed into the
+             * username and `asa` read back out of it after the finger moved to
+             * the password — one character, silently, and only ever the last one
+             * before focus moved. A form that eats a letter of somebody's
+             * username is a login that fails for a reason nothing on screen
+             * explains.
+             *
+             * A `Task` hop is enough: SwiftUI commits the focus change, and the
+             * scroll starts on the next turn of the main actor.
+             */
+            withAnimation(.easeOut(duration: 0.25)) {
+                proxy.scrollTo(field, anchor: anchor)
+            }
+            guard keyboardIsArriving else { return }
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            // Focus may have moved on — two taps in quick succession — and the
+            // last one is the one that decides where the form sits.
+            guard focused == field else { return }
+            withAnimation(.easeOut(duration: 0.2)) {
+                proxy.scrollTo(field, anchor: anchor)
+            }
+        }
     }
 
     /* ----------------------------------------------------------------- form -- */
@@ -295,6 +549,7 @@ struct ServerLoginView: View {
                 RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Theme.hairline, lineWidth: 1)
             }
             .accessibilityIdentifier("serverLogin.username")
+            .id(Field.username)
 
         fieldLabel("How you sign in", about: "the two ways in",
                    note: "Whichever that account already accepts. A key must be an Ed25519 or ECDSA "
@@ -332,6 +587,7 @@ struct ServerLoginView: View {
                 }
                 .padding(.top, 12)
                 .accessibilityIdentifier("serverLogin.password")
+                .id(Field.secret)
         } else {
             keyField
         }
@@ -463,6 +719,7 @@ struct ServerLoginView: View {
                     .stroke(Theme.hairline, lineWidth: 1)
             }
             .accessibilityIdentifier("serverLogin.address")
+            .id(Field.address)
 
         fieldLabel("Port", about: "the port",
                    note: "Leave it empty unless whoever set the server up gave you a "
@@ -491,29 +748,18 @@ struct ServerLoginView: View {
                 .frame(width: 96)
                 .accessibilityIdentifier("serverLogin.port")
                 /*
-                 * **A number pad has no return key**, so without this there is
-                 * no way off it.
+                 * **A number pad has no return key**, and the shared bar is
+                 * what gets a finger off it — `keyboardBar`, above.
                  *
-                 * `scrollDismissesKeyboard(.interactively)` is a drag, which is
-                 * a gesture rather than a control, and it is not what somebody
-                 * looks for after typing four digits. Caught by a test that
-                 * tapped the password field underneath and got "neither element
-                 * nor any descendant has keyboard focus" — the tap landed on the
-                 * keypad covering it. A person's finger lands in the same place.
-                 *
-                 * Scoped to this field: the address and username keyboards have
-                 * return keys of their own, and a second Done bar over them
-                 * would be furniture.
+                 * There used to be a Done here and nowhere else, conditioned on
+                 * `focused == .port`, on the reasoning that the other keyboards
+                 * have return keys of their own. They do, and it was still the
+                 * wrong shape: a return key moves the cursor, it does not move
+                 * the form, so the field after this one was still under the
+                 * keyboard when it got focus. One bar over every keyboard,
+                 * carrying Previous and Next as well, is what a form needs.
                  */
-                .toolbar {
-                    if focused == .port {
-                        ToolbarItemGroup(placement: .keyboard) {
-                            Spacer()
-                            Button("Done") { focused = nil }
-                                .accessibilityIdentifier("serverLogin.portDone")
-                        }
-                    }
-                }
+                .id(Field.port)
 
             Text(pastedAddress
                  ? "Not used with a server address."
@@ -622,6 +868,7 @@ struct ServerLoginView: View {
                     .stroke(readbackTint(readback), lineWidth: 1)
             }
             .accessibilityIdentifier("serverLogin.key")
+            .id(Field.secret)
 
         if let sentence = readback.sentence {
             HStack(alignment: .top, spacing: 6) {
@@ -683,6 +930,10 @@ struct ServerLoginView: View {
                 // successful pairing moves this phone past the gate, and a sheet
                 // owned by the view being torn down goes with it.
                 if !isGate { close?(nil) }
+                // And the gate stops holding the window: pairing is going to
+                // move this phone past it, and a hold left over from a login
+                // that failed would pin it here.
+                model.holdingTheLoginGate = false
                 model.addingHost = true
             } label: {
                 HStack(spacing: 7) {
@@ -721,6 +972,9 @@ struct ServerLoginView: View {
      * them which was recognised.
      */
     private func submit() {
+        // Claim the window before anything can succeed. Succeeding is what
+        // destroys this screen otherwise — see `DeckModel.holdingTheLoginGate`.
+        if isGate { model.holdingTheLoginGate = true }
         let raw = address.trimmingCharacters(in: .whitespacesAndNewlines)
         if pastedAddress {
             model.serverSignIn.submit(address: raw,
