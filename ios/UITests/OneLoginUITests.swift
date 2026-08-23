@@ -254,11 +254,68 @@ final class OneLoginUITests: XCTestCase {
         XCTAssertTrue(value.hasSuffix("\n"),
                       "the key file's own trailing newline was eaten on the way in")
 
+        /*
+         * **And the same key typed in, character by character.**
+         *
+         * A paste is a single event: one string arrives, and a field that can
+         * hold a string holds it. Typing is the harder case and the one the
+         * requirement names — seven lines going in one at a time, with six
+         * `Return`s between them, into a field whose keyboard has a return key
+         * that could just as easily have been a Done. It is what a single-line
+         * `SecureField` cannot survive, and it is the only way to prove the
+         * newlines are the field's rather than the pasteboard's.
+         *
+         * The bytes typed are the ones the paste produced, so this compares the
+         * two routes against each other as well as against the reader.
+         */
+        app.buttons["serverLogin.clearKey"].tap()
+        // An empty text field reports its *placeholder* as its value, and this
+        // field's placeholder is the BEGIN line — so "is it empty" cannot be
+        // asked of the value here. The readback line going away is the honest
+        // form of the question: it exists only while the field holds something.
+        XCTAssertTrue(readback.waitForNonExistence(timeout: 5),
+                      "Clear did not empty the key field")
+        field.tap()
+        field.typeText(value)
+
+        let afterTyping = (field.value as? String) ?? ""
+        XCTAssertEqual(afterTyping, value,
+                       "the key that was typed is not the key that came back out")
+        XCTAssertTrue(afterTyping.hasPrefix("-----BEGIN OPENSSH PRIVATE KEY-----"),
+                      "the typed key lost its BEGIN line")
+        XCTAssertTrue(afterTyping.contains("-----END OPENSSH PRIVATE KEY-----"),
+                      "the typed key lost its END line")
+        XCTAssertEqual(afterTyping.trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(separator: "\n", omittingEmptySubsequences: false).count, 7,
+                       "the newlines did not survive being typed")
+        XCTAssertTrue(readback.label.contains("7 lines"),
+                      "the reader did not see seven lines in the typed key: " + readback.label)
+        capture("04b-key-typed")
+
         // The Log in button is live, which is the whole point: a key that cannot
         // be submitted is a key that was not accepted.
-        app.textFields["serverLogin.address"].tap()
-        app.textFields["serverLogin.address"].typeText("example.com")
-        app.textFields["serverLogin.username"].tap()
+        /*
+         * Back up the form with the bar, not with a finger.
+         *
+         * Eighteen lines of key and a keyboard have pushed the address field off
+         * the top of the screen by this point, and reaching for it fails on its
+         * own terms — `kAXScrollToVisibleAction` on an element reported at
+         * `{inf, inf}`. Previous is the control that exists for exactly this,
+         * and using it proves the other half of the fix as well: each stop
+         * scrolls the field it lands on back into view, or the typing below
+         * would have nowhere to go.
+         */
+        let previous = app.buttons["serverLogin.keyboardPrevious"]
+        previous.tap()                              // → username
+        previous.tap()                              // → port
+        previous.tap()                              // → address
+        let address = app.textFields["serverLogin.address"]
+        address.typeText("example.com")
+        XCTAssertEqual(address.value as? String, "example.com")
+
+        let next = app.buttons["serverLogin.keyboardNext"]
+        next.tap()                                  // → port
+        next.tap()                                  // → username
         app.textFields["serverLogin.username"].typeText("root")
         XCTAssertTrue(app.buttons["serverLogin.submit"].isEnabled)
     }
