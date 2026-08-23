@@ -1,5 +1,5 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { join, resolve, sep } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 /**
@@ -94,7 +94,12 @@ describe('a message is never sent as one write', () => {
         // where this rule is explained, so they have to be allowed to quote it.
         const code = line.replace(/^\s*(\/\/|\*|\/\*).*$/, '')
         if (!ONE_WRITE_SUBMIT.test(code)) continue
-        const where = `${path.slice(RENDERER.length + 1)}:${index + 1}`
+        // Forward slashes, always. `join` builds these with the host's own
+        // separator, so on Windows the same file reports as
+        // `machines\servers\ServerTerminal.tsx` and misses an ALLOWED entry
+        // written the POSIX way — the exception silently stops applying and
+        // only the Windows job fails.
+        const where = `${path.slice(RENDERER.length + 1).split(sep).join('/')}:${index + 1}`
         if (!ALLOWED.has(where)) offenders.push(where)
       }
     }
