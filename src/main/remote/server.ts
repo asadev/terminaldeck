@@ -59,6 +59,7 @@ import { extname, join, normalize, resolve, sep } from 'node:path'
 import type { InvokeRegistrar } from '../ipc-seam'
 import { MAX_FAILED_ATTEMPTS, RemoteAuth, type Device, type PairingToken } from './device-auth'
 import { createEnrollAccess, type EnrollAccess } from './enroll'
+
 // Type-only, deliberately. The store is built by `index.ts` and handed to
 // `registerRemoteIpc`; importing the class here would put a second constructor
 // for the same file in the one module that must not own it.
@@ -180,6 +181,26 @@ import { tailnetStatus, type TailnetStatus } from './tailnet'
 import { serveOff, serveOn } from './tailscale-serve'
 import { FrameReader, OPCODE, acceptKey, encodeFrame } from '../../shared/ws-frame'
 import type { HeldSession } from '../../shared/held-window'
+
+/**
+ * The one refusal that really does mean "this machine does not do sign-in".
+ *
+ * Exported, and it is the export that matters. Until 2026-08-23 this sentence
+ * was a literal here and a byte-identical literal in `enroll.ts`, where it was
+ * *also* sent for a probe that could not reach sshd, for a host out of device
+ * slots and for a device row that failed to write. Every client reads
+ * `code: 'unavailable'` plus this sentence as "sign-in is not built into that
+ * server" — the iOS headline says exactly that, and the web client offers to
+ * reinstall the host underneath it — so three healthy-server faults were
+ * reported as a missing feature, and the one that happened cost an evening on a
+ * server whose sshd was on port 2222.
+ *
+ * `enroll.ts` now has its own sentence for each of its own failures, and
+ * `enroll-sentences.test.ts` holds them against this constant. Two files
+ * agreeing by coincidence is what broke; two files that cannot agree without a
+ * test noticing is the repair.
+ */
+export const SIGN_IN_NOT_SERVED = 'Sign-in is not switched on for this machine. Pair it with a code instead.'
 
 /* ------------------------------------------------------------------ types -- */
 
@@ -2914,12 +2935,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
 
     const enroll = options.enroll
     if (!enroll) {
-      refuse(
-        connection,
-        'unavailable',
-        'Sign-in is not available on this machine. Pair it with a code instead.',
-        CLOSE.policyViolation,
-      )
+      refuse(connection, 'unavailable', SIGN_IN_NOT_SERVED, CLOSE.policyViolation)
       return
     }
 

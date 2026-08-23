@@ -118,7 +118,7 @@ describe('a login that authenticates', () => {
   })
 })
 
-describe('the three failures', () => {
+describe('the four failures', () => {
   it('reads a refused login as auth', async () => {
     const client = new FakeClient({ level: 'client-authentication' })
     expect(await verifyLoopbackSsh(PASSWORD, factory(client))).toEqual({ ok: false, reason: 'auth' })
@@ -151,9 +151,30 @@ describe('the three failures', () => {
     expect(client.destroyed).toBe(true)
   })
 
-  it('reads a synchronous throw from connect as no-sshd', async () => {
+  it('reads a synchronous throw on a key sign-in as bad-key', async () => {
+    // `connect` throws rather than emitting for a key it cannot parse, and a key
+    // it cannot parse is overwhelmingly one with a passphrase. Reported as
+    // `no-sshd` — which it was until 2026-08-23 — this sends the owner of a
+    // healthy server to inspect an sshd that was never dialled.
     const client = new FakeClient('throw')
-    expect(await verifyLoopbackSsh(KEY, factory(client))).toEqual({ ok: false, reason: 'no-sshd' })
+    expect(await verifyLoopbackSsh(KEY, factory(client))).toEqual({ ok: false, reason: 'bad-key' })
+  })
+
+  it('reads a synchronous throw on a password sign-in as no-sshd', async () => {
+    // No key was sent, so there is no key to blame: a throw here is this side's
+    // configuration, which is the bucket that means "no login could be completed
+    // against that port".
+    const client = new FakeClient('throw')
+    expect(await verifyLoopbackSsh(PASSWORD, factory(client))).toEqual({ ok: false, reason: 'no-sshd' })
+  })
+
+  it('reads ssh2 complaining about the key itself as bad-key', async () => {
+    // The other shape: ssh2 emits rather than throws, and says so only in the
+    // message — there is no `level` for a key it cannot read.
+    for (const message of ['Cannot parse privateKey: Unsupported key format', 'Encrypted private OpenSSH key detected, but no passphrase given']) {
+      const client = new FakeClient({ message })
+      expect(await verifyLoopbackSsh(KEY, factory(client)), message).toEqual({ ok: false, reason: 'bad-key' })
+    }
   })
 
   it('settles once, even when error follows a timeout', async () => {

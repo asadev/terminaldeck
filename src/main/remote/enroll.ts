@@ -30,12 +30,29 @@
  *
  * ## What crosses back, and what never does
  *
- * The failure return carries a `code` and a **static** sentence, never the value
- * that failed. A wrong password and a rate-limited address collapse to the same
+ * The failure return carries a `code` and a sentence, never the value that
+ * failed. A wrong password and a rate-limited address collapse to the same
  * `unauthorized` sentence, so the wire cannot be used to tell a bad guess from a
  * locked-out one, or to learn that a username exists. The secret is used for the
  * one probe and referenced nowhere after — not stored, not logged, not put on
  * any return.
+ *
+ * ## Every refusal says which of them it is, since 2026-08-23
+ *
+ * There used to be one sentence for four different failures, and it was
+ * *`server.ts`'s* sentence — the one a host with sign-in switched off sends,
+ * which is the only one of the four that means "this machine does not do
+ * sign-in". A phone reads `code: 'unavailable'` and prints "that server does not
+ * offer sign-in", so a server whose sshd is on a non-standard port told its
+ * owner, in the host's own words, that the feature was not built into it. That
+ * cost an evening. The collapse above is *only* between the refusals a remote
+ * caller must not be able to tell apart — a bad guess and a lockout. Everything
+ * else here is the host describing its own configuration to the person who owns
+ * it, and it names the port and the variable that fixes it, because the
+ * alternative is what happened.
+ *
+ * These are exported so a test can hold them against {@link SIGN_IN_NOT_SERVED}
+ * and fail if any of them ever collides with it again.
  *
  * No Electron import: `device-auth`, `device-kind` and `ssh-verify` are all
  * plain Node, so the headless host builds this and a test drives it with a fake
@@ -87,16 +104,67 @@ const MAX_CONCURRENT_PROBES = 2
  * so the wire cannot tell a bad guess from a lockout. No platform noun, so it
  * reads the same beside a phone's label for any host.
  */
-const SIGN_IN_REFUSED = 'That sign-in was refused. Check the username, and the password or key, then try again.'
+export const SIGN_IN_REFUSED =
+  'That sign-in was refused. Check the username, and the password or key, then try again.'
 
-/** Said when this host has no sshd to sign in against — the remedy is a pairing code. */
-const SIGN_IN_UNAVAILABLE = 'Sign-in is not available on this machine. Pair it with a code instead.'
+/**
+ * Said when nothing answered SSH on the port this host probed.
+ *
+ * It names the port and the variable, and that is the whole point of it. The
+ * server this was written for was running, relayed, and serving sign-in
+ * perfectly; its sshd was on 2222 and the probe was dialling it. The old
+ * sentence — "sign-in is not available on this machine, pair it with a code
+ * instead" — was true of a demo box and of nothing else that has ever sent it,
+ * and it sent its owner to the pairing screen instead of to one line of
+ * configuration.
+ *
+ * The port is not a secret worth protecting here. A caller who can reach this
+ * function has already completed a sealed handshake against this host's static
+ * key, which means they were shown its pairing QR, and what they learn is a
+ * number about a service that either answered them or did not. Against that: an
+ * hour of the owner's evening, every time.
+ *
+ * `127.0.0.1` is named because the probe's constraint is not merely "sshd is
+ * running" — it is `ssh you@127.0.0.1`, so an sshd bound to one interface and
+ * not to loopback fails here while `ssh` from anywhere else on the network
+ * works. That is the second half of the trap and it is invisible without this.
+ */
+export const signInNoSshd = (port: number): string =>
+  `Sign-in could not be checked here: nothing answered SSH on 127.0.0.1 port ${port}. ` +
+  `If this machine's SSH is on another port, set TERMINALDECK_SSHD_PORT to it and restart, ` +
+  `then try again — or pair with a code instead.`
+
+/**
+ * Said when the private key that was sent could not be read at all.
+ *
+ * Its own sentence because the remedy is on the phone rather than on the server,
+ * and because the overwhelmingly common cause is a key with a passphrase: there
+ * is nowhere to type one on a sign-in form, and there deliberately never will
+ * be, since the passphrase would then be a second secret crossing the wire.
+ */
+export const SIGN_IN_BAD_KEY =
+  'That private key could not be read. If it has a passphrase, sign in with the account password instead.'
 
 /** Said when the probe neither succeeded nor clearly failed in time. */
-const SIGN_IN_SLOW = 'The server did not answer its own sign-in in time. Try again in a moment.'
+export const SIGN_IN_SLOW = 'The server did not answer its own sign-in in time. Try again in a moment.'
 
 /** Said when the two-probe gate is full — an honest client that lost the race retries. */
-const SIGN_IN_BUSY = 'The server is busy checking another sign-in. Try again in a moment.'
+export const SIGN_IN_BUSY = 'The server is busy checking another sign-in. Try again in a moment.'
+
+/**
+ * Said when the login was good and the device row could not be added anyway.
+ *
+ * Separated from the probe's refusals because it is the one failure here that
+ * happens *after* the sign-in succeeded, and the person reading it has just
+ * typed a correct password. Telling them their sign-in was unavailable, in the
+ * sentence a host with no sign-in sends, is three wrong things at once.
+ */
+export const SIGN_IN_NO_ROOM =
+  'That login was accepted, but this machine is already holding as many devices as it can. Remove one from its device list, then try again.'
+
+/** The same, for a device row that could not be written to disk. */
+export const SIGN_IN_NOT_SAVED =
+  'That login was accepted, but this machine could not save the new device. Check that its state folder is writable, then try again.'
 
 /**
  * Which port sshd is on, from the environment or the standard 22.
@@ -145,6 +213,11 @@ export function createEnrollAccess(deps: {
       }
 
       // 3. The loopback probe against this machine's own sshd.
+      //
+      // Read once and held, so the refusal below names the port that was
+      // actually dialled rather than re-reading an environment that could have
+      // been changed underneath it between the two lines.
+      const port = sshdPort(env)
       probesInFlight += 1
       let probe: Awaited<ReturnType<typeof verifyLoopbackSsh>>
       try {
@@ -152,7 +225,7 @@ export function createEnrollAccess(deps: {
           username: input.username,
           secret: input.secret,
           method: input.method,
-          port: sshdPort(env),
+          port,
         })
       } finally {
         probesInFlight -= 1
@@ -165,10 +238,35 @@ export function createEnrollAccess(deps: {
           deps.auth.noteEnrollFailure(input.address)
           return { ok: false, code: 'unauthorized', message: SIGN_IN_REFUSED }
         }
+        // A key nobody could read is a bad credential, so it reads as
+        // `unauthorized` — the code a phone puts under "that sign-in was
+        // refused" — and it does not count against the limiter, because no
+        // socket was opened and nothing was guessed at.
+        if (probe.reason === 'bad-key') {
+          return { ok: false, code: 'unauthorized', message: SIGN_IN_BAD_KEY }
+        }
+        /*
+         * And it is said on the host too, not only to the phone.
+         *
+         * The evening this was written after was spent with a shell open on the
+         * server, and the server's own log had nothing in it: every sign-in
+         * refusal was silent here and misleading there. One line naming the
+         * port turns `journalctl --user -u terminaldeck` into the answer.
+         *
+         * The port and nothing else. Not the username, which would put a real
+         * account name in a log that gets pasted into issues, and certainly not
+         * the secret — see the header.
+         */
+        if (probe.reason === 'no-sshd') {
+          console.warn(
+            `[enroll] a sign-in was refused: nothing answered SSH on 127.0.0.1:${port}. ` +
+              'Set TERMINALDECK_SSHD_PORT if this machine’s sshd is on another port, and check that it binds loopback.',
+          )
+        }
         return {
           ok: false,
           code: 'unavailable',
-          message: probe.reason === 'timeout' ? SIGN_IN_SLOW : SIGN_IN_UNAVAILABLE,
+          message: probe.reason === 'timeout' ? SIGN_IN_SLOW : signInNoSshd(port),
         }
       }
 
@@ -179,9 +277,13 @@ export function createEnrollAccess(deps: {
         // not a refused login; a malformed key or name should never reach here
         // (the frame was parsed and the key length checked) and collapses to the
         // refused sentence if it somehow does.
-        return minted.reason === 'too-many-devices' || minted.reason === 'storage'
-          ? { ok: false, code: 'unavailable', message: SIGN_IN_UNAVAILABLE }
-          : { ok: false, code: 'unauthorized', message: SIGN_IN_REFUSED }
+        if (minted.reason === 'too-many-devices') {
+          return { ok: false, code: 'unavailable', message: SIGN_IN_NO_ROOM }
+        }
+        if (minted.reason === 'storage') {
+          return { ok: false, code: 'unavailable', message: SIGN_IN_NOT_SAVED }
+        }
+        return { ok: false, code: 'unauthorized', message: SIGN_IN_REFUSED }
       }
 
       // 5. Record what it is: the sign-in proof is this machine's own login, so

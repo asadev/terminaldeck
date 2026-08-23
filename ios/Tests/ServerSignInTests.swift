@@ -242,15 +242,21 @@ final class ServerSignInTests: XCTestCase {
         XCTAssertNil(store.load(Self.hostId))
     }
 
-    /// A demo box, or a build with sign-in switched off. Not a wrong password,
-    /// and saying so would send somebody to check one that was never read.
-    func testAServerThatDoesNotOfferSignIn() {
+    /// A demo box, a probe that could not reach sshd, a host out of device slots:
+    /// `unavailable` is all of them. Not a wrong password, and saying so would
+    /// send somebody to check one that was never read — but not "this server has
+    /// no sign-in" either, which was the claim that cost an evening on a server
+    /// whose sshd was on port 2222. The host's own sentence carries the cause.
+    func testAServerThatCouldNotSignThisDeviceIn() {
         submit()
         carrier.deliver("""
-        {"t":"error","code":"unavailable","message":"Sign-in is not available on this machine."}
+        {"t":"error","code":"unavailable","message":"Sign-in could not be checked here: nothing answered SSH on 127.0.0.1 port 2222."}
         """)
         guard case let .failed(failure) = flow.phase else { return XCTFail("expected a refusal") }
-        XCTAssertEqual(failure.headline, "That server does not offer sign-in.")
+        XCTAssertEqual(failure.headline, "That server could not sign this device in.")
+        XCTAssertEqual(
+            failure.advice,
+            "Sign-in could not be checked here: nothing answered SSH on 127.0.0.1 port 2222.")
     }
 
     /**

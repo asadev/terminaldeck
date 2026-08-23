@@ -179,8 +179,14 @@ class EnrollExchange(
      * `parseClientMessage`'s default case, refuses and closes. That is a server too old for this
      * feature, and reporting it as a bad password would send somebody to change a password that was
      * never wrong. Every other code is the server explaining itself, and its sentence is used as
-     * written: `unauthorized` for a refused or rate-limited login, `unavailable` for a machine with
-     * no sshd to sign in against.
+     * written: `unauthorized` for a refused login, a rate-limited address or a private key that
+     * could not be read, and `unavailable` for the four different ways a host that *does* serve
+     * sign-in can fail to complete one — its own sshd not answering the loopback probe on the port
+     * it dialled, the probe timing out, no room left in the device list, a device row that would
+     * not write — plus the one host that serves none at all. Using the sentence as written is what
+     * makes that distinction reach anybody: until 2026-08-23 the host sent one sentence for all of
+     * them, and a server whose sshd was on port 2222 told its owner for an evening that it had no
+     * sign-in feature.
      */
     private fun sentenceFor(message: ServerMessage.Error): String = when (message.code) {
         ProtocolErrorCode.BadMessage -> TOO_OLD

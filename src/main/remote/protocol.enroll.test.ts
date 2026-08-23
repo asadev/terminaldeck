@@ -21,6 +21,7 @@ import {
   type RemoteWire,
   type SessionAccess,
   type SessionHandle,
+  SIGN_IN_NOT_SERVED,
 } from './server'
 import { RemoteAuth } from './device-auth'
 import { DeviceKinds } from './device-kind'
@@ -255,12 +256,16 @@ describe('the pre-auth surface is exactly {hello, enroll}', () => {
 })
 
 describe('enroll on a host that does not serve it', () => {
-  it('is refused unavailable, naming the pairing-code remedy', async () => {
+  it('is refused unavailable, in the one sentence that means exactly that', async () => {
     const peer = connect(serve(), randomBytes(32))
     peer.send(enrollFrame())
     const error = await waitFor(peer, 'error')
     expect(error.code).toBe('unavailable')
-    expect(error.message.toLowerCase()).toContain('pair')
+    // Pinned to the constant rather than to a word in it. Every client turns
+    // this exact pair — `unavailable` plus this sentence — into "that machine
+    // does not offer sign-in", so it has to be reachable from here and from
+    // nowhere else. `enroll-sentences.test.ts` holds the other end.
+    expect(error.message).toBe(SIGN_IN_NOT_SERVED)
   })
 })
 

@@ -29,10 +29,17 @@
  * wrong, and neither will this. `no-sshd` folds together every way the address
  * answered with something that is not a login we can complete (nothing
  * listening, something that is not an SSH server, a handshake with no algorithm
- * in common): all of them mean "this machine cannot offer sign-in", whose remedy
- * is a pairing code, not another password. `timeout` is the socket that neither
+ * in common): all of them mean "nothing here answered SSH on that port", and the
+ * remedy is the port, not another password. `timeout` is the socket that neither
  * readied nor errored, kept separate because its remedy is "try again", not
  * "give up on sign-in".
+ *
+ * `bad-key` is 2026-08-23's, and it was folded into `no-sshd` until then. A
+ * private key that ssh2 cannot read — the common case is one with a passphrase,
+ * which there is nowhere to type from a phone — never reaches the socket at all,
+ * so calling it "no sshd here" told the owner of a perfectly healthy server to
+ * go and look at sshd. It is the caller's credential that is wrong, and the
+ * sentence has to say so.
  *
  * No Electron import and no app object: `ssh2` is a plain Node dependency (the
  * desktop connector in `servers/connection.ts` is the only other file that
@@ -42,7 +49,7 @@
 
 import { Client } from 'ssh2'
 
-export type SshVerifyFailure = 'auth' | 'no-sshd' | 'timeout'
+export type SshVerifyFailure = 'auth' | 'no-sshd' | 'timeout' | 'bad-key'
 
 /** The one address this ever dials. Not a parameter — see the header. */
 const LOOPBACK = '127.0.0.1'
@@ -82,6 +89,14 @@ function classify(error: unknown): SshVerifyFailure {
   }
   if (level === 'client-timeout' || code === 'ETIMEDOUT' || said.includes('timed out while')) {
     return 'timeout'
+  }
+  // A key ssh2 could not read. It says so in the message and nowhere else —
+  // there is no `level` for it, because the failure happens before a socket is
+  // involved — and the two shapes are "Cannot parse privateKey: …" and the
+  // encrypted-key complaint about a missing passphrase. Read as `no-sshd` this
+  // sends somebody to inspect an sshd that was never dialled.
+  if (said.includes('privatekey') || said.includes('private key') || said.includes('passphrase')) {
+    return 'bad-key'
   }
   // ECONNREFUSED (nothing listening), a banner-less close ("before handshake"),
   // a protocol mismatch (not an SSH server), or no algorithm in common — all of
@@ -175,9 +190,12 @@ export function verifyLoopbackSsh(
       })
     } catch {
       // `connect` throws synchronously on an unreadable private key or a bad
-      // config rather than emitting `error`. An unreadable key is not a login we
-      // can complete here — same bucket as no sshd.
-      finish({ ok: false, reason: 'no-sshd' })
+      // config rather than emitting `error`. Which of the two it was is decided
+      // by what was handed in: a key sign-in that threw before the socket is an
+      // unreadable key, and nothing else here can be. A password sign-in that
+      // threw is a configuration fault on this side, which is the `no-sshd`
+      // bucket — "we could not complete a login against this port".
+      finish({ ok: false, reason: input.method === 'key' ? 'bad-key' : 'no-sshd' })
     }
   })
 }

@@ -119,10 +119,16 @@ describe('what the form will let cross', () => {
 
 describe('what a failure offers to do about itself', () => {
   it('offers an install only where a missing server is the explanation', () => {
-    // A machine that says it has no sign-in, and a machine that says nothing at
-    // all: in both, what stands in the way is what is running on that box.
-    expect(signInFor('unavailable', 'Sign-in is not available on this machine.').install).toBe(true)
+    // Nothing answered at all: either that machine is not running this, or it is
+    // too old to know the word. An install command is an answer to both.
     expect(closeFailure(CHANNEL_CLOSE.relayUnreached).install).toBe(true)
+
+    // A machine that *answered* `unavailable` parsed an `enroll` frame to do it,
+    // so it is running, it is this product, and it is new enough. Printing an
+    // install command under its refusal is what happened on 2026-08-22 to a
+    // host running 0.10.1 whose sshd was on port 2222 — advice to reinstall a
+    // server that was working.
+    expect(signInFor('unavailable', 'Nothing answered SSH on 127.0.0.1 port 2222.').install).toBe(false)
 
     // A wrong password is not that, and a browser suggesting a reinstall over
     // one would be advice to break a working server.
@@ -255,15 +261,16 @@ describe('one sign-in over one socket', () => {
     expect(result).toEqual({ ok: false, kind: 'refused', message: said, install: false })
   })
 
-  it('reports a machine that serves no sign-in, and offers the install', async () => {
+  it('reports a machine that could not sign this device in, in its own words', async () => {
     const socket = fakeSocket()
     const done = run(socket)
     socket.onopen?.()
-    const said = 'Sign-in is not available on this machine. Pair it with a code instead.'
+    const said = 'Sign-in is not switched on for this machine. Pair it with a code instead.'
     say(socket, { t: 'error', code: 'unavailable', message: said })
 
+    // No install command under it: the machine answered, so it has one.
     const result = await done
-    expect(result).toEqual({ ok: false, kind: 'unavailable', message: said, install: true })
+    expect(result).toEqual({ ok: false, kind: 'unavailable', message: said, install: false })
   })
 
   it('reads a channel that closed before answering as an older host, or none', async () => {

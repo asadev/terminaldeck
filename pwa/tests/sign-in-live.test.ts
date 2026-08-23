@@ -65,6 +65,7 @@ import {
   authenticatorFor,
   createRemoteEndpoint,
   pairingDesk,
+  SIGN_IN_NOT_SERVED,
   type SessionAccess,
 } from '../../src/main/remote/server'
 import { PROTOCOL_VERSION, serialize, type ServerMessage } from '../../src/main/remote/protocol'
@@ -317,8 +318,10 @@ describe('signing in to a server from the browser client', () => {
     if (outcome.ok) throw new Error('unreachable')
     expect(outcome.kind).toBe('unavailable')
     // The host's own sentence, which names the remedy this client cannot offer.
-    expect(outcome.message).toContain('Pair it with a code instead')
-    expect(outcome.install).toBe(true)
+    expect(outcome.message).toBe(SIGN_IN_NOT_SERVED)
+    // And no install command under it. The host answered this frame, so it is
+    // running and new enough to know the word — see `signInFor`.
+    expect(outcome.install).toBe(false)
   }, 30_000)
 })
 
