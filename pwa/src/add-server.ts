@@ -263,14 +263,23 @@ const UNOPENABLE = 'That address cannot be opened from this page.'
  * would either lose that collapse or invent a distinction the wire refuses to
  * make.
  *
- * `unavailable` is the one refusal that offers an install, and the reason is
- * narrow: a machine that answers *"sign-in is not available here"* is a machine
- * where the thing standing between this person and a session is what is running
- * on that box — and a browser cannot go and change it, because a browser has no
- * SSH. A wrong password is not that, and gets no command under it.
+ * `unavailable` offered an install until 2026-08-23, on the reading that a
+ * machine answering *"sign-in is not available here"* is a machine where what
+ * stands in the way is what is running on that box. That reading did not
+ * survive the evening of 2026-08-22.
+ *
+ * A host only ever sends `unavailable` after parsing an `enroll` frame, which
+ * means it is running, it is this product, and it is new enough to know the
+ * word — so "run the install command on that machine" cannot be the answer to
+ * any of it. And the causes it collapses are mostly not about the install at
+ * all: the one that cost the evening was an sshd on port 2222, on a host
+ * running 0.10.1 and connected to the relay, printing an install command under
+ * a sentence about a server that was already installed and working. The offer
+ * survives only where nothing answered at all — {@link closeFailure}'s
+ * `relayUnreached` — which is the case it was actually written for.
  */
 export function signInFor(code: ProtocolErrorCode | null, message: string): SignInFailure {
-  if (code === 'unavailable') return { ok: false, kind: 'unavailable', message, install: true }
+  if (code === 'unavailable') return { ok: false, kind: 'unavailable', message, install: false }
   if (code === 'version') return { ok: false, kind: 'version', message, install: false }
   return { ok: false, kind: 'refused', message, install: false }
 }

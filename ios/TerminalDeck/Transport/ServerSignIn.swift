@@ -331,8 +331,26 @@ final class ServerSignIn {
         let said = message.isEmpty ? nil : message
         switch refusalCode {
         case .some(.unavailable):
+            /*
+             * The headline used to read "That server does not offer sign-in",
+             * and on 2026-08-22 that sentence was a lie for an entire evening.
+             *
+             * `unavailable` is not one thing. The host sends it when sign-in is
+             * genuinely switched off, when its own sshd did not answer the
+             * loopback probe, when it is out of device slots, and when it could
+             * not write the new device row. Three of those four are a running
+             * server that serves sign-in perfectly — and the one that happened
+             * was an sshd on a non-standard port, with the phone insisting the
+             * feature was not built into the machine.
+             *
+             * The wire cannot tell them apart (the code is the same and a fifth
+             * error code would print as "unknown" on every shipped client), so
+             * the headline says only what is true of all four and the host's own
+             * sentence carries the rest. Since 2026-08-23 that sentence names
+             * the port it dialled and the variable that moves it.
+             */
             return Failure(
-                headline: "That server does not offer sign-in.",
+                headline: "That server could not sign this device in.",
                 advice: said ?? "Pair it with a code from its own screen instead.")
         case .some(.version):
             return Failure(

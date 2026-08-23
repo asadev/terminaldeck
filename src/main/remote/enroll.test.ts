@@ -5,7 +5,8 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MAX_FAILED_ATTEMPTS, RemoteAuth } from './device-auth'
 import { DeviceKinds } from './device-kind'
-import { createEnrollAccess } from './enroll'
+import { createEnrollAccess, SIGN_IN_BAD_KEY } from './enroll'
+import { SIGN_IN_NOT_SERVED } from './server'
 import type { verifyLoopbackSsh } from './ssh-verify'
 
 /**
@@ -127,13 +128,58 @@ describe('a refused sign-in', () => {
     expect(result.message).not.toContain('s3cr3t-do-not-echo')
   })
 
-  it('reads no sshd as unavailable with the pairing-code remedy', async () => {
+  /**
+   * The refusal that cost an evening, and what it now has to say.
+   *
+   * On 2026-08-22 a server that was running, relayed and serving sign-in refused
+   * a phone all night with *"Sign-in is not available on this machine. Pair it
+   * with a code instead"* — `server.ts`'s sentence for a host with the feature
+   * switched off, sent from here because the loopback probe could not reach an
+   * sshd that was listening on 2222. The phone dutifully printed "that server
+   * does not offer sign-in". Nothing about the port, which was the whole answer,
+   * appeared anywhere.
+   *
+   * So the port and the variable are asserted, not the tone. A sentence that
+   * says "unavailable, pair with a code" is exactly what shipped and exactly
+   * what must not ship again.
+   */
+  it('names the port and the variable when nothing answers SSH', async () => {
+    const { verify } = fakeVerifier([{ ok: false, reason: 'no-sshd' }])
+    const result = await signIn(build(verify, { TERMINALDECK_SSHD_PORT: '2222' }).access)
+    expect(result.ok).toBe(false)
+    if (result.ok) throw new Error('unreachable')
+    expect(result.code).toBe('unavailable')
+    expect(result.message).toContain('2222')
+    expect(result.message).toContain('TERMINALDECK_SSHD_PORT')
+    // The constraint is loopback, not "sshd is running": an sshd bound to one
+    // interface and not to 127.0.0.1 fails here while ssh from the next desk
+    // works, and that is invisible unless the sentence says it.
+    expect(result.message).toContain('127.0.0.1')
+    // And it is never the sentence that means the feature is switched off.
+    expect(result.message).not.toBe(SIGN_IN_NOT_SERVED)
+  })
+
+  it('names the default port when nothing set one', async () => {
     const { verify } = fakeVerifier([{ ok: false, reason: 'no-sshd' }])
     const result = await signIn(build(verify).access)
     expect(result.ok).toBe(false)
     if (result.ok) throw new Error('unreachable')
-    expect(result.code).toBe('unavailable')
-    expect(result.message.toLowerCase()).toContain('pair')
+    expect(result.message).toContain('port 22')
+  })
+
+  it('blames the key, not the server, for a key it could not read', async () => {
+    // A passphrase-protected key is the common case and there is nowhere to type
+    // one on a sign-in form. Reported as "no sshd" this reads as a broken server.
+    const { verify } = fakeVerifier([{ ok: false, reason: 'bad-key' }])
+    const { access, auth } = build(verify)
+    const spy = vi.spyOn(auth, 'noteEnrollFailure')
+    const result = await signIn(access)
+    expect(result.ok).toBe(false)
+    if (result.ok) throw new Error('unreachable')
+    expect(result.code).toBe('unauthorized')
+    expect(result.message).toBe(SIGN_IN_BAD_KEY)
+    // No socket was opened and nothing was guessed at, so no limiter slot.
+    expect(spy).not.toHaveBeenCalled()
   })
 
   it('reads a slow probe as unavailable, without counting it', async () => {

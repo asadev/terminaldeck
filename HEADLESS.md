@@ -412,6 +412,45 @@ is not the machine it is for (`src/headless/install-script.test.ts`).
 | `TERMINALDECK_OS` / `_ARCH` / `_LIBC` | override detection |
 | `TERMINALDECK_SKIP_TOOLCHAIN_CHECK=1` | skip the node-pty build-tools check |
 
+### The host's own environment — and the one that costs an evening
+
+The table above is the *installer's*. The running host reads two of its own, and
+one of them was undocumented until 2026-08-23, which is most of why the evening
+of the 22nd went the way it did.
+
+| | |
+|---|---|
+| `TERMINALDECK_SSHD_PORT` | which port this machine's sshd is on (default `22`) |
+| `TERMINALDECK_RELAY_URL` | a relay other than `wss://relay.terminaldeck.dev` |
+
+**`TERMINALDECK_SSHD_PORT` is what signing in from a phone depends on.** Sign-in
+is not a password this app stores: the host proves the login by opening an SSH
+connection to *itself* — `ssh you@127.0.0.1` — and admitting the device if that
+login works. So two things have to be true, and only the first is obvious:
+
+1. sshd is listening on the port this variable names, and
+2. it answers on **127.0.0.1**.
+
+The second is the trap. An sshd bound to one interface — a container's address,
+a WSL machine's `eth0` — is reachable from every other desk in the building and
+not from this probe, so `ssh` works for the person testing it and sign-in
+refuses. `ss -lntp | grep <port>` says which, and the address column is the half
+worth reading.
+
+Set it in the unit, not in a shell, since the host is started by systemd:
+
+```
+systemctl --user edit --full terminaldeck   # Environment=TERMINALDECK_SSHD_PORT=2222
+systemctl --user restart terminaldeck
+```
+
+A phone that is refused now says which port was dialled and names this variable
+in the refusal itself. Before 2026-08-23 every one of these failures came back
+as *"Sign-in is not available on this machine. Pair it with a code instead"* —
+the sentence a host with the feature switched off sends — so a server that was
+running, relayed and serving sign-in perfectly spent an evening insisting it did
+not have the feature. See `src/main/remote/enroll.ts`.
+
 ## Definition of done
 
 Installed in Asad's WSL Ubuntu, paired from his Mac's Terminal Deck **and** from

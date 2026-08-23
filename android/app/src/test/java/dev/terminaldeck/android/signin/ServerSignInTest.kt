@@ -289,7 +289,7 @@ class ServerSignInTest {
     fun `a server that cannot offer sign-in says so in its own words`() {
         val refusal = ServerMessage.Error(
             code = ProtocolErrorCode.Unavailable,
-            message = "Sign-in is not available on this machine. Pair it with a code instead.",
+            message = "Sign-in could not be checked here: nothing answered SSH on 127.0.0.1 port 2222.",
         )
         val (_, address) = server(refusal = refusal)
 
