@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { makeExtensionZip, makeSignedCrx, plainManifest } from './browser-extension-zip.fixture'
-import type { ExtensionEntry } from './browser-extensions'
+import type { CatalogueEntry } from './browser-extensions'
 
 /**
  * The seam where the disk's answer and the browser's answer can disagree.
@@ -117,7 +117,7 @@ interface ListAnswer {
 
 const ARCHIVE = makeExtensionZip(plainManifest({ host_permissions: ['<all_urls>'] }))
 
-const ENTRY: ExtensionEntry = {
+const ENTRY: CatalogueEntry = {
   id: 'test',
   name: 'Test Extension',
   summary: 'Does a thing.',

@@ -177,45 +177,22 @@ const marks = {
   'return-youtube-dislike': { url: 'https://raw.githubusercontent.com/Anarios/return-youtube-dislike/4e6dfd1977fcf2d160142bf5c2e303d5cda2c685/Extensions/combined/icons/icon128.png' },
   'isdcac': { url: 'https://raw.githubusercontent.com/OhMyGuus/I-Still-Dont-Care-About-Cookies/d4728187136f973c9fd59266b7f629a8228ea144/src/icons/128.png' },
   'adguard': { url: 'https://raw.githubusercontent.com/AdguardTeam/AdguardBrowserExtension/496161c602ee787d23ee87f6ad3e681f8a0a7a4b/Extension/assets/images/logo-shield.svg' },
-  'ghostery': { url: 'https://raw.githubusercontent.com/ghostery/ghostery-extension/ace6af39b02dcd16ce39566f0de292e3cda0d739/src/icons/icon.svg' },
   'consent-o-matic': { url: 'https://raw.githubusercontent.com/cavi-au/Consent-O-Matic/8ca8500d26434c586039e126ad091e1bfccd205d/Extension/logo.svg' },
-  'libredirect': { url: 'https://raw.githubusercontent.com/libredirect/browser_extension/90729f5282502fd19ee8075dac2d6d9d2059ef60/src/assets/images/libredirect.svg' },
-  'cookie-autodelete': { url: 'https://raw.githubusercontent.com/Cookie-AutoDelete/Cookie-AutoDelete/d9e01ba4acfeee7d49ef8edcc9a64b53d3fa568e/extension/icons/icon_128.png' },
   'video-speed-controller': { url: 'https://raw.githubusercontent.com/igrigorik/videospeed/8f9bc13cd1d8bad549795da265735159d9e9fad1/src/assets/icons/icon128.png' },
-  'bitwarden': { url: 'https://raw.githubusercontent.com/bitwarden/clients/cce8a341c88790387fab9c5c6eb6dd3aa7e6491d/apps/browser/src/images/icon128.png' },
-  'keepassxc-browser': { url: 'https://raw.githubusercontent.com/keepassxreboot/keepassxc-browser/5dc3a3622ee043da4718748a2821f81ad8d28748/keepassxc-browser/icons/keepassxc.svg' },
-  'search-by-image': { url: 'https://raw.githubusercontent.com/dessant/search-by-image/d5d20a64be2fc0fccdedbf52becb0a5f80a83848/src/assets/icons/app/icon.svg' },
-  'web-archives': { url: 'https://raw.githubusercontent.com/dessant/web-archives/3cc1989d4d714ccecef4914895f9255bcddcd36e/src/assets/icons/app/icon.svg' },
-  'privacy-badger': { url: 'https://raw.githubusercontent.com/EFForg/privacybadger/dd1e9f75041a4ce2b08e4b224a4e200f38a9821f/src/icons/badger-128.png' },
-  'singlefile': { url: 'https://raw.githubusercontent.com/gildas-lormeau/SingleFile/32931059bc6c125899068b9517d422008380488a/src/ui/resources/icon_128.png' },
-  'vimium': { url: 'https://raw.githubusercontent.com/philc/vimium/5aa29614bf1dce05e0d316f8c38722e17f9b38c3/icons/icon128.png' },
-  'wappalyzer': { url: 'https://www.wappalyzer.com/apple-touch-icon.png' },
-  'json-formatter': { url: 'https://raw.githubusercontent.com/callumlocke/json-formatter/bfd63560efe2c91c899a68c49bc8eedf5a43a101/ext/icons/128.png' },
 
-  /* ------------------------------- the mainstream extensions, 2026-08-23 -- */
+  /* --------------------------------- one Google mark, for a server row -- */
   /*
-   * Twelve of the rows added in the widening round are closed products with no
-   * repository to fetch from, so their marks come from the vendor's own site or
-   * from the Chrome Web Store listing the row already links to — which is the
-   * vendor's own uploaded artwork, at the size the store draws it.
+   * There were twelve marks here on 2026-08-23 — Translate, Grammarly, LastPass,
+   * 1Password, Loom, Honey and the rest — fetched from vendors' own sites for
+   * rows that linked out to the Chrome Web Store. Those rows are gone, and their
+   * sources went with them: this script refuses to write while it holds a source
+   * no catalogue row asks for, which is the same rule read from the other end.
    *
-   * Google's product marks come from `gstatic.com/images/branding`, which is the
-   * path Google's own properties draw them from. Translate is the one raster in
-   * that group: its SVG is 22 KB of gradients before encoding, which is most of
-   * this whole file's budget for one row, and the 96px PNG beside it is the same
-   * drawing at a twentieth of the weight.
+   * Drive's stays, because an MCP row still wears it. It comes from
+   * `gstatic.com/images/branding`, which is the path Google's own properties
+   * draw it from.
    */
-  'google-translate': { url: 'https://www.gstatic.com/images/branding/product/2x/translate_48dp.png' },
-  'google-docs': { url: 'https://www.gstatic.com/images/branding/productlogos/docs_2020q4/v12/192px.svg' },
-  'google-keep': { url: 'https://www.gstatic.com/images/branding/productlogos/keep_2020q4/v8/192px.svg' },
   'google-drive': { url: 'https://www.gstatic.com/images/branding/productlogos/drive_2020q4/v10/192px.svg' },
-  'grammarly': { url: 'https://lh3.googleusercontent.com/Ywdz5mn9q2Mx76DU45LSH-Pv5OGpqk8QAOY3lT1AWScMTZYQtAhqhVjtY5I2JZK530QIycLZooe2a0k3quGqYUaZ=s128' },
-  'lastpass': { url: 'https://lh3.googleusercontent.com/2E-kdWD96KmPMAR7_XC6d_zWHio7n7skW8-9S5R42ZQvTX-djSt-qbwhuiM5znQ5Iqj9SWuP4fqfycgt_OD9aLWh=s128' },
-  'todoist': { url: 'https://todoist.com/apple-touch-icon.png' },
-  'honey': { url: 'https://www.joinhoney.com/apple-touch-icon.png' },
-  'onepassword': { url: 'https://1password.com/apple-touch-icon.png' },
-  'loom': { url: 'https://cdn.loom.com/assets/favicons-loom/android-chrome-192x192.png' },
-  'momentum': { url: 'https://momentumdash.com/img/logo.svg' },
 
   /* -------------------------------------------------- MCP servers -- */
   'modelcontextprotocol': { url: 'https://raw.githubusercontent.com/modelcontextprotocol/modelcontextprotocol/5b38eb170281b43f4683c764c0bb2d3ed7d95cd9/docs/favicon.svg' },

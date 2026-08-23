@@ -2,11 +2,11 @@ import './storefront.css'
 import { linkProps } from '../link'
 
 /**
- * The honest fallback: **Get it**, for a row this app cannot install.
+ * The honest fallback: **Get it**, for an MCP row this machine cannot run yet.
  *
- * ## Why a store is allowed to list what it cannot install
+ * ## Why one store still has this and the other does not
  *
- * Asad, on both stores at once:
+ * It was built for both. Asad, then:
  *
  *   > *"it will all the applications will not be there, there will be only
  *   > install button and it will real time download from the live … or maybe
@@ -14,17 +14,25 @@ import { linkProps } from '../link'
  *   > download it, it will just redirect them and they can install if not
  *   > possible to bring button to install."*
  *
- * Both catalogues already refuse to draw an Install that cannot work — the
- * browser store for an extension it watched failing here, the MCP store for a
- * server whose runtime is not on this machine — and both were right to. What
- * they did instead was draw *nothing*, which is a different mistake with the
- * same cause: the store had two answers, *here it is* and *silence*, and a row
- * with neither a button nor a way onward reads as a dead end.
+ * Both catalogues refused to draw an Install that cannot work, and both drew
+ * *nothing* instead, which reads as a dead end. This was the third answer.
  *
- * This is the third answer, and it is the one that lets the catalogues hold
- * everything worth holding. The row keeps its measured sentence, keeps its
- * refusal to pretend, and gains one control that does exactly what it says:
- * opens the project's own page, where the person can decide for themselves.
+ * The browser store stopped needing it, and the reason is worth stating because
+ * it is the difference between the two halves. Asad again, on what it did there:
+ *
+ *   > *"They click Get and it takes them to the Chrome store … we should not
+ *   > offer tools that don't work with our architecture."*
+ *
+ * An extension that cannot install here cannot install here *ever* — this
+ * browser provides the `chrome.*` it provides, and no shopping trip changes
+ * that — so the link was sending somebody to a shop whose goods do not fit. The
+ * catalogue now holds only what installs, and `browser/ExtensionRow.tsx` draws
+ * no link out at all.
+ *
+ * An MCP row is not like that. *Cannot run* there means a runtime is not on
+ * **this machine yet** — `node`, `uvx`, Docker — which is a thing a person can
+ * go and change in ten minutes, and the project's own page is where they would
+ * start. So this stays, for the store where the destination is genuinely useful.
  *
  * ## Where it opens
  *

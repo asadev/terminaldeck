@@ -27,12 +27,7 @@ import {
 export type ExtensionVerdict = 'works' | 'partly' | 'no' | 'unmeasured'
 
 /** Mirrors `ExtensionState`. */
-export type ExtensionState =
-  | 'available'
-  | 'installed'
-  | 'damaged'
-  | 'unavailable'
-  | 'not-offered'
+export type ExtensionState = 'available' | 'installed' | 'damaged'
 
 /** Mirrors `ExtensionNeed`. */
 export type ExtensionNeed = 'account' | 'companion-app'
@@ -46,11 +41,6 @@ export type ExtensionCategory =
   | 'privacy'
   | 'appearance'
   | 'media'
-  | 'passwords'
-  | 'writing'
-  | 'work'
-  | 'shopping'
-  | 'research'
   | 'scripting'
   | 'your-own'
 
@@ -69,11 +59,6 @@ export const CATEGORY_NAMES: Readonly<Record<ExtensionCategory, string>> = {
   privacy: 'Privacy and cleaning up',
   appearance: 'How pages look',
   media: 'Video and audio',
-  passwords: 'Passwords',
-  writing: 'Writing and language',
-  work: 'Documents and work',
-  shopping: 'Shopping',
-  research: 'Saving and research',
   scripting: 'Scripting and the keyboard',
   'your-own': 'Added by you',
 }
@@ -84,11 +69,6 @@ export const CATEGORY_ORDER: readonly ExtensionCategory[] = [
   'privacy',
   'appearance',
   'media',
-  'passwords',
-  'writing',
-  'work',
-  'shopping',
-  'research',
   'scripting',
   'your-own',
 ]
@@ -112,8 +92,6 @@ export interface StoreExtension {
   /** The price reality in a sentence, or `''`. */
   costNote: string
   measured: string
-  /** Why nothing was measured and nothing is offered, or `''`. */
-  noRelease: string
   /** Which mark to draw, as a key into `store/logo-data.ts`. `''` for none. */
   logo: string
   url: string
@@ -263,12 +241,7 @@ function readVerdict(raw: unknown): ExtensionVerdict {
 }
 
 function readState(raw: unknown): ExtensionState {
-  return raw === 'installed' ||
-    raw === 'damaged' ||
-    raw === 'unavailable' ||
-    raw === 'not-offered'
-    ? raw
-    : 'available'
+  return raw === 'installed' || raw === 'damaged' ? raw : 'available'
 }
 
 function readCategory(raw: unknown): ExtensionCategory {
@@ -298,7 +271,6 @@ function readExtension(raw: unknown): StoreExtension | null {
     cost: readCost(record.cost),
     costNote: text(record.costNote),
     measured: text(record.measured),
-    noRelease: text(record.noRelease),
     logo: text(record.logo),
     url: text(record.url),
     sha256: text(record.sha256),
@@ -409,70 +381,22 @@ export function extensionActionVerb(extension: StoreExtension): 'install' | 'rem
   return extension.state === 'installed' || extension.state === 'damaged' ? 'remove' : 'install'
 }
 
-/**
- * Which extensions get a button at all.
+/*
+ * `canAct`, `linkOut`, `linkOutLabel` and `hasReach` used to live here, and all
+ * four answered the same question: what a row does when it cannot be installed.
+ * `canAct` was false for a row watched failing, `linkOut` handed such a row the
+ * project's own page, `linkOutLabel` chose between **Get it** and **Open
+ * project**, and `hasReach` hid a `Reaches` line on a row with no manifest
+ * behind it.
  *
- * An `unavailable` row is one this app measured failing in this browser. It has
- * no download pinned, so an Install could only ever refuse — and a button that
- * can only refuse is the control this whole round exists to remove. The row is
- * still drawn, with what was measured, because *"where is uBlock Origin"* has a
- * true answer and it is not silence.
+ * Asad, on what that added up to: *"They click Get and it takes them to the
+ * Chrome store … we should not offer tools that don't work with our
+ * architecture."* The catalogue cannot hold such a row any more — see
+ * `CatalogueEntry` in `src/main/browser-extensions.ts` — so all four had exactly
+ * one answer left, and four functions that can only answer one way are four
+ * places for a screen to disagree with itself. Every row here now installs, has
+ * a manifest, and states its reach.
  */
-export function canAct(extension: StoreExtension): boolean {
-  return extension.state !== 'unavailable' && extension.state !== 'not-offered'
-}
-
-/**
- * The link-out a row with no Install offers instead, or `''`.
- *
- * Asad, on both stores: *"or maybe only link of the application from github or
- * wherever they can go and download it, it will just redirect them and they can
- * install if not possible to bring button to install — so at least we have the
- * store categorizing, search and everything so it feels like a proper store
- * system."*
- *
- * The catalogue's refusal to draw an Install that cannot work is kept exactly as
- * it was. What changes is that the refusal is no longer a dead end: a row this
- * app watched failing, and a row whose project publishes nothing this app can
- * fetch, both have a project page somebody can go and look at, and that page is
- * on the row already. It is not offered for a row that *can* be installed —
- * two controls on one row, one of which quietly does nothing you asked for, is
- * the confusion this store keeps being about.
- */
-export function linkOut(extension: StoreExtension): string {
-  if (canAct(extension) || extension.sideloaded) return ''
-  return /^https?:\/\//i.test(extension.homepage) ? extension.homepage : ''
-}
-
-/**
- * The word that link-out wears, which is not the same word on both kinds of row.
- *
- * **Get it** for a row whose project simply publishes somewhere this app cannot
- * fetch from — Vimium, SingleFile, Privacy Badger. Nothing is wrong with those
- * extensions; the destination really is where you get them, and this browser
- * would run them if there were a file to pin a fingerprint to.
- *
- * **Open project** for a row this app ran here and watched fail. *Get it* would
- * be a small lie on that row: you cannot get it *here*, and the reason is the
- * sentence directly underneath. What the link is honestly for is going and
- * looking at the project — in another browser, on another day, when this
- * app's compatibility layer has grown a namespace it currently lacks.
- */
-export function linkOutLabel(extension: StoreExtension): string {
-  return extension.state === 'unavailable' ? 'Open project' : 'Get it'
-}
-
-/**
- * Does this row's `Reaches` line mean anything yet?
- *
- * False for a row nothing was measured on. There is no release, so there is no
- * manifest, so there is no reach — and `reachWords` answering *no pages of its
- * own* about Privacy Badger would be this app inventing a fact about a program
- * it has never seen, which is the exact failure the row exists to avoid.
- */
-export function hasReach(extension: StoreExtension): boolean {
-  return extension.state !== 'not-offered'
-}
 
 /* ------------------------------------------------------------- storefront -- */
 
@@ -499,12 +423,16 @@ function readCost(raw: unknown): ExtensionCost {
 /**
  * Where this row comes from, as the store's *source* facet.
  *
- * Derived, never a new catalogue field, because all three answers are already
- * facts on the row. A row with a `noRelease` sentence is one whose project
- * publishes through a browser web store and nowhere this app can fetch from —
- * that is what the sentence says. A sideloaded row came off this machine. Every
- * other row is one whose project publishes releases of its own, whether or not
- * this app pins one of them.
+ * Derived, never a new catalogue field, because both answers are already facts
+ * on the row: a sideloaded row came off this machine, and everything else came
+ * from a project's own release, fetched at a byte count and a fingerprint this
+ * app has written down.
+ *
+ * There used to be a third answer — `web-store`, for a row whose project
+ * publishes through the Chrome Web Store and nowhere this app can fetch from.
+ * It is gone with those rows. A catalogue that cannot hold one no longer needs a
+ * chip that would filter to nothing, and `facetControls` would have refused to
+ * draw it anyway.
  *
  * The MCP store's three answers are *official / community / archived*, and they
  * are not these. That distinction is real over there — GitHub reports
@@ -514,11 +442,10 @@ function readCost(raw: unknown): ExtensionCost {
  * that sorted rows by a fact nobody established, so this facet answers the
  * question this catalogue can actually answer.
  */
-export type ExtensionSourceKind = 'release' | 'web-store' | 'your-own'
+export type ExtensionSourceKind = 'release' | 'your-own'
 
 export function extensionSource(extension: StoreExtension): ExtensionSourceKind {
-  if (extension.sideloaded) return 'your-own'
-  return extension.noRelease !== '' ? 'web-store' : 'release'
+  return extension.sideloaded ? 'your-own' : 'release'
 }
 
 /**
@@ -573,8 +500,8 @@ export function extensionFacets(extension: StoreExtension): StoreFacets {
  * running inside this app's own Electron and can say *works here* — a sentence
  * the MCP catalogue states outright that it will never say about anything.
  * `facetControls` drops any group that would be left with fewer than two live
- * options, so a build whose catalogue lost its last web-store row simply stops
- * drawing that control.
+ * options, so a profile with nothing of its own added simply stops drawing the
+ * *Where it comes from* control rather than offering one answer.
  */
 export const EXTENSION_FACETS: Partial<Record<StoreFacet, FacetVocabulary>> = {
   category: {
@@ -615,7 +542,6 @@ export const EXTENSION_FACETS: Partial<Record<StoreFacet, FacetVocabulary>> = {
     anyName: 'Anywhere',
     options: [
       { id: 'release', name: 'The project’s own releases' },
-      { id: 'web-store', name: 'A browser web store' },
       { id: 'your-own', name: 'Added by you' },
     ],
   },

@@ -154,9 +154,9 @@ export function StorePage({ projectPath }: Props) {
    *
    * Split deliberately. A query means the same thing in both halves, so it is
    * shared and typing it searches the whole shop. A **chip** does not: an
-   * extension comes from a `release` or a `web-store`, a server from a
-   * `reference` project or a `third-party` one, and the two lists have no word
-   * in common. Sharing that value made pressing a chip under one heading empty
+   * extension comes from a `release` or from a folder somebody added, a server
+   * from a `reference` project or a `third-party` one, and the two lists have no
+   * word in common. Sharing that value made pressing a chip under one heading empty
    * the department under the other — found by rendering the page and looking at
    * it. `store/store-nav.ts` carries the argument.
    */
@@ -386,7 +386,15 @@ export function StorePageFrame({
             id="store-search"
             type="search"
             value={query}
-            placeholder="blocker, password, postgres, github, dark…"
+            /*
+             * Five words that each find something. `password` was one of them
+             * and stopped being one: the extensions that answered it were
+             * Chrome Web Store links and are gone, and no server's name, summary
+             * or tags contains it either. A placeholder is a promise about what
+             * is in the shop, and one that suggests a search returning nothing
+             * is the same defect as a chip with a count of zero.
+             */
+            placeholder="adblock, cookies, youtube, postgres, github…"
             autoComplete="off"
             spellCheck={false}
             onChange={(event) => onQuery(event.target.value)}

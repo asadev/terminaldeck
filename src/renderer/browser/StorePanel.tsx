@@ -743,26 +743,19 @@ export function StoreBody({
   /*
    * Everything that is not already installed, in shelf order.
    *
-   * Within a shelf: what can be installed, then what was measured failing, then
-   * what nothing was measured on. That order is the store being honest about
-   * itself twice over — the useful rows come first, and the two kinds of row
-   * with no Install stay apart rather than being swept into one bin at the
-   * bottom that reads as *the broken ones*. Neither kind is a dead end any more:
-   * both carry a Get it that opens the project's own page.
+   * `shelve` still takes a rank, and every row now answers it with the same
+   * number. That used to sort three kinds of row within a shelf — installable,
+   * then measured failing, then never measured — and the last two are gone with
+   * the rows that had no Install. A constant is left rather than a sort key
+   * because the shelf order is the catalogue's own order now, which is the one
+   * somebody wrote deliberately.
    */
-  const rank: Record<string, number> = {
-    available: 0,
-    installed: 0,
-    damaged: 0,
-    unavailable: 1,
-    'not-offered': 2,
-  }
   const browsing = kept.filter((one) => one.state !== 'installed' && one.state !== 'damaged')
   const shelves = shelve(
     browsing,
     CATEGORY_ORDER.map((id) => ({ id, name: CATEGORY_NAMES[id] })),
     facetsOf,
-    (one) => rank[one.state] ?? 0,
+    () => 0,
   )
   /*
    * Every facet except the shelf.
@@ -892,10 +885,15 @@ export function StoreBody({
           )}
 
           {/*
-            The three things every shelf below mixes, said once rather than
-            under each heading. A row's button is the row's own fact and the
-            reason for it differs by row — so the sentence points at the row
-            rather than trying to say it for all of them.
+            What every shelf below has in common, said once rather than under
+            each heading.
+
+            Half of this sentence used to be about the rows that had no Install
+            and carried a Get it out to the project's own page. There are none:
+            the catalogue holds what installs here and was watched running, and
+            nothing else. So what is left to say is where the bytes come from and
+            what is checked before they are written — which is the disclosure the
+            Install button is standing on.
 
             Directly above the first shelf rather than up with the controls,
             because it is about the rows and the controls are about the whole
@@ -904,11 +902,9 @@ export function StoreBody({
           {shelves.length > 0 && (
             <p className="bw-store-note">
               Nothing here ships inside this app. Install fetches it from the address on its row
-              and checks it against the fingerprint beside it before a byte is saved. Some rows
-              have no Install: either this app ran them here and watched them fail, or their
-              project publishes nothing this app could fetch and fingerprint. Those rows carry
-              <strong> Get it</strong> instead, which opens the project&rsquo;s own page — nothing
-              is installed by pressing it, and each row still says which of the two it is.
+              and checks it against the fingerprint beside it before a byte is saved. Every row
+              here is one this browser can install and one this app has run: nothing in this
+              store sends you somewhere else to get it.
             </p>
           )}
 

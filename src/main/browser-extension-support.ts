@@ -118,6 +118,46 @@ export const ELECTRON_MEASURED = '41.10.5'
 export const CHROMIUM_MEASURED = '146.0.7680.216'
 
 /**
+ * The newest Electron there is, and what running the same probe inside it said.
+ *
+ * ## Why this pair of numbers is in the shipped code
+ *
+ * Because a question was asked that only a measurement can answer, and the
+ * answer decides what the store may hold. Asad:
+ *
+ *   > *"They click Get and it takes them to the Chrome store, which gives
+ *   > extensions that require a newer Chrome than the one we have in Terminal
+ *   > Deck. So either we should have the latest Chrome and it should still
+ *   > support all the features we want … and if the newer version gives that we
+ *   > go newer; otherwise we keep the version we have."*
+ *
+ * There is a real mechanism in that sentence. A manifest may declare
+ * `minimum_chrome_version`, and `loadExtension` refuses anything above this
+ * browser's outright — *"This extension requires Chromium version N or
+ * greater."* Measured across both builds, at 146, 148, 150 and 151: the boundary
+ * is exact and it is the only thing a newer Chromium would move.
+ *
+ * Everything else stayed **identical**. The probe below — one extension asking
+ * for every namespace worth asking for, loaded with its own `--user-data-dir` —
+ * was run inside both builds and returned the same 14 namespaces present, the
+ * same 20 absent, the same `chrome.tabs` with no `create` and no `getCurrent`,
+ * the same `storage.sync` exception word for word, the same empty answer to the
+ * active-tab query, and `connectNative` absent in both.
+ *
+ * So the gap this whole file describes is **Electron's, not Chromium's**.
+ * Electron implements a deliberately small slice of the extension API and that
+ * slice did not grow between Chromium 146 and 150. Moving forward would raise
+ * the `minimum_chrome_version` ceiling and change nothing else — and no row was
+ * ever excluded from `browser-extension-catalogue.ts` by that ceiling. Which is
+ * why {@link EXTENSION_LIMITS} says a newer build would not help rather than
+ * leaving somebody to infer that it would.
+ */
+export const NEWEST_ELECTRON_MEASURED = '43.4.1'
+
+/** The Chromium in it — four majors newer, and the same extension surface. */
+export const NEWEST_CHROMIUM_MEASURED = '150.0.7871.224'
+
+/**
  * Which browser these verdicts are being read against.
  *
  * Every "missing" and every static-ruleset warning in this file was measured on
@@ -169,14 +209,31 @@ export const SUPPORTED_APIS: readonly string[] = [
   'declarativeNetRequest',
   'extension',
   'i18n',
+  'idle',
   'management',
   'offscreen',
+  'power',
   'runtime',
   'scripting',
   'storage',
   'tabs',
   'webRequest',
 ]
+
+/*
+ * `idle` and `power` moved up from {@link MISSING_APIS} on 2026-08-23, and they
+ * moved because the probe was re-run rather than because anybody reasoned about
+ * them. Both answer with their real methods here — `chrome.idle.queryState`,
+ * `chrome.power.requestKeepAwake` — on Electron 41 and on Electron 43 alike.
+ *
+ * Which means the limits list had been naming two namespaces as absent that were
+ * present the whole time, and {@link missingApis} would have printed the same
+ * false sentence on any row that asked for one. A limits list that names a gap
+ * the runtime does not have is the same defect as a control that does nothing,
+ * read backwards — this file already says that about the server, and it turns
+ * out to have been true here as well. "Measured, not remembered" cuts both
+ * directions, and this is the direction it usually cuts.
+ */
 
 /**
  * Namespaces an extension can ask for in a manifest that are not here.
@@ -197,10 +254,8 @@ export const MISSING_APIS: readonly string[] = [
   'downloads',
   'fontSettings',
   'history',
-  'idle',
   'notifications',
   'permissions',
-  'power',
   'privacy',
   'proxy',
   'sidePanel',
@@ -537,8 +592,15 @@ export function optionsPageOf(manifest: ExtensionManifest): string {
  * screen disagreeing with the code.
  */
 export const EXTENSION_LIMITS: readonly string[] = [
-  'There is no Chrome Web Store here. Every extension in this list is fetched from its own ' +
-    'project’s release page and checked against a fingerprint built into this app.',
+  'There is no Chrome Web Store here, and nothing in this store sends you to one. Every ' +
+    'extension in this list is fetched from its own project’s release page, checked against a ' +
+    'fingerprint built into this app, and was run here before it was listed.',
+  `This browser refuses an extension whose manifest asks for a Chromium newer than ` +
+    `${CHROMIUM_MEASURED}, with “This extension requires Chromium version N or greater.” A newer ` +
+    'build would move that ceiling and nothing else: the same probe run inside Electron ' +
+    `${NEWEST_ELECTRON_MEASURED} (Chromium ${NEWEST_CHROMIUM_MEASURED}) found exactly the same ` +
+    'namespaces present, the same ones missing, and the same gaps below. What an extension can do ' +
+    'here is set by Electron, not by the version of Chromium inside it.',
   'Nothing updates itself. An extension stays at the version this app has written down until a ' +
     'newer build of this app offers a newer one.',
   `This browser is Chromium ${CHROMIUM_MEASURED} inside Electron ${ELECTRON_MEASURED}, which ` +

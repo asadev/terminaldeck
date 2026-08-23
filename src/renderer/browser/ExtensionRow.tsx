@@ -1,14 +1,9 @@
 import {
-  canAct,
   extensionActionLabel,
   extensionActionVerb,
-  hasReach,
-  linkOut,
-  linkOutLabel,
   reachWords,
   type StoreExtension,
 } from './extensions-bridge'
-import { StoreLinkOut } from '../store/StoreLinkOut'
 import { StoreRowName } from '../store/StoreRowName'
 import { StoreLogo } from '../store/StoreLogo'
 import { COST_WORDS } from '../store/storefront'
@@ -20,22 +15,21 @@ import { COST_WORDS } from '../store/storefront'
  * unified into `StorePanel.tsx`; the reasoning that shaped that dialog moved
  * there with it, and this file is the row.
  *
- * ## Why a row can say "cannot work here" and still be a row
+ * ## Every row here has an Install, and that is new
  *
- * Because the first question anybody opens an extension store with is *where is
- * uBlock Origin*, and there are two different true answers: "this app never
- * heard of it" and "it loads and blocks nothing". Omitting it gives the first
- * answer to a person for whom the second is true, and they will go and install
- * it by hand and get the same nothing with no explanation attached.
+ * This file used to draw three kinds of row: one with an Install, one this app
+ * watched failing, and one whose project publishes nothing this app can fetch.
+ * The last two had no Install and a **Get it** in its place, which opened the
+ * project's own page — often the Chrome Web Store. Asad, on what that adds up
+ * to:
  *
- * Those rows have **no Install**. Not a disabled one either: a disabled Install
- * with a tooltip is still a store offering something, and this app's rule is that
- * a control which looks like it works and does not is the defect. What they have
- * instead is the sentence describing what was measured, and one control that
- * does exactly what it says — **Get it** / **Open project**, which opens the
- * project's own page in a tab of this app's browser and puts nothing on the
- * disk. See `store/StoreLinkOut.tsx` for why the label differs between the two
- * kinds of buttonless row.
+ *   > *"They click Get and it takes them to the Chrome store … we should not
+ *   > offer tools that don't work with our architecture."*
+ *
+ * So the catalogue stopped holding those rows rather than this file learning to
+ * draw them better — see `CatalogueEntry` in `src/main/browser-extensions.ts`,
+ * which will not let one be written. What is left here is a row with one action
+ * on it, and no branch anywhere deciding whether the action is real.
  *
  * ## The Download and sha256 facts
  *
@@ -122,11 +116,7 @@ export function ExtensionRow({
   onRenameDraft,
   onRename,
 }: RowProps) {
-  const actionable = canAct(extension)
   const isInstalled = extension.state === 'installed'
-  /* Where to send somebody this app cannot install it for. `''` for every row
-     that has a real Install, so no row ever carries both. */
-  const elsewhere = linkOut(extension)
   return (
     <li className="bw-store-row bw-store-row-logo">
       {/*
@@ -147,30 +137,25 @@ export function ExtensionRow({
         )}
         {/*
           What it costs, in the head, before anything is pressed.
+
           Every extension in a browser store is a free download, so *free to
-          install* was quietly standing in for *free to use* — which is true of
-          uBlock Origin and false of 1Password, whose extension does nothing at
-          all without a subscription. The chip is on every row, including the
-          free ones, because a price that only appeared on the expensive rows
-          would make its absence a claim as well.
+          install* had been quietly standing in for *free to use* — which is
+          true of uBlock Origin and was false of the rows that wanted a
+          subscription. Those rows are gone and every row here reads Free, and
+          the chip stays: a price that only appeared on the expensive rows would
+          make its absence a claim as well, and the next row added may not be
+          free.
         */}
         <span className="bw-store-chip" data-cost={extension.cost}>
           {COST_WORDS[extension.cost]}
         </span>
         {/*
-          The one-word version of the row's state, because the sections that
-          used to carry it are gone. A catalogue this size browses by shelf now
-          — Blocking, Passwords, and so on — and a row with no Install sitting
-          inside one of those shelves would otherwise be a row somebody has to
-          read a paragraph of to understand. The chip says which kind of
-          buttonless it is; the paragraph underneath still says why.
+          Two chips used to sit here — *Cannot work here* and *Nothing measured*
+          — for the two kinds of row that had no Install. Neither kind is in the
+          store any more, so neither chip is drawn: every catalogue row installs.
+          What is left is the one chip that still separates two real things, a
+          row this app measured from a folder somebody added themselves.
         */}
-        {extension.state === 'unavailable' && (
-          <span className="bw-store-chip bw-store-chip-no">Cannot work here</span>
-        )}
-        {extension.state === 'not-offered' && (
-          <span className="bw-store-chip">Nothing measured</span>
-        )}
         {extension.sideloaded && <span className="bw-store-chip">Added by you</span>}
         <span className="bw-grow" />
         {/* An extension that draws a panel of its own gets a way in. Only when
@@ -234,33 +219,21 @@ export function ExtensionRow({
             On
           </label>
         )}
-        {actionable && (
-          <button
-            type="button"
-            className={
-              extensionActionVerb(extension) === 'remove' ? 'bw-text-button' : 'bw-store-install'
-            }
-            disabled={busy}
-            onClick={() => onAct(extensionActionVerb(extension))}
-          >
-            {extensionActionLabel(extension, busy)}
-          </button>
-        )}
         {/*
-          The honest fallback. A row this app watched failing here, and a row
-          whose project publishes nothing this app can fetch, both had no
-          control at all — which reads as a dead end rather than as the two
-          different true things they are. This opens the project's own page, in
-          a tab of this app's browser, and installs nothing. See
-          `store/StoreLinkOut.tsx`.
+          Unconditional, where it used to be behind `canAct`. Every row in this
+          store installs, so there is no longer a row for which this button
+          would be a lie — and nothing beside it opens somebody else's store.
         */}
-        {elsewhere !== '' && (
-          <StoreLinkOut
-            url={elsewhere}
-            label={linkOutLabel(extension)}
-            describes={`open the ${extension.name} project`}
-          />
-        )}
+        <button
+          type="button"
+          className={
+            extensionActionVerb(extension) === 'remove' ? 'bw-text-button' : 'bw-store-install'
+          }
+          disabled={busy}
+          onClick={() => onAct(extensionActionVerb(extension))}
+        >
+          {extensionActionLabel(extension, busy)}
+        </button>
       </div>
 
       {/*
@@ -302,7 +275,6 @@ export function ExtensionRow({
       <p className="bw-store-summary">{extension.summary}</p>
 
       <dl className="bw-store-facts">
-        {hasReach(extension) && (
         <div>
           <dt>Reaches</dt>
           {/*
@@ -318,7 +290,6 @@ export function ExtensionRow({
           */}
           <dd>{reachWords(extension.reach, extension.everywhere)}</dd>
         </div>
-        )}
         {/*
           What it would like to reach and never will. `optional_host_permissions`
           is a real part of a manifest and this browser can grant none of it:
@@ -473,15 +444,6 @@ export function ExtensionRow({
             off, and this browser does not switch those on, so they are not in force.
           </p>
         )}
-      {/*
-        Why there is no download for a row nothing was measured on. Printed as a
-        note and not an error: nothing is broken, and the project on the other
-        end has done nothing wrong by publishing through a store this app does
-        not talk to.
-      */}
-      {extension.state === 'not-offered' && extension.noRelease !== '' && (
-        <p className="bw-store-note">{extension.noRelease}</p>
-      )}
       {extension.state === 'damaged' && <p className="bw-error">{extension.message}</p>}
       {extension.state === 'installed' && extension.message !== '' && (
         <p className="bw-error">{extension.message}</p>

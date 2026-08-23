@@ -198,25 +198,25 @@ export type ExtensionCategory =
   | 'privacy'
   | 'appearance'
   | 'media'
-  | 'passwords'
-  | 'writing'
-  | 'work'
-  | 'shopping'
-  | 'research'
   | 'scripting'
   | 'your-own'
 
-/** The categories, in the order the store draws them, with the name each wears. */
+/**
+ * The categories, in the order the store draws them, with the name each wears.
+ *
+ * Five of these are gone — *Passwords*, *Writing and language*, *Documents and
+ * work*, *Shopping*, *Saving and research* — and they went with the rows that
+ * were on them. Every one of those rows was a link to the Chrome Web Store or an
+ * extension watched failing here, so each shelf was a heading over nothing this
+ * app can install. A shelf that empties is deleted rather than kept as a name
+ * with no contents: an empty department is the store claiming a size it does not
+ * have. `browser-extension-catalogue.ts` names each row that went and why.
+ */
 export const EXTENSION_CATEGORIES: readonly { id: ExtensionCategory; name: string }[] = [
   { id: 'blocking', name: 'Blocking ads and trackers' },
   { id: 'privacy', name: 'Privacy and cleaning up' },
   { id: 'appearance', name: 'How pages look' },
   { id: 'media', name: 'Video and audio' },
-  { id: 'passwords', name: 'Passwords' },
-  { id: 'writing', name: 'Writing and language' },
-  { id: 'work', name: 'Documents and work' },
-  { id: 'shopping', name: 'Shopping' },
-  { id: 'research', name: 'Saving and research' },
   { id: 'scripting', name: 'Scripting and the keyboard' },
   { id: 'your-own', name: 'Added by you' },
 ]
@@ -279,20 +279,6 @@ export interface ExtensionEntry {
    */
   mayAskToReach?: readonly string[]
   /**
-   * Why this app pins no download, for a row it never ran.
-   *
-   * The third answer to *"where is Vimium"*, and it exists because the other two
-   * were both wrong. "It is not in the list" is what somebody gets today, and it
-   * reads as *never heard of it*. "It cannot work here" is a lie — nothing was
-   * run, because there was nothing to run: the project publishes its extension
-   * through the Chrome Web Store and its releases carry no file this app could
-   * fetch and pin a fingerprint to.
-   *
-   * Set only on a row whose {@link works} is `unmeasured`, and such a row has no
-   * source, no button, and no verdict borrowed from anywhere.
-   */
-  noRelease?: string
-  /**
    * Which mark the store draws on this row, as a key into
    * `renderer/store/logo-data.ts`.
    *
@@ -315,27 +301,69 @@ export interface ExtensionEntry {
    * generated module's header carries the notice and the removal undertaking.
    */
   logo?: string
-  /** `null` when there is nothing worth pinning: a measured refusal, or no release. */
+  /**
+   * Where the bytes come from, or `null` for an entry nothing is pinned for.
+   *
+   * Nullable on {@link ExtensionEntry} because a sideload is one of these and a
+   * sideload has no download — it is a folder somebody chose. A **catalogue**
+   * entry is a narrower thing and says so in its own type: see
+   * {@link CatalogueEntry}.
+   */
   source: ExtensionSource | null
 }
 
-export type ExtensionCatalogue = readonly ExtensionEntry[]
+/**
+ * One row of the store's own catalogue — narrower than an {@link ExtensionEntry},
+ * and the narrowing is the feature.
+ *
+ * ## Why the store's list has a type of its own
+ *
+ * Asad, on the store as it was:
+ *
+ *   > *"we only give the option to install those tools that can actually install
+ *   > in this one, and it will not redirect them to the Chrome store. We should
+ *   > not offer tools that don't work with our architecture."*
+ *
+ * The catalogue used to hold three kinds of row: one that installs, one watched
+ * failing here, and one whose project publishes nothing this app can fetch. The
+ * second and third had no Install and a **Get it** that opened somebody else's
+ * store instead — which is a shop sending you down the road, and half the shelf
+ * was doing it.
+ *
+ * The rule that replaced it could have been a sentence in a header and a habit
+ * to remember. It is a type instead, because a habit is what the old rule was
+ * too: **a catalogue row has bytes to install and was not watched failing.**
+ * `source` is non-null and `works` excludes `no` and `unmeasured`, so a row that
+ * cannot be installed here is not something this file can express. The check
+ * happens where the list is written rather than in a test that runs later, and
+ * `browser-extensions.ts` needs no branch for a state the catalogue can no
+ * longer be in.
+ *
+ * Nothing about a **sideload** changes: what somebody adds themselves is an
+ * `ExtensionEntry` with no source and no verdict, built by `loadSideload`, and
+ * *Added by you* is exactly as open as it was.
+ */
+export interface CatalogueEntry extends ExtensionEntry {
+  /** Pinned, always. A row with nothing to fetch is not a row this store has. */
+  source: ExtensionSource
+  /** Watched doing its job, or watched running with named gaps. Never a refusal. */
+  works: Extract<ExtensionVerdict, 'works' | 'partly'>
+}
+
+export type ExtensionCatalogue = readonly CatalogueEntry[]
 
 /**
  * What a row is doing right now, on one profile.
  *
- * `unavailable` and `not-offered` are both buttonless and they are not the same
- * thing, which is the whole reason for the second one: `unavailable` is *this
- * app ran it here and watched it fail*, and `not-offered` is *this app has never
- * run it, because its project publishes nothing to run*. Collapsing them would
- * put a measurement's authority behind a row nobody measured.
+ * Three values, where there were five. `unavailable` (*this app ran it here and
+ * watched it fail*) and `not-offered` (*its project publishes nothing to run*)
+ * were both buttonless rows, and both are unreachable now that
+ * {@link CatalogueEntry} refuses to hold either kind — so they are gone rather
+ * than kept as states nothing can enter. A row in this store is one somebody can
+ * install, one they have installed, or one whose files are not what they should
+ * be.
  */
-export type ExtensionState =
-  | 'available'
-  | 'installed'
-  | 'damaged'
-  | 'unavailable'
-  | 'not-offered'
+export type ExtensionState = 'available' | 'installed' | 'damaged'
 
 /** One row as a panel draws it. */
 export interface StoreExtension {
@@ -356,8 +384,6 @@ export interface StoreExtension {
   /** The price reality in a sentence, or `''` for a row that is simply free. */
   costNote: string
   measured: string
-  /** Why there is no download for a row nothing was measured on, or `''`. */
-  noRelease: string
   /**
    * The key of the mark the store draws, or `''` for a row that has none.
    *
@@ -825,7 +851,7 @@ function gatherFolder(root: string, limits: { maxBytes: number; maxFiles: number
 export function createExtensionStore(options: ExtensionStoreOptions): ExtensionStore {
   const fetchArchive = options.fetchArchive ?? httpsFetchArchive
   const now = options.now ?? Date.now
-  const entryFor = (id: string): ExtensionEntry | null =>
+  const entryFor = (id: string): CatalogueEntry | null =>
     options.catalogue.find((entry) => entry.id === id) ?? null
 
   function dirFor(profileId: string, id: string): string | null {
@@ -1004,7 +1030,6 @@ export function createExtensionStore(options: ExtensionStoreOptions): ExtensionS
         cost: 'unknown',
         costNote: '',
         measured: '',
-        noRelease: '',
         /* Nobody's catalogue has ever seen this folder, so nobody's catalogue
            has a mark for it. The store draws a monogram rather than borrowing
            somebody else's picture for a program it has not read. */
@@ -1297,7 +1322,6 @@ export function createExtensionStore(options: ExtensionStoreOptions): ExtensionS
           cost: entry.cost,
           costNote: entry.costNote,
           measured: entry.measured,
-          noRelease: entry.noRelease ?? '',
           logo: entry.logo ?? '',
           url: entry.source?.url ?? '',
           sha256: entry.source?.sha256 ?? '',
@@ -1323,22 +1347,12 @@ export function createExtensionStore(options: ExtensionStoreOptions): ExtensionS
           message: '',
         }
         /*
-         * A row nobody ran, because there was nothing to run. Separate from the
-         * refusal below and separate from silence: see {@link ExtensionEntry.noRelease}.
+         * There is no branch here for a row with nothing to install, and there
+         * cannot be one: {@link CatalogueEntry} requires a `source` and forbids
+         * a refused verdict, so every row this loop sees has bytes to fetch.
+         * That used to be two states — `not-offered` and `unavailable` — drawn
+         * as buttonless rows with a link to somebody else's store.
          */
-        if (entry.works === 'unmeasured') {
-          return { ...base, state: 'not-offered' as const, message: entry.noRelease ?? '' }
-        }
-        /*
-         * An entry with no download is not "available". `available` is the state
-         * whose button says Install, and an entry in this state has no bytes to
-         * install — so it gets a state of its own and the panel draws no button
-         * for it. A row that offered Install and could only ever fail is the
-         * control-that-does-nothing this whole round exists to remove.
-         */
-        if (entry.source === null) {
-          return { ...base, state: 'unavailable' as const, message: entry.measured }
-        }
         const loaded = root === null ? null : load(profileId, entry)
         if (loaded === null) return { ...base, state: 'available' as const }
         if ('why' in loaded) {
@@ -1449,18 +1463,14 @@ export function createExtensionStore(options: ExtensionStoreOptions): ExtensionS
       if (dir === null) return { ok: false, message: 'That is not an extension this app can install.' }
       const entry = entryFor(id)
       if (entry === null) return { ok: false, message: 'This store has no extension by that name.' }
-      if (entry.source === null) {
-        /*
-         * Reachable over IPC even though no button draws for it, so it is
-         * answered here rather than assumed impossible. The sentence is the
-         * measurement itself — the same words the row shows, so a caller that
-         * went round the screen gets the same truth the screen gives.
-         */
-        return {
-          ok: false,
-          message: `${entry.name} cannot work in this browser, so this app does not install it. ${entry.measured}`,
-        }
-      }
+      /*
+       * There is no refusal here for an entry with nothing pinned. There used to
+       * be one — reachable over IPC even though no button drew for it — and it
+       * is gone with the rows it answered: {@link CatalogueEntry} requires a
+       * `source`, so a caller going round the screen cannot name a row that has
+       * none. The `.crx` refusal below stays, because that one is about what a
+       * row *points at* rather than whether it points anywhere.
+       */
       if (entry.source.url.endsWith('.crx')) {
         return { ok: false, message: `${entry.name} was not installed: ${CANNOT_INSTALL_CRX}` }
       }
