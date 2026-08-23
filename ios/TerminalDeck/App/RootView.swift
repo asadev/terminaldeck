@@ -11,6 +11,17 @@
  * paired, and a first machine that has not been approved, still take the whole
  * window, because a tab bar over a screen that has nothing to list is furniture.
  *
+ * ## A phone with a server and no machine is past the gate
+ *
+ * `!model.isPaired` used to be the whole first test, and it was wrong for
+ * exactly the person this product is for. Asad: *"Say no MacBook or Windows
+ * exists at all — a user only has a server and a phone."* Such a phone logs in
+ * to its server over SSH, which pairs nothing and mints no machine, and it would
+ * then have been dropped straight back onto a screen asking it for a six-digit
+ * code that no server will ever show it — with the server it had just signed
+ * into unreachable behind that screen. So a server counts: one is enough to be
+ * past the gate, because there is now something to manage.
+ *
  * The order is a state machine, not a preference: an unpaired phone has nothing
  * to list, and a phone waiting for a human to approve it has nothing to list
  * either — the desktop sends an empty session list with the refusal, and a list
@@ -67,7 +78,7 @@ struct RootView: View {
 
     var body: some View {
         Group {
-            if !model.isPaired {
+            if !model.isPaired && !model.hasServers {
                 PairingView(model: model)
             } else if model.hosts.count == 1 && awaitingApproval {
                 PendingApprovalView(model: model)
@@ -76,6 +87,7 @@ struct RootView: View {
             }
         }
         .animation(.default, value: model.isPaired)
+        .animation(.default, value: model.hasServers)
         .tint(Theme.accent)
         /*
          * Stated once, here, for the whole window — including the sheets below.
@@ -91,6 +103,28 @@ struct RootView: View {
         .preferredColorScheme(appearance.colorScheme)
         .sheet(isPresented: $model.addingHost) {
             PairingView(model: model, adding: true) { model.addingHost = false }
+        }
+        /*
+         * Logging in to a server, presented from here and nowhere else.
+         *
+         * It is raised from two screens — the pairing gate and the machines list
+         * — and it must outlive both, because succeeding at it moves a phone
+         * from the first to the second. See `DeckModel.loggingIntoServer`.
+         */
+        .sheet(isPresented: $model.loggingIntoServer) {
+            ServerLoginView(model: model) { added in
+                model.loggingIntoServer = false
+                guard let added else { return }
+                // Straight to the server, which is where the login was going —
+                // *"Then all the server-related stuff comes up."* A phone whose
+                // only machine is this server has nothing else to be looking at.
+                model.show(.settings)
+                // Machines under it, not just the server: Back has to land
+                // somewhere that makes sense, and the list this server is now on
+                // is that place. A stack of one would send Back to Settings and
+                // leave a person hunting for the row they just created.
+                model.settingsRoute = [.machines, .server(added.id)]
+            }
         }
         .sheet(isPresented: $model.showingGitHub) {
             GitHubAccountView(model: model) { model.showingGitHub = false }

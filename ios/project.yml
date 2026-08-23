@@ -25,6 +25,18 @@ packages:
     url: https://github.com/migueldeicaza/SwiftTerm
     # The tag is `v1.18.0`; SPM normalises the prefix away.
     exactVersion: 1.18.0
+  # The SSH client. See `TerminalDeck/Servers/SSHSession.swift` for why this
+  # library and not another, and what it costs.
+  NIOSSH:
+    url: https://github.com/apple/swift-nio-ssh
+    exactVersion: 0.9.1
+  # NIOSSH is a protocol implementation with no socket of its own; the bootstrap
+  # that opens the TCP connection lives here. Same checkout NIOSSH resolves, so
+  # naming it costs nothing and pins it.
+  SwiftNIO:
+    url: https://github.com/apple/swift-nio.git
+    minVersion: 2.81.0
+    maxVersion: 3.0.0
 
 settings:
   base:
@@ -53,9 +65,25 @@ targets:
     platform: iOS
     sources:
       - path: TerminalDeck
+      # The installer itself, bundled rather than copied.
+      #
+      # The phone puts the headless host on a bare server by sending this script
+      # over its own SSH connection and running it — see `ServerConnector`. It is
+      # referenced out of `scripts/` instead of being duplicated under `ios/` so
+      # that there is one installer in this repository: a change to it reaches
+      # the phone in the same commit it reaches the desktop, which uploads the
+      # very same file.
+      - path: ../scripts/install-headless.sh
+        buildPhase: resources
     dependencies:
       - package: SwiftTerm
         product: SwiftTerm
+      - package: NIOSSH
+        product: NIOSSH
+      - package: SwiftNIO
+        product: NIOCore
+      - package: SwiftNIO
+        product: NIOPosix
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.terminaldeck.ios

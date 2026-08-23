@@ -195,6 +195,13 @@ final class DeckModel {
      */
     enum SettingsRoute: Hashable {
         case machines
+        /**
+         * One server this phone has signed into over SSH, and the four verbs
+         * that manage the host on it. Carries the server's own id rather than
+         * the record, so a page that is open while the server is renamed or
+         * re-measured redraws from the store instead of from a stale copy.
+         */
+        case server(String)
         /// The device roster for the current machine — every device signed in
         /// here, and the one verb that removes one. Pushed only over a host that
         /// advertised `devices`. See `DeviceRosterView`.
@@ -1094,6 +1101,56 @@ final class DeckModel {
      * — so this is not a save, it is the list learning about a machine that is
      * already paired.
      */
+    /**
+     * The servers this phone has signed into over SSH, and everything done to
+     * them from here.
+     *
+     * Lazy for the same reason `serverSignIn` is: it reads the Keychain, and a
+     * model built for a screenshot test has no business unlocking one. It is
+     * **not** the same thing as `hosts` — a server is a machine nobody sits at
+     * and that does not run this app, which is exactly why it is reached by a
+     * login rather than by a code. A server that has been *connected* appears in
+     * both: as a server here, and as the ordinary machine the host on it became.
+     */
+    var serverConnector: ServerConnector {
+        if let existing = serverConnectorStore { return existing }
+        let made = ServerConnector()
+        serverConnectorStore = made
+        return made
+    }
+
+    @ObservationIgnored private var serverConnectorStore: ServerConnector?
+
+    /**
+     * Whether this phone has a server, which is a different question from
+     * whether it has a machine.
+     *
+     * `RootView` is the caller and the reason: a phone that has logged in to a
+     * server has something to manage even with nothing paired, and the pairing
+     * gate would otherwise hold it in front of a code field forever. See the
+     * note there.
+     */
+    var hasServers: Bool { !serverConnector.servers.isEmpty }
+
+    /**
+     * Whether the **Log in to a server** sheet is up.
+     *
+     * On the model rather than on the screen that raises it, and this one is not
+     * tidiness — it is a bug that was watched happening. The sheet used to belong
+     * to `PairingView`, and a successful login takes a phone *past* the pairing
+     * gate: `RootView` swapped `PairingView` for `DeckTabs` the instant the
+     * server landed, which tore down the presenter and took the sheet with it.
+     * What a person saw was the login vanishing at the moment it succeeded,
+     * before the receipt and its **Open it** button had been on screen for a
+     * frame. Measured in the simulator against a real server; the walk in
+     * `ServerLoginUITests` waited sixty seconds for a screen that had been
+     * deleted.
+     *
+     * `RootView` presents it, because `RootView` is the one view that survives
+     * that swap.
+     */
+    var loggingIntoServer = false
+
     var serverSignIn: ServerSignIn {
         if let flow = serverFlow { return flow }
         let flow = ServerSignIn(credentials: credentials, device: device) { [weak self] record in

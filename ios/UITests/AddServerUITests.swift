@@ -61,10 +61,14 @@ final class AddServerUITests: XCTestCase {
         XCTAssertTrue(app.secureTextFields["addServer.password"].exists,
                       "the password field is secure, not a plain field")
         XCTAssertTrue(app.buttons["addServer.submit"].exists)
-        // The install line, for a machine with no host on it yet. A screen that
-        // refused an address for a server that does not exist and explained
-        // nothing would be the dead end this one is written against.
-        XCTAssertTrue(app.buttons["addServer.copyInstall"].exists)
+        // **No install line.** It used to end with "no Terminal Deck on that
+        // machine yet?" and a `curl … | sh` to copy and go and run somewhere
+        // else, because neither a browser nor this phone could reach a bare
+        // server. The phone can now — `ServerLoginView` is the door in front of
+        // this one — so the command is gone rather than moved. Asad: *"I don't
+        // want that command."*
+        XCTAssertFalse(app.buttons["addServer.copyInstall"].exists,
+                       "the copy-this-command footer was deleted, not hidden")
 
         // Put the app back where it was found. A case that leaves a sheet up is
         // a case that fails the next one for reasons nothing in it explains.

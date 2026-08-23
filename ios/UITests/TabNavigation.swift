@@ -298,16 +298,30 @@ extension XCUIApplication {
      */
     @discardableResult
     func beginAddingAServer() -> Bool {
+        guard beginLoggingIntoAServer() else { return false }
+        // The address form is behind the login now — one line at the foot of it,
+        // for a host already running somewhere this phone has no SSH login for.
+        // It stopped being the first door on 2026-08-23: a bare server prints no
+        // address, so a screen that asks for one cannot be what a phone with
+        // only a server is given. `ServerLoginView` carries the whole argument.
+        let door = buttons["serverLogin.addressDoor"]
+        guard door.waitForExistence(timeout: 10) else { return false }
+        door.tap()
+        return textFields["addServer.address"].waitForExistence(timeout: 20)
+    }
+
+    /// The SSH login itself — the first door, from wherever this phone is.
+    func beginLoggingIntoAServer() -> Bool {
         let onPairingScreen = buttons["pairing.addServer"]
         if onPairingScreen.waitForExistence(timeout: 3) {
             onPairingScreen.tap()
-            return textFields["addServer.address"].waitForExistence(timeout: 20)
+            return textFields["serverLogin.address"].waitForExistence(timeout: 20)
         }
         guard openMachinesTab() else { return false }
         let add = buttons["machines.addServer"]
         guard add.waitForExistence(timeout: 10) else { return false }
         add.tap()
-        return textFields["addServer.address"].waitForExistence(timeout: 20)
+        return textFields["serverLogin.address"].waitForExistence(timeout: 20)
     }
 
     /// The GitHub account screen, from Settings.

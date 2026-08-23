@@ -207,6 +207,8 @@ struct DeckTabs: View {
                             if let host = model.current {
                                 WatchSurfacesView(watch: host.watch)
                             }
+                        case let .server(id):
+                            ServerDetailView(model: model, serverId: id)
                         }
                     }
             }
@@ -308,17 +310,6 @@ private struct CopilotTabScreen: View {
 struct MachinesView: View {
     let model: DeckModel
 
-    /**
-     * Whether the **Add a server** sheet is up.
-     *
-     * Local rather than on the model, because this screen is the only thing that
-     * raises it from here and a flag on the model would be a second way to
-     * present the same sheet from two places at once. The *flow* underneath it
-     * is on the model — see `DeckModel.serverSignIn` — so closing this screen
-     * mid-sign-in does not end it.
-     */
-    @State private var addingServer = false
-
     var body: some View {
         ZStack {
             Theme.background.ignoresSafeArea()
@@ -370,8 +361,42 @@ struct MachinesView: View {
                      * putting the server one behind a `…` would be hiding the
                      * only way in for the machines this product is named after.
                      */
+                    /*
+                     * The servers, on the same list as the machines and clearly
+                     * not the same thing.
+                     *
+                     * A server that has been *connected* is in both places at
+                     * once — as a machine above, because the host on it became
+                     * one, and as a server here, because the SSH login that
+                     * manages it is still what installs, starts and stops it.
+                     * That is not a duplicate: the two rows do different jobs
+                     * and lead to different screens.
+                     */
+                    if !model.serverConnector.servers.isEmpty {
+                        Text("Servers")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(Theme.faint)
+                            .textCase(.uppercase)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 4)
+                            .padding(.top, 14)
+                        ForEach(model.serverConnector.servers) { server in
+                            NavigationLink(value: DeckModel.SettingsRoute.server(server.id)) {
+                                ServerRow(server: server,
+                                          isConnected: server.linkedHostId
+                                              .flatMap { model.host($0) } != nil)
+                            }
+                            .buttonStyle(RowButtonStyle())
+                            .accessibilityIdentifier("machines.server")
+                        }
+                    }
+
                     Button {
-                        addingServer = true
+                        // The root presenter, for the reason the pairing screen
+                        // gives: one login sheet, owned by the one view that
+                        // survives a phone crossing from "no machines" to "one
+                        // server". See `DeckModel.loggingIntoServer`.
+                        model.loggingIntoServer = true
                     } label: {
                         HStack(spacing: 12) {
                             Image(systemName: "server.rack")
@@ -379,7 +404,7 @@ struct MachinesView: View {
                                 .foregroundStyle(Theme.accent)
                                 .frame(width: 18)
                             VStack(alignment: .leading, spacing: 2) {
-                                Text("Add a server")
+                                Text("Log in to a server")
                                     .font(.system(size: 16, weight: .medium))
                                     .foregroundStyle(Theme.accent)
                                 // The one line on this row, and it earns it: it
@@ -387,7 +412,7 @@ struct MachinesView: View {
                                 // and somebody who reads "add a server" without
                                 // it will go looking for a code that no server
                                 // will ever show them.
-                                Text("Sign in with the login that server already trusts")
+                                Text("Its address and the login it already trusts")
                                     .font(.system(size: 12))
                                     .foregroundStyle(Theme.faint)
                             }
@@ -435,9 +460,7 @@ struct MachinesView: View {
         }
         .navigationTitle("Machines")
         .navigationBarTitleDisplayMode(.inline)
-        .sheet(isPresented: $addingServer) {
-            AddServerView(model: model) { _ in addingServer = false }
-        }
+
     }
 }
 
