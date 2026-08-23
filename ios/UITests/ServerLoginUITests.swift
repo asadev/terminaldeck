@@ -100,47 +100,57 @@ final class ServerLoginUITests: XCTestCase {
         shoot("machines-with-a-server")
     }
 
-    /// The one thing that had to leave: a command to copy and go and run
-    /// somewhere else. *"I don't want that command."*
-    func testTheOtherDoorNoLongerHandsOutAnInstallCommand() {
-        XCTAssertTrue(app.buttons["pairing.addServer"].waitForExistence(timeout: 15)
-                          || app.openMachinesTab(),
-                      "never reached a screen that offers a server")
-        // The address door is still reachable from the pairing sheet; what is
-        // gone is its footer. Nothing anywhere in this app offers the line now.
-        XCTAssertFalse(app.buttons["addServer.copyInstall"].exists)
+    /**
+     * The check-and-install step, right where he asked for it.
+     *
+     * > *"Right after logging in we need to have the step for
+     * > checking/installing headless Terminal Deck."*
+     *
+     * So this does not leave the login screen. After the receipt it reads the
+     * host card that is *on that screen* and asserts one of the four honest
+     * answers is drawn: a host that is running and can be connected to, one that
+     * is installed and stopped, one that is not there at all with an Install
+     * button, or a stated reason why it cannot go on this machine. Which of the
+     * four depends on the server, and all four are correct outcomes — what is
+     * not correct is none of them.
+     */
+    func testTheCheckAndInstallStepIsPartOfTheLogin() throws {
+        openTheLoginForm()
+        XCTAssertTrue(app.buttons["serverLogin.submit"].isEnabled)
+        app.buttons["serverLogin.submit"].tap()
+
+        XCTAssertTrue(app.staticTexts["serverLogin.signedIn"].waitForExistence(timeout: 60),
+                      "the login never finished: "
+                          + app.staticTexts["serverLogin.errorHeadline"].label)
+
+        // The step, on this screen, without going anywhere to find it.
+        let hostLine = app.staticTexts["server.hostLine"]
+        XCTAssertTrue(hostLine.waitForExistence(timeout: 60),
+                      "the check step is not on the login screen")
+        shoot("login-step-host")
+
+        let offered = app.buttons["server.install"].exists
+            || app.buttons["server.connect"].exists
+            || app.buttons["server.startConnect"].exists
+            || app.buttons["server.disconnect"].exists
+            || app.staticTexts["server.hostRefusal"].exists
+        XCTAssertTrue(offered,
+                      "the step said \"\(hostLine.label)\" and offered nothing to do about it")
+
+        // And never a command to copy and go and run somewhere else.
         XCTAssertEqual(app.staticTexts.matching(
             NSPredicate(format: "label CONTAINS %@", "install.sh")).count, 0)
+        XCTAssertEqual(app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS[c] %@", "curl")).count, 0)
     }
 
     // MARK: - Walking
 
-    /// `TabNavigation.swift` owns the walk — the machines stopped being a tab
-    /// once already, and six suites did not have to change because of it.
-    private func openTheMachinesScreen() {
-        XCTAssertTrue(app.openMachinesTab(), "never reached the machines screen")
-    }
-
-    /**
-     * The way in, from wherever this phone happens to be.
-     *
-     * On a phone with nothing on it — which is the case this feature exists for
-     * — there are no tabs at all: `RootView` puts the pairing screen over the
-     * whole window, and the server door is the line under the code field. On a
-     * phone that already has something, it is the row on Machines. Both are real
-     * first steps and a suite that knew only one of them would be testing the
-     * wrong phone.
-     */
+    /// `TabNavigation.swift` owns the walk — and there is one of it now, because
+    /// there is one login screen. On a phone with nothing on it the login *is*
+    /// the window, so there is nothing to tap.
     private func openTheLoginForm() {
-        let fromPairing = app.buttons["pairing.addServer"]
-        if fromPairing.waitForExistence(timeout: 10) {
-            fromPairing.tap()
-            return
-        }
-        openTheMachinesScreen()
-        let add = app.buttons["machines.addServer"]
-        XCTAssertTrue(add.waitForExistence(timeout: 10), "no way in to the server login")
-        add.tap()
+        XCTAssertTrue(app.beginLoggingIntoAServer(), "no way in to the server login")
     }
 
     private func shoot(_ name: String) {

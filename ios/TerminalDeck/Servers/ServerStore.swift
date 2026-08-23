@@ -32,6 +32,7 @@
  */
 
 import Foundation
+import LocalAuthentication
 import Security
 
 /// Which kind of sign-in is stored for a server, without any of it.
@@ -63,6 +64,24 @@ struct StoredServer: Codable, Equatable, Identifiable {
      * the server record — so reconnecting is one press, not a whole sign-in.
      */
     var linkedHostId: String?
+
+    /**
+     * Whether this server's password or key is behind Face ID / Touch ID.
+     *
+     * **A mirror of the truth, not the truth.** What actually refuses a read is
+     * the `SecAccessControl` on the credential item, enforced by the Secure
+     * Enclave; this flag exists so the servers list can be *drawn* without
+     * touching it. Reading the record must never raise a prompt — a list of six
+     * servers would otherwise be six Face ID sheets to scroll past one row.
+     *
+     * Optional rather than a defaulted `Bool` because records written before
+     * this existed have no such key, and a synthesised `Decodable` throws on a
+     * missing non-optional — which would read as *no servers at all* on the
+     * first launch after an update. See the header on one item per server.
+     */
+    var biometricLock: Bool?
+
+    var isBiometricLocked: Bool { biometricLock == true }
 
     /// `address:port`, with the port shown only when it is not the usual one.
     var where_: String {
@@ -131,8 +150,8 @@ final class ServerStore {
      * spends it in the handshake and the caller drops it. Nothing keeps this in
      * a property.
      */
-    func secret(for id: String) -> String? {
-        guard let data = read(account: secretPrefix + id) else { return nil }
+    func secret(for id: String, context: LAContext? = nil) -> String? {
+        guard let data = read(account: secretPrefix + id, context: context) else { return nil }
         return String(data: data, encoding: .utf8)
     }
 
@@ -190,10 +209,29 @@ final class ServerStore {
         }) {
             already.credential = secret.isEmpty ? already.credential : kind
             if let hostKey { already.hostKey = hostKey }
-            save(already)
             if !secret.isEmpty, let data = secret.data(using: .utf8) {
+                /*
+                 * A re-login must not quietly unlock a locked server.
+                 *
+                 * The new credential is written plainly first — the old item's
+                 * ACL is gone with it, which is what makes this writable at all
+                 * without a prompt — and then the lock is put straight back on
+                 * with `setBiometricLock`, using the secret still in hand. It is
+                 * two writes for one save and that is the cost of not asking for
+                 * Face ID in the middle of a password login.
+                 *
+                 * If putting the lock back fails, the flag follows the item down
+                 * rather than claiming a protection that is not there. A lock
+                 * that reads "on" over an unprotected item is worse than no lock.
+                 */
+                delete(account: secretPrefix + already.id)
                 write(account: secretPrefix + already.id, data: data)
+                if already.isBiometricLocked {
+                    do { try setBiometricLock(true, for: already.id) }
+                    catch { already.biometricLock = false }
+                }
             }
+            save(already)
             return already
         }
 
@@ -207,7 +245,8 @@ final class ServerStore {
             hostKey: hostKey,
             addedAt: Date(),
             lastConnectedAt: nil,
-            linkedHostId: nil)
+            linkedHostId: nil,
+            biometricLock: false)
         save(server)
         if !secret.isEmpty, let data = secret.data(using: .utf8) {
             write(account: secretPrefix + server.id, data: data)
@@ -228,6 +267,92 @@ final class ServerStore {
         delete(account: secretPrefix + id)
     }
 
+    /* ------------------------------------------------------------ biometry -- */
+
+    /// Why a lock could not be turned on or off. Each is a sentence a screen prints.
+    enum LockProblem: Error, Equatable {
+        /// The credential could not be read back, so there is nothing to rewrite.
+        /// On a locked server this is what a refused or cancelled unlock looks like.
+        case noSecret
+        /// The platform refused to build the access control — no passcode set.
+        case noPasscode
+        /// The rewritten item would not go back in. The old one is already gone,
+        /// so the server is left needing a fresh sign-in and the sentence says so.
+        case notWritten
+
+        var sentence: String {
+            switch self {
+            case .noSecret:
+                return "That sign-in could not be read, so nothing was changed."
+            case .noPasscode:
+                return "This iPhone has no passcode, so nothing can be locked to it. Set one in "
+                    + "Settings › Face ID & Passcode."
+            case .notWritten:
+                return "That sign-in could not be written back. Log in to this server again."
+            }
+        }
+    }
+
+    /**
+     * Put the credential behind biometry, or take it back out.
+     *
+     * Delete and re-add rather than `SecItemUpdate`, because `kSecAttrAccessControl`
+     * is not an attribute an update may change — an update that appears to
+     * succeed leaves the old ACL in place, which is a lock somebody switched on
+     * and that does not exist.
+     *
+     * The order is: read (which prompts when it is already locked), write the new
+     * item, then the record. A failure at any step leaves the previous state
+     * intact except the one in `notWritten`, which is stated rather than hidden.
+     *
+     * `context` is the authentication that has already happened, so turning a
+     * lock **off** costs one prompt rather than two.
+     */
+    func setBiometricLock(_ on: Bool, for id: String, context: LAContext? = nil) throws {
+        guard var server = load(id) else { throw LockProblem.noSecret }
+        guard let secret = read(account: secretPrefix + id, context: context) else {
+            throw LockProblem.noSecret
+        }
+
+        var control: SecAccessControl?
+        if on {
+            var error: Unmanaged<CFError>?
+            /*
+             * `.biometryCurrentSet` **or** `.devicePasscode` — the decision, in
+             * one line, argued in full in `BiometricGate.swift`.
+             *
+             * `.biometryCurrentSet` binds this credential to the faces and
+             * fingers enrolled at this moment: adding one invalidates it. That
+             * is the property `.userPresence` and `.biometryAny` do not have,
+             * and it is the one that matters for a credential that opens
+             * somebody's production machine — a person who can add their own
+             * face to an unattended phone must not thereby get every server on
+             * it.
+             *
+             * The passcode is composed in because it is not a lower bar: it is
+             * the same secret the phone already trusts to *change the
+             * enrolment*. Without it, a sensor locked out after five failures
+             * would be a locked-out person with no route back but forgetting the
+             * server. `WhenPasscodeSetThisDeviceOnly` pairs with that — the item
+             * cannot exist on a phone with no passcode, and never leaves it.
+             */
+            control = SecAccessControlCreateWithFlags(
+                nil,
+                kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly,
+                [.biometryCurrentSet, .or, .devicePasscode],
+                &error)
+            error?.release()
+            guard control != nil else { throw LockProblem.noPasscode }
+        }
+
+        delete(account: secretPrefix + id)
+        guard write(account: secretPrefix + id, data: secret, control: control) else {
+            throw LockProblem.notWritten
+        }
+        server.biometricLock = on
+        save(server)
+    }
+
     /* ------------------------------------------------------------- keychain -- */
 
     private func query(account: String) -> [String: Any] {
@@ -238,10 +363,15 @@ final class ServerStore {
         ]
     }
 
-    private func read(account: String) -> Data? {
+    private func read(account: String, context: LAContext? = nil) -> Data? {
         var query = query(account: account)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
+        if let context {
+            // The authentication that already happened, handed to the Keychain
+            // so a read behind an unlock does not raise a second prompt.
+            query[kSecUseAuthenticationContext as String] = context
+        }
         var item: CFTypeRef?
         guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess else { return nil }
         return item as? Data
@@ -267,21 +397,28 @@ final class ServerStore {
         }
     }
 
-    private func write(account: String, data: Data) {
+    @discardableResult
+    private func write(account: String, data: Data, control: SecAccessControl? = nil) -> Bool {
         let query = query(account: account)
-        let attributes: [String: Any] = [
-            kSecValueData as String: data,
+        var attributes: [String: Any] = [kSecValueData as String: data]
+        if let control {
+            // `kSecAttrAccessControl` and `kSecAttrAccessible` are mutually
+            // exclusive — an item carrying both is refused with errSecParam, and
+            // the protection class is already inside the control.
+            attributes[kSecAttrAccessControl as String] = control
+        } else {
             // AfterFirstUnlock so a connection opened from a pocket works;
             // ThisDeviceOnly so an SSH password is never in an iCloud backup on
             // somebody's other devices. `CredentialStore` argues both in full.
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
-        ]
-        if SecItemUpdate(query as CFDictionary, attributes as CFDictionary) == errSecSuccess {
-            return
+            attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        }
+        if control == nil,
+           SecItemUpdate(query as CFDictionary, attributes as CFDictionary) == errSecSuccess {
+            return true
         }
         var insert = query
         insert.merge(attributes) { current, _ in current }
-        SecItemAdd(insert as CFDictionary, nil)
+        return SecItemAdd(insert as CFDictionary, nil) == errSecSuccess
     }
 
     private func delete(account: String) {

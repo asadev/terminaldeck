@@ -288,35 +288,23 @@ extension XCUIApplication {
     }
 
     /**
-     * Open the **Add a server** screen, from wherever this phone currently is.
+     * The login, from wherever this phone happens to be — and there is only one.
      *
-     * Two ways in, because there are two, and which one exists depends on
-     * whether anything is paired: a phone with no machines is sitting on the
-     * pairing screen and the door is a line under the code field; a phone with
-     * machines reaches it from the Machines list. A helper that knew only one
-     * would skip on exactly the phone the other was built for.
+     * It used to be two walks: this one, and a `beginAddingAServer` that went
+     * through it and then tapped a line at the foot of it to reach a *second*
+     * form. That second form is deleted, and so is the walk to it. What is left
+     * is the route a person takes.
+     *
+     * On a phone with nothing on it the login **is** the window — `RootView`
+     * puts it there rather than a pairing code — so there is nothing to tap and
+     * the fields are already on screen. On a phone that has something, it is the
+     * row on Machines. Both are real first steps and a helper that knew only one
+     * of them would be walking the wrong phone.
      */
     @discardableResult
-    func beginAddingAServer() -> Bool {
-        guard beginLoggingIntoAServer() else { return false }
-        // The address form is behind the login now — one line at the foot of it,
-        // for a host already running somewhere this phone has no SSH login for.
-        // It stopped being the first door on 2026-08-23: a bare server prints no
-        // address, so a screen that asks for one cannot be what a phone with
-        // only a server is given. `ServerLoginView` carries the whole argument.
-        let door = buttons["serverLogin.addressDoor"]
-        guard door.waitForExistence(timeout: 10) else { return false }
-        door.tap()
-        return textFields["addServer.address"].waitForExistence(timeout: 20)
-    }
-
-    /// The SSH login itself — the first door, from wherever this phone is.
     func beginLoggingIntoAServer() -> Bool {
-        let onPairingScreen = buttons["pairing.addServer"]
-        if onPairingScreen.waitForExistence(timeout: 3) {
-            onPairingScreen.tap()
-            return textFields["serverLogin.address"].waitForExistence(timeout: 20)
-        }
+        // Already there: the gate is the login now.
+        if textFields["serverLogin.address"].waitForExistence(timeout: 5) { return true }
         guard openMachinesTab() else { return false }
         let add = buttons["machines.addServer"]
         guard add.waitForExistence(timeout: 10) else { return false }

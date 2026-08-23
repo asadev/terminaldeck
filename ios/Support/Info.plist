@@ -105,6 +105,27 @@
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Terminal Deck connects to the Mac you paired with, which may be on this network.</string>
 
+	<!-- Face ID, and this key is not optional in the way most usage strings are.
+
+	     iOS does not merely refuse biometry without it — it **terminates the
+	     process** the first time `LAContext` is asked to evaluate a biometric
+	     policy, with no prompt and no error to catch. So the one place this
+	     could be discovered is the first time somebody taps "Turn on Face ID",
+	     on their phone, after the build has shipped.
+
+	     What it protects is `Servers/ServerStore.swift`: a server's password or
+	     key can be put behind a `SecAccessControl` requiring the biometry
+	     enrolled at that moment, and `Servers/BiometricGate.swift` is what asks
+	     for it. It is offered, never imposed — a person who declines keeps
+	     typing their password — and the credential is in the Keychain either
+	     way. The sentence names the server rather than the app because that is
+	     what the person is unlocking.
+
+	     There is no NSFaceIDUsageDescription equivalent for Touch ID: the same
+	     key covers both, and the on-screen wording follows LABiometryType. -->
+	<key>NSFaceIDUsageDescription</key>
+	<string>Face ID unlocks the sign-in Terminal Deck keeps for your servers, so you do not have to type a password or paste a key every time.</string>
+
 	<!-- App Transport Security, for one address and one address only.
 
 	     The localhost feature serves the Mac's dev server from a listener inside

@@ -79,7 +79,27 @@ struct RootView: View {
     var body: some View {
         Group {
             if !model.isPaired && !model.hasServers {
-                PairingView(model: model)
+                /*
+                 * **The gate is the login, not the pairing code.**
+                 *
+                 * It was `PairingView`: a headline reading *"Pair with your
+                 * Mac"*, a six-digit field, a primary Pair button, and *"Log in
+                 * to a server instead"* as a small line underneath. Photographed
+                 * and then indefensible — the first thing this app said to
+                 * somebody opening it was that they owned a desktop computer.
+                 *
+                 * > *"Say no MacBook or any Windows exists at all — a user only
+                 * > has a server and a phone."*
+                 * > *"I want the standard way to sign in used everywhere —
+                 * > server address, username, password or key."*
+                 *
+                 * So the login is the window and pairing is the line underneath
+                 * it. Pairing is **not deleted** — it is one tap away in
+                 * `ServerLoginView.pairingDoor` and it is still the right door
+                 * for a machine with a screen and a person in front of it.
+                 */
+                ServerLoginView(model: model, isGate: true)
+                    .accessibilityIdentifier("root.gate")
             } else if model.hosts.count == 1 && awaitingApproval {
                 PendingApprovalView(model: model)
             } else {
@@ -101,15 +121,35 @@ struct RootView: View {
          * screen and every sheet was rendered in both schemes.
          */
         .preferredColorScheme(appearance.colorScheme)
+        /*
+         * Pairing, from wherever it was asked for — the line at the foot of the
+         * login screen, or the machines list.
+         *
+         * Its own **server** door comes back here rather than raising a second
+         * login sheet on top of this one. Two `ServerLoginView`s in one
+         * hierarchy is exactly the fault this lane exists to remove, and it was
+         * not only ugly: with both on screen, `firstMatch` on a segmented
+         * control's "Private key" hits the buried one, which is the concrete
+         * reason `testTheKeyOptionOffersAPasteRatherThanAOneLineField` failed
+         * for five seconds and then gave up.
+         */
         .sheet(isPresented: $model.addingHost) {
-            PairingView(model: model, adding: true) { model.addingHost = false }
+            PairingView(model: model, adding: true, onServerDoor: {
+                model.addingHost = false
+                // Past the gate, the login is a sheet and has to be raised. At
+                // the gate it is the window underneath this one, so closing is
+                // the whole of the move.
+                if model.isPaired || model.hasServers { model.loggingIntoServer = true }
+            }) {
+                model.addingHost = false
+            }
         }
         /*
          * Logging in to a server, presented from here and nowhere else.
          *
-         * It is raised from two screens — the pairing gate and the machines list
-         * — and it must outlive both, because succeeding at it moves a phone
-         * from the first to the second. See `DeckModel.loggingIntoServer`.
+         * Raised from the machines list and from the pairing sheet, and it must
+         * outlive both, because succeeding at it moves a phone from one to the
+         * other. See `DeckModel.loggingIntoServer`.
          */
         .sheet(isPresented: $model.loggingIntoServer) {
             ServerLoginView(model: model) { added in

@@ -46,30 +46,23 @@ struct PairingView: View {
      * would be two screens to keep in step for one behaviour.
      */
     var adding = false
+    /**
+     * What the **log in to a server** line does, decided by whoever presented
+     * this screen.
+     *
+     * It used to raise a `ServerLoginView` of its own, and that is now a bug
+     * rather than a nicety: the login screen is often the window *underneath*
+     * this sheet, and a second copy on top would put two identical forms — two
+     * address fields, two "Private key" segments — in one hierarchy. So the
+     * presenter decides: at the gate, closing this sheet **is** going back to
+     * the login; past it, `RootView` raises the one sheet there is. See the note
+     * in `RootView`.
+     */
+    var onServerDoor: (() -> Void)?
     var close: (() -> Void)?
 
     @State private var typed = ""
     @FocusState private var typing: Bool
-
-    /**
-     * Whether the **Log in to a server** sheet is up over this one.
-     *
-     * Only when this screen is itself a sheet — *pair another machine* — and the
-     * split is not a preference, it is two different failures avoided:
-     *
-     *  - **From inside a sheet, present locally.** A flag on the model would ask
-     *    `RootView` to swap one root-level sheet for another in the same update,
-     *    which SwiftUI drops about as often as it honours. A sheet raised from
-     *    inside the sheet that is already up is one presentation and always
-     *    lands. That is the original argument for this flag and it still holds.
-     *  - **From the gate, present from the root.** When this screen *is* the
-     *    window, a successful login takes the phone past it — `RootView` swaps
-     *    this view for `DeckTabs` the instant the server lands — and a sheet
-     *    owned by the view being torn down goes with it, half a second before
-     *    the person has read the receipt. Watched happening in the simulator
-     *    against a real server. See `DeckModel.loggingIntoServer`.
-     */
-    @State private var signingIn = false
 
     var body: some View {
         ZStack {
@@ -110,17 +103,6 @@ struct PairingView: View {
         // The keypad is up before the person has to ask for it. This screen has
         // exactly one thing to do and typing is it.
         .onAppear { typing = true }
-        .sheet(isPresented: $signingIn) {
-            // Reached only from the *pair another machine* sheet; the gate uses
-            // the root presenter instead. See the note on `signingIn`.
-            ServerLoginView(model: model) { added in
-                signingIn = false
-                guard let added else { return }
-                close?()
-                model.show(.settings)
-                model.settingsRoute = [.machines, .server(added.id)]
-            }
-        }
     }
 
     /**
@@ -143,8 +125,8 @@ struct PairingView: View {
         HStack(spacing: 6) {
             Button {
                 typing = false
-                // Which presenter — see the note on `signingIn` above.
-                if adding { signingIn = true } else { model.loggingIntoServer = true }
+                // Whoever presented this screen decides — see `onServerDoor`.
+                if let onServerDoor { onServerDoor() } else { model.loggingIntoServer = true }
             } label: {
                 HStack(spacing: 7) {
                     Image(systemName: "server.rack")
@@ -186,11 +168,21 @@ struct PairingView: View {
      */
     private var header: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(adding ? "Pair another machine" : "Pair with your Mac")
+            /*
+             * "Pair with a machine", never "Pair with your Mac".
+             *
+             * The old wording was on the *first* screen of the app, told
+             * everybody who opened it that they owned a Mac, and was wrong twice
+             * over: the protocol is OS-agnostic and a phone cannot tell one
+             * machine from another. This screen is now reached by choosing it,
+             * so it may name the two things it actually pairs with — and it says
+             * "another" only when there is already one.
+             */
+            Text(model.hosts.isEmpty ? "Pair with a Mac or Windows PC" : "Pair another machine")
                 .font(.system(size: 26, weight: .semibold))
                 .foregroundStyle(Theme.primary)
             InfoDot(about: "pairing",
-                    text: adding
+                    text: !model.hosts.isEmpty
                         ? "Open \(Brand.name) on the other Mac or Windows PC and show its pairing code. "
                             + "The machines you already have stay paired. A code is good for one minute "
                             + "and one use, and pairing alone does not grant access — the machine still "

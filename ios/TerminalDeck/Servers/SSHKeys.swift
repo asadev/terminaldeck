@@ -329,3 +329,89 @@ struct SSHWire {
         return String(decoding: raw, as: UTF8.self)
     }
 }
+
+/**
+ * **What was actually pasted**, read back and described.
+ *
+ * ## The bug this exists to make impossible
+ *
+ * The key field was a paste-only pill whose entire feedback was
+ * *"Private key ready · 412 characters"*. A character count cannot tell a whole
+ * key from a key whose seven lines were flattened into one — the count is
+ * identical either way, because a newline is one character and so is the space
+ * that replaced it. So a key that arrived mangled read as ready, the login was
+ * refused, and the sentence on screen sent somebody to check a password that was
+ * never the problem.
+ *
+ * A private key is **seven lines** for Ed25519, and the first and last of them
+ * are `-----BEGIN OPENSSH PRIVATE KEY-----` and its END. This says how many
+ * lines came through and whether both of those are present, and it runs the real
+ * reader over the bytes — the same one the SSH handshake will use — so *"this
+ * key is readable"* means the thing that is about to sign has already read it.
+ *
+ * Nothing here renders the key. What it returns is a sentence about it.
+ */
+enum PrivateKeyReadback: Equatable {
+    /// Readable by the reader that will sign with it. Carries the sentence.
+    case good(String)
+    /// Something arrived and it is not usable. Carries the reader's own words.
+    case bad(headline: String, advice: String)
+    /// Empty.
+    case nothing
+
+    var sentence: String? {
+        switch self {
+        case let .good(text): return text
+        case let .bad(headline, _): return headline
+        case .nothing: return nil
+        }
+    }
+
+    var isGood: Bool {
+        if case .good = self { return true }
+        return false
+    }
+
+    /**
+     * Look at a pasted key.
+     *
+     * The line count is of the **trimmed** text, because a copied file almost
+     * always arrives with a trailing newline and counting it would report eight
+     * lines for a seven-line key — a number that does not match what somebody
+     * sees in their editor, on a screen whose whole job is to convince them the
+     * paste was whole.
+     */
+    static func of(_ raw: String) -> PrivateKeyReadback {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return .nothing }
+
+        let lines = trimmed.split(separator: "\n", omittingEmptySubsequences: false).count
+        do {
+            _ = try SSHPrivateKeyReader.read(trimmed)
+        } catch let problem as PrivateKeyProblem {
+            /*
+             * A readable *kind* of key that this phone cannot sign with is still
+             * a key that survived the paste, and saying "one line" about an RSA
+             * key would be two complaints in one sentence. The reader's own
+             * headline goes out; the line count goes with it only when the
+             * failure could plausibly *be* the paste.
+             */
+            if case .notAKey = problem, lines <= 1 {
+                return .bad(headline: "That arrived as one line.",
+                            advice: "A private key is several lines and this field kept only one, "
+                                + "which usually means it was copied out of somewhere that "
+                                + "flattened it. Paste it again, or open the key file and copy all "
+                                + "of it including the BEGIN and END lines.")
+            }
+            return .bad(headline: problem.headline, advice: problem.advice)
+        } catch {
+            return .bad(headline: "That key could not be read.",
+                        advice: String(describing: error))
+        }
+
+        let kind = trimmed.contains("BEGIN OPENSSH PRIVATE KEY") ? "OpenSSH" : "PEM"
+        let ends = trimmed.hasPrefix("-----BEGIN") && trimmed.hasSuffix("KEY-----")
+        return .good("\(kind) private key · \(lines) line\(lines == 1 ? "" : "s")"
+            + (ends ? " · BEGIN and END are both here" : ""))
+    }
+}

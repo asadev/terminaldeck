@@ -33,10 +33,36 @@
  */
 
 import Foundation
+import LocalAuthentication
 // For `TimeAmount`, which is how `SSHSession` spells a deadline. Nothing else
 // here touches NIO — the SSH client is the only thing that does.
 import NIOCore
 import Observation
+
+/**
+ * Something that went wrong with one server, as two sentences a screen prints.
+ *
+ * It was `SSHProblem` directly, and stopped being able to be: a credential
+ * behind Face ID can now fail for reasons that have nothing to do with SSH —
+ * a cancelled prompt, a sensor locked out, an enrolment that changed — and
+ * reporting those as *"that sign-in was refused"* would send somebody to check a
+ * password that is perfectly correct. The headline/advice pair is `SSHProblem`'s
+ * own shape, so nothing above this had to learn a new one.
+ */
+struct ServerTrouble: Error, Equatable {
+    var headline: String
+    var advice: String
+
+    init(headline: String, advice: String) {
+        self.headline = headline
+        self.advice = advice
+    }
+
+    init(_ problem: SSHProblem) {
+        headline = problem.headline
+        advice = problem.advice
+    }
+}
 
 /// What a look at one server came back with. Everything is stamped, because
 /// nothing here refreshes on its own.
@@ -85,20 +111,34 @@ final class ServerConnector {
 
     private let store: ServerStore
 
+    /**
+     * Face ID / Touch ID, held here because this is the one object that reads a
+     * credential.
+     *
+     * Every route to a server's password goes through {@link secret}, so putting
+     * the gate anywhere else would mean a second place that can forget to ask.
+     */
+    let biometry: BiometricGate
+
     private(set) var servers: [StoredServer] = []
     /// The last look at each server, by server id. Absent means never looked.
     private(set) var views: [String: ServerView] = [:]
     /// Which servers have something in flight, so a screen can disable its buttons.
     private(set) var working: Set<String> = []
     /// The last failure per server, shown until something else happens.
-    private(set) var problems: [String: SSHProblem] = [:]
+    private(set) var problems: [String: ServerTrouble] = [:]
     private(set) var installs: [String: ServerInstallState] = [:]
 
     /// Sessions belonging to open pages. See the header.
     @ObservationIgnored private var sessions: [String: SSHSession] = [:]
 
-    init(store: ServerStore = ServerStore()) {
+    /// `biometry` is optional rather than a default argument because
+    /// `BiometricGate` is `@MainActor` and a default is evaluated in the
+    /// caller's context — which is not always this one. Built here instead,
+    /// where the isolation is already established.
+    init(store: ServerStore = ServerStore(), biometry: BiometricGate? = nil) {
         self.store = store
+        self.biometry = biometry ?? BiometricGate()
         servers = store.all()
     }
 
@@ -228,11 +268,15 @@ final class ServerConnector {
             updated.lastConnectedAt = Date()
             store.save(updated)
             servers = store.all()
+        } catch let trouble as ServerTrouble {
+            // A lock that refused, or an enrolment that changed. Not an SSH
+            // failure and not reported as one — see `secret(for:)`.
+            problems[id] = trouble
         } catch let problem as SSHProblem {
-            problems[id] = problem
+            problems[id] = ServerTrouble(problem)
             drop(id)
         } catch {
-            problems[id] = .lost
+            problems[id] = ServerTrouble(.lost)
             drop(id)
         }
     }
@@ -343,6 +387,8 @@ final class ServerConnector {
             state.step = .done
             state.line = "\(server.name) is a machine of its own now."
             installs[id] = state
+        } catch let trouble as ServerTrouble {
+            fail(trouble.headline, trouble.advice)
         } catch let problem as SSHProblem {
             fail(problem.headline, problem.advice)
             drop(id)
@@ -420,11 +466,13 @@ final class ServerConnector {
                 : ServerScripts.stop(command: look.host.command, hasUnit: !look.host.unit.isEmpty)
             _ = try await session.run(script)
             views[id] = try await measure(session)
+        } catch let trouble as ServerTrouble {
+            problems[id] = trouble
         } catch let problem as SSHProblem {
-            problems[id] = problem
+            problems[id] = ServerTrouble(problem)
             drop(id)
         } catch {
-            problems[id] = .lost
+            problems[id] = ServerTrouble(.lost)
             drop(id)
         }
     }
@@ -440,15 +488,108 @@ final class ServerConnector {
      * and mints a device credential, exactly as it does for an address somebody
      * pasted.
      */
-    func connectTicket(_ id: String) -> (address: String, username: String,
-                                         secret: String, method: EnrollMethod)? {
+    func connectTicket(_ id: String) async -> (address: String, username: String,
+                                               secret: String, method: EnrollMethod)? {
         guard let server = store.load(id),
               let host = views[id]?.host.host,
-              !host.address.isEmpty,
-              let secret = store.secret(for: id)
+              !host.address.isEmpty
         else { return nil }
-        return (host.address, server.username, secret,
-                server.credential == .key ? .key : .password)
+        // Through the lock, like every other read. A cancelled prompt lands as a
+        // stated problem on the page rather than as a Connect button that did
+        // nothing at all — which is the dead control this product does not ship.
+        do {
+            let secret = try await secret(for: server)
+            problems[id] = nil
+            return (host.address, server.username, secret,
+                    server.credential == .key ? .key : .password)
+        } catch let trouble as ServerTrouble {
+            problems[id] = trouble
+            return nil
+        } catch let problem as SSHProblem {
+            problems[id] = ServerTrouble(problem)
+            return nil
+        } catch {
+            problems[id] = ServerTrouble(headline: "That sign-in could not be read.",
+                                         advice: String(describing: error))
+            return nil
+        }
+    }
+
+    /// Whether a Connect can even be offered without a prompt-and-fail: the same
+    /// two questions `connectTicket` asks before it touches the Keychain.
+    func canConnect(_ id: String) -> Bool {
+        guard let host = views[id]?.host.host else { return false }
+        return !host.address.isEmpty && store.load(id) != nil
+    }
+
+    /* ------------------------------------------------------------ the lock -- */
+
+    /**
+     * Put this server's sign-in behind Face ID / Touch ID, or take it back out.
+     *
+     * Returns nil on success and a sentence on failure — never a bare bool. Every
+     * way this can fail is something a person did or something their phone is,
+     * and each of them has to reach the screen intact: a cancelled prompt, a
+     * sensor with nothing enrolled on it, a phone with no passcode.
+     */
+    @discardableResult
+    func setBiometricLock(_ on: Bool, for id: String) async -> String? {
+        guard let server = store.load(id) else { return nil }
+        let availability = biometry.look()
+        if on, !availability.isReady { return availability.refusal }
+
+        // Turning it **on** needs an authentication too, and that is deliberate
+        // rather than ceremony: it proves the person switching it on is the
+        // person the sensor will be checking for afterwards.
+        var context: LAContext?
+        switch await biometry.unlock(reason: on
+            ? "Lock the sign-in for \(server.name)"
+            : "Unlock the sign-in for \(server.name)") {
+        case let .unlocked(ready):
+            context = ready
+        case .cancelled:
+            return nil // Not a failure. Nothing changed and nothing is said.
+        case let .lockedOut(kind):
+            return "\(kind.name ?? "Biometric unlock") is locked after too many attempts. Unlock "
+                + "this iPhone with its passcode once and it comes back."
+        case let .notEnrolled(kind):
+            return BiometryAvailability.notEnrolled(kind).refusal
+        case .unavailable:
+            return BiometryAvailability.unavailable.refusal
+        case let .failed(said):
+            return said
+        }
+
+        do {
+            try store.setBiometricLock(on, for: id, context: context)
+            servers = store.all()
+            // The held session was opened with the credential as it was; nothing
+            // about it is wrong, and dropping it would cost a handshake for a
+            // change that did not touch the connection.
+            if !on { biometry.forget() }
+            return nil
+        } catch let problem as ServerStore.LockProblem {
+            servers = store.all()
+            return problem.sentence
+        } catch {
+            return String(describing: error)
+        }
+    }
+
+    /* ------------------------------------------------------------ bring up -- */
+
+    /**
+     * Start the host if it is here and not running, then look again.
+     *
+     * *"If it exists, it brings it up and asks you to connect."* Two verbs
+     * somebody would otherwise press in sequence, joined — because the screen
+     * that offers this is the one immediately after a login, where the person
+     * has said what they want and should not have to press Start, wait, read,
+     * and then press Connect.
+     */
+    func bringUp(_ id: String) async {
+        guard let look = views[id]?.host, look.host.isInstalled else { return }
+        if look.host.running != .yes { await start(id) }
     }
 
     /// Remember which machine row this server became, so the page can say
@@ -501,10 +642,77 @@ final class ServerConnector {
 
     /* ------------------------------------------------------------- inside -- */
 
+    /**
+     * The password or key for one server, through the lock when there is one.
+     *
+     * The single door to a credential in this app. A server with
+     * `biometricLock` off reads straight out of the Keychain as it always did; a
+     * locked one goes through `BiometricGate` first, and the authenticated
+     * context is handed to the Keychain so the read behind the prompt does not
+     * raise a second one.
+     *
+     * Every outcome throws something a screen can print. **Cancelled is not a
+     * refusal** — somebody who dismisses the sheet gets a sentence saying so and
+     * the button they pressed is still there, which is the difference between a
+     * choice and a dead end.
+     */
+    private func secret(for server: StoredServer) async throws -> String {
+        guard server.isBiometricLocked else {
+            guard let plain = store.secret(for: server.id) else { throw SSHProblem.signInRefused }
+            return plain
+        }
+        let availability = biometry.look()
+        switch await biometry.unlock(reason: "Unlock the sign-in for \(server.name)") {
+        case let .unlocked(context):
+            guard let secret = store.secret(for: server.id, context: context) else {
+                /*
+                 * Authenticated, and the item still would not come back.
+                 *
+                 * That is what `.biometryCurrentSet` looks like after somebody
+                 * adds a face or a finger: the Enclave drops the item rather
+                 * than handing it to an enrolment it was not locked to. It is
+                 * the protection working, and the only way out is the password
+                 * once — so that is what it says, instead of "refused".
+                 */
+                throw ServerTrouble(
+                    headline: "That sign-in is no longer readable on this iPhone.",
+                    advice: "\(availability.name) was locked to the faces and fingers enrolled when "
+                        + "you turned it on, and that set has changed. Log in to this server once "
+                        + "more and you can turn it back on.")
+            }
+            return secret
+        case .cancelled:
+            throw ServerTrouble(
+                headline: "\(availability.name) was cancelled.",
+                advice: "Nothing was sent. Press the button again to try, or turn "
+                    + "\(availability.name) off for this server on its own page and type the "
+                    + "password instead.")
+        case let .lockedOut(kind):
+            let name = kind.name ?? "Biometric unlock"
+            throw ServerTrouble(
+                headline: "\(name) is locked.",
+                advice: "Too many attempts failed. Unlock this iPhone with its passcode once and it "
+                    + "comes back — the passcode also works on the prompt itself.")
+        case let .notEnrolled(kind):
+            let name = kind.name ?? "Biometric unlock"
+            throw ServerTrouble(
+                headline: "\(name) is not set up any more.",
+                advice: "It was when this server was locked. Set it up again in Settings, or log in "
+                    + "to this server once and turn the lock off.")
+        case .unavailable:
+            throw ServerTrouble(
+                headline: "This iPhone cannot unlock that sign-in.",
+                advice: "Its passcode still can — the prompt offers it. If it does not appear, log "
+                    + "in to this server again.")
+        case let .failed(said):
+            throw ServerTrouble(headline: "That unlock did not finish.", advice: said)
+        }
+    }
+
     private func open(_ server: StoredServer) async throws -> SSHSession {
         if let live = sessions[server.id], live.isOpen { return live }
         sessions[server.id] = nil
-        guard let secret = store.secret(for: server.id) else { throw SSHProblem.signInRefused }
+        let secret = try await secret(for: server)
         let session = try await SSHSession.open(
             address: server.address,
             port: server.port,

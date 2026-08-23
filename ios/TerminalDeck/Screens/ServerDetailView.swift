@@ -40,7 +40,6 @@ struct ServerDetailView: View {
     let serverId: String
 
     @State private var confirmingForget = false
-    @State private var showingOutput = false
 
     private var connector: ServerConnector { model.serverConnector }
     private var server: StoredServer? { connector.server(serverId) }
@@ -58,7 +57,19 @@ struct ServerDetailView: View {
                         if let problem = connector.problems[serverId] {
                             failure(problem)
                         }
-                        hostCard(server)
+                        /*
+                         * The same card the login screen shows, not a second
+                         * drawing of it.
+                         *
+                         * Install, start, connect and disconnect used to be
+                         * written out twice — once here and once wherever else
+                         * somebody needed them — which is how two screens end up
+                         * disagreeing about what a server can do. `HostStepCard`
+                         * is the one implementation; this page and the step
+                         * after a login both render it.
+                         */
+                        HostStepCard(model: model, serverId: serverId)
+                        signInCard(server)
                         if let view {
                             machineCard(view.facts)
                             runningCard(view.facts)
@@ -90,7 +101,7 @@ struct ServerDetailView: View {
         .onDisappear { connector.release(serverId) }
         .onChange(of: signInHostId) { _, hostId in
             // The connect runs through the sign-in flow the app already has, so
-            // this is where its result is written down — see `connectButton`.
+            // this is where its result is written down — see `HostStepCard`.
             if let hostId { connector.markConnected(serverId, hostId: hostId) }
         }
     }
@@ -132,7 +143,7 @@ struct ServerDetailView: View {
         }
     }
 
-    private func failure(_ problem: SSHProblem) -> some View {
+    private func failure(_ problem: ServerTrouble) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(problem.headline)
                 .font(.system(size: 15, weight: .semibold))
@@ -149,209 +160,36 @@ struct ServerDetailView: View {
         .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
-    /* ------------------------------------------------------------ host card -- */
+    /* ------------------------------------------------------- the sign-in -- */
 
-    @ViewBuilder
-    private func hostCard(_ server: StoredServer) -> some View {
-        let host = view?.host.host
-        let room = view?.host.room
-
+    /**
+     * How this phone gets back in — and the one switch that changes it.
+     *
+     * > *"Also give the face or fingerprint login there if somebody wants to
+     * > have that, also for the next time."*
+     *
+     * The offer is made once, on the screen where the login just succeeded. This
+     * is the other half of that sentence: where it is turned **off** again, and
+     * where somebody who tapped *Not now* finds it later. It is never hidden on
+     * a phone that cannot do it — it is disabled with the reason underneath,
+     * because a person looking for a feature they were told about has to find
+     * out why it is not here rather than fail to find it at all.
+     */
+    private func signInCard(_ server: StoredServer) -> some View {
         card {
-            HStack(spacing: 8) {
-                Image(systemName: "shippingbox")
-                    .font(.system(size: 13))
-                    .foregroundStyle(Theme.secondary)
-                Text(Brand.name)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(Theme.primary)
-                Spacer(minLength: 0)
-                if isWorking || install.isBusy {
-                    ProgressView().controlSize(.small).tint(Theme.accent)
-                }
-            }
-
-            if let host {
-                Text(HostProbe.line(host))
-                    .font(.system(size: 13))
-                    .foregroundStyle(Theme.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("server.hostLine")
-                if let reach = HostProbe.reachLine(host) {
-                    Text(reach)
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.faint)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            } else {
-                Text("Looking at what is on this server.")
-                    .font(.system(size: 13))
-                    .foregroundStyle(Theme.faint)
-            }
-
-            if install.step != .idle {
-                installProgress
-            }
-
-            if let host, let room {
-                controls(server: server, host: host, room: room)
-            }
+            Text("Getting back in")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Theme.primary)
+            Text(server.credential == .key
+                 ? "This phone holds a private key for \(server.username)@\(server.address), in "
+                     + "the Keychain."
+                 : "This phone holds the password for \(server.username)@\(server.address), in "
+                     + "the Keychain.")
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            BiometricLockRow(model: model, serverId: serverId)
         }
-    }
-
-    @ViewBuilder
-    private func controls(server: StoredServer, host: HostOnServer, room: HostRoom) -> some View {
-        if !host.isInstalled {
-            if let refusal = HostProbe.whyNot(room) {
-                stated(refusal)
-            } else {
-                action("Install it on this server", "arrow.down.circle",
-                       identifier: "server.install", disabled: install.isBusy || isWorking) {
-                    Task { await connector.install(serverId) }
-                }
-                Text("It goes into your home folder on that server, needs no administrator access, "
-                     + "and can be taken off again from here.")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.faint)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        } else {
-            HStack(spacing: 10) {
-                if host.running == .yes {
-                    action("Stop", "stop.circle", identifier: "server.stop",
-                           disabled: isWorking, compact: true) {
-                        Task { await connector.stop(serverId) }
-                    }
-                } else {
-                    action("Start", "play.circle", identifier: "server.start",
-                           disabled: isWorking, compact: true) {
-                        Task { await connector.start(serverId) }
-                    }
-                }
-                connectButton(server: server, host: host)
-            }
-            connecting
-        }
-    }
-
-    /**
-     * What Connect is doing, while it does it.
-     *
-     * The connect runs through `ServerSignIn`, which takes as long as a real SSH
-     * login on the far machine takes — and without this the button simply
-     * disabled itself and the screen said nothing for fifteen seconds, which is
-     * the dead control this product does not ship. Its refusal lands here too:
-     * that flow writes a headline and an advice, and the one thing this screen
-     * must not do is invent its own wording for a failure it did not see.
-     */
-    @ViewBuilder
-    private var connecting: some View {
-        switch model.serverSignIn.phase {
-        case .reaching, .verifying, .joining:
-            HStack(spacing: 8) {
-                ProgressView().controlSize(.small).tint(Theme.accent)
-                Text(model.serverSignIn.phase == .verifying
-                     ? "It is checking that login against its own SSH."
-                     : "Connecting this phone to the host.")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.secondary)
-            }
-            .accessibilityIdentifier("server.connecting")
-        case let .failed(failure):
-            VStack(alignment: .leading, spacing: 4) {
-                Text(failure.headline)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Theme.warning)
-                Text(failure.advice)
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.secondary)
-            }
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .accessibilityIdentifier("server.connectFailed")
-        case .editing, .signedIn:
-            EmptyView()
-        }
-    }
-
-    /**
-     * Connect, disconnect, or the reason neither is offered.
-     *
-     * Connecting is the sign-in door this app already has, spending the same SSH
-     * login this phone is already holding: the host checks it against the
-     * server's own sshd and mints this phone a device credential. Nothing new is
-     * invented for it, which is why a server that has just been connected is
-     * indistinguishable from a machine paired with a code.
-     */
-    @ViewBuilder
-    private func connectButton(server: StoredServer, host: HostOnServer) -> some View {
-        if let hostId = server.linkedHostId, model.host(hostId) != nil {
-            action("Disconnect", "link.badge.plus", identifier: "server.disconnect",
-                   disabled: false, compact: true) {
-                model.unpair(hostId)
-                connector.markDisconnected(serverId)
-            }
-        } else if let ticket = connector.connectTicket(serverId) {
-            action("Connect", "link", identifier: "server.connect",
-                   disabled: model.serverSignIn.isBusy, compact: true) {
-                model.serverSignIn.submit(address: ticket.address,
-                                          username: ticket.username,
-                                          secret: ticket.secret,
-                                          method: ticket.method)
-            }
-        } else if let refusal = HostProbe.connectRefusal(host) {
-            stated(refusal)
-        }
-    }
-
-    @ViewBuilder
-    private var installProgress: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(install.done, id: \.self) { line in
-                HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(Theme.positive)
-                        .padding(.top, 2)
-                    Text(line)
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            if !install.line.isEmpty {
-                Text(install.line)
-                    .font(.system(size: 13, weight: install.step == .failed ? .semibold : .regular))
-                    .foregroundStyle(install.step == .failed ? Theme.warning : Theme.primary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("server.installLine")
-            }
-            if !install.detail.isEmpty {
-                Text(install.detail)
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if !install.output.isEmpty {
-                DisclosureGroup(isExpanded: $showingOutput) {
-                    // The server's own words, in its own shape. A terminal's
-                    // output reflowed into a paragraph is unreadable, so it
-                    // scrolls sideways instead.
-                    ScrollView(.horizontal, showsIndicators: true) {
-                        Text(install.output.suffix(4000))
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(Theme.secondary)
-                            .textSelection(.enabled)
-                    }
-                    .frame(maxHeight: 220)
-                } label: {
-                    Text("What the installer said")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(Theme.accent)
-                }
-                .accessibilityIdentifier("server.installOutput")
-            }
-        }
-        .padding(.top, 4)
     }
 
     /* --------------------------------------------------------- the machine -- */
