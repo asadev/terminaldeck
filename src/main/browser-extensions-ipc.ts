@@ -139,9 +139,17 @@ async function pickFolder(): Promise<string | null> {
 
 async function pickCrx(): Promise<string | null> {
   const chosen = await dialog.showOpenDialog({
-    title: 'Choose a .crx',
+    title: 'Choose a packed extension',
     properties: ['openFile'],
-    filters: [{ name: 'Chrome extension', extensions: ['crx'] }],
+    /*
+     * Both, because both work and only one of them is a format most people ever
+     * have. A `.crx` is what a browser exports; a **zip** is what almost every
+     * extension's own release page publishes, GitHub's "Download ZIP" included.
+     * `browser-extensions.ts` decides which it actually is from the file's first
+     * four bytes rather than from this filter or the name — a filter is a
+     * convenience in a dialog, never a fact about a file.
+     */
+    filters: [{ name: 'Packed extension', extensions: ['crx', 'zip'] }],
     buttonLabel: 'Add to this profile',
   })
   return chosen.canceled ? null : (chosen.filePaths[0] ?? null)
@@ -419,6 +427,8 @@ async function openExtensionPage(
  * - `browser-extension:options` (invoke, profileId, id)      → `{ ok, message }`
  * - `browser-extension:add-folder` (invoke, profileId)       → `{ ok, message }`
  * - `browser-extension:add-crx`    (invoke, profileId)       → `{ ok, message }`
+ * - `browser-extension:reload`  (invoke, profileId, id)       → `{ ok, message }`
+ * - `browser-extension:rename`  (invoke, profileId, id, name) → `{ ok, message }`
  *
  * Invokes and no push, for the reason `browser-store-ipc.ts` gives: a row moves
  * only when somebody presses something in this panel, so the panel re-reads, and
@@ -537,6 +547,30 @@ export function registerBrowserExtensionIpc(ipcMain: IpcMain): void {
     return openExtensionPage(profileOf(profileId), id, 'options')
   })
 
+  /**
+   * Load whatever is on disk under this id into the session, replacing whatever
+   * of it is running.
+   *
+   * The order is the catalogue install's, and for its reason: the old copy is
+   * unloaded only **after** the new files are down, because adding or reloading
+   * the same source is a replace and anything running at that point is the
+   * previous build of it.
+   */
+  const loadFresh = async (profile: string, id: string, result: ExtensionResult, verb: string) => {
+    unloadOne(profile, id)
+    const extension = store?.installed(profile).find((one) => one.entry.id === id)
+    if (extension === undefined) return result
+    const electronId = await loadOne(profile, extension)
+    if (electronId === '') {
+      const why = loadFailures.get(profile)?.get(id) ?? 'the browser refused it'
+      return {
+        ok: false,
+        message: `${extension.entry.name} was ${verb} but the browser would not load it: ${why}. It is switched off.`,
+      }
+    }
+    return result
+  }
+
   const addOwn = async (
     profileId: unknown,
     kind: 'folder' | 'crx',
@@ -559,27 +593,12 @@ export function registerBrowserExtensionIpc(ipcMain: IpcMain): void {
      */
     if (chosen === null) return { ok: true, message: '' }
     const profile = profileOf(profileId)
-    const result = kind === 'folder' ? store.addFolder(profile, chosen) : store.addCrx(profile, chosen)
+    const result =
+      kind === 'folder' ? store.addFolder(profile, chosen) : store.addFile(profile, chosen)
     if (!result.ok) return result
-    /*
-     * Loaded straight away, and the same order the catalogue install uses: the
-     * old copy is unloaded only after the new files are down, because adding the
-     * same folder again is a replace and anything running at this point is the
-     * previous build of it.
-     */
-    const id = sideloadId(kind, chosen)
-    unloadOne(profile, id)
-    const extension = store.installed(profile).find((one) => one.entry.id === id)
-    if (extension === undefined) return result
-    const electronId = await loadOne(profile, extension)
-    if (electronId === '') {
-      const why = loadFailures.get(profile)?.get(id) ?? 'the browser refused it'
-      return {
-        ok: false,
-        message: `${extension.entry.name} was copied in but the browser would not load it: ${why}. It is switched off.`,
-      }
-    }
-    return result
+    /* Loaded straight away rather than at the next launch: an Add whose effect
+       is invisible until a restart is indistinguishable from one that failed. */
+    return loadFresh(profile, sideloadId(kind, chosen), result, 'copied in')
   }
 
   ipcMain.handle('browser-extension:add-folder', async (_event, profileId: unknown) =>
@@ -587,6 +606,36 @@ export function registerBrowserExtensionIpc(ipcMain: IpcMain): void {
   )
   ipcMain.handle('browser-extension:add-crx', async (_event, profileId: unknown) =>
     addOwn(profileId, 'crx'),
+  )
+
+  /*
+   * Copy one you added in again from where it came from, and restart it.
+   *
+   * The developer loop. Somebody writing an extension rebuilds it and needs the
+   * copy in the profile replaced — and before this the only route was to find
+   * the same folder in a file dialog again, every single time. No dialog here:
+   * the path is the one already written down at Add, which is the same rule the
+   * pickers keep — a path this app acts on is one a person pointed at, never one
+   * that arrived over IPC.
+   */
+  ipcMain.handle('browser-extension:reload', async (_event, profileId: unknown, id: unknown) => {
+    if (store === null || typeof id !== 'string') return NO_STORE
+    const profile = profileOf(profileId)
+    const result = store.reload(profile, id)
+    if (!result.ok) return result
+    return loadFresh(profile, id, result, 'copied in again')
+  })
+
+  /*
+   * Rename one you added. On disk only — nothing about the running extension
+   * changes, so nothing is unloaded and nothing is restarted.
+   */
+  ipcMain.handle(
+    'browser-extension:rename',
+    (_event, profileId: unknown, id: unknown, name: unknown) => {
+      if (store === null || typeof id !== 'string') return NO_STORE
+      return store.rename(profileOf(profileId), id, typeof name === 'string' ? name : '')
+    },
   )
 }
 

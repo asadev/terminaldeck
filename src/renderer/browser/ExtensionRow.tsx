@@ -78,6 +78,22 @@ interface RowProps {
    * detail view was refused the first time it was proposed.
    */
   onOpen?: () => void
+  /**
+   * Copy this one in again from where it came from, and restart it.
+   *
+   * Only ever handed down for a row somebody added, and only when this build's
+   * preload carries the channel. An absent handler draws no button — absent
+   * rather than disabled, the standing rule for this whole menu.
+   */
+  onReload?(): void
+  /** Open the rename box on this row, or shut it. */
+  onStartRename?(on: boolean): void
+  /** The rename box is open on this row. */
+  renaming?: boolean
+  /** What is typed in it, held by the panel so it survives a re-read. */
+  renameDraft?: string
+  onRenameDraft?(value: string): void
+  onRename?(): void
 }
 
 /**
@@ -99,6 +115,12 @@ export function ExtensionRow({
   onOpenPopup,
   onOpenOptions,
   onOpen,
+  onReload,
+  onStartRename,
+  renaming = false,
+  renameDraft = '',
+  onRenameDraft,
+  onRename,
 }: RowProps) {
   const actionable = canAct(extension)
   const isInstalled = extension.state === 'installed'
@@ -171,6 +193,36 @@ export function ExtensionRow({
             Open settings
           </button>
         )}
+        {/*
+          Editing what you added, which is two things and not one.
+
+          **Reload** copies it in again from the folder or file it came from —
+          the loop somebody writing an extension is in all day, and before it
+          existed the only route was to find the same folder in a file dialog
+          after every build. **Rename** changes the name this row wears, which is
+          the only part of somebody else's program this app wrote down and
+          therefore the only part it has any business editing. The rest of an
+          extension is changed by changing the extension and pressing Reload.
+
+          Both only on a row somebody added, both only when the preload carries
+          them, and neither while the rename box is open — the two answers to an
+          open question are the only things that should be beside it.
+        */}
+        {extension.sideloaded && isInstalled && !renaming && onReload !== undefined && (
+          <button type="button" className="bw-text-button" disabled={busy} onClick={onReload}>
+            Reload
+          </button>
+        )}
+        {extension.sideloaded && isInstalled && !renaming && onStartRename !== undefined && (
+          <button
+            type="button"
+            className="bw-text-button"
+            disabled={busy}
+            onClick={() => onStartRename(true)}
+          >
+            Rename
+          </button>
+        )}
         {isInstalled && (
           <label className="bw-ext-switch">
             <input
@@ -210,6 +262,42 @@ export function ExtensionRow({
           />
         )}
       </div>
+
+      {/*
+        The rename box, under the head rather than inside it: a text field wedged
+        between the switch and the Remove would reflow the whole row's controls
+        every time it opened.
+      */}
+      {renaming && onRenameDraft !== undefined && onRename !== undefined && (
+        <div className="bw-store-rename">
+          <input
+            className="bw-store-rename-input"
+            value={renameDraft}
+            placeholder={extension.name}
+            spellCheck={false}
+            autoComplete="off"
+            aria-label={`A name for ${extension.name}`}
+            disabled={busy}
+            onChange={(event) => onRenameDraft(event.target.value)}
+          />
+          <button
+            type="button"
+            className="bw-store-install"
+            disabled={busy || renameDraft.trim() === ''}
+            onClick={onRename}
+          >
+            {busy ? 'Working…' : 'Save'}
+          </button>
+          <button
+            type="button"
+            className="bw-text-button"
+            disabled={busy}
+            onClick={() => onStartRename?.(false)}
+          >
+            Cancel
+          </button>
+        </div>
+      )}
 
       <p className="bw-store-summary">{extension.summary}</p>
 

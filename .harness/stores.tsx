@@ -30,6 +30,7 @@ import '../src/renderer/browser/BrowserWorkspace.css'
 import '../src/renderer/components/McpInspector.css'
 import { StoreBody as BrowserStoreBody } from '../src/renderer/browser/StorePanel'
 import { StoreBody as McpStoreBody } from '../src/renderer/components/McpStore'
+import { editStart, McpAddForm } from '../src/renderer/components/McpAddForm'
 import { NO_FILTER, type StoreFilter } from '../src/renderer/store/storefront'
 import type {
   ExtensionsView,
@@ -121,7 +122,15 @@ function withOneAdded(rows: StoreExtension[]): StoreExtension[] {
       works: 'unmeasured',
       category: 'your-own',
       tags: [],
-      measured: '',
+      needs: [],
+      /* What `sideloadRows` really writes for one of these: nothing is known
+         about it, so nothing is claimed. `free` would be this app pricing a
+         program it has never opened. */
+      cost: 'unknown',
+      costNote: '',
+      measured:
+        'This app has measured nothing about it. It was not fetched, no fingerprint was ' +
+        'checked against it, and no verdict here is about it — it is running because you said so.',
       logo: '',
       url: '',
       sha256: '',
@@ -210,6 +219,11 @@ function mcpRows(): McpStoreRow[] {
       inputs: entry.inputs.map((input) => ({ ...input, inEnvironment: false })),
       state: installed ? 'installed' : found ? 'available' : 'unavailable',
       scope: installed ? 'user' : '',
+      custom: false,
+      transport: 'stdio',
+      envKeys: [],
+      runsWords: '',
+      runtimeMissing: !found,
       taken: '',
       blocked: found
         ? ''
@@ -220,8 +234,74 @@ function mcpRows(): McpStoreRow[] {
   })
 }
 
+/**
+ * Two servers somebody typed, because *Add your own* was the half of this store
+ * that had nothing on screen at all.
+ *
+ * One that runs — `npx`, found — and one whose runtime is missing, which is the
+ * case worth looking at: it stays **installed**, keeps its Remove, and says the
+ * problem in a sentence, rather than becoming the buttonless row a catalogue
+ * entry in the same position gets. See `src/main/mcp-custom.ts`.
+ */
+function customRows(): McpStoreRow[] {
+  const base = {
+    category: 'your-own' as const,
+    tags: [],
+    homepage: '',
+    registry: '',
+    licence: '',
+    version: '',
+    origin: 'third-party' as const,
+    /* What `mcp-custom.ts` writes: a price nobody measured, no sentence to
+       explain one, and no mark — `StoreLogo` draws its monogram for `''`. */
+    cost: 'unknown' as const,
+    costNote: '',
+    logo: '',
+    inputs: [],
+    state: 'installed' as const,
+    scope: 'user' as const,
+    custom: true,
+    transport: 'stdio' as const,
+    taken: '',
+    blocked: '',
+    summary:
+      'You added this one. It is not in this app’s catalogue, nothing here was measured about ' +
+      'what it does, and no fingerprint was checked against it — it is configured because you ' +
+      'said so.',
+  }
+  return [
+    {
+      ...base,
+      id: 'own:user:my-notes',
+      name: 'my-notes',
+      runtime: 'node',
+      runtimeBinary: 'npx',
+      command: 'npx -y @me/notes-mcp /Users/apple/Notes',
+      envKeys: ['NOTES_API_KEY'],
+      runsWords: 'npx on this machine — /opt/homebrew/bin/npx',
+      runtimeMissing: false,
+      caveat: '',
+    },
+    {
+      ...base,
+      id: 'own:user:team-index',
+      name: 'team-index',
+      runtime: 'docker',
+      runtimeBinary: 'docker',
+      command: 'docker run --rm -i ghcr.io/acme/team-index:2',
+      envKeys: [],
+      runsWords: 'docker on this machine, and it is not there.',
+      runtimeMissing: true,
+      caveat:
+        'docker is not on this machine, so this server cannot start here. It is still in your ' +
+        'configuration — nothing was removed — and whatever runs it will fail until that binary ' +
+        'is installed or the command is changed.',
+    },
+  ]
+}
+
 const MCP: McpStoreView = {
-  rows: mcpRows(),
+  rows: [...mcpRows(), ...customRows()],
   runtimes: (['node', 'python', 'docker'] as const).map((id) => ({
     id,
     binary: RUNTIME_BINARY[id],
@@ -238,13 +318,26 @@ const MCP: McpStoreView = {
 
 const noop = (): void => {}
 
+/**
+ * The browser store, with a live Rename box on the row somebody added.
+ *
+ * Held here rather than passed in dead, for the same reason the MCP half now
+ * holds its form: Rename replaces two buttons with a text field and two others,
+ * and a `noop` handler renders only the shut state — which is the one frame that
+ * was never in question. `?rename=1` opens it straight away.
+ */
 function BrowserStore() {
   const [filter, setFilter] = useState<StoreFilter>(NO_FILTER)
+  const opening = new URLSearchParams(location.search).get('rename') === '1'
+  const [renaming, setRenaming] = useState(opening ? 'my-own-thing' : '')
+  const [renameDraft, setRenameDraft] = useState('My build')
   return (
     <div className="bw-modal-body" style={{ padding: '16px 20px', maxWidth: 940 }}>
       <BrowserStoreBody
         toolsWired
         extensionsWired
+        canReload
+        canRename
         tools={TOOLS}
         toolsProblem=""
         ext={EXT}
@@ -265,13 +358,44 @@ function BrowserStore() {
         onOpenPopup={noop}
         onOpenOptions={noop}
         onAddOwn={noop}
+        onReload={noop}
+        renaming={renaming}
+        renameDraft={renameDraft}
+        onStartRename={(id, on) => setRenaming(on ? id : '')}
+        onRenameDraft={setRenameDraft}
+        onRename={() => setRenaming('')}
       />
     </div>
   )
 }
 
+/**
+ * The MCP store, with a live add/edit form on the shelf.
+ *
+ * The form is the half of *Add your own* that could not be looked at before:
+ * `StoreBody` takes it as a slot rather than building it, so a static render
+ * shows the shut state and nothing else. Wiring the real `McpAddForm` in here is
+ * what makes `?form=add` and `?form=edit` a picture of the actual flow —
+ * including the `KEY=` line an edit opens with, which is the visible half of a
+ * promise about somebody's API key.
+ */
 function McpStore() {
   const [filter, setFilter] = useState<StoreFilter>(NO_FILTER)
+  const opening = new URLSearchParams(location.search).get('form')
+  const [form, setForm] = useState<'add' | 'edit' | null>(
+    opening === 'add' || opening === 'edit' ? opening : null,
+  )
+  const mine = MCP.rows.find((row) => row.id === 'own:user:my-notes')
+  const start =
+    form === 'edit' && mine
+      ? editStart({
+          name: mine.name,
+          scope: 'user',
+          transport: mine.transport,
+          command: mine.command,
+          envKeys: mine.envKeys,
+        })
+      : undefined
   return (
     <div className="mcp-store" style={{ padding: '16px 20px', maxWidth: 940 }}>
       <McpStoreBody
@@ -279,12 +403,33 @@ function McpStore() {
         busy=""
         values={{}}
         said={{}}
+        saidOwn=""
         arming=""
         filter={filter}
+        canEdit
+        canExport
+        canImport
+        form={
+          form === null ? null : (
+            <McpAddForm
+              key={form}
+              projectPath="/Users/apple/Projects/terminaldeck"
+              mode={form}
+              start={start}
+              onSubmit={async () => ({ ok: true, message: 'Nothing was written — this is a harness.' })}
+              onAdded={() => setForm(null)}
+              onCancel={() => setForm(null)}
+            />
+          )
+        }
         onFilter={setFilter}
         onValue={noop}
         onAct={noop}
         onArm={noop}
+        onAddOwn={() => setForm('add')}
+        onImport={noop}
+        onEdit={() => setForm('edit')}
+        onExport={noop}
       />
     </div>
   )

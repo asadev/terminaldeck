@@ -38,6 +38,11 @@ function row(over: Partial<Row> = {}): Row {
     inputs: [],
     state: 'available',
     scope: '',
+    custom: false,
+    transport: 'stdio',
+    envKeys: [],
+    runsWords: '',
+    runtimeMissing: false,
     taken: '',
     blocked: '',
     logo: 'modelcontextprotocol',
@@ -67,6 +72,11 @@ const GITHUB = row({
   runtimeBinary: 'docker',
   origin: 'third-party',
   state: 'unavailable',
+  // Both, because `buildStoreView` sets both for a catalogue row whose runtime
+  // is missing. The compat filter reads `runtimeMissing` rather than the state,
+  // so that a server somebody added — which stays `installed`, because it is in
+  // the configuration — can also say its runtime has gone.
+  runtimeMissing: true,
   blocked: 'docker is not on this machine. It needs Docker, and it has to be running.',
 })
 
@@ -90,12 +100,17 @@ function render(over: Partial<StoreBodyProps> = {}): string {
       busy=""
       values={{}}
       said={{}}
+      saidOwn=""
       arming=""
       filter={NO_FILTER}
       onFilter={noop}
       onValue={noop}
       onAct={noop}
       onArm={noop}
+      onAddOwn={noop}
+      onImport={noop}
+      onEdit={noop}
+      onExport={noop}
       {...over}
     />,
   )
@@ -229,5 +244,89 @@ describe('the store’s one standing sentence', () => {
     const markup = render()
     expect(markup).toContain('Nothing here ships inside this app')
     expect(markup).toContain('Get it')
+  })
+})
+
+describe('the shelf for what you added yourself', () => {
+  const MINE = row({
+    id: 'own:user:my-notes',
+    name: 'my-notes',
+    summary: 'You added this one.',
+    category: 'your-own',
+    tags: [],
+    homepage: '',
+    registry: '',
+    licence: '',
+    version: '',
+    origin: 'third-party',
+    command: 'npx -y @me/notes /Users/me/Notes',
+    state: 'installed',
+    scope: 'user',
+    custom: true,
+    envKeys: ['API_KEY'],
+    runsWords: 'npx on this machine — /opt/homebrew/bin/npx',
+  })
+
+  it('draws the door whether or not anything has come through it', () => {
+    /*
+     * The shelf is the way *in*, not a result, so it is there on a machine with
+     * nothing hand-written. The button used to live in the bar above the store —
+     * and what it added did not appear in the store at all, which is the defect
+     * this shelf exists to close.
+     */
+    const markup = render()
+    expect(markup).toContain('Added by you')
+    expect(markup).toContain('Add your own tool…')
+  })
+
+  it('puts a server you added on it, with what is actually configured on the row', () => {
+    const markup = render({ view: { ...VIEW, rows: [row(), MINE] } })
+    expect(markup).toContain('my-notes')
+    expect(markup).toContain('npx -y @me/notes /Users/me/Notes')
+    // The variables it carries, by name. A value could only be here if something
+    // above put one on the wire, and `configuredForStore` sends names.
+    expect(markup).toContain('API_KEY')
+    expect(markup).toContain('its value is in your configuration and is not shown here')
+  })
+
+  it('draws no empty link where a catalogue row would have a project page', () => {
+    /*
+     * Nobody published it, so `homepage` and `registry` are `''` — and an empty
+     * `<a href="">` is a link to the page you are already on, which is the dead
+     * control this store is not allowed to have.
+     */
+    expect(render({ view: { ...VIEW, rows: [MINE] } })).not.toContain('href=""')
+  })
+
+  it('offers Edit and Share only when this build can do them', () => {
+    // Absent rather than disabled, the standing rule for a control that cannot
+    // do anything — here because the preload predates the channel.
+    const view = { ...VIEW, rows: [MINE] }
+    const without = render({ view })
+    expect(without).not.toContain('>Edit<')
+    expect(without).not.toContain('>Share<')
+    const with_ = render({ view, canEdit: true, canExport: true })
+    expect(with_).toContain('>Edit<')
+    expect(with_).toContain('>Share<')
+  })
+
+  it('keeps a server you added out of the catalogue’s Installed section', () => {
+    // Otherwise it sits between two catalogue rows, which is where it was
+    // invisible in the first place.
+    const view = { ...VIEW, rows: [row({ state: 'installed', scope: 'user' }), MINE] }
+    const markup = render({ view })
+    const own = markup.indexOf('Added by you')
+    const installed = markup.indexOf('>Installed<')
+    expect(own).toBeGreaterThan(-1)
+    expect(installed).toBeGreaterThan(own)
+    expect(markup.indexOf('my-notes')).toBeLessThan(installed)
+  })
+
+  it('says which of yours the filter is hiding, rather than nothing at all', () => {
+    // Silence under the heading would read as "you have added nothing", which
+    // would be false.
+    const view = { ...VIEW, rows: [row(), MINE] }
+    const markup = render({ view, filter: withFacet(NO_FILTER, 'category', 'files') })
+    expect(markup).toContain('The one you added does not match that')
   })
 })

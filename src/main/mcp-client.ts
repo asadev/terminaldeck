@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from 'node:fs'
+import { readFileSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -6,10 +6,13 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js'
 import { BRAND } from '../shared/brand'
-import { addMcpServer, removeMcpServer } from './mcp-add'
+import { addMcpServer, quoteArgv, removeMcpServer, type McpAddScope } from './mcp-add'
+import { editMcpServer, type McpExisting } from './mcp-edit'
+import { readToolFile, toolFileName, toolFileText } from './mcp-share'
 import {
   buildStoreView,
   installFromCatalogue,
+  probeBinaries,
   readStoreFacts,
   type ConfiguredServer,
 } from './mcp-store'
@@ -1174,11 +1177,56 @@ function configuredForStore(projectPath: string | null): ConfiguredServer[] {
   return loadServers(projectPath).map((server) => ({
     name: server.name,
     scope: server.scope,
+    /*
+     * Quoted rather than space-joined, and the difference is not cosmetic. A
+     * server pointed at `/Users/me/My Folder` is two arguments in the
+     * configuration; joined with a space it *reads back* as two different
+     * arguments, so the row would print a command that is not the configured
+     * one and the edit form would start from it. See `quoteArgv` in
+     * `mcp-add.ts` — the tokenizer's inverse, round-tripped by a test.
+     */
     commandLine:
       server.transport === 'stdio'
-        ? [server.command ?? '', ...server.args].join(' ').trim()
-        : server.url ?? '',
+        ? quoteArgv([server.command ?? '', ...server.args].filter((part) => part !== ''))
+        : (server.url ?? ''),
+    transport: server.transport === 'stdio' ? 'stdio' : server.transport === 'sse' ? 'sse' : 'http',
+    /*
+     * Names only, sorted. The store's custom rows print them, the edit form
+     * offers to keep them, and neither needs a value — see `mcp-edit.ts` for
+     * where the merge happens instead, which is here in the main process.
+     */
+    envKeys: Object.keys(server.env).sort(),
   }))
+}
+
+/**
+ * One configured server as the edit path needs it — values included.
+ *
+ * The one place in this file that hands an environment *value* to anything, and
+ * it hands it to a module in this same process that merges it back into a write.
+ * Nothing derived from this reaches a renderer: `editMcpServer` returns a
+ * sentence, and the sentence never names a value.
+ */
+function existingForEdit(
+  name: string,
+  scope: McpAddScope,
+  projectPath: string | null,
+): McpExisting | null {
+  const found = loadServers(projectPath).find(
+    (server) => server.name === name && server.scope === scope,
+  )
+  if (found === undefined) return null
+  return {
+    name: found.name,
+    scope: found.scope,
+    transport: found.transport === 'stdio' ? 'stdio' : found.transport === 'sse' ? 'sse' : 'http',
+    command:
+      found.transport === 'stdio'
+        ? quoteArgv([found.command ?? '', ...found.args].filter((part) => part !== ''))
+        : '',
+    url: found.transport === 'stdio' ? '' : (found.url ?? ''),
+    env: { ...found.env },
+  }
 }
 
 /**
@@ -1191,6 +1239,9 @@ function configuredForStore(projectPath: string | null): ConfiguredServer[] {
  *  - `mcp:remove`        (McpRemoveRequest)                -> McpAddResult
  *  - `mcp:store`         (projectPath?)                    -> McpStoreView
  *  - `mcp:store-install` (McpInstallRequest)               -> McpStoreResult
+ *  - `mcp:edit`          (McpEditRequest)                  -> McpAddResult
+ *  - `mcp:export`        (name, scope, projectPath?)       -> McpStoreResult
+ *  - `mcp:import`        ()                                -> { ok, message, draft }
  *  - `mcp:connect`       (serverId, projectPath?)          -> McpServerStatus
  *  - `mcp:disconnect`    (serverId)                        -> McpServerStatus | null
  *  - `mcp:inventory`     (serverId, projectPath?)          -> McpInventory
@@ -1199,7 +1250,24 @@ function configuredForStore(projectPath: string | null): ConfiguredServer[] {
  *  - `mcp:get-prompt`    (serverId, name, args, project?)  -> McpCallResult
  *  - pushes `mcp:state` (McpServerStatus) whenever a connection changes state.
  */
-export function registerMcpIpc(ipcMain: Electron.IpcMain): void {
+export interface McpIpcDeps {
+  /**
+   * Where to write an exported tool definition, chosen by the person.
+   *
+   * A dependency rather than an `import { dialog } from 'electron'` at the top
+   * of this file, and that is load-bearing: this module is imported by tests
+   * that run under plain Node with no Electron in the process, and one runtime
+   * import of it would take every one of them down. The same rule
+   * `browser-extensions-ipc.ts` keeps for its own pickers — the dialog opens in
+   * the main process and a *path* never arrives over IPC — applies here, it is
+   * just injected one level higher.
+   */
+  chooseSaveFile?(suggested: string): Promise<string | null>
+  /** Which file to import. `null` means cancelled, which is not a failure. */
+  chooseToolFile?(): Promise<string | null>
+}
+
+export function registerMcpIpc(ipcMain: Electron.IpcMain, deps: McpIpcDeps = {}): void {
   // `ipcMain.handle` throws on a duplicate channel, so a second call — a hot
   // reload of the main process, or two call sites that each think they own
   // startup — would take the whole app down before a window ever opened.
@@ -1236,14 +1304,24 @@ export function registerMcpIpc(ipcMain: Electron.IpcMain): void {
    */
   ipcMain.handle('mcp:store', async (_e, projectPath?: unknown) => {
     const project = optionalProjectPath(projectPath)
-    const facts = await readStoreFacts()
+    const configured = configuredForStore(project)
+    /*
+     * Two probes, in parallel, and they are separate because they answer
+     * different kinds of question. `readStoreFacts` looks for the catalogue's
+     * three runtimes and is deduplicated across concurrent reads, because that
+     * question does not depend on which project is open. `probeBinaries` looks
+     * for whatever the *hand-written* servers name, which does — so it is asked
+     * fresh, per read, and never shares an answer with a different project's.
+     */
+    const [facts, binaries] = await Promise.all([readStoreFacts(), probeBinaries(configured)])
     return buildStoreView({
-      configured: configuredForStore(project),
+      configured,
       runtimes: facts.runtimes,
       environment: facts.environment,
       environmentSource: facts.environmentSource,
       writer: facts.writer,
       projectPath: project,
+      binaries,
     })
   })
 
@@ -1263,6 +1341,88 @@ export function registerMcpIpc(ipcMain: Electron.IpcMain): void {
   // terminal."* Same delegation as the add — the CLI owns the file — so the
   // same validation on the far side and the same `unknown` here.
   ipcMain.handle('mcp:remove', (_e, request: unknown) => removeMcpServer(request))
+
+  /*
+   * The third write, and the one that needed a module of its own.
+   *
+   * A store whose custom half can be added and deleted and not *changed* is one
+   * where nobody changes anything, because the only way round was to delete the
+   * server — taking its API key with it — and type the key in again. So the
+   * merge happens in `mcp-edit.ts`, in this process, reading through
+   * `existingForEdit`: a field left blank keeps whatever is saved, and the value
+   * never crosses the bridge in either direction.
+   */
+  ipcMain.handle('mcp:edit', (_e, request: unknown) =>
+    editMcpServer(request, { read: existingForEdit }),
+  )
+
+  /*
+   * Sharing one, as a file a person can read. See `mcp-share.ts` for why this
+   * exists for MCP servers and deliberately does not for browser extensions,
+   * and for why the file holds variable *names* and no values.
+   */
+  ipcMain.handle('mcp:export', async (_e, name: unknown, scope: unknown, projectPath?: unknown) => {
+    const choose = deps.chooseSaveFile
+    if (choose === undefined) return { ok: false, message: 'This build cannot save a file.' }
+    const project = optionalProjectPath(projectPath)
+    const wanted = typeof name === 'string' ? name : ''
+    const server = configuredForStore(project).find(
+      (one) => one.name === wanted && one.scope === scope,
+    )
+    if (server === undefined) {
+      return { ok: false, message: 'That server is not in your configuration.' }
+    }
+    const where = await choose(toolFileName(server.name))
+    // Changing your mind is not a failure and must not be drawn as one. An
+    // empty message is the panel's signal to print nothing at all.
+    if (where === null) return { ok: true, message: '' }
+    try {
+      writeFileSync(where, toolFileText(server), 'utf8')
+    } catch (error) {
+      return {
+        ok: false,
+        message: `That file could not be written${error instanceof Error ? ` — ${error.message}` : ''}.`,
+      }
+    }
+    return {
+      ok: true,
+      message:
+        `${server.name} was written to ${where}. It holds no values — only the names of the ` +
+        'variables it needs — so whoever opens it fills those in themselves.',
+    }
+  })
+
+  ipcMain.handle('mcp:import', async () => {
+    const choose = deps.chooseToolFile
+    if (choose === undefined) return { ok: false, message: 'This build cannot open a file.' }
+    const where = await choose()
+    if (where === null) return { ok: true, message: '' }
+    let text: string
+    try {
+      text = readFileSync(where, 'utf8')
+    } catch (error) {
+      return {
+        ok: false,
+        message: `That file could not be read${error instanceof Error ? ` — ${error.message}` : ''}.`,
+      }
+    }
+    const read = readToolFile(text)
+    if (!read.ok) return { ok: false, message: `Nothing was imported: ${read.why}.` }
+    /*
+     * A draft, not a write. The form opens filled in, the variables it named are
+     * empty, and the person presses the button — the same shape as installing a
+     * catalogue row that needs a token, because a definition somebody mailed you
+     * is not more trusted than one in the catalogue.
+     */
+    return {
+      ok: true,
+      message:
+        read.draft.env.length === 0
+          ? `${read.draft.name} is filled in below. Nothing has been written yet.`
+          : `${read.draft.name} is filled in below. ${read.draft.env.join(', ')} came with no value — that is what this format does — so fill those in before you add it.`,
+      draft: read.draft,
+    }
+  })
 
   ipcMain.handle('mcp:connect', (_e, id: unknown, projectPath?: unknown) =>
     pool.connect(findServer(id, optionalProjectPath(projectPath))),

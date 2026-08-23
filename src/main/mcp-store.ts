@@ -1,6 +1,13 @@
 import { execFile } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { promisify } from 'node:util'
-import { addMcpServer, tokenizeCommand, type McpAddResult, type McpAddScope } from './mcp-add'
+import {
+  addMcpServer,
+  tokenizeCommand,
+  type McpAddResult,
+  type McpAddScope,
+  type McpAddTransport,
+} from './mcp-add'
 import {
   catalogueEntry,
   environmentKeys,
@@ -16,6 +23,7 @@ import {
   type McpOrigin,
   type McpRuntime,
 } from './mcp-catalogue'
+import { customBinaries, customRows } from './mcp-custom'
 import { currentPlatform, withPath, type Platform } from './platform/host'
 import { firstLookupPath, lookupSpec } from './platform/lookup'
 import { loginEnvSpec, parseEnvNames } from './platform/login-env'
@@ -109,12 +117,44 @@ export interface McpStoreInput extends McpCatalogueInput {
   inEnvironment: boolean
 }
 
+/**
+ * Which shelf a row sits on.
+ *
+ * The catalogue's thirteen, plus one this catalogue can never contain:
+ * `your-own` is where a server somebody typed themselves goes, and it exists
+ * because such a server has no subject this app is entitled to guess at. Filing
+ * a hand-written command under *Time, testing and odds and ends* would be this
+ * app describing a program it has never read. The browser store already spells
+ * its equivalent shelf the same way, and the two stores are meant to read as one
+ * product.
+ *
+ * Widened here rather than in `mcp-catalogue.ts` on purpose: no catalogue entry
+ * may ever carry it, and the type that catalogue is written against is what says
+ * so.
+ */
+export type McpStoreCategory = McpCategory | 'your-own'
+
+/**
+ * What a row costs to use, as the *store* may report it.
+ *
+ * The catalogue's four, plus the one answer only a row nobody catalogued can
+ * give. `unknown` is not a fifth kind of price: it is *this app has not measured
+ * what your server costs and is not going to guess*, which is the only honest
+ * thing to say about a command somebody typed. `store/storefront.ts` argues the
+ * same five values for both stores, and the browser half already carries
+ * `unknown` for exactly this row.
+ *
+ * Widened here for the same reason {@link McpStoreCategory} is — no catalogue
+ * entry may ever hold it.
+ */
+export type McpStoreCost = McpCost | 'unknown'
+
 export interface McpStoreRow {
   id: string
   name: string
   summary: string
   /** Which shelf it sits on, so the store browses by subject rather than state. */
-  category: McpCategory
+  category: McpStoreCategory
   /** Words to search on that are in neither the name nor the summary. */
   tags: string[]
   homepage: string
@@ -125,8 +165,8 @@ export interface McpStoreRow {
   /** The binary the runtime needs, so the row can name what was looked for. */
   runtimeBinary: string
   origin: McpOrigin
-  /** What using it costs, from the catalogue. See `McpCost`. */
-  cost: McpCost
+  /** What using it costs, from the catalogue. See {@link McpStoreCost}. */
+  cost: McpStoreCost
   /** The price reality in one sentence, or `''` for a row that is simply free. */
   costNote: string
   /** The command as it would be written, placeholders and all. */
@@ -135,6 +175,47 @@ export interface McpStoreRow {
   state: McpStoreState
   /** Which scope it is installed in. `''` unless installed. */
   scope: '' | McpAddScope
+  /**
+   * True for a server that is in the configuration and in no catalogue — one
+   * somebody added themselves.
+   *
+   * A field rather than a sixth {@link McpOrigin}, because `origin` is a fact
+   * the *catalogue* establishes about a project — reference, vendor, hosted,
+   * archived on a dated day — and a server this app has never heard of has no
+   * such fact. Widening that union would also have put a value into
+   * `mcp-catalogue.ts` that no catalogue entry can ever hold.
+   */
+  custom: boolean
+  /** How it is reached, which for a custom row decides what "how it runs" means. */
+  transport: McpAddTransport
+  /**
+   * The names of the environment variables it carries. Never the values.
+   *
+   * On the row so a server you added says what it is holding, and in the edit
+   * form so a field can offer to keep what is already saved. `configuredForStore`
+   * is deliberately lossy about everything else for the same reason it is lossy
+   * here: a value has no business on a wire that only needs a name.
+   */
+  envKeys: string[]
+  /**
+   * How this one runs, in a sentence, when the three-runtime vocabulary cannot
+   * say it. `''` on every catalogue row, which uses `RUNTIME_WORDS`.
+   *
+   * A custom server can be `docker`, or `uvx`, or `/opt/homebrew/bin/my-server`,
+   * or an HTTPS URL. "npx — fetched from npm the first time it runs" is true of
+   * most catalogue rows and would be a straight lie under any of the others.
+   */
+  runsWords: string
+  /**
+   * The binary this row needs was looked for on this machine and not found.
+   *
+   * Separate from `state` because the two coincide only for catalogue rows. A
+   * custom server whose runtime is missing is still *installed* — it is in the
+   * configuration, it will fail when Claude Code tries to start it — so it keeps
+   * its Remove and says the problem in a sentence instead of becoming a row with
+   * no controls.
+   */
+  runtimeMissing: boolean
   /** The command line of the server already wearing this name, when `taken`. */
   taken: string
   /**
@@ -185,8 +266,39 @@ export interface McpStoreView {
 export interface ConfiguredServer {
   name: string
   scope: McpAddScope
-  /** `command` and `args` joined, or the URL. Only used for the token test. */
+  /**
+   * The command as it would be typed, or the URL.
+   *
+   * Quoted rather than space-joined — see `quoteArgv` in `mcp-add.ts`. It is
+   * used for the token test that decides whether a configured server *is* a
+   * catalogue row, and it is what a custom row prints and what the edit form
+   * starts from, so it has to survive being read back.
+   */
   commandLine: string
+  /** How it is reached. Absent from a caller too old to send it, read as stdio. */
+  transport?: McpAddTransport
+  /**
+   * The environment variable names it carries, never the values.
+   *
+   * Optional so a caller that has not been updated still type-checks; absent is
+   * read as none, which is what a build without this field could report anyway.
+   */
+  envKeys?: readonly string[]
+}
+
+/**
+ * One binary, looked for on this machine.
+ *
+ * The same three fields {@link McpRuntimeReport} carries without the `id`,
+ * because a custom server's runtime is whatever the person typed and there is no
+ * enum it belongs to. `docker` and `/opt/homebrew/bin/my-server` are answered
+ * the same way and by the same probe.
+ */
+export interface McpBinaryReport {
+  binary: string
+  found: boolean
+  /** Where it was found, so the claim is checkable. `''` when it was not. */
+  path: string
 }
 
 /* --------------------------------------------------------------- probing -- */
@@ -211,6 +323,12 @@ export interface McpStoreDeps {
    * path. One seam per thing being replaced.
    */
   add?(request: unknown): Promise<McpAddResult>
+  /**
+   * Whether a file is there. Replaced in tests, and only ever asked about a
+   * command a person typed that already contains a path separator — see
+   * {@link probeBinaries}.
+   */
+  exists?(file: string): boolean
 }
 
 /**
@@ -298,6 +416,47 @@ export async function readEnvironmentNames(
   }
 }
 
+/**
+ * Look for whatever the custom servers' commands name, on this machine.
+ *
+ * Kept out of {@link readStoreFacts} on purpose, and the reason is that
+ * function's own deduplication note: it shares one in-flight promise between
+ * concurrent reads, which is right for a fixed question — *where are npx, uvx,
+ * docker and claude* — and wrong for one whose answer depends on which project
+ * is open. Two tabs asking about two different configurations would have shared
+ * one answer, and the second would have been about the first one's servers.
+ *
+ * ## Why an absolute path is not asked of `which`
+ *
+ * A hand-written server is very often `/Users/me/code/thing/serve`, and `which`
+ * answers about names on the PATH. POSIX `which` happens to echo an absolute
+ * path back whether or not it exists on some systems, and Windows `where` treats
+ * one as a pattern — so the one shape people most often type is the one the
+ * probe is least reliable about. Anything with a separator in it is therefore
+ * asked of the filesystem instead, which is the question actually being asked.
+ */
+export async function probeBinaries(
+  servers: readonly ConfiguredServer[],
+  deps: McpStoreDeps = {},
+): Promise<McpBinaryReport[]> {
+  const wanted = customBinaries(servers)
+  if (wanted.length === 0) return []
+  const platform = deps.platform ?? currentPlatform()
+  const path = await (deps.path ?? loginPath)()
+  const env = withPath(process.env, path, platform)
+  const exists = deps.exists ?? ((file: string) => existsSync(file))
+  return Promise.all(
+    wanted.map(async (binary): Promise<McpBinaryReport> => {
+      if (/[\\/]/.test(binary)) {
+        const there = exists(binary)
+        return { binary, found: there, path: there ? binary : '' }
+      }
+      const found = await probeBinary(binary, env, platform, deps)
+      return { binary, found: found !== '', path: found }
+    }),
+  )
+}
+
 /* ----------------------------------------------------------- the view -- */
 
 /**
@@ -330,14 +489,31 @@ export function buildStoreView(input: {
   environmentSource: McpEnvironmentSource
   writer: { found: boolean; path: string }
   projectPath: string | null
+  /**
+   * Whatever the *custom* servers' commands name, looked for on this machine.
+   *
+   * Separate from `runtimes` because those three are a closed set the catalogue
+   * declares and these are whatever somebody typed. Optional so every existing
+   * caller and test still compiles: absent means nothing was looked for, and
+   * `customRunsWords` says exactly that rather than reporting a binary missing
+   * on the strength of a probe nobody ran.
+   */
+  binaries?: readonly McpBinaryReport[]
 }): McpStoreView {
   const catalogue = input.catalogue ?? MCP_CATALOGUE
   const byRuntime = new Map(input.runtimes.map((report) => [report.id, report]))
+  /*
+   * `scope:name` for every configured server a catalogue row actually *is* — the
+   * token test below, not merely the name. What is left over is what somebody
+   * added themselves, and it becomes a row of its own; see `mcp-custom.ts`.
+   */
+  const claimed = new Set<string>()
 
   const rows = catalogue.map((entry): McpStoreRow => {
     const runtime = byRuntime.get(entry.runtime)
     const mine = input.configured.find((server) => server.name === entry.name)
     const isMine = mine !== undefined && mine.commandLine.includes(entry.token)
+    if (isMine && mine) claimed.add(`${mine.scope}:${mine.name}`)
 
     const inputs = entry.inputs.map((field): McpStoreInput => ({
       ...field,
@@ -411,6 +587,18 @@ export function buildStoreView(input: {
       inputs,
       state,
       scope: isMine && mine ? mine.scope : '',
+      custom: false,
+      /* Every catalogue row is a command on this machine — `installFromCatalogue`
+         writes `transport: 'stdio'` and there is no other path into one. */
+      transport: 'stdio',
+      /* The catalogue declares *which* variables a row takes, in `inputs`, with
+         labels and hints. Repeating the bare keys here would be the same fact
+         twice in two vocabularies. This field is what a row with no catalogue
+         entry behind it has instead. */
+      envKeys: [],
+      /* `RUNTIME_WORDS` says it for these three. See `McpStoreRow.runsWords`. */
+      runsWords: '',
+      runtimeMissing: runtime === undefined || !runtime.found,
       taken: state === 'taken' && mine ? mine.commandLine : '',
       blocked,
       caveat: entry.caveat ?? '',
@@ -419,7 +607,12 @@ export function buildStoreView(input: {
   })
 
   return {
-    rows,
+    /*
+     * The catalogue first, then everything in the configuration it did not
+     * claim. Order here is not the drawing order — the panel shelves and sorts
+     * — but a stable one keeps a test readable.
+     */
+    rows: [...rows, ...customRows(input.configured, claimed, input.binaries ?? [])],
     runtimes: [...input.runtimes],
     writer: input.writer,
     environmentSource: input.environmentSource,

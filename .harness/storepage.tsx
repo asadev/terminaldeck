@@ -76,6 +76,12 @@ function extensionRows(): StoreExtension[] {
     category: entry.category,
     tags: [...entry.tags],
     needs: [...(entry.needs ?? [])],
+    /* This fixture predated the price field and drew *What it costs* with
+       nothing after it — the empty-fact this store is written against, in the
+       one place it is looked at. */
+    cost: entry.cost,
+    costNote: entry.costNote,
+    logo: entry.logo ?? '',
     measured: entry.measured,
     noRelease: entry.noRelease ?? '',
     url: entry.source?.url ?? '',
@@ -197,12 +203,20 @@ function mcpRows(): McpStoreRow[] {
       runtime: entry.runtime,
       runtimeBinary: RUNTIME_BINARY[entry.runtime],
       origin: entry.origin,
+      cost: entry.cost,
+      costNote: entry.costNote,
+      logo: entry.logo ?? '',
       command: installed
         ? 'npx -y @modelcontextprotocol/server-filesystem /Users/apple/Projects'
         : entry.command,
       inputs: entry.inputs.map((input) => ({ ...input, inEnvironment: false })),
       state: installed ? 'installed' : found ? 'available' : 'unavailable',
       scope: installed ? 'user' : '',
+      custom: false,
+      transport: 'stdio',
+      envKeys: [],
+      runsWords: '',
+      runtimeMissing: !found,
       taken: '',
       blocked: found
         ? ''
@@ -212,8 +226,72 @@ function mcpRows(): McpStoreRow[] {
   })
 }
 
+/**
+ * Two servers somebody typed, so the page's *Added by you* shelf has something
+ * on it and the rail has a count to draw.
+ *
+ * One that runs and one whose runtime is missing, which is the case worth
+ * looking at: it stays **installed**, keeps its Remove, and says the problem in
+ * a sentence, rather than becoming the buttonless row a catalogue entry in the
+ * same position gets. See `src/main/mcp-custom.ts`.
+ */
+function customRows(): McpStoreRow[] {
+  const base = {
+    category: 'your-own' as const,
+    tags: [],
+    homepage: '',
+    registry: '',
+    licence: '',
+    version: '',
+    origin: 'third-party' as const,
+    cost: 'unknown' as const,
+    costNote: '',
+    logo: '',
+    inputs: [],
+    state: 'installed' as const,
+    scope: 'user' as const,
+    custom: true,
+    transport: 'stdio' as const,
+    taken: '',
+    blocked: '',
+    summary:
+      'You added this one. It is not in this app’s catalogue, nothing here was measured about ' +
+      'what it does, and no fingerprint was checked against it — it is configured because you ' +
+      'said so.',
+  }
+  return [
+    {
+      ...base,
+      id: 'own:user:my-notes',
+      name: 'my-notes',
+      runtime: 'node' as const,
+      runtimeBinary: 'npx',
+      command: 'npx -y @me/notes-mcp /Users/apple/Notes',
+      envKeys: ['NOTES_API_KEY'],
+      runsWords: 'npx on this machine — /opt/homebrew/bin/npx',
+      runtimeMissing: false,
+      caveat: '',
+    },
+    {
+      ...base,
+      id: 'own:user:team-index',
+      name: 'team-index',
+      runtime: 'docker' as const,
+      runtimeBinary: 'docker',
+      command: 'docker run --rm -i ghcr.io/acme/team-index:2',
+      envKeys: [],
+      runsWords: 'docker on this machine, and it is not there.',
+      runtimeMissing: true,
+      caveat:
+        'docker is not on this machine, so this server cannot start here. It is still in your ' +
+        'configuration — nothing was removed — and whatever runs it will fail until that binary ' +
+        'is installed or the command is changed.',
+    },
+  ]
+}
+
 const MCP: McpStoreView = {
-  rows: mcpRows(),
+  rows: [...mcpRows(), ...customRows()],
   runtimes: (['node', 'python', 'docker'] as const).map((id) => ({
     id,
     binary: RUNTIME_BINARY[id],
@@ -382,13 +460,24 @@ function Page() {
               busy=""
               values={{}}
               said={{}}
+              saidOwn=""
               arming=""
+              /* Every optional door on, because the harness is where the
+                 shipped row is judged. Their absence is the *older preload*
+                 case, and `McpStoreRow.test.tsx` is what pins that. */
+              canEdit
+              canExport
+              canImport
               filter={filterFor(place, departments[1])}
               onFilter={chipsFor('servers')}
               onOpenRow={(id) => setDetail(`m:${id}`)}
               onValue={noop}
               onAct={noop}
               onArm={noop}
+              onAddOwn={noop}
+              onImport={noop}
+              onEdit={noop}
+              onExport={noop}
             />
           </div>
         )

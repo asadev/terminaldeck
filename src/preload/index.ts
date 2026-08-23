@@ -2288,6 +2288,23 @@ const api = {
     ipcRenderer.invoke('browser-extension:add-folder', profileId),
   browserExtensionAddCrx: (profileId: string): Promise<unknown> =>
     ipcRenderer.invoke('browser-extension:add-crx', profileId),
+  /*
+   * Editing what you added, which is two different things.
+   *
+   * **Reload** copies it in again from the folder or file it came from and
+   * restarts it — the loop somebody writing an extension is in all day, and the
+   * reason no path travels here either: the source is the one written down when
+   * it was added.
+   *
+   * **Rename** changes the name the row wears, which is the only part of
+   * somebody else's program this app wrote down and therefore the only part it
+   * has any business editing. The rest is changed by changing the extension and
+   * pressing Reload.
+   */
+  browserExtensionReload: (profileId: string, id: string): Promise<unknown> =>
+    ipcRenderer.invoke('browser-extension:reload', profileId, id),
+  browserExtensionRename: (profileId: string, id: string, name: string): Promise<unknown> =>
+    ipcRenderer.invoke('browser-extension:rename', profileId, id, name),
 
   browserPasswordsAvailable: (): Promise<unknown> =>
     ipcRenderer.invoke('browser-password:available'),
@@ -2407,6 +2424,28 @@ const api = {
     ipcRenderer.invoke('mcp:store', projectPath),
   mcpStoreInstall: (request: unknown): Promise<unknown> =>
     ipcRenderer.invoke('mcp:store-install', request),
+  /*
+   * Changing a server you added, which is the third write and not a second
+   * shape of the first two.
+   *
+   * The reason it is its own channel rather than "remove then add" composed in
+   * the renderer is the environment: a server's variable *values* are never sent
+   * to a renderer, so a renderer that removed and re-added would rewrite the
+   * server without them and silently drop somebody's API key. The merge happens
+   * in the main process, where the values already are — see `mcp-edit.ts`.
+   */
+  editMcpServer: (request: unknown): Promise<unknown> => ipcRenderer.invoke('mcp:edit', request),
+  /*
+   * Handing one to somebody else, as a plain file.
+   *
+   * Neither of these takes or returns a path the renderer composed: the dialog
+   * opens in the main process, and what comes back from an import is a *draft*
+   * for the add form — never a write. See `mcp-share.ts` for why the file holds
+   * variable names and no values, and why the browser half has no equivalent.
+   */
+  exportMcpServer: (name: string, scope: string, projectPath?: string | null): Promise<unknown> =>
+    ipcRenderer.invoke('mcp:export', name, scope, projectPath),
+  importMcpServer: (): Promise<unknown> => ipcRenderer.invoke('mcp:import'),
   /*
    * These three carry the project path, and for a while they did not.
    *

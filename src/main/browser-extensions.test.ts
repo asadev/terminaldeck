@@ -711,7 +711,7 @@ describe('adding your own, from a .crx', () => {
     const store = storeWith([], null)
     const { path, id } = crxAt(makeExtensionZip(plainManifest()))
     try {
-      const result = store.addCrx(PROFILE, path)
+      const result = store.addFile(PROFILE, path)
       expect(result.ok, result.message).toBe(true)
       /*
        * The sentence has to be exactly this careful. A signature on a `.crx`
@@ -741,7 +741,7 @@ describe('adding your own, from a .crx', () => {
       const bytes = readFileSync(path)
       bytes[bytes.length - 30] ^= 0xff
       writeFileSync(path, bytes)
-      const result = store.addCrx(PROFILE, path)
+      const result = store.addFile(PROFILE, path)
       expect(result.ok).toBe(false)
       expect(result.message).toContain('Nothing was added')
       expect(result.message).toContain('signature does not match')
@@ -751,17 +751,188 @@ describe('adding your own, from a .crx', () => {
     }
   })
 
-  it('refuses a file that is not a .crx at all', () => {
+  it('takes a plain zip too, and claims nothing about a file that carries no signature', () => {
+    /*
+     * A zip is what almost every extension's own release page publishes —
+     * GitHub's "Download ZIP" included — and refusing them made *Add your own*
+     * mean "add your own, if you first learn to repack it". Which kind a file is
+     * comes from its own first four bytes, not from the name: this one is
+     * deliberately called `.crx` and is a zip, because renaming a file is free
+     * and a store that dispatched on the extension would hand it to the CRX3
+     * parser and report a malformed header at somebody who did nothing wrong.
+     *
+     * The message is the point. A `.crx` can say its signature matched its
+     * contents; a zip has no signature, and the honest sentence there is that
+     * there was nothing to check — not silence, which would let the reassurance
+     * of the line above it carry onto a file nothing was checked about.
+     */
     const store = storeWith([], null)
     const dir = mkdtempSync(join(tmpdir(), 'td-crx-'))
-    const path = join(dir, 'not.crx')
+    const path = join(dir, 'misnamed.crx')
     try {
       writeFileSync(path, makeExtensionZip(plainManifest()))
-      const result = store.addCrx(PROFILE, path)
-      expect(result.ok).toBe(false)
-      expect(result.message).toContain('not a .crx')
+      const result = store.addFile(PROFILE, path)
+      expect(result.ok, result.message).toBe(true)
+      expect(result.message).toContain('A zip carries no signature')
+      expect(result.message).not.toContain('signature matched')
+
+      const row = store
+        .view(PROFILE, 'Default')
+        .extensions.find((one) => one.id === sideloadId('crx', path))
+      expect(row?.state).toBe('installed')
+      expect(row?.sideloaded).toBe(true)
+      // No crx id, because there is no key. A row that showed one would be
+      // showing a fingerprint of nothing.
+      expect(row?.crxId).toBe('')
     } finally {
       rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses a file that is neither, and says which two things it wanted', () => {
+    const store = storeWith([], null)
+    const dir = mkdtempSync(join(tmpdir(), 'td-crx-'))
+    const path = join(dir, 'not-an-archive.crx')
+    try {
+      writeFileSync(path, Buffer.from('this is a text file, not an extension'))
+      const result = store.addFile(PROFILE, path)
+      expect(result.ok).toBe(false)
+      expect(result.message).toContain('neither a .crx nor a zip')
+      expect(store.view(PROFILE, 'Default').extensions.filter((one) => one.sideloaded)).toHaveLength(0)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('editing what you added', () => {
+  it('copies a folder in again from where it came from, without a second dialog', () => {
+    /*
+     * The developer loop, and the reason *Add your own* was not finished without
+     * it: somebody writing an extension rebuilds and needs the copy in the
+     * profile replaced. Before this the only route was to find the same folder
+     * in a file dialog after every single build.
+     *
+     * No path travels for a Reload — the source is the one written down at Add —
+     * which is the same rule the pickers keep: a path this app acts on is one a
+     * person pointed at.
+     */
+    const store = storeWith([], null)
+    const source = mkdtempSync(join(tmpdir(), 'td-own-'))
+    try {
+      writeFileSync(join(source, 'manifest.json'), JSON.stringify(plainManifest({ version: '1.0.0' })))
+      expect(store.addFolder(PROFILE, source).ok).toBe(true)
+      const id = sideloadId('folder', source)
+      expect(
+        store.view(PROFILE, 'Default').extensions.find((one) => one.id === id)?.installedVersion,
+      ).toBe('1.0.0')
+
+      // The person rebuilds.
+      writeFileSync(join(source, 'manifest.json'), JSON.stringify(plainManifest({ version: '2.0.0' })))
+      const again = store.reload(PROFILE, id)
+      expect(again.ok, again.message).toBe(true)
+      expect(
+        store.view(PROFILE, 'Default').extensions.find((one) => one.id === id)?.installedVersion,
+      ).toBe('2.0.0')
+    } finally {
+      rmSync(source, { recursive: true, force: true })
+    }
+  })
+
+  it('leaves the copy alone when the folder it came from has gone', () => {
+    // Wiping a working extension because somebody renamed a project directory
+    // is the worst possible reading of a button called Reload.
+    const store = storeWith([], null)
+    const source = mkdtempSync(join(tmpdir(), 'td-own-'))
+    writeFileSync(join(source, 'manifest.json'), JSON.stringify(plainManifest()))
+    expect(store.addFolder(PROFILE, source).ok).toBe(true)
+    const id = sideloadId('folder', source)
+    rmSync(source, { recursive: true, force: true })
+
+    const again = store.reload(PROFILE, id)
+    expect(again.ok).toBe(false)
+    expect(again.message).toContain('is not there any more')
+    expect(store.view(PROFILE, 'Default').extensions.find((one) => one.id === id)?.state).toBe(
+      'installed',
+    )
+  })
+
+  it('renames one you added, and refuses to rename a catalogue row', () => {
+    /*
+     * The name this app wrote down is the only part of somebody else's program
+     * it has any business editing — the rest is changed by changing the
+     * extension and pressing Reload. A catalogue row's name is the catalogue's:
+     * letting it be edited would leave a row that no longer matches the entry
+     * every claim on it was measured against.
+     */
+    const store = storeWith([], null)
+    const source = mkdtempSync(join(tmpdir(), 'td-own-'))
+    try {
+      writeFileSync(join(source, 'manifest.json'), JSON.stringify(plainManifest()))
+      expect(store.addFolder(PROFILE, source).ok).toBe(true)
+      const id = sideloadId('folder', source)
+
+      const renamed = store.rename(PROFILE, id, 'My build')
+      expect(renamed.ok, renamed.message).toBe(true)
+      expect(store.view(PROFILE, 'Default').extensions.find((one) => one.id === id)?.name).toBe(
+        'My build',
+      )
+
+      expect(store.rename(PROFILE, 'dark-reader', 'Something else').ok).toBe(false)
+      expect(store.rename(PROFILE, id, '   ').ok).toBe(false)
+    } finally {
+      rmSync(source, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps the name a person chose across a reload', () => {
+    /*
+     * The two writes land in the same field, so without a flag saying which of
+     * them wrote it the developer loop would undo itself: rename to *My build*,
+     * rebuild, press Reload, and the manifest's own name is back — every time,
+     * with nothing on screen explaining it.
+     *
+     * A name that came off the manifest is *not* kept: an extension that renames
+     * itself in its own manifest should be renamed on the row too.
+     */
+    const store = storeWith([], null)
+    const source = mkdtempSync(join(tmpdir(), 'td-own-'))
+    try {
+      writeFileSync(join(source, 'manifest.json'), JSON.stringify(plainManifest()))
+      expect(store.addFolder(PROFILE, source).ok).toBe(true)
+      const id = sideloadId('folder', source)
+      const nameOf = (): string | undefined =>
+        store.view(PROFILE, 'Default').extensions.find((one) => one.id === id)?.name
+
+      expect(store.rename(PROFILE, id, 'My build').ok).toBe(true)
+      writeFileSync(
+        join(source, 'manifest.json'),
+        JSON.stringify(plainManifest({ name: 'Renamed Upstream' })),
+      )
+      expect(store.reload(PROFILE, id).ok).toBe(true)
+      expect(nameOf()).toBe('My build')
+    } finally {
+      rmSync(source, { recursive: true, force: true })
+    }
+  })
+
+  it('follows the manifest when nobody has renamed it', () => {
+    const store = storeWith([], null)
+    const source = mkdtempSync(join(tmpdir(), 'td-own-'))
+    try {
+      writeFileSync(join(source, 'manifest.json'), JSON.stringify(plainManifest()))
+      expect(store.addFolder(PROFILE, source).ok).toBe(true)
+      const id = sideloadId('folder', source)
+      writeFileSync(
+        join(source, 'manifest.json'),
+        JSON.stringify(plainManifest({ name: 'Renamed Upstream' })),
+      )
+      expect(store.reload(PROFILE, id).ok).toBe(true)
+      expect(store.view(PROFILE, 'Default').extensions.find((one) => one.id === id)?.name).toBe(
+        'Renamed Upstream',
+      )
+    } finally {
+      rmSync(source, { recursive: true, force: true })
     }
   })
 })

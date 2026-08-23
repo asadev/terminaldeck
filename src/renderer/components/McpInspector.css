@@ -1046,6 +1046,37 @@ button.mcp-item-head:hover {
   color: var(--text-secondary);
 }
 
+/* The store's first shelf: the door to a server you type yourself, and every
+   one you have typed.
+
+   Given a border rather than left as a plain section, and that is the whole
+   visual argument. Everything else on this screen is somebody else's catalogue;
+   this one shelf is yours, it is a place you act rather than browse, and it sits
+   above nine shelves of rows that all look alike. Without an edge it reads as a
+   paragraph of advice at the top of a list.
+
+   Not a colour, and not a background: `--bg-hover` here would fight every row
+   inside it, which uses that same token on hover. */
+.mcp-store-own {
+  padding: var(--sp-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+}
+
+/* Its own heading needs no extra top margin — the section's padding is the
+   space — and the note under it already carries the gap below. */
+.mcp-store-own > .mcp-store-heading {
+  margin-bottom: var(--sp-05);
+}
+
+.mcp-store-own-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+
 .mcp-store-list {
   display: flex;
   flex-direction: column;

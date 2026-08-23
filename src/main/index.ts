@@ -3198,7 +3198,36 @@ function registerIpc(): void {
   registerRoutinesIpc(ipcMain, routines.api)
   registerDeckignoreIpc(ipcMain)
   registerHooksIpc(ipcMain)
-  registerMcpIpc(ipcMain)
+  registerMcpIpc(ipcMain, {
+    /*
+     * The two dialogs the MCP store's share buttons open.
+     *
+     * They are injected from here rather than imported inside `mcp-client.ts`,
+     * because that module is loaded by tests running under plain Node with no
+     * Electron in the process. The rule they keep is the one
+     * `browser-extensions-ipc.ts` states for its own pickers: a path is chosen
+     * in the **main** process, never composed by a renderer and sent over.
+     * Cancelling answers `null`, which is not a failure and prints nothing.
+     */
+    chooseSaveFile: async (suggested: string) => {
+      const chosen = await dialog.showSaveDialog({
+        title: 'Save this tool definition',
+        defaultPath: suggested,
+        filters: [{ name: 'Tool definition', extensions: ['json'] }],
+        buttonLabel: 'Save',
+      })
+      return chosen.canceled ? null : (chosen.filePath ?? null)
+    },
+    chooseToolFile: async () => {
+      const chosen = await dialog.showOpenDialog({
+        title: 'Open a tool definition',
+        properties: ['openFile'],
+        filters: [{ name: 'Tool definition', extensions: ['json'] }],
+        buttonLabel: 'Read it',
+      })
+      return chosen.canceled ? null : (chosen.filePaths[0] ?? null)
+    },
+  })
   /*
    * Bytes on the clipboard, written to a file on this machine so that the one
    * rule about handing files to sessions can run over a path like everything

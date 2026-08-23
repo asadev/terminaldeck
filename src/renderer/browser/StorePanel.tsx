@@ -220,6 +220,9 @@ export function BrowserStoreDepartment({
   const [said, setSaid] = useState<Record<string, string>>({})
   /** The row with something in flight, so its button can say so. */
   const [busy, setBusy] = useState('')
+  /** The row whose rename box is open, and what is typed in it. */
+  const [renaming, setRenaming] = useState('')
+  const [renameDraft, setRenameDraft] = useState('')
 
   const loadTools = useCallback(async () => {
     if (!store.browserStore) return
@@ -364,7 +367,61 @@ export function BrowserStoreDepartment({
   )
 
   /**
-   * Add a folder or a `.crx`.
+   * Copy one somebody added in again from where it came from.
+   *
+   * No path travels: the source is the one written down when it was added, and
+   * the main process re-reads it. This is the loop somebody writing an extension
+   * is in all day — before it, the only route was to find the same folder in a
+   * file dialog after every build.
+   */
+  const reload = useCallback(
+    async (id: string) => {
+      if (!extensions.browserExtensionReload) return
+      setBusy(`e:${id}`)
+      try {
+        const result = readExtensionResult(await extensions.browserExtensionReload(showing, id))
+        setSaid((was) => ({ ...was, [`e:${id}`]: result.message }))
+      } catch (error) {
+        setSaid((was) => ({
+          ...was,
+          [`e:${id}`]: error instanceof Error ? error.message : 'That did not work.',
+        }))
+      } finally {
+        setBusy('')
+        await loadExtensions()
+      }
+    },
+    [extensions, showing, loadExtensions],
+  )
+
+  /** Rename one somebody added. On disk only; nothing running is disturbed. */
+  const rename = useCallback(
+    async (id: string, name: string) => {
+      if (!extensions.browserExtensionRename) return
+      setBusy(`e:${id}`)
+      try {
+        const result = readExtensionResult(
+          await extensions.browserExtensionRename(showing, id, name),
+        )
+        setSaid((was) => ({ ...was, [`e:${id}`]: result.message }))
+        // Shut only on success, so a refused name is still on screen to be
+        // corrected rather than retyped from memory.
+        if (result.ok) setRenaming('')
+      } catch (error) {
+        setSaid((was) => ({
+          ...was,
+          [`e:${id}`]: error instanceof Error ? error.message : 'That did not work.',
+        }))
+      } finally {
+        setBusy('')
+        await loadExtensions()
+      }
+    },
+    [extensions, showing, loadExtensions],
+  )
+
+  /**
+   * Add a folder or a packed file — a `.crx` or a zip.
    *
    * The path never travels through here. This calls the channel, the main
    * process opens the dialog, and what comes back is a sentence — so a renderer
@@ -462,6 +519,10 @@ export function BrowserStoreDepartment({
       canOpenOptions={typeof extensions.browserExtensionOptions === 'function'}
       canAddFolder={typeof extensions.browserExtensionAddFolder === 'function'}
       canAddCrx={typeof extensions.browserExtensionAddCrx === 'function'}
+      canReload={typeof extensions.browserExtensionReload === 'function'}
+      canRename={typeof extensions.browserExtensionRename === 'function'}
+      renaming={renaming}
+      renameDraft={renameDraft}
       filter={filter}
       onShowProfile={setShowing}
       onFilter={onFilter}
@@ -472,6 +533,15 @@ export function BrowserStoreDepartment({
       onOpenPopup={(id) => void openPopup(id)}
       onOpenOptions={(id) => void openOptions(id)}
       onAddOwn={(kind) => void addOwn(kind)}
+      onReload={(id) => void reload(id)}
+      onStartRename={(id, on) => {
+        setRenaming(on ? id : '')
+        // Seeded with the name it has, so the common edit — a word changed — is
+        // a word changed rather than a name retyped.
+        if (on) setRenameDraft(ext.extensions.find((one) => one.id === id)?.name ?? '')
+      }}
+      onRenameDraft={setRenameDraft}
+      onRename={(id) => void rename(id, renameDraft)}
     />
   )
 }
@@ -559,6 +629,12 @@ export interface StoreBodyProps {
   /** Whether this build's preload carries each Add-your-own door. */
   canAddFolder: boolean
   canAddCrx: boolean
+  /** And each door for *editing* one you added. Same rule: absent, not disabled. */
+  canReload?: boolean
+  canRename?: boolean
+  /** The row whose rename box is open, and what is typed in it. */
+  renaming?: string
+  renameDraft?: string
   filter: StoreFilter
   onShowProfile(id: string): void
   onFilter(next: StoreFilter): void
@@ -578,6 +654,10 @@ export interface StoreBodyProps {
   onOpenPopup(id: string): void
   onOpenOptions(id: string): void
   onAddOwn(kind: 'folder' | 'crx'): void
+  onReload?(id: string): void
+  onStartRename?(id: string, on: boolean): void
+  onRenameDraft?(value: string): void
+  onRename?(id: string): void
 }
 
 /**
@@ -602,6 +682,10 @@ export function StoreBody({
   canOpenOptions,
   canAddFolder,
   canAddCrx,
+  canReload = false,
+  canRename = false,
+  renaming = '',
+  renameDraft = '',
   filter,
   onShowProfile,
   onFilter,
@@ -612,6 +696,10 @@ export function StoreBody({
   onOpenPopup,
   onOpenOptions,
   onAddOwn,
+  onReload,
+  onStartRename,
+  onRenameDraft,
+  onRename,
 }: StoreBodyProps) {
   /*
    * The whole catalogue, as the shared storefront sees it, computed once.
@@ -639,6 +727,16 @@ export function StoreBody({
       onEnable={(on) => onEnable(extension.id, on)}
       onOpenPopup={() => onOpenPopup(extension.id)}
       onOpenOptions={() => onOpenOptions(extension.id)}
+      /* Handed down only for a row they can act on and only when this build has
+         the channel behind them; the row draws no button for an absent handler. */
+      onReload={canReload && onReload ? () => onReload(extension.id) : undefined}
+      onStartRename={
+        canRename && onStartRename ? (on) => onStartRename(extension.id, on) : undefined
+      }
+      renaming={renaming === extension.id}
+      renameDraft={renameDraft}
+      onRenameDraft={onRenameDraft}
+      onRename={canRename && onRename ? () => onRename(extension.id) : undefined}
     />
   )
 
@@ -874,16 +972,37 @@ export function StoreBody({
                     disabled={busy === 'own:crx'}
                     onClick={() => onAddOwn('crx')}
                   >
-                    {busy === 'own:crx' ? 'Working…' : 'Add a .crx…'}
+                    {busy === 'own:crx' ? 'Working…' : 'Add a .crx or a zip…'}
                   </button>
                 )}
               </div>
               <p className="bw-store-note">
-                A folder is the one with the manifest.json in it. A .crx is opened here rather
-                than handed to the browser, and its own signature is checked first — which proves
-                the file has not changed since it was packed and proves nothing about who packed
-                it, because a .crx carries its own key.
+                A folder is the one with the manifest.json in it. A packed file is opened here
+                rather than handed to the browser, and which kind it is comes from its own first
+                four bytes rather than from its name — a zip is what most projects publish, and a
+                .crx is what a browser exports. A .crx has its signature checked first, which
+                proves the file has not changed since it was packed and proves nothing about who
+                packed it, because a .crx carries its own key. A zip carries no signature at all,
+                so there is nothing there to check and nothing is claimed.
               </p>
+              {/* What can be done to one afterwards, said where the door is. A
+                  Reload nobody knows about is a Reload nobody presses, and this
+                  is the control the developer loop is actually made of. */}
+              {(canReload || canRename) && (
+                <p className="bw-store-note">
+                  {/* "Under Installed" rather than "below": this section sits at
+                      the foot of the extension half and the row it produces
+                      appears at the *top*, in Installed. Rendering it and
+                      looking at it is what caught the word. */}
+                  Each one you add gets a row of its own under Installed, with
+                  {canReload ? <strong> Reload</strong> : null}
+                  {canReload ? ' — copy it in again from where it came from, after you rebuild —' : null}
+                  {canReload && canRename ? ' and' : null}
+                  {canRename ? <strong> Rename</strong> : null}
+                  {canRename ? ', for the name this app wrote down' : null}. Everything else about
+                  it is its own program: change that, and press Reload.
+                </p>
+              )}
               {(said.own ?? '') !== '' && <p className="bw-store-said">{said.own}</p>}
             </section>
           )}

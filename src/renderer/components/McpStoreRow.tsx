@@ -3,8 +3,8 @@ import {
   COST_LABELS,
   mcpLinkOut,
   needsWords,
-  ORIGIN_WORDS,
-  RUNTIME_WORDS,
+  runsWords,
+  sourceWords,
   unfilled,
   type McpStoreInput,
   type McpStoreRow as Row,
@@ -103,6 +103,14 @@ interface Props {
    * will be written, what it needs and where it comes from are all still here.
    */
   onOpen?: () => void
+  /**
+   * Open this row in the edit form. Absent means this build's preload has no
+   * `mcp:edit`, and the button is then **not drawn** rather than drawn dead —
+   * the standing rule for a control that cannot do anything.
+   */
+  onEdit?(): void
+  /** Write this row out as a file somebody else can read. Same rule. */
+  onExport?(): void
 }
 
 function fieldType(input: McpStoreInput): string {
@@ -119,6 +127,8 @@ export function McpStoreRow({
   onAct,
   onArm,
   onOpen,
+  onEdit,
+  onExport,
 }: Props) {
   const missing = unfilled(row, values)
   const verb = actionVerb(row)
@@ -137,7 +147,10 @@ export function McpStoreRow({
       <StoreLogo name={row.name} id={row.id} logo={row.logo} />
       <div className="mcp-store-head">
         <StoreRowName name={row.name} className="mcp-store-name" onOpen={onOpen} />
-        <span className="mcp-tag">{ORIGIN_WORDS[row.origin]}</span>
+        {/* Where it comes from. A custom row says *Added by you*, because
+            `origin` is a fact the catalogue established about a project and a
+            server this app has never heard of has no such fact. */}
+        <span className="mcp-tag">{sourceWords(row)}</span>
         {/*
           What it costs, in the head, next to the licence rather than buried in
           the facts below — because the two answer different questions and the
@@ -149,12 +162,31 @@ export function McpStoreRow({
         <span className="mcp-tag" data-cost={row.cost}>
           {COST_LABELS[row.cost]}
         </span>
-        <span className="mcp-tag">{row.licence}</span>
-        <span className="mcp-store-version">{row.version}</span>
+        {/* Both drawn only when there is one. A hand-written server has no
+            licence and no version, and an empty chip beside a name is a fact
+            somebody has to squint at to discover is absent. */}
+        {row.licence !== '' && <span className="mcp-tag">{row.licence}</span>}
+        {row.version !== '' && <span className="mcp-store-version">{row.version}</span>}
         {row.state === 'installed' && (
           <span className="mcp-store-state">
             Installed{row.scope === '' ? '' : ` · ${row.scope}`}
           </span>
+        )}
+        {/*
+          Measured, and separate from the state — after it rather than before it,
+          which rendering this and looking at it is what settled. A row reading
+          *Cannot start here · Installed* looks like two chips arguing; the true
+          order is that it **is** installed and it will not start, and that is
+          what the sentence at the foot of the row then explains.
+
+          A server you added whose runtime has since gone never reaches the
+          `unavailable` state a catalogue row would, because it is in the
+          configuration and will fail when something tries to start it — so it
+          keeps every one of its controls, including the Remove somebody almost
+          certainly wants at this moment.
+        */}
+        {row.custom && row.runtimeMissing && (
+          <span className="mcp-store-chip mcp-store-chip-no">Will not start here</span>
         )}
         {/*
           The one-word version of why this row has no Install, because the
@@ -169,6 +201,30 @@ export function McpStoreRow({
         )}
         {row.state === 'taken' && <span className="mcp-store-chip">Name taken</span>}
         <span className="mcp-grow" />
+
+        {/*
+          The two controls a row somebody typed has that a catalogue row cannot.
+          Hidden while the Remove is armed, so the only two things on screen at
+          that moment are the question and its two answers.
+
+          **Edit** is the reason this store's custom half is usable at all: the
+          only way to change a server before it was to delete it — taking its API
+          key with it — and type the key in again. See `src/main/mcp-edit.ts`.
+
+          **Share** writes a plain, readable file holding the definition and no
+          values. See `src/main/mcp-share.ts` for why the browser half of this
+          store deliberately has no equivalent.
+        */}
+        {row.custom && !arming && onEdit !== undefined && (
+          <button type="button" className="mcp-server-action" disabled={busy} onClick={onEdit}>
+            Edit
+          </button>
+        )}
+        {row.custom && !arming && onExport !== undefined && (
+          <button type="button" className="mcp-server-action" disabled={busy} onClick={onExport}>
+            Share
+          </button>
+        )}
 
         {/* Remove is armed, exactly as it is on the servers list: this deletes a
             line out of another application's configuration and nothing in this
@@ -221,30 +277,70 @@ export function McpStoreRow({
       <p className="mcp-store-summary">{row.summary}</p>
 
       <dl className="mcp-store-facts">
-        <div>
-          <dt>Source</dt>
-          <dd>
-            <a href={row.homepage} target="_blank" rel="noreferrer noopener">
-              {row.homepage}
-            </a>
-          </dd>
-        </div>
-        <div>
-          <dt>Package</dt>
-          <dd>
-            <a href={row.registry} target="_blank" rel="noreferrer noopener">
-              {row.registry}
-            </a>
-          </dd>
-        </div>
+        {/*
+          Both links are drawn only when there is an address behind them. A
+          server somebody typed has neither — nobody published it — and an empty
+          `<a href="">` is a link to the page you are on, which is the dead
+          control this store is not allowed to have. Rendering the store with a
+          custom row in it is what caught this.
+        */}
+        {row.homepage !== '' && (
+          <div>
+            <dt>Source</dt>
+            <dd>
+              <a href={row.homepage} target="_blank" rel="noreferrer noopener">
+                {row.homepage}
+              </a>
+            </dd>
+          </div>
+        )}
+        {row.registry !== '' && (
+          <div>
+            <dt>Package</dt>
+            <dd>
+              <a href={row.registry} target="_blank" rel="noreferrer noopener">
+                {row.registry}
+              </a>
+            </dd>
+          </div>
+        )}
         <div>
           <dt>How it runs</dt>
-          <dd>{RUNTIME_WORDS[row.runtime]}</dd>
+          {/*
+            The catalogue's phrase for one of three runtimes, or — for a server
+            somebody typed — the binary its command actually names and whether it
+            was found here. "npx — fetched from npm the first time it runs" is
+            true of most rows and a straight lie under `/usr/local/bin/serve`.
+          */}
+          <dd>{runsWords(row)}</dd>
         </div>
-        <div>
-          <dt>Needs</dt>
-          <dd>{needsWords(row)}</dd>
-        </div>
+        {/*
+          What the *catalogue* says a row wants before it can work. A custom row
+          has no catalogue entry, so this app knows nothing about what it needs
+          and the honest thing is to draw no line at all — "Nothing", which is
+          what an empty input list produces, would be a claim nobody measured.
+        */}
+        {!row.custom && (
+          <div>
+            <dt>Needs</dt>
+            <dd>{needsWords(row)}</dd>
+          </div>
+        )}
+        {/*
+          The variables it carries, by name. Never a value: `configuredForStore`
+          sends names, and `mcp-edit.ts` is where a value is merged back in,
+          inside the process that already has it.
+        */}
+        {row.envKeys.length > 0 && (
+          <div>
+            <dt>Environment</dt>
+            <dd>
+              {row.envKeys.join(', ')} —{' '}
+              {row.envKeys.length === 1 ? 'its value is' : 'their values are'} in your configuration
+              and {row.envKeys.length === 1 ? 'is' : 'are'} not shown here.
+            </dd>
+          </div>
+        )}
         {/*
           The price reality, in the catalogue's own sentence, above the button.
           On the facts list rather than under the measured line for the same
@@ -264,7 +360,7 @@ export function McpStoreRow({
           </div>
         )}
         <div>
-          <dt>Command</dt>
+          <dt>{row.transport === 'stdio' ? 'Command' : 'URL'}</dt>
           <dd>
             <code>{row.command}</code>
           </dd>

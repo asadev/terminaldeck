@@ -48,6 +48,11 @@ const ROW: Row = {
   ],
   state: 'available',
   scope: '',
+  custom: false,
+  transport: 'stdio',
+  envKeys: [],
+  runsWords: '',
+  runtimeMissing: false,
   taken: '',
   blocked: '',
   logo: '',
@@ -206,10 +211,8 @@ function bar(over: Partial<Parameters<typeof StoreHeader>[0]> = {}): string {
       loading={false}
       scope="user"
       scopes={[{ value: 'user', label: 'All projects', help: 'Available everywhere.' }]}
-      adding={false}
       onScope={() => {}}
       onReload={() => {}}
-      onAdd={() => {}}
       {...over}
     />,
   )
@@ -225,14 +228,18 @@ describe('the store bar', () => {
     expect(html).toContain('docker')
   })
 
-  it('offers “Add your own” as a control, not a footnote', () => {
+  it('does not keep an Add door in the bar, because the store has a shelf for it', () => {
     /*
-     * *"people like to use their own kind of extension … they can just click and
-     * attach their own things to this application."* The catalogue is the
-     * convenience; arbitrary servers are the capability, so the button is in the
-     * bar beside Reload rather than under nineteen rows.
+     * It used to be here, beside Reload, and that was half the feature: you
+     * could add a server and the thing you added **was not in the store**. It
+     * moved down into the store's first shelf, beside the rows it produces, so
+     * the door and what comes through it are in one place. Two doors to one form
+     * — one here, one there — would be a control whose only job is to scroll.
+     *
+     * See `McpStore.test.tsx` for the shelf itself.
      */
-    expect(bar()).toContain('Add your own')
+    expect(bar()).not.toContain('Add your own')
+    expect(bar()).toContain('Reload')
   })
 
   it('does not say a variable is absent when the shell could not be asked', () => {

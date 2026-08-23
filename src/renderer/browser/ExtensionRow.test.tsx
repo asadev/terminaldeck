@@ -328,3 +328,57 @@ describe('what it costs', () => {
     expect(render({ cost: 'free', costNote: '' })).not.toContain('What it costs')
   })
 })
+
+describe('editing one you added', () => {
+  const OWN = { sideloaded: true, state: 'installed' as const, enabled: true, origin: '/Users/me/code/thing' }
+  const noop = (): void => {}
+
+  it('offers Reload and Rename only on a row somebody added', () => {
+    /*
+     * A catalogue row has neither, and for two different reasons. There is no
+     * local source to reload from — its `origin` is a download URL and
+     * re-fetching it is what Install already does — and its name is the
+     * catalogue's, so editing it would leave a row that no longer matches the
+     * entry every claim on it was measured against.
+     */
+    const own = render(OWN, { onReload: noop, onStartRename: noop })
+    expect(own).toContain('>Reload<')
+    expect(own).toContain('>Rename<')
+
+    const catalogue = render({ state: 'installed', enabled: true }, { onReload: noop, onStartRename: noop })
+    expect(catalogue).not.toContain('>Reload<')
+    expect(catalogue).not.toContain('>Rename<')
+  })
+
+  it('draws neither when this build has no channel for them', () => {
+    // Absent rather than disabled, the standing rule for this whole menu.
+    const markup = render(OWN)
+    expect(markup).not.toContain('>Reload<')
+    expect(markup).not.toContain('>Rename<')
+  })
+
+  it('replaces both with the rename box while it is open', () => {
+    // The two answers to an open question are the only things that should be
+    // beside it.
+    const markup = render(OWN, {
+      onReload: noop,
+      onStartRename: noop,
+      onRenameDraft: noop,
+      onRename: noop,
+      renaming: true,
+      renameDraft: 'My build',
+    })
+    expect(markup).toContain('My build')
+    expect(markup).toContain('>Save<')
+    expect(markup).toContain('>Cancel<')
+    expect(markup).not.toContain('>Reload<')
+    expect(markup).not.toContain('>Rename<')
+  })
+
+  it('still says where it came from, and that nothing was measured about it', () => {
+    // Reload and Rename change nothing about what this row is allowed to claim.
+    const markup = render(OWN, { onReload: noop, onStartRename: noop })
+    expect(markup).toContain('/Users/me/code/thing')
+    expect(markup).toContain('Added by you')
+  })
+})

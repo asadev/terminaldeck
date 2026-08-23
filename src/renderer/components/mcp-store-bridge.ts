@@ -32,11 +32,22 @@ export type McpRuntime = 'node' | 'python' | 'docker'
 /** Mirrors `McpInputKind`. */
 export type McpInputKind = 'secret' | 'path' | 'text'
 
+/** Mirrors `McpAddTransport` in `src/main/mcp-add.ts`. */
+export type McpAddTransport = 'stdio' | 'http' | 'sse'
+
 /** Mirrors `McpOrigin`. */
 export type McpOrigin = 'reference' | 'reference-archived' | 'vendor' | 'hosted' | 'third-party'
 
-/** Mirrors `McpCost`. A row's price is one of four things and never a guess. */
-export type McpCost = 'free' | 'account' | 'metered' | 'paid'
+/**
+ * Mirrors `McpStoreCost` in `src/main/mcp-store.ts`.
+ *
+ * A catalogue row's price is one of four things and never a guess. The fifth is
+ * the answer only a row nobody catalogued can give — *this app has not measured
+ * what your server costs* — and it belongs to the servers somebody added
+ * themselves. The browser store has carried it since its own catalogue stopped
+ * being all open source; both halves now can be it, for the same one row.
+ */
+export type McpCost = 'free' | 'account' | 'metered' | 'paid' | 'unknown'
 
 /** Mirrors `McpCategory` in `src/main/mcp-catalogue.ts`. */
 export type McpCategory =
@@ -63,7 +74,17 @@ export type McpCategory =
  * no longer matched what the panel does with it. A *measurement* — which runtime
  * was found, and where — travels, because it belongs to the module that took it.
  */
-export const MCP_CATEGORY_NAMES: Readonly<Record<McpCategory, string>> = {
+/**
+ * The shelf a row can sit on. Mirrors `McpStoreCategory` in `src/main`.
+ *
+ * `your-own` is the one shelf the catalogue can never fill: it holds the servers
+ * somebody typed themselves. The browser store spells its equivalent the same
+ * way, which is deliberate — the two stores are meant to read as one product,
+ * and *Added by you* means the same thing on both.
+ */
+export type McpStoreCategory = McpCategory | 'your-own'
+
+export const MCP_CATEGORY_NAMES: Readonly<Record<McpStoreCategory, string>> = {
   files: 'Files on this machine',
   code: 'Code and repositories',
   work: 'Issues, projects and tickets',
@@ -77,10 +98,29 @@ export const MCP_CATEGORY_NAMES: Readonly<Record<McpCategory, string>> = {
   thinking: 'What the agent remembers',
   messaging: 'Mail, chat and calendars',
   utility: 'Time, testing and odds and ends',
+  'your-own': 'Added by you',
 }
 
-/** The order the store draws them in. */
-export const MCP_CATEGORY_ORDER: readonly McpCategory[] = [
+/**
+ * The shelves the store browses by, in order, with *Added by you* last.
+ *
+ * It is on this list, and that is a change of mind worth writing down. When the
+ * custom rows were first built, both departments still drew their own row of
+ * category chips, and rendering it showed `Added by you 2` twice, two rows
+ * apart — once as a category and once in *Where it comes from* — so the
+ * category was dropped as the one filed under the wrong question.
+ *
+ * The store page took the chips away. Shelves now live in exactly one place, the
+ * page's left rail, and the browser department has listed **Added by you** there
+ * since the catalogue was widened. Leaving the MCP half off it would mean one
+ * department offering a way to your own things in the rail and the other not,
+ * which is the drift `store/storefront.ts` exists to stop.
+ *
+ * Nothing draws twice as a result: a custom row is always installed, so it never
+ * reaches the browsing list `shelve` groups, and the *Added by you* section is
+ * the only place one is rendered.
+ */
+export const MCP_CATEGORY_ORDER: readonly McpStoreCategory[] = [
   'files',
   'code',
   'work',
@@ -94,6 +134,7 @@ export const MCP_CATEGORY_ORDER: readonly McpCategory[] = [
   'thinking',
   'messaging',
   'utility',
+  'your-own',
 ]
 
 /** Mirrors `McpStoreState` in `src/main/mcp-store.ts`. */
@@ -116,7 +157,7 @@ export interface McpStoreRow {
   name: string
   summary: string
   /** Which shelf it sits on. */
-  category: McpCategory
+  category: McpStoreCategory
   /** Words to search on that are in neither the name nor the summary. */
   tags: string[]
   homepage: string
@@ -134,6 +175,15 @@ export interface McpStoreRow {
   inputs: McpStoreInput[]
   state: McpStoreState
   scope: '' | 'user' | 'project' | 'local'
+  /** True for a server somebody added themselves — see `src/main/mcp-custom.ts`. */
+  custom: boolean
+  transport: McpAddTransport
+  /** The names of the environment variables it carries. Never the values. */
+  envKeys: string[]
+  /** How it runs, when the three-runtime vocabulary cannot say it. `''` otherwise. */
+  runsWords: string
+  /** The binary it needs was looked for on this machine and was not there. */
+  runtimeMissing: boolean
   taken: string
   blocked: string
   caveat: string
@@ -182,7 +232,26 @@ export interface McpStoreApi {
    * tab is only offered when both exist.
    */
   addMcpServer?(request: unknown): Promise<unknown>
+  /**
+   * Changing a server you added.
+   *
+   * Deliberately **not** in {@link METHODS}. The four below it are what a store
+   * cannot be without — list, install, remove, add your own — and a build whose
+   * preload predates this one should lose the *Edit* button on custom rows, not
+   * the whole Store tab. Absent rather than disabled, the standing rule.
+   */
+  editMcpServer?(request: unknown): Promise<unknown>
+  /** Writing one out as a file, and reading one back in. Same rule as above. */
+  exportMcpServer?(name: string, scope: string, projectPath?: string | null): Promise<unknown>
+  importMcpServer?(): Promise<unknown>
 }
+
+/** The optional half — a missing one costs a button, never the tab. */
+const EXTRA_METHODS = [
+  'editMcpServer',
+  'exportMcpServer',
+  'importMcpServer',
+] as const satisfies readonly (keyof McpStoreApi)[]
 
 const METHODS = [
   'mcpStore',
@@ -197,7 +266,7 @@ export function resolveMcpStoreApi(host?: unknown): McpStoreApi {
   if (typeof source !== 'object' || source === null) return {}
   const record = source as Record<string, unknown>
   const api: Record<string, unknown> = {}
-  for (const name of METHODS) {
+  for (const name of [...METHODS, ...EXTRA_METHODS]) {
     const value = record[name]
     if (typeof value === 'function') api[name] = (value as (...args: never[]) => unknown).bind(source)
   }
@@ -236,9 +305,10 @@ const ORIGINS: readonly McpOrigin[] = [
   'hosted',
   'third-party',
 ]
-const COSTS: readonly McpCost[] = ['free', 'account', 'metered', 'paid']
+const COSTS: readonly McpCost[] = ['free', 'account', 'metered', 'paid', 'unknown']
 const RUNTIMES: readonly McpRuntime[] = ['node', 'python', 'docker']
 const SOURCES: readonly McpEnvironmentSource[] = ['login-shell', 'process', 'unavailable']
+const TRANSPORTS: readonly McpAddTransport[] = ['stdio', 'http', 'sse']
 
 function oneOf<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
   return allowed.find((candidate) => candidate === value) ?? fallback
@@ -299,6 +369,13 @@ function readRow(raw: unknown): McpStoreRow | null {
       : [],
     state: oneOf(record.state, STATES, 'available'),
     scope: scope === 'user' || scope === 'project' || scope === 'local' ? scope : '',
+    custom: flag(record.custom),
+    transport: oneOf(record.transport, TRANSPORTS, 'stdio'),
+    envKeys: Array.isArray(record.envKeys)
+      ? record.envKeys.filter((one): one is string => typeof one === 'string').slice(0, 32)
+      : [],
+    runsWords: text(record.runsWords),
+    runtimeMissing: flag(record.runtimeMissing),
     taken: text(record.taken),
     blocked: text(record.blocked),
     caveat: text(record.caveat),
@@ -363,6 +440,50 @@ export function readMcpStoreResult(raw: unknown): McpStoreResult {
   return { ok, message: message === '' ? (ok ? 'Done.' : 'That did not work.') : message }
 }
 
+/**
+ * What an import answered with: a sentence, and the draft it read.
+ *
+ * The draft is the whole reason this is not just an {@link McpStoreResult}: an
+ * import **writes nothing**. It fills in the add form and the person presses the
+ * button, which is the same shape as installing a catalogue row that needs a
+ * token — a definition somebody mailed you is not more trusted than one in the
+ * catalogue. See `src/main/mcp-share.ts`.
+ */
+export interface McpImportedDraft {
+  name: string
+  transport: McpAddTransport
+  command: string
+  url: string
+  /** Variable names, to be drawn as empty fields. The file carries no values. */
+  env: string[]
+}
+
+export interface McpImportResult extends McpStoreResult {
+  draft: McpImportedDraft | null
+}
+
+export function readMcpImport(raw: unknown): McpImportResult {
+  const result = readMcpStoreResult(raw)
+  if (typeof raw !== 'object' || raw === null) return { ...result, draft: null }
+  const record = (raw as Record<string, unknown>).draft
+  if (typeof record !== 'object' || record === null) return { ...result, draft: null }
+  const draft = record as Record<string, unknown>
+  const name = text(draft.name)
+  if (name === '') return { ...result, draft: null }
+  return {
+    ...result,
+    draft: {
+      name,
+      transport: oneOf(draft.transport, TRANSPORTS, 'stdio'),
+      command: text(draft.command),
+      url: text(draft.url),
+      env: Array.isArray(draft.env)
+        ? draft.env.filter((one): one is string => typeof one === 'string').slice(0, 32)
+        : [],
+    },
+  }
+}
+
 /* ---------------------------------------------------------------- words -- */
 
 /** What each origin means, in a phrase, on the row. */
@@ -374,21 +495,52 @@ export const ORIGIN_WORDS: Readonly<Record<McpOrigin, string>> = {
   'third-party': 'Third party',
 }
 
+/** The id every custom row wears in the *source* facet. */
+export const CUSTOM_SOURCE = 'custom'
+
+/**
+ * The phrase the chip in a row's head wears.
+ *
+ * `origin` is what the *catalogue* established about a project, and a server
+ * this app has never heard of has no such fact — so a custom row says the only
+ * true thing there is to say about where it came from. See `McpStoreRow.custom`
+ * for why this is a separate field rather than a sixth `McpOrigin`.
+ */
+export function sourceWords(row: McpStoreRow): string {
+  return row.custom ? 'Added by you' : ORIGIN_WORDS[row.origin]
+}
+
+/**
+ * How a custom row's command runs, or the catalogue's phrase for a runtime.
+ *
+ * One function so the row has one line to draw and cannot end up printing "npx —
+ * fetched from npm the first time it runs" under `/usr/local/bin/serve`, which
+ * is what it would have done with `RUNTIME_WORDS` alone.
+ */
+export function runsWords(row: McpStoreRow): string {
+  return row.runsWords === '' ? RUNTIME_WORDS[row.runtime] : row.runsWords
+}
+
 /**
  * What a price wears on the row.
  *
  * Taken from `store/storefront.ts` rather than spelled again here, which is the
  * one exception to this file's *"the words are the store's own"* rule and is
  * argued there: a monthly bill is the same fact in both stores, and two names
- * for it would be the drift the shared model exists to stop. The MCP row can
- * never be `unknown` — every row of this catalogue is one this file wrote — so
- * the type keeps it out.
+ * for it would be the drift the shared model exists to stop.
+ *
+ * All five, `unknown` included. It was once left out on the grounds that *"every
+ * row of this catalogue is one this file wrote"* — which stopped being the whole
+ * story when the store started carrying the servers somebody typed themselves.
+ * Nobody wrote a catalogue entry for one of those, so nobody read its pricing
+ * page, and *Not known* is the only honest chip it can wear.
  */
 export const COST_LABELS: Readonly<Record<McpCost, string>> = {
   free: COST_WORDS.free,
   account: COST_WORDS.account,
   metered: COST_WORDS.metered,
   paid: COST_WORDS.paid,
+  unknown: COST_WORDS.unknown,
 }
 
 /** How each runtime fetches and starts the server, on the row. */
@@ -476,7 +628,15 @@ export function mcpNeeds(row: McpStoreRow): string[] {
  * on a machine with every runtime present this facet simply is not drawn.
  */
 export function mcpCompat(row: McpStoreRow): StoreCompat {
-  return row.state === 'unavailable' ? 'cannot' : 'unknown'
+  /*
+   * `runtimeMissing` rather than `state === 'unavailable'`, and the two coincide
+   * only for catalogue rows. A server somebody added whose runtime has since
+   * been uninstalled is still *installed* — it is in the configuration and it
+   * will fail when something tries to start it — so it never reaches that state,
+   * and a filter keyed on the state would have answered "its runtime is here"
+   * about a row that says on its face that the runtime is not.
+   */
+  return row.runtimeMissing ? 'cannot' : 'unknown'
 }
 
 /**
@@ -504,7 +664,7 @@ export function mcpFacets(row: McpStoreRow): StoreFacets {
     cost: row.cost,
     compat: mcpCompat(row),
     installed: row.state === 'installed',
-    source: row.origin,
+    source: row.custom ? CUSTOM_SOURCE : row.origin,
     needs: mcpNeeds(row),
   }
 }
@@ -530,14 +690,16 @@ export const MCP_FACETS: Partial<Record<StoreFacet, FacetVocabulary>> = {
     anyName: 'Any price',
     /*
      * Drawn straight from the shared order, so the browser store's price chips
-     * and these are the same words in the same sequence. `unknown` is filtered
-     * out because no catalogue row can be it — and `facetControls` would drop
-     * an option with no rows anyway, so this is only saying so on purpose.
+     * and these are the same words in the same sequence — `unknown` included.
+     *
+     * It used to be filtered out here on the grounds that no MCP row could be
+     * one. That is still true of every *catalogue* row and no longer true of the
+     * store: a server somebody typed is priced `unknown`, because this app has
+     * never opened it. `facetControls` drops an option no row would match, so on
+     * a machine with nothing hand-written the chip is simply not drawn — which
+     * is what filtering it out here was really trying to achieve.
      */
-    options: COST_ORDER.filter((id) => id !== 'unknown').map((id: StoreCost) => ({
-      id,
-      name: COST_WORDS[id],
-    })),
+    options: COST_ORDER.map((id: StoreCost) => ({ id, name: COST_WORDS[id] })),
   },
   compat: {
     label: 'On this machine',
@@ -559,6 +721,13 @@ export const MCP_FACETS: Partial<Record<StoreFacet, FacetVocabulary>> = {
     label: 'Where it comes from',
     anyName: 'Anywhere',
     options: [
+      /*
+       * First, because it is the answer a person is most often looking *for*
+       * rather than browsing past — "where is the one I added". `facetControls`
+       * drops an option no row would match, so on a machine with nothing
+       * hand-written this chip is simply not drawn.
+       */
+      { id: CUSTOM_SOURCE, name: 'Added by you' },
       { id: 'reference', name: 'Official reference' },
       { id: 'vendor', name: 'From the vendor' },
       { id: 'hosted', name: 'Runs on the vendor’s servers' },
@@ -593,5 +762,9 @@ export const MCP_FACETS: Partial<Record<StoreFacet, FacetVocabulary>> = {
  */
 export function mcpLinkOut(row: McpStoreRow): string {
   if (row.state === 'installed' || row.blocked === '') return ''
+  // A custom row has no project page — nobody published it — and `homepage` is
+  // `''` on every one of them, so this is belt and braces rather than a branch
+  // that changes an outcome.
+  if (row.custom) return ''
   return /^https?:\/\//i.test(row.homepage) ? row.homepage : ''
 }

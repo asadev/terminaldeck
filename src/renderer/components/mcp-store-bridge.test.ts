@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  CUSTOM_SOURCE,
   MCP_FACETS,
   mcpCompat,
   mcpFacets,
@@ -7,9 +8,12 @@ import {
   mcpNeeds,
   mcpStoreAvailable,
   needsWords,
+  readMcpImport,
   readMcpStoreResult,
   readMcpStoreView,
   resolveMcpStoreApi,
+  runsWords,
+  sourceWords,
   unfilled,
   type McpStoreRow,
 } from './mcp-store-bridge'
@@ -49,6 +53,11 @@ const ROW: McpStoreRow = {
   ],
   state: 'available',
   scope: '',
+  custom: false,
+  transport: 'stdio',
+  envKeys: [],
+  runsWords: '',
+  runtimeMissing: false,
   taken: '',
   blocked: '',
   logo: '',
@@ -185,7 +194,69 @@ describe('the storefront projection', () => {
     for (const state of ['available', 'installed', 'taken'] as const) {
       expect(mcpCompat(row({ state }))).toBe('unknown')
     }
-    expect(mcpCompat(row({ state: 'unavailable' }))).toBe('cannot')
+    expect(mcpCompat(row({ state: 'unavailable', runtimeMissing: true }))).toBe('cannot')
+  })
+
+  it('says a server you added cannot run, without pretending it is not installed', () => {
+    /*
+     * The two used to be one answer. A catalogue row whose runtime is missing
+     * gets `state: 'unavailable'` and no Install, because installing it would
+     * write a line that can never work. A server somebody *added* in the same
+     * position is the opposite case — the line is already written — so it stays
+     * `installed`, keeps its Remove, and would have answered "its runtime is
+     * here" to the filter if this read the state instead of the measurement.
+     */
+    const mine = row({ state: 'installed', custom: true, runtimeMissing: true })
+    expect(mcpCompat(mine)).toBe('cannot')
+    expect(mcpFacets(mine).installed).toBe(true)
+  })
+
+  it('files a server you added under its own source, not under a catalogue origin', () => {
+    /*
+     * `origin` is a fact the catalogue established about a project — reference,
+     * community, archived on a dated day. A server this app has never heard of
+     * has no such fact, so it gets a source of its own and the chip says *Added
+     * by you* rather than borrowing the nearest catalogue word.
+     */
+    const mine = row({ custom: true, origin: 'third-party' })
+    expect(mcpFacets(mine).source).toBe(CUSTOM_SOURCE)
+    expect(sourceWords(mine)).toBe('Added by you')
+    expect(sourceWords(row({ custom: false, origin: 'third-party' }))).toBe('Third party')
+  })
+
+  it('reads an imported definition as a draft, and refuses to invent one', () => {
+    /*
+     * An import **writes nothing**: what comes back fills in the add form and
+     * the person presses the button. So a result with no readable draft in it
+     * has to answer `null` rather than a plausible-looking empty draft, which
+     * would open a blank form under a message saying something had been read.
+     */
+    const read = readMcpImport({
+      ok: true,
+      message: 'my-notes is filled in below.',
+      draft: { name: 'my-notes', transport: 'stdio', command: 'npx -y @me/notes', env: ['API_KEY'] },
+    })
+    expect(read.ok).toBe(true)
+    expect(read.draft).toEqual({
+      name: 'my-notes',
+      transport: 'stdio',
+      command: 'npx -y @me/notes',
+      url: '',
+      env: ['API_KEY'],
+    })
+
+    expect(readMcpImport({ ok: true, message: '' }).draft).toBeNull()
+    expect(readMcpImport({ ok: true, message: '', draft: { name: '' } }).draft).toBeNull()
+    expect(readMcpImport(null)).toEqual({ ok: false, message: 'That did not work.', draft: null })
+  })
+
+  it('lets a custom row say how it runs in its own words', () => {
+    // "npx — fetched from npm the first time it runs" is true of eleven
+    // catalogue rows and a straight lie under `/usr/local/bin/serve`.
+    expect(runsWords(row())).toBe('npx — fetched from npm the first time it runs')
+    expect(runsWords(row({ runsWords: 'docker on this machine — /usr/bin/docker' }))).toBe(
+      'docker on this machine — /usr/bin/docker',
+    )
   })
 
   it('does not call a name collision "installed"', () => {
@@ -309,11 +380,21 @@ describe('price on an MCP row', () => {
     expect(readMcpStoreView({ rows: [{ id: 'a', cost: 'free' }] }).rows[0]?.cost).toBe('free')
   })
 
-  it('offers a price chip for every value the catalogue can hold', () => {
+  it('offers a price chip for every value a row can hold, the unmeasured one included', () => {
+    /*
+     * This once asserted the opposite of its last line — that `unknown` was a
+     * browser-store answer no MCP row could give. That held while every row here
+     * came out of a catalogue this app wrote. It stopped holding when the store
+     * started carrying the servers somebody typed themselves: nobody wrote a
+     * catalogue entry for one of those, so nobody read its pricing page, and
+     * `mcp-custom.ts` prices it `unknown` rather than guessing `free`.
+     *
+     * Nothing is drawn that would filter to nothing, which is what the old
+     * assertion was really protecting: `facetControls` drops an option no row
+     * matches, so on a machine with nothing hand-written the chip is absent
+     * anyway — for the same reason, and without a hard-coded exception.
+     */
     const ids = (MCP_FACETS.cost?.options ?? []).map((option) => option.id)
-    expect(ids).toEqual(['free', 'account', 'metered', 'paid'])
-    // `unknown` is a browser-store answer — a folder somebody dropped in. No MCP
-    // row can be one, so the chip would filter to nothing.
-    expect(ids).not.toContain('unknown')
+    expect(ids).toEqual(['free', 'account', 'metered', 'paid', 'unknown'])
   })
 })

@@ -157,8 +157,89 @@ export function missingFrom(draft: McpAddDraft): string | null {
 
 /* ------------------------------------------------------------------- form -- */
 
+/**
+ * What the form starts from, when it is not starting from nothing.
+ *
+ * Two callers hand it one: **Edit**, on a server that is already configured,
+ * and **Import**, on a definition somebody was sent. Both are drafts rather than
+ * writes — the fields are filled in and the person presses the button — which is
+ * the same shape as installing a catalogue row that needs a token.
+ *
+ * `savedKeys` is what makes editing survivable. A server's environment *values*
+ * are never sent to a renderer, so an edit form cannot show them; what it shows
+ * instead is `KEY=` with nothing after it, and the rule — stated on the form,
+ * and enforced in `src/main/mcp-edit.ts` — is that an empty value keeps whatever
+ * is saved. Deleting the line is how you delete the variable.
+ */
+export interface McpFormStart {
+  draft: McpAddDraft
+  /** Variable names that already have a value in the configuration. */
+  savedKeys: string[]
+}
+
+/**
+ * An edit draft for one configured server.
+ *
+ * Pure and exported because the `KEY=` lines are the visible half of a promise
+ * about somebody's API key, and a promise assembled inline in JSX is one nothing
+ * can pin.
+ */
+export function editStart(server: {
+  name: string
+  scope: McpAddScope
+  transport: McpAddTransport
+  command: string
+  envKeys: readonly string[]
+}): McpFormStart {
+  return {
+    draft: {
+      name: server.name,
+      scope: server.scope,
+      transport: server.transport,
+      command: server.transport === 'stdio' ? server.command : '',
+      url: server.transport === 'stdio' ? '' : server.command,
+      extras: server.envKeys.map((key) => `${key}=`).join('\n'),
+    },
+    savedKeys: [...server.envKeys],
+  }
+}
+
+/**
+ * A draft for a definition that arrived in a file.
+ *
+ * `savedKeys` is empty and that is the difference from an edit: the file carries
+ * variable *names* and no values, on purpose, so every one of them is a field
+ * this person has to fill in rather than one they can leave alone.
+ */
+export function importStart(
+  imported: { name: string; transport: McpAddTransport; command: string; url: string; env: readonly string[] },
+  scope: McpAddScope,
+): McpFormStart {
+  return {
+    draft: {
+      name: imported.name,
+      scope,
+      transport: imported.transport,
+      command: imported.command,
+      url: imported.url,
+      extras: imported.env.map((key) => `${key}=`).join('\n'),
+    },
+    savedKeys: [],
+  }
+}
+
 export interface McpAddFormProps {
   projectPath: string | null
+  /**
+   * Adding something new, or changing something that is already there.
+   *
+   * The same fields either way — a server is a server — and what differs is the
+   * word on the button and whether a blank value means *empty* or *keep what is
+   * saved*. Two forms would have been two places to get the scope picker wrong.
+   */
+  mode?: 'add' | 'edit'
+  /** What to open with. Absent means an empty form. */
+  start?: McpFormStart
   onSubmit(request: Record<string, unknown>): Promise<McpAddResult>
   /**
    * Called after a server was actually added, carrying what the CLI said.
@@ -172,10 +253,19 @@ export interface McpAddFormProps {
   onCancel(): void
 }
 
-export function McpAddForm({ projectPath, onSubmit, onAdded, onCancel }: McpAddFormProps) {
-  const [draft, setDraft] = useState<McpAddDraft>(EMPTY_DRAFT)
+export function McpAddForm({
+  projectPath,
+  mode = 'add',
+  start,
+  onSubmit,
+  onAdded,
+  onCancel,
+}: McpAddFormProps) {
+  const [draft, setDraft] = useState<McpAddDraft>(start?.draft ?? EMPTY_DRAFT)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const editing = mode === 'edit'
+  const savedKeys = start?.savedKeys ?? []
 
   const choices = scopeChoices(projectPath)
   const stdio = draft.transport === 'stdio'
@@ -197,8 +287,10 @@ export function McpAddForm({ projectPath, onSubmit, onAdded, onCancel }: McpAddF
       const result = await onSubmit(draftToRequest(draft, projectPath))
       if (result.ok) {
         // Cleared only on success, so a rejected command is still on screen to
-        // be corrected rather than retyped from memory.
-        setDraft(EMPTY_DRAFT)
+        // be corrected rather than retyped from memory — and only when adding.
+        // Blanking an edit form would repaint the person's own server as an
+        // empty form for the frame before its caller closes it.
+        if (!editing) setDraft(EMPTY_DRAFT)
         onAdded(result.message)
         return
       }
@@ -268,7 +360,21 @@ export function McpAddForm({ projectPath, onSubmit, onAdded, onCancel }: McpAddF
         </label>
 
         <label className="mcp-field mcp-field-wide">
-          <span className="mcp-field-label">{stdio ? 'Environment variables' : 'Headers'}</span>
+          <span className="mcp-field-label">
+            {stdio ? 'Environment variables' : 'Headers'}
+            {/*
+              The one thing about this box that cannot be read off it, and only
+              on the screen where it is true. A value this app is not allowed to
+              show, on a line that looks empty, needs saying out loud — the
+              alternative is somebody pressing Save and wiping the key they came
+              here to keep.
+            */}
+            {editing && stdio && savedKeys.length > 0 && (
+              <HoverNote label="Leave a value blank to keep it">
+                {`${savedKeys.join(', ')} already ${savedKeys.length === 1 ? 'has a value' : 'have values'} in your configuration, and this app is never sent them — so they are shown with nothing after the =. A line left that way keeps what is saved. Type something to replace it. Delete the whole line to drop the variable.`}
+              </HoverNote>
+            )}
+          </span>
           <textarea
             className="mcp-input mcp-textarea"
             value={draft.extras}
@@ -281,6 +387,19 @@ export function McpAddForm({ projectPath, onSubmit, onAdded, onCancel }: McpAddF
           {/* Same: `API_KEY=…` in the box is the format, and a line saying so
               underneath is the same thing twice. A pasted line in the wrong
               shape is refused by name — see `resolveRequest`. */}
+          {/*
+            Headers are the one thing an edit genuinely cannot preserve, so it
+            says so rather than quietly dropping them. This app's reader does not
+            read an HTTP server's headers back out of the configuration — it has
+            never needed to — and an edit is a remove followed by an add, so
+            whatever is in this box is what the server ends up with.
+          */}
+          {editing && !stdio && (
+            <span className="mcp-field-hint">
+              This app does not read an HTTP server’s headers back, so it cannot show you the ones
+              that are there. Saving replaces them with whatever is in this box.
+            </span>
+          )}
         </label>
 
         <label className="mcp-field mcp-field-wide">
@@ -329,7 +448,7 @@ export function McpAddForm({ projectPath, onSubmit, onAdded, onCancel }: McpAddF
           // it is readable before the click as well as after it.
           title={missing ?? undefined}
         >
-          {busy ? 'Adding…' : 'Add server'}
+          {busy ? (editing ? 'Saving…' : 'Adding…') : editing ? 'Save changes' : 'Add server'}
         </button>
         <button type="button" className="mcp-server-action" onClick={onCancel} disabled={busy}>
           Cancel

@@ -2747,6 +2747,38 @@
   margin-bottom: var(--sp-2);
 }
 
+/* The rename box, on a row somebody added. Under the head rather than inside
+   it: a text field wedged between the switch and the Remove would reflow the
+   whole row's controls every time it opened. */
+.bw-store-rename {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+}
+
+/* The same geometry and the same tokens as the store's own search box a few
+   rules up, because it is the same kind of thing on the same surface and two
+   text fields in one dialog that do not match is the seam a person notices. */
+.bw-store-rename-input {
+  flex: 1 1 16ch;
+  min-width: 0;
+  height: var(--control-h);
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--t-caption);
+}
+
+.bw-store-rename-input:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
+
 /*
   Which profile the panel is talking about.
 

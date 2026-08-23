@@ -584,10 +584,19 @@ interface OnDisk {
   sideloaded: boolean
   /** A sideload's own name, so a row can be drawn with no catalogue entry behind it. */
   name: string
-  /** Where it came from: the folder or the `.crx` that was chosen. */
+  /**
+   * The name above was **chosen by a person**, not read off the manifest.
+   *
+   * The distinction exists because both write the same field, and without it a
+   * Reload would silently undo a Rename: `addOwn` re-reads the manifest every
+   * time, so it would put `Test Extension` back over `My build` on the next
+   * rebuild, and the person would have to rename it again after every one.
+   */
+  named: boolean
+  /** Where it came from: the folder or the file that was chosen. */
   origin: string
-  /** How it arrived. */
-  kind: 'folder' | 'crx' | ''
+  /** How it arrived. A packed file is recorded as what it turned out to be. */
+  kind: 'folder' | 'crx' | 'zip' | ''
   /** For a `.crx`: the id its signature yields. */
   crxId: string
 }
@@ -609,8 +618,12 @@ function readOnDisk(dir: string): OnDisk | null {
       enabled: value.enabled !== false,
       sideloaded: value.sideloaded === true,
       name: typeof value.name === 'string' ? value.name : '',
+      // Absent means the name came off a manifest — which is what every record
+      // written before this field existed holds.
+      named: value.named === true,
       origin: typeof value.origin === 'string' ? value.origin : '',
-      kind: value.kind === 'folder' || value.kind === 'crx' ? value.kind : '',
+      kind:
+        value.kind === 'folder' || value.kind === 'crx' || value.kind === 'zip' ? value.kind : '',
       crxId: typeof value.crxId === 'string' ? value.crxId : '',
     }
   } catch {
@@ -634,8 +647,40 @@ export interface ExtensionStore {
   install(profileId: string, id: string): Promise<ExtensionResult>
   /** Add an unpacked extension from a folder somebody chose. */
   addFolder(profileId: string, folder: string): ExtensionResult
-  /** Add one from a `.crx` somebody chose, after checking its own signature. */
-  addCrx(profileId: string, file: string): ExtensionResult
+  /**
+   * Add one from a packed file somebody chose — a `.crx` or a zip.
+   *
+   * Named for the door rather than the format because the format is decided by
+   * the file's own first four bytes, not by the caller and not by the extension
+   * on its name. `addCrx` was the old name and it would now be a lie half the
+   * time.
+   */
+  addFile(profileId: string, file: string): ExtensionResult
+  /**
+   * Copy one you added in again from where it came from.
+   *
+   * The developer loop, and the reason *Add your own* was not finished without
+   * it: somebody writing an extension rebuilds it and needs the copy in the
+   * profile replaced. Before this, the only route was to find the same folder in
+   * a file dialog again, every time.
+   *
+   * Refused for a catalogue row, which has no local source to come from — its
+   * `origin` is a download URL and re-fetching it is what Install already does.
+   */
+  reload(profileId: string, id: string): ExtensionResult
+  /**
+   * Rename one you added.
+   *
+   * The other half of *editing* something you added, and the only part of it
+   * this app owns: the rest of an extension is somebody's program, and the way
+   * to change that is to change it and press Reload. What a person can change
+   * from here is what this app wrote down — the name the row wears, which
+   * defaults to whatever the manifest says and is not always a name anybody
+   * would recognise on a folder full of builds.
+   */
+  rename(profileId: string, id: string, name: string): ExtensionResult
+  /** Where one you added came from, so a caller can re-add it. `null` otherwise. */
+  sourceOf(profileId: string, id: string): { kind: 'folder' | 'file'; origin: string } | null
   remove(profileId: string, id: string): ExtensionResult
   /** Turn one on or off without deleting it. */
   setEnabled(profileId: string, id: string, on: boolean): ExtensionResult
@@ -711,9 +756,18 @@ export function isSideloadId(id: string): boolean {
  * a directory name — it has slashes, spaces and anything else a filesystem
  * allows — and {@link SAFE_ID} is what decides where this app is willing to
  * write.
+ *
+ * `namespace` is a **hash input, not a claim**. `crx` covers every packed file,
+ * `.zip` included, and the record on disk is what says which one it turned out
+ * to be. Splitting it would give the same file two ids depending on which build
+ * added it, and the loser would be a folder on disk that nothing on screen can
+ * name or delete.
  */
-export function sideloadId(kind: 'folder' | 'crx', source: string): string {
-  return SIDELOAD_PREFIX + createHash('sha256').update(`${kind}:${source}`).digest('hex').slice(0, 12)
+export function sideloadId(namespace: 'folder' | 'crx', source: string): string {
+  return (
+    SIDELOAD_PREFIX +
+    createHash('sha256').update(`${namespace}:${source}`).digest('hex').slice(0, 12)
+  )
 }
 
 interface Gathered {
@@ -882,7 +936,15 @@ export function createExtensionStore(options: ExtensionStoreOptions): ExtensionS
     if (disk === null || !disk.sideloaded) {
       return { why: 'this app has no record of adding it — remove it and add it again' }
     }
-    const name = displayName(parsed.manifest, disk.name === '' ? id : disk.name)
+    /*
+     * What a person called it wins over what the manifest calls itself. Every
+     * other case falls through to the manifest exactly as before: `disk.name` is
+     * written from the manifest at Add, so this only diverges after a Rename.
+     */
+    const name =
+      disk.named && disk.name !== ''
+        ? disk.name
+        : displayName(parsed.manifest, disk.name === '' ? id : disk.name)
     return {
       disk,
       extension: {
@@ -890,9 +952,9 @@ export function createExtensionStore(options: ExtensionStoreOptions): ExtensionS
           id,
           name,
           summary:
-            disk.kind === 'crx'
-              ? `Added by you, from ${basename(disk.origin) || 'a .crx'}.`
-              : 'Added by you, from a folder on this machine.',
+            disk.kind === 'folder'
+              ? 'Added by you, from a folder on this machine.'
+              : `Added by you, from ${basename(disk.origin) || 'a packed file'}.`,
           homepage: '',
           licence: '',
           version: typeof parsed.manifest.version === 'string' ? parsed.manifest.version : '',
@@ -1010,7 +1072,19 @@ export function createExtensionStore(options: ExtensionStoreOptions): ExtensionS
    * so rather than letting the confidence of the pinned rows leak onto a row
    * that has not earned it.
    */
-  function addOwn(profileId: string, kind: 'folder' | 'crx', chosen: string): ExtensionResult {
+  /** Where something somebody added came from, or `null`. See the interface. */
+  function sourceOf(
+    profileId: string,
+    id: string,
+  ): { kind: 'folder' | 'file'; origin: string } | null {
+    if (!isSideloadId(id)) return null
+    const dir = dirFor(profileId, id)
+    const disk = dir === null ? null : readOnDisk(dir)
+    if (disk === null || !disk.sideloaded || disk.origin === '') return null
+    return { kind: disk.kind === 'folder' ? 'folder' : 'file', origin: disk.origin }
+  }
+
+  function addOwn(profileId: string, kind: 'folder' | 'file', chosen: string): ExtensionResult {
     const root = profileExtensionsRoot(options.userData, profileId)
     if (root === null) return { ok: false, message: 'That is not a profile this app knows.' }
     if (typeof chosen !== 'string' || chosen.trim() === '' || !isAbsolute(chosen)) {
@@ -1019,6 +1093,9 @@ export function createExtensionStore(options: ExtensionStoreOptions): ExtensionS
     const source = resolve(chosen)
     let files: { path: string; bytes: Buffer }[]
     let crxId = ''
+    /* What the file turned out to be, which is what goes in the record. A
+       folder is a folder; a packed file is whatever its first four bytes say. */
+    let arrived: 'folder' | 'crx' | 'zip' = 'folder'
     if (kind === 'folder') {
       if (!existsSync(join(source, 'manifest.json'))) {
         return {
@@ -1048,17 +1125,64 @@ export function createExtensionStore(options: ExtensionStoreOptions): ExtensionS
           message: `Nothing was added: that file could not be read${error instanceof Error ? ` — ${error.message}` : ''}.`,
         }
       }
-      const opened = openCrx(bytes)
-      if (!opened.ok) return { ok: false, message: `Nothing was added: ${opened.why}.` }
-      crxId = opened.crx.crxId
-      const unzipped = unzip(opened.crx.zip, {
+      /*
+       * What kind of packed file is this? Asked of the **bytes**, not of the
+       * extension on the name.
+       *
+       *   > *"accept a `.crx`/zip the person supplies"*
+       *
+       * A `.crx` is `Cr24` and a signed header in front of a zip; a plain zip is
+       * `PK\x03\x04` and is what almost every extension's source release
+       * actually ships as, GitHub's own "Download ZIP" included. Refusing those
+       * would have made *Add your own* mean "add your own, if you first learn to
+       * repack it", and there is nothing a `.crx` gives this app that a zip does
+       * not — see below for what its signature is and is not worth.
+       *
+       * Sniffed rather than trusted from the name because renaming a file is
+       * free and a store that dispatched on `.crx` would hand a zip to the CRX3
+       * parser and report a malformed header at somebody who did nothing wrong.
+       */
+      const magic = bytes.subarray(0, 4)
+      const isCrx = magic.equals(Buffer.from('Cr24', 'ascii'))
+      const isZip = magic.equals(Buffer.from([0x50, 0x4b, 0x03, 0x04]))
+      if (!isCrx && !isZip) {
+        return {
+          ok: false,
+          message:
+            'Nothing was added: that file is neither a .crx nor a zip. Pick the packed extension ' +
+            'itself — not an installer, a disk image or a folder that has been compressed twice.',
+        }
+      }
+      arrived = isCrx ? 'crx' : 'zip'
+      let zip: Buffer
+      if (isCrx) {
+        const opened = openCrx(bytes)
+        if (!opened.ok) return { ok: false, message: `Nothing was added: ${opened.why}.` }
+        crxId = opened.crx.crxId
+        zip = opened.crx.zip
+      } else {
+        /*
+         * A zip carries no signature at all, so there is nothing here to check
+         * and nothing is claimed. That is a *smaller* claim than the `.crx`
+         * path's, not a weaker version of the same one: a `.crx`'s signature
+         * proves the file has not changed since whoever packed it signed it, and
+         * says nothing whatsoever about who that was. Neither file is trusted;
+         * one of them can say one more true sentence about itself, and the
+         * message below says it only for that one.
+         */
+        zip = bytes
+      }
+      const unzipped = unzip(zip, {
         maxTotalBytes: MAX_UNPACKED_BYTES,
         maxFiles: MAX_FILES,
       })
       if (!unzipped.ok) return { ok: false, message: `Nothing was added: ${unzipped.why}.` }
       const prefix = manifestPrefix(unzipped.files)
       if (prefix === null) {
-        return { ok: false, message: 'Nothing was added: there is no manifest.json inside that .crx.' }
+        return {
+          ok: false,
+          message: `Nothing was added: there is no manifest.json inside that ${isCrx ? '.crx' : 'zip'}.`,
+        }
       }
       files = unzipped.files
         .filter((file) => file.path.startsWith(prefix) && file.path !== prefix)
@@ -1071,10 +1195,23 @@ export function createExtensionStore(options: ExtensionStoreOptions): ExtensionS
     const can = loadability(parsed.manifest)
     if (!can.ok) return { ok: false, message: `Nothing was added: ${can.why}.` }
 
-    const id = sideloadId(kind, source)
+    /* One namespace for every packed file — see {@link sideloadId}. The record
+       below is what says whether it was a `.crx` or a zip. */
+    const id = sideloadId(kind === 'folder' ? 'folder' : 'crx', source)
     const dir = dirFor(profileId, id)
     if (dir === null) return { ok: false, message: 'Nothing was added: that profile is not one this app knows.' }
-    const name = displayName(parsed.manifest, basename(source) || id)
+    /*
+     * A name a person chose survives a Reload; a name that came off the manifest
+     * does not. Read before the directory is torn down, because the record is
+     * inside it.
+     *
+     * Without this, the developer loop would undo itself: rename the row to *My
+     * build*, rebuild, press Reload, and the manifest's own `Test Extension`
+     * would be back — every time, with nothing on screen explaining it.
+     */
+    const before = readOnDisk(dir)
+    const kept = before?.sideloaded === true && before.named && before.name !== '' ? before.name : ''
+    const name = kept === '' ? displayName(parsed.manifest, basename(source) || id) : kept
 
     let compat: CompatReport = { ok: true, provides: [], inert: [], why: '' }
     try {
@@ -1095,8 +1232,9 @@ export function createExtensionStore(options: ExtensionStoreOptions): ExtensionS
         enabled: true,
         sideloaded: true,
         name,
+        named: kept !== '',
         origin: source,
-        kind,
+        kind: arrived,
         crxId,
       })
     } catch (error) {
@@ -1121,10 +1259,18 @@ export function createExtensionStore(options: ExtensionStoreOptions): ExtensionS
         ? ''
         : ` This app fills in ${compat.provides.map((api) => `chrome.${api}`).join(', ')} so it can start.`
     const inert = compat.inert.length === 0 ? '' : ` Even so, ${compat.inert.join('; ')}.`
+    /*
+     * Three arrivals, three different true sentences, and the zip's is the one
+     * that had to be written rather than borrowed. A `.crx` can say its
+     * signature matched; a zip has no signature to match, and saying nothing at
+     * all there would let the reassurance of the sentence above it carry over.
+     */
     const signed =
-      kind === 'crx'
+      arrived === 'crx'
         ? ` Its signature matched its contents, which says the file has not changed since it was packed and says nothing about who packed it. Its signing key gives the id ${crxId}.`
-        : ''
+        : arrived === 'zip'
+          ? ' A zip carries no signature, so there was nothing to check and nothing is claimed about where it came from.'
+          : ''
     return {
       ok: true,
       message:
@@ -1235,8 +1381,67 @@ export function createExtensionStore(options: ExtensionStoreOptions): ExtensionS
       return addOwn(profileId, 'folder', folder)
     },
 
-    addCrx(profileId: string, file: string): ExtensionResult {
-      return addOwn(profileId, 'crx', file)
+    addFile(profileId: string, file: string): ExtensionResult {
+      return addOwn(profileId, 'file', file)
+    },
+
+    sourceOf: sourceOf,
+
+    reload(profileId: string, id: string): ExtensionResult {
+      // The local, never `this.sourceOf`: this object is handed to callers who
+      // may hold a method on its own, and a `this` that is sometimes undefined
+      // is a crash that only happens to whoever destructures it.
+      const from = sourceOf(profileId, id)
+      if (from === null) {
+        return {
+          ok: false,
+          message:
+            'Only something you added yourself can be reloaded, and only while this app still ' +
+            'has a record of where it came from.',
+        }
+      }
+      if (!existsSync(from.origin)) {
+        /*
+         * Said before anything is touched, and the copy in the profile is left
+         * exactly as it is. A folder that has been moved or deleted since it was
+         * added is the common case here — people rename project directories —
+         * and wiping a working extension on account of it would be the worst
+         * possible reading of a button called Reload.
+         */
+        return {
+          ok: false,
+          message: `Nothing was changed: ${from.origin} is not there any more. Add it again from wherever it is now.`,
+        }
+      }
+      return addOwn(profileId, from.kind, from.origin)
+    },
+
+    rename(profileId: string, id: string, name: string): ExtensionResult {
+      const wanted = typeof name === 'string' ? name.trim() : ''
+      if (wanted === '') return { ok: false, message: 'Give it a name.' }
+      if (wanted.length > 120) return { ok: false, message: 'That name is too long.' }
+      if (!isSideloadId(id)) {
+        /*
+         * A catalogue row's name is the catalogue's, and letting it be edited
+         * would mean a row that no longer matches the entry every claim on it
+         * was measured against.
+         */
+        return { ok: false, message: 'Only something you added yourself can be renamed.' }
+      }
+      const dir = dirFor(profileId, id)
+      const disk = dir === null ? null : readOnDisk(dir)
+      if (dir === null || disk === null) {
+        return { ok: false, message: 'It is not installed in this profile.' }
+      }
+      try {
+        writeRecord(dir, { ...disk, id, name: wanted, named: true })
+      } catch (error) {
+        return {
+          ok: false,
+          message: `That could not be saved: ${error instanceof Error ? error.message : 'the file would not write'}.`,
+        }
+      }
+      return { ok: true, message: `It is called ${wanted} now.` }
     },
 
     async install(profileId: string, id: string): Promise<ExtensionResult> {
@@ -1345,6 +1550,9 @@ export function createExtensionStore(options: ExtensionStoreOptions): ExtensionS
           enabled: true,
           sideloaded: false,
           name: entry.name,
+          // A catalogue row's name is the catalogue's and `rename` refuses to
+          // touch it, so this is never true for one.
+          named: false,
           origin: entry.source.url,
           kind: '',
           crxId: '',

@@ -989,7 +989,16 @@ describe('registerMcpIpc', () => {
       'mcp:call',
       'mcp:connect',
       'mcp:disconnect',
+      // Changing a server you added, which is a write of its own rather than a
+      // remove and an add composed in the renderer: a renderer is never sent a
+      // server's environment *values*, so composing it there would rewrite the
+      // server without them. See `mcp-edit.ts`.
+      'mcp:edit',
+      // Handing one to somebody else as a plain file, and taking one back. The
+      // import answers with a *draft* for the add form and writes nothing.
+      'mcp:export',
       'mcp:get-prompt',
+      'mcp:import',
       'mcp:inventory',
       'mcp:list',
       'mcp:read-resource',
@@ -1009,7 +1018,7 @@ describe('registerMcpIpc', () => {
     const ipc = fakeIpcMain()
     registerMcpIpc(ipc as unknown as Electron.IpcMain)
     expect(() => registerMcpIpc(ipc as unknown as Electron.IpcMain)).not.toThrow()
-    expect(ipc.handlers.size).toBe(11)
+    expect(ipc.handlers.size).toBe(14)
   })
 
   it('refuses a relative project path instead of resolving it against the app cwd', () => {

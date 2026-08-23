@@ -178,7 +178,18 @@ export interface ExtensionsApi {
   browserExtensionPopup?(profileId: string, id: string): Promise<unknown>
   browserExtensionOptions?(profileId: string, id: string): Promise<unknown>
   browserExtensionAddFolder?(profileId: string): Promise<unknown>
+  /** A packed file — a `.crx` or a zip. The main process decides which from the bytes. */
   browserExtensionAddCrx?(profileId: string): Promise<unknown>
+  /**
+   * Copy one you added in again from where it came from, and restart it.
+   *
+   * The developer loop: rebuild, press Reload. Absent in a preload older than
+   * this feature, and its absence costs that one button on rows somebody added —
+   * absent rather than disabled, the standing rule for this whole menu.
+   */
+  browserExtensionReload?(profileId: string, id: string): Promise<unknown>
+  /** Rename one you added. The only part of somebody else's program this app wrote. */
+  browserExtensionRename?(profileId: string, id: string, name: string): Promise<unknown>
 }
 
 const METHODS = [
@@ -190,6 +201,8 @@ const METHODS = [
   'browserExtensionOptions',
   'browserExtensionAddFolder',
   'browserExtensionAddCrx',
+  'browserExtensionReload',
+  'browserExtensionRename',
 ] as const satisfies readonly (keyof ExtensionsApi)[]
 
 export function resolveExtensionsApi(host?: unknown): ExtensionsApi {

@@ -278,6 +278,36 @@ export function tokenizeCommand(line: string): string[] {
   return out
 }
 
+/**
+ * The inverse of {@link tokenizeCommand}: an argument vector, back as one line.
+ *
+ * This exists because two things now have to show a command that was *already*
+ * written into somebody's configuration — the store's row for a server you
+ * added, and the form that edits it — and both had been doing it with
+ * `[command, ...args].join(' ')`. That is lossy in exactly the case macOS makes
+ * common: a server pointed at `/Users/me/My Folder` comes back out of the
+ * configuration as two arguments, joins to `npx -y pkg /Users/me/My Folder`,
+ * and re-tokenizes as **two** arguments the next time anything reads it. So the
+ * displayed command would not have been the configured one, and an edit that
+ * re-saved it would quietly repoint the server at a directory that does not
+ * exist.
+ *
+ * Single quotes, because {@link tokenizeCommand} treats them as literal
+ * throughout, and the `'\''` sandwich for a token containing one — close the
+ * quote, escape a bare `'`, reopen — which that tokenizer reads back exactly.
+ * Round-tripped by a test rather than reasoned about: this is the kind of pair
+ * where both halves can be individually plausible and disagree.
+ */
+export function quoteArgv(argv: readonly string[]): string {
+  return argv
+    .map((token) => {
+      if (token === '') return "''"
+      if (!/[\s'"\\]/.test(token)) return token
+      return `'${token.split("'").join("'\\''")}'`
+    })
+    .join(' ')
+}
+
 /* -------------------------------------------------------- the command -- */
 
 /**

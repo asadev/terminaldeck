@@ -234,8 +234,16 @@ describe('the honesty that must not regress', () => {
   it('offers both doors for adding your own, and says what is not checked', () => {
     const markup = render()
     expect(markup).toContain('Add a folder…')
-    expect(markup).toContain('Add a .crx…')
+    // A zip as well as a `.crx`, because a zip is what almost every extension's
+    // own release page publishes and refusing those would have made this door
+    // mean "add your own, if you first learn to repack it". Which one a file
+    // actually is comes from its first four bytes — see `browser-extensions.ts`.
+    expect(markup).toContain('Add a .crx or a zip…')
     expect(markup).toContain('no fingerprint is checked against it')
+    // And the two claims kept apart. A `.crx` can say its signature matched; a
+    // zip has none, and saying nothing there would let the sentence above it
+    // carry over onto a file nothing was checked about.
+    expect(markup).toContain('A zip carries no signature at all')
   })
 
   it('draws neither Add door when the preload has neither', () => {

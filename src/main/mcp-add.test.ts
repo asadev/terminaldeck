@@ -7,6 +7,7 @@ import {
   removeMcpServer,
   resolveRemoveRequest,
   resolveRequest,
+  quoteArgv,
   tokenizeCommand,
   type McpAddRequest,
 } from './mcp-add'
@@ -35,6 +36,42 @@ function request(overrides: Partial<McpAddRequest> = {}): McpAddRequest {
     ...overrides,
   }
 }
+
+describe('quoteArgv', () => {
+  /*
+   * The tokenizer's inverse, round-tripped rather than reasoned about: this is
+   * the kind of pair where both halves can be individually plausible and
+   * disagree, and the disagreement is invisible until somebody's server is
+   * pointed at a directory that does not exist.
+   */
+  const cases: string[][] = [
+    ['npx', '-y', '@modelcontextprotocol/server-filesystem', '/tmp'],
+    ['npx', '-y', 'pkg', '/Users/me/My Folder'],
+    ['serve', "it's", 'fine'],
+    ['a', 'b"c', 'd\\e'],
+    ['--flag', ''],
+    ['/Users/me/My Tools/serve', '--port', '3000'],
+  ]
+
+  for (const argv of cases) {
+    it(`survives a round trip: ${JSON.stringify(argv)}`, () => {
+      expect(tokenizeCommand(quoteArgv(argv))).toEqual(argv)
+    })
+  }
+
+  it('leaves an ordinary command exactly as somebody would type it', () => {
+    // The common case must not acquire quotes it did not have: this string is
+    // what a store row prints and what an edit form opens with, and a row that
+    // showed `'npx' '-y' 'pkg'` would look like something had gone wrong.
+    expect(quoteArgv(['npx', '-y', '@me/thing'])).toBe('npx -y @me/thing')
+  })
+
+  it('quotes only what would otherwise re-tokenize as two arguments', () => {
+    expect(quoteArgv(['npx', 'pkg', '/Users/me/My Folder'])).toBe(
+      "npx pkg '/Users/me/My Folder'",
+    )
+  })
+})
 
 describe('tokenizeCommand', () => {
   it('splits a plain command line', () => {
