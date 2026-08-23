@@ -15,20 +15,16 @@
  * It takes a `send` and is fed decoded frames, exactly as the pairing path hands
  * frames to whatever holds the socket. It does not open the socket, and it does
  * not know how the sealed channel to a first-contact host was established — that
- * is the rendezvous layer's problem, and a real one (a bare server has to be
- * reached at all before it can be signed into; the browser punts to an install
- * command, and iOS has no SSH client linked to install one itself). Keeping the
- * frame sequence here, pure and driven, is what lets it be tested against the
- * real `WireCodec` with no socket.
+ * is the rendezvous layer's problem, and a real one: a bare server has to be
+ * reached at all before it can be signed into. The browser still punts to an
+ * install command; **this phone no longer does** — `Servers/SSHSession.swift`
+ * links a real SSH client, so `ServerConnector` logs in, looks, and installs the
+ * host itself, and this flow is what runs afterwards to connect to it. Keeping
+ * the frame sequence here, pure and driven, is what lets it be tested against
+ * the real `WireCodec` with no socket.
  */
 
 import Foundation
-
-/// The one-line install for a bare server, from `HEADLESS.md`. Shown for a
-/// person to run on the machine when there is no host to sign into yet — the
-/// same fallback the browser client shows, because neither a browser nor this
-/// phone can install a host over SSH itself.
-let installCommand = "curl -fsSL https://terminaldeck.dev/install.sh | sh"
 
 struct SignInInput: Equatable {
     let username: String

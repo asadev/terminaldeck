@@ -52,14 +52,22 @@ struct PairingView: View {
     @FocusState private var typing: Bool
 
     /**
-     * Whether the **Add a server** sheet is up over this one.
+     * Whether the **Log in to a server** sheet is up over this one.
      *
-     * Presented from here rather than from `RootView`, and that is the point: on
-     * a phone with no machines this screen *is* the window, and on a phone
-     * adding one it is itself a sheet. A flag on the model would have to swap
-     * one root-level sheet for another in the same update, which SwiftUI drops
-     * about as often as it honours. A sheet raised from inside the sheet that is
-     * already up is one presentation and always lands.
+     * Only when this screen is itself a sheet — *pair another machine* — and the
+     * split is not a preference, it is two different failures avoided:
+     *
+     *  - **From inside a sheet, present locally.** A flag on the model would ask
+     *    `RootView` to swap one root-level sheet for another in the same update,
+     *    which SwiftUI drops about as often as it honours. A sheet raised from
+     *    inside the sheet that is already up is one presentation and always
+     *    lands. That is the original argument for this flag and it still holds.
+     *  - **From the gate, present from the root.** When this screen *is* the
+     *    window, a successful login takes the phone past it — `RootView` swaps
+     *    this view for `DeckTabs` the instant the server lands — and a sheet
+     *    owned by the view being torn down goes with it, half a second before
+     *    the person has read the receipt. Watched happening in the simulator
+     *    against a real server. See `DeckModel.loggingIntoServer`.
      */
     @State private var signingIn = false
 
@@ -103,12 +111,14 @@ struct PairingView: View {
         // exactly one thing to do and typing is it.
         .onAppear { typing = true }
         .sheet(isPresented: $signingIn) {
-            AddServerView(model: model) { added in
+            // Reached only from the *pair another machine* sheet; the gate uses
+            // the root presenter instead. See the note on `signingIn`.
+            ServerLoginView(model: model) { added in
                 signingIn = false
-                // A machine arrived, so this screen has nothing left to ask for.
-                // On a first run `RootView` swaps it out on its own; in the
-                // "pair another machine" sheet it has to be told.
-                if added { close?() }
+                guard let added else { return }
+                close?()
+                model.show(.settings)
+                model.settingsRoute = [.machines, .server(added.id)]
             }
         }
     }
@@ -133,12 +143,16 @@ struct PairingView: View {
         HStack(spacing: 6) {
             Button {
                 typing = false
-                signingIn = true
+                // Which presenter — see the note on `signingIn` above.
+                if adding { signingIn = true } else { model.loggingIntoServer = true }
             } label: {
                 HStack(spacing: 7) {
                     Image(systemName: "server.rack")
                         .font(.system(size: 13))
-                    Text("Add a server instead")
+                    // "Log in", not "Add" — because that is now what it does.
+                    // The screen behind this used to ask for a token a server
+                    // cannot produce; it asks for a login.
+                    Text("Log in to a server instead")
                         .font(.system(size: 15, weight: .medium))
                 }
                 .contentShape(Rectangle())

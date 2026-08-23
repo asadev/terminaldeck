@@ -12,6 +12,21 @@
  * nothing valid to put in a form. `ServerAddress.swift` is the thing that was
  * missing; this is the form.
  *
+ * ## The `curl … | sh` footer is gone, and is not coming back
+ *
+ * This screen used to end with *"No Terminal Deck on that machine yet?"* and a
+ * one-line install command to copy and go and run somewhere else. Asad, looking
+ * at it: *"**I don't want that command.** The steps should be: first they log in
+ * to the server."* He is right, and the footer was never a feature — it was this
+ * app admitting it could not reach a bare server, dressed as help. The phone
+ * links a real SSH client now (`Servers/SSHSession.swift`), so a bare server is
+ * reached, looked at and installed on from `ServerLoginView`, with a button.
+ *
+ * That makes this the **second** door rather than the first. It is still the
+ * right door for one case and that case is real: a host that is already running
+ * somewhere this phone has no SSH login for — somebody else's machine, a host
+ * whose address was sent to you — where the address is the only thing you hold.
+ *
  * ## Why it is a second door rather than a second mode of pairing
  *
  * Pairing is six digits read off a machine **somebody is standing at**. A server
@@ -356,8 +371,6 @@ struct AddServerView: View {
         .disabled(!canSubmit)
         .padding(.top, 24)
         .accessibilityIdentifier("addServer.submit")
-
-        installFooter
     }
 
     private var canSubmit: Bool {
@@ -435,42 +448,6 @@ struct AddServerView: View {
             }
             .padding(.top, 12)
         }
-    }
-
-    /**
-     * The one-line install, for a machine that has no host on it yet.
-     *
-     * The same fallback the browser client shows and for the same reason: this
-     * phone has no SSH client linked into it, so it cannot install a host on a
-     * bare box itself. Saying so, with the command to run, is the honest version
-     * of a screen that would otherwise refuse an address that does not exist yet
-     * and explain nothing.
-     */
-    @ViewBuilder
-    private var installFooter: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("No \(Brand.name) on that machine yet?")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(Theme.faint)
-                .textCase(.uppercase)
-
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Text(installCommand)
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(Theme.secondary)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 0)
-                Button("Copy") { UIPasteboard.general.string = installCommand }
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(Theme.accent)
-                    .accessibilityIdentifier("addServer.copyInstall")
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .padding(.top, 28)
     }
 
     /* -------------------------------------------------------------- working -- */

@@ -306,6 +306,51 @@ Install button with a sentence saying so — never a registry install, because
 `terminaldeck` on npm is a name reservation and installs a package with no `bin`
 entry.
 
+### From a phone
+
+The same five steps, over the phone's own SSH connection. **Machines → Log in to
+a server** asks for an address, a port, a username and a password or a key —
+nothing that has to exist first — and lands on the server's own page: what the
+machine is, what it is running, and whether the host is on it. If it is not,
+there is an **Install it on this server** button; if it is, there are **Start**,
+**Stop** and **Connect**.
+
+Asad, 2026-08-23, on the screen this replaced: *"I want it to work exactly like
+it works for MacBook. Say no MacBook or Windows exists at all — a user only has a
+server and a phone… Right now on iOS the add-server page tells us: if you don't
+have a server yet, copy this command and paste it there — curl … terminaldeck
+install. **I don't want that command.**"* It is gone.
+
+Two differences from the desktop, both forced and both stated on screen:
+
+1. **The phone sends the installer, not a tarball.** It cannot carry a Node
+   package it does not build, so `scripts/install-headless.sh` is bundled into
+   the app (`ios/project.yml` references the file itself rather than copying it),
+   staged to a temporary file over the SSH channel, and run. The package comes
+   from the registry — see the correction below.
+2. **The phone connects with the address, not with a code.** It has no terminal
+   on that server to read a code out of, so **Connect** spends the same SSH login
+   it already holds against the **server address** the host prints, through the
+   ordinary `enroll` door. A host too old to print one says so where the button
+   would be, and names the desktop install as the way to a build that does.
+
+The SSH client is `apple/swift-nio-ssh`. What that costs, said out loud because
+it is the difference between the two clients: **no RSA**, for user keys or host
+keys. An RSA key is refused by name with the two things that work instead, and a
+server offering only an `ssh-rsa` host key cannot be reached from the phone at
+all. `ios/TerminalDeck/Servers/SSHSession.swift` carries the whole argument.
+
+> **Correction, measured 2026-08-23.** The paragraph above about the desktop says
+> a registry install is never offered because `terminaldeck` on npm *"is a name
+> reservation and installs a package with no `bin` entry."* That was true when it
+> was written and is **not true now**: the registry carries `terminaldeck@0.6.1`
+> with both `bin` entries and a 3.2 MB payload. It is still older than this app —
+> old enough that it prints no server address, which is why the phone's connect
+> refusal names the desktop rather than a reinstall — so the desktop keeps
+> shipping its own copy. What has to happen for the phone's install to end in a
+> connectable host is that the current host is **published to npm**; nothing in
+> the client needs to change.
+
 ### By hand, on the machine itself
 
 ```

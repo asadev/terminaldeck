@@ -1,35 +1,46 @@
 What to test — 0.10.0
 
-Start here: Add a server. Last build you looked for a way to pair the phone with
-a server and there was none — the wire was in, the screen was not. It is in now,
-and it is the first thing to check.
+Start here: Log in to a server. Last build the add-server page asked for a
+"server address" — a token only a machine already running Terminal Deck prints —
+and, when you had none, offered a curl command to copy and go and run somewhere
+else. That command is gone. The phone signs in to a server over SSH itself now.
 
-Two doors to it. On a phone with nothing paired yet it is "Add a server instead",
-under the six-digit code field. On a phone already paired it is Settings >
-Machines > Add a server. Both open the same form.
+Two doors to it. On a phone with nothing on it yet it is "Log in to a server
+instead", under the six-digit code field. On a phone that already has something
+it is Settings > Machines > Log in to a server.
 
-Getting the address. On a server, run: terminaldeck address — it prints one line
-beginning srv1. and nothing else, so it can be copied straight out of the
-terminal. On a machine running the desktop app, open its server page and use the
-"Address for a phone" block, Copy. terminaldeck status prints the same address
-under "Server address". That string is not a secret: it carries a public key and
-a name at the relay and grants nothing on its own.
+What it asks for: the address, the port, the username, and a password or a
+private key — the four things you already have for any server. Leave the port
+empty for 22; a server on another port (2222, say) works and is the case that
+used to be impossible.
 
-Filling the form. Paste the address (the Paste button beside the label puts it in
-without an Allow Paste alert), type the username you would use to SSH into that
-machine, then either a password or a private key. Private key is the other half
-of the segmented control: it takes a paste, not typing, and it will say how many
-characters landed — a key must be unencrypted, one with a passphrase on it cannot
-be used here. The server checks the login against its own SSH, then issues this
-phone a credential of its own. The password itself is not stored by the app.
+What should happen next: it signs in, checks the server's identity, and lands on
+that server's own page — what the machine is, how much disk and memory, what is
+running on it, what is listening — and a card at the top saying whether the
+headless host is on it.
 
-What should not happen: a spinner that never ends. Every failure lands on a
-sentence and puts the form back underneath it. A bad address is refused at the
-field. A wrong login says so after the server has answered. Closing the screen
-mid-sign-in does not cancel it; the Stop button does.
+If it is not there: an "Install it on this server" button, with the installer's
+own output as it happens and the real error if it fails. If it is there: Start,
+Stop, and Connect. Connect signs this phone in to the host through the relay and
+the server appears as a machine like any other; Disconnect takes that away and
+leaves the server itself alone.
 
-Then the machine appears in Settings > Machines like any paired one, with its
-sessions on the Sessions tab.
+Fingerprints: the login shows the server's SHA256 fingerprint once, and it is the
+same string `ssh-keyscan <host> | ssh-keygen -lf -` prints. Every later
+connection is checked against it, and a server answering with a different key is
+refused before your password is offered.
+
+What will not work, and says so rather than failing oddly: an RSA private key —
+this phone signs with Ed25519 and ECDSA — and a key with a passphrase on it. Both
+are refused by name with what to do instead.
+
+Known gap: what the phone installs comes from the npm registry, and the newest
+published host is older than this app. It installs and runs; it is too old to
+print the address Connect needs, and the page says so where the button would be.
+Installing from a desktop Terminal Deck puts the current host on.
+
+"I have a server address instead" is still at the foot of the login, for a host
+somebody sent you an address for.
 
 The rest, unchanged from the last build:
 
