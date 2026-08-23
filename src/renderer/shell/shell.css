@@ -2780,16 +2780,35 @@
   border-top: 1px solid var(--border-subtle);
 }
 
-/* The hole a pane leaves for a terminal that is drawn over it.
+/* The hole a pane leaves for a terminal — or a page — that is drawn over it.
 
    It has no background of its own on purpose: for the frame between a layout
    change and the re-measure the terminal has not moved yet, and a coloured
    rectangle would flash where it is about to be. The pane area behind it is the
    window's own ground, which is what a pane briefly showing nothing should look
-   like. */
+   like.
+
+   `position: absolute; inset: 0` and NOT `flex: 1`, and that is the whole of
+   why a split never showed a page.
+
+   This element is the only child of `.pane-cell-body`, which is
+   `position: relative` and `display: block` — it has never been a flex
+   container. So `flex: 1` applied to nothing, an empty div in a block box is
+   `height: 0`, and `measureSlots()` in `layout/pane-slots.ts` drops every slot
+   whose height is zero *by design* — a zero box is worse than no box, because
+   something would be drawn at 0×0 in the corner. With no box, `pageOnScreen()`
+   answers false for every page in a split and `.bw[data-visible='false']`
+   hides it: press Split and both panes are empty. Measured on 2026-08-23 in a
+   real window — two slots, 584×0 and 568×0, inside bodies 584×804 and 568×754.
+
+   Filling the positioning parent is the right answer rather than making the
+   body a flex column, because the slot is always the only child of that body
+   (the pane draws a terminal, a page's hole, or an empty state — never two),
+   and because it cannot then be collapsed again by a later change to how the
+   body lays its children out. */
 .pane-remote-slot {
-  flex: 1;
-  min-height: 0;
+  position: absolute;
+  inset: 0;
 }
 
 /* Which computer a guest pane's session is on.

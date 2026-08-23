@@ -27,6 +27,7 @@ import { onWebContentsDestroyed } from './web-contents-teardown'
 import { openGuestLink } from './link-open'
 import { showGuestContextMenu } from './browser-context-menu'
 import { cleanUserAgent } from './browser-user-agent'
+import { baseZoom, fitPageToPane, forgetFit, resetFit } from './browser-fit'
 import { activeProfile, DEFAULT_PARTITION, sessionForPartition } from './browser-profiles'
 import { workerSessionFor } from './browser-workers'
 import { rememberVisit } from './browser-history'
@@ -160,6 +161,14 @@ export interface BrowserTabState {
    * *text* is a sentence in both cases by design.
    */
   failed: boolean
+  /**
+   * The page's zoom factor, 1 unless something has changed it.
+   *
+   * Sent so the window can draw the truth: this app zooms a page out by itself
+   * when its layout will not fit the pane — see `browser-fit.ts` — and the
+   * toolbar's zoom chip is both how that is announced and how it is undone.
+   */
+  zoom: number
 }
 
 /** What the renderer receives for a captured element. */
@@ -358,6 +367,18 @@ interface BrowserTab {
    * over: there is no password in this shape and nowhere to put one.
    */
   signIn: { origin: string; usernames: string[] } | null
+  /**
+   * The pending re-fit for this tab, so a drag produces one measurement.
+   *
+   * `browser:bounds` arrives on every frame of a window resize or a divider
+   * drag, and fitting runs a script in the page — sixty of those a second for a
+   * rectangle still moving is work for an answer that is wrong by the time it
+   * lands. Cleared and re-armed on each bounds message, so it fires once the
+   * pane has stopped moving. See `browser-fit.ts`.
+   */
+  fitTimer: ReturnType<typeof setTimeout> | null
+  /** The zoom last reported to the window, so an unchanged one costs no message. */
+  zoom: number
 }
 
 /**
@@ -596,6 +617,16 @@ function stateOf(tab: BrowserTab): BrowserTabState {
     inspecting: tab.inspecting,
     error: tab.error,
     failed: tab.failedUrl !== null,
+    /*
+     * What the page is actually zoomed to.
+     *
+     * On the state rather than left to the renderer's own copy, because the
+     * renderer is no longer the only thing that sets it: `browser-fit.ts` zooms
+     * a page out when its layout is wider than the pane, and a window still
+     * showing the number *it* last asked for would put "100%" on a page at 92%
+     * — which is the toolbar chip lying about the one fact it exists to state.
+     */
+    zoom: tab.zoom,
   }
 }
 
@@ -742,12 +773,86 @@ function applyLayout(tab: BrowserTab): void {
   tab.view.setVisible(shouldComposite(compositeCheck(tab)))
 }
 
+/* ------------------------------------------------------------- fitting -- */
+
+/** How long the pane has to hold still before the page is measured against it. */
+const FIT_SETTLE_MS = 180
+
+/**
+ * Measure this page against its pane once things have stopped moving.
+ *
+ * Armed from the two places the answer can change — the pane's rectangle and a
+ * new document — and never from anywhere else, because every other route into
+ * this ends up running a script in somebody's page for no reason.
+ *
+ * The timer is cleared on teardown with the rest of the tab. A fit that lands
+ * after the view has gone is a no-op inside `fitPageToPane`, which checks the
+ * page again on the far side of its own round trip.
+ */
+function scheduleFit(tab: BrowserTab, delay = FIT_SETTLE_MS): void {
+  if (tab.fitTimer !== null) clearTimeout(tab.fitTimer)
+  tab.fitTimer = setTimeout(() => {
+    tab.fitTimer = null
+    const page = liveContents(tab)
+    if (!page) return
+    void fitPageToPane(tab.id, page)
+      .then((zoom) => {
+        if (zoom === null || zoom === tab.zoom) return
+        tab.zoom = zoom
+        push(tab)
+      })
+      .catch(() => undefined)
+  }, delay)
+}
+
+/**
+ * A new document is on its way in: put the zoom back before it arrives.
+ *
+ * Without this the next page inherits the last one's fit. Chromium keeps zoom
+ * *per origin* inside a partition, so leaving 92% on `chromewebstore.google.com`
+ * would also be writing it into the person's stored preference for that site —
+ * a number this app chose for a window shape, remembered for every future visit
+ * in every window. Restoring first keeps what is persisted equal to what they
+ * actually chose.
+ */
+function unfit(tab: BrowserTab): void {
+  if (tab.fitTimer !== null) {
+    clearTimeout(tab.fitTimer)
+    tab.fitTimer = null
+  }
+  const page = liveContents(tab)
+  const base = baseZoom(tab.id)
+  if (page && base !== null && page.getZoomFactor() !== base) {
+    try {
+      page.setZoomFactor(base)
+    } catch {
+      // The view is going away mid-navigation; there is no zoom left to restore.
+    }
+  }
+  resetFit(tab.id)
+  tab.zoom = base ?? 1
+}
+
 function tellGuest(tab: BrowserTab): void {
   liveContents(tab)?.send(GUEST_INSPECT_CHANNEL, tab.inspecting)
 }
 
 function destroyTab(tab: BrowserTab): void {
   tabs.delete(tab.id)
+  /*
+   * Hand the zoom back before the page goes, and cancel any fit still pending.
+   *
+   * The pending timer would run a script in a view on its way out, which is the
+   * cheap half. The zoom is the half that outlives the process: Chromium keeps
+   * it **per origin inside the partition**, on disk, so a tab closed — or an app
+   * quit, which comes through here for every tab — while a page sat at 91%
+   * would write 91% into that person's stored preference for that site, for
+   * every future visit in every window. This app is allowed to fit a page to a
+   * pane for as long as the pane is on screen; it is not allowed to leave that
+   * decision behind as if they had made it.
+   */
+  unfit(tab)
+  forgetFit(tab.id)
   /*
    * Off the screen first, by the same lever that put it there.
    *
@@ -1114,10 +1219,17 @@ function wireGuestEvents(tab: BrowserTab): void {
   wc.on('did-start-navigation', (details: { url: string; isMainFrame: boolean; isSameDocument: boolean }) => {
     if (!details.isMainFrame || details.isSameDocument) return
     paintBackdrop(tab, details.url)
+    // The fit belonged to the document being replaced. See `unfit`.
+    unfit(tab)
   })
 
   wc.on('did-start-loading', () => push(tab))
-  wc.on('did-stop-loading', () => push(tab))
+  wc.on('did-stop-loading', () => {
+    push(tab)
+    // The layout is only settled once the load is. A store measured at
+    // `did-navigate` answers with the shell's width, not the page's.
+    scheduleFit(tab)
+  })
   /*
    * The title arrives after the navigation that carries it, so it is recorded
    * here as well as below.
@@ -1352,6 +1464,8 @@ export function registerBrowserIpc(ipcMain: IpcMain): void {
             : activeProfile(app.getPath('userData')).id,
       documentFromAgent: false,
       signIn: null,
+      fitTimer: null,
+      zoom: 1,
     }
     tabs.set(tab.id, tab)
 
@@ -1452,8 +1566,13 @@ export function registerBrowserIpc(ipcMain: IpcMain): void {
   ipcMain.on('browser:bounds', (_event, id: unknown, bounds: unknown) => {
     const tab = typeof id === 'string' ? tabs.get(id) : undefined
     if (!tab) return
+    const before = tab.bounds.width
     tab.bounds = sanitizeBounds(bounds)
     applyLayout(tab)
+    // Only when the pane's *width* moved. Height has no bearing on whether a
+    // layout fits, and the strip wrapping or a panel opening below sends a
+    // stream of bounds that differ in nothing this cares about.
+    if (tab.bounds.width !== before && tab.bounds.width > 0) scheduleFit(tab)
   })
 
   ipcMain.on('browser:visible', (_event, id: unknown, visible: unknown) => {

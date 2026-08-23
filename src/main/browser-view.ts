@@ -13,6 +13,7 @@ import { guestSession } from './browser-session'
 import { isIsolatedGuestSession } from './browser-isolation'
 import { isProfileGuestSession } from './browser-profiles'
 import { cleanUserAgent } from './browser-user-agent'
+import { noteManualZoom } from './browser-fit'
 import { GUEST_RECORD_CHANNEL, GUEST_STEP_CHANNEL, safeAccent } from './browser-record-preload'
 import { decodePngDataUrl, markedName } from './marked-image'
 import {
@@ -666,7 +667,21 @@ export function registerBrowserViewIpc(ipcMain: IpcMain): void {
     // partition, so a tab that opens a site the user zoomed last week opens
     // zoomed — and a UI that assumed 100% would both show the wrong number and
     // reset their preference the first time they pressed a button.
-    if (factor !== null && factor !== undefined) entry.wc.setZoomFactor(clampZoom(factor))
+    if (factor !== null && factor !== undefined) {
+      const chosen = clampZoom(factor)
+      entry.wc.setZoomFactor(chosen)
+      /*
+       * A zoom that came from a person, which is the one kind `browser-fit.ts`
+       * must never argue with.
+       *
+       * It fits a page out when the layout is wider than the pane, and the
+       * toolbar chip that appears is *how somebody undoes that* — so a reset to
+       * 100% that was silently re-fitted a moment later would be a control that
+       * visibly does nothing. Telling the fitter here is what makes the chip
+       * mean what it says: their number stands until the tab navigates.
+       */
+      noteManualZoom(String(tabId), chosen)
+    }
     return entry.wc.getZoomFactor()
   })
 

@@ -1226,6 +1226,24 @@ export function BrowserWorkspace({
     if (!api) return
     const offState = api.onBrowserState((state) => {
       setTabs((prev) => withTabId(prev, state.id, patchFrom(state)))
+      /*
+       * The zoom, when the main process is the one that moved it.
+       *
+       * `browser-fit.ts` zooms a page out when its own layout is wider than the
+       * pane — the Chrome Web Store pins `body { min-width: 1280px }` and this
+       * pane is 1176 at an ordinary window size — so the panel is no longer the
+       * only writer of this number. Without this line the chip in the address
+       * bar keeps saying whatever the panel last asked for, which is 100% on a
+       * page sitting at 92%, and pressing it to "reset" would be a control that
+       * changes nothing visible.
+       */
+      if (typeof state.zoom === 'number' && Number.isFinite(state.zoom)) {
+        const tab = tabForId(tabsRef.current, state.id)
+        if (tab) {
+          const next = state.zoom
+          setZooms((prev) => (prev[tab.key] === next ? prev : { ...prev, [tab.key]: next }))
+        }
+      }
     })
     const offElement = api.onBrowserElement((id, next) => {
       const tab = tabForId(tabsRef.current, id)

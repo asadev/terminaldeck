@@ -32,6 +32,15 @@ export interface BrowserTabState {
    * start page there instead.
    */
   failed: boolean
+  /**
+   * The page's zoom factor, as the main process has it.
+   *
+   * Optional because an older main process does not send it, and because the
+   * panel keeps its own copy for the tab it just zoomed — this field is how the
+   * *other* writer is heard: `browser-fit.ts` zooms a page out when its layout
+   * is wider than the pane, and the chip has to say so.
+   */
+  zoom?: number
 }
 
 /** Mirrors `LabelSource` in `src/main/selector.ts`. */

@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { measureSlots, sameBoxes, slotStyle, SLOT_ATTR, type SlotElement, type SlotHost } from './pane-slots'
 
@@ -129,5 +132,71 @@ describe('standing in the hole', () => {
   it('says nothing at all when no pane is holding it', () => {
     // Which leaves the stylesheet's `inset: 0`, and that is the unsplit window.
     expect(slotStyle(undefined)).toBeUndefined()
+  })
+})
+
+/* ----------------------------------------------------- the hole has a size -- */
+
+/**
+ * The stylesheet has to give the hole a rectangle, or none of the above runs.
+ *
+ * This is the assertion the arithmetic tests above could never make, and the
+ * bug it closes shipped past every one of them. `.pane-remote-slot` is an empty
+ * `<div>`: it has no content, so its height comes entirely from CSS. It carried
+ * `flex: 1; min-height: 0`, and its only parent — `.pane-cell-body` — is
+ * `position: relative; flex: 1; min-height: 0` with no `display` of its own,
+ * which is to say a **block** container. `flex: 1` on the child of a block box
+ * does nothing at all, so every slot in the window measured `width × 0`.
+ *
+ * `measureSlots` above drops a zero box on purpose, so the result was `{}`;
+ * `pageOnScreen()` in `App.tsx` requires an entry there while the window is
+ * split; and `.bw[data-visible='false']` is `display: none`. Splitting the
+ * window therefore emptied both panes — measured in a real window on
+ * 2026-08-23 as two slots of 584×0 and 568×0 inside bodies of 584×804 and
+ * 568×754, with both pages hidden and nothing on screen.
+ *
+ * Read as text rather than rendered because jsdom has no layout engine — the
+ * same reason the fixtures above supply their own numbers. Either arrangement
+ * is accepted: fill the positioning parent, or make the parent a flex column.
+ * What is refused is the third state, which is what shipped: a slot that asks
+ * for flex growth from a parent that does not lay its children out that way.
+ */
+describe('the stylesheet behind the hole', () => {
+  const sheet = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), '..', 'shell', 'shell.css'),
+    'utf8',
+  )
+
+  /** One rule body out of the sheet, by selector. */
+  const ruleFor = (selector: string): string => {
+    const at = sheet.indexOf(`\n${selector} {`)
+    expect(at, `${selector} is not in shell.css`).toBeGreaterThan(-1)
+    const open = sheet.indexOf('{', at)
+    const close = sheet.indexOf('}', open)
+    return sheet.slice(open + 1, close)
+  }
+
+  it('gives the slot a height that does not depend on the parent being flex', () => {
+    const slotRule = ruleFor('.pane-remote-slot')
+    const bodyRule = ruleFor('.pane-cell-body')
+
+    const fillsItsParent =
+      /position:\s*absolute/.test(slotRule) && /inset:\s*0/.test(slotRule)
+    const parentIsAColumn =
+      /display:\s*flex/.test(bodyRule) && /flex-direction:\s*column/.test(bodyRule)
+
+    expect(
+      fillsItsParent || parentIsAColumn,
+      'an empty .pane-remote-slot is 0px tall unless it fills .pane-cell-body or that body is a flex column',
+    ).toBe(true)
+  })
+
+  it('does not leave the slot asking a block parent to grow it', () => {
+    const slotRule = ruleFor('.pane-remote-slot')
+    const bodyRule = ruleFor('.pane-cell-body')
+    if (/display:\s*flex/.test(bodyRule)) return
+    expect(slotRule, '.pane-cell-body is not a flex container, so flex: 1 sizes nothing').not.toMatch(
+      /(^|[\s;])flex:\s*1/,
+    )
   })
 })
