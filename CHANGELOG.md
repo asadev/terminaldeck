@@ -10,6 +10,26 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.10.1] — 2026-08-23
+
+### Added
+
+- **A store, with its own page.** Browser extensions and tools/MCP servers in one place, with search, filters, categories and a logo on every row. Rows carry what a thing costs — free, free but needs a paid account, or paid — and say so before you install rather than after. Everything is fetched when you choose it; nothing ships inside the app. Where an in-app install genuinely is not possible, the row links to the project's own page instead of showing a button that cannot work.
+- **Add your own.** Your own MCP server by command, or your own browser extension from a folder — both first-class rows in the store, marked as yours, editable and removable.
+- **Mainstream and commercial tools alongside the open-source ones** — Google, Microsoft, Atlassian, Stripe, Cloudflare, Supabase, Notion, 1Password, Grammarly and more, each verified to exist and honest about what it needs.
+- **A server on a non-standard SSH port now says so**, everywhere its address is shown. A server on 2222 read as though it were on 22 on four different screens.
+
+### Fixed
+
+- **`terminaldeck browser install` no longer reports success over a Chromium that cannot run.** On a stock Linux server thirteen of the libraries Chromium needs are absent; the install verified nothing, printed a version and exited 0, and every real start died. It now starts the browser to prove it works, names the missing packages for your distribution, and offers `--with-deps` to install them — printing the command before it runs it.
+- **A failed browser start no longer takes the whole host down.** An unhandled pipe error killed the daemon, and with it the sessions, the pairing and the relay connection.
+- **Chat.** A message you send appears immediately instead of leaving the page blank, and the conversation survives switching away and back.
+- **The copilot chat on the phone** — reliability and layout on both iPhone and Android.
+- Settings → Servers: four visual defects, including a path that read `srv/www/` instead of `/srv/www`.
+- Devices whose id began with `-` or `_` could never be revoked, and pressing Remove closed the asking phone's connection. Every stored device is revocable now.
+- An explicit "no" to a server driving browser windows survives being carried through an older version and back.
+
+
 ### Fixed
 
 - **Remove works on every device signed in to a host, including the ones it used to skip.** About one paired device in thirty was given an id the Remove button could not name, and pressing it did nothing except knock the phone that pressed it off — so a lost or stolen device could only be cut off from the desktop it was paired at. Every device already paired is now removable from any of your own devices; nothing has to be paired again, and no per-device folder or account permission changes hands.
@@ -1970,7 +1990,8 @@ First cut. macOS 12+, Apple silicon, unsigned.
 - Preferences with live dark/light theming
 - Session resume (`⌘⇧T`)
 
-[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.10.1...HEAD
+[0.10.1]: https://github.com/asadev/terminaldeck/releases/tag/v0.10.1
 [0.10.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.10.0
 [0.9.1]: https://github.com/asadev/terminaldeck/releases/tag/v0.9.1
 [0.9.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.9.0
