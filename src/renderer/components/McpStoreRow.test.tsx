@@ -67,9 +67,11 @@ function draw(row: Row, over: Partial<Parameters<typeof McpStoreRow>[0]> = {}): 
       values={{}}
       said=""
       arming={false}
+      asking={false}
       onValue={() => {}}
       onAct={() => {}}
       onArm={() => {}}
+      onAsk={() => {}}
       {...over}
     />,
   )
@@ -90,23 +92,81 @@ describe('the store row', () => {
   it('says a row needs a token before anything is pressed, not after', () => {
     /*
      * The requirement in one test: *"a row that cannot work without one says so
-     * BEFORE install rather than failing after."* The field is on the row, the
-     * Needs line names it, and the button cannot be pressed while it is empty.
+     * BEFORE install rather than failing after."*
+     *
+     * It is the **sentence** that has to be here, unfolded, and it is — from
+     * `needsWords`, which is the catalogue's answer rather than this component's.
+     * The boxes are behind the button now; see the ask below and the header on
+     * `McpStoreRow.tsx` for what that changed and what it could not change.
      */
     const html = draw(ROW)
+    expect(html).toContain('· Needs <b>API token</b>')
+    expect(html).toContain('>Install</button>')
+  })
+
+  it('does not put a token box on a shelf nobody has pressed anything on', () => {
+    /*
+     * The measurement this reverses a decision for: label, box, hint and a hover
+     * dot is ~90px per required input, on every row of a shelf somebody is
+     * scanning, for a form only the person installing that one row will type
+     * into. `supabase` takes two of them.
+     */
+    const html = draw(ROW)
+    expect(html).not.toContain('type="password"')
+    expect(html).not.toContain('From their dashboard.')
+  })
+
+  it('asks for what it needs when Install is pressed, in the same words', () => {
+    const html = draw(ROW, { asking: true })
+    // The same field, the same hint, the same note about where a typed secret
+    // is kept. Nothing was reworded on the way behind the button.
+    expect(html).toContain('type="password"')
+    expect(html).toContain('API token')
+    expect(html).toContain('From their dashboard.')
+    expect(html).toContain('written into your Claude Code configuration as API_TOKEN=…')
+    // And a way out that writes nothing.
+    expect(html).toContain('>Cancel</button>')
+  })
+
+  it('cannot install from the ask while a required value is empty', () => {
+    /*
+     * The defect the old placement guarded against, pinned where it now lives:
+     * the ask's own button is the only thing that installs, and it is disabled
+     * with the missing labels named under it. `mcp-store.ts` refuses it a second
+     * time — both ends check, as they always did.
+     */
+    const html = draw(ROW, { asking: true })
     expect(html).toContain('Needs API token before it can be installed.')
     expect(html).toContain('disabled=""')
   })
 
   it('takes a secret in a field that does not show it', () => {
-    expect(draw(ROW)).toContain('type="password"')
-    expect(draw({ ...ROW, inputs: [{ ...ROW.inputs[0], kind: 'path' }] })).toContain('type="text"')
+    expect(draw(ROW, { asking: true })).toContain('type="password"')
+    expect(
+      draw({ ...ROW, inputs: [{ ...ROW.inputs[0], kind: 'path' }] }, { asking: true }),
+    ).toContain('type="text"')
   })
 
-  it('enables the button once the field is filled', () => {
-    const html = draw(ROW, { values: { API_TOKEN: 'sk-1' } })
+  it('enables the ask’s button once the field is filled', () => {
+    const html = draw(ROW, { asking: true, values: { API_TOKEN: 'sk-1' } })
     expect(html).not.toContain('Needs API token before')
     expect(html).toContain('>Install</button>')
+    expect(html).not.toContain('disabled=""')
+  })
+
+  it('asks even when nothing is required, because the field still points it somewhere', () => {
+    /*
+     * A row whose only input is optional — or whose token is already exported by
+     * the login shell — has nothing *missing* and still has a field. Installing
+     * `filesystem` without asking which directory would write a configuration
+     * nobody chose.
+     */
+    const optional: Row = {
+      ...ROW,
+      inputs: [{ ...ROW.inputs[0], required: false, key: 'ROOT', label: 'Directory', kind: 'path' }],
+    }
+    expect(draw(optional)).not.toContain('type="text"')
+    expect(draw(optional, { asking: true })).toContain('type="text"')
   })
 
   it('offers no Install at all when the runtime is missing', () => {
@@ -127,8 +187,18 @@ describe('the store row', () => {
      * Personal access token box sat under a GitHub row that had no Install
      * anywhere on it. Something you can type a secret into that nothing can ever
      * use is worse than an inert button — a person can put a real token in it.
+     *
+     * Asserted with the ask forced open as well, because that state is now
+     * reachable from outside this component: the gate is `hasAction`, so a row
+     * with no button has no ask to be put into.
      */
     expect(html).not.toContain('type="password"')
+    expect(
+      draw(
+        { ...ROW, state: 'unavailable', blocked: 'docker is not on this machine.' },
+        { asking: true },
+      ),
+    ).not.toContain('type="password"')
   })
 
   it('offers no Install when something else owns the name, and shows what does', () => {
@@ -141,6 +211,22 @@ describe('the store row', () => {
     expect(html).toContain('node /home/me/mine.js')
     expect(html).not.toContain('>Install</button>')
     expect(html).not.toContain('type="password"')
+  })
+
+  it('keeps the head’s chips in one cluster, so a wrapped head cannot orphan Install', () => {
+    /*
+     * Reproduced at a half-width column on `supabase`: the head wraps on the
+     * store page — `store/store-page.css` argues why it has to — and with the
+     * chips as flat children of it the item that dropped to the second line was
+     * the Install button, alone, under the name. Grouped, the cluster is the
+     * only thing that gives way.
+     */
+    const html = draw(ROW)
+    const meta = html.indexOf('mcp-store-meta')
+    const button = html.indexOf('mcp-store-install')
+    expect(meta).toBeGreaterThan(-1)
+    expect(meta, 'the chips came after the button').toBeLessThan(button)
+    expect(html).not.toContain('mcp-grow')
   })
 
   it('keeps Remove on an installed row even when its runtime went away', () => {
@@ -168,6 +254,9 @@ describe('the store row', () => {
 
   it('hides the fields once it is installed, because there is nothing to type', () => {
     expect(draw({ ...ROW, state: 'installed', scope: 'user' })).not.toContain('type="password"')
+    expect(
+      draw({ ...ROW, state: 'installed', scope: 'user' }, { asking: true }),
+    ).not.toContain('type="password"')
   })
 
   it('does not tell an installed row what it needs before it can be installed', () => {

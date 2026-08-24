@@ -256,17 +256,20 @@
 .mcp-field-name,
 .mcp-input-json,
 
-/* The MCP store's three mono surfaces, and each of them is machine text a
+/* The MCP store's four mono surfaces, and each of them is machine text a
    person is being asked to check before they press a button.
 
    `.mcp-store-name` is the name the server is written into another
    application's configuration under — it is typed by hand in `claude mcp add`
-   afterwards. `.mcp-store-facts code` is the exact command line that will be
-   written, placeholders and all, which is the row's whole disclosure: a welded
-   `=>` inside `-e KEY=value` would show a pair that is not the pair being
-   written. `.mcp-store-runtimes code` is `npx`, `uvx`, `docker` and the absolute
-   path each was found at. */
+   afterwards. `.mcp-store-ask-head > b` is that same name again, in the sentence
+   the ask opens with, and it has to look like the same string as the row's
+   heading rather than like an English word. `.mcp-store-facts code` is the exact
+   command line that will be written, placeholders and all, which is the row's
+   whole disclosure: a welded `=>` inside `-e KEY=value` would show a pair that
+   is not the pair being written. `.mcp-store-runtimes code` is `npx`, `uvx`,
+   `docker` and the absolute path each was found at. */
 .mcp-store-name,
+.mcp-store-ask-head > b,
 .mcp-store-facts code,
 .mcp-store-runtimes code,
 

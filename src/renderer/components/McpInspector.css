@@ -1058,23 +1058,32 @@ button.mcp-item-head:hover {
    Not a colour, and not a background: `--bg-hover` here would fight every row
    inside it, which uses that same token on hover. */
 .mcp-store-own {
-  padding: var(--sp-3);
+  /* `--sp-2` down the sides it used to give `--sp-3`: there is nothing stacked
+     inside it any more, so the padding was holding open a box around one line. */
+  padding: var(--sp-2) var(--sp-3);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
 }
 
-/* Its own heading needs no extra top margin — the section's padding is the
-   space — and the note under it already carries the gap below. */
-.mcp-store-own > .mcp-store-heading {
-  margin-bottom: var(--sp-05);
-}
+/* The whole card, in one line: the name of the shelf, the dot that still holds
+   the paragraph that used to be printed under it, and the two doors.
 
-.mcp-store-own-actions {
+   Measured on the shipped page at 1440x900: the card was 208px of chrome above
+   the first row of a store whose first row was already below the fold.
+
+   Wraps, because at a half-width column the heading and the two buttons do not
+   share a line — and when it wraps the buttons go under the name rather than off
+   the edge, which is the one arrangement that stays readable. */
+.mcp-store-own-bar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--sp-2);
-  margin-top: var(--sp-3);
+  gap: var(--sp-1) var(--sp-2);
+}
+
+/* The heading sits on that line now, so it carries no margin of its own. */
+.mcp-store-own-bar > .mcp-store-heading {
+  margin: 0;
 }
 
 .mcp-store-list {
@@ -1117,6 +1126,33 @@ button.mcp-item-head:hover {
   font-size: var(--t-body);
   color: var(--text-primary);
   overflow-wrap: anywhere;
+}
+
+/*
+   Every chip on the head, as one thing the head can give way on.
+
+   The head has to be able to wrap — `store/store-page.css` argues that, and a
+   half-width column proves it — but with the chips as flat children of the head
+   the item that dropped to the second line was whichever one did not fit, and
+   at 575px on `supabase` that was **Install**: alone, at the left, under the
+   name, reading as a button belonging to nothing.
+
+   `flex: 1 1 0` is what fixes that, and the `0` is the whole of it. A wrapping
+   flex container breaks its lines on each item's *hypothetical* main size and
+   only shrinks what is left on a line afterwards — so `flex-basis: auto` would
+   still have measured this cluster at its full content width, decided Install
+   did not fit beside it, and wrapped the button anyway. At a basis of zero the
+   cluster asks for nothing, the head never has a reason to break, and the
+   cluster then grows into whatever is left and wraps *inside itself*. Name and
+   action keep the first line at every width this page can produce.
+*/
+.mcp-store-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1) var(--sp-2);
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 .mcp-store-version {
@@ -1224,10 +1260,48 @@ button.mcp-item-head:hover {
   color: var(--accent);
 }
 
-/* The fields a row needs, on the row, above the button — never behind a
-   disclosure. A required token is the first thing somebody has to decide about
-   and hiding it one click away is how a store ends up with an Install that
-   fails. */
+/*
+   What Install asked for.
+
+   Set apart from the row rather than continuous with it, because the row is
+   something being read and this is something being answered: the rule down the
+   left is the same device `store/StoreRowMore.css` uses for the facts a
+   disclosure opened, so the two "this appeared because you pressed something"
+   states on a store row look like one idea.
+
+   The fields inside it are unchanged — same grid, same widths. What changed is
+   when they exist; `components/McpStoreRow.tsx` carries that argument and the
+   measurement behind it.
+*/
+.mcp-store-ask {
+  margin: var(--sp-2) 0 0;
+  padding-left: var(--sp-3);
+  border-left: 2px solid var(--accent);
+}
+
+.mcp-store-ask-head {
+  max-width: 78ch;
+  margin: 0;
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}
+
+.mcp-store-ask-head > b {
+  font-family: var(--font-mono);
+  font-weight: inherit;
+  color: var(--text-primary);
+}
+
+.mcp-store-ask-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+
+/* The fields themselves. */
 .mcp-store-fields {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(20rem, 1fr));
@@ -1239,6 +1313,31 @@ button.mcp-item-head:hover {
   font-size: var(--t-footnote);
   line-height: var(--lh-body);
   color: var(--text-muted);
+}
+
+/*
+   The ⓘ that used to draw on a line of its own.
+
+   `.mcp-field` is a flex column, so every child of it is a flex item on a line
+   of its own — and the *"where this is kept"* dot was a sibling of the hint.
+   The result was a lone ⓘ under the hint with nothing beside it, on every
+   secret-taking row in the store, which reads as a control somebody forgot to
+   label.
+
+   No rule in this file could pull the sibling back up: a flex item is
+   blockified whatever `display` it asks for. Putting it *inside* the hint was
+   tried and was not enough either — these hints fill their line, so the dot
+   wrapped alone anyway, and `&nbsp;` did not hold it back in Chromium. It lives
+   on `.mcp-field-label` now, which is already a baseline-aligned flex row with
+   the required asterisk and the `secret` chip on it, so there is always
+   something beside it at every width. `McpStoreRow.tsx` carries that argument.
+
+   What is left here is the line box: `--t-footnote` type with an `inline-flex`
+   child 1.15em tall, whose default `vertical-align: middle` would lift it off
+   the label's baseline.
+*/
+.mcp-field-label > .hovernote-dot {
+  vertical-align: baseline;
 }
 
 /* Something true about a row that Install does not fix — archived, metered,
