@@ -157,7 +157,7 @@ fun TerminalSchemePreview(scheme: TerminalScheme, modifier: Modifier = Modifier)
  * ## The first entry is not a scheme
  *
  * *Match app appearance* is the default and has to be first, because it is where everybody starts
- * and a list that opened on **Terminal Deck** would suggest somebody had chosen it. Its preview
+ * and a list that opened on **Deck Dark** would suggest somebody had chosen it. Its preview
  * draws whichever of the two halves the app currently resolves to, so it is a live answer to *what
  * will I get* rather than a label.
  */
@@ -268,8 +268,8 @@ fun TerminalSchemeScreen(onBack: () -> Unit, onEdit: (String) -> Unit) {
             item("footnote.tail") {
                 DeckFootnote(
                     "Colours apply to open sessions straight away. This phone's terminal shows a " +
-                        "selection by inverting, so Selection and Cursor text are stored for your " +
-                        "other machines and change nothing here."
+                        "selection by inverting, so Selection and Text under the cursor are stored " +
+                        "for your other machines and change nothing here."
                 )
             }
         }

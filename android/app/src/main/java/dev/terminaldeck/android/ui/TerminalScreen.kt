@@ -478,7 +478,7 @@ fun TerminalScreen(
          * The inset and the radius used to be visible for free, because the terminal's paper was
          * `--bg-sunken` — a step *below* the app's canvas — while the chrome around it was the
          * canvas itself. That is no longer something this screen is allowed to assume: the ground
-         * is now whichever scheme somebody chose, and the product's own **Terminal Deck** scheme is
+         * is now whichever scheme somebody chose, and the product's own **Deck Dark** scheme is
          * `#191919`, which is exactly the app's canvas in the dark. Left alone, the default would
          * have drawn a rounded rectangle in the same colour as the thing behind it, which is not a
          * rounded rectangle — the precise defect the sunken paper was introduced to fix, arriving

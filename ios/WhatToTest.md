@@ -1,64 +1,61 @@
-What to test — 0.10.0
+What to test — 0.10.3
 
-Start here: Log in to a server. Last build the add-server page asked for a
-"server address" — a token only a machine already running Terminal Deck prints —
-and, when you had none, offered a curl command to copy and go and run somewhere
-else. That command is gone. The phone signs in to a server over SSH itself now.
+**Start here: start a session on a server that has nothing open on it.** Last
+build this was impossible. Every first session on a fresh Linux host came back
+"This machine could not keep a session inside that folder, so it did not start
+one. Check it on the machine itself." Nothing was wrong with the folder and
+nothing was wrong with the server.
 
-Two doors to it. On a phone with nothing on it yet it is "Log in to a server
-instead", under the six-digit code field. On a phone that already has something
-it is Settings > Machines > Log in to a server.
+The cause was the safety check itself. Before every session the host puts two
+marker files *outside* the boundary it is about to build, then proves neither
+can be read from inside it. One of those markers goes in the account's home
+directory — and on a server with nothing open, the folder you are given **is**
+the home. So the marker landed inside the boundary, the check decided it could
+not prove anything, and refused. It now refuses only when *both* markers are
+inside; one inside is fine, because the other is still outside and still doing
+the job. Measured on a real rented Ubuntu box, both ways round.
 
-What it asks for: the address, the port, the username, and a password or a
-private key — the four things you already have for any server. Leave the port
-empty for 22; a server on another port (2222, say) works and is the case that
-used to be impossible.
+**Then: choose a folder.** The other half of the same complaint — the phone
+offered exactly one folder on a bare server, the account's home, and no way to
+reach a project three directories down.
 
-What should happen next: it signs in, checks the server's identity, and lands on
-that server's own page — what the machine is, how much disk and memory, what is
-running on it, what is listening — and a card at the top saying whether the
-headless host is on it.
+It turns out the phone could always *start* a session anywhere; it had no way to
+*look*. Tap **+ → Choose a folder…** and walk the machine's directories. Tapping
+a folder goes into it, the button at the bottom starts a session in the one you
+are standing in, and it names it. Folders your account cannot open are shown
+dimmed with a lock rather than hidden — a folder you know is there and cannot
+see reads as a broken picker.
 
-If it is not there: an "Install it on this server" button, with the installer's
-own output as it happens and the real error if it fails. If it is there: Start,
-Stop, and Connect. Connect signs this phone in to the host through the relay and
-the server appears as a machine like any other; Disconnect takes that away and
-leaves the server itself alone.
+This is offered only to a device paired as one of your own, never to a guest.
 
-Fingerprints: the login shows the server's SHA256 fingerprint once, and it is the
-same string `ssh-keyscan <host> | ssh-keygen -lf -` prints. Every later
-connection is checked against it, and a server answering with a different key is
-refused before your password is offered.
+**The server page is back.** Sign in to a server and it appeared in Machines
+having apparently never connected: no details, and no way to disconnect. The
+line that recorded which machine your server had become was attached to a piece
+of the screen that gets replaced at the exact moment the connection succeeds, so
+it never ran. It is on the screen itself now. While it was open: the server can
+be **renamed** — the app could always do it and offered it nowhere — and a
+headless box draws as a server rather than as an iMac.
 
-What will not work, and says so rather than failing oddly: an RSA private key —
-this phone signs with Ed25519 and ECDSA — and a key with a passphrase on it. Both
-are refused by name with what to do instead.
+**Localhost and Watch browser are now one tab: Browser.** They were two places
+to look at a page living on your machine, one of them three rows deep in
+Settings. There is one pill now, with the address bar **on the screen** instead
+of behind a `+`. Type a port and it opens through a tunnel exactly as before;
+type a real site and it opens in the machine's own browser and appears under
+**Windows** further down the same screen, which you can watch and drive.
 
-Known gap: what the phone installs comes from the npm registry, and the newest
-published host is older than this app. It installs and runs; it is too old to
-print the address Connect needs, and the page says so where the button would be.
-Installing from a desktop Terminal Deck puts the current host on.
+**It stops calling your Linux server a Mac.** Twenty-one sentences across
+transport, tunnels, uploads, the browser and the session list said "the Mac"
+whatever was actually at the other end. The app knows the difference now and
+says server, Mac or PC accordingly.
 
-"I have a server address instead" is still at the foot of the login, for a host
-somebody sent you an address for.
+**And it looks like itself.** The app wore white paper with grey cards, which is
+iOS's own default grouped-list look and therefore no character at all. It is
+warm paper with white cards floating on it now, with larger corner radii and
+lighter, larger row icons throughout. Worth a look in both light and dark, and
+worth telling us if any screen reads worse than it did.
 
-The rest, unchanged from the last build:
+Also fixed: the last row of the Terminal appearance screen and the scheme editor
+sat behind the floating tab bar.
 
-Sign in. The pairing screen also takes a full sign-in link, not only a code.
-
-Devices. Settings > Devices lists every phone, browser and desktop signed in to
-the machine you are on. This phone is marked. Removing a row cuts that device off
-immediately.
-
-Server settings. Further down Settings are the machine's own settings — the
-coding tool it starts sessions with, whether it restores sessions at launch.
-They belong to the machine, not the phone, so every device sees the change.
-
-Controls. Open a session with an agent in it, open Controls, and set model,
-effort or permission mode. The change lands on the machine running it.
-
-Watch the browser. A machine with a browser window open shows it under Watch
-browser. It streams full screen and your keystrokes drive the real browser.
-
-Version. The About row reads 0.10.0, and the app now says when the machine it is
-talking to is on a different build than itself.
+Known: the six desktop panels — Files, Source control, Artifacts, Store, AI
+readiness, MCP servers — are still desktop-only. They are the next release.

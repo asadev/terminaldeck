@@ -3,6 +3,7 @@ package dev.terminaldeck.android.ui.theme
 import com.termux.terminal.TerminalColors
 import com.termux.terminal.TextStyle
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -18,9 +19,15 @@ import java.io.File
  *  1. **Shape.** Every scheme has twenty-one colours and every one of them is a colour. This is the
  *     check that catches a transcription with a digit missing, which is the failure mode of a file
  *     that is two hundred hand-typed hexes.
- *  2. **Parity with the desktop.** The default scheme's sixteen are read out of `tokens.css` rather
- *     than repeated here, in the manner of `PaletteParityTest`: three copies of the same table exist
- *     in this product and none of them knows when another moves.
+ *  2. **Parity with the shared table.** Every shipped scheme is read out of
+ *     `src/shared/terminal-theme.ts` at test time and compared colour for colour, and the default
+ *     scheme's sixteen are read out of `tokens.css` besides, in the manner of `PaletteParityTest`.
+ *     This is the check that was missing: three copies of one table exist in this product — the
+ *     shared declaration, the Swift mirror, this one — and none of them knew when another moved, so
+ *     Tango sat black on two clients and a dark grey on this one until somebody diffed them by
+ *     hand, which is not a mechanism and happens once. iOS has the
+ *     same guard pointed the same way, in `tokens.test.ts`. The direction is deliberate everywhere:
+ *     the shared file declares, the clients mirror.
  *  3. **The emulator actually takes them.** `installTerminalPalette` is asserted through
  *     `TerminalColors.COLOR_SCHEME` — the real vendored object, not a stand-in — because the whole
  *     feature is one call into somebody else's static state and "we called it" is not the claim
@@ -36,12 +43,14 @@ class TerminalSchemeTest {
             assertEquals("${scheme.id} ANSI count", 16, scheme.ansi.size)
             for (slot in TerminalSlot.entries) {
                 val value = slot.read(scheme)
+                // Slot-aware: six of the shipped schemes write their selection `#rrggbbaa`, and
+                // exactly one slot is allowed to. See `TerminalSlot.carriesAlpha`.
                 assertNotNull("${scheme.id}.${slot.name} = '$value' is not a colour",
-                    TerminalScheme.parseOrNull(value))
+                    TerminalScheme.parseOrNull(value, slot.carriesAlpha))
                 assertEquals(
                     "${scheme.id}.${slot.name} is not written canonically",
                     value,
-                    TerminalScheme.normalise(value),
+                    TerminalScheme.normalise(value, slot.carriesAlpha),
                 )
             }
         }
@@ -57,7 +66,7 @@ class TerminalSchemeTest {
     @Test
     fun `the slots cover the whole record`() {
         assertEquals(TerminalScheme.SLOT_COUNT, TerminalSlot.entries.size)
-        val scheme = TerminalSchemes.terminalDeck
+        val scheme = TerminalSchemes.deckDark
         val reached = TerminalSlot.entries.map { it.read(scheme) }.toSet()
         // Five roles plus sixteen, minus whatever two of them happen to be equal. Reading the
         // record through the slots must produce every distinct value the record holds.
@@ -113,9 +122,9 @@ class TerminalSchemeTest {
     fun `the requested schemes all ship`() {
         val byName = TerminalSchemes.builtIns.associateBy { it.name }
         for (name in listOf(
-            "Pure black", "Terminal Deck", "Dark grey",
+            "Pure Black", "Deck Dark", "Dark Grey",
             "Solarized Dark", "Solarized Light", "Nord", "Dracula",
-            "Gruvbox Dark", "One Half Dark", "One Half Light", "Tango", "Campbell",
+            "Gruvbox Dark", "One Half Dark", "One Half Light", "Tango Dark", "Campbell",
         )) {
             assertNotNull("$name is missing", byName[name])
         }
@@ -147,6 +156,33 @@ class TerminalSchemeTest {
         for (bad in listOf("", "#", "#8", "#8a", "#8ae2", "#8ae23", "#8ae2345", "#80ff0000",
                            "rgb(0,0,0)", "#gggggg", "not a colour")) {
             assertNull("'$bad' was accepted", TerminalScheme.parseOrNull(bad))
+        }
+    }
+
+    /**
+     * Eight digits, on the one slot that may have them.
+     *
+     * The pair below is the whole of the rule: the *string* keeps its alpha, because that is what
+     * makes this phone's copy of a scheme the same copy the desktop has, and the *int* does not,
+     * because everything that paints with it — the emulator's table, the preview, the editor's
+     * swatch — is a surface that cannot express transparency.
+     */
+    @Test
+    fun `the selection may carry an alpha, and only the selection`() {
+        assertEquals("#3b8fee29", TerminalScheme.normalise("#3B8FEE29", alpha = true))
+        assertEquals("#ffffff40", TerminalScheme.normalise("ffffff40", alpha = true))
+        // #rgba doubles the way #rgb does, which is how CSS expands it.
+        assertEquals("#33bb8844", TerminalScheme.normalise("#3b84", alpha = true))
+        // Opaque out, alpha or not: the swatch and the emulator both need a colour, not a wash.
+        assertEquals(0xff3b8fee.toInt(), TerminalScheme.parse("#3b8fee29", alpha = true))
+        // And nowhere else. Six digits stay six digits on the other twenty slots.
+        assertNull(TerminalScheme.normalise("#3b8fee29"))
+        for (slot in TerminalSlot.entries) {
+            assertEquals(
+                "$slot disagrees with the shared table about who may carry an alpha",
+                slot == TerminalSlot.Selection,
+                slot.carriesAlpha,
+            )
         }
     }
 
@@ -232,15 +268,15 @@ class TerminalSchemeTest {
     @Test
     fun `no choice means the scheme follows the app's appearance`() {
         assertEquals(
-            TerminalSchemes.terminalDeck,
+            TerminalSchemes.deckDark,
             TerminalSchemeStore.resolve(null, emptyList(), dark = true),
         )
         assertEquals(
-            TerminalSchemes.terminalDeckLight,
+            TerminalSchemes.deckLight,
             TerminalSchemeStore.resolve(null, emptyList(), dark = false),
         )
         assertEquals(
-            TerminalSchemes.terminalDeckLight,
+            TerminalSchemes.deckLight,
             TerminalSchemeStore.resolve(TerminalSchemes.MATCH_APPEARANCE, emptyList(), dark = false),
         )
     }
@@ -254,7 +290,7 @@ class TerminalSchemeTest {
     @Test
     fun `a choice pointing at nothing falls back to the appearance`() {
         assertEquals(
-            TerminalSchemes.terminalDeck,
+            TerminalSchemes.deckDark,
             TerminalSchemeStore.resolve("custom-deleted", emptyList(), dark = true),
         )
     }
@@ -380,14 +416,22 @@ class TerminalSchemeTest {
      * The cursor is the scheme's, not the one the emulator would have picked.
      *
      * `updateWith` runs `setCursorColorForBackground` when no cursor is given — white on a dark
-     * ground — so a scheme whose caret is deliberately not white (Nord's `#d8dee9`, One Half Dark's
-     * `#a3b3cc`) is the case that proves the key is being sent.
+     * ground — so a scheme whose caret is deliberately not white is the case that proves the key is
+     * being sent. Nord's `#d8dee9` is that scheme, and it is read off the scheme rather than typed
+     * in: this test used to assert One Half Dark's caret as a literal `#a3b3cc`, which was a value
+     * this module had invented and the shared table did not have, so the assertion was pinning the
+     * drift in place.
      */
     @Test
     fun `the scheme's own cursor is installed rather than a derived one`() {
-        installTerminalPalette(TerminalSchemes.oneHalfDark)
+        installTerminalPalette(TerminalSchemes.nord)
         assertEquals(
-            TerminalScheme.parse("#a3b3cc"),
+            TerminalScheme.parse(TerminalSchemes.nord.cursor),
+            TerminalColors.COLOR_SCHEME.mDefaultColors[TextStyle.COLOR_INDEX_CURSOR],
+        )
+        // And it is not what the emulator would have derived for a dark ground.
+        assertNotEquals(
+            TerminalScheme.parse("#ffffff"),
             TerminalColors.COLOR_SCHEME.mDefaultColors[TextStyle.COLOR_INDEX_CURSOR],
         )
     }
@@ -395,22 +439,24 @@ class TerminalSchemeTest {
     /* ----------------------------------------------- parity with the desktop ------- */
 
     /**
-     * The stylesheet, found by walking up rather than by a relative path.
+     * A file in the repository above this module, found by walking up rather than by a relative path.
      *
      * The same walk `PaletteParityTest` does, and for the reason that test's first version taught:
      * a `File("../…")` depends on which directory the runner starts in, so it does not fail when it
      * is wrong — it *skips*, and a cross-check that has silently skipped for a month is worse than
      * no cross-check, because the file it guards looks tested.
      */
-    private fun stylesheet(): File? {
+    private fun upstream(path: String): File? {
         var here: File? = File("").absoluteFile
         repeat(6) {
-            val candidate = File(here, "src/renderer/styles/tokens.css")
+            val candidate = File(here, path)
             if (candidate.isFile) return candidate
             here = here?.parentFile
         }
         return null
     }
+
+    private fun stylesheet(): File? = upstream("src/renderer/styles/tokens.css")
 
     /**
      * The default scheme's sixteen are `tokens.css`'s sixteen, read out of the stylesheet.
@@ -437,14 +483,14 @@ class TerminalSchemeTest {
                 .findAll(text).map { it.groupValues[1].lowercase() }.toList()
             assumeTrue("--ansi-$name not declared twice", all.size >= 2)
             assertEquals(
-                "Terminal Deck's colour $index has drifted from --ansi-$name (dark)",
+                "Deck Dark's colour $index has drifted from --ansi-$name (dark)",
                 all.last(),
-                TerminalSchemes.terminalDeck.ansi[index],
+                TerminalSchemes.deckDark.ansi[index],
             )
             assertEquals(
-                "Terminal Deck Light's colour $index has drifted from --ansi-$name (light)",
+                "Deck Light's colour $index has drifted from --ansi-$name (light)",
                 all.first(),
-                TerminalSchemes.terminalDeckLight.ansi[index],
+                TerminalSchemes.deckLight.ansi[index],
             )
         }
     }
@@ -470,9 +516,168 @@ class TerminalSchemeTest {
         val foregrounds = declarations("terminal-fg")
         assumeTrue("terminal tokens not declared twice", backgrounds.size >= 2 && foregrounds.size >= 2)
 
-        assertEquals(backgrounds.last(), TerminalSchemes.terminalDeck.background)
-        assertEquals(foregrounds.last(), TerminalSchemes.terminalDeck.foreground)
-        assertEquals(backgrounds.first(), TerminalSchemes.terminalDeckLight.background)
-        assertEquals(foregrounds.first(), TerminalSchemes.terminalDeckLight.foreground)
+        assertEquals(backgrounds.last(), TerminalSchemes.deckDark.background)
+        assertEquals(foregrounds.last(), TerminalSchemes.deckDark.foreground)
+        assertEquals(backgrounds.first(), TerminalSchemes.deckLight.background)
+        assertEquals(foregrounds.first(), TerminalSchemes.deckLight.foreground)
+    }
+
+    /* ------------------------------------- parity with the shared table ------------ */
+
+    /**
+     * `src/shared/terminal-theme.ts`, with its comments taken out.
+     *
+     * Load-bearing rather than tidiness, the same way `tokens.test.ts` strips its sheet: the prose
+     * in that file quotes hexes — `#0e0f13`, `rgba(59,143,238,0.16)` — and names the palettes it
+     * took each scheme from, so a parser that read the comments would read colours that are being
+     * discussed rather than declared. Stripping first also means the brace-matching below never has
+     * to worry about a brace inside a sentence.
+     */
+    private fun sharedSource(): String? =
+        upstream("src/shared/terminal-theme.ts")?.readText()
+            ?.replace(Regex("/\\*.*?\\*/", RegexOption.DOT_MATCHES_ALL), "")
+            ?.replace(Regex("(?m)^[ \\t]*//.*$"), "")
+
+    /** The `key: 'value'` pairs of one object literal. */
+    private fun pairs(block: String): Map<String, String> =
+        Regex("([A-Za-z][A-Za-z0-9]*)\\s*:\\s*'([^']*)'").findAll(block)
+            .associate { it.groupValues[1] to it.groupValues[2] }
+
+    /**
+     * The body of a top-level `const NAME … = { … }`.
+     *
+     * Ends at the first `}` in column zero, which is enough because nothing declared this way in
+     * that file nests. Throws rather than returning null when the declaration is not there: a
+     * renamed export is a restructuring somebody has to look at, not a reason to go quiet.
+     */
+    private fun objectNamed(source: String, name: String): String {
+        val start = Regex("const\\s+" + Regex.escape(name) + "[^=]*=\\s*\\{").find(source)?.range?.last
+            ?: throw AssertionError("$name is no longer declared in terminal-theme.ts")
+        return source.substring(start, source.indexOf("\n}", start))
+    }
+
+    /**
+     * Every shipped scheme as the shared file declares it, in the order it declares them.
+     *
+     * Two of the entries there are written as five colours and a `...APP_ANSI_DARK` spread rather
+     * than as twenty-one literals, so the spreads are resolved here — otherwise the sixteen that
+     * four schemes share would be the sixteen this guard never checked, which is most of the table.
+     */
+    private fun sharedSchemes(source: String): List<Map<String, String>> {
+        val spreads = mapOf(
+            "APP_ANSI_DARK" to pairs(objectNamed(source, "APP_ANSI_DARK")),
+            "APP_ANSI_LIGHT" to pairs(objectNamed(source, "APP_ANSI_LIGHT")),
+        )
+        val start = Regex("const\\s+BUILTIN_SCHEMES[^=]*=\\s*\\[").find(source)?.range?.last
+            ?: throw AssertionError("BUILTIN_SCHEMES is no longer declared in terminal-theme.ts")
+        val body = source.substring(start, source.indexOf("\n]", start))
+        return Regex("\\{([^{}]*)\\}").findAll(body).map { match ->
+            val block = match.groupValues[1]
+            val spread = Regex("\\.\\.\\.([A-Za-z_][A-Za-z0-9_]*)").find(block)?.groupValues?.get(1)
+            val base = spread?.let {
+                spreads[it] ?: throw AssertionError("terminal-theme.ts spreads an unknown $it")
+            } ?: emptyMap()
+            base + pairs(block)
+        }.toList()
+    }
+
+    /** What this slot is called in the shared file. Every name but one is the enum's, decapitalised. */
+    private fun sharedKey(slot: TerminalSlot): String = when (slot) {
+        TerminalSlot.Selection -> "selectionBackground"
+        else -> slot.name.replaceFirstChar { it.lowercase() }
+    }
+
+    /**
+     * Every shipped scheme is the shared table's scheme, colour for colour and name for name.
+     *
+     * This is the guard the drift got past. `src/shared/terminal-theme.ts` is the single declaration
+     * — the desktop imports it, iOS mirrors it in Swift, this module mirrors it in Kotlin — and
+     * there is no import path from TypeScript into either mirror, so the only thing holding the
+     * three together is a test that reads the source. Without one, eleven values had moved before
+     * anybody noticed: Tango's ground was `#2e3436` here and `#000000` everywhere else, Dark Grey's
+     * was `#2b2b2b` against `#262626`, One Half Light's yellow was `#c18401` against `#c18301`, and
+     * the four schemes this product owns had different names, different cursor accents and
+     * selections that had been flattened opaque.
+     *
+     * The order is asserted as well as the contents, because the picker on this phone and the picker
+     * on the desktop are the same list read top to bottom and *where a scheme sits* is part of what
+     * somebody recognises.
+     */
+    @Test
+    fun `every shipped scheme is the shared table's, colour for colour`() {
+        val source = sharedSource()
+        assumeTrue(
+            "src/shared/terminal-theme.ts is not above this module — skipping the cross-check.",
+            source != null,
+        )
+        val declared = sharedSchemes(source!!)
+        // A regex that matched nothing would let this test pass by having nothing to compare.
+        assertEquals(
+            "terminal-theme.ts parsed to a different number of schemes — was it restructured, or " +
+                "does this phone ship a different set?",
+            declared.size,
+            TerminalSchemes.builtIns.size,
+        )
+        assertEquals(
+            "the shipped ids, in the order the picker draws them",
+            declared.map { it["id"] },
+            TerminalSchemes.builtIns.map { it.id },
+        )
+        for (entry in declared) {
+            val id = entry["id"]!!
+            val found = TerminalSchemes.builtIn(id)
+            assertNotNull("$id is in the shared table and not on this phone", found)
+            val mine = found!!
+            assertEquals("$id.name has drifted from the shared table", entry["name"], mine.name)
+            for (slot in TerminalSlot.entries) {
+                assertEquals(
+                    "$id.${slot.name} has drifted from src/shared/terminal-theme.ts",
+                    entry[sharedKey(slot)],
+                    slot.read(mine),
+                )
+            }
+        }
+    }
+
+    /**
+     * The choice that is not a scheme is spelt the way every client spells it.
+     *
+     * It is an id like any other — it is what gets *stored* when somebody has not picked — and this
+     * module wrote `auto` where the shared file and iOS both write `follow-app`. A default that
+     * spells itself differently on one client is the same defect as a scheme that does, and it is
+     * the one an id-level check catches before anybody has to see it.
+     */
+    @Test
+    fun `the reserved choice is spelt the way every client spells it`() {
+        val source = sharedSource()
+        assumeTrue(
+            "src/shared/terminal-theme.ts is not above this module — skipping the cross-check.",
+            source != null,
+        )
+        val shared = Regex("FOLLOW_APP_SCHEME_ID\\s*=\\s*'([^']*)'")
+            .find(source!!)?.groupValues?.get(1)
+        assertNotNull("FOLLOW_APP_SCHEME_ID is no longer declared in terminal-theme.ts", shared)
+        assertEquals(shared, TerminalSchemes.MATCH_APPEARANCE)
+    }
+
+    /**
+     * And the editor's rows are named what the shared file names them.
+     *
+     * `SLOT_LABELS` is part of the same declaration and it is the half a person actually reads: the
+     * row under the caret used to say *Cursor text* here and *Text under the cursor* on the other
+     * two, which is two different answers to what a screenshot of this screen means.
+     */
+    @Test
+    fun `the editor's rows are named the way the shared table names them`() {
+        val source = sharedSource()
+        assumeTrue(
+            "src/shared/terminal-theme.ts is not above this module — skipping the cross-check.",
+            source != null,
+        )
+        val labels = pairs(objectNamed(source!!, "SLOT_LABELS"))
+        assertEquals("SLOT_LABELS parsed to the wrong size", TerminalSlot.entries.size, labels.size)
+        for (slot in TerminalSlot.entries) {
+            assertEquals("$slot's label", labels[sharedKey(slot)], slot.label)
+        }
     }
 }

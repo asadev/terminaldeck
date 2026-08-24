@@ -86,7 +86,7 @@
  *   not, and nothing warns about it.
  */
 
-import { existsSync, realpathSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { posix } from 'node:path'
 import { shellCommandLine } from '../wsl'
 import { collapse, within, type ConfinementPlan } from './plan'
@@ -154,6 +154,125 @@ export const realMachine: LinuxMachine = {
   // name a real runtime directory, and `linuxCovers` drops it rather than
   // emitting `/run/user/-1` for something to fail on later.
   uid: process.getuid?.() ?? -1,
+}
+
+/* ----------------------------------------- the two switches, asked up front -- */
+
+/**
+ * The two kernel switches that refuse every session before any of this runs.
+ *
+ * ## Why they are read at all, when the proof would catch it anyway
+ *
+ * {@link linuxCommand} builds a boundary out of an unprivileged user namespace,
+ * and `unshare --user` is the first thing that happens. A kernel that will not
+ * hand this account one refuses at that instruction — before a single mount,
+ * before the script is even parsed — so the whole plan below is moot and the
+ * only thing anybody gets is `unshare: Operation not permitted` wrapped in
+ * Node's `Command failed with exit code 1`. `proveConfinement` does catch it,
+ * per session, which is the right place to *refuse*. It is the wrong place to
+ * *explain*: it explains once per attempt, at the moment somebody is holding a
+ * phone in another room, in the kernel's four words.
+ *
+ * This is the other half — asked of the box once, up front, by whoever is in a
+ * position to say something a person can act on. `scripts/check-headless-drive.mjs`
+ * is where this was learned the hard way: stock Ubuntu 24.04 sets the AppArmor
+ * one, and every namespace-shaped thing on that machine failed at once for a
+ * reason nothing on screen named.
+ *
+ * ## The polarity is opposite between the two, which is the trap
+ *
+ * `kernel.unprivileged_userns_clone` is a **permission**: `0` refuses, `1`
+ * allows, and the file is absent on a mainline kernel that never had the Debian
+ * patch — absent is *not* a refusal. `kernel.apparmor_restrict_unprivileged_userns`
+ * is a **restriction**: `1` refuses, `0` allows, absent means the kernel has no
+ * such restriction. A reader that asked "is this switch set" would report one of
+ * the two exactly backwards, so both are kept as numbers and each is compared
+ * against its own bad value rather than folded into a boolean here.
+ *
+ * ## What `null` from {@link usernsRefusal} does and does not mean
+ *
+ * It means *neither of these two switches is standing in the way* — not that
+ * this machine will confine a session. Seccomp policies, a container runtime
+ * that masks `/proc`, `user.max_user_namespaces` at zero (which
+ * `browser-chromium-launch.ts` reads for the browser's own sandbox) and a dozen
+ * other things can still refuse, and only the per-session proof can settle it.
+ * Answering "yes it works" from two file reads is the kind of claim this whole
+ * subsystem exists to stop making.
+ */
+export interface UsernsSwitches {
+  /**
+   * `/proc/sys/kernel/unprivileged_userns_clone`, or `-1` when it is not there.
+   *
+   * Debian and older Ubuntu carry this patch; mainline does not, so `-1` is the
+   * ordinary answer on most machines and means nothing is switched off.
+   */
+  unprivilegedClone: number
+  /**
+   * `/proc/sys/kernel/apparmor_restrict_unprivileged_userns`, or `-1` when it is
+   * not there. Ubuntu 23.10 and newer ship it set to `1`.
+   */
+  apparmorRestrict: number
+}
+
+/** One `/proc` number, or `-1` when the file is absent or holds something else. */
+function procNumber(path: string, read: (path: string) => string): number {
+  try {
+    const value = Number(read(path).trim())
+    return Number.isFinite(value) ? value : -1
+  } catch {
+    return -1
+  }
+}
+
+/**
+ * Read both switches off this machine.
+ *
+ * The read is a parameter for the reason {@link LinuxMachine} is injected: none
+ * of these files exist on the Mac this is written on, so a function that reached
+ * for `fs` directly would have exactly one behaviour any test here could
+ * observe. `readSandboxFacts` in `browser-chromium-launch.ts` takes the same
+ * seam for the same reason, and the two are deliberately separate readers — that
+ * one answers "can Chromium keep its sandbox", this one answers "will `unshare
+ * --user` work at all", and they do not read the same files.
+ */
+export function readUsernsSwitches(
+  read: (path: string) => string = (path) => readFileSync(path, 'utf8'),
+): UsernsSwitches {
+  return {
+    unprivilegedClone: procNumber('/proc/sys/kernel/unprivileged_userns_clone', read),
+    apparmorRestrict: procNumber('/proc/sys/kernel/apparmor_restrict_unprivileged_userns', read),
+  }
+}
+
+/**
+ * The sentence for a box that will refuse every session, or `null`.
+ *
+ * Pure over the numbers so that both shapes are pinnable from a machine that has
+ * neither file. Each sentence names the switch by its sysctl name and the one
+ * command that changes it, because the remedy is a decision only the owner of
+ * that server can make: flipping a system-wide sysctl is a change to somebody's
+ * whole machine, and an app that was asked to start a terminal does not get to
+ * make it. `browser-chromium-launch.ts` draws the same line in the same words
+ * for the browser's sandbox.
+ */
+export function usernsRefusal(switches: UsernsSwitches): string | null {
+  if (switches.unprivilegedClone === 0) {
+    return (
+      'this kernel has unprivileged user namespaces switched off ' +
+      '(kernel.unprivileged_userns_clone is 0), so a session from a device cannot be held ' +
+      'inside its folder and will not start. `sudo sysctl -w kernel.unprivileged_userns_clone=1` ' +
+      'turns them back on.'
+    )
+  }
+  if (switches.apparmorRestrict === 1) {
+    return (
+      'this kernel restricts unprivileged user namespaces ' +
+      '(kernel.apparmor_restrict_unprivileged_userns is 1, which Ubuntu 23.10 and newer set by ' +
+      'default), so a session from a device cannot be held inside its folder and will not start. ' +
+      '`sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` lifts it.'
+    )
+  }
+  return null
 }
 
 /** Is this directory inside a tree that must never be covered? */

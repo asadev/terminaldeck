@@ -45,6 +45,20 @@ struct HostOnServer: Equatable {
     var isInstalled: Bool { command != "" }
 }
 
+/**
+ * Whether a session on that server could be held inside the folder it was
+ * granted — three states, and the third is why this is not a `Bool`.
+ *
+ * `unknown` is what a probe that never asked answers, and it is not "no": this
+ * app is talking to a script that is generated from the desktop's, and a server
+ * surveyed by a build that predates the question would otherwise be refused an
+ * install for a fact nobody measured. Same rule as ``HostRunning``, same
+ * reason.
+ */
+enum HostConfinement: String, Equatable {
+    case yes, no, unknown
+}
+
 /// What it would take to put one here. Every refusal is decided from this.
 struct HostRoom: Equatable {
     var os = ""
@@ -59,6 +73,11 @@ struct HostRoom: Equatable {
     var canUnpack = false
     var homeFreeKb: Int?
     var systemdUser = false
+    /// Whether that box can confine a session. See ``HostConfinement``.
+    var confinement: HostConfinement = .unknown
+    /// The machine's own reason when it cannot, as half a sentence: *"it has no
+    /// unshare, which is the util-linux package"*. Empty otherwise.
+    var confineWhy = ""
 }
 
 struct HostLook: Equatable {
@@ -133,6 +152,16 @@ enum HostProbe {
         room.canUnpack = value("tar") == "yes"
         room.homeFreeKb = Int(value("home_free_kb"))
         room.systemdUser = value("systemd_user") == "yes"
+        // Only the two answers the script can actually give are read as
+        // answers. Anything else — an empty field, no field at all — is the
+        // question not having been asked, which `whyNot` treats as silence
+        // rather than as a refusal.
+        room.confineWhy = value("confine_why")
+        if value("confine") == "yes" {
+            room.confinement = .yes
+        } else if !room.confineWhy.isEmpty {
+            room.confinement = .no
+        }
 
         return HostLook(host: host, room: room)
     }
@@ -222,6 +251,18 @@ enum HostProbe {
      * script is the authority; this copy exists to decide whether to *offer* the
      * button at all, because §4.1 says a control that cannot act is removed or
      * disabled with a stated reason, never drawn hopefully.
+     *
+     * ## Why these particular sentences still hand somebody a command
+     *
+     * Nothing else in this flow does. The phone holds an open SSH session and
+     * anything it can run, it runs — *"I don't want that command."* Every
+     * command left in the sentences below is one that needs **root**: a package
+     * manager, or a kernel setting. This app signs in as an ordinary account on
+     * purpose (*"needs no administrator access"* is the promise on the install
+     * card), it has no password to feed a `sudo` prompt for a key-based login,
+     * and quietly making a system-wide change to somebody's server is not
+     * something a phone should do behind one tap. So these are named for a
+     * person who has that access, and the app does not pretend it does.
      */
     static func whyNot(_ room: HostRoom) -> String? {
         if room.os != "linux" && room.os != "darwin" {
@@ -259,6 +300,33 @@ enum HostProbe {
             return "There is \(free / 1024) MB free in your home folder on this server and this "
                 + "needs about \(roomNeededKb / 1024) MB."
         }
+        /*
+         * Last, and last on purpose: everything above is about whether the
+         * install can *finish*, and this is about whether what it installs can
+         * do its job. Both are refusals before the press rather than after it,
+         * and this is the one that used to be missing — a box with no
+         * `unshare`, or a kernel that refuses an unprivileged user namespace,
+         * installs cleanly, starts, connects, and then refuses **every**
+         * session, because `confineSpawn` throws rather than hand a phone a
+         * boundary it could not build. Five green steps and a machine nobody
+         * can open a shell on.
+         *
+         * `.unknown` is not refused. A server surveyed by a build that never
+         * asked this question is a server nobody measured, and §4.1 is about
+         * not drawing a hopeful control — not about refusing on a fact this app
+         * does not have.
+         */
+        if room.confinement == .no {
+            let said = room.confineWhy.isEmpty
+                ? "this account cannot open one on it"
+                : room.confineWhy
+            return "Sessions on that server are held inside the folder they are given, and this "
+                + "server cannot hold them: \(said). It would install, start and connect, and then "
+                + "refuse every session — so the refusal is here instead. A missing unshare or "
+                + "setpriv is the util-linux package (sudo apt-get install -y util-linux on Debian "
+                + "and Ubuntu); a kernel that switches unprivileged user namespaces off is a "
+                + "decision for whoever runs that server."
+        }
         return nil
     }
 
@@ -288,10 +356,18 @@ enum HostProbe {
     static func reachLine(_ host: HostOnServer) -> String? {
         if host.command.isEmpty { return nil }
         if host.unit.isEmpty {
+            // The desktop's sentence, which this could not say until there was
+            // a Remove on this card: `service` is written by the install, so
+            // the route back to a unit is off and on again. Naming a route that
+            // did not exist on a phone is what this whole pass is about.
             return "It was not set up to start on its own, so it will not come back after this "
-                + "server reboots. Installing it again from here sets that up."
+                + "server reboots. Removing it and installing it again from here sets that up."
         }
         if !host.linger {
+            // `ServerScripts.service` already ran this without `sudo`, which is
+            // where it succeeds on a box whose policy allows it. Reaching this
+            // sentence means the unprivileged attempt was refused, and the only
+            // thing left is root — see the note on ``whyNot``.
             return "It starts with this server, and stops when your last login on this server ends "
                 + "— running `sudo loginctl enable-linger $(id -un)` once on that server is what "
                 + "stops that."
@@ -323,22 +399,82 @@ enum HostProbe {
                 + "give out. It usually connects within a few seconds of starting."
         case .connected, .unknown:
             /*
-             * Measured rather than guessed, and the advice is narrower than it
-             * wants to be.
+             * This sentence has been wrong twice, in opposite directions, and
+             * the second time is the one worth writing down.
              *
-             * The address block is a 0.10.0 thing, and the newest `terminaldeck`
-             * on the npm registry — which is what an install from this phone
-             * fetches — was **0.6.1** when this was written. So "install it
-             * again from here" is not reliably a fix: it installs whatever the
-             * registry has, and if that is still older than the address, this
-             * sentence would send somebody round a loop. The desktop's install
-             * carries the app's own build and does not have that problem, so
-             * that is what is named.
+             * It began as *"install it again from here"*, which was a loop: an
+             * install from this phone fetched `terminaldeck@latest`, and the
+             * registry was **0.6.1** while the address block is a 0.10.0 thing.
+             * So it was rewritten to name a desktop — correct on the day, and
+             * dead the moment `ServerScripts.hostPackage` stopped using the
+             * registry. It now fetches this app's *own* release tarball at
+             * `Brand.version`, which by construction is a build that prints an
+             * address. So the phone can do the upgrade it was sending somebody
+             * across the room for, and the premise this release is built on —
+             * *"say no MacBook or Windows exists at all"* — no longer has a
+             * hole in it here.
+             *
+             * The button that acts on this is `HostStepCard`'s, drawn from
+             * ``needsNewerBuild``, which asks these same three questions.
              */
             return "This host is running a build older than the one that prints a server address, "
-                + "which is the only thing a phone can dial. Installing it from a desktop "
-                + "\(Brand.name) puts that build on, because the desktop carries its own copy of "
-                + "the host rather than fetching the published one."
+                + "which is the only thing a phone can dial. Installing it again from here puts "
+                + "\(Brand.version) on that server — this app carries the release its own build "
+                + "was cut from, so what goes on is a host this phone can reach."
         }
+    }
+
+    /**
+     * Whether the only thing between this phone and a connection is the **build
+     * on that server** — the one refusal an install actually repairs.
+     *
+     * The three questions ``connectRefusal`` asks to reach its last branch,
+     * asked again as an answer a card can act on rather than print. They sit
+     * next to each other deliberately: a condition added to one has to be added
+     * to the other, and an Install button offered for a relay that is switched
+     * off would be exactly the control §4.1 forbids — one that cannot do what
+     * pressing it claims.
+     */
+    static func needsNewerBuild(_ host: HostOnServer) -> Bool {
+        guard host.isInstalled, host.running == .yes, host.address.isEmpty else { return false }
+        switch relay(in: host.status) {
+        case .connected, .unknown: return true
+        case .off, .notConnected: return false
+        }
+    }
+
+    /* ------------------------------------------------------ the way back -- */
+
+    /// The button that takes it off again, named the way a person would say it.
+    /// `REMOVE_HOST_LABEL` on the desktop, the same words on purpose.
+    static let removeLabel = "Remove it from this server"
+
+    /**
+     * What removing it leaves behind, said before the press rather than
+     * discovered after it.
+     *
+     * The desktop's sentence, with one difference that is the phone's situation
+     * and not a rewrite: there is no tick box here. A confirmation sheet on a
+     * phone is a list of verbs, so the choice between keeping and not keeping
+     * what the host stored is **two buttons**, and this names the other one
+     * instead of a control that does not exist.
+     *
+     * The data folder is the interesting half and it is deliberately not the
+     * default: it holds the devices paired to this host and the folders each of
+     * them may use, and somebody removing the program to put a newer one on
+     * does not expect to pair this phone again afterwards.
+     */
+    static func removeConsequence(_ host: HostOnServer, alsoData: Bool) -> String {
+        let service = host.unit.isEmpty ? "" : " Its service is stopped and its unit file removed."
+        let data = alsoData
+            ? " Everything it stored on that server goes too — \(host.dataDir), which is the devices "
+                + "paired to it and the folders each of them may use. This phone would need "
+                + "connecting again."
+            : " What it stored stays: \(host.dataDir) holds the devices paired to it and the folders "
+                + "each of them may use, so a later install finds them again — the other button "
+                + "takes that too."
+        return "This removes the host program and, if this app fetched one, the private Node runtime "
+            + "beside it.\(service)\(data) This app’s own record of the machine is separate — "
+            + "forget it under Machines if you want that gone too."
     }
 }

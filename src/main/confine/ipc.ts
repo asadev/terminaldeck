@@ -41,7 +41,12 @@
  *
  * macOS needs no grant at all: seatbelt confines a process with no prior
  * permission from anybody, which is exactly why the Windows half needed a
- * button and the macOS half never has.
+ * button and the macOS half never has. Linux needs no grant either, for a
+ * different reason — an unprivileged user namespace is something the kernel
+ * hands out to an ordinary account — but unlike seatbelt it can be switched off
+ * by the machine's owner, so {@link ConfineState.confining} asks the two
+ * switches rather than asserting the platform. See `linux.ts`'s
+ * {@link usernsRefusal}.
  */
 
 import type { InvokeRegistrar } from '../ipc-seam'
@@ -55,6 +60,7 @@ import {
   type GrantResult,
 } from './tools'
 import { WINDOWS_GRANT_NOTE } from './appcontainer'
+import { readUsernsSwitches, usernsRefusal } from './linux'
 
 /** What a screen needs in order to describe the grant before anybody presses. */
 export interface ConfineState {
@@ -65,7 +71,10 @@ export interface ConfineState {
    *
    * On macOS this is true with nothing granted — seatbelt needs no permission.
    * On Windows it is the record on disk, which is what the one-time grant
-   * writes.
+   * writes. On Linux it is the two kernel switches, read from this machine:
+   * nothing has to be granted, but a kernel with unprivileged user namespaces
+   * switched off will refuse every session, and answering `true` there would be
+   * this panel promising a boundary the first session is about to fail to build.
    */
   confining: boolean
   /**
@@ -76,7 +85,15 @@ export interface ConfineState {
   canGrant: boolean
   /** The folders the grant would cover, so the prompt can name them. */
   folders: readonly string[]
-  /** The one thing about the Windows boundary a person would not guess. */
+  /**
+   * The one thing about this machine's boundary a person would not guess.
+   *
+   * On Windows, what the one-time grant actually covers. On Linux, why the
+   * kernel is refusing, when it is — because {@link confining} answering `false`
+   * with nothing beside it is the same shape of failure this subsystem keeps
+   * paying for: the side that knows the reason not being the side that reports
+   * it. Empty when there is nothing a reader would not already know.
+   */
   note: string
 }
 
@@ -90,6 +107,17 @@ export interface ConfineIpcDeps {
   establish?: typeof establishToolGrant
   withdraw?: typeof withdrawToolGrant
   ready?: typeof windowsConfinementReady
+  /**
+   * Why this kernel would refuse every session, or `null`.
+   *
+   * Injected for the reason the three above are, and for one more: the files it
+   * reads are `/proc/sys/kernel/*`, which do not exist on the machine this app
+   * is built and tested on, so the Linux branch would otherwise have exactly one
+   * observable behaviour here — the one a Mac produces by having no `/proc` at
+   * all, which is the *passing* answer. A branch whose failing half cannot be
+   * reached from the test suite is a branch whose first user finds the bug.
+   */
+  userns?: () => string | null
 }
 
 export const CONFINE_STATE = 'confine:state'
@@ -101,6 +129,7 @@ export function registerConfineIpc(ipcMain: InvokeRegistrar, deps: ConfineIpcDep
   const ready = deps.ready ?? windowsConfinementReady
   const establish = deps.establish ?? establishToolGrant
   const withdraw = deps.withdraw ?? withdrawToolGrant
+  const userns = deps.userns ?? ((): string | null => usernsRefusal(readUsernsSwitches()))
 
   /**
    * What the grant would cover, asked without performing anything.
@@ -120,14 +149,44 @@ export function registerConfineIpc(ipcMain: InvokeRegistrar, deps: ConfineIpcDep
     }
   }
 
-  const state = (): ConfineState => ({
-    platform,
-    // macOS confines with no grant; Windows only once the record exists.
-    confining: platform === 'darwin' || (platform === 'win32' && ready()),
-    canGrant: platform === 'win32' && windowsToolsInstall() !== null,
-    folders: planned(),
-    note: platform === 'win32' ? WINDOWS_GRANT_NOTE : '',
-  })
+  /*
+   * Linux was excluded from this line, and it had stopped being true.
+   *
+   * `confinementKind` answers `'namespace'` for linux and `confineSpawn` wraps
+   * every session from a device in one — measured on a real rented Linux box,
+   * not read; `linux.ts` carries the table — while this function still said the
+   * same `false` it says for a platform with no mechanism at all. That is the *safe* direction
+   * of the two, which is why it survived, and it is still a wrong answer: a
+   * panel that says nothing holds a session is how somebody decides not to hand
+   * out a folder they could safely have handed out, and worse, it is the line a
+   * later reader trusts instead of the module that does the work.
+   *
+   * It is a read of the machine rather than `platform === 'linux'`, because
+   * unlike seatbelt this mechanism can be switched off from outside the app —
+   * see `linux.ts`. `null` there is "neither switch is in the way", which is not
+   * a promise that the session will start; the per-session proof is still what
+   * decides, and it still refuses rather than downgrading.
+   */
+  const state = (): ConfineState => {
+    // Asked once per answer rather than once per field it decides. The two
+    // fields below are one statement about this machine — *is it holding
+    // sessions, and if not what is in the way* — and reading the switches twice
+    // is how a state eventually goes out saying "not held" with nothing beside
+    // it, or the reverse.
+    const blocked = platform === 'linux' ? userns() : null
+    return {
+      platform,
+      // macOS confines with no grant; Linux with no grant but not on every
+      // kernel; Windows only once the record exists.
+      confining:
+        platform === 'darwin' ||
+        (platform === 'linux' && blocked === null) ||
+        (platform === 'win32' && ready()),
+      canGrant: platform === 'win32' && windowsToolsInstall() !== null,
+      folders: planned(),
+      note: platform === 'win32' ? WINDOWS_GRANT_NOTE : (blocked ?? ''),
+    }
+  }
 
   ipcMain.handle(CONFINE_STATE, (): ConfineState => state())
 

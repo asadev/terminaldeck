@@ -290,6 +290,7 @@ export class ConfinementUnavailableError extends Error {
     super(`This session could not be confined to its folder: ${detail}`)
     this.name = 'ConfinementUnavailableError'
   }
+
 }
 
 /* ---------------------------------------------------------------- the plan -- */

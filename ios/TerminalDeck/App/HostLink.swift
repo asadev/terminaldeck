@@ -803,11 +803,48 @@ final class HostLink: Identifiable {
      * directories of sessions this phone can see. That fallback is right for the
      * New Session picker — it is what a desktop older than per-device grants
      * would have accepted — and it is wrong here, because this capability is
-     * authorised against the grant list and nothing else. A machine that somehow
-     * advertised `devserver` without sending a grant would be asked about
-     * folders it never offered, and every one of those questions comes back as
-     * an `unauthorized` error banner on the session list. Nil means "I have not
-     * been told", and the honest thing to do with that is ask nothing.
+     * authorised against the list this device was **sent**. Nil means "I have
+     * not been told", and the honest thing to do with that is ask nothing.
+     *
+     * ## This is why a bare server has no Start on it, and the fix is not here
+     *
+     * On a headless box the whole feature is invisible, which is the machine it
+     * is most useful on: `welcome.folders` for one of the owner's own devices is
+     * the machine's open projects plus the folders its sessions are running in,
+     * and a rented Linux box has neither — so `device-reach.ts` falls back to
+     * `[home()]`, one row, and a home directory has no dev script, so there is
+     * no row and no Start anywhere on the screen.
+     *
+     * `folders.pick` looks like the answer and is not. It reads directory names;
+     * *"it grants nothing, changes nothing, and writes nothing"*, and the folder
+     * a person picks goes to the ordinary `create`, which for one of the owner's
+     * own devices accepts any absolute path because that device is
+     * `unrestricted`. **`dev.status` has no such clause.** It is checked against
+     * `sessions.folders(deviceId)` and nothing else, and `dev.status`'s own
+     * protocol comment is unambiguous about it: *"the desktop accepts only a
+     * folder it is already offering this device in `welcome.folders`"*. So the
+     * phone can start a session in a folder it may not ask a single question
+     * about.
+     *
+     * Widening this list from here — adding the folders the visible sessions are
+     * running in, which the *desktop's* own reach list does include — was
+     * written and then reverted, and what it costs is worth writing down. A
+     * refusal comes back as a plain `error` carrying no request id, so a
+     * speculative ask cannot be told apart from a real failure and each one
+     * lands as a yellow banner about somebody's own machine refusing them. And
+     * the contract is what a conforming host is entitled to enforce, not what
+     * this build's desktop happens to allow: `ios/Harness/host-standin.ts`
+     * checks a `dev.status` against its granted list alone and starts two of its
+     * own sessions outside it, which is exactly the shape that would answer
+     * every such ask with a banner.
+     *
+     * Both ends of the fix are on the desktop. Either `devServe` gains the
+     * `unrestricted` clause `create` has — the same device, the same machine,
+     * and it is already trusted with the stronger verb — or the offered list is
+     * pushed when it *changes* rather than only when somebody edits a grant in a
+     * settings panel, which is what would make a session started in a picked
+     * folder appear here on its own. Today the phone learns about it on the next
+     * reconnect, and only then.
      */
     var devFolders: [String] {
         guard canUseDevServers, let granted else { return [] }

@@ -19,6 +19,12 @@
  *    them, because it is sitting in front of a terminal on that server. Asad
  *    asked for these two by name for the phone: *"then you can connect, and
  *    disconnect if you want"*, and before that, *"it brings it up"*.
+ *
+ * Remove is not in that second list because it is not new: it is `removeScript`
+ * ported line for line, and the header it comes from says why it exists at all
+ * — *"If we want to uninstall we can uninstall."* It was missing here while the
+ * install card promised it in as many words, which is a promise a card should
+ * never have been able to make on its own.
  */
 
 import Foundation
@@ -277,6 +283,102 @@ enum ServerScripts {
             return "systemctl --user start \(Brand.id).service && exit 0"
         }
         return startDirect(command: command)
+    }
+
+    /**
+     * Ask the host for its address — which is really a way of **waiting for the
+     * relay dial to finish**, on the far side, where the answer lives.
+     *
+     * ## The gap this closes
+     *
+     * `start` returns the instant systemd or `nohup` has forked; the relay dial
+     * is a WebSocket across the internet and is still in flight. So the probe
+     * that ran a moment later read a `status` with no address block, and the
+     * card that said *"start it and connect"* started it and then connected to
+     * nothing at all — `canConnect` was false, `connect()` returned, and the
+     * button had visibly done nothing. Measured by the host's own author on a
+     * real server, in `waitForAddress`: *"the address was there when asked
+     * again fourteen seconds later. Same code, same machine, different luck."*
+     *
+     * ## Why this command rather than a timer on the phone
+     *
+     * Because the wait already exists and it is already correct. `terminaldeck
+     * address` polls its own daemon every 400 ms for up to ten seconds, and —
+     * the part a phone-side loop could not copy — it only waits for a host
+     * **young enough that the relay could still be dialling**, measured from
+     * the host's own `startedAt`. A host that has been up for an hour with no
+     * relay has a real problem and answers immediately, as it should. Re-running
+     * the survey on a timer from here would be the phone asking the same
+     * question over and over, which is the standing rule about polling, and it
+     * would still be a worse answer than the one the host already has.
+     *
+     * Its output is deliberately thrown away. The address that reaches a screen
+     * is the one `HostProbe.serverAddress` reads out of the following `status`
+     * and validates with the real parser, and having two sources for one string
+     * is how they come to disagree. What is wanted here is the *time*.
+     *
+     * Failure is not a failure: an older host has no `address` verb and exits
+     * non-zero, which is one of the two states this whole card is about, and
+     * the survey after it is what says so.
+     */
+    static func address(command: String) -> String {
+        [
+            "b=\(quote(command))",
+            // `>/dev/null` on both: `address` writes a pasteable line to stdout
+            // and a note to stderr, and neither is read here.
+            "\"$b\" address >/dev/null 2>&1 || true",
+            "exit 0",
+        ].joined(separator: "\n")
+    }
+
+    /**
+     * The way back, and it removes exactly what was added.
+     *
+     * `removeScript` from the desktop, line for line, including the guard that
+     * matters most: **nothing outside `$HOME`**. Every path this is handed came
+     * off the server itself through `command -v`, so a machine whose PATH turns
+     * up a system-wide copy — installed by somebody else, by a package manager,
+     * for everyone — is a machine where the honest answer is to refuse rather
+     * than to start deleting on a phone user's behalf.
+     *
+     * The data folder is never touched unless it was asked for. That is the
+     * same argument `setup.ts` makes about `~/.claude`: *"those folders are the
+     * person's own … removing one would be deleting somebody's work under the
+     * heading of undoing our own."*
+     */
+    static func remove(command: String, dataDir: String, alsoData: Bool) -> String {
+        var lines = [
+            "b=\(quote(command))",
+            "case \"$b\" in \"$HOME\"/*) ;; *) echo \"not ours to remove\" >&2; exit 1 ;; esac",
+            // The service first: stopping it is what releases the files below,
+            // and a unit left enabled would keep trying to start a program that
+            // has gone — every five seconds, for as long as that server is up.
+            "if [ -f \"$HOME/.config/systemd/user/\(Brand.id).service\" ]; then",
+            "  systemctl --user disable --now \(Brand.id).service >/dev/null 2>&1 || true",
+            "  rm -f \"$HOME/.config/systemd/user/\(Brand.id).service\"",
+            "  systemctl --user daemon-reload >/dev/null 2>&1 || true",
+            "fi",
+            // Then the daemon itself, in case it was started by hand rather than
+            // by the unit. Its own command is the one thing that knows how to
+            // stop it cleanly.
+            "\"$b\" stop >/dev/null 2>&1 || true",
+            "if grep -q \(Brand.id)-launcher \"$b\" 2>/dev/null; then",
+            "  rm -rf \"$HOME/.\(Brand.id)/runtime\"",
+            "  rm -f \"$b\"",
+            "  rmdir \"$HOME/.\(Brand.id)\" 2>/dev/null || true",
+            "else",
+            "  d=$(dirname \"$b\")",
+            "  rm -f \"$d/\(Brand.id)\" \"$d/\(Brand.id)-host\"",
+            "  rm -rf \"$d/../lib/node_modules/\(Brand.id)\"",
+            "fi",
+        ]
+        if alsoData {
+            lines.append("dd=\(quote(dataDir))")
+            lines.append(
+                "case \"$dd\" in \"$HOME\"/*) rm -rf \"$dd\" ;; *) echo \"not ours to remove\" >&2 ;; esac")
+        }
+        lines.append("exit 0")
+        return lines.joined(separator: "\n")
     }
 
     /**

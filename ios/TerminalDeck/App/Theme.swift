@@ -163,10 +163,21 @@ private enum Ink {
      * cool grey with white cards. Same idea both times, and it is the idea rather
      * than either palette that reads as *designed*.
      *
-     * So the ground is warm off-white and the cards are white. Warm rather than
-     * ChatGPT's cool blue-grey for two reasons: a blue-grey ground is the more
-     * generic of the two, and this app sets amber and green status words on its
-     * surfaces all day — they sit on warm paper and fight cool paper.
+     * So the ground is off-white and the cards are white.
+     *
+     * **Exactly neutral, and that is not a small detail.** The first cut of this
+     * was warm — `#f4f2ef`, five levels more red than blue — because Claude's
+     * app is warm and it looks well. `AppearanceTests.testTheGreysAreExactlyNeutral`
+     * refused it, and it was right to: the set *this palette replaced* ran three
+     * to four levels warm, and a filled screen reading as faintly orange was
+     * **reported on the desktop** and fixed. Reintroducing it here would have
+     * reopened a defect this product has already had once, to buy a warmth
+     * nobody had asked for by name.
+     *
+     * Nothing is lost. The character was never in the hue — it is in the
+     * *relationship*, ground darker than card, and ChatGPT's is cool-grey and
+     * reads every bit as designed. A neutral ground gets the whole effect and
+     * keeps the guard that caught this.
      *
      * The contrast tiers below are **better** after this, not worse: they were
      * measured against the darkest paper here, and body text now lands mostly on
@@ -177,10 +188,10 @@ private enum Ink {
      * step lighter at the card: a card has to separate from what it is lying on,
      * and `#191919` under `#202020` was three points of difference.
      */
-    static let background = Duo(light: Shade(0xf4f2ef), dark: Shade(0x121212))
-    static let raised = Duo(light: Shade(0xffffff), dark: Shade(0x1e1e1e))
-    static let raisedHigh = Duo(light: Shade(0xfaf9f7), dark: Shade(0x272727))
-    static let sunken = Duo(light: Shade(0xeae7e2), dark: Shade(0x0d0d0d))
+    static let background = Duo(light: Shade(0xffffff), dark: Shade(0x191919))
+    static let raised = Duo(light: Shade(0xf5f5f5), dark: Shade(0x202020))
+    static let raisedHigh = Duo(light: Shade(0xededed), dark: Shade(0x252525))
+    static let sunken = Duo(light: Shade(0xeaeaea), dark: Shade(0x121212))
 
     /* Text. `--text-primary` / `--text-secondary` / `--text-muted`.
 
@@ -386,10 +397,36 @@ enum Theme {
     /// accent is dark enough to carry white, so it does.
     static let onAccent = swiftUI(Ink.onAccent)
 
-    static let background = swiftUI(Ink.background)
+    /*
+     * **The page ground is the app ground, not the canvas — and that swap is
+     * the whole of the character fix.**
+     *
+     * `Ink.background` is `--bg-primary`, which `tokens.css` calls *"the content
+     * canvas"*; `Ink.raised` is `--bg-secondary`, *"the app ground the sidebar
+     * sits on"*. The phone had them the wrong way round: it painted its page in
+     * the canvas and drew its cards in the ground. In light that is white paper
+     * with grey cards — which is iOS's own default grouped-list look, and
+     * therefore no character at all. Asad, with the two apps he uses every day
+     * open beside this one: *"this app does not have any character of itself,
+     * it's like very much of base colour of iOS."*
+     *
+     * Every app he pointed at does what the desktop already does: a ground, with
+     * lighter surfaces sitting on it. Reading the two tokens the way the desktop
+     * names them gets that for free — and keeps the phone byte-identical to
+     * `tokens.css`, which is the property `AppearanceTests` exists to hold.
+     *
+     * The first attempt at this changed the *values* instead — a warm off-white
+     * ground of its own. `testTheGreysAreExactlyNeutral` refused it, and was
+     * right to: the set this palette replaced ran three to four levels warm, and
+     * a filled screen reading as faintly orange was **reported on the desktop**
+     * and fixed. Nothing was lost by going neutral, because the character was
+     * never in the hue — it is in which surface is on top.
+     */
+    static let background = swiftUI(Ink.raised)
     /// A card sitting on the background. Space separates things in this app;
     /// this is for the cases where space genuinely cannot.
-    static let surface = swiftUI(Ink.raised)
+    /// The cards. `--bg-primary`, the canvas — what sits *on* the ground above.
+    static let surface = swiftUI(Ink.background)
     /// A surface on a surface — a chip inside a card.
     static let surfaceHigh = swiftUI(Ink.raisedHigh)
     /// The fill under a swipe action that carries no meaning of its own. Not a

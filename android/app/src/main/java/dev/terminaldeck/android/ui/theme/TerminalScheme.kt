@@ -18,9 +18,11 @@ import java.util.Locale
  * that can drift.
  *
  * The colours are **strings** rather than packed ints for the same reason. `#8ae234` in
- * `terminal-theme.ts` is `"#8ae234"` here, so the two files can be diffed by eye and by a script,
- * and so the hex field in the editor stores exactly what somebody typed rather than a value that
- * has been through two conversions. [Companion.parse] is the one place a string becomes a colour.
+ * `terminal-theme.ts` is `"#8ae234"` here, so the two files can be diffed by eye and by a script —
+ * which `TerminalSchemeTest` now does, reading the TypeScript at test time — and so the hex field in
+ * the editor stores exactly what somebody typed rather than a value that has been through two
+ * conversions. [Companion.normalise] is the one gate a string passes to become a colour, and
+ * [Companion.parse] the one place it becomes an int.
  *
  * ## Two of these do nothing on Android, and that is said out loud
  *
@@ -50,7 +52,16 @@ data class TerminalScheme(
      * carried so a scheme edited here is still a whole scheme when it reaches a desktop.
      */
     val cursorAccent: String,
-    /** Inert on Android for the same reason. The emulator inverts a selection rather than filling it. */
+    /**
+     * Inert on Android for the same reason. The emulator inverts a selection rather than filling it.
+     *
+     * The one slot that may carry an alpha — `#rrggbbaa`. The shared table declares six of the
+     * built-ins with one (`#3b8fee29` for Deck Dark, `#ffffff40` for Tango and Campbell) because on
+     * a client that *does* fill, a selection is drawn under text that has to stay readable. This
+     * module used to refuse eight digits outright and flattened those six onto their own
+     * backgrounds, which made them colours no other client had. See [Companion.parseOrNull] for why
+     * the permission is granted to this slot and to nothing else.
+     */
     val selectionBackground: String,
     val black: String,
     val red: String,
@@ -106,38 +117,59 @@ data class TerminalScheme(
         const val SLOT_COUNT = 21
 
         /**
-         * `#rrggbb` (or `#rgb`) to an opaque ARGB int.
+         * Canonical form of whatever somebody typed, or `null` if it was not a colour.
          *
-         * Tolerant on the way in because this also reads what somebody typed into the hex field —
-         * a missing `#`, upper case, the three-digit short form — and strict about what it returns:
-         * always opaque. Alpha is deliberately not representable. `TerminalColors.parse` on the
-         * emulator side accepts `#aarrggbb`, and a scheme with a translucent background there draws
-         * over whatever the last frame left behind rather than compositing, which looks like a
-         * rendering bug and is a scheme nobody could have known was wrong.
+         * `normaliseColour` in the shared file, with one restriction that file does not have.
+         * Tolerant on the way in, because this also reads a half-finished hex field: a missing `#`,
+         * upper case, and the short forms, which are doubled the way CSS itself doubles them so that
+         * a three-digit colour means here what it means in the sheet somebody copied it out of.
+         *
+         * **[alpha] is off by default and that is the load-bearing part.** `installTerminalPalette`
+         * hands the emulator these strings, and `TerminalColors.parse` on the other side reads eight
+         * digits as `#aarrggbb` — the opposite end from `#rrggbbaa`. So `#3b8fee29` typed into a
+         * *background* would arrive as a translucent `#8fee29`, drawing over whatever the last frame
+         * left behind: the wrong colour and a rendering bug, from a value nobody could have known
+         * was wrong. Nineteen slots therefore stay six digits, and [TerminalSlot.carriesAlpha] opens
+         * the door for the one that never reaches the emulator at all.
+         */
+        fun normalise(raw: String, alpha: Boolean = false): String? {
+            val body = raw.trim().removePrefix("#").lowercase(Locale.ROOT)
+            val expanded = when (body.length) {
+                3 -> body.map { "$it$it" }.joinToString("")
+                4 -> if (alpha) body.map { "$it$it" }.joinToString("") else return null
+                6 -> body
+                8 -> if (alpha) body else return null
+                else -> return null
+            }
+            if (!expanded.all { it.isDigit() || it in 'a'..'f' }) return null
+            return "#$expanded"
+        }
+
+        /**
+         * The same string as an **opaque** ARGB int, or `null` when it is not a colour.
+         *
+         * Opaque even when [alpha] let eight digits through, because everything downstream of this
+         * paints with it: the emulator's table, the preview, the editor's swatch. `opaquePart` in the
+         * shared file says the same thing from the other direction — *the six-digit part, for a
+         * control that cannot express transparency* — and a 28dp chip at sixteen per cent over a
+         * card is exactly such a control: it would read as an empty square rather than as a colour.
+         * The alpha survives where it is meant to, in the stored string.
          *
          * Returns `null` rather than throwing or guessing, so the field can say *that is not a
          * colour* while somebody is still halfway through typing one.
          */
-        fun parseOrNull(raw: String): Int? {
-            val body = raw.trim().removePrefix("#")
-            val expanded = when (body.length) {
-                3 -> body.map { "$it$it" }.joinToString("")
-                6 -> body
-                else -> return null
-            }
-            if (!expanded.all { it.isDigit() || it.lowercaseChar() in 'a'..'f' }) return null
-            return 0xff000000.toInt() or expanded.toInt(16)
+        fun parseOrNull(raw: String, alpha: Boolean = false): Int? {
+            val hex = normalise(raw, alpha) ?: return null
+            return 0xff000000.toInt() or hex.substring(1, 7).toInt(16)
         }
 
         /** The same, for a value already known to be good — every colour in a built-in is. */
-        fun parse(raw: String): Int = parseOrNull(raw) ?: 0xff000000.toInt()
+        fun parse(raw: String, alpha: Boolean = false): Int =
+            parseOrNull(raw, alpha) ?: 0xff000000.toInt()
 
         /** Back to the canonical `#rrggbb`, lower case, which is the form every scheme is written in. */
         fun format(argb: Int): String =
             String.format(Locale.ROOT, "#%06x", argb and 0xffffff)
-
-        /** Canonical form of whatever somebody typed, or `null` if it was not a colour. */
-        fun normalise(raw: String): String? = parseOrNull(raw)?.let { format(it) }
 
         /**
          * Relative luminance, the sRGB one, used only to decide whether a preview sits on a dark
@@ -174,7 +206,7 @@ data class TerminalScheme(
  * without a keyboard.
  */
 fun TerminalScheme.withTyped(slot: TerminalSlot, raw: String): TerminalScheme? {
-    val normalised = TerminalScheme.normalise(raw) ?: return null
+    val normalised = TerminalScheme.normalise(raw, slot.carriesAlpha) ?: return null
     if (normalised == slot.read(this)) return null
     return slot.write(this, normalised)
 }
@@ -194,7 +226,7 @@ enum class TerminalSlot(
     Background("Background", { it.background }, { s, v -> s.copy(background = v) }),
     Foreground("Text", { it.foreground }, { s, v -> s.copy(foreground = v) }),
     Cursor("Cursor", { it.cursor }, { s, v -> s.copy(cursor = v) }),
-    CursorAccent("Cursor text", { it.cursorAccent }, { s, v -> s.copy(cursorAccent = v) }),
+    CursorAccent("Text under the cursor", { it.cursorAccent }, { s, v -> s.copy(cursorAccent = v) }),
     Selection("Selection", { it.selectionBackground }, { s, v -> s.copy(selectionBackground = v) }),
     Black("Black", { it.black }, { s, v -> s.copy(black = v) }),
     Red("Red", { it.red }, { s, v -> s.copy(red = v) }),
@@ -220,4 +252,16 @@ enum class TerminalSlot(
      */
     val paintedHere: Boolean
         get() = this != CursorAccent && this != Selection
+
+    /**
+     * Whether this slot may be written `#rrggbbaa`.
+     *
+     * Exactly one, and the reason is the same reason [paintedHere] is false for it: the selection is
+     * the only colour that never reaches `TerminalColors.updateWith`, so it is the only one where
+     * eight digits cannot be misread as `#aarrggbb` by the emulator's own parser. The shared table
+     * declares six built-ins with an alpha in this slot and none anywhere else, so this permission
+     * is the whole of the difference between mirroring that table and rewriting it.
+     */
+    val carriesAlpha: Boolean
+        get() = this == Selection
 }

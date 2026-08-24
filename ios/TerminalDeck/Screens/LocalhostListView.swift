@@ -115,6 +115,25 @@ struct LocalhostListView: View {
 
             VStack(spacing: 0) {
                 /*
+                 * The machine's last word, on the screen it was said to.
+                 *
+                 * `lastError` is one line per machine and the session list was
+                 * the only screen drawing it — so a Start pressed on a dev-server
+                 * row here, or a page the machine would not open, was answered on
+                 * a tab nobody was looking at. A press whose refusal is invisible
+                 * is a press that reads as dead, which is the same complaint the
+                 * address bar below is fixing one layer up.
+                 *
+                 * The same banner and the same tap to dismiss, over one string:
+                 * two screens draw it and only one of them is ever on top.
+                 */
+                if let error = model.lastError {
+                    Banner(text: error, tone: .warning)
+                        .onTapGesture { model.dismissError() }
+                        .accessibilityIdentifier("localhost.error")
+                }
+
+                /*
                  * The address bar, on the screen rather than behind a `+`.
                  *
                  * *"we should have only one which will be called browser… where
@@ -550,9 +569,11 @@ struct LocalhostListView: View {
                     // a screen the person may not be looking at. Without it, a
                     // press that worked perfectly is indistinguishable from one
                     // that did nothing.
-                    show("Opening localhost:\(String(entry.port)) on \(model.current?.label ?? "the machine")")
+                    show("Opening localhost:\(String(entry.port)) on "
+                         + (model.current?.label ?? model.theMachine))
                 } label: {
-                    Label("Open on \(model.current?.label ?? "the machine")", systemImage: "arrow.up.forward.app")
+                    Label("Open on \(model.current?.label ?? model.theMachine)",
+                          systemImage: "arrow.up.forward.app")
                 }
                 .accessibilityIdentifier("port.menu.openThere")
             }
@@ -616,14 +637,47 @@ struct LocalhostListView: View {
     }
 
     /**
-     * Nothing to show, and which of the three reasons it is.
+     * Nothing to show, and which of the four reasons it is.
      *
      * A machine that does not offer the capability at all is a different fact
      * from one that offers it and is serving nothing, and both are different from
      * a socket that is down — saying "nothing is running" over a dead connection
      * is a claim nobody checked.
+     *
+     * ## And a fourth, which says nothing at all
+     *
+     * The first seconds of a launch. This screen read `connection.isLive`, so it
+     * opened on the word **Connecting** every single time — the first frame of a
+     * launch is `.offline` and the second is `.connecting` — which is the
+     * yellow-thing complaint written larger: *"let it give a few seconds; after
+     * five seconds if it is still not connected, then show. Otherwise it will
+     * just load, so they will not even feel that it takes time for connecting."*
+     *
+     * `showsConnectionNotice` is the one property that rule lives in.
+     * `SessionListView` puts its banner, its pill and its empty state all on it
+     * so the three cannot drift; this tab was the one place still asking the
+     * socket directly, and a tab that flashes a warning the tab next door has
+     * decided not to show is two answers to one question. A spinner until the
+     * grace period is over, and the honest sentence after it. See
+     * `ConnectionGrace`.
      */
+    @ViewBuilder
     private var empty: some View {
+        if !model.connection.isLive && !model.showsConnectionNotice {
+            ProgressView()
+                .controlSize(.large)
+                .tint(Theme.secondary)
+                // The `ContentUnavailableView` below fills the space it is given;
+                // a bare spinner does not, and would sit tucked under the address
+                // bar with the rest of the screen empty beneath it.
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .accessibilityIdentifier("localhost.loading")
+        } else {
+            settledEmpty
+        }
+    }
+
+    private var settledEmpty: some View {
         ContentUnavailableView {
             Label(emptyTitle, systemImage: "globe")
         } description: {
@@ -663,23 +717,6 @@ struct LocalhostListView: View {
     }
 
     /**
-     * Open whatever is in the address field, or say why not.
-     *
-     * The sheet closes **only on success**, which is the opposite of what the
-     * pairing sheet does and right for the opposite reason: a pairing code that
-     * fails has to be typed again from a screen the person can get back to,
-     * whereas a mistyped address is one character away from working and closing
-     * the sheet would throw the other twenty away. So a refusal stays put with
-     * the sentence under the field.
-     *
-     * Nothing is dialled here. `open(port:path:)` sends `tunnel.open` and the
-     * *machine* decides — it re-scans and refuses a port nothing is listening on
-     * — so a number that parses is not the same as a number that answers, and
-     * the page that comes up says which of the two happened. This function's
-     * whole job is the difference between "that is not an address" and "that is
-     * an address; ask the machine".
-     */
-    /**
      * The address bar. One field, and it decides where what you typed belongs.
      *
      * A port or a localhost address is a **tunnel**: the page loads in a real
@@ -693,13 +730,29 @@ struct LocalhostListView: View {
      * browser, this app can already open a page in it (`web.open`) and can
      * already cast it back (`watch`). So a real URL opens *there* and appears in
      * Windows below. *"we can have all the browser features also in there."*
+     *
+     * ## Why it is shaped like the rows under it rather than like a search field
+     *
+     * The radius is the cards' 20 and the glyph is the row glyph — 19 point,
+     * light, in the same 24-point column — so the bar's magnifier sits on the
+     * same vertical line as every port's globe and every window's frame, and the
+     * three sections read as one screen instead of as a control bolted above a
+     * list. It was 14-point radius with a 13-point regular glyph, which is SF
+     * Symbols' default and therefore what every iOS app that has not thought
+     * about it looks like: the exact complaint the row icons were changed for.
+     *
+     * The height is fixed at 48 whether or not the clear button is there. Both
+     * ends of the row carry the same 28-point box, so a field that grows a
+     * button the moment somebody types does not also grow five points taller
+     * under their thumb.
      */
     private var addressBar: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
+            HStack(spacing: 12) {
                 Image(systemName: "magnifyingglass")
-                    .font(.system(size: 13))
+                    .font(.system(size: 19, weight: .light))
                     .foregroundStyle(Theme.faint)
+                    .frame(width: 24, height: 28)
                 TextField("localhost:3000, or a site to open on the machine", text: $address)
                     .textFieldStyle(.plain)
                     // Every one of these is load-bearing: a URL keyboard puts
@@ -720,18 +773,30 @@ struct LocalhostListView: View {
                         address = ""
                         addressNotice = nil
                     } label: {
+                        // The glyph stays small and the target does not. A
+                        // 14-point image is the whole hit area of a `Button` in
+                        // SwiftUI, and 14 points is not something anybody hits
+                        // on a moving train — 28 is the biggest box that leaves
+                        // the bar the same height as an empty one.
                         Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 14))
+                            .font(.system(size: 15))
                             .foregroundStyle(Theme.faint)
+                            .frame(width: 28, height: 28)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Clear")
                 }
             }
-            .padding(.horizontal, 12)
+            // Sixteen leading, so the glyph starts where a row's glyph starts:
+            // the cards are inset 16 from the screen and their content another
+            // 16 inside that. Ten trailing, because the clear button's own box
+            // carries the other six.
+            .padding(.leading, 16)
+            .padding(.trailing, 10)
             .padding(.vertical, 10)
-            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.hairline))
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(Theme.hairline))
 
             if let addressNotice {
                 Text(addressNotice)
@@ -739,42 +804,155 @@ struct LocalhostListView: View {
                     .foregroundStyle(Theme.warning)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.top, 8)
-                    .padding(.horizontal, 2)
+                    // Four, which is 20 from the screen edge once the outer
+                    // padding is added — the column the section headers and the
+                    // footnote sit in. This is a sentence *about* the screen
+                    // rather than a row on it, and it lines up with the app's
+                    // other ones instead of with the card above it.
+                    .padding(.horizontal, 4)
                     .accessibilityIdentifier("browser.address.notice")
             }
         }
         .padding(.horizontal, 16)
         .padding(.top, 8)
-        .padding(.bottom, 10)
+        .padding(.bottom, 12)
     }
 
+    /**
+     * Open whatever is in the address field, or say why not.
+     *
+     * The field is cleared **only on success**, and a refusal leaves both the
+     * text and the sentence under it: a mistyped address is one character away
+     * from working, and a field that empties itself throws the other twenty
+     * characters away to punish a typo.
+     *
+     * Nothing is dialled here. `open(port:path:)` sends `tunnel.open` and the
+     * *machine* decides — it re-scans and refuses a port nothing is listening on
+     * — so a number that parses is not the same as a number that answers, and
+     * the page that comes up says which of the two happened. This function's
+     * whole job is deciding which of the three things a typed line is: a port to
+     * tunnel here, a page for the machine's own browser, or neither.
+     *
+     * ## Both halves of the never-dead-click rule, because it was breaking both
+     *
+     * The audit found the old `+` refusing a live link rather than acting. The
+     * `+` is gone and the fall-through to `web.open` replaced it — and it was
+     * applied to **every** refusal, including the ones that are not addresses at
+     * all. So `hello world` was sent to the machine, which answered *"that is
+     * not a web address this machine will open"* on the tab next door, while
+     * this screen cleared the field and said *Opening…*. A press that could not
+     * possibly have worked, reported as having worked.
+     *
+     * And a dead one in the other direction: a host can offer `web` without
+     * offering `localhost` — they are separate capabilities and they come apart
+     * — and typing a port at one of those did **nothing whatsoever**.
+     * `openLocalhost` refuses, hands back nil, and the only trace was an error
+     * on a screen the person was not looking at, while the machine sat there
+     * perfectly able to open the same address on its own display.
+     */
     private func openTyped() {
         let typed = address.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !typed.isEmpty else { return }
         switch LocalhostAddress.parse(typed) {
         case let .address(port, path):
             addressNotice = nil
-            open(port: port, path: path)
-        case .refused:
-            /*
-             * Not a port on this machine, so it is a page for the machine's own
-             * browser — if this host offers one.
-             *
-             * The refusal sentence is kept for the case where there is nothing
-             * to fall back to: a host that does not advertise `web` cannot open
-             * a page anywhere, and "that is not a localhost address" is then the
-             * whole truth. Where the host *can*, the honest answer is to open it
-             * rather than to explain why we will not.
-             */
-            guard model.canOpenPages else {
-                if case let .refused(why) = LocalhostAddress.parse(typed) { addressNotice = why }
+            guard model.canBrowseLocalhost else {
+                // The port is real and this phone cannot reach it. The machine
+                // can, and opening it there is the same act the port menu offers
+                // by name — so it is what the bar does rather than nothing.
+                guard model.canOpenPages else {
+                    addressNotice = "\(model.current?.label ?? model.theMachine) cannot put its "
+                        + "own ports on a phone, and cannot open a page on its own screen either."
+                    return
+                }
+                openThere("http://localhost:\(String(port))\(path)")
                 return
             }
-            addressNotice = nil
-            model.openPageOnMachine(typed)
-            address = ""
-            show("Opening on \(model.current?.label ?? "the machine")")
+            open(port: port, path: path)
+
+        case let .refused(why):
+            /*
+             * Not a port on this machine, so it may be a page for the machine's
+             * own browser — if it is a page at all, and if this host offers one.
+             *
+             * Two guards and they refuse different things. `canOpenPages` is the
+             * host: one that does not advertise `web` cannot open a page
+             * anywhere, and the parser's sentence is then the whole truth.
+             * `pageForTheMachine` is the *line*: it says nil for a line that is
+             * not an address, and nil for one of this machine's own names, both
+             * of which already have a better sentence written for them than
+             * anything a refusal from the far end would carry.
+             */
+            guard model.canOpenPages, let page = pageForTheMachine(typed) else {
+                addressNotice = why
+                return
+            }
+            openThere(page)
         }
+    }
+
+    /**
+     * What the machine's own browser should be asked to open, or nil when the
+     * typed line is not a page for it.
+     *
+     * **The scheme is completed here**, which is the half that was missing. The
+     * most ordinary thing anybody types into an address bar is `example.com`,
+     * and `web.open` runs what it is given through a URL parser — `isNavigationAllowed`
+     * in `browser-url.ts` — where a bare host is not a URL and is refused. Every
+     * browser on the phone completes it; so does this, once, here, so what goes
+     * on the wire is the thing the machine will accept.
+     *
+     * Nil for a bare number, because the parser reads one as a port and so does
+     * the person who typed it. Left to the lines below, `70000` becomes the host
+     * `70000` and is opened as a page on a name that cannot resolve.
+     *
+     * Nil for the loopback names too, and that is the interesting one: they are
+     * this machine's own, the tunnel is how they are reached, and the refusal
+     * written for a loopback name with no port is *"Which port?"* — a question
+     * with an answer somebody can type. That is asked by handing the parser the
+     * same host with a port on it rather than by keeping a second opinion here
+     * about what counts as loopback: `LocalhostAddress.isLoopback` is the only
+     * one of those in the app and there is no reason for a second.
+     */
+    private func pageForTheMachine(_ typed: String) -> String? {
+        let bare = typed.hasPrefix(":") ? String(typed.dropFirst()) : typed
+        if bare.allSatisfy(\.isNumber) { return nil }
+
+        let withScheme = typed.contains("://") ? typed : "http://\(typed)"
+        guard var parts = URLComponents(string: withScheme),
+              let scheme = parts.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              let host = parts.host, !host.isEmpty else { return nil }
+
+        // Bracketed by hand for the probe: `URLComponents` hands back an IPv6
+        // literal without its brackets and does not put them back when the
+        // string is rebuilt, so `::1` would come out as a scheme, a host and two
+        // stray colons — which parses as nothing and would send this machine's
+        // own address to its own browser.
+        let bracketed = host.contains(":") && !host.hasPrefix("[") ? "[\(host)]" : host
+        if case .address = LocalhostAddress.parse("\(scheme)://\(bracketed):80") { return nil }
+
+        // The lowercased scheme, so `HTTP://` is normalised on the way out as
+        // well as on the way through the check above.
+        parts.scheme = scheme
+        return parts.string
+    }
+
+    /**
+     * Ask the machine to open a page on its own screen, and say so.
+     *
+     * The confirmation matters more here than anywhere else in the app: what
+     * happens is a tab appearing on a screen in another room, so without a
+     * sentence a press that worked perfectly is indistinguishable from one that
+     * did nothing. The same sentence the port menu shows for the same act.
+     */
+    private func openThere(_ url: String) {
+        addressNotice = nil
+        model.openPageOnMachine(url)
+        // Cleared, unlike a refusal: this went somewhere. What would be left in
+        // the field is the address of a tab that is already open over there.
+        address = ""
+        show("Opening on \(model.current?.label ?? model.theMachine)")
     }
 
     private func beginRename(port: Int) {
@@ -919,10 +1097,17 @@ private struct PortRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
+            // The app's row glyph: monoline at 19, in a 24-point column. It was
+            // 15 at regular weight, which is SF Symbols' default and the reason
+            // the icons were changed everywhere else — and it left this section
+            // three points out of line with the windows under it and with the
+            // address bar above, on a screen whose whole claim is that the three
+            // are one list. See `DeckTabs` for the argument and the two apps it
+            // came from.
             Image(systemName: name == nil ? "globe" : "tag.fill")
-                .font(.system(size: 15))
+                .font(.system(size: 19, weight: .light))
                 .foregroundStyle(name == nil ? Theme.secondary : Theme.accent)
-                .frame(width: 18)
+                .frame(width: 24)
 
             VStack(alignment: .leading, spacing: 3) {
                 if let name {

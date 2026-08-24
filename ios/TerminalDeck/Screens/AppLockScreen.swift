@@ -15,14 +15,21 @@
  * section that reached for them would have to live in that file. This one draws
  * its own card so it can be dropped into `DeckSettingsView` as a single line.
  *
- * ## The paragraph under the switch, and why this one is allowed
+ * ## The line under the switch, and why this one is allowed
  *
  * Asad on the desktop's settings page: *"we don't need this much of big
  * descriptions under each."* He is right, and the rule holds everywhere else on
- * that screen. This row keeps two sentences because the thing they say is the
+ * that screen. This row keeps **one** sentence because the thing it says is the
  * thing he asked to be true — *when* it will ask — and a rule about when an app
  * challenges you is one you should be able to read rather than discover by being
  * challenged.
+ *
+ * It was two. The second one — what does *not* count as having been away — is
+ * mechanism rather than rule: nobody needs it until the app has failed to
+ * challenge them and they have wondered why, and at that point a tap is
+ * cheaper than having read it every time they opened Settings. So it is on the
+ * ⓘ beside the switch. See `AppLockText`, which now has three pieces where it
+ * had one, and still only one place each of them is written.
  */
 
 import SwiftUI
@@ -55,15 +62,27 @@ struct AppLockSection: View {
                 .padding(.bottom, 8)
 
             HStack(spacing: 12) {
+                // The row-icon metrics the rest of Settings is on — 19 light in
+                // a 24-point column. This card sits directly under one drawn by
+                // `SettingsRowBody`, so a glyph four points smaller in a gutter
+                // six points narrower is visible as a step in the left edge.
                 Image(systemName: availability.symbol)
-                    .font(.system(size: 15))
+                    .font(.system(size: 19, weight: .light))
                     .foregroundStyle(availability.canLock || on ? Theme.secondary : Theme.faint)
-                    .frame(width: 18)
-                Text(availability.title)
-                    .font(.system(size: 16))
-                    .foregroundStyle(Theme.primary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("settings.appLockLabel")
+                    .frame(width: 24)
+                // The dot rides with the label in a stack of its own at four
+                // points rather than the row's twelve. "Lock the app with Face
+                // ID" is already close to the width of a 375-point phone once
+                // the icon and the switch have taken theirs; eight points is
+                // eight points.
+                HStack(spacing: 4) {
+                    Text(availability.title)
+                        .font(.system(size: 16))
+                        .foregroundStyle(Theme.primary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("settings.appLockLabel")
+                    InfoDot(about: "the app lock", text: AppLockText.grace)
+                }
                 Spacer(minLength: 8)
                 Toggle("", isOn: Binding(
                     get: { on },
@@ -93,7 +112,9 @@ struct AppLockSection: View {
                 caption(caveat, tone: Theme.faint, id: "settings.appLockCaveat")
             }
 
-            caption(AppLockText.rule(availability), tone: Theme.faint, id: "settings.appLockRule")
+            // The rule, not the mechanism — one line. The other half is on the
+            // ⓘ in the row above. See `AppLockText`.
+            caption(AppLockText.line(availability), tone: Theme.faint, id: "settings.appLockRule")
         }
         // A sentence from an attempt made ten minutes ago is not news. It goes
         // when the screen does.
@@ -112,15 +133,38 @@ struct AppLockSection: View {
     }
 }
 
-/// The sentences both screens say, written once so they cannot drift apart.
+/**
+ * The sentences both screens say, written once so they cannot drift apart.
+ *
+ * Three pieces rather than one, because the two screens have different room and
+ * different readers. `line` is the rule and goes under the switch, where a
+ * person is deciding. `grace` is the mechanism and goes behind the ⓘ beside the
+ * switch, where a person who has already been surprised goes looking. `rule` is
+ * both, for the lock screen itself — a mostly empty screen with room for the
+ * whole thing, and no sensible place to put a popover.
+ *
+ * They are still written once each: `rule` is built from the other two rather
+ * than being a third copy, so the three cannot come to disagree about the
+ * mechanism or about the window.
+ */
 enum AppLockText {
 
-    /// When it asks — the requirement, in the person's own terms, naming the
-    /// thing their phone will actually put in front of them.
+    /// **When it asks**, in one line. The requirement, in the person's own
+    /// terms, naming the thing their phone will actually put in front of them.
+    static func line(_ availability: AppLockAvailability) -> String {
+        "\(Brand.name) asks for \(availability.noun) when it starts, and again after "
+            + "\(AppLock.graceWords) away."
+    }
+
+    /// What does **not** count as having been away. Behind the ⓘ: the grace
+    /// window is the reason the lock feels right rather than something anybody
+    /// needs before they move the switch.
+    static let grace = "Coming back from the app switcher, a share sheet or another app for a "
+        + "moment does not ask."
+
+    /// Both, for the lock screen, which has the room.
     static func rule(_ availability: AppLockAvailability) -> String {
-        "\(Brand.name) asks for \(availability.noun) when it starts, and again if you have been "
-            + "away for more than \(AppLock.graceWords). Coming back from the app switcher, a share "
-            + "sheet or another app for a moment does not ask."
+        "\(line(availability)) \(grace)"
     }
 }
 

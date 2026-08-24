@@ -30,6 +30,14 @@
  * says why. Start is absent when it is already running. Nothing here is a button
  * that would fail if pressed.
  *
+ * The rule cuts the other way too, and that is the half this card kept getting
+ * wrong: **a refusal that names a way out has to offer it.** A host too old to
+ * print an address was told to go and find a desktop, from a card holding an
+ * open connection to the very server that needed the newer build. And the
+ * install copy promised the thing could be "taken off again from here" while no
+ * verb on this side could remove anything. Both are controls now, in the branch
+ * where the sentence appears.
+ *
  * ## Never a command to copy
  *
  * There is no `curl … | sh` on this card and there is not going to be. *"I don't
@@ -48,6 +56,8 @@ struct HostStepCard: View {
     var justLoggedIn = false
 
     @State private var showingOutput = false
+    /// The remove sheet. `false` is the only state anything else can put it in.
+    @State private var confirmingRemove = false
 
     private var connector: ServerConnector { model.serverConnector }
     private var server: StoredServer? { connector.server(serverId) }
@@ -93,6 +103,21 @@ struct HostStepCard: View {
                 controls(server: server, host: look.host, room: look.room)
             }
 
+            /*
+             * The way back, and it is one row rather than a branch of the chain
+             * above, because "take it off this server" is true of an installed
+             * host in every one of those states — running, stopped, connected,
+             * or too old to dial.
+             *
+             * Not on the login screen. `justLoggedIn` is somebody two seconds
+             * into arriving, who asked to *use* this server; a destructive
+             * control is not what that moment is for, and the server's own page
+             * is one tap away and is where the desktop keeps it too.
+             */
+            if let look, look.host.isInstalled, !justLoggedIn {
+                removeRow(host: look.host)
+            }
+
             connecting
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -131,9 +156,15 @@ struct HostStepCard: View {
                        disabled: install.isBusy || isWorking) {
                     Task { await connector.install(serverId) }
                 }
+                // "Taken off again" is a promise, and for one release it was a
+                // promise nothing on this side could keep — there was no remove
+                // verb on the phone at all. There is now; it lives on this
+                // server's own page rather than on the step somebody has just
+                // arrived at, so the sentence names the place instead of
+                // saying "here" from a screen that does not draw it.
                 Text("It goes into your home folder on that server, needs no administrator access, "
-                     + "and can be taken off again from here. Nothing is copied and pasted "
-                     + "anywhere — this app runs it over the connection you just made.")
+                     + "and can be taken off again from this server’s page. Nothing is copied and "
+                     + "pasted anywhere — this app runs it over the connection you just made.")
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.faint)
                     .fixedSize(horizontal: false, vertical: true)
@@ -166,10 +197,24 @@ struct HostStepCard: View {
             action("Start it and connect", "play.circle",
                    identifier: "server.startConnect", disabled: isWorking) {
                 Task {
+                    /*
+                     * These two lines only became a sentence when the wait was
+                     * put in between them, on the server.
+                     *
+                     * `bringUp` used to return the moment the daemon forked,
+                     * seconds before it reached the relay, so `connect()` found
+                     * an empty address, hit its own guard and returned — a
+                     * button that started something and then visibly did
+                     * nothing. `start` now asks the host for its address before
+                     * it re-surveys, and the host holds that answer until the
+                     * dial finishes or it knows it will not; see
+                     * `ServerScripts.address`.
+                     *
+                     * The refusal below is still reachable and still correct:
+                     * it is what a host too old to print an address, or one
+                     * whose relay is off, redraws into.
+                     */
                     await connector.bringUp(serverId)
-                    // Only when starting it actually produced something to dial.
-                    // A host takes a moment to reach its relay, and the card
-                    // redraws into the refusal below when it has not yet.
                     await connect()
                 }
             }
@@ -204,6 +249,41 @@ struct HostStepCard: View {
              * giving them the button is telling them to close the app.
              */
             stated(refusal)
+            /*
+             * **The one refusal that has a button**, and the reason this branch
+             * stopped being a dead end.
+             *
+             * A host too old to print a server address used to get that
+             * sentence and nothing else — Install lives in the `!isInstalled`
+             * branch, so an *installed* host that nothing could reach had no
+             * control on this card at all, and the sentence sent somebody to a
+             * desktop. `ServerScripts.hostPackage` fetches this app's own
+             * release now, so the phone carries the newer build in the only
+             * sense that matters, and `connector.install` re-runs the staged
+             * installer over the session that is already open. Nothing else
+             * changes: `whyNot` is asked first, so a box that has since lost
+             * its compiler gets its own reason rather than a button that would
+             * fail two minutes in.
+             *
+             * A relay that is off or still dialling gets no button here on
+             * purpose. Installing repairs neither, and offering it would be a
+             * control that acts and changes nothing.
+             */
+            if HostProbe.needsNewerBuild(host) {
+                if let why = HostProbe.whyNot(room) {
+                    // Its own identifier, not the refusal's: two sentences are
+                    // on this card in this state — why it cannot be dialled,
+                    // and why it cannot be repaired — and they are different
+                    // facts about the same server.
+                    stated(why, identifier: "server.installRefusal")
+                } else {
+                    action("Install \(Brand.version) on this server", "arrow.down.circle",
+                           identifier: "server.install",
+                           disabled: install.isBusy || isWorking) {
+                        Task { await connector.install(serverId) }
+                    }
+                }
+            }
             HStack(spacing: 10) {
                 action("Look again", "arrow.clockwise", identifier: "server.check",
                        disabled: isWorking, compact: true) {
@@ -235,6 +315,57 @@ struct HostStepCard: View {
                                   username: ticket.username,
                                   secret: ticket.secret,
                                   method: ticket.method)
+    }
+
+    /**
+     * Remove, behind a confirmation that states the consequence — and states it
+     * as the two answers it actually has.
+     *
+     * The desktop asks this with a tick box beside a button. A phone sheet is a
+     * list of verbs, so the box becomes the second verb: what the host stored
+     * on that server — the devices paired to it, the folders each of them may
+     * use — is kept by one and taken by the other, and
+     * `HostProbe.removeConsequence` names both before anything is pressed.
+     *
+     * Drawn as a row rather than as one of the filled buttons above, and drawn
+     * as the *same* row as "Forget this server" one card below it: the two are
+     * the only destructive things on this page, they are a tap apart, and a
+     * person has to be able to tell at a glance that they are the same kind of
+     * act on two different things — the program on that server, and this
+     * phone's record of it. `removeConsequence` is what says which is which.
+     */
+    @ViewBuilder
+    private func removeRow(host: HostOnServer) -> some View {
+        let busy = install.isBusy || isWorking
+        Button(role: .destructive) {
+            confirmingRemove = true
+        } label: {
+            Text(HostProbe.removeLabel)
+                .font(.system(size: 15, weight: .medium))
+                // Faint rather than gone while something else is in flight. A
+                // removal that started at the same moment as an install would
+                // be two scripts racing over one server.
+                .foregroundStyle(busy ? Theme.faint : Theme.warning)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 12)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(busy)
+        .accessibilityIdentifier("server.remove")
+        .confirmationDialog(HostProbe.removeLabel,
+                            isPresented: $confirmingRemove,
+                            titleVisibility: .visible) {
+            Button("Remove it", role: .destructive) {
+                Task { await connector.uninstall(serverId, alsoData: false) }
+            }
+            Button("Remove it and everything it stored", role: .destructive) {
+                Task { await connector.uninstall(serverId, alsoData: true) }
+            }
+            Button("Keep it", role: .cancel) {}
+        } message: {
+            Text(HostProbe.removeConsequence(host, alsoData: false))
+        }
     }
 
     /* ------------------------------------------------------- what it says -- */
@@ -359,12 +490,13 @@ struct HostStepCard: View {
 
     /// A sentence shown **in place of** a control — never a dash, never an empty
     /// row, and never a button that would fail if pressed.
-    private func stated(_ text: String) -> some View {
+    private func stated(_ text: String,
+                        identifier: String = "server.hostRefusal") -> some View {
         Text(text)
             .font(.system(size: 12))
             .foregroundStyle(Theme.secondary)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .accessibilityIdentifier("server.hostRefusal")
+            .accessibilityIdentifier(identifier)
     }
 }

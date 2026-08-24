@@ -198,7 +198,10 @@ struct GitHubAccountView: View {
         .padding(.top, 24)
         .accessibilityIdentifier("github.signIn")
 
-        Text("You choose which repositories Terminal Deck may touch, on GitHub, when you install it.")
+        // The name is read, never spelled. `Brand.name` is the one place it
+        // lives — a literal here is a second answer that goes stale the day
+        // the first one changes.
+        Text("You choose which repositories \(Brand.name) may touch, on GitHub, when you install it.")
             .font(.system(size: 12))
             .foregroundStyle(Theme.faint)
             .fixedSize(horizontal: false, vertical: true)

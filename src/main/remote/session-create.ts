@@ -65,15 +65,24 @@
  * ## What this file decides, and what it no longer has to apologise for
  *
  * It decides where a session **starts**, and which agent it starts. What happens
- * after that is
- * `src/main/confine/`, and the answer is now different per platform: on macOS
- * the session is held inside the folder it started in, and on Windows and Linux
- * it is not, because no mechanism there has been measured. This file makes no
- * claim either way — it only has to know that the spawn it calls can refuse for
- * a *third* reason now, and that the refusal deserves its own sentence.
+ * after that is `src/main/confine/`, and the answer differs per platform: macOS
+ * holds the session with seatbelt, Linux with a user namespace, and Windows with
+ * an AppContainer once an administrator has granted it one thing, once. That
+ * paragraph used to end *"on Windows and Linux it is not, because no mechanism
+ * there has been measured"*, which was true when it was written and stopped
+ * being true as each of the other two mechanisms landed — the same drift the
+ * refusal below now exists to stop, one layer up.
+ *
+ * This file still makes no claim either way, and that is the point: it does not
+ * decide whether a boundary exists, it only has to know that the spawn it calls
+ * can refuse for a *third* reason, and that the refusal deserves its own
+ * sentence **carrying the reason the machine measured**. A refusal that keeps
+ * the reason to itself is how a session that could not be held became, on a
+ * server, a message about a folder that was perfectly fine.
  */
 
 import { posix, win32 } from 'node:path'
+import { BRAND } from '../../shared/brand'
 import type { ProviderId, SessionMeta } from '../../shared/types'
 import { AgentUnavailableError } from '../agent-unavailable'
 import { ConfinementUnavailableError } from '../confine'
@@ -317,6 +326,61 @@ function trimEnd(path: string, sep: string): string {
 }
 
 /**
+ * Where a person is supposed to go and look, on the machine that refused.
+ *
+ * The sentence this replaces was *"Check it on the machine itself"*, and on the
+ * machine this whole feature exists for it names nowhere. A rented Linux box has
+ * no screen, no window and no Settings pane; there is nothing to check *on* it
+ * in the sense that sentence means, and somebody reading it on a phone in
+ * another country is being told to do something that does not exist. The
+ * headless host has one command that prints exactly this state — `HEADLESS.md`
+ * puts it in as many words, *"`terminaldeck status` must say which of these is
+ * true"* — so naming it is the difference between a refusal and a remedy.
+ *
+ * Linux is read as the headless host rather than as a Linux desktop because
+ * there is no Linux GUI build: `platform/paths.ts` says so where it reconciles
+ * the two shells' data directories, and `platform.ts` in the renderer says it
+ * again where it refuses to give Linux a machine noun. If one ever ships, this
+ * is a third place that has to move, and the failure would be a sentence naming
+ * a command instead of a window — visible, and not dangerous, which is the
+ * right way round for a guess about somebody else's computer.
+ *
+ * "That machine" rather than `here`'s "This machine", for the reason the agent
+ * refusal below gives: the sentence is read on the client, where "this" is the
+ * thing in your hand.
+ */
+function lookOn(platform: Platform): string {
+  return platform === 'linux'
+    ? `Run "${BRAND.id} status" on that ${machineNoun(platform)} to see why.`
+    : `Settings → Remote on that ${machineNoun(platform)} says what it can hold.`
+}
+
+/*
+ * **The measured reason is not on the wire, and that is deliberate.**
+ *
+ * It was, for an afternoon. The complaint that put it there is real and stands:
+ * `ConfinementUnavailableError.detail` is the only account of what happened
+ * anywhere, and the only thing receiving it was `console.error`, which a
+ * detached daemon has pointed at `/dev/null`.
+ *
+ * But those strings cannot be sent to a phone, and the reason is structural
+ * rather than a matter of wording. Most end in `tail(error)`, which appends the
+ * mechanism's own stderr — `unshare: Operation not permitted` — and several
+ * *begin* by naming the program, as `sandbox-exec would not run a command with
+ * this profile` does. Truncating at the colon was tried and fails on the second
+ * shape; rephrasing the sentence does nothing about what is appended after it.
+ * `session-create.test.ts` has asserted since long before this that the wire
+ * sentence names no program, and it is right to: nobody holding a phone can act
+ * on a program name or a profile.
+ *
+ * So the split is by *destination* rather than by string surgery. The **log**
+ * gets `detail`, whole. The **phone** gets `lookOn`, which names the place that
+ * holds it — `terminaldeck status` on a server, the Remote panel on a desktop.
+ * That is the fix the original complaint actually wanted: the reason stops
+ * going nowhere, without ending up somewhere it cannot be used.
+ */
+
+/**
  * The `SessionAccess.create` a real desktop hands to the remote server.
  *
  * Returns a refusal rather than throwing, for the same reason
@@ -455,11 +519,42 @@ export function remoteSessionCreator(
        * machine can look into.
        */
       if (error instanceof ConfinementUnavailableError) {
+        /*
+         * The detail goes over the wire, and the log line stays.
+         *
+         * It stayed in the log alone until 2026-08-24, and the branch below
+         * already records what that costs — a detached daemon points stdout at
+         * `/dev/null`, so on the one kind of machine this feature is for, the
+         * only account of why a session was refused was destroyed at the moment
+         * it was written. What reached the person holding the phone was a
+         * sentence with no fact in it and an instruction to go and look at a
+         * server that has nothing to look at.
+         *
+         * These strings are a different thing from a raw exception: each one
+         * was written, by hand, at the point that measured the failure, for the
+         * person who has to act on it. Where one quotes the machine it quotes
+         * the useful line — `unshare: Operation not permitted` is the whole
+         * diagnosis on a box with the AppArmor restriction set — and where a
+         * quoted command line comes with it, it can carry the folders that were
+         * in the plan. That is not a disclosure: the device named one of those
+         * folders in the request this is the answer to, and the rest were sent
+         * to it on connect. The same is already true of the agent refusal below,
+         * which sends the error's own message for the same reason.
+         *
+         * The log line is kept because the two readers are different — whoever
+         * is at the machine gets it with a timestamp and everything around it —
+         * and because a message that has to be shortened one day should not take
+         * the record with it.
+         */
+        // The **whole** detail here, including the mechanism's own stderr —
+        // this is the half `ConfinementUnavailableError.summary` drops on its
+        // way to the phone, and the half somebody standing at the machine
+        // actually needs.
         console.error('[remote] refusing to start an unconfined session:', error.detail)
         return {
           ok: false,
           code: 'unavailable',
-          message: `${here} could not keep a session inside that folder, so it did not start one. Check it on the machine itself.`,
+          message: `${here} could not keep a session inside that folder, so it did not start one. ${lookOn(platform)}`,
         }
       }
       /*

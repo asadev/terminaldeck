@@ -29,15 +29,22 @@ import './DeviceFolders.css'
  *
  * On **macOS** a session started from a device is held inside the folder it was
  * given — measured, not assumed; `src/main/confine/` lists every escape that
- * was attempted and what happened. On **Windows** and **Linux** nothing holds
- * it, because no mechanism there has been built or measured, and an unmeasured
- * boundary claimed on screen is worse than an honest gap.
+ * was attempted and what happened. On **Linux** it is held too, by a user
+ * namespace, and that half of this paragraph was wrong for as long as the
+ * mechanism has existed: it said Linux holds nothing. On **Windows** it is held
+ * once an administrator has granted one permission, once, and nothing holds it
+ * before that.
  *
- * So this panel says which of the two the reader is getting, in its own
- * sentence, and never one sentence covering both. A person who reads "held
+ * So this panel says which of those the reader is getting, in its own sentence,
+ * and never one sentence covering more than one. A person who reads "held
  * inside" on a machine where nothing holds it will hand a device to somebody on
  * the strength of it — which is exactly why the old wording was so careful, and
  * exactly why the new wording may not be careless in the other direction.
+ *
+ * The correction is worth naming as a correction. Understating a boundary is the
+ * safe mistake and that is why it survived here for so long, but it is still a
+ * mistake: it is what somebody decides *not* to share a folder on, and it is the
+ * line a later reader believes instead of the module that does the work.
  *
  * It is the first thing under the heading either way, not fine print — and
  * since 2026-08-19 it is the *only* thing under the heading. Four paragraphs
@@ -183,7 +190,8 @@ export interface FolderDevice {
 }
 
 /**
- * Whether a session started from a device is held inside its folder here.
+ * Whether a session started from a device is held inside its folder here —
+ * **guessed from the platform, for a build too old to be asked.**
  *
  * The renderer's copy of `confinementKind` in `src/main/confine/index.ts`, and a
  * copy for the same reason `machineNoun` is one: this bundle cannot import from
@@ -199,6 +207,30 @@ export interface FolderDevice {
  * boundary that is — annoying, and not dangerous. That is why this names macOS
  * rather than excluding the platforms it knows about: a new build target arrives
  * unconfined until somebody measures it.
+ *
+ * ## Linux is confined, and still cannot be claimed from here
+ *
+ * `confinementKind` answers `'namespace'` for linux and `confineSpawn` wraps
+ * every session from a device in one — **measured on a real rented Linux box**
+ * rather than reasoned about; `confine/linux.ts` carries the table of what was
+ * attempted there and what happened. So the panel does now claim Linux —
+ * through `confine:state`, which `holdsSessions` prefers over this function
+ * whenever the main process answered, and which reads the two kernel switches on
+ * that machine rather than trusting the platform name (`confine/ipc.ts`).
+ *
+ * It is not claimed *here*, and that is a limit of this function rather than a
+ * second opinion about Linux. `UiPlatform` has three values and Linux is not one
+ * of them — `platform.ts` folds it into `'other'` together with every target
+ * nobody has measured, deliberately, because a user agent is a poor thing to
+ * decide a boundary on. Answering `true` for `'other'` would claim a boundary for
+ * every unmeasured target at once, which is the one direction the paragraph above
+ * forbids; answering it for Linux specifically would need a fourth `UiPlatform`
+ * value, and the only build that would ever read it does not exist — there is no
+ * Linux window, only the headless host, which has no renderer at all.
+ *
+ * So the honest state of this function is: it undersells Linux, in a build old
+ * enough that nothing can ask the main process, on a platform that has no window.
+ * If a Linux desktop build ever ships, this is where the fourth value goes.
  */
 export function confinesSessions(platform: UiPlatform): boolean {
   return platform === 'mac'
@@ -234,10 +266,12 @@ export function toConfineView(value: unknown): ConfineView | null {
 /**
  * Does this panel get to say a session is held?
  *
- * The main process's answer wins where there is one, because it read the disk;
- * the platform guess is the fallback for a preload too old to be asked. On
- * macOS the two always agree — seatbelt confines with nothing granted — and on
- * Windows they agree only once somebody has pressed the button.
+ * The main process's answer wins where there is one, because it read the disk —
+ * and, on Linux, the kernel; the platform guess is the fallback for a preload too
+ * old to be asked. On macOS the two always agree — seatbelt confines with nothing
+ * granted — on Windows they agree only once somebody has pressed the button, and
+ * on Linux they do not agree at all: the main process says held and the guess
+ * cannot, for the reason {@link confinesSessions} sets out at length.
  */
 export function holdsSessions(platform: UiPlatform, confine: ConfineView | null): boolean {
   return confine === null ? confinesSessions(platform) : confine.confining

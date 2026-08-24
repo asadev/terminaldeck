@@ -40,7 +40,10 @@
 #     instead of telling you to re-run the whole thing under sudo;
 #   - it says what to do next, which on a server is the part people get wrong —
 #     a host installed and never started is indistinguishable from a broken one
-#     when you are looking at a phone in another country.
+#     when you are looking at a phone in another country;
+#   - and it names the two util-linux tools a confined session is built out of,
+#     when they are not here, because a box without them installs perfectly and
+#     then refuses every session a device starts.
 #
 # POSIX sh, no bashisms: this runs on whatever /bin/sh a minimal server image
 # ships, which is dash as often as not. No `local`, no `[[`, no arrays, no
@@ -243,6 +246,69 @@ Install them and run this again:
 
 Nothing has been written to this machine.
 (If node-pty has since started shipping Linux prebuilds, TERMINALDECK_SKIP_TOOLCHAIN_CHECK=1 goes past this.)"
+}
+
+# ----------------------------------------------- what confinement will need --
+
+# `unshare` and `setpriv`, which are what actually hold a session inside its
+# folder on this machine.
+#
+# `src/main/confine/linux.ts` builds the boundary out of an unprivileged user
+# namespace: `unshare` makes the namespace, a handful of mounts cover the trees
+# holding the account's secrets, and `setpriv --bounding-set=-all` throws away
+# the capabilities that would let the session mount them back. Both are
+# util-linux, both are on essentially every distribution, and both are absent
+# often enough on a minimal image to be worth one `command -v` each.
+#
+# ## Why this warns and does not refuse, unlike the check above it
+#
+# They are different failures with different costs. Without a compiler,
+# `npm install` dies half way through and there is no install at all — so
+# refusing before anything is written is strictly better than letting it start.
+# Without these two the install is fine and the host runs; what breaks is one
+# thing, loudly and safely: a session started from a device is *refused* rather
+# than started outside its folder, because `confineSpawn` throws rather than
+# falling back. Nothing is quietly less protected. Refusing the whole install
+# over it would mean somebody who only wants to attach to sessions from their
+# phone cannot install at all, and the fix here does not need the installer
+# re-run — one package, and the next session is held.
+#
+# So it is said at the end, beside the other "this works, and this machine needs
+# one more thing" lines, rather than shouted from the middle of a scroll nobody
+# reads on a `curl | sh`.
+check_confine_tools() {
+  [ "$OS" = linux ] || return 0
+
+  confine_missing=""
+  have unshare || confine_missing="$confine_missing unshare"
+  have setpriv || confine_missing="$confine_missing setpriv"
+  [ -n "$confine_missing" ] || return 0
+
+  confine_hint="sudo apt-get install -y util-linux"
+  if have apk; then
+    confine_hint="sudo apk add --no-cache util-linux"
+  elif have dnf; then
+    confine_hint="sudo dnf install -y util-linux"
+  elif have yum; then
+    confine_hint="sudo yum install -y util-linux"
+  elif have pacman; then
+    confine_hint="sudo pacman -S --needed util-linux"
+  elif have zypper; then
+    confine_hint="sudo zypper install -y util-linux"
+  fi
+
+  say ""
+  say "This machine is missing:$confine_missing"
+  say ""
+  say "Those are how a session started from your phone is held inside the folder you"
+  say "granted it — a user namespace made by \`unshare\`, with every capability dropped"
+  say "by \`setpriv\` before the shell starts. Without them a session from a device is"
+  say "refused rather than started unconfined, so New Session will not work until:"
+  say ""
+  say "    $confine_hint"
+  say ""
+  say "Everything else here is installed and working. Sessions you start on this"
+  say "machine yourself are unaffected."
 }
 
 # ------------------------------------------------------------- fetch + hash --
@@ -617,6 +683,8 @@ if [ -z "$on_path" ]; then
   say ""
   say "…in your shell's startup file, then open a new shell."
 fi
+
+check_confine_tools
 
 say ""
 say "Next:"

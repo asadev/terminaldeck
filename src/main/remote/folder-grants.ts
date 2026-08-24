@@ -17,38 +17,55 @@
  * ## Be honest about what this is — and the answer is now per platform
  *
  * This file decides **where a session starts**, and that is all it has ever
- * done. What that *means* changed when `src/main/confine/` arrived, and it
- * changed on one platform only:
+ * done. What that *means* changed when `src/main/confine/` arrived, and it now
+ * differs on each of the three:
  *
  *  - **macOS.** The folder is also a boundary. The session is held inside it by
  *    Seatbelt and cannot read or write anything else; `confine/seatbelt.ts`
  *    lists every escape that was attempted and what happened.
- *  - **Windows and Linux.** Exactly as before: a shell that starts in a granted
- *    folder can `cd` anywhere the account can reach, read any file it can read,
- *    and push to any remote its keys open. No mechanism there has been measured,
- *    and no wording in this app may claim one on those platforms.
+ *  - **Linux.** The same, by a user namespace and a handful of mounts;
+ *    `confine/linux.ts` lists what was attempted there, including the two
+ *    escapes that would have shipped. This bullet said the opposite until
+ *    2026-08-24 — that no mechanism had been measured on Linux — which was the
+ *    understatement this file's own rule forbids in the other direction.
+ *  - **Windows.** A boundary once, and only once, an administrator has granted
+ *    one permission on the folders holding node, git and the agent CLIs. Before
+ *    that a shell which starts in a granted folder can `cd` anywhere the account
+ *    can reach, and no wording in this app may claim otherwise.
  *
- * Nothing in *this* file enforces either answer. It is still a list, and the
- * list is still the input to both — which is why it is worth saying here that a
- * folder appearing in it is not, on its own, a promise about anything.
+ * Nothing in *this* file enforces any of those answers. It is still a list, and
+ * the list is still the input to all of them — which is why it is worth saying
+ * here that a folder appearing in it is not, on its own, a promise about
+ * anything.
  *
  * The security boundary that decides whether a device gets a shell at all is
  * unchanged and comes first: pairing, plus a human approving the device on the
  * desktop. This file decides which door that shell opens on; confinement decides
  * how far it can walk once it is through.
  *
- * ## Absence is not denial
+ * ## Absence was not denial. Now it is, and the fallback left with it.
  *
- * A device with **no record here** falls back to the old behaviour rather than
- * being locked out. Two phones were already paired when this was written, and
- * shipping a feature that silently stops them starting sessions — with the
- * refusal arriving on a phone, away from the machine that could fix it — would
- * be a worse bug than the one being fixed.
+ * A device with **no record here** used to fall back to whatever the desktop was
+ * offering rather than be locked out, and the argument for it was compatibility:
+ * two phones were already paired when this was written, and silently stopping
+ * them starting sessions — with the refusal arriving on a phone, away from the
+ * machine that could fix it — would have been a worse bug than the one being
+ * fixed. That was a good argument about a preference and not an argument about a
+ * boundary: it meant six digits typed into a phone bought every open project
+ * immediately, with no further act by anybody.
  *
- * An **empty recorded list** is a different fact and is honoured: that is a
- * person having removed every folder, which means "nowhere", not "anywhere".
- * The distinction is the whole reason {@link FolderGrants.granted} answers
- * `null` rather than an empty array for an unlisted device.
+ * `device-reach.ts` closed it, and it is that file's rule now — a guest with no
+ * record reaches nothing, one of your own machines reaches everything, and this
+ * file's `foldersForDevice` went with it rather than being left as a second
+ * answer to a question that already has one. What is left here is the **store**:
+ * what was chosen, for whom, on disk.
+ *
+ * An **empty recorded list** is still a different fact from an absent one, and
+ * is still honoured: that is a person having removed every folder, which means
+ * "nowhere". The distinction is the whole reason {@link FolderGrants.granted}
+ * answers `null` rather than an empty array for an unlisted device — `reachFor`
+ * folds the two together for a guest today, and the day one of them stops
+ * meaning the other, the store must still be able to tell them apart.
  *
  * ## Why its own file
  *
@@ -280,61 +297,4 @@ export class FolderGrants {
     }
     this.grants = grants
   }
-}
-
-/**
- * The one list a device may start a session in — the answer `folders()` gives
- * the remote session rule, and the same array the phone's picker is sent.
- *
- * It is one function because it must be one answer. The picker showing a folder
- * the rule would refuse is the failure this whole feature exists to end, and two
- * places computing "what may this device use" is how that comes back.
- *
- * `offered` and `home` are called lazily: a device with its own list must not
- * cost a walk of the desktop's projects and sessions, and `home` is only the
- * answer in the one case below.
- *
- * The home directory is in this list rather than kept as a separate fallback for
- * a request that named nothing. There used to be two rules — a list, and a
- * "when the list is empty, use home" — and with grants that second rule quietly
- * turns "this device may use no folders" into "this device may start in the
- * user's home directory", which is the opposite of what was chosen. One list,
- * and an empty one means nothing, is the only version without that hole.
- */
-export function foldersForDevice(
-  grants: Pick<FolderGrants, 'granted'>,
-  deviceId: string,
-  offered: () => readonly string[],
-  home: () => string,
-): string[] {
-  const chosen = grants.granted(deviceId)
-  if (chosen !== null) return chosen
-
-  /*
-   * Deduplicated, because `offered` concatenates two sources that overlap.
-   *
-   * `host-core.ts` builds it as the open projects *plus* the cwd of every
-   * running session — and a session almost always runs in a project that is
-   * open, so two projects with a session in each offer four entries, two of
-   * them repeats. Asad's recording caught exactly that: the browser client's
-   * "Start in" list showed `/home/asad/ClaudeImza` and
-   * `/home/asad/ClaudeImzacrm`, and then both again.
-   *
-   * The asymmetry that let it through is a few lines up: the *granted* branch
-   * returns a hand-chosen list, which cannot repeat itself, so nothing on this
-   * path had ever needed merging. This branch is not hand-chosen.
-   *
-   * `sameFolder` rather than a Set, so `/a/b` and `/a/b/` are one folder and
-   * Windows' case-insensitivity is honoured — the same comparison `granted`
-   * already uses a hundred lines above, rather than a second idea of what makes
-   * two paths the same.
-   */
-  const list: string[] = []
-  for (const path of offered()) {
-    if (list.some((seen) => sameFolder(seen, path))) continue
-    list.push(path)
-  }
-  // A first launch: nothing open, nothing running, and a phone starting a
-  // session is at its most useful and least able to name a folder.
-  return list.length > 0 ? list : [home()]
 }

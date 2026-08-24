@@ -236,8 +236,16 @@ final class AppearanceTests: XCTestCase {
     /// never reached the phone fails here instead of drifting for a year.
     func testTheLightHalfIsTheDesktopsLightTheme() {
         let expected: [(String, SwiftUI.Color, Int)] = [
-            ("--bg-primary", Theme.background, 0xffffff),
-            ("--bg-secondary", Theme.surface, 0xf5f5f5),
+            // Swapped on 2026-08-24, and the swap is the point rather than a
+            // relabelling: `tokens.css` calls `--bg-primary` the *content
+            // canvas* and `--bg-secondary` *the app ground the sidebar sits
+            // on*. A phone screen is app chrome, so its page is the ground and
+            // its cards are the canvas. The phone had it the other way round,
+            // which drew white paper with grey cards — iOS's own default, and
+            // the reason the app read as having no character of its own.
+            // The hexes are untouched: both sides still ship `tokens.css`.
+            ("--bg-secondary", Theme.background, 0xf5f5f5),
+            ("--bg-primary", Theme.surface, 0xffffff),
             ("--bg-tertiary", Theme.surfaceHigh, 0xededed),
             ("--text-primary", Theme.primary, 0x1c1c1c),
             ("--text-secondary", Theme.secondary, 0x545454),
@@ -258,8 +266,9 @@ final class AppearanceTests: XCTestCase {
     /// move the theme people are already using.
     func testTheDarkHalfIsWhatTheAppAlreadyShipped() {
         let expected: [(String, SwiftUI.Color, Int)] = [
-            ("--bg-primary", Theme.background, 0x191919),
-            ("--bg-secondary", Theme.surface, 0x202020),
+            // The same swap as the light half above, and for the same reason.
+            ("--bg-secondary", Theme.background, 0x202020),
+            ("--bg-primary", Theme.surface, 0x191919),
             ("--bg-tertiary", Theme.surfaceHigh, 0x252525),
             ("--text-primary", Theme.primary, 0xededed),
             ("--text-secondary", Theme.secondary, 0xa8a8a8),

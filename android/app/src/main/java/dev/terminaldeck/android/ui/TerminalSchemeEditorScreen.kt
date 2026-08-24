@@ -223,9 +223,9 @@ fun TerminalSchemeEditorScreen(schemeId: String, onBack: () -> Unit) {
  * One colour: a swatch, its name, and the hex behind it.
  *
  * The swatch is the value rather than a decoration — it is drawn from whatever the field currently
- * parses to, so a mistyped hex stops updating it and the row says why. Six characters of monospace
- * is the field, because a hex is a measurement and proportional digits in a colour code are how a
- * `0` and an `O` get confused.
+ * parses to, so a mistyped hex stops updating it and the row says why. The field is monospace,
+ * because a hex is a measurement and proportional digits in a colour code are how a `0` and an `O`
+ * get confused — and eight digits fit in it as well as six, which the selection row needs.
  */
 @Composable
 private fun ColourRow(
@@ -237,7 +237,11 @@ private fun ColourRow(
     val colors = DeckTheme.colors
     val stored = slot.read(scheme)
     val typed = drafts[slot] ?: stored
-    val parsed = TerminalScheme.parseOrNull(typed)
+    // Slot-aware, because the selection is the one colour that may be written `#rrggbbaa` — see
+    // `TerminalSlot.carriesAlpha`. Passing `false` here would put "Not a colour" under six of the
+    // shipped schemes and paint their swatch black. The swatch itself is the opaque part either
+    // way: sixteen per cent of the accent in a 28dp chip is an empty square, not a colour.
+    val parsed = TerminalScheme.parseOrNull(typed, slot.carriesAlpha)
 
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -249,7 +253,7 @@ private fun ColourRow(
             modifier = Modifier
                 .size(28.dp)
                 .clip(Radius.small)
-                .background(Color(parsed ?: TerminalScheme.parse(stored)))
+                .background(Color(parsed ?: TerminalScheme.parse(stored, slot.carriesAlpha)))
                 .border(1.dp, colors.hairline, Radius.small)
         )
         Spacer(Modifier.width(Space.x3))

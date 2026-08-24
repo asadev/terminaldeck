@@ -116,11 +116,16 @@ struct DevServerRow: View {
          */
         HStack(spacing: 12) {
             HStack(alignment: .top, spacing: 12) {
+                // The app's row glyph — monoline at 19, in a 24-point column —
+                // so a dev server sits in the same icon column as the ports it
+                // is drawn among on the Browser tab. The one-point nudge that
+                // used to be here went with the size: it existed to drop a
+                // 15-point glyph onto a 16-point title's cap height, and a
+                // 19-point one already meets it.
                 Image(systemName: glyph)
-                    .font(.system(size: 15))
+                    .font(.system(size: 19, weight: .light))
                     .foregroundStyle(tint)
-                    .frame(width: 18)
-                    .padding(.top, 1)
+                    .frame(width: 24)
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text(name ?? Self.folderName(report.folder))

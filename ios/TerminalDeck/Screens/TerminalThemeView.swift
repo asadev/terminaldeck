@@ -119,10 +119,15 @@ struct TerminalThemeView: View {
 
             SchemeGroup {
                 HStack(spacing: 12) {
+                    // 19 light in a 24-point column, which is what every row
+                    // icon in Settings is now set at — see `SettingsRowBody`.
+                    // A 15-point regular glyph here is the SF Symbols default,
+                    // and the SF Symbols default is precisely the look he
+                    // complained about.
                     Image(systemName: "textformat.size")
-                        .font(.system(size: 15))
+                        .font(.system(size: 19, weight: .light))
                         .foregroundStyle(Theme.secondary)
-                        .frame(width: 18)
+                        .frame(width: 24)
                     Text("Text size")
                         .font(.system(size: 16))
                         .foregroundStyle(Theme.primary)
@@ -180,31 +185,36 @@ struct TerminalThemeView: View {
         }
     }
 
+    /**
+     * Five words, and the rest of it behind the dot.
+     *
+     * *"we don't need this much of big descriptions under each."* This was two
+     * paragraphs — the scope of the choice, and what editing a shipped scheme
+     * does — and both of them were explanation rather than anything somebody
+     * has to have in front of them while choosing a colour.
+     *
+     * **The half-line that stays is not a leftover.** Somebody who changes the
+     * colour on their desktop and then picks the phone up is looking at what
+     * seems like a bug, and a person who thinks they have found a bug does not
+     * tap an ⓘ to check. So the scope is said out loud and the reasoning is one
+     * tap away. "Stands alone" rather than "does not sync": the second
+     * describes a missing feature, the first describes the design.
+     */
     private var footer: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            /*
-             * The sentence the design asks for out loud, because it is the one
-             * thing about this screen that cannot be worked out by using it:
-             * somebody who changes the colour on the Mac and then picks the
-             * phone up would otherwise be looking at what seems like a bug.
-             *
-             * "Every machine keeps its own" rather than "this does not sync" —
-             * the second describes a missing feature, the first describes the
-             * design. The desktop has this same screen and the choice there is
-             * that machine's.
-             */
-            Text("This phone's own choice, and it stands alone: every machine keeps the scheme "
-                 + "chosen in the app running on it, and changing one never changes the other.")
+        HStack(spacing: 4) {
+            Text("This phone's choice stands alone.")
                 .font(.system(size: 12))
                 .foregroundStyle(Theme.faint)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("terminalTheme.scopeNote")
 
-            Text("Editing a scheme that ships with \(Brand.name) makes a copy first, so Dracula "
-                 + "stays Dracula. A copy can be renamed, edited and deleted.")
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.faint)
-                .fixedSize(horizontal: false, vertical: true)
+            InfoDot(about: "where this choice applies",
+                    text: "Every machine keeps the scheme chosen in the app running on it, and "
+                        + "changing one never changes the other.\n\nEditing a scheme that ships "
+                        + "with \(Brand.name) makes a copy first, so Dracula stays Dracula. A copy "
+                        + "can be renamed, edited and deleted.")
+
+            Spacer(minLength: 0)
         }
         .padding(.horizontal, 4)
         .padding(.top, 14)
@@ -464,23 +474,43 @@ struct SchemePreview: View {
 /* Chrome shared with the editor                                              */
 /* -------------------------------------------------------------------------- */
 
-/// The same caption `DeckSettingsView` draws, available to this screen and the
-/// editor. A second copy that drifted by two points is how two settings screens
-/// stop looking like one product.
+/**
+ * The same caption `DeckSettingsView` draws, available to this screen and the
+ * editor. A second copy that drifted by two points is how two settings screens
+ * stop looking like one product.
+ *
+ * It carries the ⓘ for anything that is about the **section** rather than about
+ * one row in it — the note that used to be a paragraph under the last card,
+ * where it was read after the decision it was meant to inform. Both are nil on
+ * most captions, which is the point: a caption with a dot on it is saying there
+ * is something here that the rows cannot say for themselves.
+ */
 struct SchemeSectionCaption: View {
     let text: String
+    let about: String?
+    let info: String?
 
-    init(_ text: String) { self.text = text }
+    init(_ text: String, about: String? = nil, info: String? = nil) {
+        self.text = text
+        self.about = about
+        self.info = info
+    }
 
     var body: some View {
-        Text(text.uppercased())
-            .font(.system(size: 11, weight: .semibold))
-            .kerning(0.6)
-            .foregroundStyle(Theme.faint)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.leading, 4)
-            .padding(.top, 20)
-            .padding(.bottom, 8)
+        HStack(spacing: 4) {
+            Text(text.uppercased())
+                .font(.system(size: 11, weight: .semibold))
+                .kerning(0.6)
+                .foregroundStyle(Theme.faint)
+            if let about, let info {
+                InfoDot(about: about, text: info)
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.leading, 4)
+        .padding(.top, 20)
+        .padding(.bottom, 8)
     }
 }
 

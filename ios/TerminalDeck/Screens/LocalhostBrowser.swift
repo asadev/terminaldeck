@@ -93,11 +93,13 @@ struct LocalhostBrowser: View {
      * What to ask that origin for, first.
      *
      * `"/"` for every row on the list, which is what a tap on a port has always
-     * meant. Anything else comes from the address field the `+` opens — see
-     * `LocalhostAddress` — and it is the reason that field exists at all: the
-     * thing somebody is working on is very often at `/admin` rather than at the
-     * root, and until there was somewhere to type a path there was no way to
-     * reach it from this app at all.
+     * meant. Anything else comes from the address bar at the top of that screen
+     * — see `LocalhostAddress` — and it is the reason that bar exists at all:
+     * the thing somebody is working on is very often at `/admin` rather than at
+     * the root, and until there was somewhere to type a path there was no way to
+     * reach it from this app at all. The bar was a `+` and a sheet when this was
+     * written; it is a field on the screen now, which changes where the string
+     * comes from and nothing about what is done with it here.
      *
      * Resolved against the tunnel's own URL rather than concatenated, so the
      * loopback literal the tunnel actually managed to bind is kept — it is

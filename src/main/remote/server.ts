@@ -2033,6 +2033,14 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     // its own loopback.
     if (options.offer !== undefined && !options.offer.includes(name)) return false
     if (name === CAPABILITY.create) return typeof options.sessions.create === 'function'
+    // Same rule, and it is the rule this capability was missing. Browsing the
+    // machine's folders is answered out of `sessions.folders` — it is what
+    // decides where the picker opens, and `mayPickFolders` refuses the verb
+    // without it — so a host that does not choose folders per device must not
+    // advertise that a phone may walk them. Caught by the stub-shaped host in
+    // `server.test.ts`, which cannot create, close or report a plan and was
+    // being told it could browse.
+    if (name === CAPABILITY.folderPick) return typeof options.sessions.folders === 'function'
     // Its opposite number, negotiated the same way and separately from it. A
     // host can genuinely start sessions and refuse to end them — the public demo
     // box is exactly that — so the two are two methods and two capabilities

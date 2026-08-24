@@ -2,7 +2,8 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { FolderGrants, foldersForDevice, REMOTE_FOLDERS_FILE } from './folder-grants'
+import { FolderGrants, REMOTE_FOLDERS_FILE } from './folder-grants'
+import { reachFor } from './device-reach'
 import { remoteSessionCreator } from './session-create'
 import type { SessionMeta } from '../../shared/types'
 
@@ -19,14 +20,22 @@ import type { SessionMeta } from '../../shared/types'
  *
  * The three states are the whole design and they are not two:
  *
- *   - **no record** — nobody has chosen for this device, so it gets whatever
- *     this desktop offers. Two phones were already paired when this shipped and
- *     locking them out with a feature they never asked for would be a worse bug
- *     than the one being fixed.
+ *   - **no record** — nobody has chosen for this device. The store answers
+ *     `null`, which is not the same value as `[]` and must not become it here:
+ *     what a *guest* gets from that is `device-reach.ts`'s decision, and it is
+ *     nothing at all.
  *   - **a list** — exactly those folders, whatever the desktop has open.
  *   - **an empty list** — a person removed the last one. That means nowhere, and
  *     flattening it into "no record" would silently undo the only thing they
  *     said.
+ *
+ * What is deliberately **not** here any more is the fallback: `foldersForDevice`
+ * turned "no record" into "whatever this desktop is offering", `reachFor`
+ * replaced it, and the function and its tests went with it rather than being
+ * left behind asserting a rule the product no longer follows. The dedupe cases
+ * it carried — the repeated folders from Asad's recording — belong to the same
+ * move and live in `device-reach.test.ts`, where the code that does the
+ * deduplicating now is.
  */
 
 function tempDir(): string {
@@ -167,54 +176,12 @@ describe('the store', () => {
   })
 })
 
-describe('the list one device is offered', () => {
-  const offered = (): string[] => ['/Users/apple/Projects/open-on-the-desktop']
-  const home = (): string => '/Users/apple'
-
-  it('falls back to what this desktop offers when nobody has chosen', () => {
-    // The two phones that were already paired. Shipping a feature that silently
-    // stops them starting sessions would be the worse bug.
-    const grants = new FolderGrants(tempDir())
-    expect(foldersForDevice(grants, 'device-a', offered, home)).toEqual([
-      '/Users/apple/Projects/open-on-the-desktop',
-    ])
-  })
-
-  it('falls back to home when this desktop has nothing open at all', () => {
-    // A first launch, which is exactly when a phone starting a session is most
-    // useful and least able to name a folder. Home is *in* the list rather than
-    // a second rule beside it, so that an empty list can mean nowhere.
-    const grants = new FolderGrants(tempDir())
-    expect(foldersForDevice(grants, 'device-a', () => [], home)).toEqual(['/Users/apple'])
-  })
-
-  it('is exactly the chosen list once somebody has chosen', () => {
-    const grants = new FolderGrants(tempDir())
-    grants.set('device-a', ['/Users/apple/Projects/alpha'])
-    expect(foldersForDevice(grants, 'device-a', offered, home)).toEqual(['/Users/apple/Projects/alpha'])
-  })
-
-  it('is empty — not home, not the desktop’s — when the last folder is removed', () => {
-    const grants = new FolderGrants(tempDir())
-    grants.set('device-a', [])
-    expect(foldersForDevice(grants, 'device-a', offered, home)).toEqual([])
-  })
-
-  it('does not walk the desktop’s projects for a device that has its own list', () => {
-    const grants = new FolderGrants(tempDir())
-    grants.set('device-a', ['/Users/apple/Projects/alpha'])
-    const walked = vi.fn(offered)
-    foldersForDevice(grants, 'device-a', walked, home)
-    expect(walked).not.toHaveBeenCalled()
-  })
-})
-
 /**
  * The store and the rule, together, in the words the panel uses.
  *
  * Everything above can pass with the id never reaching the lookup — which is
- * exactly the bug this feature exists to fix. These four run the real creator
- * over the real store.
+ * exactly the bug this feature exists to fix. These run the real creator over
+ * the real store, through the real rule in `device-reach.ts`.
  */
 describe('two phones on one desktop', () => {
   function desktop(dir: string): {
@@ -227,15 +194,27 @@ describe('two phones on one desktop', () => {
       ...META,
       cwd: input.cwd,
     }))
+    // Through `reachFor`, which is the rule this store feeds in production —
+    // not a copy of it written for the test. A hand-rolled `granted() ?? []`
+    // here would pass on the day the real rule stopped agreeing with it, which
+    // is the exact shape of drift `folder-grants.ts` exists because of.
+    //
+    // `kindOf` answers `guest` because that is the side the folder list decides
+    // anything on: one of the owner's own machines is unrestricted and never
+    // consults it. `device-reach.test.ts` owns that half.
+    const kinds = { kindOf: (): 'guest' => 'guest' }
     const create = remoteSessionCreator(
       {
         folders: (deviceId) =>
-          foldersForDevice(
-            grants,
+          reachFor(
+            { kinds, grants },
             deviceId,
-            () => ['/Users/apple/Projects/whatever-is-open'],
-            () => '/Users/apple',
-          ),
+            {
+              offered: () => ['/Users/apple/Projects/whatever-is-open'],
+              home: () => '/Users/apple',
+            },
+            'darwin',
+          ).folders,
         spawn,
       },
       'darwin',
@@ -276,15 +255,21 @@ describe('two phones on one desktop', () => {
     expect(spawn).toHaveBeenCalledTimes(1)
   })
 
-  it('leaves a device nobody has chosen for exactly where it was', async () => {
-    // The phones that were already paired: no row in the file, and the folder
-    // the desktop has open still starts.
-    const { create } = desktop(tempDir())
+  it('starts nothing for a device nobody has chosen for', async () => {
+    /*
+     * This test asserted the opposite until 2026-08-24, and the flip is the
+     * fix rather than a regression. A phone with no row in this file used to get
+     * whatever the desktop had open — so pairing, on its own, bought every open
+     * project — and `device-reach.ts` closed it: a guest reaches what was chosen
+     * for it, and nothing was.
+     */
+    const { create, spawn } = desktop(tempDir())
     const outcome = await create({
       deviceId: 'phone-that-predates-grants',
       cwd: '/Users/apple/Projects/whatever-is-open',
     })
-    expect(outcome).toMatchObject({ ok: true })
+    expect(outcome).toMatchObject({ ok: false })
+    expect(spawn).not.toHaveBeenCalled()
   })
 
   it('starts nothing for a device whose last folder was removed', async () => {
@@ -294,53 +279,5 @@ describe('two phones on one desktop', () => {
     expect((await create({ deviceId: 'phone', cwd: '/Users/apple/Projects/alpha' })).ok).toBe(false)
     expect((await create({ deviceId: 'phone' })).ok).toBe(false)
     expect(spawn).not.toHaveBeenCalled()
-  })
-})
-
-describe('the folders a device is offered when nobody has chosen for it', () => {
-  const grants = { granted: () => null }
-  const home = () => '/Users/someone'
-
-  /*
-   * The bug Asad's recording caught, at its source.
-   *
-   * `host-core.ts` offers the open projects plus every running session's cwd,
-   * and a session normally runs in a project that is open — so the two lists
-   * overlap and the wire carried each folder twice. His browser client showed
-   * `/home/asad/ClaudeImza` and `/home/asad/ClaudeImzacrm`, then both again,
-   * which is this array verbatim.
-   */
-  it('offers a folder once when a session is running in an open project', () => {
-    const offered = () => [
-      '/home/asad/ClaudeImza',
-      '/home/asad/ClaudeImzacrm',
-      '/home/asad/ClaudeImza',
-      '/home/asad/ClaudeImzacrm',
-    ]
-    expect(foldersForDevice(grants, 'device-1', offered, home)).toEqual([
-      '/home/asad/ClaudeImza',
-      '/home/asad/ClaudeImzacrm',
-    ])
-  })
-
-  it('treats a trailing separator as the same folder', () => {
-    const offered = () => ['/home/asad/work', '/home/asad/work/']
-    expect(foldersForDevice(grants, 'device-1', offered, home)).toEqual(['/home/asad/work'])
-  })
-
-  /*
-   * The rule this must NOT become. A prefix test would merge these two — they
-   * are the pair from his own machine, and they are different projects.
-   */
-  it('does not merge one folder into another whose name it is a prefix of', () => {
-    const offered = () => ['/home/asad/ClaudeImza', '/home/asad/ClaudeImzacrm']
-    expect(foldersForDevice(grants, 'device-1', offered, home)).toEqual([
-      '/home/asad/ClaudeImza',
-      '/home/asad/ClaudeImzacrm',
-    ])
-  })
-
-  it('still falls back to home when nothing is offered at all', () => {
-    expect(foldersForDevice(grants, 'device-1', () => [], home)).toEqual(['/Users/someone'])
   })
 })

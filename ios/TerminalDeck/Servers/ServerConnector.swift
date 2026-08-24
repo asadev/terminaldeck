@@ -75,7 +75,7 @@ struct ServerView: Equatable {
 /// Where an install has got to. The desktop's `HostState`, with its own words.
 struct ServerInstallState: Equatable {
     enum Step: Equatable {
-        case idle, checking, staging, installing, service, done, failed
+        case idle, checking, staging, installing, service, removing, done, failed
     }
 
     var step: Step = .idle
@@ -90,7 +90,7 @@ struct ServerInstallState: Equatable {
 
     var isBusy: Bool {
         switch step {
-        case .checking, .staging, .installing, .service: return true
+        case .checking, .staging, .installing, .service, .removing: return true
         case .idle, .done, .failed: return false
         }
     }
@@ -295,11 +295,18 @@ final class ServerConnector {
      * Put the headless host on a server, as five steps somebody watches happen.
      *
      * Check, stage, install, start, look again — the desktop's order, minus its
-     * upload of a tarball. The desktop carries the package because the npm name
-     * used to be a placeholder with no `bin` entry; the registry now carries a
-     * real one, so the phone sends the installer and lets it fetch what it was
-     * written to fetch. What the phone cannot do is carry a Node package it does
-     * not build, and it does not have to.
+     * upload of a tarball. The desktop carries the package inside itself; a
+     * phone cannot carry a Node package it does not build, so it sends the
+     * installer and **names what that installer is to fetch**, which is
+     * `ServerScripts.hostPackage`: this app's own release tarball at
+     * `Brand.version`, from the release its build was cut from. Not the npm
+     * registry — that route installed 0.6.1 under a 0.10 app and dead-ended at
+     * the connect step with every one of these five saying success. See the
+     * argument on `hostPackage` itself.
+     *
+     * This is also the way *back* from an out-of-date host: the same five steps
+     * over an already-open session, which is why the card's refusal for a host
+     * too old to print an address now offers this rather than naming a desktop.
      */
     func install(_ id: String) async {
         guard let server = store.load(id), !working.contains(id) else { return }
@@ -442,6 +449,109 @@ final class ServerConnector {
             : "It is installed and not running. Starting it is the button above."
     }
 
+    /* ------------------------------------------------------------ removing -- */
+
+    /**
+     * Take it off that server again, and say what is left.
+     *
+     * ## Why this exists at all
+     *
+     * Because the install card promised it: *"It goes into your home folder on
+     * that server, needs no administrator access, and can be taken off again
+     * from here."* That sentence was on screen for a build in which no verb on
+     * this side could remove anything — the phone had install, start and stop,
+     * and the way back was a desktop. A promise a product cannot keep is worse
+     * than a missing feature, and the desktop had already argued the case in
+     * `host.ts`'s own header: *"If we want to uninstall we can uninstall."*
+     *
+     * ## The confirmation is the caller's
+     *
+     * `HostProbe.removeConsequence` is the sentence shown before the press, and
+     * `alsoData` is the answer to it. By the time this runs the question has
+     * been asked, so this does the work and reports it rather than asking
+     * again — the desktop's `ServerHosts.uninstall` splits it the same way and
+     * for the same reason.
+     *
+     * ## What is deliberately left alone
+     *
+     * This phone's own record of the machine. The host is gone from that
+     * server, but the machine row and its pairing are this app's, not that
+     * server's, and `removeConsequence` says so in as many words rather than
+     * quietly reaching into somebody's Machines list. What *is* re-read is the
+     * survey, because the card is drawn from it and the card must not still be
+     * offering Stop for a program that is not there.
+     */
+    func uninstall(_ id: String, alsoData: Bool) async {
+        guard let server = store.load(id),
+              let look = views[id]?.host,
+              look.host.isInstalled,
+              !working.contains(id)
+        else { return }
+        working.insert(id)
+        problems[id] = nil
+        defer { working.remove(id) }
+
+        var state = ServerInstallState()
+        state.step = .removing
+        state.line = "Stopping it and taking it off \(server.name)."
+        installs[id] = state
+
+        do {
+            let session = try await open(server)
+            let ran = try await session.run(
+                ServerScripts.remove(command: look.host.command,
+                                     dataDir: look.host.dataDir,
+                                     alsoData: alsoData))
+            guard ran.code == 0 else {
+                state.step = .failed
+                state.line = "That could not be removed from \(server.name)."
+                // The server's own words, and the exit code when it had none.
+                // The one refusal with a shape worth reading is the `$HOME`
+                // guard in `ServerScripts.remove`: "not ours to remove", for a
+                // host somebody else installed for everyone on that machine.
+                let said = ran.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+                state.detail = said.isEmpty ? "It ended with \(ran.code)." : said
+                installs[id] = state
+                return
+            }
+            state.done = [
+                "The host program is gone, and its service with it.",
+                alsoData
+                    ? "\(look.host.dataDir) is gone too, so any device paired to it will need pairing "
+                        + "again."
+                    : "\(look.host.dataDir) was left alone — the devices paired to it and the folders "
+                        + "each of them may use are still there for a later install.",
+            ]
+            state.step = .done
+            state.line = "It was removed from \(server.name)."
+            installs[id] = state
+            // `try?`, for the reason `install` gives: the removal is finished
+            // and has said so, and a survey that fails a moment later must not
+            // turn a completed removal into a failed one. The card falls back
+            // to "nothing has been looked at on this server yet" and its Check
+            // button, which is a true thing to say about a phone that has just
+            // lost its connection.
+            views[id] = try? await measure(session)
+        } catch let trouble as ServerTrouble {
+            state.step = .failed
+            state.line = trouble.headline
+            state.detail = trouble.advice
+            installs[id] = state
+        } catch let problem as SSHProblem {
+            state.step = .failed
+            state.line = problem.headline
+            state.detail = problem.advice
+            installs[id] = state
+            drop(id)
+        } catch {
+            state.step = .failed
+            state.line = "That removal did not finish."
+            state.detail = String(describing: error)
+            installs[id] = state
+            drop(id)
+        }
+    }
+
     /* --------------------------------------------------------- start & stop -- */
 
     func start(_ id: String) async {
@@ -467,6 +577,35 @@ final class ServerConnector {
                                       systemdUser: look.room.systemdUser)
                 : ServerScripts.stop(command: look.host.command, hasUnit: !look.host.unit.isEmpty)
             _ = try await session.run(script)
+            if running {
+                /*
+                 * **Started is not reachable**, and the difference is the whole
+                 * of the bug this closes.
+                 *
+                 * Both start scripts return the instant the daemon is forked —
+                 * `systemctl start` by design, `nohup` by definition — while
+                 * the thing a phone actually needs is a *relay dial* that has
+                 * not happened yet. So the survey below read a `status` with no
+                 * address block, `canConnect` answered false, and "start it and
+                 * connect" started it and connected to nothing, silently.
+                 *
+                 * `ServerScripts.address` is the wait, and it is the host's own
+                 * — it knows how old the daemon is and stops waiting when the
+                 * answer cannot improve. Its result is ignored on purpose; what
+                 * this call buys is the seconds, and the survey on the next
+                 * line is what reads the answer.
+                 *
+                 * `try?`, not `try`: an older host has no `address` verb, and a
+                 * host that will not start has already failed in a way the
+                 * survey reports properly. Neither is a reason to throw away a
+                 * measurement that would have said so.
+                 *
+                 * `working` still holds `id` for all of this — deliberately, so
+                 * the spinner on the card is still turning while the wait
+                 * happens rather than the card sitting still and looking done.
+                 */
+                _ = try? await session.run(ServerScripts.address(command: look.host.command))
+            }
             views[id] = try await measure(session)
         } catch let trouble as ServerTrouble {
             problems[id] = trouble
@@ -537,6 +676,10 @@ final class ServerConnector {
      */
     func bringUp(_ id: String) async {
         guard let look = views[id]?.host, look.host.isInstalled else { return }
+        // `start` does not return until the host has been asked for its address,
+        // so by the time this does, `views[id]` either has one to dial or the
+        // server has said why it never will. That is what makes the caller's
+        // next line — a connect — worth writing. See `control`.
         if look.host.running != .yes { await start(id) }
     }
 

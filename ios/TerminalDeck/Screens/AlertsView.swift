@@ -1,19 +1,25 @@
 /**
  * Alerts: the switches, and the sentence that says what they can and cannot do.
  *
- * ## The honest paragraph is the point of this screen
+ * ## The honest limit is the point of this screen — and it is a line now
  *
  * Two switches would fit in a menu. What does not fit in a menu, and what a
  * person deciding whether to rely on this deserves before they do, is that a
  * suspended phone is not reachable: this product has no push service, so an
- * alert can only be raised while the app is running — on screen, or in the
- * half-minute iOS allows after you put the phone down. Everything that happened
- * while it was asleep is caught up on the next connection and shown as a line at
- * the top of the session list instead.
+ * alert can only be raised while the app is running.
  *
- * Saying that costs a paragraph. Not saying it costs somebody a two-hour wait
- * for a buzz that was never coming, and that is the sort of thing an app is
- * uninstalled over.
+ * That used to be five paragraphs. *"Remove this full shit. I don't want any
+ * kind of long descriptions anywhere. Just if somewhere it's very required,
+ * give the i icon."* It is one line and an ⓘ now, and the split between them is
+ * the only judgement on this screen worth writing down.
+ *
+ * **The limit stays visible.** Not saying it costs somebody a two-hour wait for
+ * a buzz that was never coming, and that is the sort of thing an app is
+ * uninstalled over — and somebody who does not know there is a limit will never
+ * tap a dot to go looking for one. What went *behind* the dot is the mechanism:
+ * the half-minute iOS allows after the phone goes down, and the catch-up on the
+ * next connection. Mechanism is only interesting once you know there is
+ * something to explain, and by then a tap is cheap.
  *
  * ## Why the permission button is not a switch
  *
@@ -83,8 +89,11 @@ struct AlertsView: View {
                 .padding(.vertical, 12)
 
         case .notAsked:
+            // No line under this one at all: the button directly beneath says
+            // "Turn on alerts", which is the same sentence with a finger on it.
             Block(title: "Get told when a machine needs you",
-                  detail: "A session that stops and waits for an answer can put a notification on "
+                  about: "alerts",
+                  info: "A session that stops and waits for an answer can put a notification on "
                       + "this phone, so you do not have to keep opening the app to check.")
             Button {
                 asking = true
@@ -106,9 +115,11 @@ struct AlertsView: View {
             .accessibilityIdentifier("alerts.turnOn")
 
         case .denied:
+            // One line and no dot. "Nothing here can turn them back on — that
+            // switch lives over there" was the second sentence, and the button
+            // under it is labelled Open Settings, which says it better.
             Block(title: "Alerts are off",
-                  detail: "Notifications are turned off for \(Brand.name) in the Settings app. "
-                      + "Nothing here can turn them back on — that switch lives over there.")
+                  detail: "Turned off for \(Brand.name) in the Settings app.")
             Button {
                 if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
             } label: {
@@ -158,44 +169,66 @@ struct AlertsView: View {
 
     // MARK: - What it cannot do
 
+    /// The limit, and the mechanism behind it. See the header for why one of
+    /// those two is on the screen and the other is not.
     private var limits: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("What this can and cannot reach")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Theme.secondary)
-
-            Text("Alerts are raised by this app while it is running — open, or for about half a "
-                 + "minute after you put the phone down. \(Brand.name) has no notification server, "
-                 + "so a phone that has been asleep for an hour cannot be woken by a machine.")
+        HStack(spacing: 4) {
+            Text("A phone that has been asleep cannot be woken.")
                 .font(.system(size: 13))
                 .foregroundStyle(Theme.faint)
+                .fixedSize(horizontal: false, vertical: true)
+                // Kept on the text rather than on the row, so the ⓘ beside it
+                // keeps an identifier of its own.
+                .accessibilityIdentifier("alerts.limits")
 
-            Text("Anything that happened while it was asleep is picked up the next time the app "
-                 + "connects, and the session list says what changed.")
-                .font(.system(size: 13))
-                .foregroundStyle(Theme.faint)
+            InfoDot(about: "what alerts can reach",
+                    text: "Alerts are raised by this app while it is running — open, or for "
+                        + "about half a minute after you put the phone down. \(Brand.name) has "
+                        + "no notification server, so nothing on a machine can reach a sleeping "
+                        + "phone.\n\nAnything that happened while it was asleep is picked up the "
+                        + "next time the app connects, and the session list says what changed.")
+
+            Spacer(minLength: 0)
         }
         .padding(.top, 30)
-        .accessibilityIdentifier("alerts.limits")
     }
 }
 
 /**
- * A title and its paragraph, with the spacing the design brief asks for: the
- * title brighter, the description dimmer, and room between them.
+ * A title, at most one line under it, and the ⓘ that holds whatever used to be
+ * a paragraph there.
+ *
+ * The spacing the design brief asks for is unchanged — title brighter,
+ * description dimmer, room between them. What changed is that `detail` is now
+ * optional and is one line when it is there at all. Each of the three states
+ * this screen has opened with a heading and two lines of prose explaining
+ * itself, directly above a button that said the same thing in three words.
  */
 private struct Block: View {
     let title: String
-    let detail: String
+    /// One line, or none. Never a paragraph — that is what `info` is for.
+    var detail: String? = nil
+    var about: String? = nil
+    var info: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.system(size: 20, weight: .semibold))
-                .foregroundStyle(Theme.primary)
-            Text(detail)
-                .font(.system(size: 15))
-                .foregroundStyle(Theme.secondary)
+            HStack(spacing: 6) {
+                Text(title)
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(Theme.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let about, let info {
+                    InfoDot(about: about, text: info)
+                }
+                Spacer(minLength: 0)
+            }
+            if let detail {
+                Text(detail)
+                    .font(.system(size: 15))
+                    .foregroundStyle(Theme.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }

@@ -816,7 +816,13 @@ struct DeckSettingsView: View {
                     // host that did not advertise `settings`, so an older desktop
                     // or a guest sees exactly what it did before.
                     if let host = model.current {
-                        ServerSettingsSection(settings: host.serverSettings)
+                        // The noun as well as the link. That section's caption
+                        // said "THIS SERVER" over a Mac — see
+                        // `DeckModel.machineNoun`, which is the one answer this
+                        // app is allowed to give to *what do I call the box on
+                        // the other end*.
+                        ServerSettingsSection(settings: host.serverSettings,
+                                              machineNoun: model.machineNoun)
                     }
 
                     /*
@@ -856,9 +862,9 @@ struct DeckSettingsView: View {
                         VStack(alignment: .leading, spacing: 10) {
                             HStack(spacing: 12) {
                                 Image(systemName: "circle.lefthalf.filled")
-                                    .font(.system(size: 15))
+                                    .font(.system(size: 19, weight: .light))
                                     .foregroundStyle(Theme.secondary)
-                                    .frame(width: 18)
+                                    .frame(width: 24)
                                 Text("Theme")
                                     .font(.system(size: 16))
                                     .foregroundStyle(Theme.primary)
@@ -928,10 +934,17 @@ struct DeckSettingsView: View {
                             // the About row's name started 68 points to the left
                             // of GitHub's and the two groups read as belonging to
                             // different screens.
+                            //
+                            // Which means the two numbers have to be `SettingsRowBody`'s
+                            // two numbers, not near them. They were 15-in-18
+                            // against its 19-light-in-24, so this row's name and
+                            // GitHub's were six points apart — a smaller version
+                            // of the same fault, and the one the new divider
+                            // inset makes visible.
                             Image(systemName: "info.circle")
-                                .font(.system(size: 15))
+                                .font(.system(size: 19, weight: .light))
                                 .foregroundStyle(Theme.secondary)
-                                .frame(width: 18)
+                                .frame(width: 24)
                             Text(Brand.name)
                                 .font(.system(size: 16))
                                 .foregroundStyle(Theme.primary)
@@ -959,9 +972,9 @@ struct DeckSettingsView: View {
                             SettingsDivider()
                             HStack(spacing: 12) {
                                 Image(systemName: host.hostKind == .headless ? "server.rack" : "desktopcomputer")
-                                    .font(.system(size: 15))
+                                    .font(.system(size: 19, weight: .light))
                                     .foregroundStyle(Theme.secondary)
-                                    .frame(width: 18)
+                                    .frame(width: 24)
                                 Text("This \(host.hostKind.noun)")
                                     .font(.system(size: 16))
                                     .foregroundStyle(Theme.primary)
@@ -1096,12 +1109,27 @@ private struct SettingsGroup<Content: View>: View {
     }
 }
 
+/**
+ * The hairline between two rows, inset to the **label's** left edge rather than
+ * the card's.
+ *
+ * That is what both apps Asad put beside this one do, and it is the difference
+ * between a stack of rows that reads as one list and a stack that reads as a
+ * column of boxes: the line starts where the words start, so the icons sit in a
+ * clear gutter of their own.
+ *
+ * 52 is arithmetic rather than taste — the row is `.padding(.horizontal, 16)`,
+ * its icon column is 24 wide and the `HStack` spacing is 12. It was 46, which
+ * was the same sum back when the icons were 18 points. The icons grew with the
+ * palette and this did not, so every line stopped six points short of the word
+ * it was drawn to start under.
+ */
 private struct SettingsDivider: View {
     var body: some View {
         Rectangle()
             .fill(Theme.hairline)
             .frame(height: 0.5)
-            .padding(.leading, 46)
+            .padding(.leading, 52)
     }
 }
 

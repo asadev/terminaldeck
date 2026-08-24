@@ -120,10 +120,12 @@ struct SchemeEditorView: View {
             SchemeSectionCaption("Name")
             SchemeGroup {
                 HStack(spacing: 12) {
+                    // The row-icon metrics the whole app is on now — 19 light
+                    // in a 24-point column. See `SettingsRowBody`.
                     Image(systemName: "textformat")
-                        .font(.system(size: 15))
+                        .font(.system(size: 19, weight: .light))
                         .foregroundStyle(Theme.secondary)
-                        .frame(width: 18)
+                        .frame(width: 24)
                     TextField("Name", text: $name)
                         .font(.system(size: 16))
                         .foregroundStyle(Theme.primary)
@@ -164,27 +166,43 @@ struct SchemeEditorView: View {
             SchemeGroup {
                 ForEach(Array(ColourSlot.surface.enumerated()), id: \.element) { index, slot in
                     if index > 0 { SchemeDivider() }
-                    ColorSlotRow(label: slot.label, hex: binding(slot), editable: isEditable)
+                    ColorSlotRow(label: slot.label,
+                                 hex: binding(slot),
+                                 editable: isEditable,
+                                 // On the row rather than in a paragraph under
+                                 // the card. It is about one of the five, and a
+                                 // note at the foot of a group is read after
+                                 // the well has already eaten the two digits it
+                                 // was warning about.
+                                 info: slot == .selectionBackground ? Self.selectionNote : nil)
                 }
             }
-
-            // The selection is the one slot that carries an alpha, and the well
-            // cannot express one — see `ColorSlotRow`. Said here rather than
-            // discovered by watching two digits vanish.
-            Text("The selection is drawn under text, so it is usually part transparent. "
-                 + "Type eight digits — \(TerminalScheme.builtIns[0].selectionBackground) — to set that; "
-                 + "the colour well sets the first six.")
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.faint)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, 4)
-                .padding(.top, 8)
         }
     }
 
+    /// Behind the ⓘ on the Selection row. The selection is the one slot that
+    /// carries an alpha and the well cannot express one — see `ColorSlotRow` —
+    /// so this is the difference between a highlight and a solid band painted
+    /// over the text it covers.
+    private static let selectionNote =
+        "The selection is drawn under text, so it is usually part transparent. Type eight "
+        + "digits — \(TerminalScheme.builtIns[0].selectionBackground) — to set that; the colour "
+        + "well sets the first six."
+
     private var normalColors: some View {
         VStack(alignment: .leading, spacing: 0) {
-            SchemeSectionCaption("ANSI colours")
+            /*
+             * The one thing worth knowing **before** spending time in here, and
+             * that is why it is on this caption rather than under the last of
+             * the sixteen where it used to be — it was an answer printed after
+             * the question had been paid for. Same caveat `Ink.ansi` records: an
+             * agent that emits 24-bit colour bypasses all sixteen of these.
+             */
+            SchemeSectionCaption("ANSI colours",
+                                 about: "the sixteen",
+                                 info: "Programs that print full-colour output name their own "
+                                     + "colours and ignore these sixteen. Everything else — "
+                                     + "shells, agents, diffs, test runners — uses them.")
             SchemeGroup {
                 ForEach(Array(ColourSlot.ansi.prefix(8).enumerated()), id: \.element) { index, slot in
                     if index > 0 { SchemeDivider() }
@@ -203,18 +221,6 @@ struct SchemeEditorView: View {
                     ColorSlotRow(label: slot.label, hex: binding(slot), editable: isEditable)
                 }
             }
-
-            // The one thing worth knowing before spending time in here, and the
-            // same caveat `Ink.ansi` records: an agent that emits 24-bit colour
-            // bypasses all sixteen of these.
-            Text("Programs that print full-colour output name their own colours and ignore "
-                 + "these sixteen. Everything else — shells, agents, diffs, test runners — "
-                 + "uses them.")
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.faint)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, 4)
-                .padding(.top, 8)
         }
     }
 
@@ -273,12 +279,18 @@ private struct ColorSlotRow: View {
     let label: String
     @Binding var hex: String
     let editable: Bool
+    /// What the ⓘ beside this label says, on the one slot in twenty-one that
+    /// has something about it the label cannot carry. Nil on the other twenty.
+    var info: String? = nil
 
     var body: some View {
         HStack(spacing: 12) {
             Text(label)
                 .font(.system(size: 16))
                 .foregroundStyle(Theme.primary)
+            if let info {
+                InfoDot(about: label.lowercased(), text: info)
+            }
             Spacer(minLength: 8)
             HexField(hex: $hex, editable: editable)
             ColorPicker("", selection: swatch, supportsOpacity: false)
@@ -369,8 +381,9 @@ private struct HexField: View {
     }
 }
 
-/// The hairline between two rows in a card, inset past the label the way the
-/// Settings screen's is.
+/// The hairline between two rows in a card, inset to the label's own left edge
+/// the way `SettingsDivider` is. 16 rather than that one's 52 because these rows
+/// carry no icon: the label starts at the card's own padding.
 struct SchemeDivider: View {
     var body: some View {
         Rectangle()

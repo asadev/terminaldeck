@@ -18,22 +18,71 @@ import SwiftUI
 struct ServerSettingsSection: View {
     let settings: ServerSettingsLink
 
+    /**
+     * What to call the box these two settings live on — `Mac`, `PC`, `server`.
+     *
+     * Passed in rather than read here, because this section holds a
+     * `ServerSettingsLink` and deliberately nothing else. `DeckModel.machineNoun`
+     * is where the answer is decided and why: kind wins when the box is
+     * headless, platform otherwise, so a rented Ubuntu box is a *server* and the
+     * computer on somebody's desk is a *Mac*.
+     */
+    let machineNoun: String
+
     var body: some View {
         Group {
             if settings.offered {
                 VStack(alignment: .leading, spacing: 0) {
-                    Text("This server")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Theme.faint)
-                        .textCase(.uppercase)
-                        .padding(.horizontal, 4)
-                        .padding(.top, 22)
-                        .padding(.bottom, 8)
+                    /*
+                     * **"THIS SERVER" over a Mac.**
+                     *
+                     * A hardcoded word, and wrong on every desktop this app has
+                     * ever been pointed at — the same fault `machineNoun` was
+                     * written for when a rented Linux box was being called a Mac
+                     * on twenty-one screens, arriving here from the other
+                     * direction.
+                     *
+                     * And it was set two points larger than every other caption
+                     * on this screen, with no kerning, which is how one settings
+                     * page comes to look like two stitched together. These are
+                     * `SectionCaption`'s numbers; that type is private to
+                     * `DeckTabs.swift` and this section stays self-contained, so
+                     * the numbers are copied and the reason is written down.
+                     */
+                    HStack(spacing: 4) {
+                        Text("This \(machineNoun)".uppercased())
+                            .font(.system(size: 11, weight: .semibold))
+                            .kerning(0.6)
+                            .foregroundStyle(Theme.faint)
+                        InfoDot(about: "these two settings",
+                                text: "These belong to the machine, not this phone — every "
+                                    + "device that reaches it sees the same two.")
+                        Spacer(minLength: 0)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.leading, 4)
+                    .padding(.top, 24)
+                    .padding(.bottom, 8)
 
                     if let rows = settings.rows {
                         VStack(spacing: 0) {
                             ForEach(Array(rows.enumerated()), id: \.element.key) { index, row in
-                                if index > 0 { Divider().background(Theme.hairline).padding(.leading, 16) }
+                                if index > 0 {
+                                    // `Divider().background(_:)` paints a colour
+                                    // *behind* the system's own hairline rather
+                                    // than replacing it, so this line was drawn
+                                    // in the system separator on both
+                                    // appearances while claiming to be
+                                    // `Theme.hairline`. A rectangle is what the
+                                    // rest of the app draws. Inset to the label's
+                                    // left edge, which for these rows is the
+                                    // card's own padding — they carry no icon,
+                                    // so there is no gutter to clear.
+                                    Rectangle()
+                                        .fill(Theme.hairline)
+                                        .frame(height: 0.5)
+                                        .padding(.leading, 16)
+                                }
                                 switch row.key {
                                 case .defaultProvider: providerRow(row)
                                 case .restoreSessions: toggleRow(row)
@@ -52,12 +101,10 @@ struct ServerSettingsSection: View {
                                 .padding(.top, 8)
                         }
 
-                        Text("These belong to the machine, not this phone — every device that reaches it sees the same two.")
-                            .font(.system(size: 12))
-                            .foregroundStyle(Theme.faint)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .padding(.horizontal, 4)
-                            .padding(.top, 8)
+                        // The sentence that used to be here is on the caption's
+                        // ⓘ now. It is about the section rather than about
+                        // either row, and it was the longest thing on a page
+                        // whose two controls fit in a line each.
                     } else {
                         Text("Reading this machine’s settings…")
                             .font(.system(size: 14))
@@ -109,22 +156,47 @@ struct ServerSettingsSection: View {
                         .foregroundStyle(Theme.faint)
                 }
             }
+            /*
+             * **The selected chip was rendering as the disabled one.**
+             *
+             * It painted `Theme.accent` under `Theme.onAccent` and then said
+             * `.disabled(working || on)` — and `on` is *this chip is the
+             * current setting*. SwiftUI dims a disabled button's whole label,
+             * fill included, so the one chip that had been chosen came out at
+             * about 1.6:1: the only greyed-out thing on the screen was the
+             * answer. Both apps he pointed at draw an active pill solid and at
+             * full strength, and that is all this needs to be.
+             *
+             * So `on` is not a disablement any more. Pressing the chip that is
+             * already the setting does nothing — the guard is in the action,
+             * where a no-op belongs — and the control stays legible. `working`
+             * still disables, and dimming *while a machine is answering* is the
+             * one time the dimming means what it looks like.
+             *
+             * The unselected chips changed too, and had to: `Theme.surfaceHigh`
+             * is `#faf9f7` and the card under them is `#ffffff`. On paper that
+             * is a chip you cannot see — the same class of fault as the white
+             * glyph on the near-white swipe action `Ink.neutralAction` records.
+             * A tint of the ink plus a hairline is a pill in both appearances.
+             */
             FlowRow(spacing: 8) {
                 ForEach(ids, id: \.self) { id in
                     let on = id == row.value
                     Button {
-                        settings.apply(.defaultProvider, id)
+                        if !on { settings.apply(.defaultProvider, id) }
                     } label: {
                         Text(ServerSettingsText.providerLabel(id))
                             .font(.system(size: 14, weight: on ? .semibold : .regular))
                             .foregroundStyle(on ? Theme.onAccent : Theme.primary)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 7)
-                            .background(on ? Theme.accent : Theme.surfaceHigh)
+                            .background(on ? Theme.accent : Theme.pressed)
                             .clipShape(Capsule())
+                            .overlay(Capsule()
+                                .strokeBorder(on ? Color.clear : Theme.hairline, lineWidth: 1))
                     }
                     .buttonStyle(.plain)
-                    .disabled(working || on)
+                    .disabled(working)
                     .accessibilityAddTraits(on ? [.isSelected] : [])
                     // By provider id rather than by label, because the label is
                     // a product's name and the id is the thing the wire and the
