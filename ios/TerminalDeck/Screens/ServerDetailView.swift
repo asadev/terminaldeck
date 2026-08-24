@@ -41,6 +41,9 @@ struct ServerDetailView: View {
 
     @State private var confirmingForget = false
 
+    /// The name being typed, while the rename alert is up. Empty when it is not.
+    @State private var renamingTo: String?
+
     private var connector: ServerConnector { model.serverConnector }
     private var server: StoredServer? { connector.server(serverId) }
     private var view: ServerView? { connector.views[serverId] }
@@ -99,6 +102,52 @@ struct ServerDetailView: View {
         }
         .navigationTitle(server?.name ?? "Server")
         .navigationBarTitleDisplayMode(.inline)
+        /*
+         * Rename, which the app could already do and offered nowhere.
+         *
+         * `ServerConnector.rename` has existed since servers did and had no
+         * caller anywhere in the app — so the name a server was given at the
+         * login screen was the name it kept forever. Asad, holding a list of
+         * them: *"I am not able to edit the name of this account and I don't
+         * know where it belongs to… I should be able to edit the account, delete
+         * and add."* Delete is the row at the bottom and add is the login
+         * screen; this is the third.
+         *
+         * On this page rather than in the list, beside the address it belongs to
+         * and beside Forget, so the two things somebody does to a server they
+         * are looking at are in the same place.
+         */
+        .toolbar {
+            if let server {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        renamingTo = server.name
+                    } label: {
+                        Label("Rename", systemImage: "pencil")
+                    }
+                    .accessibilityIdentifier("server.rename")
+                }
+            }
+        }
+        .alert("Rename this server",
+               isPresented: Binding(get: { renamingTo != nil },
+                                    set: { if !$0 { renamingTo = nil } })) {
+            TextField("Name", text: Binding(get: { renamingTo ?? "" },
+                                            set: { renamingTo = $0 }))
+                .textInputAutocapitalization(.words)
+                .accessibilityIdentifier("server.renameField")
+            // Save first so it is the default action a return key presses.
+            Button("Save") {
+                if let name = renamingTo { connector.rename(serverId, to: name) }
+                renamingTo = nil
+            }
+            Button("Cancel", role: .cancel) { renamingTo = nil }
+        } message: {
+            // What the name is *for*, because the answer is not obvious and he
+            // said so: it is this phone's label and nothing on the server reads
+            // it. `rename` already refuses an empty one and caps it at 64.
+            Text("This is the name on this phone. Nothing on the server changes.")
+        }
         .task {
             if connector.views[serverId] == nil { await connector.look(serverId) }
         }
@@ -161,7 +210,7 @@ struct ServerDetailView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
-        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 
     /* ------------------------------------------------------- the sign-in -- */
@@ -347,7 +396,7 @@ struct ServerDetailView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
-        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 
     private var divider: some View {
@@ -379,7 +428,7 @@ struct ServerDetailView: View {
         .buttonStyle(.plain)
         .foregroundStyle(disabled ? Theme.secondary : Theme.onAccent)
         .background(Theme.accent.opacity(disabled ? 0.28 : 1),
-                    in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                    in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .disabled(disabled)
         .accessibilityIdentifier(identifier)
     }

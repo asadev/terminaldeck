@@ -74,10 +74,17 @@ struct SchemeEditorView: View {
                     normalColors
                     brightColors
                     if isEditable { deleteRow }
+                    // Measured, not guessed — see `TabBarClearance`.
+                    TabBarClearance()
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
-                .padding(.bottom, 28)
+                // The floating pill is drawn over this screen — it is pushed inside
+                // the Settings stack, where `settingsSurface` resolves to
+                // `.machines`, which keeps the bar. A bare 28 was the copied
+                // constant `TabBarClearance` exists to replace: the bar's real
+                // band is 83 points, so the last scheme card sat behind it.
+                .padding(.bottom, 12)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .scrollBounceBehavior(.basedOnSize)
@@ -221,7 +228,7 @@ struct SchemeEditorView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .padding(.top, 24)
         .accessibilityIdentifier("editor.delete")
     }

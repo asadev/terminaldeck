@@ -51,7 +51,7 @@ struct WatchSurfacesView: View {
                         }
                     }
                     .background(Theme.surface)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
                     .padding(16)
 
                     // Pushed from Settings, so it keeps the bar and owes it room.

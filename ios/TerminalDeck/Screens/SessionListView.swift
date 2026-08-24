@@ -323,7 +323,7 @@ struct SessionListView: View {
      */
     @ViewBuilder
     private var newSession: some View {
-        if model.startableFolders.isEmpty {
+        if model.startableFolders.isEmpty && !model.canPickFolders {
             Button {
                 model.createSession(in: nil)
             } label: {
@@ -356,6 +356,28 @@ struct SessionListView: View {
                         // last component and two projects called `web` under
                         // different parents are one label and two rows.
                         .accessibilityIdentifier("sessions.newIn.\(folder)")
+                    }
+                    /*
+                     * And the folders this machine did not think to offer.
+                     *
+                     * Last in the section rather than first: the rows above are
+                     * one tap and this one is a screen, so somebody whose folder
+                     * is already listed never has to walk past a browser to
+                     * reach it. It is also the only row here on a bare server,
+                     * where the list above is the account's home and nothing
+                     * else — which is the complaint this answers.
+                     *
+                     * Drawn only where the machine offered `folders.pick`, which
+                     * it does for one of the owner's own devices. A guest sees
+                     * the section it always saw.
+                     */
+                    if model.canPickFolders {
+                        Button {
+                            model.showingFolderPicker = true
+                        } label: {
+                            Label("Choose a folder…", systemImage: "folder.badge.plus")
+                        }
+                        .accessibilityIdentifier("sessions.pickFolder")
                     }
                 }
             } label: {
@@ -828,6 +850,20 @@ struct SessionListView: View {
                     .buttonStyle(.borderedProminent)
                     .tint(Theme.accent)
                     .accessibilityIdentifier("sessions.showArchivedFromEmpty")
+            } else if model.hasNoGrantedFolders && model.canPickFolders && model.connection.isLive {
+                /*
+                 * Nothing has been shared with this phone — and this phone can
+                 * go and find a folder itself.
+                 *
+                 * This is the case the screen previously had no button for at
+                 * all: the sentence said to open the settings on the machine,
+                 * and a headless server has no settings to open. The one action
+                 * that actually works is the one that is now on screen.
+                 */
+                Button("Choose a folder") { model.showingFolderPicker = true }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Theme.accent)
+                    .accessibilityIdentifier("sessions.pickFolderFromEmpty")
             } else if model.canStartSomewhere && model.connection.isLive {
                 // The empty state is where a first session gets started, so the
                 // action is here as well as in the toolbar — the toolbar's plus
@@ -871,17 +907,30 @@ struct SessionListView: View {
                 + "They are all still running on \(model.current?.label ?? "the machine")."
         }
         if model.hasNoGrantedFolders {
-            // Named where the fix is. The grant is per device and it is edited
-            // on the machine, so a sentence that only said "you cannot start a
-            // session" would send someone hunting on the wrong screen.
-            return "\(model.current?.label ?? "That machine") has not shared any folders with this "
-                + "phone yet. Open the settings on the \(model.hostPlatform.noun) and choose which "
+            /*
+             * Named where the fix is — and where that is depends on whether this
+             * phone can reach the machine's folders itself.
+             *
+             * The sentence used to send everybody to "the settings on the Mac",
+             * which is a real screen on a desktop and **nothing at all** on a
+             * headless server: there is no window to open it in. Somebody
+             * holding a phone against a rented Linux box was told to go and do
+             * something that could not be done, which is worse than being told
+             * nothing.
+             */
+            let whose = model.current?.label ?? "That machine"
+            if model.canPickFolders {
+                return "\(whose) has not shared any folders with this phone yet. "
+                    + "Choose one with the button below."
+            }
+            return "\(whose) has not shared any folders with this "
+                + "phone yet. Open the settings on \(model.theMachine) and choose which "
                 + "folders it may start sessions in."
         }
         // Not "the Mac has nothing running", which is the sentence that was here
         // and is very often false — the Mac may well be running an agent, just
         // not one this app started. See `scopeNote`.
-        return "Nothing has been started on the \(model.hostPlatform.noun) yet. "
+        return "Nothing has been started on \(model.theMachine) yet. "
             + Self.onlyItsOwnSessions
     }
 }
@@ -926,13 +975,13 @@ extension View {
 struct RowButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
             .overlay {
                 // `Theme.pressed` rather than white: on paper a white wash over
                 // a near-white card is nothing at all, so this row would have
                 // had no press state in the light appearance while looking
                 // perfectly correct in the dark one. See `Ink.pressed`.
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
                     .fill(configuration.isPressed ? Theme.pressed : .clear)
             }
             .scaleEffect(configuration.isPressed ? 0.99 : 1)

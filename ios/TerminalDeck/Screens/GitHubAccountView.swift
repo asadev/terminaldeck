@@ -134,7 +134,7 @@ struct GitHubAccountView: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(Theme.critical)
-            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
             .padding(.top, 28)
             .accessibilityIdentifier("github.disconnect")
         }
@@ -193,7 +193,7 @@ struct GitHubAccountView: View {
         .buttonStyle(.plain)
         .foregroundStyle(Theme.onAccent)
         .background(Theme.accent.opacity(signIn.isBusy ? 0.6 : 1),
-                    in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .disabled(signIn.isBusy)
         .padding(.top, 24)
         .accessibilityIdentifier("github.signIn")
@@ -212,9 +212,9 @@ struct GitHubAccountView: View {
                     .font(.system(size: 15, design: .monospaced))
                     .padding(.horizontal, 12)
                     .padding(.vertical, 11)
-                    .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                     .overlay {
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
                             .stroke(Theme.hairline, lineWidth: 1)
                     }
                     .accessibilityIdentifier("github.tokenField")
@@ -231,7 +231,7 @@ struct GitHubAccountView: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(Theme.primary)
-                .background(Theme.surfaceHigh, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .background(Theme.surfaceHigh, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                 .disabled(signIn.isBusy)
                 .accessibilityIdentifier("github.useToken")
             }
@@ -288,7 +288,7 @@ struct GitHubAccountView: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(Theme.onAccent)
-            .background(Theme.accent, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background(Theme.accent, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
             .padding(.top, 22)
             .accessibilityIdentifier("github.openGitHub")
 

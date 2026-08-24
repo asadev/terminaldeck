@@ -128,7 +128,7 @@ final class FileUpload: Identifiable {
     /// Announce the file. Nothing is read until the Mac answers with a path.
     func start() {
         guard wire?.send(.uploadBegin(id: id, name: name, size: size)) == true else {
-            end(.failed("The connection to the Mac is not up."), tellMac: false)
+            end(.failed("The connection to the machine is not up."), tellMac: false)
             return
         }
     }
@@ -227,7 +227,7 @@ final class FileUpload: Identifiable {
             read += chunk.count
             digest.update(data: chunk)
             guard wire?.send(.uploadData(id: id, data: chunk)) == true else {
-                end(.failed("The connection to the Mac dropped."), tellMac: false)
+                end(.failed("The connection dropped."), tellMac: false)
                 return
             }
             inFlight += chunk.count
@@ -244,7 +244,7 @@ final class FileUpload: Identifiable {
             phase = .finishing(path: path)
             let hex = digest.finalize().map { String(format: "%02x", $0) }.joined()
             guard wire?.send(.uploadEnd(id: id, sha256: hex)) == true else {
-                end(.failed("The connection to the Mac dropped."), tellMac: false)
+                end(.failed("The connection dropped."), tellMac: false)
                 return
             }
             return

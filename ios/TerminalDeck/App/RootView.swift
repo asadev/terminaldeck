@@ -185,6 +185,23 @@ struct RootView: View {
             AlertsView(model: model) { model.showingAlerts = false }
         }
         /*
+         * Walking the machine's folders to start a session in one.
+         *
+         * Here beside the other two rather than on the session list, because it
+         * is raised from the New Session menu *and* from the empty state behind
+         * it, and a sheet asked for by a view that the presentation itself
+         * removes is a sheet that never opens.
+         *
+         * The session is started by the callback rather than by the picker: the
+         * picker's job is to answer *which folder*, and the same answer will be
+         * worth having the day something other than a new session needs one.
+         */
+        .sheet(isPresented: $model.showingFolderPicker) {
+            FolderPickerView(model: model) { folder in
+                model.createSession(in: folder)
+            }
+        }
+        /*
          * A machine asking this phone for a GitHub login. One copy, here.
          *
          * It used to be two, armed one at a time through a `covered` flag,

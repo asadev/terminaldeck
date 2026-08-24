@@ -306,11 +306,23 @@ describe('the Linux proof', () => {
     expect(proof.detail).toMatch(/\/run\/WSL/)
   })
 
-  it('refuses a plan that contains the account home, rather than testing nothing', async () => {
+  it('passes when the home is the granted folder — uses tmp canary only', async () => {
+    /*
+     * A grant on the whole account home (the common fallback on a fresh server).
+     * homeCanary lands inside the plan, but tmpCanary (/tmp/…) is still outside,
+     * so the proof uses only the tmp canary rather than refusing entirely.
+     */
     const wide: ConfinementPlan = { ...linuxPlan, writable: ['/home/asad'] }
     const proof = await proveConfinement(wide, 'linux', linuxMachine({}))
+    expect(proof.ok).toBe(true)
+  })
+
+  it('refuses when both canaries land inside the boundary', async () => {
+    // Grant on '/' covers both /home/asad/… and /tmp/… — no canary left outside.
+    const everywhere: ConfinementPlan = { ...linuxPlan, writable: ['/'] }
+    const proof = await proveConfinement(everywhere, 'linux', linuxMachine({}))
     expect(proof.ok).toBe(false)
-    expect(proof.detail).toMatch(/could not fail/)
+    expect(proof.detail).toMatch(/both test files/)
   })
 
   it('takes its canaries away again, even when the boundary failed', async () => {

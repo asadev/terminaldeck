@@ -130,7 +130,7 @@ final class PortTunnel: Identifiable {
     /// connection it can do nothing with.
     func start() {
         guard wire?.send(.tunnelOpen(id: id, port: port)) == true else {
-            end("The connection to the Mac is not up.", tellMac: false)
+            end("The connection to the machine is not up.", tellMac: false)
             return
         }
         /*
@@ -301,7 +301,7 @@ final class PortTunnel: Identifiable {
 
         end(
             "Port \(port) is already in use on this phone, so the page cannot be served at the address the "
-                + "Mac's server writes into its own links. Close whatever is using it and tap again.",
+                + "machine's server writes into its own links. Close whatever is using it and tap again.",
             tellMac: true)
         return nil
     }

@@ -79,7 +79,7 @@ struct AppLockSection: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 13)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
 
             if let trouble = lock.trouble {
                 caption(trouble, tone: Theme.warning, id: "settings.appLockTrouble")
@@ -229,7 +229,7 @@ struct AppLockScreen: View {
                 .frame(minWidth: 180)
                 .padding(.vertical, 13)
                 .padding(.horizontal, 22)
-                .background(Theme.accent, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+                .background(Theme.accent, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

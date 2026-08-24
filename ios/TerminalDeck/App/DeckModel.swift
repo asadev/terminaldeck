@@ -640,6 +640,11 @@ final class DeckModel {
     /// Whether the alerts sheet is up. Same shape and for the same reason.
     var showingAlerts = false
 
+    /// Whether the folder picker is up. Same shape and for the same reason: it
+    /// is raised from the New Session menu, which is on the session list and on
+    /// the empty state behind it.
+    var showingFolderPicker = false
+
     /**
      * A route names the machine as well as the session.
      *
@@ -1379,6 +1384,10 @@ final class DeckModel {
     /// which is the one case worth a sentence on screen, because it is the only
     /// one a person can fix, and they fix it on the desktop.
     var hasNoGrantedFolders: Bool { current?.granted?.isEmpty == true }
+    /// Whether this phone may walk the machine's folders. False for a guest and
+    /// for a host older than the capability — two facts a phone cannot tell
+    /// apart and does not need to, because both draw the same screen.
+    var canPickFolders: Bool { current?.canPickFolders ?? false }
     /**
      * What this phone may do with the current machine's copilot.
      *
@@ -1393,6 +1402,16 @@ final class DeckModel {
     /// rather than handed out once.
     var copilot: CopilotLink? { current?.copilot }
     var canBrowseLocalhost: Bool { current?.canBrowseLocalhost ?? false }
+    /// Whether the machine will open a page in its own browser for this phone.
+    /// The Browser tab's address bar falls back to this for anything that is not
+    /// one of the machine's own ports — see `LocalhostListView.openTyped`.
+    var canOpenPages: Bool { current?.canOpenPagesThere ?? false }
+    /// The machine's own browser windows, castable back to this phone. Empty
+    /// when the host withheld `watch`, which it does from a guest.
+    var watchSurfaces: [BrowserSurfaceRow] { current?.watch.surfaces ?? [] }
+    /// Open a page in the machine's own browser. It appears under Windows on the
+    /// Browser tab once the machine reports it.
+    func openPageOnMachine(_ url: String) { current?.openOnMachine(url) }
     /// Whether this machine will open a page on **its own** screen for this
     /// phone. The other half of localhost, and a different question from
     /// tunnelling one here — see `HostLink.canOpenPagesThere`.
@@ -1407,6 +1426,43 @@ final class DeckModel {
     /// The machine currently selected, for screens that name it. `.unknown`
     /// with no host selected, which reads as a neutral noun rather than a guess.
     var hostPlatform: HostPlatform { current?.hostPlatform ?? .unknown }
+
+    /// What kind of box the current machine is — desktop, headless server, or
+    /// not yet said. Every host before 0.10.0 says nothing and reads `.unknown`.
+    var hostKind: HostKind { current?.hostKind ?? .unknown }
+
+    /**
+     * **The one noun for the machine on the other end**, for every sentence in
+     * the app that has to name it.
+     *
+     * There were two nouns and neither was right on its own. `HostPlatform.noun`
+     * answers *what operating system* — "Mac", "PC", "machine" — and was the one
+     * everything reached for, which is how a rented Ubuntu box came to be called
+     * a Mac on twenty-one screens. `HostKind.noun` answers *what kind of box* —
+     * "desktop", "server" — and never left `DeckTabs`.
+     *
+     * The rule is that **kind wins when it is known and it is a server**: a
+     * headless Linux box is a *server* to the person using it, not a "machine",
+     * and calling it by its operating system tells them nothing they asked. A
+     * desktop keeps its platform noun, because "Mac" and "PC" are exactly what
+     * somebody calls the computer on their desk — "desktop" would be a step
+     * backwards there.
+     *
+     * Asad's whole premise for this release is the case this exists for: *"say
+     * no MacBook or Windows exists at all — a user only has a server and a
+     * phone."* Every sentence that says Mac to that person is wrong.
+     */
+    var machineNoun: String {
+        hostKind == .headless ? "server" : hostPlatform.noun
+    }
+
+    /// The same noun with its article, for mid-sentence use: "on **the server**",
+    /// "on **the Mac**". Separate because "Mac" and "PC" are proper nouns that
+    /// read wrong lowercased, and a caller that guessed would get one of the two
+    /// cases wrong every time.
+    var theMachine: String {
+        hostKind == .headless ? "the server" : "the \(hostPlatform.noun)"
+    }
     var canSendFiles: Bool { current?.canSendFiles ?? false }
     var startableFolders: [String] { current?.startableFolders ?? [] }
     var endpointSummary: String? { current?.endpointSummary }

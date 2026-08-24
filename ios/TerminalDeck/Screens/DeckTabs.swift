@@ -189,7 +189,26 @@ struct DeckTabs: View {
             // is on top of this tab is answered by a flag the browser sets. See
             // `DeckModel.localhostPageIsOpen`.
             .toolbar(DeckChrome.tabBar(on: model.localhostSurface), for: .tabBar)
-            .tabItem { Label("Localhost", systemImage: "globe") }
+            /*
+             * **Browser**, not *Localhost* — and it is one tab now, not a tab
+             * and a row in Settings.
+             *
+             * > *"instead of having local host page on the pill and one separate
+             * > feature as watch browser in the settings page, we should have
+             * > only one which will be called browser… where we can browse the
+             * > localhost, we can type, and we can have all the browser features
+             * > also in there in a very simple way instead of having it inside
+             * > the settings."*
+             *
+             * The split was never a user's idea of anything. *Localhost* was a
+             * list of ports this machine happens to be serving; *Watch browser*
+             * was the machine's own windows, cast back — and it sat three rows
+             * deep in Settings, which is where a feature goes to be undiscovered.
+             * Both are the same verb: look at a page that lives on that machine.
+             * So there is one screen, it is called what it is, and the address
+             * bar at the top of it is the thing a browser has.
+             */
+            .tabItem { Label("Browser", systemImage: "globe") }
             .tag(DeckModel.Tab.localhost)
 
             NavigationStack(path: $model.settingsRoute) {
@@ -495,7 +514,14 @@ private struct MachineRow: View {
         HStack(spacing: 0) {
             Button(action: select) {
                 HStack(alignment: .top, spacing: 12) {
-                    Image(systemName: isCurrent ? "checkmark.circle.fill" : "desktopcomputer")
+                    // A rented Linux box drawn as an iMac is a row that
+                    // contradicts the About section two screens away, which has
+                    // named the same machine a *server* since 0.10.0. `hostKind`
+                    // is one property access away and this row already holds the
+                    // whole `HostLink`.
+                    Image(systemName: isCurrent
+                          ? "checkmark.circle.fill"
+                          : (host.hostKind == .headless ? "server.rack" : "desktopcomputer"))
                         .font(.system(size: 15))
                         .foregroundStyle(isCurrent ? Theme.accent : Theme.secondary)
                         .frame(width: 18)
@@ -581,7 +607,7 @@ private struct MachineRow: View {
             .accessibilityIdentifier("machine.more.\(host.id)")
             .padding(.trailing, 6)
         }
-        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 
     /// What the row says the machine is doing. Sessions while it is up, because
@@ -728,23 +754,17 @@ struct DeckSettingsView: View {
                         }
 
                         /*
-                         * The machine's own browser, live: watch one of its
-                         * windows and drive it with a finger. Drawn only over a
-                         * host that advertised `watch` — withheld from a guest at
-                         * the source, because watching a signed-in browser is an
-                         * owner act. See `WatchSurfacesView`.
+                         * **There is no Watch browser row here any more.**
+                         *
+                         * It pushed a list of the machine's own windows, and it
+                         * was the second of two places this app asked somebody to
+                         * look at a page on their machine — the Localhost tab
+                         * being the first. *"we should have only one which will
+                         * be called browser… instead of having it inside the
+                         * settings."* Both live on the Browser tab now, which is
+                         * one pill away rather than three rows deep in here. See
+                         * the tab above.
                          */
-                        if model.current?.watch.offered == true {
-                            NavigationLink(value: DeckModel.SettingsRoute.watch) {
-                                SettingsRowBody(title: "Watch browser",
-                                                value: "",
-                                                icon: "macwindow.on.rectangle")
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityIdentifier("settings.watch")
-
-                            SettingsDivider()
-                        }
 
                         /*
                          * **There is no Copilot row here, and that is the
@@ -1072,7 +1092,7 @@ private struct SettingsGroup<Content: View>: View {
 
     var body: some View {
         VStack(spacing: 0) { content }
-            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 }
 
@@ -1118,10 +1138,20 @@ private struct SettingsRowBody: View {
 
     var body: some View {
         HStack(spacing: 12) {
+            /*
+             * Monoline, and the two numbers are the whole of it.
+             *
+             * Both apps Asad pointed at draw row icons as a **consistent thin
+             * stroke at about 21 points**. This was regular weight at 15, which
+             * is SF Symbols' default and therefore what every iOS app that has
+             * not thought about it looks like — the exact complaint. Light
+             * weight makes the stroke monoline; the larger size is what stops a
+             * thinner stroke reading as faded.
+             */
             Image(systemName: icon)
-                .font(.system(size: 15))
+                .font(.system(size: 19, weight: .light))
                 .foregroundStyle(Theme.secondary)
-                .frame(width: 18)
+                .frame(width: 24)
             Text(title)
                 .font(.system(size: 16))
                 .foregroundStyle(Theme.primary)

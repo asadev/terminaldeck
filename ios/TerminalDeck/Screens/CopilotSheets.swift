@@ -132,7 +132,7 @@ struct CopilotQuestionCard: View {
             // deadline on it and everything around it does not. Space and a tint
             // are the first two tools, they are both already spent on the rows
             // above and below, and the third exists for exactly this.
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .stroke(Theme.warning.opacity(0.4), lineWidth: 1)
         }
         .accessibilityIdentifier("copilot.question.\(question.id)")
@@ -397,7 +397,7 @@ struct CopilotConsentSheet: View {
                     .font(.system(size: 15, weight: .semibold))
                     .frame(maxWidth: .infinity, minHeight: Self.answerHeight)
                     .background(Theme.surfaceHigh,
-                                in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                     .foregroundStyle(Theme.primary)
                     .padding(.horizontal, 16)
                     .padding(.bottom, 12)
@@ -426,8 +426,8 @@ struct CopilotConsentSheet: View {
                      * the two apart.
                      */
                     .background(Theme.surfaceHigh,
-                                in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous)
                         .stroke(Theme.hairline, lineWidth: 1))
                     .foregroundStyle(Theme.primary)
                     .accessibilityIdentifier("copilot.consent.refuse")
@@ -440,7 +440,7 @@ struct CopilotConsentSheet: View {
                             .frame(maxWidth: .infinity, minHeight: Self.answerHeight)
                     }
                     .background(Theme.accent,
-                                in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                     .foregroundStyle(Theme.onAccent)
                     .accessibilityIdentifier("copilot.consent.allow")
                 }
@@ -1058,7 +1058,7 @@ private struct Card<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) { content }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 }
 

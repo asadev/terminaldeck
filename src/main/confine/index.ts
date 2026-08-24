@@ -686,18 +686,29 @@ async function proveNamespace(
   const args = (mode: 'plant' | 'read' | 'clean'): string[] =>
     linuxProofArgs({ mode, token, homeCanary, tmpCanary, homeSecret, tmpSecret })
 
-  for (const canary of [homeCanary, tmpCanary]) {
-    const inside = [...plan.writable, ...plan.readable].some((root) =>
-      within(canary, root, 'linux'),
-    )
-    if (!inside) continue
-    // Reached when the grant covers the account's home directory, and refusing
-    // is the honest answer rather than a smaller boundary: there would be
-    // nothing left for the session to be held inside, and the test that was
-    // supposed to notice cannot.
+  const withinPlan = (path: string): boolean =>
+    [...plan.writable, ...plan.readable].some((root) => within(path, root, 'linux'))
+
+  const homeInside = withinPlan(homeCanary)
+  const tmpInside = withinPlan(tmpCanary)
+
+  /*
+   * Both canaries inside the plan means the boundary covers the entire tree the
+   * proof can write a canary into — and a test that cannot write outside the
+   * boundary cannot detect a leak. Fail.
+   *
+   * One canary inside is fine: the other is still outside, still readable from
+   * the unconfined plant step, and still protected from inside the namespace.
+   * The common case is a grant on the account's home directory (the fallback
+   * when no projects are open on a bare server) — `homeCanary` lands inside it
+   * while `tmpCanary` is in `/tmp` which is always outside. Refusing there would
+   * block every first-session on a fresh Linux headless install, and `/tmp` is
+   * a perfectly valid test canary.
+   */
+  if (homeInside && tmpInside) {
     return {
       ok: false,
-      detail: `the file used to test the boundary (${canary}) is inside it, so the test could not fail`,
+      detail: `both test files would be inside the granted boundary, so the test could not fail`,
     }
   }
 
@@ -707,7 +718,20 @@ async function proveNamespace(
     if (before.token !== token) {
       return { ok: false, detail: `could not run a command to test this machine${why(outside)}` }
     }
-    if (before.home !== homeSecret || before.tmp !== tmpSecret) {
+    /*
+     * Only verify the canaries that are OUTSIDE the plan.  An inside-plan
+     * canary is legitimately readable from within the namespace (it is inside
+     * the granted folder) — checking it would both overcount a false leak and
+     * mistakenly pass when the canary was unwritable.
+     */
+    if (!homeInside && before.home !== homeSecret) {
+      return {
+        ok: false,
+        detail:
+          'the file used to test the boundary could not be read from outside it either, so the test could not fail',
+      }
+    }
+    if (!tmpInside && before.tmp !== tmpSecret) {
       return {
         ok: false,
         detail:
@@ -721,7 +745,12 @@ async function proveNamespace(
     if (after.token !== token) {
       return { ok: false, detail: `this machine would not start the namespace${why(inside)}` }
     }
-    if (after.home === homeSecret || after.tmp === tmpSecret) {
+    // Only check canaries that are outside the plan — inside-plan ones are
+    // readable by design.
+    if (!homeInside && after.home === homeSecret) {
+      return { ok: false, detail: 'a file outside the folder was readable from inside the namespace' }
+    }
+    if (!tmpInside && after.tmp === tmpSecret) {
       return { ok: false, detail: 'a file outside the folder was readable from inside the namespace' }
     }
     if (after.interop !== 'none') {

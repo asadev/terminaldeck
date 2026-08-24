@@ -64,7 +64,7 @@ struct DeviceRosterView: View {
                             }
                         }
                         .background(Theme.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
                         .padding(.horizontal, 16)
                     }
                     Text("Every device that has paired with or signed in to this machine. Remove one to take its access away.")

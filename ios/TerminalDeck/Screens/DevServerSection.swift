@@ -98,7 +98,7 @@ struct DevServerRow: View {
 
             trailing
         }
-        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 
     // MARK: - The body of the row

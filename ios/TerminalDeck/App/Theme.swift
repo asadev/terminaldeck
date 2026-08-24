@@ -147,11 +147,40 @@ private struct Duo {
 /// The raw values. Private to the three façades below so nothing else can reach
 /// past them and hard-code a hex.
 private enum Ink {
-    /* Surfaces. `--bg-primary` … `--bg-sunken`, both themes. */
-    static let background = Duo(light: Shade(0xffffff), dark: Shade(0x191919))
-    static let raised = Duo(light: Shade(0xf5f5f5), dark: Shade(0x202020))
-    static let raisedHigh = Duo(light: Shade(0xededed), dark: Shade(0x252525))
-    static let sunken = Duo(light: Shade(0xeaeaea), dark: Shade(0x121212))
+    /*
+     * Surfaces — and the relationship between two of them is the whole of the
+     * app's character.
+     *
+     * Asad, with the two apps he uses every day open beside this one: *"this app
+     * does not have any character of itself, it's like very much of base colour
+     * of iOS… they look smooth, clean, simple and have their own character."*
+     *
+     * He was right, and the cause was one inversion. This palette had **white
+     * paper with grey cards** — which is iOS's own default grouped-list look, so
+     * an app wearing it has, precisely, no character of its own. Every app he
+     * pointed at does the opposite: a **tinted ground with lighter cards
+     * floating on it**. Claude's is warm paper with warm-grey cards; ChatGPT's is
+     * cool grey with white cards. Same idea both times, and it is the idea rather
+     * than either palette that reads as *designed*.
+     *
+     * So the ground is warm off-white and the cards are white. Warm rather than
+     * ChatGPT's cool blue-grey for two reasons: a blue-grey ground is the more
+     * generic of the two, and this app sets amber and green status words on its
+     * surfaces all day — they sit on warm paper and fight cool paper.
+     *
+     * The contrast tiers below are **better** after this, not worse: they were
+     * measured against the darkest paper here, and body text now lands mostly on
+     * white. Primary is 16:1 on a card, secondary 7.4:1, muted 5.7:1; on the new
+     * `sunken` they are 14:1, 6.3:1 and 4.9:1 — every tier still AA everywhere.
+     *
+     * Dark goes one step deeper at the ground for the same reason light goes one
+     * step lighter at the card: a card has to separate from what it is lying on,
+     * and `#191919` under `#202020` was three points of difference.
+     */
+    static let background = Duo(light: Shade(0xf4f2ef), dark: Shade(0x121212))
+    static let raised = Duo(light: Shade(0xffffff), dark: Shade(0x1e1e1e))
+    static let raisedHigh = Duo(light: Shade(0xfaf9f7), dark: Shade(0x272727))
+    static let sunken = Duo(light: Shade(0xeae7e2), dark: Shade(0x0d0d0d))
 
     /* Text. `--text-primary` / `--text-secondary` / `--text-muted`.
 

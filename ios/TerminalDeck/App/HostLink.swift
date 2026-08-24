@@ -410,7 +410,57 @@ final class HostLink: Identifiable {
     /// the machine *can*; an empty grant says this device *may not*, and a
     /// button that is only ever refused is not a button.
     var canStartSomewhere: Bool {
-        canCreateSessions && granted?.isEmpty != true
+        canCreateSessions && (canPickFolders || granted?.isEmpty != true)
+    }
+
+    /**
+     * Whether this phone may walk the machine's folders to find one.
+     *
+     * Advertised only to one of the owner's own devices, so its absence means
+     * either a guest or a host older than the capability — two facts this phone
+     * cannot tell apart and does not need to. Both draw the picker without the
+     * *Choose a folder* row, which is what the app looked like before this
+     * existed.
+     */
+    var canPickFolders: Bool {
+        connection.isLive && (transport?.capabilities.contains(WireCapability.folderPick) ?? false)
+    }
+
+    /// What the picker last asked for, so a stale answer can be told from the
+    /// current one. Nil when nothing is browsing.
+    private(set) var browsing: String?
+
+    /// The folder the picker is showing, once the machine has answered.
+    private(set) var browsed: FolderListing?
+
+    /// Why the last browse could not be shown, if it could not.
+    private(set) var browseError: String?
+
+    /**
+     * Ask the machine what is inside a folder.
+     *
+     * `nil` opens the picker wherever the machine thinks is sensible — the
+     * folder this device already works in. The phone deliberately does not guess:
+     * it does not know whether this machine's home is `/Users/apple`, `/root` or
+     * `C:\\Users\\asad`, and a guess that is wrong opens the picker on an error.
+     */
+    func browseFolders(_ path: String?) {
+        guard canPickFolders else { return }
+        // Cleared rather than left standing: the rows on screen belong to the
+        // folder being left, and holding them through the round trip shows the
+        // old folder's contents under the new folder's heading.
+        browsed = nil
+        browseError = nil
+        browsing = path ?? ""
+        transport?.send(.browseFolders(path: path))
+    }
+
+    /// Leave the picker, so a late answer for a folder nobody is looking at is
+    /// dropped rather than drawn.
+    func endBrowsing() {
+        browsing = nil
+        browsed = nil
+        browseError = nil
     }
 
     // MARK: - Lifecycle
@@ -1261,6 +1311,24 @@ final class HostLink: Identifiable {
             // the state they are already showing.
             askDevServers()
 
+        case let .folderEntries(path, parent, entries):
+            /*
+             * One folder's contents, for the picker that is open on it.
+             *
+             * Dropped when nothing is browsing, and dropped when the answer is
+             * for a folder the picker has already left. Somebody who taps two
+             * rows quickly has two asks in flight, and without this the slower
+             * first answer lands last and the screen walks backwards under the
+             * thumb. `browsing` is what the picker asked for most recently, so
+             * comparing against it is comparing against what is on screen.
+             */
+            // Empty means the picker asked for the machine's own choice and has
+            // no path to compare against, so whatever came back is the answer.
+            guard let wanted = browsing, wanted.isEmpty || wanted == path else { break }
+            browsing = path
+            browsed = FolderListing(path: path, parent: parent, entries: entries)
+            browseError = nil
+
         case let .created(session):
             if !sessions.contains(where: { $0.id == session.id }) { sessions.append(session) }
             if !activity.isEmpty { lastActivity.merge(activity) { _, new in new } }
@@ -1368,6 +1436,15 @@ final class HostLink: Identifiable {
             // id, so this cannot be narrowed to copilot errors without inventing
             // one; see `CopilotLink.wireErrored`.
             copilot.wireErrored()
+            // And a picker waiting on an answer stops waiting. The wire carries
+            // no correlation id, so an error that arrived while a browse was in
+            // flight is treated as that browse's — the same assumption the
+            // copilot line above makes, and the cost of being wrong is one
+            // sentence on a screen that is already showing the banner.
+            if browsing != nil {
+                browseError = text.isEmpty ? code.rawValue : text
+                browsed = nil
+            }
 
         case let .ports(list):
             ports = list

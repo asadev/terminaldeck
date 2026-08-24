@@ -85,11 +85,8 @@ struct LocalhostListView: View {
      */
     @State private var browsingPath = "/"
 
-    /// Whether the address sheet is up, and what is in it. Two plain properties
-    /// rather than one optional, for the reason the rename alert below gives:
-    /// this model publishes constantly, and a computed `Binding` over an optional
-    /// has its setter run on every rebuild.
-    @State private var opening = false
+    /// What is in the address bar at the top of this screen. The bar is always
+    /// on screen now, so there is no "is it up" to track — see `addressBar`.
     @State private var address = ""
     /// Why the last thing typed was not opened, or nil. Drawn under the field —
     /// see `LocalhostAddress.Parsed.refused`, which writes whole sentences
@@ -116,10 +113,28 @@ struct LocalhostListView: View {
         ZStack {
             Theme.background.ignoresSafeArea()
 
-            if sections.isEmpty {
-                empty
-            } else {
-                list
+            VStack(spacing: 0) {
+                /*
+                 * The address bar, on the screen rather than behind a `+`.
+                 *
+                 * *"we should have only one which will be called browser… where
+                 * we can browse the localhost, we can type."* Typing was already
+                 * possible and it was two taps and a modal away, which is not
+                 * what anybody means by a browser. A browser has a bar at the
+                 * top; this is that bar.
+                 *
+                 * It stays above the empty state as well as above the list,
+                 * which is the case it is most needed in: a machine serving
+                 * nothing is exactly when somebody wants to type a port they
+                 * know is coming up.
+                 */
+                addressBar
+
+                if sections.isEmpty && surfaces.isEmpty {
+                    empty
+                } else {
+                    list
+                }
             }
 
             if let toast {
@@ -139,7 +154,7 @@ struct LocalhostListView: View {
                 .allowsHitTesting(false)
             }
         }
-        .navigationTitle("Localhost")
+        .navigationTitle("Browser")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             /*
@@ -156,32 +171,13 @@ struct LocalhostListView: View {
                 HostSwitcher(model: model, singleHostTitle: "Localhost")
             }
             /*
-             * The `+`, where a Refresh button used to be.
+             * **There is no `+` here any more.**
              *
-             * *"The `+` starts a new browsing window here too."* And on what was
-             * there: *"Refresh — what does it actually do? Pull-to-refresh would
-             * be the natural gesture."* It called `model.refresh()`, which sends
-             * one `list` frame; the pull gesture on this list sends the same
-             * frame and has done since before the button existed. So the slot
-             * was spent on a duplicate of a gesture, and it is spent on the new
-             * page instead.
-             *
-             * See `LocalhostAddress` for what the field accepts, why a live link
-             * is refused rather than opened, and why that refusal is the right
-             * answer rather than a gap.
+             * It raised a sheet with one field in it. The field is on the screen
+             * now, at the top, where a browser keeps it — *"we can type"* — so
+             * the button opened a modal to show somebody a control they were
+             * already looking at. See `addressBar`.
              */
-            ToolbarItem(placement: .topBarTrailing) {
-                SwiftUI.Button {
-                    address = ""
-                    addressNotice = nil
-                    opening = true
-                } label: {
-                    Image(systemName: "plus")
-                }
-                .disabled(!model.canBrowseLocalhost || !model.connection.isLive)
-                .accessibilityLabel("Open an address")
-                .accessibilityIdentifier("localhost.open")
-            }
         }
         /*
          * A push, not a cover.
@@ -218,13 +214,6 @@ struct LocalhostListView: View {
          * builder is attached to a view that is rebuilt whenever the desktop
          * pushes anything.
          */
-        .sheet(isPresented: $opening) {
-            OpenAddressSheet(machine: model.current?.label ?? "this machine",
-                             address: $address,
-                             notice: addressNotice,
-                             open: { openTyped() },
-                             dismiss: { opening = false })
-        }
         .onChange(of: browsing == nil) { _, dismissed in
             // Covers the back swipe and the back button as well as Done:
             // whichever way the page goes away, the port stops being reachable.
@@ -266,6 +255,37 @@ struct LocalhostListView: View {
     /// What the machine says is listening, and nothing when it has not offered
     /// to say. A machine speaking plain v1 has no `ports` frame at all.
     private var ports: [LocalPort] { model.canBrowseLocalhost ? model.ports : [] }
+
+    /// The machine's watchable windows. Empty for a guest, and empty on a host
+    /// that never offered `watch` — both draw no section at all.
+    private var surfaces: [BrowserSurfaceRow] { model.watchSurfaces }
+
+    /// One window of the machine's browser. Its title if it has one, and the
+    /// address under it — the same pair the ports above draw, so the two
+    /// sections read as one list rather than as two features stacked up.
+    private func windowRow(_ surface: BrowserSurfaceRow) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "macwindow")
+                .font(.system(size: 19, weight: .light))
+                .foregroundStyle(Theme.secondary)
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(surface.title.isEmpty ? "Untitled window" : surface.title)
+                    .font(.system(size: 15))
+                    .foregroundStyle(Theme.primary)
+                    .lineLimit(1)
+                if !surface.url.isEmpty {
+                    Text(surface.url)
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(Theme.faint)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 2)
+    }
 
     /// The projects this machine will discuss. A separate capability from the
     /// one above, and they genuinely come apart — see `HostLink.canUseDevServers`.
@@ -320,6 +340,37 @@ struct LocalhostListView: View {
                                        host: hostId,
                                        category: section.category)
                     }
+                }
+            }
+
+            /*
+             * The machine's own browser windows, cast back — the feature that
+             * used to be three rows deep in Settings as *Watch browser*.
+             *
+             * Here because it answers the same question the ports above it do —
+             * *show me a page that lives on that machine* — and because a page
+             * this phone just asked the machine to open arrives in this section.
+             * A section rather than a second screen, so the whole of "browser"
+             * is one scroll.
+             *
+             * Absent, not empty, when the host withheld `watch`: it does that
+             * for a guest, and a guest must not be shown a heading for something
+             * it will never be allowed to see.
+             */
+            if !surfaces.isEmpty {
+                Section {
+                    ForEach(surfaces) { surface in
+                        NavigationLink {
+                            if let watch = model.current?.watch {
+                                WatchViewerScreen(watch: watch, surface: surface)
+                            }
+                        } label: {
+                            windowRow(surface)
+                        }
+                        .accessibilityIdentifier("browser.window.\(surface.id)")
+                    }
+                } header: {
+                    Text("Windows on \(model.current?.label ?? "this machine")")
                 }
             }
 
@@ -598,7 +649,7 @@ struct LocalhostListView: View {
             return "\(model.current?.label ?? "That machine") is running a version of the desktop "
                 + "app that cannot share its ports with a phone."
         }
-        return "Nothing on the \(model.hostPlatform.noun) is serving a page right now."
+        return "Nothing on \(model.theMachine) is serving a page right now."
     }
 
     // MARK: - Actions
@@ -628,14 +679,101 @@ struct LocalhostListView: View {
      * whole job is the difference between "that is not an address" and "that is
      * an address; ask the machine".
      */
+    /**
+     * The address bar. One field, and it decides where what you typed belongs.
+     *
+     * A port or a localhost address is a **tunnel**: the page loads in a real
+     * `WKWebView` on a real loopback origin, so it gets cookies, service workers
+     * and the WebSocket a dev server's hot reload runs on. That is the good path
+     * and it is unchanged.
+     *
+     * Anything else — a site on the internet — used to be **refused**, with a
+     * paragraph explaining that it would load on the phone rather than on the
+     * machine. That was true and it was the wrong conclusion: the machine has a
+     * browser, this app can already open a page in it (`web.open`) and can
+     * already cast it back (`watch`). So a real URL opens *there* and appears in
+     * Windows below. *"we can have all the browser features also in there."*
+     */
+    private var addressBar: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.faint)
+                TextField("localhost:3000, or a site to open on the machine", text: $address)
+                    .textFieldStyle(.plain)
+                    // Every one of these is load-bearing: a URL keyboard puts
+                    // the slash and the dot under a thumb, autocapitalisation
+                    // would send "Localhost", autocorrect "local host", and the
+                    // `.URL` content type stops iOS offering a contact's name.
+                    .keyboardType(.URL)
+                    .textContentType(.URL)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .submitLabel(.go)
+                    .onSubmit(openTyped)
+                    .font(.system(size: 15, design: .monospaced))
+                    .foregroundStyle(Theme.primary)
+                    .accessibilityIdentifier("browser.address")
+                if !address.isEmpty {
+                    Button {
+                        address = ""
+                        addressNotice = nil
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 14))
+                            .foregroundStyle(Theme.faint)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Clear")
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.hairline))
+
+            if let addressNotice {
+                Text(addressNotice)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 8)
+                    .padding(.horizontal, 2)
+                    .accessibilityIdentifier("browser.address.notice")
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .padding(.bottom, 10)
+    }
+
     private func openTyped() {
-        switch LocalhostAddress.parse(address) {
-        case let .refused(why):
-            addressNotice = why
+        let typed = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !typed.isEmpty else { return }
+        switch LocalhostAddress.parse(typed) {
         case let .address(port, path):
             addressNotice = nil
-            opening = false
             open(port: port, path: path)
+        case .refused:
+            /*
+             * Not a port on this machine, so it is a page for the machine's own
+             * browser — if this host offers one.
+             *
+             * The refusal sentence is kept for the case where there is nothing
+             * to fall back to: a host that does not advertise `web` cannot open
+             * a page anywhere, and "that is not a localhost address" is then the
+             * whole truth. Where the host *can*, the honest answer is to open it
+             * rather than to explain why we will not.
+             */
+            guard model.canOpenPages else {
+                if case let .refused(why) = LocalhostAddress.parse(typed) { addressNotice = why }
+                return
+            }
+            addressNotice = nil
+            model.openPageOnMachine(typed)
+            address = ""
+            show("Opening on \(model.current?.label ?? "the machine")")
         }
     }
 
@@ -681,121 +819,6 @@ struct LocalhostListView: View {
 
 /* -------------------------------------------------------------------------- */
 /* Opening an address                                                          */
-/* -------------------------------------------------------------------------- */
-
-/**
- * One field, one button, and a sentence saying which machine is about to be
- * asked.
- *
- * Asad, on the phone's localhost tab: *"the `+` starts a new browsing window
- * here too"*, and on what a browsing window is for: *"a live link and a
- * localhost link both open on the connected machine, not in a phone web view
- * pretending."*
- *
- * Half of that is what this does and half of it is refused, deliberately, and the
- * argument is in `LocalhostAddress` — in one line, driving the desktop's own
- * browser from a paired device is blocked at the machine by a security decision
- * this codebase took on purpose, and quietly loading a live site over the phone's
- * network instead would be exactly the pretending he named. So the field opens
- * **what the machine is serving**, and says so.
- *
- * ## Which is why the machine's name is on the screen and not just in a hint
- *
- * With several machines paired, *"open localhost:3000"* is an ambiguous request
- * and the wrong answer looks exactly like the right one — a dev server on the
- * wrong computer renders perfectly. The title carries the machine; the switcher
- * on the list behind it is how it is changed.
- */
-private struct OpenAddressSheet: View {
-    let machine: String
-    @Binding var address: String
-    let notice: String?
-    let open: () -> Void
-    let dismiss: () -> Void
-
-    /// Focused on appearance, because there is exactly one thing to do on this
-    /// screen and a sheet that raises no keyboard costs a tap for no reason.
-    @FocusState private var typing: Bool
-
-    var body: some View {
-        NavigationStack {
-            ZStack {
-                Theme.background.ignoresSafeArea()
-                VStack(alignment: .leading, spacing: 0) {
-                    TextField("localhost:3000", text: $address)
-                        .textFieldStyle(.plain)
-                        // Every one of these is load-bearing on this field. A
-                        // URL keyboard puts the slash and the dot where a thumb
-                        // can reach them; autocapitalisation would send
-                        // "Localhost"; autocorrect would send "local host"; and
-                        // `.URL` content type is what stops iOS offering a
-                        // contact's name as a completion.
-                        .keyboardType(.URL)
-                        .textContentType(.URL)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .submitLabel(.go)
-                        .onSubmit(open)
-                        .focused($typing)
-                        .font(.system(size: 17, design: .monospaced))
-                        .foregroundStyle(Theme.primary)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 13)
-                        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.hairline))
-                        .accessibilityIdentifier("localhost.open.field")
-
-                    if let notice {
-                        Text(notice)
-                            .font(.system(size: 12))
-                            .foregroundStyle(Theme.warning)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .padding(.top, 10)
-                            .padding(.horizontal, 2)
-                            .accessibilityIdentifier("localhost.open.notice")
-                    }
-
-                    // The one paragraph, and it is the answer to "why did my
-                    // link not open". Said before it is needed rather than only
-                    // as a refusal, because somebody typing a site into this
-                    // field has a reasonable idea in their head and deserves to
-                    // find out it is not this feature before they press Open.
-                    Text("Pages this machine is serving on its own ports — a number is enough, and a "
-                         + "path works: 3000, or localhost:3000/admin. A site on the internet cannot "
-                         + "be opened here, because it would load on the phone rather than on "
-                         + "\(machine).")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.faint)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, 16)
-                        .padding(.horizontal, 2)
-
-                    Spacer(minLength: 0)
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 16)
-            }
-            .navigationTitle("Open on \(machine)")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    SwiftUI.Button("Cancel") { dismiss() }
-                        .accessibilityIdentifier("localhost.open.cancel")
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    SwiftUI.Button("Open", action: open)
-                        .disabled(address.trimmingCharacters(in: .whitespaces).isEmpty)
-                        .accessibilityIdentifier("localhost.open.go")
-                }
-            }
-        }
-        .presentationDetents([.medium])
-        .onAppear { typing = true }
-    }
-}
-
-/* -------------------------------------------------------------------------- */
-/* Rows and chrome                                                             */
 /* -------------------------------------------------------------------------- */
 
 /**
@@ -875,7 +898,7 @@ private struct SplitRow<Label: View, Trailing: View>: View {
             trailing
                 .padding(.trailing, 4)
         }
-        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 }
 
@@ -958,7 +981,7 @@ private struct PortRowButtonStyle: ButtonStyle {
             .overlay {
                 // See `RowButtonStyle`: a white wash is invisible on paper, so
                 // this is the ink tint that flips with the appearance.
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
                     .fill(configuration.isPressed ? Theme.pressed : .clear)
             }
             .scaleEffect(configuration.isPressed ? 0.99 : 1)

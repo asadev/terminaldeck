@@ -392,14 +392,26 @@ describe.skipIf(!onLinux)('a confined Linux session, run for real', () => {
 })
 
 describe.skipIf(!onLinux)('the proof, which runs before every session', () => {
-  it('refuses a plan whose canary would land inside the boundary', async () => {
-    // A grant on the whole home directory. There would be nothing left to hold
-    // the session inside, and the test that is supposed to notice cannot — so
-    // the session is refused rather than started on a check that cannot fail.
+  it('still passes when home is the granted folder (uses tmp canary only)', async () => {
+    /*
+     * A grant on the whole home directory is the fallback when no projects are
+     * open on a bare Linux server. The homeCanary lands inside the plan, but
+     * tmpCanary (/tmp/…) is still outside — so the proof must proceed and
+     * confirm that /tmp is protected, rather than refusing on a technicality
+     * that would block every first-session on a fresh headless install.
+     */
     const wide = { ...plan, writable: [...plan.writable, homedir()] }
     const proof = await proveConfinement(wide, 'linux')
+    expect(proof.ok).toBe(true)
+  })
+
+  it('refuses when BOTH canaries would land inside the boundary', async () => {
+    // / is the granted folder → both homeCanary (in home) and tmpCanary (/tmp/…)
+    // are inside, so there is nothing left to test with.
+    const root = { ...plan, writable: [...plan.writable, '/'] }
+    const proof = await proveConfinement(root, 'linux')
     expect(proof.ok).toBe(false)
-    expect(proof.detail).toMatch(/could not fail/)
+    expect(proof.detail).toMatch(/both test files/)
   })
 
   it('leaves nothing behind in the account home', async () => {

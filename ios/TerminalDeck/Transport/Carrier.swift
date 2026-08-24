@@ -403,7 +403,7 @@ final class RelayCarrier: Carrier {
      */
     private func unstartedReason() -> String? {
         if sealed != nil { return nil }
-        if pending != nil { return "That Mac is not connected to the relay right now." }
+        if pending != nil { return "That machine is not connected to the relay right now." }
         return "Could not reach the relay at \(url.host ?? url.absoluteString)."
     }
 
@@ -422,7 +422,7 @@ final class RelayCarrier: Carrier {
         } catch {
             // A malformed host key from a pairing code, essentially. Not
             // retryable, but the transport decides that; this only reports.
-            fail("This device could not start a handshake with that Mac's key.")
+            fail("This device could not start a handshake with that machine's key.")
         }
     }
 
@@ -434,13 +434,13 @@ final class RelayCarrier: Carrier {
             } catch {
                 // Every failure is the same failure: a bad tag, a replay and a
                 // reordering are not distinguished out loud.
-                fail("A frame from the Mac failed authentication.")
+                fail("A frame from the machine failed authentication.")
                 return
             }
             guard let text = String(data: plaintext, encoding: .utf8) else {
                 // The seal held, so this really is the Mac — sending something
                 // the protocol above does not define.
-                fail("The Mac sent a frame that is not text.")
+                fail("The machine sent a frame that is not text.")
                 return
             }
             onEvent?(.text(text))
@@ -472,7 +472,7 @@ final class RelayCarrier: Carrier {
             // The relay cannot man-in-the-middle without landing here, which is
             // the property the whole design is for. It is also what a stale
             // pairing code looks like after the Mac has regenerated its key.
-            fail("The Mac's reply failed authentication. Its key may have changed — pair again.")
+            fail("The machine's reply failed authentication. Its key may have changed — pair again.")
         }
     }
 

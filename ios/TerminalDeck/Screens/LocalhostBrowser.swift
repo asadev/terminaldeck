@@ -434,7 +434,7 @@ struct LocalhostBrowser: View {
     private var content: some View {
         switch tunnel.phase {
         case .opening:
-            waiting("Opening port \(tunnel.port) on the Mac…")
+            waiting("Opening port \(tunnel.port) on \(model.theMachine)…")
         case .live:
             ZStack {
                 WebSurface(browser: browser)
@@ -831,9 +831,9 @@ final class BrowserBridge: NSObject, WKNavigationDelegate {
     private func sentence(for error: Error) -> String {
         switch (error as NSError).code {
         case NSURLErrorCannotConnectToHost, NSURLErrorNetworkConnectionLost:
-            return "The server on the Mac did not answer. It may be restarting."
+            return "The server on the machine did not answer. It may be restarting."
         case NSURLErrorTimedOut:
-            return "The Mac took too long to answer."
+            return "The machine took too long to answer."
         case NSURLErrorAppTransportSecurityRequiresSecureConnection:
             return "iOS refused to load this page over plain HTTP."
         default:

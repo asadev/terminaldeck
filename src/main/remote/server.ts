@@ -46,7 +46,9 @@ import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import { createReadStream } from 'node:fs'
 // Plain HTTP on loopback, not HTTPS. Tailscale terminates TLS in front of it;
 // see ./tailscale-serve for why it cannot be done in-process.
-import { stat } from 'node:fs/promises'
+import { access, readdir, stat } from 'node:fs/promises'
+import { constants as FS } from 'node:fs'
+import { homedir } from 'node:os'
 import { createServer as createPlainServer, type Server as LocalServer } from 'node:http'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Duplex } from 'node:stream'
@@ -2368,6 +2370,12 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     // welcome later, so a guest must never be told the capability exists. The
     // grant `drivesWindows` is the second layer, read per frame at send time.
     if (!ownDevice(deviceId)) withheld.push(CAPABILITY.watch)
+    // And browsing this machine's folders to widen your own grant, on the same
+    // rule as the four above. The point of lending a folder is that the
+    // borrower cannot leave it; a guest that could add its own would be holding
+    // the key to the room it was let into. Stripped rather than only refused
+    // because no push frame corrects a welcome later.
+    if (!ownDevice(deviceId)) withheld.push(CAPABILITY.folderPick)
     const narrowed = withheld.length === 0 ? advertised : advertised.filter((name) => !withheld.includes(name))
     if (copilotEligible(deviceId)) return narrowed
     // `web` goes with it, and for the same reason: opening a page puts a window
@@ -3130,6 +3138,122 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     const list = options.sessions.folders?.(deviceId)
     return list ? { folders: list } : {}
   }
+
+  /**
+   * Whether this device may walk the machine's folders and widen its own list.
+   *
+   * The same two-layer shape every owner-only verb here has: `capabilitiesFor`
+   * decides what a client *of ours* draws, and this decides what *any* client
+   * gets. A build older than the rule, or one somebody wrote themselves, sends
+   * the frame without having read the welcome.
+   */
+  function mayPickFolders(connection: LiveConnection, deviceId: string): boolean {
+    if (options.sessions.folders === undefined) {
+      send(connection, {
+        t: 'error',
+        code: 'unauthorized',
+        message: 'This machine does not choose folders per device.',
+      })
+      return false
+    }
+    if (!ownDevice(deviceId)) {
+      send(connection, {
+        t: 'error',
+        code: 'unauthorized',
+        message: 'Only one of the owner’s own devices may choose folders on this machine.',
+      })
+      return false
+    }
+    return true
+  }
+
+  /**
+   * The sub-directories of one folder, for a device walking to the one it wants.
+   *
+   * Directories only, and dot-directories are dropped: `.git`, `.cache` and
+   * `node_modules` are the three things a listing of a real project is otherwise
+   * mostly made of, and none of them is a folder anybody starts a session in.
+   * `node_modules` is named explicitly rather than caught by the dot rule
+   * because it does not begin with one and is the largest of the three.
+   *
+   * A directory that cannot be read is listed **dimmed** rather than dropped.
+   * Dropping it would make `/root` invisible on every Linux box to every account
+   * but root's, and somebody looking for a folder they know is there and cannot
+   * see would go looking for a bug in the picker. `readable` carries the fact and
+   * the client draws it un-tappable.
+   *
+   * An unreadable *parent* is an error rather than an empty list, for the same
+   * reason: "this folder has nothing in it" and "you may not look in this
+   * folder" are different sentences and only one of them means try somewhere
+   * else.
+   */
+  async function browseFolders(
+    connection: LiveConnection,
+    deviceId: string,
+    asked: string | undefined,
+  ): Promise<void> {
+    if (!mayPickFolders(connection, deviceId)) return
+
+    /*
+     * No path means "somewhere sensible", and the sensible place is **where this
+     * device already works** — the first folder on its own list — rather than a
+     * fixed home. On a bare server the two are the same thing, because the
+     * fallback in `foldersForDevice` is the account's home; on a machine where
+     * somebody has chosen, the picker opens beside the project instead of a
+     * directory up from it. `homedir()` is what is left when a host answers no
+     * list at all, which is a host that will refuse the browse a line above.
+     *
+     * A picker that opened on `/` would make somebody walk down four levels of a
+     * Linux root to reach anything of theirs.
+     */
+    const start = options.sessions.folders?.(deviceId)?.[0] ?? homedir()
+    const here = resolve(asked && asked !== '' ? asked : start)
+
+    let listing: Awaited<ReturnType<typeof readdir>>
+    try {
+      listing = await readdir(here, { withFileTypes: true })
+    } catch {
+      send(connection, {
+        t: 'error',
+        code: 'unavailable',
+        message: `That folder could not be read on this machine.`,
+      })
+      return
+    }
+
+    const granted = new Set(options.folders.granted(deviceId) ?? [])
+    const rows = listing
+      .filter((entry) => entry.isDirectory())
+      .filter((entry) => !entry.name.startsWith('.') && entry.name !== 'node_modules')
+      .map((entry) => ({ name: entry.name, path: join(here, entry.name) }))
+      // By name, case-insensitively, because the order `readdir` returns is the
+      // order the filesystem happens to hold and a picker that reorders itself
+      // between two visits is a picker somebody stops trusting.
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+
+    const entries = await Promise.all(
+      rows.map(async (row) => ({
+        ...row,
+        readable: await access(row.path, FS.R_OK | FS.X_OK).then(
+          () => true,
+          () => false,
+        ),
+        granted: granted.has(row.path),
+      })),
+    )
+
+    // `null` at the filesystem root — `resolve('/..')` is `'/'`, and a parent
+    // equal to the folder itself is how the top announces itself on every
+    // platform without this needing to know what a Windows drive letter is.
+    const up = resolve(here, '..')
+    send(connection, {
+      t: 'folders.entries',
+      path: here,
+      parent: up === here ? null : up,
+      entries,
+    })
+  }
+
 
   /**
    * This device's copilot grant, in the shape a `welcome` spreads.
@@ -4884,6 +5008,21 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
         return
       case 'close':
         closeSession(connection, connection.deviceId, message.id)
+        return
+      case 'folders.browse':
+        // Not awaited, for the reason `create` above is not: this reads the
+        // machine's filesystem, and the message loop is the socket's data
+        // handler. It must not stop reading for the length of a `readdir` on a
+        // directory somebody keeps forty thousand files in.
+        void browseFolders(connection, connection.deviceId, message.path).catch((error) => {
+          console.error('[remote] folder browse failed:', error)
+          if (!live.has(connection.id)) return
+          send(connection, {
+            t: 'error',
+            code: 'unavailable',
+            message: 'That folder could not be read on this machine.',
+          })
+        })
         return
       case 'ports':
       case 'tunnel.open':

@@ -136,6 +136,33 @@ enum WireCodec {
             }
             return .ok(.folders(list), activity: [:])
 
+        case "folders.entries":
+            // `path` is required and the list is not: a readable folder with no
+            // sub-folders in it is an ordinary answer and draws an empty picker,
+            // whereas an answer that cannot say *which* folder it describes
+            // cannot be drawn under any heading at all.
+            guard let path = string(object["path"]) else {
+                return .failed(reason: "folders.entries without a path")
+            }
+            let rows = (object["entries"] as? [Any] ?? []).compactMap { row -> FolderEntry? in
+                guard let entry = row as? [String: Any],
+                      let name = string(entry["name"]),
+                      let full = string(entry["path"])
+                else { return nil }
+                // Both flags default the safe way for a client older than the
+                // host: an unsaid `readable` draws a row somebody may try, and an
+                // unsaid `granted` draws one they may add. The machine refuses
+                // either honestly, which is the layer that matters.
+                return FolderEntry(name: name,
+                                   path: full,
+                                   readable: entry["readable"] as? Bool ?? true,
+                                   granted: entry["granted"] as? Bool ?? false)
+            }
+            return .ok(.folderEntries(path: path,
+                                      parent: string(object["parent"]),
+                                      entries: rows),
+                       activity: [:])
+
         case "attached":
             guard let id = string(object["id"]) else { return .failed(reason: "attached without an id") }
             return .ok(.attached(id: id), activity: [:])
@@ -766,6 +793,16 @@ enum WireCodec {
                 request["rows"] = size.rows
             }
             object = request
+        case let .browseFolders(path):
+            // `path` omitted rather than sent empty when there is none: the host
+            // reads absent as "somewhere sensible" and would read `""` as a
+            // path, which resolves to the process's working directory — a folder
+            // nobody asked for and which is not on the picker's way anywhere.
+            if let path, !path.isEmpty {
+                object = ["t": "folders.browse", "path": path]
+            } else {
+                object = ["t": "folders.browse"]
+            }
         case let .close(id):
             object = ["t": "close", "id": id]
         case let .attach(id, size):

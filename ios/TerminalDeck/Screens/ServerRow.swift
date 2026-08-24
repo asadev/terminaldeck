@@ -23,9 +23,9 @@ struct ServerRow: View {
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: "server.rack")
-                .font(.system(size: 15))
+                .font(.system(size: 19, weight: .light))
                 .foregroundStyle(Theme.secondary)
-                .frame(width: 18)
+                .frame(width: 24)
             VStack(alignment: .leading, spacing: 2) {
                 Text(server.name)
                     .font(.system(size: 16, weight: .medium))

@@ -74,7 +74,7 @@ struct PairingView: View {
 
                     if let notice = model.pairingNotice {
                         Banner(text: notice, tone: .warning)
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                            .clipShape(RoundedRectangle(cornerRadius: 14))
                     }
 
                     codeEntry
@@ -239,11 +239,11 @@ struct PairingView: View {
                 .accessibilityIdentifier("pairing.field")
                 .padding(.vertical, 14)
                 .frame(maxWidth: .infinity)
-                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                 // The one border on this screen, and it earns it: a text field
                 // with no edge on a dark background is indistinguishable from a
                 // paragraph until it is tapped.
-                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.hairline))
+                .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(Theme.hairline))
                 .onChange(of: typed) { _, value in
                     /*
                      * Trimmed to six, then submitted on six.
@@ -294,7 +294,7 @@ struct PairingView: View {
             // So the disabled state takes secondary ink instead, which is what a
             // disabled control should read as anyway.
             .background(Theme.accent.opacity(typed.isEmpty ? 0.28 : 1),
-                        in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        in: RoundedRectangle(cornerRadius: 20, style: .continuous))
             .foregroundStyle(typed.isEmpty ? Theme.secondary : Theme.onAccent)
             .accessibilityIdentifier("pairing.submit")
             .disabled(typed.isEmpty || model.isPairing)
@@ -364,7 +364,7 @@ struct PairingView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
-        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20))
     }
 
     /**
@@ -417,7 +417,7 @@ struct PairingView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
-        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20))
     }
 }
 
@@ -469,7 +469,7 @@ struct PendingApprovalView: View {
                         .foregroundStyle(Theme.warning)
                 }
 
-                Text(reached ? "Waiting for approval" : "Cannot reach that Mac")
+                Text(reached ? "Waiting for approval" : "Cannot reach that machine")
                     .font(.system(size: 22, weight: .semibold))
                     .foregroundStyle(Theme.primary)
                     .accessibilityIdentifier("pending.title")
@@ -513,7 +513,7 @@ struct PendingApprovalView: View {
                 }
                 .padding(14)
                 .frame(maxWidth: .infinity)
-                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20))
 
                 if let retryAt = model.connection.retryAt {
                     // Says when, so the screen is visibly doing something
@@ -530,13 +530,13 @@ struct PendingApprovalView: View {
                         .font(.system(size: 14, weight: .medium))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 10)
-                        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10))
+                        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14))
 
                     Button("Start over") { model.unpairCurrent() }
                         .font(.system(size: 14, weight: .medium))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 10)
-                        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10))
+                        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14))
                 }
                 .foregroundStyle(Theme.primary)
             }

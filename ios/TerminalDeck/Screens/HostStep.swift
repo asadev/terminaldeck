@@ -97,7 +97,7 @@ struct HostStepCard: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
-        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 
     /* --------------------------------------------------------------- head -- */
@@ -352,7 +352,7 @@ struct HostStepCard: View {
         .buttonStyle(.plain)
         .foregroundStyle(disabled ? Theme.secondary : Theme.onAccent)
         .background(Theme.accent.opacity(disabled ? 0.28 : 1),
-                    in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                    in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .disabled(disabled)
         .accessibilityIdentifier(identifier)
     }

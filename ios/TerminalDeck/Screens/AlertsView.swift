@@ -100,7 +100,7 @@ struct AlertsView: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(Theme.onAccent)
-            .background(Theme.accent, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background(Theme.accent, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
             .disabled(asking)
             .padding(.top, 20)
             .accessibilityIdentifier("alerts.turnOn")
@@ -119,7 +119,7 @@ struct AlertsView: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(Theme.accent)
-            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
             .padding(.top, 20)
             .accessibilityIdentifier("alerts.openSettings")
 
@@ -151,7 +151,7 @@ struct AlertsView: View {
                     .accessibilityIdentifier("alerts.finished")
                     .onChange(of: finished) { _, value in AlertSettings.finished = value }
             }
-            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
             .padding(.top, 24)
         }
     }

@@ -104,7 +104,7 @@ struct SessionChatView: View {
                     .padding(.horizontal, 13)
                     .padding(.vertical, 10)
                     .background(mine ? Theme.accent.opacity(0.14) : Theme.surface,
-                                in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                in: RoundedRectangle(cornerRadius: 20, style: .continuous))
 
                 HStack(spacing: 8) {
                     let stamp = SessionChatView.time(message.at)

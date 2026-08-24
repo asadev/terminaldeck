@@ -109,7 +109,7 @@ struct FindBar: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
-        .background(Theme.surfaceHigh, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background(Theme.surfaceHigh, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
     /// Earlier and later, in that order, because a scrollback grows downwards:

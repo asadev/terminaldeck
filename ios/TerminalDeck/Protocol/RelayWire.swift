@@ -75,10 +75,10 @@ enum RelayWire {
         var sentence: String {
             switch self {
             case let .wrongVersion(saw):
-                return "That Mac answered with sealed-channel version \(saw); this app speaks "
+                return "That machine answered with sealed-channel version \(saw); this app speaks "
                     + "\(RelayWire.sealedVersion). Update whichever is older."
             case .malformed:
-                return "That Mac's first answer was not a sealed handshake."
+                return "That machine's first answer was not a sealed handshake."
             }
         }
     }

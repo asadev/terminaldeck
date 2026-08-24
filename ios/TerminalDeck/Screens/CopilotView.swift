@@ -702,7 +702,7 @@ struct CopilotView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 13)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         }
     }
 
@@ -759,6 +759,9 @@ struct CopilotView: View {
         return "\(tools) · \(state.turnTokens) tokens a turn"
     }
 
+    /// The copilot only ever runs on a desktop — a headless host advertises no
+    /// copilot at all (`NO_COPILOT_HERE`) — so the platform noun is the right one
+    /// here and `DeckModel.machineNoun` would add a case that cannot happen.
     private var hostNoun: String { host?.hostPlatform.noun ?? "desktop" }
 
     /**
@@ -1142,7 +1145,7 @@ private struct CopilotBubble: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 11)
             .background(message.role == .you ? Theme.accent.opacity(0.14) : Theme.surface,
-                        in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        in: RoundedRectangle(cornerRadius: 20, style: .continuous))
 
             if message.role == .agent { Spacer(minLength: 40) }
         }
@@ -1193,7 +1196,7 @@ private struct CopilotOutgoingBubble: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 11)
             .background(Theme.accent.opacity(0.14),
-                        in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(outgoing.unacknowledged

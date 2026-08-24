@@ -504,6 +504,21 @@ enum WireCapability {
     static let watch = "watch"
 
     /**
+     * Walk this machine's folders, and add one to the list this device may use.
+     *
+     * Advertised by a host only to one of the owner's own devices — a guest is
+     * never told it exists, because the point of lending a folder is that the
+     * borrower cannot leave it. So its absence has two meanings this phone
+     * cannot tell apart and does not need to: an older desktop, or a device
+     * paired as a guest. Both draw the picker without the *Choose a folder* row,
+     * which is exactly what the app looked like before this existed.
+     *
+     * Not in `claimed` below: this is something the phone *asks for*, gated by
+     * what the host advertised, so naming it in `hello` would say nothing.
+     */
+    static let folderPick = "folders.pick"
+
+    /**
      * What this build tells a desktop it can do, in `hello.capabilities`.
      *
      * Only names that run desktop→phone belong here, either as a *question* the
@@ -670,6 +685,46 @@ struct LocalPort: Equatable, Identifiable, Hashable {
     var id: Int { port }
 }
 
+/**
+ * One sub-folder on the machine, in the folder picker.
+ *
+ * `readable` is carried rather than assumed because a listing of a real Linux
+ * box has folders in it that this account cannot open — `/root` is on every one
+ * of them — and the honest thing is to draw the row dimmed rather than to hide
+ * it or to offer a tap that fails. Somebody looking for a folder they know is
+ * there and cannot see goes looking for a bug in the picker.
+ *
+ * `granted` marks a folder already on this device's list, so browsing back to
+ * one shows it is there instead of inviting somebody to add it twice.
+ *
+ * Identified by `path` and not by `name`: two projects called `web` under
+ * different parents are one name and two rows.
+ */
+/**
+ * One folder of the machine, as the picker is showing it.
+ *
+ * `path` is the machine's own answer rather than something this phone built by
+ * joining strings: it is the only side that knows whether its separator is `/`
+ * or `\`, and a path assembled here would be wrong on exactly the machines this
+ * feature exists for.
+ *
+ * `parent` is `nil` at the very top, which is what the "up" row is drawn from.
+ */
+struct FolderListing: Equatable {
+    let path: String
+    let parent: String?
+    let entries: [FolderEntry]
+}
+
+struct FolderEntry: Equatable, Identifiable, Hashable {
+    let name: String
+    let path: String
+    let readable: Bool
+    let granted: Bool
+
+    var id: String { path }
+}
+
 enum ClientMessage: Equatable {
     /**
      * `capabilities` is this client's half of the negotiation.
@@ -704,6 +759,19 @@ enum ClientMessage: Equatable {
      * session in the product is titled after its folder, by the Mac.
      */
     case create(folder: String?, size: TerminalSize?)
+
+    /* ---- capability `folders.pick`. Never sent unless it was offered. ------ */
+
+    /**
+     * List the sub-folders of `path`, so somebody can walk to the one they want.
+     *
+     * `nil` means *somewhere sensible*, which the machine answers as the folder
+     * this device already works in. The phone deliberately does not guess a
+     * starting path: it does not know whether this machine's home is
+     * `/Users/apple`, `/root` or `C:\Users\asad`, and a guess that is wrong opens
+     * the picker on an error.
+     */
+    case browseFolders(path: String?)
 
     /* ---- capability `close`. Never sent unless the desktop offered it. ------ */
 
@@ -1221,6 +1289,19 @@ enum ServerMessage: Equatable {
      * only possible outcome is a refusal.
      */
     case folders([String])
+
+    /* ---- capability `folders.pick` --------------------------------------- */
+
+    /**
+     * One folder's sub-folders, in answer to a `folders.browse`.
+     *
+     * `path` is echoed by the machine rather than remembered here, because two
+     * asks can be in flight after a fast double-tap and the second answer must
+     * not be drawn under the first heading. `parent` is `nil` at the very top,
+     * which is what the "up" row is drawn from — working it out on the phone
+     * would mean a phone that knows where the root is on Windows.
+     */
+    case folderEntries(path: String, parent: String?, entries: [FolderEntry])
     case attached(id: String)
     case detached(id: String)
     /// `replay` marks scrollback that arrived before this client did.

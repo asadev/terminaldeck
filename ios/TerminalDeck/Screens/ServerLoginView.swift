@@ -235,6 +235,29 @@ struct ServerLoginView: View {
             }
         }
         .tint(Theme.accent)
+        /*
+         * Write down which machine this server turned into — **on the screen,
+         * not on the branch that is about to be replaced.**
+         *
+         * This lived inside the `arrived(server)` view, which is exactly where
+         * it could never fire. `stage` reads `serverSignIn.phase` first, so the
+         * instant the connect lands the screen returns `.connected(name)` and
+         * SwiftUI swaps the whole `arrived` subtree out — and an `.onChange` on
+         * a view being removed in the same update does not run. The server was
+         * added to the store and then never linked to the host it had become,
+         * so Machines listed a server that had never connected, the detail page
+         * had nothing to show and Disconnect could not be reached. He said it
+         * plainly: *"before we had full page for server connected and could see
+         * all details now its gone."*
+         *
+         * Here it survives every stage the screen moves through. The server id
+         * is read from `connector.login` rather than captured, because the
+         * branch that held it is the thing that goes away.
+         */
+        .onChange(of: signedInHostId) { _, hostId in
+            guard let hostId, let server = addedServer else { return }
+            connector.markConnected(server.id, hostId: hostId)
+        }
         #if DEBUG
         .task {
             prefillFromEnvironment()
@@ -518,7 +541,7 @@ struct ServerLoginView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(14)
-            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
             .padding(.bottom, 20)
         }
 
@@ -541,9 +564,9 @@ struct ServerLoginView: View {
             .focused($focused, equals: .username)
             .padding(.horizontal, 12)
             .padding(.vertical, 11)
-            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Theme.hairline, lineWidth: 1)
+                RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.hairline, lineWidth: 1)
             }
             .accessibilityIdentifier("serverLogin.username")
             .id(Field.username)
@@ -578,9 +601,9 @@ struct ServerLoginView: View {
                 .focused($focused, equals: .secret)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 11)
-                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .overlay {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Theme.hairline, lineWidth: 1)
+                    RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.hairline, lineWidth: 1)
                 }
                 .padding(.top, 12)
                 .accessibilityIdentifier("serverLogin.password")
@@ -604,7 +627,7 @@ struct ServerLoginView: View {
         .buttonStyle(.plain)
         .foregroundStyle(canSubmit ? Theme.onAccent : Theme.secondary)
         .background(Theme.accent.opacity(canSubmit ? 1 : 0.28),
-                    in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .disabled(!canSubmit)
         .padding(.top, 24)
         .accessibilityIdentifier("serverLogin.submit")
@@ -710,9 +733,9 @@ struct ServerLoginView: View {
             .focused($focused, equals: .address)
             .padding(.horizontal, 12)
             .padding(.vertical, 11)
-            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .stroke(Theme.hairline, lineWidth: 1)
             }
             .accessibilityIdentifier("serverLogin.address")
@@ -733,9 +756,9 @@ struct ServerLoginView: View {
                 .focused($focused, equals: .port)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 11)
-                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .overlay {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
                         .stroke(Theme.hairline, lineWidth: 1)
                 }
                 // Disabled rather than hidden when a server address is in the
@@ -859,9 +882,9 @@ struct ServerLoginView: View {
             .focused($focused, equals: .secret)
             .padding(.horizontal, 12)
             .padding(.vertical, 11)
-            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .stroke(readbackTint(readback), lineWidth: 1)
             }
             .accessibilityIdentifier("serverLogin.key")
@@ -1146,7 +1169,7 @@ struct ServerLoginView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(14)
-                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
             }
 
             /*
@@ -1197,23 +1220,26 @@ struct ServerLoginView: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(Theme.primary)
-            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.hairline, lineWidth: 1)
+                RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(Theme.hairline, lineWidth: 1)
             }
             .accessibilityIdentifier("serverLogin.open")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.top, 12)
-        .onChange(of: signedInHostId) { _, hostId in
-            // The connect ran through the sign-in flow the app already has, so
-            // this is where its result is written down.
-            if let hostId { connector.markConnected(server.id, hostId: hostId) }
-        }
     }
 
     private var signedInHostId: String? {
         if case let .signedIn(hostId, _) = model.serverSignIn.phase { return hostId }
+        return nil
+    }
+
+    /// The server this screen added, whatever stage the screen has moved on to.
+    /// `connector.login` keeps holding it after `stage` has stopped drawing it,
+    /// which is the whole reason the link above can still be written.
+    private var addedServer: StoredServer? {
+        if case let .added(server) = connector.login { return server }
         return nil
     }
 
@@ -1260,7 +1286,7 @@ struct ServerLoginView: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(Theme.onAccent)
-            .background(Theme.accent, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background(Theme.accent, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
             .padding(.top, 8)
             .accessibilityIdentifier("serverLogin.openMachine")
         }

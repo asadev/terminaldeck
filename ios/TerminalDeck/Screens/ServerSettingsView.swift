@@ -41,7 +41,7 @@ struct ServerSettingsSection: View {
                             }
                         }
                         .background(Theme.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
 
                         if let notice = settings.notice {
                             Text(notice.text)
@@ -65,7 +65,7 @@ struct ServerSettingsSection: View {
                             .padding(16)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .background(Theme.surface)
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
                     }
                 }
                 .onAppear { settings.ensureRead() }

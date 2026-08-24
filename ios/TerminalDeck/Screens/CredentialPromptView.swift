@@ -83,7 +83,7 @@ struct CredentialPromptView: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(Theme.onAccent)
-                .background(Theme.accent, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .background(Theme.accent, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                 .accessibilityIdentifier("credential.approve")
 
                 // Only when there is a repository to remember. See the header.
@@ -98,7 +98,7 @@ struct CredentialPromptView: View {
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(Theme.primary)
-                    .background(Theme.surfaceHigh, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .background(Theme.surfaceHigh, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                     .accessibilityIdentifier("credential.approveAlways")
                 }
 

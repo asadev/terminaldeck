@@ -71,10 +71,17 @@ struct TerminalThemeView: View {
                     size
                     schemes
                     footer
+                    // Measured, not guessed — see `TabBarClearance`.
+                    TabBarClearance()
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
-                .padding(.bottom, 28)
+                // The floating pill is drawn over this screen — it is pushed inside
+                // the Settings stack, where `settingsSurface` resolves to
+                // `.machines`, which keeps the bar. A bare 28 was the copied
+                // constant `TabBarClearance` exists to replace: the bar's real
+                // band is 83 points, so the last scheme card sat behind it.
+                .padding(.bottom, 12)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .scrollBounceBehavior(.basedOnSize)
@@ -119,6 +126,10 @@ struct TerminalThemeView: View {
                     Text("Text size")
                         .font(.system(size: 16))
                         .foregroundStyle(Theme.primary)
+                    InfoDot(about: "text size",
+                            text: "The column count is the font, so this resizes the session on "
+                                + "the machine — a session already open picks it up the next time "
+                                + "you open it. Pinching inside a terminal changes the same setting.")
                     Spacer(minLength: 8)
                     Text(TextSize.label(textSize))
                         .font(.system(size: 14, design: .monospaced))
@@ -134,14 +145,6 @@ struct TerminalThemeView: View {
                 .padding(.vertical, 12)
             }
 
-            Text("The column count is the font, so this resizes the session on the machine — "
-                 + "a session already open picks it up the next time you open it. Pinching "
-                 + "inside a terminal changes the same setting.")
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.faint)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, 4)
-                .padding(.top, 8)
         }
     }
 
@@ -331,9 +334,9 @@ private struct SchemeCard: View {
                 }
             }
         }
-        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .strokeBorder(isSelected ? Theme.accent : .clear, lineWidth: 1.5)
         )
     }
@@ -486,6 +489,6 @@ struct SchemeGroup<Content: View>: View {
 
     var body: some View {
         VStack(spacing: 0) { content }
-            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 }

@@ -741,7 +741,7 @@ private struct UploadRow: View {
     private var detail: String {
         switch upload.phase {
         case .opening:
-            return "Asking the Mac where to put it…"
+            return "Asking the machine where to put it…"
         case let .sending(path):
             return "\(byteSize(upload.acked)) of \(byteSize(upload.size)) → \(path)"
         case .finishing:

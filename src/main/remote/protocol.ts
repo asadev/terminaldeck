@@ -604,6 +604,47 @@ export const CAPABILITY = {
    * clicking it; a device that may not drive a window may not watch it either.
    */
   watch: 'watch',
+  /**
+   * Walk this machine's folders, so a device can name one it cannot see.
+   *
+   * Asad, on an iPhone against a rented Linux server with nothing open on it:
+   * *"it is not giving me the option to choose the folder as well."*
+   *
+   * ## What was actually missing, which was not permission
+   *
+   * One of the owner's own devices has been able to start a session in **any**
+   * absolute folder since device kinds arrived: `deviceReach` answers
+   * `unrestricted: true` for it, and the check in `remoteSessionCreator` reads
+   * *"one of the owner's own machines may name a folder that is not on the
+   * suggestion list"*. `welcome.folders` is a **suggestion** for that device, not
+   * a boundary — on a bare server the suggestion is `[home()]`, one row, because
+   * nothing is open and nothing is running.
+   *
+   * So the phone could already start a session anywhere. What it had no way to
+   * do was find out what was there. A picker can only offer what it was sent,
+   * and nothing on the wire could answer *what folders are on that machine* —
+   * which is why the app's own empty state pointed at a desktop settings panel
+   * that a headless server does not have.
+   *
+   * This capability is that one missing answer and nothing more. It reads
+   * directory names. It grants nothing, changes nothing, and writes nothing —
+   * the folder a person picks is passed to the ordinary `create`, which applies
+   * exactly the rule it always has.
+   *
+   * ## Owner devices only
+   *
+   * Withheld from a guest in `capabilitiesFor`, on exactly the rule `logins`,
+   * `devices`, `settings` and `watch` are withheld on: reading the names of every
+   * directory on a machine is an act on the *machine*, not an act inside a folder
+   * somebody was lent, and a guest that could enumerate the disk would learn the
+   * shape of everything it was deliberately not given. A guest's `folders` list
+   * stays the whole of what it may see, which is what `deviceReach` already
+   * enforces with `unrestricted: false`.
+   *
+   * Stripped at the source rather than only refused, because no push frame could
+   * correct a welcome later — the same reason its four siblings are stripped.
+   */
+  folderPick: 'folders.pick',
 } as const
 
 /**
@@ -636,6 +677,7 @@ export const CAPABILITIES: string[] = [
   CAPABILITY.windows,
   CAPABILITY.hostWindows,
   CAPABILITY.watch,
+  CAPABILITY.folderPick,
 ]
 
 /**
@@ -2503,6 +2545,21 @@ export type ClientMessage =
    *    per-provider question above and not merely widening a type.
    */
   | { t: 'create'; cwd?: string; cols?: number; rows?: number; provider?: string }
+  /* ---- capability `folders.pick`. Refused when it is not advertised. ------ */
+  /**
+   * List the sub-directories of `path`, so a device can walk to a folder.
+   *
+   * `path` absent means "start somewhere sensible" — the account's home, which
+   * is where the fallback in `foldersForDevice` already puts a phone with no
+   * grant. A client that has never been here has nothing better to name, and a
+   * picker that opened on `/` would make somebody walk down four levels of a
+   * Linux root to reach anything of theirs.
+   *
+   * Answered by `folders.entries`, or by a plain `error` — the two ways this
+   * fails are *this device may not browse* and *that directory cannot be read*,
+   * and `error` already says both with a code and a sentence.
+   */
+  | { t: 'folders.browse'; path?: string }
   /* ---- capability `close`. Refused when it is not advertised. ------------- */
   /**
    * End the session named by `id`. The process is killed; it does not come back.
@@ -3386,6 +3443,32 @@ export type ServerMessage =
    * the stale picker it has today.
    */
   | { t: 'folders'; folders: string[] }
+  /* ---- capability `folders.pick` ---------------------------------------- */
+  /**
+   * One directory's sub-directories, in answer to a `folders.browse`.
+   *
+   * `path` is echoed back rather than assumed, because a phone may have two
+   * asks in flight after a fast double-tap and the second answer must not be
+   * drawn under the first heading. `parent` is `null` at the filesystem root,
+   * which is what a client draws an "up" row from — computing it on the phone
+   * would mean a phone that knows where `/` is on Windows.
+   *
+   * Directories only. A folder picker that lists files is a file browser, and
+   * this app does not have one; every entry here is something a session could
+   * be started in. `readable` says whether this account can actually open it,
+   * so a row that would fail is drawn dimmed rather than offered and refused —
+   * `/root` is on every Linux listing and readable by nobody but root.
+   *
+   * `granted` marks the folders already on this device's list, so somebody
+   * browsing back to one sees that it is already there instead of adding it
+   * twice.
+   */
+  | {
+      t: 'folders.entries'
+      path: string
+      parent: string | null
+      entries: { name: string; path: string; readable: boolean; granted: boolean }[]
+    }
   /* ---- capability `localhost` ------------------------------------------- */
   | { t: 'ports'; ports: LocalPort[] }
   | { t: 'tunnel.opened'; id: string; port: number }
@@ -4938,6 +5021,24 @@ export function parseClientMessage(raw: unknown): ParseResult {
     }
 
     /* ---- capability `create` -------------------------------------------- */
+    case 'folders.browse': {
+      const message: Extract<ClientMessage, { t: 'folders.browse' }> = { t: 'folders.browse' }
+      // Absent is the ordinary case and means "somewhere sensible" — the host
+      // answers with the folder this device already works in. Present-and-empty
+      // is refused rather than treated as absent: `resolve('')` is the process's
+      // own working directory, which is a folder nobody asked for.
+      const rawPath = parsed.path
+      if (rawPath !== undefined) {
+        if (typeof rawPath !== 'string' || rawPath === '') return bad('folders.browse with an unusable folder')
+        if (overBytes(rawPath, MAX_CWD_BYTES)) return tooLarge('folders.browse with a folder over the path limit')
+        // Refused rather than stripped, for the reason `create.cwd` gives: this
+        // value is handed to `readdir`, and stripping a control byte turns a
+        // hostile path into a *different* legal-looking one.
+        if (CONTROL_CHARS.test(rawPath)) return bad('folders.browse with an unusable folder')
+        message.path = rawPath
+      }
+      return { ok: true, message }
+    }
     case 'create': {
       const message: Extract<ClientMessage, { t: 'create' }> = { t: 'create' }
       // Read once, for the reason spelled out on `input.data`: on the object
