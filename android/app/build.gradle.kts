@@ -109,7 +109,7 @@ android {
          * iOS carries `MARKETING_VERSION: "0.10.1"` in `ios/project.yml` for the same reason. When
          * one moves, this moves.
          */
-        versionName = "0.10.1"
+        versionName = "0.10.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
