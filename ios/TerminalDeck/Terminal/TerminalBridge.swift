@@ -104,12 +104,21 @@ final class TerminalBridge: NSObject, @preconcurrency TerminalViewDelegate, Term
     /// one, and what it costs on the wire.
     private(set) var textSize: CGFloat
 
+    /// Which colours this session is drawn in. The phone's own choice rather
+    /// than the machine's or this session's — see `TerminalThemeStore` for that
+    /// argument. A property rather than a reach for `.shared` inside
+    /// `applyColors` so a test can paint a terminal from a store of its own.
+    let themes: TerminalThemeStore
+
     private let accessory: KeyboardAccessory
     private let grid: KeyGridView
     private var gestures: TerminalGestures?
     private var keyboardObservers: [NSObjectProtocol] = []
+    /// The scheme observer, kept only so it can be handed back. See `deinit`.
+    private var colorObserver: NSObjectProtocol?
 
-    override init() {
+    init(themes: TerminalThemeStore = .shared) {
+        self.themes = themes
         // A fixed monospaced face rather than the system default: the terminal
         // measures its column count from the advance width, and a font whose
         // metrics change with the user's Dynamic Type setting would change the
@@ -147,6 +156,26 @@ final class TerminalBridge: NSObject, @preconcurrency TerminalViewDelegate, Term
          */
         view.registerForTraitChanges([UITraitUserInterfaceStyle.self]) { [weak self] (_: DeckTerminalView, _: UITraitCollection) in
             self?.applyColors()
+        }
+        /*
+         * And the same problem from the other direction: somebody changing the
+         * scheme in Settings while this session is open.
+         *
+         * A SwiftUI screen would redraw itself from the `@Observable` store, but
+         * the emulator is a UIKit view SwiftUI does not own and SwiftTerm has
+         * already resolved and frozen every colour it was given. Nothing repaints
+         * it but this. It is `.main` because `applyColors` touches the view, and
+         * the token is kept so `deinit` hands it back — see the loop below.
+         *
+         * *"Applies live"* is the requirement, and this is the whole of it: with
+         * this observer absent the picker still works, still saves and still
+         * looks right on the next session, and the terminal already on screen
+         * quietly keeps yesterday's colours.
+         */
+        colorObserver = NotificationCenter.default.addObserver(
+            forName: .terminalSchemeChanged, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.applyColors() }
         }
         // Nothing here is a shell running locally, so there is no bell worth
         // ringing on a phone in someone's pocket.
@@ -227,26 +256,33 @@ final class TerminalBridge: NSObject, @preconcurrency TerminalViewDelegate, Term
      * the session is in stays the wrong colour.
      */
     private func applyColors() {
-        let traits = view.traitCollection
-        let paper = Palette.terminalBackground.resolvedColor(with: traits)
+        // The chosen scheme, resolved for the appearance this view is actually
+        // in. Every scheme but the app's own default is absolute and ignores the
+        // appearance entirely — a person who chose Nord chose Nord. See
+        // `TerminalPalette.resolved`.
+        let scheme = TerminalPalette.resolved(themes.selected,
+                                              style: view.traitCollection.userInterfaceStyle)
+        let paper = TerminalPalette.color(scheme.background, fallback: .black)
         view.backgroundColor = paper
-        view.nativeForegroundColor = Palette.terminalForeground.resolvedColor(with: traits)
+        view.nativeForegroundColor = TerminalPalette.color(scheme.foreground, fallback: .white)
         // Set after the foreground because this setter is the one that calls
         // SwiftTerm's `colorsChanged()`, which drops the cached attribute runs
         // and repaints the whole screen. Setting them the other way round
         // repaints with the old ink and waits for the next output to correct it.
         view.nativeBackgroundColor = paper
-        view.caretColor = Palette.caret.resolvedColor(with: traits)
-        // A selection is blue on this platform, and this app's blue is the
-        // icon's. See `Palette.selection` for what the library's default did.
-        view.selectedTextBackgroundColor = Palette.selection.resolvedColor(with: traits)
+        view.caretColor = TerminalPalette.color(scheme.cursor, fallback: .white)
+        // Solid rather than the half-strength blue this line used to compute,
+        // because a scheme carries one hex per slot and SwiftTerm's selection is
+        // opaque. The app's own schemes carry the accent already composited over
+        // their own ground, so the colour on screen is unchanged; see the note
+        // above `TerminalScheme.builtIns`.
+        view.selectedTextBackgroundColor = TerminalPalette.color(scheme.selectionBackground,
+                                                                 fallback: .systemBlue)
         // The sixteen ANSI colours. Installed rather than left at SwiftTerm's
-        // default for two reasons, both in `Ink.ansi`: the library's default is
-        // Apple Terminal's set and the desktop renders xterm's, so one session
-        // had two colour schemes depending on which screen it was read on; and
-        // the light half has to be a different sixteen or an agent's coloured
-        // output is invisible on paper.
-        view.installColors(Palette.ansi(for: traits.userInterfaceStyle))
+        // default, whose set is Apple Terminal's — so before this table existed
+        // one session had two colour schemes depending on which screen it was
+        // read on.
+        view.installColors(TerminalPalette.ansi(scheme))
     }
 
     deinit {
@@ -254,6 +290,7 @@ final class TerminalBridge: NSObject, @preconcurrency TerminalViewDelegate, Term
         // one until it is handed back, so a session-per-bridge app would
         // accumulate one dead observer per terminal ever opened.
         for token in keyboardObservers { NotificationCenter.default.removeObserver(token) }
+        if let colorObserver { NotificationCenter.default.removeObserver(colorObserver) }
     }
 
     /// The bar, the grid, and the single place a key press turns into an effect.

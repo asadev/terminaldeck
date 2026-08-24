@@ -103,6 +103,17 @@ private struct Shade {
         self.alpha = alpha
     }
 
+    /// From a `#rrggbb` or `#rrggbbaa` string, which is the form the shared
+    /// scheme table is written in. Only the terminal's own colours come this
+    /// way; everything above is a literal read across from `tokens.css`.
+    init(_ colour: String) {
+        let rgba = TerminalPalette.components(colour) ?? (red: 0, green: 0, blue: 0, alpha: 255)
+        red = rgba.red
+        green = rgba.green
+        blue = rgba.blue
+        alpha = Double(rgba.alpha) / 255
+    }
+
     var uiColor: UIColor {
         UIColor(red: CGFloat(red) / 255,
                 green: CGFloat(green) / 255,
@@ -230,94 +241,77 @@ private enum Ink {
                                  dark: Shade(0xffffff, alpha: 0.05))
 
     /*
-     * The terminal's own paper and ink.
+     * The terminal's own paper and ink — **read from the shared scheme table,
+     * not declared here.**
      *
-     * Its own pair rather than a reuse of a surface, because on paper the
-     * terminal is the one part of this app that must **not** be the app's
-     * canvas. `tokens.css` says why, in the words of the person who reported it:
-     * a terminal painted `--bg-primary` in the light theme *"is pure white, and
+     * These used to be two literal pairs, and that was the second copy of a
+     * palette this product now declares once: `src/shared/terminal-theme.ts`
+     * holds `deck-dark` and `deck-light`, the desktop's xterm.js reads them, and
+     * `TerminalScheme` mirrors them into Swift. Deriving here means the app's
+     * own terminal cannot drift from the scheme somebody can choose out of the
+     * picker by that name, which is exactly the drift this whole change exists
+     * to end.
+     *
+     * The reasoning behind the values is worth keeping even though the values
+     * moved. On paper the terminal must **not** be the app's canvas —
+     * `tokens.css` says why, in the words of the person who reported it: a
+     * terminal painted `--bg-primary` in the light theme *"is pure white, and
      * inside the terminal itself it is a little bit different, like kind of
-     * grey"* — it stops being a terminal and becomes an empty document with a
-     * cursor in it. `#e8e8e8` is the desktop's `--terminal-bg`, a genuinely
-     * recessed paper twenty-three levels below the chrome, and it is the same
-     * hex the desktop paints so the two products' terminals are one colour.
+     * grey"*. It stops being a terminal and becomes an empty document with a
+     * cursor in it. So `deck-light`'s ground is `#e8e8e8`, a genuinely recessed
+     * paper twenty-three levels below the chrome. The ink is `#141414`, darker
+     * than the app's own body text on purpose, because a terminal's job is to be
+     * exact.
      *
-     * The dark value is `--bg-sunken` and is what this app has always drawn:
-     * the chrome is a raised Apple surface and the terminal is the well cut into
-     * it. It is two levels below the desktop's dark `--terminal-bg` (`#191919`,
-     * which on the desktop is also its canvas) and that difference predates this
-     * change; it is left alone rather than quietly corrected, because nothing
-     * asked for the dark terminal to move.
-     *
-     * The ink is `--terminal-fg` in both: `#141414` is darker than the app's own
-     * body text on purpose, because a terminal's job is to be exact.
+     * **The dark ground moved, and it is the one visible change in this file.**
+     * This app drew `#121212` — `--bg-sunken`, two levels below the desktop's
+     * dark `--terminal-bg`. That gap was recorded here as a known difference
+     * nobody had asked to fix. It is fixed now, at `#191919`, because the phone
+     * and the desktop are being given one named scheme and *Deck Dark* cannot be
+     * two colours depending on which screen it is read on. Nothing else about
+     * the dark terminal changes.
      */
-    static let terminalPaper = Duo(light: Shade(0xe8e8e8), dark: Shade(0x121212))
-    static let terminalInk = Duo(light: Shade(0x141414), dark: Shade(0xededed))
+    private static func terminal(_ slot: ColourSlot) -> Duo {
+        Duo(light: Shade(TerminalScheme.app(dark: false)[slot]),
+            dark: Shade(TerminalScheme.app(dark: true)[slot]))
+    }
+
+    static let terminalPaper = terminal(.background)
+    static let terminalInk = terminal(.foreground)
 
     /**
      * The sixteen ANSI colours, in both appearances, in the order the wire
-     * numbers them: 0–7 then 8–15.
+     * numbers them: 0–7 then 8–15 — **read from the shared scheme table.**
      *
-     * ## The dark set is the desktop's, verbatim
+     * `deck-dark` and `deck-light` carry them now, and the argument for what
+     * they are is on `TerminalScheme.appAnsiDark` / `appAnsiLight`. The short
+     * version, kept here because this is where a reader of the app's palette
+     * arrives: the dark set is `@xterm/xterm`'s Tango-derived defaults, which is
+     * what a session has always shown on both halves of this product; the light
+     * set is the same sixteen with every channel scaled toward black by one
+     * factor, which preserves hue and saturation exactly and moves only value,
+     * until each clears its contrast target on `#e8e8e8`. Nothing is re-hued and
+     * nothing is chosen by eye — `AppearanceTests` recomputes the contrast and
+     * the hue drift on every run and fails if either moves.
      *
-     * Those sixteen hexes are what a session looks like in the window on the
-     * Mac. They began as `@xterm/xterm`'s Tango-derived defaults, which the
-     * desktop used to inherit by simply not passing a palette; it now declares
-     * all sixteen itself as `--ansi-*` in `tokens.css`, with the same values, so
-     * a default became a decision without anything on screen changing.
-     * SwiftTerm's own default is a different set — Apple Terminal's — so until
-     * this table existed the same session rendered in two different colour
-     * schemes depending on which screen it was read on, with a `#492ee1` blue on
-     * the phone and a `#3465a4` blue on the desktop. Installing the desktop's
-     * set here ends that. These are values, not code: the same facts the
-     * desktop's terminal already displays, and `tokens.test.ts` reads this very
-     * table and fails if the two ever disagree.
-     *
-     * ## The light set is the same sixteen, walked down until they can be read
-     *
-     * This is the part of a light terminal that is most easily got wrong, and
-     * when this table was written "match the desktop" was not available as an
-     * answer, because the desktop had not solved it either — it painted its
-     * light terminal `#e8e8e8` and left the dark-ground ANSI set on top of it.
-     * Measured against that paper, its yellow was 2.1:1, its bright green 1.3:1
-     * and its bright yellow 1.0:1. A phone shipping those would have an
-     * appearance in which an agent's coloured output is genuinely invisible,
-     * which is not a light mode.
-     *
-     * The desktop has since taken these same sixteen — the derivation below is
-     * where they were worked out, and `tokens.css` now carries them as its own
-     * light `--ansi-*` set. So "match the desktop" *is* the answer now, and this
-     * table is one half of a pair rather than a phone-only fix.
-     *
-     * So the light half applies the transform this product already documents for
-     * exactly this problem. `tokens.css` on the accent: *"the light theme walks
-     * the same hue (≈213°) down in lightness until it clears WCAG AA as text on
-     * paper"*, and it does the same to all five `--status-*` colours. The same
-     * rule, applied to these sixteen: scale the channels toward black — which
-     * preserves hue and saturation exactly and moves only value — until the
-     * colour clears its target on `#e8e8e8`. Nothing is re-hued and nothing is
-     * chosen by eye; `AppearanceTests` recomputes the contrast and the hue drift
-     * and fails if either moves.
-     *
-     * Three deliberate exceptions, each of which is a property of what a
-     * terminal palette *is* rather than a colour decision:
+     * Three deliberate exceptions, each a property of what an ANSI palette *is*
+     * rather than a colour decision:
      *
      *  - **The normal eight target 4.6:1; the bright eight target 7:1.** On a
      *    dark ground "bright" means further from the ground, i.e. lighter. On
-     *    paper the same idea is also further from the ground, i.e. darker. Given
-     *    both the same target they collapsed onto each other — green and bright
-     *    green ended eleven levels apart, which a diff renders as one colour.
+     *    paper the same idea is darker. Given both the same target they collapse
+     *    onto each other — green and bright green ended eleven levels apart,
+     *    which a diff renders as one colour.
      *  - **Black and bright black keep their places on the ramp**, because they
      *    already clear on paper (10.3:1 and 6.0:1) and darkening bright black
      *    past black would invert the pair.
      *  - **White and bright white are left alone, and they are unreadable as
-     *    foreground on paper — 1.2:1 and 1.1:1.** That is not an oversight, it
-     *    is what an ANSI colour is: these are used as *backgrounds* as often as
-     *    foregrounds, and darkening them would turn `ESC[47m` into a black band.
-     *    Every light terminal scheme in use makes the same trade, the desktop
-     *    included. A program that wants "the normal foreground" says `ESC[39m`,
-     *    which is `terminalInk` above and is 15:1 on this paper.
+     *    foreground on paper — 1.2:1 and 1.1:1.** That is what an ANSI colour
+     *    is: those two are used as *backgrounds* as often as foregrounds, and
+     *    darkening them would turn `ESC[47m` into a black band. Every light
+     *    terminal scheme in use makes the same trade. A program that wants "the
+     *    normal foreground" says `ESC[39m`, which is `terminalInk` and is 15:1
+     *    on this paper.
      *
      * What none of this reaches is 256-colour and 24-bit output, which bypasses
      * the palette entirely — an agent that emits `ESC[38;2;…m` greys tuned for a
@@ -325,24 +319,7 @@ private enum Ink {
      * the desktop. That is a property of the programs rather than of this file,
      * and it is the one thing about light mode worth knowing before choosing it.
      */
-    static let ansi: [Duo] = [
-        Duo(light: Shade(0x2e3436), dark: Shade(0x2e3436)),  // black
-        Duo(light: Shade(0xcc0000), dark: Shade(0xcc0000)),  // red
-        Duo(light: Shade(0x3b7405), dark: Shade(0x4e9a06)),  // green
-        Duo(light: Shade(0x7c6500), dark: Shade(0xc4a000)),  // yellow
-        Duo(light: Shade(0x3465a4), dark: Shade(0x3465a4)),  // blue
-        Duo(light: Shade(0x75507b), dark: Shade(0x75507b)),  // magenta
-        Duo(light: Shade(0x057375), dark: Shade(0x06989a)),  // cyan
-        Duo(light: Shade(0xd3d7cf), dark: Shade(0xd3d7cf)),  // white
-        Duo(light: Shade(0x555753), dark: Shade(0x555753)),  // bright black
-        Duo(light: Shade(0x951a1a), dark: Shade(0xef2929)),  // bright red
-        Duo(light: Shade(0x335413), dark: Shade(0x8ae234)),  // bright green
-        Duo(light: Shade(0x534d1a), dark: Shade(0xfce94f)),  // bright yellow
-        Duo(light: Shade(0x384e65), dark: Shade(0x729fcf)),  // bright blue
-        Duo(light: Shade(0x5d445b), dark: Shade(0xad7fa8)),  // bright magenta
-        Duo(light: Shade(0x135454), dark: Shade(0x34e2e2)),  // bright cyan
-        Duo(light: Shade(0xeeeeec), dark: Shade(0xeeeeec)),  // bright white
-    ]
+    static let ansi: [Duo] = ColourSlot.ansi.map(terminal)
 }
 
 /// One `UIColor` that answers for both appearances. See the header for why this
@@ -440,32 +417,38 @@ enum Theme {
  * with rather than here.
  */
 enum Palette {
+    /**
+     * The app's own two terminal schemes, seen as an appearance pair.
+     *
+     * Nothing in the app paints from these any more — `TerminalBridge` reads the
+     * chosen scheme through `TerminalPalette`, which is the only thing that can,
+     * because a chosen scheme is absolute and has no light half. They are kept
+     * because `AppearanceTests` holds the app's *default* terminal to the same
+     * contrast and hue rules as the rest of this file, and it is the default
+     * that most people will look at for the life of the product.
+     */
     static let terminalBackground = uiKit(Ink.terminalPaper)
     static let terminalForeground = uiKit(Ink.terminalInk)
-    static let caret = uiKit(Ink.accent)
 
-    /**
-     * Selected text in the terminal — a long press, or a search match.
+    /*
+     * **There is no `caret` or `selection` here any more.**
      *
-     * SwiftTerm's own default is a teal, and on a screen whose one accent is
-     * `#3b8fee` it is the only thing that colour anywhere in the product. It is
-     * also not what iOS does: a selection on this platform is blue, with blue
-     * drag handles, which the system draws over the top either way — so the
-     * default left the handles and the highlight in two different colours.
+     * Both were single app-wide values — the accent, and the accent at half
+     * strength — and both are now *per scheme*: a cursor is `cursor` and a
+     * selection is `selectionBackground`, twenty-one slots that somebody can
+     * edit. `TerminalBridge` reads them off the chosen scheme. Leaving a
+     * `Palette.caret` standing would have been a second, authoritative-looking
+     * answer to a question this file no longer decides.
      *
-     * Half opacity rather than the solid accent, because the glyphs stay on top
-     * of it and a full-strength blue under the terminal's ink is a legibility
-     * problem rather than a highlight.
-     *
-     * Written as its own pair rather than as `caret.withAlphaComponent(0.5)`,
-     * because `withAlphaComponent` on a colour built from a `dynamicProvider` is
-     * not documented to keep the provider — and a selection highlight that
-     * silently froze at whichever appearance the app happened to launch in is
-     * precisely the class of bug this file is being changed to remove.
+     * The reasoning is not lost, it moved: the app's schemes carry `#3b8fee` as
+     * the cursor because a selection on this platform is blue and this app's
+     * blue is the icon's — SwiftTerm's own default is a teal, the only thing
+     * that colour anywhere in the product, and it left the system's blue drag
+     * handles sitting on a teal highlight. And the selection is written with an
+     * alpha (`#3b8fee29`) rather than solid, because the glyphs stay on top of
+     * it and a full-strength blue under a terminal's ink is a legibility problem
+     * rather than a highlight.
      */
-    static let selection = UIColor { traits in
-        Ink.accent.shade(for: traits.userInterfaceStyle).uiColor.withAlphaComponent(0.5)
-    }
 
     /// A key cap at rest. A tint of the ink rather than a solid grey, so the bar
     /// picks up whatever the keyboard behind it is doing — and so it works over

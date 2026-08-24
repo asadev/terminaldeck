@@ -373,7 +373,12 @@ final class AppearanceTests: XCTestCase {
         XCTAssertNotEqual(hex(SwiftUI.Color(uiColor: Palette.terminalBackground), Self.light),
                           hex(Theme.background, Self.light),
                           "a terminal the same colour as the app canvas is not a terminal")
-        XCTAssertEqual(hex(SwiftUI.Color(uiColor: Palette.terminalBackground), Self.dark), 0x121212)
+        // `#191919`, not the `#121212` this app drew before schemes existed.
+        // The app's default terminal is now a *named* scheme — Deck Dark, out of
+        // `src/shared/terminal-theme.ts` — and a scheme with a name cannot be
+        // two colours depending on which screen it is read on. The desktop has
+        // painted `#191919` all along. See `Ink.terminalPaper`.
+        XCTAssertEqual(hex(SwiftUI.Color(uiColor: Palette.terminalBackground), Self.dark), 0x191919)
 
         for (name, traits) in [("light", Self.light), ("dark", Self.dark)] {
             let ratio = contrast(rgb(Palette.terminalForeground, traits),

@@ -15,8 +15,22 @@ import XCTest
 @MainActor
 final class TerminalBridgeTests: XCTestCase {
 
+    /**
+     * A store of this test's own, and it is not tidiness.
+     *
+     * `TerminalBridge` paints from `TerminalThemeStore.shared`, which reads the
+     * simulator's own `UserDefaults` — so a scheme pinned by a UI run, or by
+     * somebody's finger on the same simulator, would silently decide what colour
+     * every assertion below expects. A fresh suite has nothing pinned, which
+     * means `follow-app`, which is what a fresh install has.
+     */
+    private func store() -> TerminalThemeStore {
+        let defaults = UserDefaults(suiteName: "bridge.\(UUID().uuidString)")!
+        return TerminalThemeStore(defaults: defaults, center: NotificationCenter())
+    }
+
     private func bridge() -> TerminalBridge {
-        let bridge = TerminalBridge()
+        let bridge = TerminalBridge(themes: store())
         // A terminal at `.zero` has no columns to put anything in. The size the
         // app gives it comes from SwiftUI layout, which does not happen here.
         bridge.view.frame = CGRect(x: 0, y: 0, width: 390, height: 600)
@@ -181,7 +195,7 @@ final class TerminalBridgeTests: XCTestCase {
      * product never asks.
      */
     private func hosted() -> (bridge: TerminalBridge, window: UIWindow) {
-        let bridge = TerminalBridge()
+        let bridge = TerminalBridge(themes: store())
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         let root = UIViewController()
         window.rootViewController = root
@@ -234,7 +248,9 @@ final class TerminalBridgeTests: XCTestCase {
         XCTAssertEqual(lightPaper.red / 257, 0xe8)
         XCTAssertEqual(lightPaper.green / 257, 0xe8)
         XCTAssertEqual(lightPaper.blue / 257, 0xe8)
-        XCTAssertEqual(darkPaper.red / 257, 0x12)
+        // `#191919` — Deck Dark, out of the shared scheme table. It was
+        // `#121212` before this app had schemes; see `Ink.terminalPaper`.
+        XCTAssertEqual(darkPaper.red / 257, 0x19)
     }
 
     /**
@@ -273,6 +289,97 @@ final class TerminalBridgeTests: XCTestCase {
                       "dark ANSI green should be the desktop's #4e9a06; the terminal said \(dark.debugDescription)")
         XCTAssertTrue(light.contains("3b3b/7474/0505"),
                       "light ANSI green should be the walked-down #3b7405; the terminal said \(light.debugDescription)")
+    }
+
+    // MARK: - The scheme
+
+    /**
+     * Choosing a scheme repaints a session that is already open.
+     *
+     * *"Applies live"* is the requirement and this is the whole of it. Without
+     * the notification observer in `TerminalBridge`, the picker still works, the
+     * choice still saves, and the next session opens in the new colours — while
+     * the terminal the person is looking at keeps yesterday's. Nothing in the
+     * SwiftUI graph can fix that: the emulator is a UIKit view SwiftUI does not
+     * own, and SwiftTerm resolved and froze every colour it was given.
+     *
+     * The colour is read back out of the emulator rather than off this app's
+     * constants, for the same reason the appearance tests do it.
+     */
+    func testChoosingASchemeRepaintsAnOpenSession() {
+        let center = NotificationCenter()
+        let defaults = UserDefaults(suiteName: "bridge.\(UUID().uuidString)")!
+        let themes = TerminalThemeStore(defaults: defaults, center: center)
+        let bridge = TerminalBridge(themes: themes)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        let root = UIViewController()
+        window.rootViewController = root
+        window.makeKeyAndVisible()
+        bridge.view.frame = root.view.bounds
+        root.view.addSubview(bridge.view)
+        switchTo(.dark, window)
+
+        XCTAssertEqual(bridge.view.getTerminal().backgroundColor.red / 257, 0x19,
+                       "a fresh phone follows the app, which in dark is Deck Dark")
+
+        // The store this bridge was built with posts on its own centre, and the
+        // bridge listens on `.default` — so this is the real path: the app's
+        // singletons both use `.default`, and a test that posted directly would
+        // be proving less than it looks.
+        themes.select(TerminalScheme.pureBlackID)
+        NotificationCenter.default.post(name: .terminalSchemeChanged, object: nil)
+
+        XCTAssertEqual(bridge.view.getTerminal().backgroundColor.red / 257, 0x00)
+        XCTAssertEqual(bridge.view.getTerminal().backgroundColor.green / 257, 0x00)
+        XCTAssertEqual(bridge.view.getTerminal().backgroundColor.blue / 257, 0x00)
+    }
+
+    /**
+     * A chosen scheme does not follow the appearance, and this is where that is
+     * proved on the emulator rather than in arithmetic.
+     *
+     * Solarized Light on a phone in Dark stays Solarized Light. The failure this
+     * guards is a resolver that helpfully "corrected" a light scheme on a dark
+     * phone, which would be the app overruling the one choice the picker exists
+     * to offer.
+     */
+    func testAChosenSchemeSurvivesTheAppearanceChanging() {
+        let defaults = UserDefaults(suiteName: "bridge.\(UUID().uuidString)")!
+        let themes = TerminalThemeStore(defaults: defaults, center: NotificationCenter())
+        themes.select("solarized-light")
+        let bridge = TerminalBridge(themes: themes)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        let root = UIViewController()
+        window.rootViewController = root
+        window.makeKeyAndVisible()
+        bridge.view.frame = root.view.bounds
+        root.view.addSubview(bridge.view)
+
+        for style in [UIUserInterfaceStyle.dark, .light, .dark] {
+            switchTo(style, window)
+            let paper = bridge.view.getTerminal().backgroundColor
+            XCTAssertEqual(paper.red / 257, 0xfd, "style \(style.rawValue)")
+            XCTAssertEqual(paper.green / 257, 0xf6, "style \(style.rawValue)")
+            XCTAssertEqual(paper.blue / 257, 0xe3, "style \(style.rawValue)")
+        }
+    }
+
+    /// The sixteen come from the scheme too, asked of the emulator through the
+    /// escape sequence a program would use. Dracula's green is `#50fa7b` and is
+    /// nothing any other scheme here would produce.
+    func testTheSixteenComeFromTheChosenScheme() {
+        let defaults = UserDefaults(suiteName: "bridge.\(UUID().uuidString)")!
+        let themes = TerminalThemeStore(defaults: defaults, center: NotificationCenter())
+        themes.select("dracula")
+        let bridge = TerminalBridge(themes: themes)
+        bridge.view.frame = CGRect(x: 0, y: 0, width: 390, height: 600)
+        bridge.view.layoutIfNeeded()
+
+        var replies = ""
+        bridge.onInput = { replies += $0 }
+        bridge.feed("\u{1b}]4;2;?\u{1b}\\")
+        XCTAssertTrue(replies.contains("5050/fafa/7b7b"),
+                      "the terminal said \(replies.debugDescription)")
     }
 
     /// Going back is not a special case, and a stuck value would only show on

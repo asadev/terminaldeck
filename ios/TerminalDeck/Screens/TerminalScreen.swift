@@ -39,6 +39,12 @@ struct TerminalScreen: View {
     let hostID: String
     let sessionID: String
 
+    /// The phone's colour scheme, held so the letterbox around the emulator is
+    /// painted in the same ground the emulator is and repaints with it. A stored
+    /// property rather than a reach for `.shared` inside `body`, because
+    /// `@Observable` only re-runs a body that *read* the object.
+    var themes: TerminalThemeStore = .shared
+
     @State private var title: String?
     @State private var toast: String?
     /// Bumped by every message so an earlier one's dismissal cannot take a later
@@ -106,7 +112,9 @@ struct TerminalScreen: View {
 
     var body: some View {
         ZStack {
-            Color(Palette.terminalBackground).ignoresSafeArea()
+            // The chosen scheme's ground, not the app's — see
+            // `TerminalPalette.dynamicBackground`.
+            Color(TerminalPalette.dynamicBackground(themes.selected)).ignoresSafeArea()
 
             /*
              * Two things want the bottom sixty points of this screen and only
