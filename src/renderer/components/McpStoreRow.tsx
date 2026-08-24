@@ -49,9 +49,10 @@ import { StoreRowMore } from '../store/StoreRowMore'
  * names them. `store/StoreRowMore.tsx` carries the measurement: printed inline,
  * these five definition rows put **one server on a 1440px screen**.
  *
- * The *Needs* argument above is the reason the fold stops where it does. A row
- * that wants a key says so before the button, unpressed, along with the field
- * to put it in — neither of those moved.
+ * The *Needs* argument above is what decides where the fold stops, and it is
+ * about the **sentence**, not about the form. `Needs Personal access token` is
+ * unfolded, on the row, in words, before anything is pressed. The boxes those
+ * words name are behind Install — see {@link Props.asking} and the ask below.
  *
  * ## The button, and the row that has none
  *
@@ -64,6 +65,52 @@ import { StoreRowMore } from '../store/StoreRowMore'
  *
  * It carries **Get it** instead, which opens the project's own page and writes
  * nothing. The refusal is unchanged; what it stops being is a dead end.
+ *
+ * ## Press Install, and it asks for what it needs
+ *
+ * This is a reversal, and the thing it reverses was right about a defect and
+ * wrong about where the fix belonged. The rule used to be:
+ *
+ *   > *The fields are not behind a disclosure: a token that is required is the
+ *   > first thing somebody has to decide about, and hiding it one click away is
+ *   > how a store ends up with an Install that fails.*
+ *
+ * That argument is about **disclosure**, and it was carrying the form as well as
+ * the sentence because at the time the row had nothing else to say it with. The
+ * density pass gave it one: `Runs with npx … · Needs Personal access token,
+ * Project reference` is unfolded, on the row, in the catalogue's own words,
+ * before the button. Disclosure is satisfied there.
+ *
+ * What the form cost, measured on the shipped page at 1440x900 over the real
+ * catalogue: an extension row is 137px and an MCP row was **372–420px**, of
+ * which roughly 90px per required input is label, box, hint and a hover dot —
+ * and `supabase` takes two. Standing on *Databases*, **no row at all** was
+ * fully on screen. Every person browsing paid for a form that only the person
+ * installing that one row will ever type into.
+ *
+ * So the boxes moved behind the press: Install on a row with inputs opens the
+ * ask, in place, carrying the same fields, the same hints, the same
+ * "where this is kept" note and the same links to where a person gets the key.
+ * Nothing was reworded and nothing was dropped.
+ *
+ * **Why the defect the old rule feared cannot come back.** It feared an Install
+ * that fails for a value nobody was asked for. Three things stop that, and none
+ * of them is a habit:
+ *
+ *  - The row **says what it needs** before the button, unfolded — the `Needs`
+ *    half of the line above, from `needsWords`, which is the catalogue's answer
+ *    rather than this component's.
+ *  - Install on a row with inputs **cannot install**. It opens the ask; only the
+ *    ask's own button calls `onAct('install')`, and that one is disabled while
+ *    {@link unfilled} is non-empty, with the missing labels named under it. A
+ *    press that silently writes a half-filled config has no code path.
+ *  - `mcp-store.ts` refuses the install a second time, in the process that does
+ *    the writing, printing the same words. Both ends check, as they always did.
+ *
+ * **Cancelling installs nothing.** It cannot: the only write is
+ * `mcpStoreInstall`, and the ask's Cancel does not call it. What it does do is
+ * throw away what was typed — see `McpStore.tsx` — so a cancelled ask leaves no
+ * secret in this window's state either.
  *
  * ## The chip
  *
@@ -106,9 +153,28 @@ interface Props {
   said: string
   /** Armed Remove, the two-press shape the servers list already uses. */
   arming: boolean
+  /**
+   * The ask is open on this row: Install was pressed and it is collecting what
+   * the row said it needs.
+   *
+   * State rather than a derived answer, and owned by the store rather than by
+   * the row, for the same reason {@link Props.arming} is: only one row on a
+   * shelf may be mid-question at a time, and a boolean per row would eventually
+   * be two of them true. It also means a row rendered by a test or the harness
+   * can be stood in either state with one prop — which is the only way the
+   * asking half of this component is ever looked at.
+   */
+  asking: boolean
   onValue(key: string, value: string): void
   onAct(verb: 'install' | 'remove'): void
   onArm(on: boolean): void
+  /**
+   * Open or shut the ask.
+   *
+   * Shutting it is a cancel: nothing is written, and the store drops what was
+   * typed into this row rather than keeping it for a press that may never come.
+   */
+  onAsk(on: boolean): void
   /**
    * Open this server on its own, where there is a page that can show it.
    *
@@ -137,9 +203,11 @@ export function McpStoreRow({
   values,
   said,
   arming,
+  asking,
   onValue,
   onAct,
   onArm,
+  onAsk,
   onOpen,
   onEdit,
   onExport,
@@ -147,6 +215,17 @@ export function McpStoreRow({
   const missing = unfilled(row, values)
   const verb = actionVerb(row)
   const blocked = missing.length > 0
+  /*
+   * Whether pressing Install has a question to ask first.
+   *
+   * `inputs.length`, not `missing.length`. A row whose token is already exported
+   * by the login shell has nothing *missing* and still has a field — the one
+   * that says "Leave blank to use SUPABASE_ACCESS_TOKEN from your shell" — and a
+   * store that quietly used a variable a person never saw named would be making
+   * the choice for them. Same for a path: `filesystem` installed without asking
+   * which directory would write a configuration nobody chose.
+   */
+  const asks = hasAction(row) && verb === 'install' && row.inputs.length > 0
   /* Where to send somebody this store cannot install it for. `''` on every row
      that has a real Install, so no row ever carries both. */
   const elsewhere = mcpLinkOut(row)
@@ -161,6 +240,23 @@ export function McpStoreRow({
       <StoreLogo name={row.name} id={row.id} logo={row.logo} />
       <div className="mcp-store-head">
         <StoreRowName name={row.name} className="mcp-store-name" onOpen={onOpen} />
+        {/*
+          Every chip on the head, in one cluster that wraps inside itself.
+
+          The wrapping is `store/store-page.css`'s — a half-width column cannot
+          hold this head on one line and it says so. What it could not decide,
+          with the chips as flat children of the head, was *which* child moved:
+          at 575px the thing that dropped to line two was **Install**, alone,
+          left-aligned under the name, reading as a button belonging to nothing.
+          Reproduced on `supabase`, which carries an origin, a price, a licence
+          and a version.
+
+          Grouped, the head has three parts — name, this, the controls — and the
+          part that gives way is the one made of chips. The name keeps the top
+          line and the button stays at its right, which is where a row's action
+          is on every other surface in this app.
+        */}
+        <span className="mcp-store-meta">
         {/* Where it comes from. A custom row says *Added by you*, because
             `origin` is a fact the catalogue established about a project and a
             server this app has never heard of has no such fact. */}
@@ -214,7 +310,7 @@ export function McpStoreRow({
           <span className="mcp-store-chip mcp-store-chip-no">Cannot run here</span>
         )}
         {row.state === 'taken' && <span className="mcp-store-chip">Name taken</span>}
-        <span className="mcp-grow" />
+        </span>
 
         {/*
           The two controls a row somebody typed has that a catalogue row cannot.
@@ -264,13 +360,22 @@ export function McpStoreRow({
             {actionLabel(row, busy)}
           </button>
         )}
-        {hasAction(row) && verb === 'install' && (
+        {/*
+          Install, and it is not disabled any more for a value nobody typed.
+
+          It cannot be, because it no longer installs on a row that wants
+          something: it opens the ask. A greyed-out Install over a row whose
+          fields were three lines below it was the shape that made the fields
+          have to be there in the first place. Gone while the ask is open — the
+          question and its two answers are the only things on the row then, which
+          is the shape armed Remove already uses a few lines above.
+        */}
+        {hasAction(row) && verb === 'install' && !asking && (
           <button
             type="button"
             className="mcp-store-install"
-            disabled={busy || blocked}
-            title={blocked ? `Fill in ${missing.join(', ')} first` : undefined}
-            onClick={() => onAct('install')}
+            disabled={busy}
+            onClick={() => (asks ? onAsk(true) : onAct('install'))}
           >
             {actionLabel(row, busy)}
           </button>
@@ -381,69 +486,24 @@ export function McpStoreRow({
       </StoreRowMore>
 
       {/*
-        Every field this row takes, on the row, before the button — and only on a
-        row that has a button.
+        What Install asked for.
 
-        The fields are not behind a disclosure: a token that is required is the
-        first thing somebody has to decide about, and hiding it one click away is
-        how a store ends up with an Install that fails.
+        The same fields, the same hints, the same links to the page that issues
+        the key — nothing here was reworded when it moved behind the press, and
+        the header on this file says why it moved and why the *"an Install that
+        fails"* defect the old placement guarded against cannot come back.
 
-        `hasAction` is the gate rather than `state !== 'installed'`, and
-        rendering the page and looking at it is what caught the difference. The
-        *"cannot run on this machine"* and *"a server already has this name"*
+        `asks` is the gate rather than `state !== 'installed'`, and rendering the
+        page and looking at it is what caught the difference in the first place:
+        the *"cannot run on this machine"* and *"a server already has this name"*
         rows were drawing their fields too — a Personal access token box under a
         GitHub row with no Install anywhere on it. Something you can type a
         secret into that nothing can ever use is the dead control this store is
         not allowed to have, and it is worse than an inert button because a
-        person can put a real token in it.
+        person can put a real token in it. `asks` is built on `hasAction`, so
+        those rows have no way into this at all: with no Install there is nothing
+        to press, and with nothing to press there is no ask.
       */}
-      {hasAction(row) && verb === 'install' && row.inputs.length > 0 && (
-        <div className="mcp-store-fields">
-          {row.inputs.map((input) => (
-            <label className="mcp-field" key={input.key} htmlFor={`mcp-store-${row.id}-${input.key}`}>
-              <span className="mcp-field-label">
-                {input.label}
-                {input.required && <span className="mcp-field-required">*</span>}
-                {input.kind === 'secret' && <span className="mcp-tag">secret</span>}
-              </span>
-              <input
-                id={`mcp-store-${row.id}-${input.key}`}
-                type={fieldType(input)}
-                className="mcp-input"
-                autoComplete="off"
-                spellCheck={false}
-                value={values[input.key] ?? ''}
-                placeholder={
-                  input.inEnvironment ? `Leave blank to use ${input.key} from your shell` : input.key
-                }
-                onChange={(event) => onValue(input.key, event.target.value)}
-              />
-              <span className="mcp-field-hint">{input.hint}</span>
-              {/*
-                The one place the secret question is answered, and it is answered
-                differently depending on what was measured on this machine — see
-                `mcp-store.ts` for why there are exactly two places a token can
-                live and why a third, encrypted in this app, would be a value
-                nothing could decrypt when it was needed.
-              */}
-              {input.kind !== 'path' && input.into === 'env' && (
-                <span className="mcp-field-hint" data-secret="true">
-                  {input.inEnvironment ? (
-                    <HoverNote label={`${input.key} is already in your shell`}>
-                      {`${input.key} is exported by your login shell, which is where sessions run, so leaving this blank writes nothing down at all. One thing that comes with that: opening this server from the servers list starts it from this app rather than from a shell, and this app may not carry that variable — so it can report a missing key there while working perfectly in a session.`}
-                    </HoverNote>
-                  ) : (
-                    <HoverNote label="Where this is kept">
-                      {`Typed here, it is written into your Claude Code configuration as ${input.key}=…, in plain text, in a file that only your account can read. That is where the server reads it from, so there is nowhere better for it to be — encrypting it inside this app would put it somewhere nothing could decrypt it at the moment it is needed.`}
-                    </HoverNote>
-                  )}
-                </span>
-              )}
-            </label>
-          ))}
-        </div>
-      )}
-
       {/* Something true that Install does not fix — archived, metered, writes to
           your repository. Above the button in reading order, always shown. */}
       {row.caveat !== '' && <p className="mcp-store-caveat">{row.caveat}</p>}
@@ -456,15 +516,145 @@ export function McpStoreRow({
         </p>
       )}
 
-      {/*
-        Only while there is still an install to block. Rendering the page and
-        looking at it caught this saying *"Needs Directory it may touch before it
-        can be installed"* under an installed `filesystem` row that was plainly
-        already installed and carrying a Remove — the fields are hidden once a
-        row is installed, so nothing could ever have filled it in.
-      */}
-      {missing.length > 0 && row.blocked === '' && row.state !== 'installed' && (
-        <p className="mcp-run-hint">Needs {missing.join(', ')} before it can be installed.</p>
+      {asks && asking && (
+        <div className="mcp-store-ask">
+          {/*
+            Said again, at the top of the form, and that is not a repeat of the
+            row's own Needs line doing nothing. That line is what a person read
+            while deciding; this is what they are being asked for now, and a form
+            that opens with no sentence over it is a form somebody has to infer
+            the purpose of from its first label.
+          */}
+          <p className="mcp-store-ask-head">
+            {row.inputs.some((input) => input.required) ? (
+              <>
+                {/* `needsWords` and not a second join of the same labels: this
+                    sentence and the `Needs …` line on the row above it name the
+                    same fields, and two spellings of one field on one row reads
+                    as two different things. */}
+                <b>{row.name}</b> needs {needsWords(row)}.
+              </>
+            ) : (
+              <>
+                <b>{row.name}</b> requires nothing, and these are what it can be
+                pointed at.
+              </>
+            )}{' '}
+            Nothing is written until you press Install.
+          </p>
+          <div className="mcp-store-fields">
+            {row.inputs.map((input, at) => (
+              <label
+                className="mcp-field"
+                key={input.key}
+                htmlFor={`mcp-store-${row.id}-${input.key}`}
+              >
+                <span className="mcp-field-label">
+                  {input.label}
+                  {input.required && <span className="mcp-field-required">*</span>}
+                  {input.kind === 'secret' && <span className="mcp-tag">secret</span>}
+                  {/*
+                    The one place the secret question is answered, and it is
+                    answered differently depending on what was measured on this
+                    machine — see `mcp-store.ts` for why there are exactly two
+                    places a token can live and why a third, encrypted in this
+                    app, would be a value nothing could decrypt when it was
+                    needed.
+
+                    On the label line, and that is a fix rather than a
+                    preference. It used to be a sibling of the hint, which is a
+                    flex item in a column — so it drew on a line of its own,
+                    beside nothing, under every secret-taking field in the store.
+                    Moving it *inside* the hint was not enough either: these
+                    hints fill their line, so the dot wrapped alone anyway, and a
+                    non-breaking space did not hold it back in Chromium. The
+                    label line is short, it is already a flex row with the
+                    asterisk and the `secret` chip in it, and the note is about
+                    the field rather than about the sentence under it — so here
+                    there is always something beside it, at every width.
+                  */}
+                  {input.kind !== 'path' && input.into === 'env' && (
+                    <>
+                      {input.inEnvironment ? (
+                        <HoverNote label={`${input.key} is already in your shell`}>
+                          {`${input.key} is exported by your login shell, which is where sessions run, so leaving this blank writes nothing down at all. One thing that comes with that: opening this server from the servers list starts it from this app rather than from a shell, and this app may not carry that variable — so it can report a missing key there while working perfectly in a session.`}
+                        </HoverNote>
+                      ) : (
+                        <HoverNote label="Where this is kept">
+                          {`Typed here, it is written into your Claude Code configuration as ${input.key}=…, in plain text, in a file that only your account can read. That is where the server reads it from, so there is nowhere better for it to be — encrypting it inside this app would put it somewhere nothing could decrypt it at the moment it is needed.`}
+                        </HoverNote>
+                      )}
+                    </>
+                  )}
+                </span>
+                <input
+                  id={`mcp-store-${row.id}-${input.key}`}
+                  type={fieldType(input)}
+                  className="mcp-input"
+                  autoComplete="off"
+                  spellCheck={false}
+                  /*
+                    Focus follows the press, into the first box.
+
+                    Not a flourish: the button that opened this is *gone* — it
+                    is replaced by the question, the way armed Remove replaces
+                    itself — so without this, a keyboard or screen-reader user
+                    presses Install and focus falls to the body with no
+                    announcement that anything appeared. It also scrolls the ask
+                    into view on a shelf, which is what a pointer user wanted
+                    anyway.
+                  */
+                  // eslint-disable-next-line jsx-a11y/no-autofocus
+                  autoFocus={at === 0}
+                  value={values[input.key] ?? ''}
+                  placeholder={
+                    input.inEnvironment
+                      ? `Leave blank to use ${input.key} from your shell`
+                      : input.key
+                  }
+                  onChange={(event) => onValue(input.key, event.target.value)}
+                />
+                <span className="mcp-field-hint">{input.hint}</span>
+              </label>
+            ))}
+          </div>
+
+          {/*
+            What is still empty, named. The same sentence that used to sit under
+            a permanently-visible form; it belongs here now, next to the button
+            it is the reason for.
+          */}
+          {missing.length > 0 && (
+            <p className="mcp-run-hint">Needs {missing.join(', ')} before it can be installed.</p>
+          )}
+
+          {/*
+            The question's two answers, under the fields rather than up in the
+            head. Armed Remove keeps its pair in the head because there is
+            nothing between the question and the answer there; here there is a
+            form, and a confirm at the top of a form is a confirm somebody
+            scrolls back up to.
+
+            Which is also why the whole ask sits at the *foot* of the row, under
+            the caveat rather than above it. `mcp-store-caveat` is the sentence
+            about something Install does not fix — archived, metered, writes to
+            your repository — and it is nobody's idea of a disclosure if the
+            button that acts on it is three paragraphs higher up.
+          */}
+          <div className="mcp-store-ask-actions">
+            <button
+              type="button"
+              className="mcp-store-install"
+              disabled={busy || blocked}
+              onClick={() => onAct('install')}
+            >
+              {busy ? 'Working…' : 'Install'}
+            </button>
+            <button type="button" className="mcp-server-action" onClick={() => onAsk(false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
       )}
 
       {said !== '' && <p className="mcp-store-said">{said}</p>}

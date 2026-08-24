@@ -193,6 +193,16 @@ export function McpStore({
   const [said, setSaid] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState('')
   const [arming, setArming] = useState('')
+  /**
+   * The row whose Install was pressed and which is now asking for what it needs,
+   * or `''`.
+   *
+   * One id rather than a flag per row, exactly like {@link arming} beside it: a
+   * shelf may have one question open at a time, and a second one opening while
+   * the first still held a typed token would be two forms competing for one
+   * Install.
+   */
+  const [asking, setAsking] = useState('')
 
   const scopes = useMemo(() => scopeChoices(projectPath), [projectPath])
 
@@ -241,6 +251,14 @@ export function McpStore({
         const result = readMcpStoreResult(await call(request))
         setSaid((was) => ({ ...was, [row.id]: result.message }))
         if (result.ok && verb === 'install') {
+          /*
+           * The ask shuts on success and stays open on failure. A refusal — a
+           * token the service did not accept, a path that is not there — is
+           * something to correct in the field it came from, and a form that
+           * closed itself would make the person press Install again to read
+           * their own answer back.
+           */
+          setAsking('')
           // The typed secret does not stay in the renderer's state once it has
           // been written. Nothing reads it back — the row redraws as installed —
           // and a token sitting in a React state tree for the rest of the
@@ -268,6 +286,28 @@ export function McpStore({
 
   const setValue = useCallback((id: string, key: string, value: string) => {
     setValues((was) => ({ ...was, [id]: { ...(was[id] ?? {}), [key]: value } }))
+  }, [])
+
+  /**
+   * Open or shut one row's ask.
+   *
+   * Shutting it throws the typed values away, and that is the half worth
+   * writing down. Nothing was ever written to the configuration — the only write
+   * is `mcpStoreInstall` and Cancel does not call it — so this is not about the
+   * file. It is the same rule the successful path already keeps a few lines up:
+   * *"a token sitting in a React state tree for the rest of the session is a
+   * token in a heap snapshot for the rest of the session."* Somebody who pastes
+   * a key, thinks better of it and presses Cancel has said to forget it.
+   */
+  const ask = useCallback((id: string, on: boolean) => {
+    setAsking(on ? id : '')
+    if (on) return
+    setValues((was) => {
+      if (was[id] === undefined) return was
+      const next = { ...was }
+      delete next[id]
+      return next
+    })
   }, [])
 
   /**
@@ -441,9 +481,11 @@ export function McpStore({
               values={values[open.id] ?? {}}
               said={said[open.id] ?? ''}
               arming={arming === open.id}
+              asking={asking === open.id}
               onValue={(key, value) => setValue(open.id, key, value)}
               onAct={(verb) => void act(open, verb)}
               onArm={(on) => setArming(on ? open.id : '')}
+              onAsk={(on) => ask(open.id, on)}
               /* A row read on its own keeps every control it has on the shelf.
                  Edit sends the person back to the shelves, because that is where
                  the form is drawn — one form, in one place. */
@@ -469,6 +511,7 @@ export function McpStore({
           said={said}
           saidOwn={saidOwn}
           arming={arming}
+          asking={asking}
           filter={filter}
           form={formNode}
           canEdit={typeof api.editMcpServer === 'function'}
@@ -479,6 +522,7 @@ export function McpStore({
           onValue={setValue}
           onAct={(row, verb) => void act(row, verb)}
           onArm={(id, on) => setArming(on ? id : '')}
+          onAsk={ask}
           onAddOwn={() => {
             setSaidOwn('')
             setForm({ mode: 'add', row: null, start: undefined })
@@ -510,6 +554,16 @@ export interface StoreBodyProps {
   saidOwn?: string
   /** The row whose Remove is waiting for its second press. */
   arming: string
+  /**
+   * The row whose Install was pressed and which is now asking for what it needs.
+   *
+   * Required, like `arming` beside it, and deliberately not optional. A caller
+   * that did not wire this and its handler would draw a shelf of Install buttons
+   * that open nothing — the dead control this store is not allowed to have, and
+   * the one failure mode the ask introduces that the old always-visible form
+   * could not have had.
+   */
+  asking: string
   filter: StoreFilter
   /**
    * The add/edit form, or `null` when it is shut.
@@ -532,6 +586,8 @@ export interface StoreBodyProps {
   onValue(id: string, key: string, value: string): void
   onAct(row: Row, verb: 'install' | 'remove'): void
   onArm(id: string, on: boolean): void
+  /** Open one row's ask, or cancel it. See {@link StoreBodyProps.asking}. */
+  onAsk(id: string, on: boolean): void
   onAddOwn(): void
   onImport(): void
   onEdit(row: Row): void
@@ -554,6 +610,7 @@ export function StoreBody({
   said,
   saidOwn = '',
   arming,
+  asking,
   filter,
   form = null,
   canEdit = false,
@@ -564,6 +621,7 @@ export function StoreBody({
   onValue,
   onAct,
   onArm,
+  onAsk,
   onAddOwn,
   onImport,
   onEdit,
@@ -610,9 +668,11 @@ export function StoreBody({
       values={values[row.id] ?? {}}
       said={said[row.id] ?? ''}
       arming={arming === row.id}
+      asking={asking === row.id}
       onValue={(key, value) => onValue(row.id, key, value)}
       onAct={(verb) => onAct(row, verb)}
       onArm={(on) => onArm(row.id, on)}
+      onAsk={(on) => onAsk(row.id, on)}
       onOpen={onOpenRow === undefined ? undefined : () => onOpenRow(row.id)}
       /*
        * Both are handed down only for a row they can act on, and only when this
@@ -672,38 +732,60 @@ export function StoreBody({
         which of your rows are listed under it.
       */}
       <section className="mcp-store-section mcp-store-own">
-        <h3 className="mcp-store-heading">{MCP_CATEGORY_NAMES['your-own']}</h3>
-        <p className="mcp-store-note">
-          Any MCP server at all — one you are writing, one from a README, one your team runs.
-          It is written into the same configuration the rows below are, through the same command
-          line tool. This app measures one thing about it, which is whether the command it starts
-          is on this machine, and claims nothing else.
-        </p>
         {/*
-          The form replaces the buttons rather than appearing under them: two
-          ways into one form, both on screen, is two controls where the second
-          does nothing.
+          One line, where there was a bordered card with a paragraph in it.
+
+          Measured on the shipped page at 1440x900, standing on *Databases*: the
+          filter bar, this card and the note below it came to **533px before the
+          first row** — more than a whole MCP row — and not one row was fully on
+          screen. A store whose first shelf begins below the fold is a store
+          nobody has seen the stock of.
+
+          Nothing was deleted. The paragraph that was printed here is behind the
+          dot, word for word: it explains what *any MCP server at all* means and
+          what this app does and does not measure about one, which is worth
+          reading **once**, by somebody about to press the button — and was being
+          printed on every visit to a page that is mostly a catalogue of forty
+          rows nobody typed.
+
+          Still a section with a border, and still the first shelf. The argument
+          for that has not changed: this one shelf is yours, it is a place you
+          act rather than browse, and without an edge it reads as advice at the
+          top of somebody else's list.
         */}
-        {form ?? (
-          <div className="mcp-store-own-actions">
-            <button type="button" className="mcp-store-install" onClick={onAddOwn}>
-              Add your own tool…
-            </button>
-            {/* Reading a definition somebody sent. Drawn only when this build
-                has the channel; see `mcp-share.ts` for what is in such a file
-                and, just as importantly, what is not. */}
-            {canImport && (
-              <button
-                type="button"
-                className="mcp-server-action"
-                disabled={busy === 'own'}
-                onClick={onImport}
-              >
-                {busy === 'own' ? 'Reading…' : 'Open a shared one…'}
+        <div className="mcp-store-own-bar">
+          <h3 className="mcp-store-heading">{MCP_CATEGORY_NAMES['your-own']}</h3>
+          <HoverNote label="what you can add here">
+            {'Any MCP server at all — one you are writing, one from a README, one your team runs. It is written into the same configuration the catalogue rows are, through the same command line tool. This app measures one thing about it, which is whether the command it starts is on this machine, and claims nothing else.'}
+          </HoverNote>
+          {/*
+            The form replaces the buttons rather than appearing under them: two
+            ways into one form, both on screen, is two controls where the second
+            does nothing.
+          */}
+          {form === null && (
+            <>
+              <span className="mcp-grow" />
+              <button type="button" className="mcp-store-install" onClick={onAddOwn}>
+                Add your own tool…
               </button>
-            )}
-          </div>
-        )}
+              {/* Reading a definition somebody sent. Drawn only when this build
+                  has the channel; see `mcp-share.ts` for what is in such a file
+                  and, just as importantly, what is not. */}
+              {canImport && (
+                <button
+                  type="button"
+                  className="mcp-server-action"
+                  disabled={busy === 'own'}
+                  onClick={onImport}
+                >
+                  {busy === 'own' ? 'Reading…' : 'Open a shared one…'}
+                </button>
+              )}
+            </>
+          )}
+        </div>
+        {form}
         {saidOwn !== '' && <p className="mcp-store-said">{saidOwn}</p>}
         {own.length > 0 && <ul className="mcp-store-list">{own.map(line)}</ul>}
         {/*
@@ -731,17 +813,27 @@ export function StoreBody({
 
       {/*
         The one thing every shelf below mixes, said once rather than under each
-        heading. Directly above the first shelf rather than up with the controls,
-        because it is about the rows and the controls are about the whole screen.
+        heading — and now in one line rather than four.
+
+        What stayed on screen is the half a person needs *at this moment*, while
+        looking at a shelf of Install buttons: none of this is in the app, and
+        pressing Install writes a command rather than downloading a program.
+
+        What moved behind the dot is the half that explains a row they may never
+        meet — why some rows have no Install and carry **Get it** instead. That
+        is not deleted and it is not the only place it is said: the row itself
+        carries the chip, the main process's own sentence about which of the two
+        it is, and the Get it link. This paragraph was the third telling, four
+        lines high, above every shelf.
       */}
       {shelves.length > 0 && (
         <p className="mcp-store-note">
-          Nothing here ships inside this app. Install writes the command on the row into your
-          configuration; the server itself is fetched by npx, uvx or docker the first time it
-          runs. A row with no Install says which of two things is true of it — the runtime it
-          needs is not on this machine, or a server of that name is already configured and is not
-          this one — and carries <strong>Get it</strong>, which opens the project&rsquo;s own page
-          and installs nothing.
+          Nothing here ships inside this app: Install writes the command on the row into your
+          configuration, and npx, uvx or docker fetches the server itself the first time it
+          runs.{'\u00a0'}
+          <HoverNote label="rows with no Install">
+            {'A row with no Install says which of two things is true of it — the runtime it needs is not on this machine, or a server of that name is already configured and is not this one. Those rows carry Get it, which opens the project’s own page in this app’s browser and installs nothing anywhere.'}
+          </HoverNote>
         </p>
       )}
 

@@ -131,9 +131,11 @@ const server = (
     values={{}}
     said=""
     arming={false}
+    asking={false}
     onValue={noop}
     onAct={noop}
     onArm={noop}
+    onAsk={noop}
   />
 )
 

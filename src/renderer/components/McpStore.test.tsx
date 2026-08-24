@@ -102,11 +102,13 @@ function render(over: Partial<StoreBodyProps> = {}): string {
       said={{}}
       saidOwn=""
       arming=""
+      asking=""
       filter={NO_FILTER}
       onFilter={noop}
       onValue={noop}
       onAct={noop}
       onArm={noop}
+      onAsk={noop}
       onAddOwn={noop}
       onImport={noop}
       onEdit={noop}
@@ -245,6 +247,26 @@ describe('the store’s one standing sentence', () => {
     expect(markup).toContain('Nothing here ships inside this app')
     expect(markup).toContain('Get it')
   })
+
+  it('keeps the Get it explanation reachable rather than printed above every shelf', () => {
+    /*
+     * Four lines above the first shelf, of which two were about rows a person
+     * may never meet. Measured at 1440x900 with the filter bar and the *Added by
+     * you* card: **533px before the first row**, on a page whose rows are 137px
+     * next door in the extensions department.
+     *
+     * Behind the dot, not deleted — `HoverNote` keeps its paragraph in the
+     * document whether or not anything is hovering, which is why this can be
+     * asserted at all. The row itself still carries the chip, the main process's
+     * own sentence and the Get it link; this paragraph was the third telling.
+     */
+    const markup = render()
+    expect(markup).toContain('hovernote-text')
+    expect(markup).toContain('the runtime it needs is not on this machine')
+    expect(markup).not.toContain(
+      '<p class="mcp-store-note">A row with no Install says which of two things',
+    )
+  })
 })
 
 describe('the shelf for what you added yourself', () => {
@@ -277,6 +299,20 @@ describe('the shelf for what you added yourself', () => {
     const markup = render()
     expect(markup).toContain('Added by you')
     expect(markup).toContain('Add your own tool…')
+  })
+
+  it('is a control on one line now, with its paragraph still reachable behind it', () => {
+    /*
+     * It was a bordered card carrying a four-line paragraph, 208px of it, above
+     * a store whose first row was already below the fold at 1440x900. The
+     * paragraph is worth reading once, by somebody about to press the button,
+     * and was being printed on every visit to a page that is mostly a catalogue
+     * of rows nobody typed.
+     */
+    const markup = render()
+    expect(markup).toContain('mcp-store-own-bar')
+    expect(markup).toContain('Any MCP server at all')
+    expect(markup).not.toContain('<p class="mcp-store-note">Any MCP server at all')
   })
 
   it('puts a server you added on it, with what is actually configured on the row', () => {

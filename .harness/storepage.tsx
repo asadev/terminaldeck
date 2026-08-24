@@ -31,7 +31,7 @@ import '../src/renderer/components/McpInspector.css'
 import {
   StoreBody as BrowserStoreBody,
   BROWSER_SHELVES,
-  BUILT_IN_SHELF,
+  builtInFacets,
 } from '../src/renderer/browser/StorePanel'
 import { StoreBody as McpStoreBody } from '../src/renderer/components/McpStore'
 import { StorePageFrame } from '../src/renderer/store/StorePage'
@@ -64,6 +64,17 @@ import { MCP_CATALOGUE, RUNTIME_BINARY, RUNTIME_NEEDS } from '../src/main/mcp-ca
 
 /* --------------------------------------------------- the browser store's rows -- */
 
+/**
+ * The catalogue as `browser-extensions.ts` hands it to a panel.
+ *
+ * Deliberately the *same shape as that mapping*, field for field, because this
+ * is the only place anybody looks at the page and a fixture that has drifted
+ * from the view is a screenshot of a build that does not exist. It had drifted:
+ * it still carried `entry.noRelease` and still minted `not-offered` and
+ * `unavailable` rows, and all three of those were deleted when the catalogue
+ * type started refusing a row with nothing to install. Nothing caught it —
+ * `tsc` covers neither `.harness` nor anything vite merely bundles.
+ */
 function extensionRows(): StoreExtension[] {
   return BROWSER_EXTENSION_CATALOGUE.map((entry) => ({
     id: entry.id,
@@ -71,7 +82,7 @@ function extensionRows(): StoreExtension[] {
     summary: entry.summary,
     homepage: entry.homepage,
     licence: entry.licence,
-    version: entry.works === 'unmeasured' ? '' : entry.version,
+    version: entry.version,
     works: entry.works,
     category: entry.category,
     tags: [...entry.tags],
@@ -83,16 +94,18 @@ function extensionRows(): StoreExtension[] {
     costNote: entry.costNote,
     logo: entry.logo ?? '',
     measured: entry.measured,
-    noRelease: entry.noRelease ?? '',
-    url: entry.source?.url ?? '',
-    sha256: entry.source?.sha256 ?? '',
-    bytes: entry.source?.bytes ?? 0,
-    state:
-      entry.works === 'unmeasured'
-        ? ('not-offered' as const)
-        : entry.source === null
-          ? ('unavailable' as const)
-          : ('available' as const),
+    url: entry.source.url,
+    sha256: entry.source.sha256,
+    bytes: entry.source.bytes,
+    /*
+     * `available`, always, and there is no branch left to write. A
+     * `CatalogueEntry` carries a pinned download and a verdict of `works` or
+     * `partly` — the type refuses anything else — so the two buttonless states
+     * this fixture used to mint are unreachable in the app and cannot be shown
+     * here either. `damaged` is the third state and it is a fact about a folder
+     * on disk, which a fixture has no business inventing.
+     */
+    state: 'available' as const,
     installedVersion: '',
     installedAt: 0,
     enabled: false,
@@ -315,21 +328,12 @@ const DEPARTMENTS = (chips: Record<'extensions' | 'servers', StoreFilter>, query
     wired: true,
     filter: { ...chips.extensions, query },
     shelves: BROWSER_SHELVES,
-    rows: [
-      ...EXT.extensions.map(extensionFacets),
-      ...TOOLS.tools.map((tool) => ({
-        id: tool.id,
-        name: tool.name,
-        summary: tool.summary,
-        category: BUILT_IN_SHELF,
-        categoryName: 'Built into this app',
-        tags: [] as string[],
-        compat: 'works' as const,
-        installed: tool.state === 'installed',
-        source: BUILT_IN_SHELF,
-        needs: [] as string[],
-      })),
-    ],
+    /* `builtInFacets` rather than the same object spelled out here. It is
+       exported for exactly this — the panel and the rail have to count a
+       built-in tool the same way — and the copy that used to be inline had
+       already fallen a field behind (`cost`), which is how a rail ends up
+       counting a shelf the department does not draw. */
+    rows: [...EXT.extensions.map(extensionFacets), ...TOOLS.tools.map(builtInFacets)],
   },
   {
     id: 'servers',
@@ -359,6 +363,27 @@ function Page() {
   })
   const [place, setPlace] = useState<StorePlace>(startPlace)
   const [detail, setDetail] = useState(params.get('row') ?? '')
+  /**
+   * The MCP row whose Install has been pressed and which is asking for what it
+   * needs, and what has been typed into it.
+   *
+   * Real state, not a stub, because the ask is the one thing on this page that
+   * only exists after a press — the same reason this harness exists at all. It
+   * is the panel's own shape (`components/McpStore.tsx`): one id, because one
+   * question at a time, and Cancel forgets what was typed. `?ask=<id>` opens one
+   * straight away, so a screenshot of a row mid-install is one URL.
+   */
+  const [asking, setAsking] = useState(params.get('ask') ?? '')
+  const [values, setValues] = useState<Record<string, Record<string, string>>>({})
+  const ask = (id: string, on: boolean): void => {
+    setAsking(on ? id : '')
+    if (on) return
+    setValues((was) => {
+      const next = { ...was }
+      delete next[id]
+      return next
+    })
+  }
 
   const departments = DEPARTMENTS(chips, query)
   const extension = EXT.extensions.find((one) => `e:${one.id}` === detail)
@@ -444,12 +469,19 @@ function Page() {
               <McpRow
                 row={server}
                 busy={false}
-                values={{}}
+                values={values[server.id] ?? {}}
                 said=""
                 arming={false}
-                onValue={noop}
+                asking={asking === server.id}
+                onValue={(key, value) =>
+                  setValues((was) => ({
+                    ...was,
+                    [server.id]: { ...(was[server.id] ?? {}), [key]: value },
+                  }))
+                }
                 onAct={noop}
                 onArm={noop}
+                onAsk={(on) => ask(server.id, on)}
               />
             </ul>
           </StoreDetail>
@@ -458,10 +490,11 @@ function Page() {
             <McpStoreBody
               view={MCP}
               busy=""
-              values={{}}
+              values={values}
               said={{}}
               saidOwn=""
               arming=""
+              asking={asking}
               /* Every optional door on, because the harness is where the
                  shipped row is judged. Their absence is the *older preload*
                  case, and `McpStoreRow.test.tsx` is what pins that. */
@@ -471,9 +504,12 @@ function Page() {
               filter={filterFor(place, departments[1])}
               onFilter={chipsFor('servers')}
               onOpenRow={(id) => setDetail(`m:${id}`)}
-              onValue={noop}
+              onValue={(id, key, value) =>
+                setValues((was) => ({ ...was, [id]: { ...(was[id] ?? {}), [key]: value } }))
+              }
               onAct={noop}
               onArm={noop}
+              onAsk={ask}
               onAddOwn={noop}
               onImport={noop}
               onEdit={noop}

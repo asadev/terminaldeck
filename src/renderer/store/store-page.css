@@ -395,6 +395,17 @@
    `flex-wrap` and nothing else. Nothing here changes what a head *contains*,
    what it says, or the order it says it in — only whether the line is allowed
    to become two, which is a fact about the width this page gives it.
+
+   What it could not decide is *which* child moves, and that turned out to
+   matter: at 575px on `supabase` the item that dropped to the second line was
+   the **Install button**, alone, at the left, under the name — a button
+   belonging to nothing. Wrapping was still the right answer; what was missing
+   was something for the head to give way *on*. The MCP head groups its chips
+   into `.mcp-store-meta` now, at a flex basis of zero, so the cluster is the
+   only part that yields and the name keeps the top line with its button.
+   `components/McpInspector.css` carries that rule and the argument for the
+   zero. The browser department's heads were measured at the same width and do
+   not wrap, so nothing was done to them.
 */
 .store-page .bw-store-head,
 .store-page .mcp-store-head {
