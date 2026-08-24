@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { StoreRowPlaceIs } from './StoreRowMore'
 
 /**
  * One thing in the store, on its own.
@@ -43,6 +44,23 @@ import type { ReactNode } from 'react'
  * What it is *for*, then: the store holds forty-odd rows across two departments,
  * and somebody deciding on one of them wants that one on screen without the
  * other thirty-nine. That is a real need and it is the only one this serves.
+ *
+ * ## The one thing it now tells the row
+ *
+ * That it is a page. Nothing else — no facts, no header, no second button.
+ *
+ * The rule above survived a second reading of the shelf and cost it everything:
+ * with one representation for both surfaces, every fact that had to be reachable
+ * had to be printed where somebody is scanning twenty rows, and the shipped page
+ * fit **two rows on a screen**. `store/StoreRowMore.tsx` is what gave the row a
+ * second size; this frame is the only thing in the app that knows a row is being
+ * read on its own, so this is where that is said.
+ *
+ * The rule itself is untouched. A shelf row's markup still carries its download
+ * URL and its fingerprint — folded, one press away, on the row itself — so the
+ * awkward facts have not been moved behind getting here, which is the exact
+ * failure `StorePanel.test.tsx` pins against. What this adds is that somebody
+ * who *did* come here does not have to press anything.
  */
 
 interface Props {
@@ -76,11 +94,14 @@ export function StoreDetail({ backTo, onBack, children }: Props) {
         Back to {backTo}
       </button>
       {/*
-        The row, whole and unaltered. Its buttons are the real ones — this frame
-        owns no action of its own, so there is no second Install anywhere in the
-        app that could come to mean something different from the first.
+        The row, whole and unaltered — and told that here it is the page, which
+        is the whole of what this frame says to it. Every department's row is
+        wrapped without either department knowing: a prop would have had to be
+        threaded through two bodies, two shelf renderers and the harness, and the
+        cost of one of them disagreeing is a detail page that folds its own
+        detail away.
       */}
-      {children}
+      <StoreRowPlaceIs place="page">{children}</StoreRowPlaceIs>
     </div>
   )
 }

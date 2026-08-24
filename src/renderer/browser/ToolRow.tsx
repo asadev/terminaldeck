@@ -1,5 +1,6 @@
 import { GRANT_WORDS, originWords, type StoreTool } from './store-bridge'
 import { StoreRowName } from '../store/StoreRowName'
+import { StoreRowMore } from '../store/StoreRowMore'
 
 /**
  * One row of the store's built-in half — a page-reading tool.
@@ -30,6 +31,20 @@ import { StoreRowName } from '../store/StoreRowName'
  * and the exact fingerprint the download must match, before anybody presses
  * anything — a store that says "verified" and will not say against what is
  * asking for the same trust it exists to replace.
+ *
+ * ## Which of them is folded, and why the seam is not
+ *
+ * Licence, Source and the fingerprint sit behind the row's own disclosure —
+ * `store/StoreRowMore.tsx` carries the measurement that forced it on every row
+ * in the shop. What a person reads while scanning is what the tool reads and
+ * where it runs, because those are the two facts `browser-store.ts` checks an
+ * install against.
+ *
+ * The seam itself does not fold and never was on the row: *"These are not
+ * downloads — each is a set of selectors that ships inside this app"* is a
+ * sentence over the whole section, in `StorePanel.tsx`, which is where a fact
+ * about a heading belongs. The row's *Source* line is that same fact, per row,
+ * for somebody who came to check it.
  */
 
 /**
@@ -95,53 +110,71 @@ export function ToolRow({ tool, busy, said, onAct, onOpen }: RowProps) {
 
       <p className="bw-store-summary">{tool.summary}</p>
 
-      <dl className="bw-store-facts">
-        <div>
-          <dt>Reads</dt>
-          <dd>{tool.grants.map((grant) => GRANT_WORDS[grant] ?? grant).join('. ') || 'nothing'}</dd>
-        </div>
-        <div>
-          <dt>Runs on</dt>
-          <dd>{originWords(tool.origins)}</dd>
-        </div>
-        <div>
-          <dt>Licence</dt>
-          <dd>{tool.licence}</dd>
-        </div>
-        <div>
-          <dt>Source</dt>
-          <dd>
-            {tool.fetched
-              ? tool.url
-              : 'Built into this app. Installing it downloads nothing — it ships in the app’s own bytes.'}
-          </dd>
-        </div>
-        {/* Only for a download: what its bytes must hash to, pinned in this
-            app, before or after the fetch. A built-in is verified against the
-            same kind of digest, but printing a fingerprint for a thing that is
-            never fetched would dress it as a download. */}
-        {tool.fetched && (
+      {/*
+        The two facts the install is actually checked against, on one line, on
+        the shelf. `browser-store.ts` refuses a recipe that asks for a grant or
+        an origin this row did not say, so these are the disclosure rather than a
+        description — and they are short enough to read while scanning, which is
+        why they are a line and not the first two rows of a definition list.
+
+        No word in front of the grants, unlike the *Reaches* and *Needs* lines on
+        the store's other two rows. `GRANT_WORDS` is already a whole sentence —
+        *Reads the page you point it at* — and a `Reads` label in front of it
+        printed **Reads Reads the page you point it at** on the shipped shelf.
+        Found by rendering it and looking, which is also how it would have been
+        missed: the fact was correct and the sentence was not.
+      */}
+      <p className="store-rowline">
+        <b>
+          {tool.grants.map((grant) => GRANT_WORDS[grant] ?? grant).join('. ') || 'Reads nothing'}
+        </b>{' '}
+        · Runs on <b>{originWords(tool.origins)}</b>
+      </p>
+
+      <StoreRowMore label="Licence, source and checksum">
+        <dl className="bw-store-facts">
           <div>
-            <dt>sha256</dt>
+            <dt>Licence</dt>
+            <dd>{tool.licence}</dd>
+          </div>
+          <div>
+            <dt>Source</dt>
             <dd>
-              <code>{tool.sha256}</code>
-              {installed
-                ? ' — the download matched this before it was saved, and is checked against it again every time it is read.'
-                : ' — the download must match this, or nothing is saved.'}
+              {tool.fetched
+                ? tool.url
+                : 'Built into this app. Installing it downloads nothing — it ships in the app’s own bytes.'}
             </dd>
           </div>
-        )}
-        {/* Only once it is installed, because until then there is no file to
-            read the field names out of, and inventing them from the catalogue
-            would be this panel's word rather than the recipe's. */}
-        {tool.reads.length > 0 && (
-          <div>
-            <dt>Collects</dt>
-            <dd>{tool.reads.join(', ')}</dd>
-          </div>
-        )}
-      </dl>
+          {/* Only for a download: what its bytes must hash to, pinned in this
+              app, before or after the fetch. A built-in is verified against the
+              same kind of digest, but printing a fingerprint for a thing that is
+              never fetched would dress it as a download. */}
+          {tool.fetched && (
+            <div>
+              <dt>sha256</dt>
+              <dd>
+                <code>{tool.sha256}</code>
+                {installed
+                  ? ' — the download matched this before it was saved, and is checked against it again every time it is read.'
+                  : ' — the download must match this, or nothing is saved.'}
+              </dd>
+            </div>
+          )}
+          {/* Only once it is installed, because until then there is no file to
+              read the field names out of, and inventing them from the catalogue
+              would be this panel's word rather than the recipe's. */}
+          {tool.reads.length > 0 && (
+            <div>
+              <dt>Collects</dt>
+              <dd>{tool.reads.join(', ')}</dd>
+            </div>
+          )}
+        </dl>
+      </StoreRowMore>
 
+      {/* Unfolded, like every red line in this store: a file on disk that is not
+          the one that was installed is not something a person should have to
+          press anything to find out about. */}
       {tool.state === 'damaged' && <p className="bw-error">{tool.message}</p>}
       {said !== '' && <p className="bw-store-said">{said}</p>}
     </li>

@@ -274,8 +274,21 @@ describe('what it costs', () => {
       cost: 'paid',
       costNote: '1Password has no free plan; the extension does nothing without a subscription.',
     })
-    expect(html).toContain('What it costs')
-    expect(html).toContain('has no free plan')
+    /*
+     * On the shelf and unfolded, which is the part that matters and the part
+     * that survived the density pass: the facts list this used to sit in is now
+     * behind a `details` — see `store/StoreRowMore.tsx` — and a price a person
+     * has to press something to see is a price they will read after installing.
+     *
+     * It carries no *What it costs* label any more. The catalogue's sentence
+     * already reads as a price and the chip beside the name already names one,
+     * so the label was the third spelling of the same thing on one row.
+     */
+    const note = html.indexOf('has no free plan')
+    expect(note, 'the price sentence is not on the row').toBeGreaterThan(-1)
+    expect(note, 'the price sentence was folded away').toBeLessThan(
+      html.indexOf('store-more-summary'),
+    )
     expect(html).toContain('Paid')
   })
 
@@ -287,7 +300,14 @@ describe('what it costs', () => {
   })
 
   it('says nothing extra about a row that is simply free', () => {
-    expect(render({ cost: 'free', costNote: '' })).not.toContain('What it costs')
+    /*
+     * One unfolded line on such a row — what it reaches — and no second one.
+     * *Free.* under a chip that already says *Free* is the padding that teaches
+     * people to stop reading, and on a shelf of twenty rows it is a line each.
+     */
+    const html = render({ cost: 'free', costNote: '' })
+    expect(html.split('class="store-rowline"').length - 1).toBe(1)
+    expect(html).toContain('Reaches')
   })
 })
 

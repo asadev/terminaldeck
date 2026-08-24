@@ -12,6 +12,7 @@ import {
 import { StoreLinkOut } from '../store/StoreLinkOut'
 import { StoreRowName } from '../store/StoreRowName'
 import { StoreLogo } from '../store/StoreLogo'
+import { StoreRowMore } from '../store/StoreRowMore'
 
 /**
  * One row of the MCP store.
@@ -38,6 +39,19 @@ import { StoreLogo } from '../store/StoreLogo'
  *    install fails is the defect this store was written against.
  *  - **Command** — exactly what will be written into the configuration, with the
  *    placeholders visible. Nothing is added behind it.
+ *
+ * ## Where each of the four is, since the shelf was screenshotted
+ *
+ * All four are still on the row and none of them changed a word. Two of them —
+ * *How it runs* and *Needs* — are the two a person weighs while scanning, so
+ * they are one line under the summary; the other two are looked **up**, by
+ * somebody checking a particular thing, so they are folded behind a line that
+ * names them. `store/StoreRowMore.tsx` carries the measurement: printed inline,
+ * these five definition rows put **one server on a 1440px screen**.
+ *
+ * The *Needs* argument above is the reason the fold stops where it does. A row
+ * that wants a key says so before the button, unpressed, along with the field
+ * to put it in — neither of those moved.
  *
  * ## The button, and the row that has none
  *
@@ -276,96 +290,95 @@ export function McpStoreRow({
 
       <p className="mcp-store-summary">{row.summary}</p>
 
-      <dl className="mcp-store-facts">
-        {/*
-          Both links are drawn only when there is an address behind them. A
-          server somebody typed has neither — nobody published it — and an empty
-          `<a href="">` is a link to the page you are on, which is the dead
-          control this store is not allowed to have. Rendering the store with a
-          custom row in it is what caught this.
-        */}
-        {row.homepage !== '' && (
-          <div>
-            <dt>Source</dt>
-            <dd>
-              <a href={row.homepage} target="_blank" rel="noreferrer noopener">
-                {row.homepage}
-              </a>
-            </dd>
-          </div>
-        )}
-        {row.registry !== '' && (
-          <div>
-            <dt>Package</dt>
-            <dd>
-              <a href={row.registry} target="_blank" rel="noreferrer noopener">
-                {row.registry}
-              </a>
-            </dd>
-          </div>
-        )}
-        <div>
-          <dt>How it runs</dt>
-          {/*
-            The catalogue's phrase for one of three runtimes, or — for a server
-            somebody typed — the binary its command actually names and whether it
-            was found here. "npx — fetched from npm the first time it runs" is
-            true of most rows and a straight lie under `/usr/local/bin/serve`.
-          */}
-          <dd>{runsWords(row)}</dd>
-        </div>
-        {/*
-          What the *catalogue* says a row wants before it can work. A custom row
-          has no catalogue entry, so this app knows nothing about what it needs
-          and the honest thing is to draw no line at all — "Nothing", which is
-          what an empty input list produces, would be a claim nobody measured.
-        */}
-        {!row.custom && (
-          <div>
-            <dt>Needs</dt>
-            <dd>{needsWords(row)}</dd>
-          </div>
-        )}
-        {/*
-          The variables it carries, by name. Never a value: `configuredForStore`
-          sends names, and `mcp-edit.ts` is where a value is merged back in,
-          inside the process that already has it.
-        */}
-        {row.envKeys.length > 0 && (
-          <div>
-            <dt>Environment</dt>
-            <dd>
-              {row.envKeys.join(', ')} —{' '}
-              {row.envKeys.length === 1 ? 'its value is' : 'their values are'} in your configuration
-              and {row.envKeys.length === 1 ? 'is' : 'are'} not shown here.
-            </dd>
-          </div>
-        )}
-        {/*
-          The price reality, in the catalogue's own sentence, above the button.
-          On the facts list rather than under the measured line for the same
-          reason *Needs* is: **never imply free when a key costs money**, and a
-          sentence somebody reads after pressing Install is a sentence that
-          arrived too late.
+      {/*
+        The two facts weighed while scanning, on one line, unfolded.
 
-          Drawn only when there is one to draw. A row that is simply free — the
-          filesystem one, the clock — carries no note, and printing *Free.* under
-          a chip that already says *Free* would be the padding that teaches
-          people to stop reading this list.
-        */}
-        {row.costNote !== '' && (
-          <div>
-            <dt>What it costs</dt>
-            <dd>{row.costNote}</dd>
-          </div>
+        **How it runs** is the catalogue's phrase for one of three runtimes, or —
+        for a server somebody typed — the binary its command actually names and
+        whether it was found here. "npx — fetched from npm the first time it
+        runs" is true of most rows and a straight lie under
+        `/usr/local/bin/serve`.
+
+        **Needs** is what the *catalogue* says a row wants before it can work,
+        before the button rather than after, and a custom row has no catalogue
+        entry — so it draws no *Needs* at all rather than "Nothing", which would
+        be a claim nobody measured.
+      */}
+      <p className="store-rowline">
+        Runs with <b>{runsWords(row)}</b>
+        {!row.custom && (
+          <>
+            {' · Needs '}
+            <b>{needsWords(row)}</b>
+          </>
         )}
-        <div>
-          <dt>{row.transport === 'stdio' ? 'Command' : 'URL'}</dt>
-          <dd>
-            <code>{row.command}</code>
-          </dd>
-        </div>
-      </dl>
+      </p>
+
+      {/*
+        The price reality, in the catalogue's own sentence, above the button and
+        unfolded: **never imply free when a key costs money**, and a sentence
+        somebody reads after pressing Install is a sentence that arrived too
+        late.
+
+        Drawn only when there is one to draw. A row that is simply free — the
+        filesystem one, the clock — carries no note, and printing *Free.* under a
+        chip that already says *Free* would be the padding that teaches people to
+        stop reading.
+      */}
+      {row.costNote !== '' && <p className="store-rowline">{row.costNote}</p>}
+
+      <StoreRowMore label="Source, package and the exact command">
+        <dl className="mcp-store-facts">
+          {/*
+            Both links are drawn only when there is an address behind them. A
+            server somebody typed has neither — nobody published it — and an empty
+            `<a href="">` is a link to the page you are on, which is the dead
+            control this store is not allowed to have. Rendering the store with a
+            custom row in it is what caught this.
+          */}
+          {row.homepage !== '' && (
+            <div>
+              <dt>Source</dt>
+              <dd>
+                <a href={row.homepage} target="_blank" rel="noreferrer noopener">
+                  {row.homepage}
+                </a>
+              </dd>
+            </div>
+          )}
+          {row.registry !== '' && (
+            <div>
+              <dt>Package</dt>
+              <dd>
+                <a href={row.registry} target="_blank" rel="noreferrer noopener">
+                  {row.registry}
+                </a>
+              </dd>
+            </div>
+          )}
+          {/*
+            The variables it carries, by name. Never a value: `configuredForStore`
+            sends names, and `mcp-edit.ts` is where a value is merged back in,
+            inside the process that already has it.
+          */}
+          {row.envKeys.length > 0 && (
+            <div>
+              <dt>Environment</dt>
+              <dd>
+                {row.envKeys.join(', ')} —{' '}
+                {row.envKeys.length === 1 ? 'its value is' : 'their values are'} in your
+                configuration and {row.envKeys.length === 1 ? 'is' : 'are'} not shown here.
+              </dd>
+            </div>
+          )}
+          <div>
+            <dt>{row.transport === 'stdio' ? 'Command' : 'URL'}</dt>
+            <dd>
+              <code>{row.command}</code>
+            </dd>
+          </div>
+        </dl>
+      </StoreRowMore>
 
       {/*
         Every field this row takes, on the row, before the button — and only on a

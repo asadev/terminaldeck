@@ -6,6 +6,7 @@ import {
 } from './extensions-bridge'
 import { StoreRowName } from '../store/StoreRowName'
 import { StoreLogo } from '../store/StoreLogo'
+import { StoreRowMore } from '../store/StoreRowMore'
 import { COST_WORDS } from '../store/storefront'
 
 /**
@@ -41,6 +42,22 @@ import { COST_WORDS } from '../store/storefront'
  * has not happened, *matched* is a record of one that did. A store that fetches
  * programs and will not say from where, or says "verified" and not against
  * what, is asking for the trust it exists to replace.
+ *
+ * ## Where those facts are, since this row was screenshotted
+ *
+ * On the row, folded, under a line that names them. All of them, unchanged, in
+ * the markup whether it is open or shut — see `store/StoreRowMore.tsx`, which
+ * carries the measurement that forced it: four lines of build metadata and a
+ * paragraph of measurement per row put **two rows on a 1440px screen**, and a
+ * sixty-four character hash is not something a person reads while choosing an
+ * ad blocker.
+ *
+ * What did **not** fold is what somebody is agreeing to. *Reaches* is the whole
+ * of the permission decision and it stays on the shelf — as one line rather than
+ * a definition list, because the label column was pushing a three-word answer to
+ * a second tab stop. The price sentence stays for the same reason it was put
+ * above the button in the first place: a cost read after installing arrived too
+ * late. So does anything red.
  *
  * ## Why the switch and the Remove are separate controls
  *
@@ -274,168 +291,187 @@ export function ExtensionRow({
 
       <p className="bw-store-summary">{extension.summary}</p>
 
-      <dl className="bw-store-facts">
-        <div>
-          <dt>Reaches</dt>
+      {/*
+        What somebody is agreeing to, on the shelf, before the button, installed
+        or not. An extension is a program, and the one thing that decides how
+        much of your browsing it sees is the host patterns in its manifest.
+
+        The catalogue states it before the install and the manifest on disk
+        replaces that answer afterwards — and `browser-extensions.ts` refuses an
+        install whose manifest reaches wider than this line said, so the two can
+        never be different things.
+
+        A line rather than the first row of a definition list: it is the one
+        fact read while scanning, and the label column was pushing *every page
+        you open in this profile* out to a second tab stop for nothing.
+      */}
+      <p className="store-rowline">
+        Reaches <b>{reachWords(extension.reach, extension.everywhere)}</b>
+      </p>
+
+      {/*
+        The price reality, in the catalogue's own sentence, above the button and
+        unfolded — because a cost somebody reads after pressing Install arrived
+        too late, which is the one argument that survives every pass over this
+        row. Drawn only when there is one: a row that is simply free carries
+        none, and printing *Free.* under a chip that already says *Free* is the
+        padding that teaches people to stop reading.
+      */}
+      {extension.costNote !== '' && <p className="store-rowline">{extension.costNote}</p>}
+
+      <StoreRowMore label="Licence, download, checksum and what was measured">
+        <dl className="bw-store-facts">
           {/*
-            Before the button, always, installed or not. This is the whole of
-            what somebody is agreeing to: an extension is a program, and the one
-            thing that decides how much of your browsing it sees is the host
-            patterns in its manifest.
+            What it would like to reach and never will. `optional_host_permissions`
+            is a real part of a manifest and this browser can grant none of it:
+            there is no runtime prompt here, and the compatibility layer answers
+            permissions.request() with false. Left off the row entirely, this reads
+            as an extension that asks for less than it does.
 
-            The catalogue states it before the install and the manifest on disk
-            replaces that answer afterwards — and `browser-extensions.ts` refuses
-            an install whose manifest reaches wider than this line said, so the
-            two can never be different things.
+            Folded rather than beside *Reaches*, and the difference is that this
+            one is a promise about what can never happen: the sentence is thirty
+            words and it qualifies a decision the line above has already stated
+            truthfully.
           */}
-          <dd>{reachWords(extension.reach, extension.everywhere)}</dd>
-        </div>
-        {/*
-          What it would like to reach and never will. `optional_host_permissions`
-          is a real part of a manifest and this browser can grant none of it:
-          there is no runtime prompt here, and the compatibility layer answers
-          permissions.request() with false. Left off the row entirely, this reads
-          as an extension that asks for less than it does.
-        */}
-        {extension.mayAsk.length > 0 && (
-          <div>
-            <dt>Would like to reach</dt>
-            <dd>
-              {extension.mayAsk.join(', ')} — it can ask for this at any time and this browser
-              always answers no, so it never gets it.
-            </dd>
-          </div>
-        )}
-        {/*
-          The price reality, in the catalogue's own sentence, above the button
-          and above the measured paragraph.
+          {extension.mayAsk.length > 0 && (
+            <div>
+              <dt>Would like to reach</dt>
+              <dd>
+                {extension.mayAsk.join(', ')} — it can ask for this at any time and this browser
+                always answers no, so it never gets it.
+              </dd>
+            </div>
+          )}
+          {extension.licence !== '' && (
+            <div>
+              <dt>Licence</dt>
+              <dd>{extension.licence}</dd>
+            </div>
+          )}
+          {extension.homepage !== '' && (
+            <div>
+              <dt>Project</dt>
+              <dd>{extension.homepage}</dd>
+            </div>
+          )}
+          {/*
+            Where a folder or a .crx somebody added came from, and what its
+            signature is worth. Both on the row for the same reason the URL and
+            the digest are on a catalogue row: "where did this program on my disk
+            come from" has an answer and it is not a shrug.
+          */}
+          {extension.sideloaded && extension.origin !== '' && (
+            <div>
+              <dt>Added from</dt>
+              <dd>
+                <code>{extension.origin}</code>
+              </dd>
+            </div>
+          )}
+          {extension.sideloaded && extension.crxId !== '' && (
+            <div>
+              <dt>Signed as</dt>
+              <dd>
+                <code>{extension.crxId}</code> — its signature matched its contents, which says the
+                file has not changed since it was packed and says nothing at all about who packed
+                it. That id is the fingerprint of the signing key.
+              </dd>
+            </div>
+          )}
+          {/*
+            Where the bytes come from and what they must hash to — drawn only when
+            there is a download at all. A row this app measured failing pins no
+            download, and printing a URL under it would offer provenance for a
+            fetch that can never happen.
+          */}
+          {extension.url !== '' && (
+            <div>
+              <dt>Download</dt>
+              <dd>
+                {extension.url}
+                {extension.bytes > 0 ? ` — ${extension.bytes.toLocaleString('en-US')} bytes, exactly` : ''}
+              </dd>
+            </div>
+          )}
+          {extension.url !== '' && extension.sha256 !== '' && (
+            <div>
+              <dt>sha256</dt>
+              <dd>
+                <code>{extension.sha256}</code>
+                {isInstalled || extension.state === 'damaged'
+                  ? ' — the download matched this before it was unpacked.'
+                  : ' — the download must match this, or nothing is saved.'}
+              </dd>
+            </div>
+          )}
+          {extension.missing.length > 0 && (
+            <div>
+              <dt>Not available here</dt>
+              <dd>{extension.missing.map((api) => `chrome.${api}`).join(', ')}</dd>
+            </div>
+          )}
+          {/*
+            What this app had to add to the extension for it to start at all, and
+            what is still not there afterwards. Both on the row, because the layer
+            rewrote files inside a program somebody agreed to install: an app that
+            edits somebody's extension and does not say so is keeping a secret for
+            no reason, and one that says "works" without naming what is inert is
+            the store row version of a button that does nothing.
+          */}
+          {extension.provides.length > 0 && (
+            <div>
+              <dt>Filled in by this app</dt>
+              <dd>{extension.provides.map((api) => `chrome.${api}`).join(', ')}</dd>
+            </div>
+          )}
+          {extension.inert.length > 0 && (
+            <div>
+              <dt>Still not there</dt>
+              <dd>{extension.inert.join('; ')}</dd>
+            </div>
+          )}
+        </dl>
 
-          On the facts list rather than in a footnote for the same reason
-          *Reaches* is: this is part of what somebody is deciding, and a sentence
-          they read after installing arrived too late. Drawn only when there is
-          one — a row that is simply free carries none, and printing *Free.*
-          under a chip that already says *Free* is the padding that teaches
-          people to stop reading this list.
-        */}
-        {extension.costNote !== '' && (
-          <div>
-            <dt>What it costs</dt>
-            <dd>{extension.costNote}</dd>
-          </div>
-        )}
-        {extension.licence !== '' && (
-          <div>
-            <dt>Licence</dt>
-            <dd>{extension.licence}</dd>
-          </div>
-        )}
-        {extension.homepage !== '' && (
-          <div>
-            <dt>Project</dt>
-            <dd>{extension.homepage}</dd>
-          </div>
-        )}
         {/*
-          Where a folder or a .crx somebody added came from, and what its
-          signature is worth. Both on the row for the same reason the URL and
-          the digest are on a catalogue row: "where did this program on my disk
-          come from" has an answer and it is not a shrug.
-        */}
-        {extension.sideloaded && extension.origin !== '' && (
-          <div>
-            <dt>Added from</dt>
-            <dd>
-              <code>{extension.origin}</code>
-            </dd>
-          </div>
-        )}
-        {extension.sideloaded && extension.crxId !== '' && (
-          <div>
-            <dt>Signed as</dt>
-            <dd>
-              <code>{extension.crxId}</code> — its signature matched its contents, which says the
-              file has not changed since it was packed and says nothing at all about who packed
-              it. That id is the fingerprint of the signing key.
-            </dd>
-          </div>
-        )}
-        {/*
-          Where the bytes come from and what they must hash to — drawn only when
-          there is a download at all. A row this app measured failing pins no
-          download, and printing a URL under it would offer provenance for a
-          fetch that can never happen.
-        */}
-        {extension.url !== '' && (
-          <div>
-            <dt>Download</dt>
-            <dd>
-              {extension.url}
-              {extension.bytes > 0 ? ` — ${extension.bytes.toLocaleString('en-US')} bytes, exactly` : ''}
-            </dd>
-          </div>
-        )}
-        {extension.url !== '' && extension.sha256 !== '' && (
-          <div>
-            <dt>sha256</dt>
-            <dd>
-              <code>{extension.sha256}</code>
-              {isInstalled || extension.state === 'damaged'
-                ? ' — the download matched this before it was unpacked.'
-                : ' — the download must match this, or nothing is saved.'}
-            </dd>
-          </div>
-        )}
-        {extension.missing.length > 0 && (
-          <div>
-            <dt>Not available here</dt>
-            <dd>{extension.missing.map((api) => `chrome.${api}`).join(', ')}</dd>
-          </div>
-        )}
-        {/*
-          What this app had to add to the extension for it to start at all, and
-          what is still not there afterwards. Both on the row, because the layer
-          rewrote files inside a program somebody agreed to install: an app that
-          edits somebody's extension and does not say so is keeping a secret for
-          no reason, and one that says "works" without naming what is inert is
-          the store row version of a button that does nothing.
-        */}
-        {extension.provides.length > 0 && (
-          <div>
-            <dt>Filled in by this app</dt>
-            <dd>{extension.provides.map((api) => `chrome.${api}`).join(', ')}</dd>
-          </div>
-        )}
-        {extension.inert.length > 0 && (
-          <div>
-            <dt>Still not there</dt>
-            <dd>{extension.inert.join('; ')}</dd>
-          </div>
-        )}
-      </dl>
+          What this app saw, in its own words. On every row, including the ones
+          that work: a verdict with no observation behind it is an opinion, and a
+          store full of opinions is what this one was written to avoid.
 
-      {/*
-        What this app saw, in its own words. On every row, including the ones
-        that work: a verdict with no observation behind it is an opinion, and a
-        store full of opinions is what this one was written to avoid.
-      */}
-      <p className="bw-store-said">{extension.measured}</p>
+          Inside the disclosure and not below it. This is the longest thing on the
+          row — Dark Reader's runs to sixty words — and it is a record of a
+          measurement rather than a warning: the two red lines under this block are
+          what a person has to be told without pressing anything.
+        */}
+        <p className="bw-store-said">{extension.measured}</p>
+
+        {/*
+          Manifest declarativeNetRequest rulesets are not switched on when an
+          extension loads here — `browser-extension-support.ts` measured
+          getEnabledRulesets() answering [] with "enabled": true on the resource.
+          This used to be the end of the sentence and a red line on the row. It is
+          now something this app does something about, once, after installing, and
+          the row says which of the two happened rather than keeping the older,
+          more alarming half.
+        */}
+        {extension.state === 'installed' && extension.rulesetsSwitchedOn > 0 && (
+          <p className="bw-store-said">
+            This browser does not switch manifest declarativeNetRequest rulesets on when an extension
+            loads. This app switched its {extension.rulesetsSwitchedOn} on, once, after installing —
+            and leaves them alone afterwards, so turning one off in the extension stays off.
+          </p>
+        )}
+      </StoreRowMore>
 
       {/*
-        Manifest declarativeNetRequest rulesets are not switched on when an
-        extension loads here — `browser-extension-support.ts` measured
-        getEnabledRulesets() answering [] with "enabled": true on the resource.
-        This used to be the end of the sentence and a red line on the row. It is
-        now something this app does something about, once, after installing, and
-        the row says which of the two happened rather than keeping the older,
-        more alarming half.
+        Everything red stays on the shelf, unfolded.
+
+        A store may fold what it measured; it may not fold what is broken. These
+        three are the cases where something on this machine is not doing what the
+        row above it appears to promise — a file that is not the one that was
+        installed, rules that are not in force, an extension that loaded with a
+        complaint — and a person scanning the shelf has to see them without
+        pressing anything.
       */}
-      {extension.state === 'installed' && extension.rulesetsSwitchedOn > 0 && (
-        <p className="bw-store-said">
-          This browser does not switch manifest declarativeNetRequest rulesets on when an extension
-          loads. This app switched its {extension.rulesetsSwitchedOn} on, once, after installing —
-          and leaves them alone afterwards, so turning one off in the extension stays off.
-        </p>
-      )}
       {extension.state === 'installed' &&
         extension.rulesetsSwitchedOn === 0 &&
         extension.staticRulesets && (

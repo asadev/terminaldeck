@@ -284,16 +284,23 @@ describe('what it costs', () => {
     /*
      * Two places, and they are doing different jobs. The **chip** is in the head
      * and has to come before the Install button, because that is the one somebody
-     * reads without meaning to. The **sentence** is in the facts list under it,
-     * where Source, Needs and Command already are — the same place, and the same
-     * moment, as everything else an install is decided from.
+     * reads without meaning to. The **sentence** is under the summary, unfolded,
+     * ahead of the disclosure that now holds Source, Package and Command — see
+     * `store/StoreRowMore.tsx`. A price behind a press is a price read after
+     * installing, which is the one thing this rule exists to prevent.
+     *
+     * No *What it costs* label any more: the catalogue's sentence already reads
+     * as a price and the chip already names one.
      */
     const chip = html.indexOf('Free to a limit, then paid')
     const button = html.indexOf('mcp-store-install')
     expect(chip).toBeGreaterThan(-1)
     expect(chip, 'the price chip came after the Install button').toBeLessThan(button)
-    expect(html).toContain('What it costs')
-    expect(html).toContain('Free to a limit, then every search is billed to the key.')
+    const note = html.indexOf('Free to a limit, then every search is billed to the key.')
+    expect(note, 'the price sentence is not on the row').toBeGreaterThan(-1)
+    expect(note, 'the price sentence was folded away').toBeLessThan(
+      html.indexOf('store-more-summary'),
+    )
   })
 
   it('draws the price on every row, free ones included', () => {
@@ -305,7 +312,11 @@ describe('what it costs', () => {
 
   it('says nothing extra about a row that is simply free', () => {
     // No note, no line. *Free.* printed under a chip that already says *Free* is
-    // the padding that teaches people to stop reading the facts list.
-    expect(draw({ ...ROW, cost: 'free', costNote: '' })).not.toContain('What it costs')
+    // the padding that teaches people to stop reading — and on a shelf of twenty
+    // rows it is a line each. One unfolded line on such a row: how it runs and
+    // what it needs.
+    const html = draw({ ...ROW, cost: 'free', costNote: '' })
+    expect(html.split('class="store-rowline"').length - 1).toBe(1)
+    expect(html).toContain('Runs with')
   })
 })
