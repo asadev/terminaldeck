@@ -4,6 +4,7 @@ import { thisMachine, type UiPlatform } from '../platform'
 import { useAppSettings } from '../settings/useAppSettings'
 import { numberSetting, stringSetting } from '../settings/settings-schema'
 import { RemoteTerminal } from './RemoteTerminal'
+import type { SessionEnd } from '../shell/session-end'
 import type { CodeEntryState } from './CodeEntry'
 import {
   STATE_LABEL,
@@ -813,10 +814,20 @@ export function MachineSessionPane({
   machineId,
   sessionId,
   bridge,
+  end = null,
 }: {
   machineId: string
   sessionId: string
   bridge: MachinesBridge
+  /**
+   * Why this session's screen has stopped being one, or null while it is.
+   *
+   * Passed straight through to the terminal, which is where the argument for it
+   * is written. The window reads it — `endOfMachineSession` needs the *link*,
+   * and this pane holds one session id and nothing else — so the pane, the bar
+   * above it and the rail row all say one thing about one event.
+   */
+  end?: SessionEnd | null
 }) {
   /*
    * Read here rather than threaded down from the section.
@@ -873,6 +884,7 @@ export function MachineSessionPane({
       subscribe={subscribe}
       fontSize={fontSize}
       fontFamily={fontFamily}
+      end={end}
     />
   )
 }

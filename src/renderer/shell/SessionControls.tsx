@@ -25,6 +25,7 @@ import {
   type ControlOption,
 } from '../chat/controls/catalog'
 import { runningProvider, useAgentPresence } from './agent-presence'
+import { endedNotice, type SessionEnd } from './session-end'
 import type { ControlsTarget } from './controls-target'
 import {
   chooseLayout,
@@ -163,6 +164,16 @@ export interface SessionControlsProps {
    * `App.tsx` pass the session's real exit code and not a literal.
    */
   exited: boolean
+  /**
+   * Why it ended, when the window knows — for the word that replaces the chips.
+   *
+   * Optional and separate from {@link exited} because they answer two different
+   * questions and only one of them is always answerable: `exited` is *may these
+   * controls act*, which every caller can settle, and this is *what happened*,
+   * which a caller with no link state in hand cannot. A null draws the neutral
+   * sentence rather than an invented one.
+   */
+  end?: SessionEnd | null
   /**
    * Opens the app's MCP servers view — the one connector surface it has.
    *
@@ -898,6 +909,7 @@ export function SessionControls({
   cwd,
   provider,
   exited,
+  end = null,
   onOpenConnectors,
   target,
 }: SessionControlsProps) {
@@ -1228,6 +1240,60 @@ export function SessionControls({
    * prop: a killed CLI leaves its banner on the last frame of the screen, so
    * without the record this line would go on drawing live chips over a corpse.
    */
+  /*
+   * A session that is over keeps its reading and loses its controls.
+   *
+   * ## Why this is a guard of its own rather than a case of the one below
+   *
+   * Because the line below only reaches the answer for a session this app
+   * spawned as `$SHELL -l`. `runningProvider` maps `shell` + *an agent is
+   * running* to `undefined`; it does **not** map any provider + *the session has
+   * ended* to `shell`. So on a session started as `claude` that has since
+   * exited, `running` is still `'claude'` and every chip below drew itself live
+   * over a dead pty — and on a terminal on a server it is worse, because
+   * `App.tsx` passes `provider: undefined` there on purpose, which means the
+   * `exited` prop never even reaches presence: the session object handed to
+   * `useAgentPresence` is built as `sessionId && provider ? … : null`, and the
+   * second half is always false for a server shell.
+   *
+   * That is the bar half of the screen in Asad's recording. The transcript ends
+   * with the shell gone and the chips above it still offer to set a model and an
+   * effort on it — through `applyControlAt`, which types into a channel the main
+   * process has already closed.
+   *
+   * ## Why the reading stays and the controls go
+   *
+   * Two different rules, and they point opposite ways. A control that cannot act
+   * is *removed* rather than shown inert — the account chip states it next door
+   * and this cluster's own header states it for a shell. A reading that is
+   * hidden is indistinguishable from one that was never taken, which is the
+   * argument `UsageBar` is kept outside the fold by. Neither changes because the
+   * session ended: the model cannot be set on a dead pty, and the account's
+   * five-hour window is as true now as it was a minute ago.
+   *
+   * What replaces the chips is not a gap. `session-end.ts` holds one sentence
+   * per end and the pane below draws it in full; this is the same sentence as a
+   * hover on one quiet word, so the bar and the pane cannot come to describe one
+   * event two ways.
+   */
+  if (exited) {
+    const said = end === null ? null : endedNotice(end)
+    return (
+      <div
+        className="session-controls"
+        ref={attach}
+        data-fit={fit}
+        data-ended="true"
+        style={clamp === null ? undefined : ({ '--sc-room': `${clamp}px` } as CSSProperties)}
+      >
+        <UsageBar sessionId={sessionId} provider={running} fit={fit} target={target} />
+        <span className="sc-ended" title={said?.detail ?? undefined}>
+          {said?.title ?? 'This session has ended'}
+        </span>
+      </div>
+    )
+  }
+
   if (running === 'shell') return null
 
   const foreignNote = foreignAgentNote(running)

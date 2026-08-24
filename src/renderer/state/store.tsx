@@ -195,6 +195,36 @@ interface StoreValue {
   setActiveSession(id: string | null): void
   setSessionStatus(id: string, status: SessionStatus): void
   /**
+   * The process in a session ended, and the record has to say so.
+   *
+   * ## Why this did not exist, and what it cost
+   *
+   * `SessionMeta.exitCode` is read at every launch — `listSessions()` answers
+   * with it — and then **never written again for the life of the window**. The
+   * main process broadcasts `session:exit` with the code; the renderer had
+   * three subscribers to that channel (the alerts feed, the Overview board and
+   * the copilot's naming) and not one of them put it back on the session.
+   *
+   * `session:status` arrives at the same moment carrying `'exited'`, so the
+   * rail's dot was right — which is what made this invisible. Everything that
+   * asks the *record* was wrong: `App.tsx`'s `controlsFor` answers
+   * `exited: local.exitCode !== null`, and it therefore answered `false` about
+   * every dead session in the window. The bar over a killed agent went on
+   * drawing a live model chip, a live effort chip and a live connectors chip —
+   * seen on a real screen: `Opus 5 1M ⌄ · Ultracode ⌄ · Connectors ⌄` above a
+   * terminal whose last line reads `[process exited]` — and pressing one typed
+   * a slash command at a pty that no longer exists.
+   *
+   * ## Why the status is not enough on its own
+   *
+   * `'exited'` is a `SessionStatus`, and every other member of that type is a
+   * *classification of output* produced by a heuristic in `session-activity.ts`.
+   * An exit code is the operating system's own answer, it is the field
+   * `SessionMeta` already has for it, and it is what `endOfLocalSession` reads.
+   * Two facts, both true, and the record is the one that has to be right.
+   */
+  setSessionExit(id: string, exitCode: number): void
+  /**
    * Rename a session, when something better than the folder name turns up.
    *
    * Ignored when the name has not actually changed, so a title derived on
@@ -297,6 +327,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     )
   }, [])
 
+  /**
+   * Written once. A second `session:exit` for one session is not a thing the
+   * main process does, but a re-broadcast on reconnect is — and overwriting a
+   * code that is already there would be a status change with no change in it,
+   * rebuilding the array and every memo hanging off it for nothing. The guard
+   * is the same one `setSessionStatus` above states, for the same reason.
+   */
+  const setSessionExit = useCallback((id: string, exitCode: number) => {
+    setSessions((prev) =>
+      prev.some((s) => s.id === id && s.exitCode === null)
+        ? prev.map((s) => (s.id === id ? { ...s, exitCode } : s))
+        : prev,
+    )
+  }, [])
+
   const setSessionTitle = useCallback(
     (id: string, title: string, options?: { fromUser?: boolean }) => {
       setSessions((prev) => withSessionTitle(prev, id, title, options?.fromUser === true))
@@ -321,6 +366,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       removeSession,
       setActiveSession: setActiveSessionId,
       setSessionStatus,
+      setSessionExit,
       setSessionTitle,
       sessionsForProject,
     }),
@@ -334,6 +380,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       replaceSession,
       removeSession,
       setSessionStatus,
+      setSessionExit,
       setSessionTitle,
       sessionsForProject,
     ],
