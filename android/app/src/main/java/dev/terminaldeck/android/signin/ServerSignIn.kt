@@ -23,17 +23,27 @@ import okio.ByteString
 import okio.ByteString.Companion.toByteString
 import java.util.concurrent.TimeUnit
 
-/**
- * The one-line install for a bare server, from `HEADLESS.md`.
+/*
+ * There was a `curl -fsSL https://terminaldeck.dev/install.sh | sh` here, and it is gone.
  *
- * A phone cannot SSH, so it cannot install a host itself the way the desktop clients can — it shows
- * this command for a person to run on the machine, and then sign in. The browser client shows the
- * same line for the same reason; see `INSTALL_COMMAND` in `pwa/src/signin.ts`.
+ * It existed on the premise in its own comment — *"a phone cannot SSH"* — which stopped being true
+ * the moment `servers/SshSession.kt` was written. Asad refused the line twice, in the same words
+ * both times:
  *
- * Copied rather than derived: the domain is the marketing site's, not the app's `BRAND`, and
- * `HEADLESS.md` is the source that ships it.
+ *   > *"Right now on iOS the add-server page tells us: if you don't have a server yet, copy this
+ *   > command and paste it there — curl … terminaldeck install. **I don't want that command.** …
+ *   > First they log in to the server. Then it checks whether the headless Terminal Deck already
+ *   > exists there. If it exists it brings it up and asks you to connect; if not it gives the
+ *   > option to install — you click, it installs, then you can connect. That's all."*
+ *
+ * That is what `ui/ServerLoginScreen.kt` and `ui/HostStepCard.kt` do now, over the phone's own SSH
+ * connection: the app runs the installer, watched, and prints the server's own words when it goes
+ * wrong. It is deleted rather than hidden, so nothing can reach for it again.
+ *
+ * `pwa/src/signin.ts` still has one, and that is not an oversight: a browser tab genuinely cannot
+ * open a TCP socket to port 22, so for the web client the line is the truth rather than a
+ * placeholder for a client that had not been written.
  */
-const val INSTALL_COMMAND = "curl -fsSL https://terminaldeck.dev/install.sh | sh"
 
 /**
  * One sign-in, on one socket of its own.

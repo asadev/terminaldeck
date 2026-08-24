@@ -32,10 +32,19 @@ import dev.terminaldeck.android.protocol.RemoteSessionView
 import dev.terminaldeck.android.protocol.ServerMessage
 import dev.terminaldeck.android.protocol.EnrollMethod
 import dev.terminaldeck.android.session.RemoteSessionBinding
+import dev.terminaldeck.android.servers.AssetScriptLibrary
+import dev.terminaldeck.android.servers.FileServerStore
+import dev.terminaldeck.android.servers.InMemoryServerStore
+import dev.terminaldeck.android.servers.LoginPhase
+import dev.terminaldeck.android.servers.ScriptLibrary
+import dev.terminaldeck.android.servers.ServerConnector
+import dev.terminaldeck.android.servers.ServerCredentialKind
+import dev.terminaldeck.android.servers.SshDialer
 import dev.terminaldeck.android.signin.ServerAddress
 import dev.terminaldeck.android.signin.ServerSignIn
 import dev.terminaldeck.android.store.DeviceVault
 import dev.terminaldeck.android.store.KeystoreDeviceVault
+import dev.terminaldeck.android.store.KeystoreVaultCipher
 import dev.terminaldeck.android.store.PairingRecord
 import dev.terminaldeck.android.transfer.FileUpload
 import dev.terminaldeck.android.transfer.PickedFile
@@ -167,6 +176,24 @@ class DeckViewModel(
      * says otherwise.
      */
     private val raiseAlert: (SessionAlert) -> Unit = {},
+    /**
+     * Everything that reaches a **bare server** over this phone's own SSH connection: the login,
+     * the check, the install, the start, and what a connect would spend.
+     *
+     * Held here rather than built by the screen so an install survives a rotation — it takes
+     * minutes on a server with no Node — and so the one SSH session opened for a card is reused
+     * across check, install and start rather than being three handshakes for one visit.
+     *
+     * The default is the one a unit test wants: an in-memory store, no scripts, and a dialer that
+     * refuses rather than one that would open a socket to somebody's real machine from whatever
+     * laptop ran `./gradlew test`. [factory] passes the real three.
+     */
+    val serverConnector: ServerConnector = ServerConnector(
+        store = InMemoryServerStore(),
+        scripts = ScriptLibrary.none,
+        dialer = SshDialer.refusing,
+        appVersion = "",
+    ),
     private val transportFactory: (CoroutineScope, String, DeviceVault) -> DeckTransport,
 ) : ViewModel() {
 
@@ -232,6 +259,26 @@ class DeckViewModel(
      */
     private var signingIn = false
     private var serverSignInJob: Job? = null
+
+    /**
+     * Which server's card started the connect that is in flight, or null.
+     *
+     * The relay sign-in is one code path with two callers now: a pasted server address typed into
+     * the login field, and the Connect on a server this phone has already logged into over SSH.
+     * They end differently and must — the first is finished when the machine arrives, and the
+     * second has to come back to the card that is still on screen and say so — so the caller is
+     * remembered rather than guessed at from the shape of the address.
+     */
+    private var connectingServerId: String? = null
+
+    /**
+     * The name of the machine a card's Connect just produced, while that receipt is on screen.
+     *
+     * Cleared by leaving the login screen or by disconnecting. Nothing derives it from the machine
+     * list: the list has the machine in it from the moment it arrives, and a receipt drawn from
+     * that would appear again every time somebody opened the screen.
+     */
+    private var serverConnectedName: String? = null
 
     private var notice: String? = null
 
@@ -909,6 +956,9 @@ class DeckViewModel(
         addingServer = true
         serverSignInError = null
         serverSignInWorking = null
+        serverConnectedName = null
+        connectingServerId = null
+        serverConnector.resetLogin()
         publish()
     }
 
@@ -926,6 +976,19 @@ class DeckViewModel(
         addingServer = false
         serverSignInError = null
         serverSignInWorking = null
+        connectingServerId = null
+        serverConnectedName = null
+        /*
+         * The held SSH connection goes **before** the phase is cleared, and the order is the whole
+         * point: `resetLogin` puts the phase back to `Editing`, so reading `Added` off it
+         * afterwards finds nothing and the session for the server whose card was open is left
+         * open until the process ends. One leaked socket per cancelled login, on somebody else's
+         * sshd.
+         */
+        (serverConnector.state.value.login as? LoginPhase.Added)?.let { serverConnector.release(it.server.id) }
+        // And the phase itself, because leaving it on `Added` would reopen the screen on somebody
+        // else's receipt the next time they pressed Add a server.
+        serverConnector.resetLogin()
         publish()
     }
 
@@ -1023,6 +1086,95 @@ class DeckViewModel(
         serverSignInJob = job.takeIf { it.isActive }
     }
 
+    /* ----------------------------------------------------- the SSH way in -- */
+
+    /**
+     * Log in to a **bare** server over SSH — the door Android did not have.
+     *
+     * The other half of the one login screen. A pasted server address goes through
+     * [signInToServer], because the block is *for* a machine with no SSH login this phone holds;
+     * a hostname or an IP comes here, which is an ordinary SSH login and the only route that can
+     * reach a server with nothing installed on it at all.
+     *
+     * `port` arrives as the string the field holds. Empty means 22 and the field says so; anything
+     * that is not a number is refused by the connector with the sentence about ports rather than
+     * quietly becoming 22 — a form that silently chooses a port is what told Asad his server was
+     * off when it was listening on 2222.
+     */
+    fun logInToServer(
+        address: String,
+        port: String,
+        username: String,
+        secret: String,
+        kind: ServerCredentialKind,
+    ) {
+        if (serverConnector.state.value.isSigningIn) return
+        val typedPort = port.trim()
+        // `null` is "empty, so 22"; a number that will not parse is handed on as an out-of-range
+        // one so the connector answers with the port sentence rather than this deciding for it.
+        val realPort = if (typedPort.isEmpty()) null else typedPort.toIntOrNull() ?: 0
+        viewModelScope.launch {
+            serverConnector.signIn(
+                name = address.trim(),
+                address = address,
+                port = realPort,
+                username = username,
+                secret = secret,
+                kind = kind,
+            )
+        }
+    }
+
+    /** Ask a server what is on it. The card's own Check, and its Look again. */
+    fun checkServer(serverId: String) {
+        viewModelScope.launch { serverConnector.look(serverId) }
+    }
+
+    /** Put the headless host on it, watched, with the server's own output. */
+    fun installOnServer(serverId: String) {
+        viewModelScope.launch { serverConnector.install(serverId) }
+    }
+
+    /**
+     * *"If it exists, it brings it up and asks you to connect."*
+     *
+     * Two verbs joined, because the wait between them has nothing in it for the person to decide.
+     * The connect runs only when starting it actually produced something to dial — a host takes a
+     * moment to reach its relay, and the card redraws into the refusal when it has not yet.
+     */
+    fun startAndConnectServer(serverId: String) {
+        viewModelScope.launch {
+            serverConnector.bringUp(serverId)
+            connectToServer(serverId)
+        }
+    }
+
+    fun stopServer(serverId: String) {
+        viewModelScope.launch { serverConnector.stop(serverId) }
+    }
+
+    /**
+     * Connect this phone to the host running on a server it is logged in to.
+     *
+     * Through the door the app already has: the server address that host prints, spent by
+     * [signInToServer] over the relay. Nothing new is invented for it — the host verifies the same
+     * SSH login against its own sshd and mints a device credential, exactly as it does for an
+     * address somebody pasted.
+     */
+    fun connectToServer(serverId: String) {
+        val ticket = serverConnector.connectTicket(serverId) ?: return
+        connectingServerId = serverId
+        signInToServer(ticket.address, ticket.username, ticket.secret, ticket.method)
+    }
+
+    /** Take the machine away again, and leave the server logged in. */
+    fun disconnectServer(serverId: String) {
+        serverConnector.server(serverId)?.linkedHostId?.let(::forget)
+        serverConnector.markDisconnected(serverId)
+        serverConnectedName = null
+        publish()
+    }
+
     /** The half of [signInToServer] that runs once a credential is in hand. */
     private fun adoptSignedIn(address: ServerAddress, result: ServerSignIn.Result.SignedIn) {
         vault.signedIn(
@@ -1051,7 +1203,23 @@ class DeckViewModel(
 
         selectedHostId = address.hostId
         vault.selectHost(address.hostId)
-        addingServer = false
+        /*
+         * A connect started from a server's card **stays on that card**, and that is the
+         * requirement rather than a nicety.
+         *
+         * *"If it exists, it brings it up and asks you to connect… then you can connect, and
+         * disconnect if you want."* Closing the screen at the moment the connect lands would drop
+         * somebody on the machines list with no receipt, and take away the Disconnect they were
+         * just told about. A pasted address has no card behind it and closes as it always did.
+         */
+        val fromCard = connectingServerId
+        if (fromCard != null) {
+            serverConnector.markConnected(fromCard, address.hostId)
+            serverConnectedName = record.label
+            connectingServerId = null
+        } else {
+            addingServer = false
+        }
         addingHost = false
         serverSignInWorking = null
         serverSignInError = null
@@ -1064,6 +1232,9 @@ class DeckViewModel(
     private fun failSignIn(sentence: String) {
         serverSignInWorking = null
         serverSignInError = sentence
+        // The card's Connect is no longer in flight. Left set, the next *successful* sign-in from
+        // anywhere would be written down as this server's connect.
+        connectingServerId = null
         publish()
     }
 
@@ -1747,7 +1918,11 @@ class DeckViewModel(
             copilot = current?.copilot?.view(),
             awayReport = awayReport,
             addServer = if (addingServer) {
-                AddServerView(working = serverSignInWorking, error = serverSignInError)
+                AddServerView(
+                    working = serverSignInWorking,
+                    error = serverSignInError,
+                    connected = serverConnectedName,
+                )
             } else {
                 null
             },
@@ -1756,6 +1931,9 @@ class DeckViewModel(
 
     override fun onCleared() {
         for (link in links.values) link.stop()
+        // Every SSH connection this phone was holding for an open server card. Nothing reconnects
+        // them and nothing polls them, so the only thing left is to hang up.
+        serverConnector.releaseAll()
         // Nothing left to answer on, so nothing is left asking. Not a refusal: the desktop settles
         // its own question on its own deadline, and a "no" sent from an app that is being torn down
         // would be a decision nobody made.
@@ -1779,6 +1957,15 @@ class DeckViewModel(
         const val DEFAULT_RELAY = "wss://relay.terminaldeck.dev"
 
         /**
+         * The SSH logins' own wrapping key, deliberately not the pairings' and not GitHub's.
+         *
+         * `KeystoreVaultCipher` argues the split in full: one alias for two things makes one event
+         * out of two, and a phone that loses its pairings must not thereby lose the SSH logins
+         * that could put them back — that being the exact sequence this feature exists for.
+         */
+        const val SERVER_KEY_ALIAS = "terminaldeck.servers.v1"
+
+        /**
          * `context` is the **activity**, not the application, and that is load bearing: the debug
          * harness reads its launch intent through it. The application context is taken from it for
          * everything that must outlive the activity, which is everything else here.
@@ -1790,6 +1977,23 @@ class DeckViewModel(
                 initializer {
                     DeckViewModel(
                         vault = KeystoreDeviceVault(application),
+                        /*
+                         * The SSH half: a store of its own under its own Keystore alias, the
+                         * scripts out of the APK, and the real dialer. Built here because this is
+                         * the one place in this class allowed to hold a `Context`, and because
+                         * every one of the three is a seam whose default is deliberately inert.
+                         */
+                        serverConnector = ServerConnector(
+                            store = FileServerStore(
+                                file = java.io.File(application.filesDir, "servers.bin"),
+                                cipher = KeystoreVaultCipher(SERVER_KEY_ALIAS),
+                            ),
+                            scripts = AssetScriptLibrary(application),
+                            dialer = SshDialer.real,
+                            // What `ServerScripts.hostPackage` derives the release asset from, so
+                            // an install puts on a host this build can actually talk to.
+                            appVersion = BuildConfig.VERSION_NAME,
+                        ),
                         clipboard = AndroidClipboard(application),
                         accounts = KeystoreGitHubStore(application),
                         gitHubEndpoints = endpoints,
@@ -2208,6 +2412,13 @@ data class FolderChoice(val label: String, val folder: String?) {
 data class AddServerView(
     val working: String? = null,
     val error: String? = null,
+    /**
+     * The machine a server card's Connect just produced, while that receipt is on screen.
+     *
+     * Null on every other path, including a pasted address — that one closes the screen on success
+     * and has no card to come back to.
+     */
+    val connected: String? = null,
 ) {
     /** Whether something is in flight. The one predicate the screen may disable its button on. */
     val busy: Boolean get() = working != null

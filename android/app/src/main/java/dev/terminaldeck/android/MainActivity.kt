@@ -61,7 +61,7 @@ import dev.terminaldeck.android.ui.SettingsScreen
 import dev.terminaldeck.android.ui.WatchSurfacesScreen
 import dev.terminaldeck.android.ui.WatchViewerScreen
 import dev.terminaldeck.android.transfer.PickedFile
-import dev.terminaldeck.android.ui.AddServerScreen
+import dev.terminaldeck.android.ui.HostStepCard
 import dev.terminaldeck.android.ui.AlertsScreen
 import dev.terminaldeck.android.ui.CopilotConsentSheet
 import dev.terminaldeck.android.ui.CopilotScreen
@@ -78,6 +78,8 @@ import dev.terminaldeck.android.ui.CredentialPromptSheet
 import dev.terminaldeck.android.ui.DevicesScreen
 import dev.terminaldeck.android.ui.GitHubSheet
 import dev.terminaldeck.android.ui.PairingScreen
+import dev.terminaldeck.android.ui.ServerLoginScreen
+import dev.terminaldeck.android.ui.ServerLoginView
 import dev.terminaldeck.android.ui.SessionListScreen
 import dev.terminaldeck.android.ui.TerminalScreen
 import androidx.compose.ui.platform.LocalConfiguration
@@ -1039,11 +1041,41 @@ fun TerminalDeckApp(
      * device row minted on somebody's server that this phone has no credential for.
      */
     state.addServer?.let { adding ->
-        AddServerScreen(
-            view = adding,
+        /*
+         * The connector's own state, collected here rather than folded into [DeckUiState].
+         *
+         * It carries an install's live output — the installer prints for a minute or two on a
+         * server with no Node — and folding that through the state every screen in the app reads
+         * would recompose the session list on every chunk of somebody else's `npm install`.
+         */
+        val servers by viewModel.serverConnector.state.collectAsStateWithLifecycle()
+        ServerLoginScreen(
+            view = ServerLoginView(
+                servers = servers,
+                relayBusy = adding.busy,
+                relayWorking = adding.working,
+                relayError = adding.error,
+                connected = adding.connected,
+            ),
+            onLogIn = viewModel::logInToServer,
             onSignIn = viewModel::signInToServer,
             onCancel = viewModel::cancelAddingServer,
-        )
+        ) { server ->
+            HostStepCard(
+                server = server,
+                state = servers,
+                justLoggedIn = true,
+                connecting = adding.busy,
+                connectError = adding.error,
+                linked = server.linkedHostId?.let { id -> state.hosts.any { it.hostId == id } } == true,
+                onCheck = { viewModel.checkServer(server.id) },
+                onInstall = { viewModel.installOnServer(server.id) },
+                onStartAndConnect = { viewModel.startAndConnectServer(server.id) },
+                onConnect = { viewModel.connectToServer(server.id) },
+                onStop = { viewModel.stopServer(server.id) },
+                onDisconnect = { viewModel.disconnectServer(server.id) },
+            )
+        }
     }
 
     /*
