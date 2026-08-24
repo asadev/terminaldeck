@@ -1,3 +1,4 @@
+import java.io.File
 import java.util.Properties
 
 plugins {
@@ -24,6 +25,52 @@ val keystoreProperties = Properties().apply {
     if (file.exists()) file.inputStream().use { load(it) }
 }
 
+/**
+ * The installer, carried into the APK from the one file this repo ships it as.
+ *
+ * `scripts/install-headless.sh` is what the desktop uploads over SFTP and what iOS references
+ * straight out of `project.yml`. The phone now runs it over its own SSH connection — see
+ * `servers/ScriptLibrary.kt` — so it has to be in the APK, and copying it here rather than keeping
+ * a second copy under `assets/` means a change to the installer reaches all three clients in the
+ * commit that makes it.
+ *
+ * A typed task with a declared output directory rather than a plain `Copy`, because of how it is
+ * wired below. `sourceSets.assets.srcDir(<a Copy provider>)` was tried first and **silently ships
+ * an APK without the file**: the directory is added to the source set, nothing tells
+ * `mergeDebugAssets` that a task produces it, the task never runs, and the only symptom is an
+ * Install button that reports *"this copy of the app does not carry the installer"* on a phone.
+ * Measured, by unzipping the APK. `addGeneratedSourceDirectory` is the API that carries the
+ * dependency with it, and it takes a `DirectoryProperty`.
+ */
+abstract class CopyHeadlessInstaller : DefaultTask() {
+
+    @get:InputFile
+    abstract val source: RegularFileProperty
+
+    @get:OutputDirectory
+    abstract val outputDir: DirectoryProperty
+
+    @TaskAction
+    fun copy() {
+        val target = outputDir.get().asFile
+        target.mkdirs()
+        source.get().asFile.copyTo(File(target, "install-headless.sh"), overwrite = true)
+    }
+}
+
+val installerAssets = tasks.register<CopyHeadlessInstaller>("copyHeadlessInstaller") {
+    source.set(rootProject.file("../scripts/install-headless.sh"))
+}
+
+androidComponents {
+    onVariants { variant ->
+        variant.sources.assets?.addGeneratedSourceDirectory(
+            installerAssets,
+            CopyHeadlessInstaller::outputDir,
+        )
+    }
+}
+
 android {
     namespace = "dev.terminaldeck.android"
     compileSdk = 35
@@ -45,8 +92,24 @@ android {
         //    limits who can install this.
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.10.0"
+        versionCode = 4
+        /**
+         * **This number decides which host a server gets**, so it is not cosmetic and it is not
+         * allowed to lag the repo.
+         *
+         * `ServerScripts.hostPackage` derives the release asset from it —
+         * `releases/download/v<versionName>/terminaldeck-<versionName>.tgz` — so an install from
+         * this phone puts exactly this version on somebody's server. Measured on a bare Hetzner box
+         * on 2026-08-24, with this left at 0.10.0 while the repo was 0.10.1: the install succeeded,
+         * systemd started it, the card said *"is a machine of its own now"* — and the connect step
+         * then drew a refusal, because the `Server address` block `status` prints landed in
+         * **v0.10.1** (`src/headless/cli.ts`, first tagged there) and a server address is the only
+         * thing a phone can dial. Every step reported success and the flow dead-ended.
+         *
+         * iOS carries `MARKETING_VERSION: "0.10.1"` in `ios/project.yml` for the same reason. When
+         * one moves, this moves.
+         */
+        versionName = "0.10.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -100,6 +163,14 @@ android {
 
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        /*
+         * BouncyCastle ships multi-release jars, and sshj pulls two more of them beside the one
+         * this app already had — `bcpkix` and `bcutil` next to `bcprov`. All three carry the same
+         * `META-INF/versions/9/OSGI-INF/MANIFEST.MF`, and `mergeDebugJavaResource` refuses a
+         * three-way duplicate with an error naming a file nothing in this app reads. Excluded
+         * rather than picked-first: it is OSGi metadata for a container Android is not.
+         */
+        resources.excludes += "META-INF/versions/9/OSGI-INF/MANIFEST.MF"
     }
 
     testOptions {
@@ -141,6 +212,7 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.okhttp)
     implementation(libs.bouncycastle)
+    implementation(libs.sshj)
 
     testImplementation(libs.junit)
     // The upload pump is a coroutine driven by acknowledgements, so its tests need a scheduler they

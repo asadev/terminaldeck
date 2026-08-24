@@ -1,5 +1,6 @@
 /**
- * The two survey scripts, in Swift, generated from the ones the desktop runs.
+ * The two survey scripts, in Swift and as Android assets, generated from the
+ * ones the desktop runs.
  *
  * ## Why generate rather than hand-copy
  *
@@ -24,6 +25,18 @@
  * asserts the file on disk is exactly what it would have written. Drift fails
  * the suite on the side that caused it.
  *
+ * ## And the host probe for Android, as an asset rather than as source
+ *
+ * The Android client signs into a bare server over SSH too, and it needs the
+ * identical question about the host. Kotlin is the one of the three languages that cannot
+ * hold a shell script verbatim in a literal: its raw strings interpolate `$`,
+ * and both scripts are made of `$`. Escaping every one of them as `${'$'}` would
+ * produce a file that is unreadable and, worse, one whose bytes are no longer
+ * the bytes that run — the exact drift generating these is meant to end.
+ *
+ * So Android gets them as **files**, in `android/app/src/main/assets/`, byte for
+ * byte. Same generator, same assertion, no escaping question at all.
+ *
  * ## Why a raw Swift string
  *
  * `#"""…"""#`, not `"""…"""`. Both scripts are full of backslashes that mean
@@ -33,7 +46,7 @@
  * the only correct treatment for a shell script.
  */
 
-import { readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { HOST_PROBE } from './host'
@@ -49,6 +62,35 @@ const SWIFT_FILE = join(
   'Servers',
   'ProbeScripts.swift',
 )
+
+const ANDROID_ASSETS = join(
+  __dirname,
+  '..',
+  '..',
+  '..',
+  'android',
+  'app',
+  'src',
+  'main',
+  'assets',
+)
+
+/**
+ * What Android reads at runtime, named for the question it asks.
+ *
+ * `HOST_PROBE` only, and the omission is deliberate rather than unfinished.
+ * `PROBE_SCRIPT` is what fills the desktop's server-facts panel — services,
+ * listeners, containers, the agents on the box — and the Android client has no
+ * screen that shows any of it. Shipping the other nine kilobytes so that
+ * nothing reads them would be a script to keep in step for a feature that does
+ * not exist. iOS takes both because iOS draws both.
+ *
+ * The name is the contract with `servers/ScriptLibrary.kt`, which asks the
+ * asset manager for exactly this and has nowhere else to look.
+ */
+const ANDROID_FILES: ReadonlyArray<readonly [string, string]> = [
+  ['probe-host.sh', HOST_PROBE],
+]
 
 function swiftSource(): string {
   return `/*
@@ -86,6 +128,17 @@ describe('the probe scripts the phone runs', () => {
       writeFileSync(SWIFT_FILE, expected)
     }
     expect(readFileSync(SWIFT_FILE, 'utf8')).toBe(expected)
+  })
+
+  it('is the same host probe in the Android assets', () => {
+    for (const [name, script] of ANDROID_FILES) {
+      const file = join(ANDROID_ASSETS, name)
+      if (process.env.WRITE_IOS_PROBE === '1') {
+        mkdirSync(ANDROID_ASSETS, { recursive: true })
+        writeFileSync(file, script)
+      }
+      expect(readFileSync(file, 'utf8')).toBe(script)
+    }
   })
 
   it('carries nothing a raw Swift literal cannot hold', () => {
