@@ -540,6 +540,12 @@ struct SessionListView: View {
              * the only useful thing to say. A list with sessions in it does not
              * need a note explaining which sessions are in it.
              */
+
+            // Room for the pill that floats over this list. See `TabBarClearance`.
+            TabBarClearance()
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)

@@ -463,6 +463,136 @@ function publicKeyBytes(stored: string | undefined): Buffer | null {
   return raw.length === PUBLIC_KEY_BYTES ? raw : null
 }
 
+/* -------------------------------------------------------------------------- */
+/* One live row per device key                                                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * **A device key names one row here, not a row per sign-in.**
+ *
+ * Photographed on his own phone, 0.10.1: Settings → Devices listed *iPhone ·
+ * This phone · Your device · Connected now* and, directly under it, *iPhone ·
+ * Your device · Seen 7m ago* — the same name, the same kind, and the **same
+ * fingerprint**, `VK6R-M299-Q8P6-YJPK-BYNT-Q358`. One phone, one X25519 key, two
+ * rows. Nothing on that screen tells them apart, and Remove on the wrong one
+ * cuts off the phone in your hand.
+ *
+ * It happened because both mint paths below started from `newDeviceId()` and
+ * looked at nothing first. Signing in again is an ordinary thing to do — after a
+ * revoke, after a password change, or simply because somebody was not sure it
+ * had worked — and it cost a duplicate row every time. The phone side settled
+ * this exact argument for *servers* a week earlier, in `ServerStore.add`:
+ * *"three logins to one box left three identical rows… the same login twice is
+ * the **same server**, not a second one."* This is the device half of it, and it
+ * belongs here rather than on the phone because the roster is the host's: the
+ * trust file is the only place that knows a key was already enrolled, and a
+ * client that merely hid the second row would still be one of two live
+ * credentials away from a stranger's device list.
+ *
+ * ## Identity is the public key, and it can only be the public key
+ *
+ * Not the name — every iPhone since iOS 16 calls itself "iPhone". Not the
+ * address, which moves with the network. The X25519 static key is what the
+ * handshake proves possession of, it is what `deviceHoldsKey` already binds
+ * every later connection to, and it is what the fingerprint on that screen is
+ * made of. Two rows with one key are, provably, one device.
+ *
+ * A row with **no** key is never matched by any of this. A device that paired
+ * over the tailnet has nothing to prove it is itself with, so two of them are
+ * two devices as far as this file can honestly tell, and guessing otherwise
+ * would merge two strangers' phones on the strength of a display name.
+ *
+ * A **revoked** row is never matched either. Revocation is permanent and
+ * un-revoking would hand the credential back to whoever the revoke was about;
+ * `device-kind.ts` also names *"revoke, pair again, choose again"* as the way to
+ * change what a device is, and that only works if a revoked row stops being
+ * something a later pairing can land back on.
+ */
+
+/**
+ * How recently a row meant anything, for choosing between two that name one
+ * device.
+ *
+ * Neither field answers it alone: a row minted a second ago has never been seen,
+ * and the row that has been carrying the connection all week was added long
+ * before it. The later of the two is when this record was last live.
+ */
+function freshness(device: StoredDevice): number {
+  return Math.max(device.addedAt, device.lastSeenAt ?? 0)
+}
+
+/**
+ * Which of two rows for one device is the one to keep.
+ *
+ * Approved beats pending, because a pending row opens nothing and keeping it
+ * over a working one would sign the device out until somebody walked to the
+ * machine. Then the fresher of the two, because a device stores the credential
+ * it was handed last and forgets the one before it — the newest row is the one
+ * whose secret the phone is actually holding, which is exactly what his frames
+ * showed: the newest row was *Connected now* and the older one *Seen 7m ago*.
+ *
+ * Strictly `>`, so a genuine tie keeps whichever was met first and the answer
+ * does not depend on the iteration turning over.
+ */
+function outranks(candidate: StoredDevice, holder: StoredDevice): boolean {
+  if (candidate.approved !== holder.approved) return candidate.approved
+  return freshness(candidate) > freshness(holder)
+}
+
+/**
+ * Collapse rows that name one device, keeping the one row per key `outranks`
+ * chooses. Rows with no key, and revoked rows, are left exactly as they are.
+ *
+ * The losers are **dropped**, not tombstoned. A duplicate is not a device that
+ * was taken away — it is a second record of a device that is still trusted — so
+ * marking it revoked would be the file saying something untrue about the phone
+ * in his hand, and it would spend a `MAX_DEVICES` slot saying it. Dropping the
+ * row is also what retires its credential: the id no longer resolves, so the
+ * stale secret is refused at `verifyCredential` like any other unknown one.
+ *
+ * The array identity of the survivors is preserved, so a caller can tell whether
+ * anything moved by comparing lengths.
+ */
+/**
+ * The roster with `device` in it — replacing the row of the same id if there is
+ * one, appended if there is not.
+ *
+ * Both mint paths write through this so that "refresh the row I already have"
+ * and "add a row" are one line rather than two branches that can disagree about
+ * ordering. Replacing **in place** keeps the file's order stable across a
+ * re-login, which matters for nothing the code reads and quite a lot for a human
+ * comparing two copies of `remote-auth.json`.
+ */
+function withDevice(devices: StoredDevice[], device: StoredDevice): StoredDevice[] {
+  let replaced = false
+  const next = devices.map((row) => {
+    if (row.id !== device.id) return row
+    replaced = true
+    return device
+  })
+  return replaced ? next : [...next, device]
+}
+
+function collapseByKey(devices: StoredDevice[]): StoredDevice[] {
+  const best = new Map<string, StoredDevice>()
+  for (const device of devices) {
+    if (device.revoked) continue
+    const key = publicKeyBytes(device.publicKey)
+    if (key === null) continue
+    const slot = key.toString('base64')
+    const holder = best.get(slot)
+    if (holder === undefined || outranks(device, holder)) best.set(slot, device)
+  }
+  if (best.size === 0) return devices
+  const kept = devices.filter((device) => {
+    if (device.revoked) return true
+    const key = publicKeyBytes(device.publicKey)
+    if (key === null) return true
+    return best.get(key.toString('base64')) === device
+  })
+  return kept.length === devices.length ? devices : kept
+}
+
 function asStoredCredential(value: unknown): StoredCredential | null {
   if (!isRecord(value)) return null
   const { salt, hash, n, r, p, keylen } = value
@@ -669,30 +799,66 @@ export class RemoteAuth {
 
     const name = cleanName(deviceName)
     if (name === null) return { ok: false, reason: 'bad-name' }
-    if (this.rosterWithRoom().length >= MAX_DEVICES) return { ok: false, reason: 'too-many-devices' }
 
-    const id = newDeviceId()
+    /*
+     * Refused rather than truncated or padded: a key of the wrong length is a
+     * caller bug, and storing it would bind the device to something no handshake
+     * can ever match. Null is also how the tailnet path arrives, which has no
+     * handshake and therefore nothing to be recognised by.
+     */
+    const key =
+      devicePublicKey !== undefined && devicePublicKey.length === PUBLIC_KEY_BYTES ? devicePublicKey : null
+
+    /*
+     * And pairing again from a phone this machine already knows refreshes that
+     * phone's row rather than adding a second one — the same rule the sign-in
+     * path keeps, argued in full above `freshness`.
+     *
+     * What is **not** touched here is `approved`. A row that a human has already
+     * approved stays approved, because the only way to reach this branch is to
+     * hold the device's private key, which is to *be* the phone that was
+     * approved — making it pending again would sign a trusted device out until
+     * somebody walked to the machine, and it would prove nothing that the
+     * handshake has not already proved. A row still waiting stays waiting, for
+     * the same reason read the other way: a second code does not approve
+     * anything, and a human at the machine is still what the pending state is
+     * for.
+     *
+     * And the kind is not re-asked, which is what keeps `device-kind.ts`'s rule
+     * whole: *"revoke, pair again, choose again."* A revoked row is not matched
+     * here, so that sentence still works exactly as written — the revoke is what
+     * frees the key to land on a fresh id with a fresh choice. Pairing again
+     * *without* revoking never re-asked the question either; it only used to
+     * leave a second row behind while not asking it.
+     */
+    const already = key === null ? null : this.liveDeviceWithKey(key)
+    if (already === null && this.rosterWithRoom().length >= MAX_DEVICES) {
+      return { ok: false, reason: 'too-many-devices' }
+    }
+
     const secret = randomBytes(CREDENTIAL_BYTES)
     const salt = randomBytes(SALT_BYTES)
     const hash = await scrypt(secret, salt, SCRYPT)
-
-    const device: StoredDevice = {
-      id,
-      name,
-      addedAt: now,
-      lastSeenAt: null,
-      // Pending, deliberately. The credential is real and still opens nothing
-      // until a human at the Mac approves it.
-      approved: false,
-      revoked: false,
-      credential: { ...SCRYPT, salt: salt.toString('base64'), hash: hash.toString('base64') },
-      // Refused rather than truncated or padded: a key of the wrong length is a
-      // caller bug, and storing it would bind the device to something no
-      // handshake can ever match.
-      ...(devicePublicKey !== undefined && devicePublicKey.length === PUBLIC_KEY_BYTES
-        ? { publicKey: devicePublicKey.toString('base64') }
-        : {}),
+    const credential: StoredCredential = {
+      ...SCRYPT,
+      salt: salt.toString('base64'),
+      hash: hash.toString('base64'),
     }
+
+    const device: StoredDevice = already !== null && key !== null
+      ? { ...already, name, credential, publicKey: key.toString('base64') }
+      : {
+          id: newDeviceId(),
+          name,
+          addedAt: now,
+          lastSeenAt: null,
+          // Pending, deliberately. The credential is real and still opens nothing
+          // until a human at the Mac approves it.
+          approved: false,
+          revoked: false,
+          credential,
+          ...(key === null ? {} : { publicKey: key.toString('base64') }),
+        }
 
     try {
       // Persist before handing the credential out. A credential we returned but
@@ -700,14 +866,14 @@ export class RemoteAuth {
       // no way to tell that apart from a rejection.
       // Recomputed here rather than reused from the pre-check: the roster can
       // have changed while scrypt was running.
-      this.commit([...this.rosterWithRoom(), device])
+      this.commit(withDevice(this.rosterWithRoom(), device))
     } catch (err) {
       console.error('[remote-auth] could not persist a newly paired device:', err)
       return { ok: false, reason: 'storage' }
     }
 
     this.clearFailures(keys)
-    return { ok: true, credential: `${id}.${secret.toString('base64url')}`, device: toPublic(device) }
+    return { ok: true, credential: `${device.id}.${secret.toString('base64url')}`, device: toPublic(device) }
   }
 
   /* ---------------------------------------------------------------- devices */
@@ -841,40 +1007,85 @@ export class RemoteAuth {
     }
     const cleaned = cleanName(name)
     if (cleaned === null) return { ok: false, reason: 'bad-name' }
-    if (this.rosterWithRoom().length >= MAX_DEVICES) return { ok: false, reason: 'too-many-devices' }
+    /*
+     * The same key signing in again is the **same device**, not a second one.
+     *
+     * The whole argument is above `freshness`; the shape here is
+     * `ServerStore.add`'s, deliberately: what is refreshed is the credential and
+     * the name — the two things this sign-in just restated — and what is kept is
+     * the `id`, which is what every per-device store in this app is keyed on.
+     * Keeping it is not tidiness: a new id silently drops that phone's folder
+     * grants, its window grants and its recorded kind on the floor and starts it
+     * again as a stranger that happens to still be trusted.
+     *
+     * `addedAt` and `lastSeenAt` are kept for the same reason — *when this
+     * machine first trusted this phone* is a fact about the phone, not about the
+     * form that was just filled in — so the row does not jump to the top of a
+     * list sorted by when devices arrived.
+     *
+     * The room check is skipped when a row is being refreshed, and that matters:
+     * without it, the one person whose roster is full — quite possibly *because*
+     * of duplicates this bug minted — would be refused a sign-in from a phone
+     * that is already in the list.
+     */
+    const already = this.liveDeviceWithKey(publicKey)
+    if (already === null && this.rosterWithRoom().length >= MAX_DEVICES) {
+      return { ok: false, reason: 'too-many-devices' }
+    }
 
-    const id = newDeviceId()
     const secret = randomBytes(CREDENTIAL_BYTES)
     const salt = randomBytes(SALT_BYTES)
     const hash = await scrypt(secret, salt, SCRYPT)
-
-    const device: StoredDevice = {
-      id,
-      name: cleaned,
-      addedAt: now,
-      lastSeenAt: null,
-      // Approved on mint. The sign-in already was the approval — a login this
-      // machine accepts is a human at this machine, which is the exact thing the
-      // pending state waits for on the pairing path.
-      approved: true,
-      revoked: false,
-      credential: { ...SCRYPT, salt: salt.toString('base64'), hash: hash.toString('base64') },
-      publicKey: publicKey.toString('base64'),
+    const credential: StoredCredential = {
+      ...SCRYPT,
+      salt: salt.toString('base64'),
+      hash: hash.toString('base64'),
     }
+
+    const device: StoredDevice = already
+      ? {
+          ...already,
+          // The phone may have been renamed since; the row it already has is
+          // display text and there is no reason to keep yesterday's copy.
+          name: cleaned,
+          // A pending row that signs in is approved by the sign-in, exactly as a
+          // fresh one is: the login this machine accepted is the thing the
+          // pending state was waiting for.
+          approved: true,
+          // And the old secret dies with the write. That is not a side effect to
+          // be worked around — a re-login the user asked for should retire the
+          // credential it replaces, which is the second half of what those two
+          // rows were: two live secrets for one phone.
+          credential,
+          publicKey: publicKey.toString('base64'),
+        }
+      : {
+          id: newDeviceId(),
+          name: cleaned,
+          addedAt: now,
+          lastSeenAt: null,
+          // Approved on mint. The sign-in already was the approval — a login this
+          // machine accepts is a human at this machine, which is the exact thing the
+          // pending state waits for on the pairing path.
+          approved: true,
+          revoked: false,
+          credential,
+          publicKey: publicKey.toString('base64'),
+        }
 
     try {
       // Persist before returning the credential, and recompute the roster: the
       // list can have changed while scrypt ran. Same ordering redeemPairingToken
       // uses and for the same reason — a credential we returned but never stored
       // is one the user can never make work.
-      this.commit([...this.rosterWithRoom(), device])
+      this.commit(withDevice(this.rosterWithRoom(), device))
     } catch (err) {
       console.error('[remote-auth] could not persist a signed-in device:', err)
       return { ok: false, reason: 'storage' }
     }
 
     this.clearFailures([enrollKey(address)])
-    return { ok: true, credential: `${id}.${secret.toString('base64url')}`, device: toPublic(device) }
+    return { ok: true, credential: `${device.id}.${secret.toString('base64url')}`, device: toPublic(device) }
   }
 
   /* ------------------------------------------------------------ public keys */
@@ -921,6 +1132,32 @@ export class RemoteAuth {
     if (!device) return false
     const stored = publicKeyBytes(device.publicKey)
     return stored !== null && sameBytes(stored, publicKey)
+  }
+
+  /**
+   * The one live row holding this key, or null — the question both mint paths
+   * ask before they write.
+   *
+   * Distinct from {@link knowsDeviceKey}, which answers *may this handshake
+   * proceed* and is deliberately branch-free for timing; this one has to hand
+   * back the row itself, so it is a plain search. It is also not on the hot
+   * path: it runs once per sign-in or pairing, behind a rate limiter and an SSH
+   * probe or a burned one-shot token.
+   *
+   * Revoked rows are skipped, and a file that somehow still holds two live rows
+   * for one key answers with the one {@link outranks} chooses, so this and
+   * {@link collapseByKey} cannot disagree about which row is the device.
+   */
+  private liveDeviceWithKey(publicKey: Buffer): StoredDevice | null {
+    if (publicKey.length !== PUBLIC_KEY_BYTES) return null
+    let found: StoredDevice | null = null
+    for (const device of this.devices) {
+      if (device.revoked) continue
+      const stored = publicKeyBytes(device.publicKey)
+      if (stored === null || !sameBytes(stored, publicKey)) continue
+      if (found === null || outranks(device, found)) found = device
+    }
+    return found
   }
 
   /* ------------------------------------------------------------- internals */
@@ -1149,7 +1386,40 @@ export class RemoteAuth {
       existing.revoked = true
       console.error('[remote-auth] duplicate device id in the trust file; treating it as revoked')
     }
-    this.devices = [...byId.values()]
+
+    /*
+     * And two rows claiming one **device key** — which is the file every phone
+     * that ever signed in twice already has on disk, so the fix has to reach
+     * backwards or it only stops the next duplicate.
+     *
+     * The opposite reading from the id collision above, and the opposite
+     * direction, deliberately. Two rows with one id is a *damaged* file — the
+     * two records contradict each other about one row, so neither can be
+     * believed and both are refused. Two rows with one key is a file this
+     * program wrote on purpose, twice, about a phone that is still trusted and
+     * very possibly the one being held. Failing closed there would sign somebody
+     * out of their own machine to tidy up after us.
+     *
+     * So the freshest live row survives, the rest are dropped, and the file is
+     * rewritten if anything moved — *"existing duplicates must collapse, not
+     * just stop appearing"*. A write that fails changes nothing about this run:
+     * the collapse is already in memory, the roster already lists one row, and
+     * the next ordinary commit writes it out anyway.
+     */
+    const parsedRows = [...byId.values()]
+    const devices2 = collapseByKey(parsedRows)
+    this.devices = devices2
+    if (devices2.length !== parsedRows.length) {
+      console.error(
+        `[remote-auth] collapsed ${parsedRows.length - devices2.length} duplicate device row(s): ` +
+          'one device key is one device.',
+      )
+      try {
+        this.persist({ version: 1, devices: devices2 })
+      } catch (err) {
+        console.error('[remote-auth] could not rewrite the trust file after collapsing duplicates:', err)
+      }
+    }
   }
 
   /**

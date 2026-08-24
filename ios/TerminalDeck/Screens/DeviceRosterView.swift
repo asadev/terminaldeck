@@ -73,6 +73,10 @@ struct DeviceRosterView: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.horizontal, 20)
                         .padding(.top, 10)
+                        .accessibilityIdentifier("devices.footnote")
+
+                    // This screen is pushed from Settings and keeps the bar.
+                    TabBarClearance()
                 }
                 .padding(.vertical, 12)
             }

@@ -69,6 +69,21 @@ struct ServerSettingsSection: View {
                     }
                 }
                 .onAppear { settings.ensureRead() }
+                /*
+                 * And again whenever a connection throws the rows away.
+                 *
+                 * `ServerSettingsLink.welcomed` nils them on **every** welcome —
+                 * the machine on the other end can change — but `onAppear` does
+                 * not fire a second time for a screen that never left. So a
+                 * reconnect while somebody is standing on Settings left this
+                 * section reading *"Reading this machine's settings…"* for the
+                 * rest of that connection, and the read that was in flight when
+                 * the socket went was dropped with the request id it was waiting
+                 * on. One line, and the section catches up on its own.
+                 */
+                .onChange(of: settings.rows == nil) { _, unknown in
+                    if unknown { settings.ensureRead() }
+                }
             } else {
                 EmptyView()
             }
@@ -118,11 +133,27 @@ struct ServerSettingsSection: View {
         .padding(.vertical, 12)
     }
 
+    /**
+     * The switch, in three states rather than two.
+     *
+     * *"Ticked in one frame, unticked moments later, with no interaction
+     * between them."* It had not toggled: this row used to read
+     * `row.value == "true"`, which draws an empty circle — a definite **Off** —
+     * for every value that is not that exact word, the empty string included.
+     * See `ServerSettingWire.flag`.
+     *
+     * So an unknown value draws a dash and refuses the press. A control that
+     * would send `apply` from a state it does not know is a control that can
+     * turn a setting off by being tapped once while it was still catching up,
+     * and this particular setting decides whether somebody's work comes back
+     * after a restart.
+     */
     private func toggleRow(_ row: ServerSettingWire) -> some View {
-        let on = row.value == "true"
+        let flag = row.flag
         let working = settings.busy == row.key
         return Button {
-            settings.apply(.restoreSessions, on ? "false" : "true")
+            guard let flag else { return }
+            settings.apply(.restoreSessions, flag ? "false" : "true")
         } label: {
             HStack {
                 Text("Restore sessions at launch")
@@ -133,10 +164,17 @@ struct ServerSettingsSection: View {
                     Text("Working…")
                         .font(.system(size: 13))
                         .foregroundStyle(Theme.faint)
-                } else {
-                    Image(systemName: on ? "checkmark.circle.fill" : "circle")
+                } else if let flag {
+                    Image(systemName: flag ? "checkmark.circle.fill" : "circle")
                         .font(.system(size: 22))
-                        .foregroundStyle(on ? Theme.accent : Theme.faint)
+                        .foregroundStyle(flag ? Theme.accent : Theme.faint)
+                } else {
+                    // Not a third icon: an icon is a state, and "not told" is
+                    // the absence of one. A dash reads as a blank rather than as
+                    // an answer.
+                    Text("—")
+                        .font(.system(size: 17))
+                        .foregroundStyle(Theme.faint)
                 }
             }
             .padding(.horizontal, 16)
@@ -144,8 +182,9 @@ struct ServerSettingsSection: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(working)
-        .accessibilityValue(on ? "On" : "Off")
+        .disabled(working || flag == nil)
+        .accessibilityIdentifier("settings.restoreSessions")
+        .accessibilityValue(flag == nil ? "Not known yet" : (flag == true ? "On" : "Off"))
     }
 }
 

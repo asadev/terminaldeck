@@ -38,6 +38,41 @@ final class DeckChromeTests: XCTestCase {
     }
 
     /**
+     * **How much room a screen under the bar reserves for it.**
+     *
+     * He photographed the About row on Settings with the pill drawn across the
+     * words *"Terminal Deck"*. Every scrolling screen under the bar had the same
+     * `.padding(.bottom, 28)` at the end of it, copied into six files, and
+     * twenty-eight points is breathing room rather than a bar: the bar's own
+     * frame is eighty-three points on an iPhone 17 Pro.
+     *
+     * The arithmetic is what is pinned here — the measuring is UIKit's and the
+     * looking is `TabBarInsetUITests`' — because both wrong answers are bad and
+     * only one of them is visible in a screenshot. Reserving nothing puts the
+     * last row under the pill; reserving the band a second time on a release
+     * that already handed it over leaves a hundred and sixty points of nothing
+     * that looks, in a photograph, exactly like a slightly short screen.
+     */
+    func testAScreenReservesTheDifferenceAndNeverTheBandTwice() {
+        // The release that hands the inset over: nothing more is owed.
+        XCTAssertEqual(TabBarClearanceMath.spacer(band: 83, alreadyInset: 83), 0,
+                       "the scroll view was already inset by the whole bar")
+        // The release his phone is running: only the home indicator was given,
+        // so the pill's own band is what is missing.
+        XCTAssertEqual(TabBarClearanceMath.spacer(band: 83, alreadyInset: 34), 49)
+        // A phone with no home indicator, inset by nothing at all.
+        XCTAssertEqual(TabBarClearanceMath.spacer(band: 49, alreadyInset: 0), 49)
+        // Over-inset is not fixed by taking content away.
+        XCTAssertEqual(TabBarClearanceMath.spacer(band: 49, alreadyInset: 120), 0)
+        // No bar found — a screen that hides it, or a phone mid-transition. The
+        // honest answer is to reserve nothing rather than room for a bar that is
+        // not drawn.
+        XCTAssertEqual(TabBarClearanceMath.spacer(band: 0, alreadyInset: 0), 0)
+        XCTAssertEqual(TabBarClearanceMath.spacer(band: .nan, alreadyInset: 34), 0)
+        XCTAssertEqual(TabBarClearanceMath.spacer(band: 83, alreadyInset: .nan), 0)
+    }
+
+    /**
      * The three screens the complaint is about.
      *
      * Each is the whole reason you are there rather than somewhere you are

@@ -324,6 +324,12 @@ struct LocalhostListView: View {
             }
 
             footnote
+
+            // Room for the pill that floats over this list. See `TabBarClearance`.
+            TabBarClearance()
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)

@@ -105,10 +105,12 @@ import {
     type CopilotPendingRow,
     type CopilotStateReport,
     type CopilotTier,
+    type DeviceRosterRow,
     type DevServerReport,
     type ProtocolErrorCode,
     type RemoteSession,
     type ServerMessage,
+    type ServerSettingWire,
 } from '../../src/main/remote/protocol'
 /*
  * The dev-server feature, imported rather than stood in for.
@@ -516,6 +518,39 @@ function mintPairingToken(): string {
 function persist(): void {
     state.devices = [...devices.values()]
     saveState()
+}
+
+/**
+ * The roster in the shape `devices.rows` carries, from this stand-in's own
+ * device map.
+ *
+ * `connected` is read from the live sockets rather than remembered, and the
+ * fingerprint is the product's own `fingerprint()` over the stored key — the
+ * same six groups the phone shows on its pairing screen, so the two can be held
+ * against each other by eye, which is the whole point of putting it on the row.
+ */
+function roster(): DeviceRosterRow[] {
+    return [...devices.values()].map((device) => ({
+        id: device.id,
+        name: device.name,
+        kind: 'mine' as const,
+        status: device.approved ? ('approved' as const) : ('pending' as const),
+        addedAt: Date.now() - 86_400_000,
+        lastSeenAt: Date.now() - 420_000,
+        connected: [...channels.values()].some((channel) => channel.deviceId === device.id),
+        fingerprint: device.publicKey === null ? null : fingerprint(Buffer.from(device.publicKey, 'base64')),
+    }))
+}
+
+/** The two settings a machine owns, stringly, exactly as `host-core.ts` writes them. */
+let restoreSessions = true
+let defaultProvider = 'shell'
+
+function serverSettings(): ServerSettingWire[] {
+    return [
+        { key: 'agents.defaultProvider', value: defaultProvider, options: ['claude', 'codex', 'shell'] },
+        { key: 'general.restoreSessions', value: restoreSessions ? 'true' : 'false' },
+    ]
 }
 
 function approveAll(): string[] {
@@ -1470,6 +1505,54 @@ class Channel {
                 return this.refuse('bad-message', 'Already said hello.')
             case 'list':
                 return this.send({ t: 'sessions', sessions: list() })
+            /*
+             * The roster and the two server settings, implemented rather than
+             * merely advertised.
+             *
+             * This file sends `CAPABILITIES` verbatim, so it has always claimed
+             * `devices` and `settings` and answered neither — which is the exact
+             * trap `CopilotLink.isImplemented` was written after: a screen that
+             * spins forever looks, in a screenshot, like a screen that is simply
+             * loading. Both are wanted here for the same reason the localhost
+             * stop needs real ports: the Devices list and the "This server"
+             * section are two of the screens the 2026-08-23 recording is about,
+             * and photographs of a spinner would prove nothing about either.
+             *
+             * Deliberately simpler than the desktop's: no revoke cascade, no
+             * kinds file. What a phone sees is the shape of the frames, and that
+             * is what is reproduced.
+             */
+            case 'devices.list':
+                return this.send({ t: 'devices.rows', rid: message.rid, devices: roster() })
+            case 'devices.revoke': {
+                const gone = devices.delete(message.device)
+                if (gone) persist()
+                if (message.device === this.deviceId) return
+                return this.send({
+                    t: 'devices.revoked',
+                    rid: message.rid,
+                    ok: gone,
+                    message: gone ? 'That device was removed.' : 'That device was not on the list.',
+                    devices: roster(),
+                })
+            }
+            case 'settings.read':
+                return this.send({ t: 'settings.state', rid: message.rid, settings: serverSettings() })
+            case 'settings.apply': {
+                if (message.key === 'general.restoreSessions') {
+                    restoreSessions = message.value === 'true'
+                } else {
+                    defaultProvider = message.value
+                }
+                const setting = serverSettings().find((row) => row.key === message.key)!
+                return this.send({
+                    t: 'settings.applied',
+                    rid: message.rid,
+                    ok: true,
+                    message: 'Saved on this machine.',
+                    setting,
+                })
+            }
             case 'attach': {
                 const session = sessions.get(message.id)
                 if (!session) {
