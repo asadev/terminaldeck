@@ -210,6 +210,15 @@ final class DeckModel {
         /// taps that drive it. Pushed only over a host that advertised `watch`.
         /// See `WatchSurfacesView`.
         case watch
+        /**
+         * How a terminal looks on this phone — its colour scheme and its text
+         * size. See `TerminalThemeView`.
+         *
+         * No machine gates it, unlike the two above. The choice belongs to this
+         * phone and nothing on the wire is involved, so it is reachable with
+         * every machine offline and with none paired at all.
+         */
+        case terminalTheme
     }
 
     /**

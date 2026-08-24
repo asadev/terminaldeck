@@ -209,6 +209,8 @@ struct DeckTabs: View {
                             }
                         case let .server(id):
                             ServerDetailView(model: model, serverId: id)
+                        case .terminalTheme:
+                            TerminalThemeView()
                         }
                     }
             }
@@ -636,7 +638,11 @@ struct DeckSettingsView: View {
     /// `UserDefaults` façade rather than an observable object — the same shape
     /// the alert switches use, and for the same reason: the control responds to
     /// the finger rather than to a store round trip.
-    @State private var textSize = TextSize.stored
+    /// The phone's terminal colour scheme, read for the row's value. Held as a
+    /// property rather than reached for inside `body`, because `@Observable`
+    /// only re-runs a body that read the object — and the row has to say the new
+    /// name the moment somebody comes back from the picker.
+    var themes: TerminalThemeStore = .shared
 
     /**
      * Light, dark, or the phone's own setting.
@@ -826,52 +832,48 @@ struct DeckSettingsView: View {
                         }
                         .padding(.horizontal, 16)
                         .padding(.vertical, 12)
-                    }
 
-                    SectionCaption("Terminal")
+                        SettingsDivider()
 
-                    SettingsGroup {
                         /*
-                         * The same setting the pinch and the session menu change,
-                         * read and written through `TextSize`, which is where the
-                         * clamping and the whole-point rounding live. It is here
-                         * as well as in the terminal because it is a property of
-                         * the person's eyes rather than of one session — see
-                         * `TextSize` — and because a setting you can only reach
-                         * by opening a session is a setting somebody with a
-                         * nine-point terminal cannot read well enough to find.
+                         * The terminal's own colours and its text size, one
+                         * screen down.
+                         *
+                         * Here and not in a section of its own because it
+                         * answers the same question the control above it does —
+                         * what this phone looks like — and because the text size
+                         * used to sit three groups below in a caption called
+                         * "Terminal" with one row under it. Asad asked for the
+                         * colour choice on every surface; the size was already
+                         * on this screen, and the two of them apart was two
+                         * places to look for one answer. `TerminalThemeView`
+                         * holds them both.
+                         *
+                         * The value is the scheme's name, which is the thing
+                         * this row is being asked — the same rule Machines and
+                         * Alerts follow.
                          */
-                        HStack(spacing: 12) {
-                            Image(systemName: "textformat.size")
-                                .font(.system(size: 15))
-                                .foregroundStyle(Theme.secondary)
-                                .frame(width: 18)
-                            Text("Text size")
-                                .font(.system(size: 16))
-                                .foregroundStyle(Theme.primary)
-                            Spacer(minLength: 8)
-                            Text(TextSize.label(textSize))
-                                .font(.system(size: 14, design: .monospaced))
-                                .foregroundStyle(Theme.faint)
-                            Stepper("Text size", value: $textSize,
-                                    in: TextSize.minimum...TextSize.maximum,
-                                    step: TextSize.step)
-                                .labelsHidden()
-                                .onChange(of: textSize) { _, size in TextSize.save(size) }
-                                .accessibilityIdentifier("settings.textSize")
+                        NavigationLink(value: DeckModel.SettingsRoute.terminalTheme) {
+                            SettingsRowBody(title: "Terminal",
+                                            value: themes.selectedName,
+                                            icon: "paintpalette")
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("settings.terminalTheme")
                     }
 
-                    Text("A session already open picks this up the next time you open it — the "
-                         + "column count is the font, so changing it resizes the session on the "
-                         + "machine.")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.faint)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.horizontal, 4)
-                        .padding(.top, 8)
+                    /*
+                     * **There is no Terminal section here any more.**
+                     *
+                     * It held one row — the text size — under a caption of its
+                     * own, three groups below Appearance. Both of those settings
+                     * describe what a terminal looks like on this phone, and
+                     * splitting them across a screen meant two places to look
+                     * for one answer. They are together now, one push down from
+                     * the Terminal row above, where the size is drawn *into* the
+                     * scheme previews rather than described by a number. See
+                     * `TerminalThemeView`.
+                     */
 
                     SectionCaption("About")
 
