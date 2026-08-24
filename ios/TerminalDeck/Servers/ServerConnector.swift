@@ -524,60 +524,6 @@ final class ServerConnector {
         return !host.address.isEmpty && store.load(id) != nil
     }
 
-    /* ------------------------------------------------------------ the lock -- */
-
-    /**
-     * Put this server's sign-in behind Face ID / Touch ID, or take it back out.
-     *
-     * Returns nil on success and a sentence on failure — never a bare bool. Every
-     * way this can fail is something a person did or something their phone is,
-     * and each of them has to reach the screen intact: a cancelled prompt, a
-     * sensor with nothing enrolled on it, a phone with no passcode.
-     */
-    @discardableResult
-    func setBiometricLock(_ on: Bool, for id: String) async -> String? {
-        guard let server = store.load(id) else { return nil }
-        let availability = biometry.look()
-        if on, !availability.isReady { return availability.refusal }
-
-        // Turning it **on** needs an authentication too, and that is deliberate
-        // rather than ceremony: it proves the person switching it on is the
-        // person the sensor will be checking for afterwards.
-        var context: LAContext?
-        switch await biometry.unlock(reason: on
-            ? "Lock the sign-in for \(server.name)"
-            : "Unlock the sign-in for \(server.name)") {
-        case let .unlocked(ready):
-            context = ready
-        case .cancelled:
-            return nil // Not a failure. Nothing changed and nothing is said.
-        case let .lockedOut(kind):
-            return "\(kind.name ?? "Biometric unlock") is locked after too many attempts. Unlock "
-                + "this iPhone with its passcode once and it comes back."
-        case let .notEnrolled(kind):
-            return BiometryAvailability.notEnrolled(kind).refusal
-        case .unavailable:
-            return BiometryAvailability.unavailable.refusal
-        case let .failed(said):
-            return said
-        }
-
-        do {
-            try store.setBiometricLock(on, for: id, context: context)
-            servers = store.all()
-            // The held session was opened with the credential as it was; nothing
-            // about it is wrong, and dropping it would cost a handshake for a
-            // change that did not touch the connection.
-            if !on { biometry.forget() }
-            return nil
-        } catch let problem as ServerStore.LockProblem {
-            servers = store.all()
-            return problem.sentence
-        } catch {
-            return String(describing: error)
-        }
-    }
-
     /* ------------------------------------------------------------ bring up -- */
 
     /**
@@ -645,13 +591,27 @@ final class ServerConnector {
     /* ------------------------------------------------------------- inside -- */
 
     /**
-     * The password or key for one server, through the lock when there is one.
+     * The password or key for one server — and, for anyone who has one, the last
+     * time a per-server lock ever asks.
      *
-     * The single door to a credential in this app. A server with
-     * `biometricLock` off reads straight out of the Keychain as it always did; a
-     * locked one goes through `BiometricGate` first, and the authenticated
-     * context is handed to the Keychain so the read behind the prompt does not
-     * raise a second one.
+     * The single door to a credential in this app. **Nothing turns a per-server
+     * lock on any more**: the offer after a login and the switch on the server's
+     * page are both gone, because putting one server's password behind the
+     * sensor is what made this app ask for a face every time it opened. The lock
+     * is at the front door now — one switch in Settings, `AppLock`.
+     *
+     * What survives here is the read path, and it survives for exactly one
+     * reason: a phone that ran the previous build may be holding a credential
+     * with a `SecAccessControl` on it right now, and a build that simply stopped
+     * knowing about that would be a phone that can no longer open its own
+     * server. So a locked item is still read through `BiometricGate`, the
+     * authenticated context is still handed to the Keychain so the read behind
+     * the prompt raises no second sheet — **and then the lock is lifted**, using
+     * the context already in hand, so it costs no extra prompt and never happens
+     * again. The secret stays exactly where it was: same Keychain item, same
+     * account, `WhenUnlockedThisDeviceOnly`, never synced. Only the access
+     * control comes off, and it comes off because the person asked for that in
+     * as many words: *"If it is that way then remove the face lock."*
      *
      * Every outcome throws something a screen can print. **Cancelled is not a
      * refusal** — somebody who dismisses the sheet gets a sentence saying so and
@@ -680,15 +640,26 @@ final class ServerConnector {
                     headline: "That sign-in is no longer readable on this iPhone.",
                     advice: "\(availability.name) was locked to the faces and fingers enrolled when "
                         + "you turned it on, and that set has changed. Log in to this server once "
-                        + "more and you can turn it back on.")
+                        + "more — nothing will lock it again.")
             }
+            /*
+             * The one-time lift. Free, because the authentication that just
+             * happened is still valid: `setBiometricLock(false:)` re-reads the
+             * item with this same context and writes it back without the access
+             * control, so there is no second prompt. A failure is swallowed
+             * deliberately — the secret is in hand and the connection should
+             * proceed; the lift is simply retried the next time, and until then
+             * the behaviour is exactly what it was.
+             */
+            try? store.setBiometricLock(false, for: server.id, context: context)
+            servers = store.all()
+            biometry.forget()
             return secret
         case .cancelled:
             throw ServerTrouble(
                 headline: "\(availability.name) was cancelled.",
-                advice: "Nothing was sent. Press the button again to try, or turn "
-                    + "\(availability.name) off for this server on its own page and type the "
-                    + "password instead.")
+                advice: "Nothing was sent. Press the button again — this sign-in was locked by an "
+                    + "older build of this app, and unlocking it once takes the lock off for good.")
         case let .lockedOut(kind):
             let name = kind.name ?? "Biometric unlock"
             throw ServerTrouble(
@@ -699,8 +670,8 @@ final class ServerConnector {
             let name = kind.name ?? "Biometric unlock"
             throw ServerTrouble(
                 headline: "\(name) is not set up any more.",
-                advice: "It was when this server was locked. Set it up again in Settings, or log in "
-                    + "to this server once and turn the lock off.")
+                advice: "It was when an older build of this app locked this sign-in. Set it up "
+                    + "again in Settings, or log in to this server once and the lock is gone.")
         case .unavailable:
             throw ServerTrouble(
                 headline: "This iPhone cannot unlock that sign-in.",

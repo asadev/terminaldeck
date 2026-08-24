@@ -241,6 +241,27 @@ final class BiometricGate {
         }
     }
 
+    /**
+     * Whether this phone can ask its owner to prove who they are **at all** —
+     * biometry or the passcode, whichever it has.
+     *
+     * `.deviceOwnerAuthentication` rather than the biometric policy `look()`
+     * uses, and the difference is the whole reason this exists. `look()` answers
+     * "is there a face or a finger to offer", which is the right question for a
+     * Keychain item bound to an enrolment. This answers "is there anybody to
+     * ask", which is the right question for a lock on the front door of the app:
+     * an iPhone SE with no Touch ID set up still has a passcode, and a lock that
+     * asks for it is a real lock.
+     *
+     * False means the phone has no passcode either — and then there is nothing
+     * to lock with and nothing that could ever unlock it, which is a state
+     * `AppLock` refuses to enter and lifts itself out of if it is ever found in.
+     */
+    func canAskForPasscode() -> Bool {
+        var error: NSError?
+        return makeContext().canEvaluatePolicy(.deviceOwnerAuthentication, error: &error)
+    }
+
     /// Whether there is already an authentication this session, so a caller can
     /// tell "will not prompt" from "will".
     var isUnlocked: Bool { authenticated != nil }
@@ -259,9 +280,31 @@ final class BiometricGate {
     func unlock(reason: String) async -> BiometryOutcome {
         if let already = authenticated { return .unlocked(already) }
 
-        let availability = look()
-        if case .unavailable = availability { return .unavailable }
+        if case .unavailable = look() { return .unavailable }
 
+        let outcome = await authenticateOnce(reason: reason)
+        if case let .unlocked(context) = outcome { authenticated = context }
+        return outcome
+    }
+
+    /**
+     * One authentication, with nothing kept.
+     *
+     * The evaluation `unlock` is built out of, split out because the app-level
+     * lock needs the same LocalAuthentication plumbing and none of the caching:
+     * `AppLock` decides for itself how long an unlock lasts (five minutes of
+     * absence, stated on its own screen) and a second cache underneath it would
+     * be a second answer to the same question. Both callers get the same error
+     * mapping, which is the part that is easy to get subtly wrong twice.
+     *
+     * Deliberately **without** `unlock`'s `.unavailable` early return: a phone
+     * with no sensor cannot protect a Keychain item with biometry, but it can
+     * still ask its owner for the passcode, and that is a real app lock. The
+     * caller that must not accept a passcode-only device is the one that keeps
+     * that early return.
+     */
+    func authenticateOnce(reason: String) async -> BiometryOutcome {
+        let availability = look()
         let context = makeContext()
         context.localizedReason = reason
         // "Use passcode", not the default "Enter Password" — this app has no
@@ -273,7 +316,6 @@ final class BiometricGate {
             let ok = try await context.evaluatePolicy(.deviceOwnerAuthentication,
                                                       localizedReason: reason)
             guard ok else { return .cancelled }
-            authenticated = context
             return .unlocked(context)
         } catch let error as LAError {
             switch error.code {

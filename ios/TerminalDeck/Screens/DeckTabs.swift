@@ -671,6 +671,16 @@ struct DeckSettingsView: View {
      */
     @State private var alertsRevision = 0
 
+    /**
+     * The lock on the front door, put into the environment by
+     * `TerminalDeckApp` — one instance, because a second would have its own idea
+     * of whether this app is locked. Read here rather than threaded through
+     * `DeckModel`: the lock knows nothing about machines, sessions or servers,
+     * and hanging it off the model would be the first step back towards a lock
+     * that belongs to one of them.
+     */
+    @Environment(AppLock.self) private var lock
+
     var body: some View {
         ZStack {
             Theme.background.ignoresSafeArea()
@@ -788,6 +798,17 @@ struct DeckSettingsView: View {
                     if let host = model.current {
                         ServerSettingsSection(settings: host.serverSettings)
                     }
+
+                    /*
+                     * *"On the main page of settings just give it there, as
+                     * optional for the overall application."* Here it is, and
+                     * this is the only place in the app that mentions it: one
+                     * switch, off until somebody moves it, above Appearance
+                     * because it is a fact about getting in rather than a fact
+                     * about looking at it. See `AppLockSection` — it draws its
+                     * own caption and card so it can sit here as one line.
+                     */
+                    AppLockSection(lock: lock)
 
                     SectionCaption("Appearance")
 

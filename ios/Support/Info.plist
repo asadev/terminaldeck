@@ -110,21 +110,25 @@
 	     iOS does not merely refuse biometry without it — it **terminates the
 	     process** the first time `LAContext` is asked to evaluate a biometric
 	     policy, with no prompt and no error to catch. So the one place this
-	     could be discovered is the first time somebody taps "Turn on Face ID",
-	     on their phone, after the build has shipped.
+	     could be discovered is the first time somebody moves the switch, on
+	     their phone, after the build has shipped.
 
-	     What it protects is `Servers/ServerStore.swift`: a server's password or
-	     key can be put behind a `SecAccessControl` requiring the biometry
-	     enrolled at that moment, and `Servers/BiometricGate.swift` is what asks
-	     for it. It is offered, never imposed — a person who declines keeps
-	     typing their password — and the credential is in the Keychain either
-	     way. The sentence names the server rather than the app because that is
-	     what the person is unlocking.
+	     What it guards is the app itself: `App/AppLock.swift`, one optional
+	     switch on the main Settings page, off unless somebody turns it on. It
+	     asks when the app starts and again after five minutes away — never on
+	     an ordinary return to the foreground. Turning it off asks too, so a
+	     borrowed phone cannot be quietly unlocked for good.
+
+	     It used to say something else, and the wording is the change rather than
+	     a polish: this key described a lock on one *server's* password, which is
+	     where the feature started and where it asked far too often. Server
+	     credentials are still in the Keychain, marked to this device — no
+	     biometry stands in front of them any more.
 
 	     There is no NSFaceIDUsageDescription equivalent for Touch ID: the same
 	     key covers both, and the on-screen wording follows LABiometryType. -->
 	<key>NSFaceIDUsageDescription</key>
-	<string>Face ID unlocks the sign-in Terminal Deck keeps for your servers, so you do not have to type a password or paste a key every time.</string>
+	<string>Face ID unlocks Terminal Deck itself, if you turn the lock on in Settings. It is off unless you ask for it.</string>
 
 	<!-- App Transport Security, for one address and one address only.
 
