@@ -11,10 +11,10 @@
  *    over SFTP: `install.sh` and a tarball of the host, because
  *    `host-package.ts` argued that the npm name was a placeholder with no `bin`
  *    entry and installing it would leave *"a host that looks installed and
- *    answers nothing"*. That is no longer true — the registry now carries a real
- *    `terminaldeck` with both `bin` entries — so the phone sends the installer
- *    only and lets it do what it was written to do. A phone cannot carry a
- *    tarball of a Node package it does not build, and it does not have to.
+ *    answers nothing"*. A phone cannot carry a tarball of a Node package it does
+ *    not build, so it sends the installer only — and **names the tarball the
+ *    installer is to fetch**, which is `hostPackage` below and is the whole
+ *    reason that function exists.
  *  - **Start and stop.** The desktop has install and remove and nothing between
  *    them, because it is sitting in front of a terminal on that server. Asad
  *    asked for these two by name for the phone: *"then you can connect, and
@@ -36,6 +36,82 @@ enum ServerScripts {
      */
     static func quote(_ value: String) -> String {
         "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    /**
+     * **Which host the server is told to install** — and why it is not
+     * `terminaldeck@latest` from the registry.
+     *
+     * ## What was measured
+     *
+     * It *was* `terminaldeck@latest`, on the reasoning that the registry had
+     * stopped being a placeholder and now carried a real package with both `bin`
+     * entries. That reasoning was right and the conclusion was still wrong,
+     * because it checked whether the name resolved and not **what version it
+     * resolved to**. Run against a bare Hetzner box on 2026-08-24: the install
+     * succeeded, systemd started it, the card said *"is a machine of its own
+     * now"* — and then the connect step drew a refusal, because
+     * `terminaldeck@latest` is **0.6.1** while this app is 0.10.1, and 0.6.1
+     * predates the host printing a server address. A server address is the only
+     * thing a phone can dial. So the whole flow Asad asked for — *"you click, it
+     * installs, then you can connect"* — installed a host and dead-ended, with
+     * every step reporting success.
+     *
+     * The registry is eight tagged versions behind and publishing to it is a
+     * separate act with a separate credential. What is **not** behind is the
+     * release: `release.yml` runs `npm pack ./out/headless` on every tag and
+     * uploads the tarball beside the Mac and Windows downloads, built from the
+     * tagged tree rather than from somebody's disk. That asset is what this
+     * names.
+     *
+     * ## Why the app's own version, exactly
+     *
+     * Because the two halves have to agree about the wire, and the only version
+     * this app can promise anything about is its own. `npm pack` names the file
+     * after the package version, so the asset for a tag is derivable rather than
+     * looked up — no registry, no API call, no token, and nothing to be rate
+     * limited. A build whose tag was never released gets a 404 from npm, the
+     * install fails, and the installer's own words are on the card; that is a
+     * worse day than a success and a much better one than a host nobody can
+     * reach.
+     */
+    static func hostPackage(version: String = Brand.version) -> String {
+        "https://github.com/asadev/\(Brand.id)/releases/download/"
+            + "v\(version)/\(Brand.id)-\(version).tgz"
+    }
+
+    /**
+     * The one command that runs the staged installer, with the package named.
+     *
+     * The assignment is in front of the command rather than exported earlier in
+     * a separate round trip, because `SSHSession.stream` opens a channel per
+     * command and an export would land in a shell that has already exited.
+     */
+    static func runInstaller(at path: String, version: String = Brand.version) -> String {
+        "TERMINALDECK_PACKAGE=\(quote(packageToInstall(version: version))) sh \(quote(path))"
+    }
+
+    /**
+     * The release tarball — or, in a debug build only, a build being tried
+     * before it is published.
+     *
+     * `install-headless.sh` names that case in its own header as one of the two
+     * reasons `TERMINALDECK_PACKAGE` exists: *"a server with no route to
+     * npmjs.org, or a build being tried before it is published"*. It is the only
+     * way to put a host on a server from this app and then check the change you
+     * just made to that host, because the release path can only ever install
+     * what is already tagged. `TD_SERVER_HOST_PACKAGE` is anything npm accepts,
+     * including a path on the far end.
+     *
+     * Debug only, beside the other `TD_SERVER_…` variables and for the same
+     * reason. A shipping build has exactly one answer here.
+     */
+    static func packageToInstall(version: String = Brand.version) -> String {
+        #if DEBUG
+        let named = ProcessInfo.processInfo.environment["TD_SERVER_HOST_PACKAGE"] ?? ""
+        if !named.isEmpty { return named }
+        #endif
+        return hostPackage(version: version)
     }
 
     /**
@@ -106,6 +182,27 @@ enum ServerScripts {
             "  host=\"$bin/\(Brand.id)-host\"",
             "fi",
             "[ -x \"$host\" ] || { echo \"no host daemon beside $b\" >&2; exit 1; }",
+            /*
+             * **Stop whatever is already running, because the unit is about to
+             * own it.**
+             *
+             * `install-headless.sh` leaves a host running — that is the point of
+             * it — and this script then enables a unit whose `ExecStart` is the
+             * same daemon. The daemon refuses to be a second copy, correctly:
+             * *"A Terminal Deck host is already running here as pid …"*, exit 1.
+             * With `Restart=on-failure` and `RestartSec=5` that is not a one-off
+             * failure, it is a **loop**: measured on a real server on
+             * 2026-08-24, thirty-eight restarts and climbing, one failed unit
+             * every five seconds in that machine's journal, for as long as it is
+             * up. Nothing on the phone shows it, because the host somebody
+             * pressed the button for is running perfectly — it is just the one
+             * the installer started rather than the one systemd thinks it owns.
+             *
+             * So the running one is stopped, and `enable --now` on the next line
+             * starts the same daemon under the unit. The end state is what the
+             * card claims: one host, started by systemd, back after a reboot.
+             */
+            "\"$b\" stop >/dev/null 2>&1 || true",
             "mkdir -p \"$HOME/.config/systemd/user\" || exit 1",
             "cat > \"$HOME/.config/systemd/user/\(Brand.id).service\" <<UNIT",
             "[Unit]",
@@ -144,7 +241,25 @@ enum ServerScripts {
             "  h=\"$(dirname \"$b\")/\(Brand.id)-host\"",
             "fi",
             "[ -x \"$h\" ] || exit 1",
-            "nohup \"$h\" >/dev/null 2>&1 &",
+            /*
+             * **Its output goes to a file, not to /dev/null.**
+             *
+             * This was `>/dev/null 2>&1`, and the cost of that is a sentence
+             * this app shows: a session the host refuses to start says *"Check
+             * it on the machine itself"* — and the reason it refused is written
+             * to stderr by `session-create.ts`, which on a host started this way
+             * went nowhere at all. So the remedy named on screen was impossible
+             * to carry out on exactly the machines that need it, which are the
+             * ones with no systemd to catch stderr for them.
+             *
+             * Beside the host's own log rather than in /tmp, so it is where
+             * somebody already looking at that folder will find it, and it
+             * survives a reboot that clears /tmp. Appended, not truncated: two
+             * starts a week apart are two things worth reading.
+             */
+            "d=\"${XDG_DATA_HOME:-$HOME/.local/share}/\(Brand.id)\"",
+            "mkdir -p \"$d\" 2>/dev/null || true",
+            "nohup \"$h\" >>\"$d/host-stderr.log\" 2>&1 &",
             "exit 0",
         ].joined(separator: "\n")
     }

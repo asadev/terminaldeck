@@ -25,6 +25,61 @@ final class ServerScriptsTests: XCTestCase {
         XCTAssertEqual(ServerScripts.quote("/home/o'brien/bin"), "'/home/o'\\''brien/bin'")
     }
 
+    // MARK: - Which host it installs
+
+    /**
+     * **Never the registry**, and this is the regression the whole of
+     * `ServerScripts.hostPackage` exists for.
+     *
+     * `terminaldeck@latest` on npmjs.org was 0.6.1 while this app was 0.10.1,
+     * and 0.6.1 is older than the host printing a server address — which is the
+     * only thing a phone can dial. So the install succeeded, the service
+     * started, and the connect step drew a refusal. Every step reported success
+     * and the feature did not work. A test that only checked "an installer runs"
+     * would have passed through all of it, so this one checks what it installs.
+     */
+    func testNeverInstallsWhateverTheRegistryHappensToCallLatest() {
+        let command = ServerScripts.runInstaller(at: "/tmp/x/install.sh", version: "0.10.1")
+        XCTAssertTrue(command.contains("TERMINALDECK_PACKAGE="),
+                      "nothing is named, so the installer falls back to the registry")
+        XCTAssertFalse(command.contains("terminaldeck@latest"))
+        XCTAssertFalse(command.contains("@latest"))
+    }
+
+    /**
+     * The exact asset `release.yml` uploads.
+     *
+     * That job runs `npm pack ./out/headless` and uploads the result beside the
+     * Mac and Windows downloads, so the file is named after the package version
+     * and the tag is that version with a `v`. Both halves of that are asserted
+     * here because both are guesses this app makes about another file in this
+     * repository, and a rename there would otherwise show up as a 404 on
+     * somebody's server rather than as a failing test.
+     */
+    func testNamesTheReleaseTarballForItsOwnVersion() {
+        XCTAssertEqual(ServerScripts.hostPackage(version: "0.10.1"),
+                       "https://github.com/asadev/terminaldeck/releases/download/"
+                           + "v0.10.1/terminaldeck-0.10.1.tgz")
+    }
+
+    /// It is a URL in single quotes, on one line, in front of `sh` — an export
+    /// in an earlier command would land in a shell that has already exited,
+    /// because `SSHSession.stream` opens a channel per command.
+    func testTheInstallerRunsWithThePackageInItsOwnEnvironment() {
+        let command = ServerScripts.runInstaller(at: "/tmp/o'brien/install.sh", version: "1.2.3")
+        XCTAssertFalse(command.contains("\n"), "one command, one channel")
+        XCTAssertTrue(command.hasSuffix("sh '/tmp/o'\\''brien/install.sh'"),
+                      "the staged path is quoted: \(command)")
+        XCTAssertTrue(command.hasPrefix("TERMINALDECK_PACKAGE='https://"))
+    }
+
+    /// Defaulted from the bundle rather than restated, so a version bump cannot
+    /// leave this pointing at a release that is no longer the app.
+    func testTakesTheVersionFromTheAppItself() {
+        XCTAssertTrue(ServerScripts.hostPackage().contains("v\(Brand.version)"),
+                      ServerScripts.hostPackage())
+    }
+
     // MARK: - Getting the installer there
 
     func testStagesTheInstallerToAFileAndPrintsWhereItLanded() {
@@ -98,6 +153,27 @@ final class ServerScriptsTests: XCTestCase {
     }
 
     /**
+     * **The unit does not fight the host the installer left running.**
+     *
+     * `install-headless.sh` starts one; this script then enables a unit whose
+     * `ExecStart` is the same daemon, and the daemon refuses to be a second copy
+     * — correctly, and with exit 1. `Restart=on-failure` turns that refusal into
+     * a restart every five seconds forever: thirty-eight of them on a real
+     * server before anybody looked, with nothing visible on the phone because
+     * the host somebody pressed the button for was running fine. The stop has to
+     * come before `enable --now`, so the order is asserted rather than the mere
+     * presence of both.
+     */
+    func testStopsTheAlreadyRunningHostBeforeGivingTheUnitTheJob() {
+        let script = ServerScripts.service(command: "/root/.local/bin/terminaldeck")
+        guard let stopAt = script.range(of: "stop >/dev/null"),
+              let enableAt = script.range(of: "systemctl --user enable --now")
+        else { return XCTFail("the service script no longer stops or no longer enables") }
+        XCTAssertTrue(stopAt.lowerBound < enableAt.lowerBound,
+                      "the unit is enabled while another host still holds the socket")
+    }
+
+    /**
      * `ExecStart` is the daemon, not the CLI.
      *
      * They are two programs. When the installer supplies its own Node it writes
@@ -126,6 +202,15 @@ final class ServerScriptsTests: XCTestCase {
         let script = ServerScripts.start(command: "/root/.local/bin/terminaldeck",
                                          hasUnit: false, systemdUser: false)
         XCTAssertTrue(script.contains("nohup"))
+        /*
+         * And its output is kept. A host started this way has no journal behind
+         * it, so `>/dev/null 2>&1` — which is what this was — threw away the
+         * only copy of the reason a session refused to start, while the phone
+         * told the person to go and check that machine.
+         */
+        XCTAssertFalse(script.contains(">/dev/null 2>&1 &"),
+                       "the host's own words about a refused session go nowhere")
+        XCTAssertTrue(script.contains("host-stderr.log"))
     }
 
     /**

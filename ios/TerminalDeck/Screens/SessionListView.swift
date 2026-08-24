@@ -352,6 +352,10 @@ struct SessionListView: View {
                         } label: {
                             Label(folderName(folder), systemImage: "folder")
                         }
+                        // By the folder's own path, because the label is its
+                        // last component and two projects called `web` under
+                        // different parents are one label and two rows.
+                        .accessibilityIdentifier("sessions.newIn.\(folder)")
                     }
                 }
             } label: {
