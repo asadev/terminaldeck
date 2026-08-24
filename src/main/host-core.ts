@@ -1089,7 +1089,33 @@ export function createHostCore(options: HostCoreOptions): HostCore {
     // bug this whole path exists to fix: every agent reported missing, and every
     // tab silently downgraded to a shell.
     const available = await detectProviders(platform, target)
-    const requested = input.provider ?? 'claude'
+    /*
+     * **What was asked for, or this machine's own default — never the string
+     * `claude`.**
+     *
+     * This line read `input.provider ?? 'claude'`. The identical fault was found
+     * and fixed once already, four hundred lines down, where the comment still
+     * describes it: *"a request for `shell` arrived as a request for nothing and
+     * this line filled the hole with `claude`."* That fix went to the guest path
+     * and this one, the path every session actually takes, kept the literal.
+     *
+     * What it costs is a control that does nothing. `agents.defaultProvider` is
+     * a real setting, on the machine, which the phone can read and write over
+     * the wire — `ServerSettingsSection` draws it — and the phone never names a
+     * provider when it starts a session, so *every* phone-started session
+     * ignored it. Measured on a fresh Hetzner box on 2026-08-24, which is where
+     * it matters most: the headless host installs onto a server that has no
+     * agent CLIs on it at all, so a phone-only owner — *"say no MacBook or
+     * Windows exists at all"* — pressed New Session, was told Claude Code could
+     * not be found and to *"choose a different one in its settings"*, chose one,
+     * and got the same refusal, because the setting could not reach this line.
+     *
+     * This is not the silent downgrade the throw below exists to prevent, and
+     * the difference is the whole point: that one substituted something else for
+     * what a person **asked for**. This is what they get when they ask for
+     * nothing, and it is the answer their own machine is configured to give.
+     */
+    const requested = input.provider ?? store().getPreferences().defaultProvider
     /*
      * An agent the person added, if that is what was asked for.
      *

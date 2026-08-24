@@ -111,6 +111,12 @@ struct ServerSettingsSection: View {
                     .buttonStyle(.plain)
                     .disabled(working || on)
                     .accessibilityAddTraits(on ? [.isSelected] : [])
+                    // By provider id rather than by label, because the label is
+                    // a product's name and the id is the thing the wire and the
+                    // machine both use. A walk that has just been told "choose a
+                    // different one in its settings" has to be able to find the
+                    // one it means.
+                    .accessibilityIdentifier("serverSetting.provider.\(id)")
                 }
             }
         }

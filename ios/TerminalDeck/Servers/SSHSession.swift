@@ -219,8 +219,11 @@ final class SSHSession {
 
         let seen = HostKeySeen()
         let verifier = HostKeyVerifier(expect: expect, seen: seen)
-        let authenticator = OneOffer(username: username, offer: offer)
+        // The signal first, because the authenticator reports a refusal into it.
         let signal = SignalHandler()
+        let authenticator = OneOffer(username: username, offer: offer) { [signal] in
+            signal.refused()
+        }
 
         // Built here rather than inside the initialiser so this object keeps a
         // reference to it: `createChannel` is on the handler, and fishing it back
@@ -478,14 +481,40 @@ private final class OneOffer: NIOSSHClientUserAuthenticationDelegate {
     private let offer: NIOSSHUserAuthenticationOffer.Offer
     private var spent = false
 
-    init(username: String, offer: NIOSSHUserAuthenticationOffer.Offer) {
+    /**
+     * **Being asked a second time is the refusal**, and it is the only place
+     * this app can hear one.
+     *
+     * A refused sign-in does not arrive as an error and does not close the
+     * connection: OpenSSH answers `SSH_MSG_USERAUTH_FAILURE` and then waits for
+     * another attempt, for its whole `LoginGraceTime` — two minutes by default.
+     * NIOSSH turns that into one more call here asking what else this app has,
+     * and the answer is nothing. Before this, that was the end of it: nothing
+     * failed the handshake promise, so it sat until the twenty-second deadline
+     * and a key the server had plainly rejected was reported as *"That server
+     * stopped answering… usually a server under heavy load or a network that
+     * dropped in the middle."* Measured against a real sshd on 2026-08-24, with
+     * a valid Ed25519 key that account had never been given.
+     *
+     * That sentence is worse than no sentence. It is a confident, specific
+     * claim about the *network* made in the one case where the network is
+     * working perfectly and the person's key is the problem — so it sends
+     * somebody to check their server's load while their key sits unauthorised.
+     */
+    private let onRefusal: () -> Void
+
+    init(username: String,
+         offer: NIOSSHUserAuthenticationOffer.Offer,
+         onRefusal: @escaping () -> Void) {
         self.username = username
         self.offer = offer
+        self.onRefusal = onRefusal
     }
 
     func nextAuthenticationType(availableMethods: NIOSSHAvailableUserAuthenticationMethods,
                                 nextChallengePromise: EventLoopPromise<NIOSSHUserAuthenticationOffer?>) {
         guard !spent else {
+            onRefusal()
             nextChallengePromise.succeed(nil)
             return
         }
@@ -521,10 +550,30 @@ private final class SignalHandler: ChannelInboundHandler {
                 self.promise = promise
             }
         }
-        loop.scheduleTask(deadline: .now() + timeout) {
+        // Cancelled when the handshake settles, however it settles. Completing a
+        // promise twice is a no-op in NIO, so this was harmless — but a 20s
+        // timer per connection that outlives the connection is a timer that
+        // fires on a closed channel's loop for no reader, and `timedOut` now
+        // means what it says: nothing came back at all.
+        let deadline = loop.scheduleTask(deadline: .now() + timeout) {
             promise.fail(SSHProblem.timedOut)
         }
+        promise.futureResult.whenComplete { _ in deadline.cancel() }
         return promise.futureResult
+    }
+
+    /**
+     * The server refused what was offered — from `OneOffer`, on this loop.
+     *
+     * Called from `nextAuthenticationType`, which NIOSSH runs on the channel's
+     * event loop, so this touches `promise` and `lastError` on the same thread
+     * every other method here does.
+     */
+    func refused() {
+        guard !done else { return }
+        lastError = SSHProblem.signInRefused
+        promise?.fail(SSHProblem.signInRefused)
+        promise = nil
     }
 
     func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {

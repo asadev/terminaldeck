@@ -350,9 +350,11 @@ final class ServerConnector {
             }
             state.done.append("Copied the installer to \(path).")
 
-            step(.installing, "Installing on \(server.name). This takes a minute or two.")
+            step(.installing,
+                 "Installing \(Brand.name) \(Brand.version) on \(server.name). "
+                     + "This takes a minute or two.")
             let ran = try await session.stream(
-                command: "sh \(ServerScripts.quote(path))",
+                command: ServerScripts.runInstaller(at: path),
                 stdin: nil,
                 timeout: Self.installTimeout
             ) { [weak self] chunk in

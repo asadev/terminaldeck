@@ -19,9 +19,24 @@
  *     TD_SERVER_KEY_BASE64="$(base64 < ~/.ssh/id_ed25519)" TD_SHOTS=/tmp/shots \
  *     xcodebuild test -only-testing:TerminalDeckUITests/ServerLoginUITests …
  *
- * **Read-only.** The walk logs in, looks, and photographs. It does not install,
- * start or stop anything, because the machine on the other end is somebody's and
- * a test suite has no business changing it.
+ * **Read-only by default.** The walk logs in, looks, and photographs. The three
+ * cases that change the far end — install, start, disconnect-and-reconnect — are
+ * each behind their own opt-in variable, because the machine on the other end is
+ * somebody's and a test suite has no business changing it unasked.
+ *
+ * ## Why every case launches the app itself
+ *
+ * Two of these cases are about a login that is *wrong* — a key the server never
+ * accepted, a port nothing listens on — and the only way to produce one is to
+ * hand the app different values than the rest of the suite gets. The launch
+ * environment is fixed at launch, so `setUp` gathers what the run was given and
+ * each case launches with it, overriding the one field it is about. A single
+ * shared launch in `setUp` would have meant a second suite, or a back door in
+ * the app for typing a wrong password, and both are worse.
+ *
+ * `ios/Harness/live-server.sh` is the whole of it as one command, in the order
+ * Asad asked for: a bare server, a server that already has it, disconnect and
+ * connect again, and the two refusals.
  */
 
 import XCTest
@@ -29,18 +44,34 @@ import XCTest
 final class ServerLoginUITests: XCTestCase {
 
     private var app: XCUIApplication!
+    /// What the run was given, before any case bends one field of it.
+    private var given: [String: String] = [:]
 
     override func setUpWithError() throws {
         continueAfterFailure = false
         let address = env("TD_SERVER_ADDRESS")
         try XCTSkipIf(address.isEmpty, "No TD_SERVER_ADDRESS: nothing real to log in to.")
+        given = [
+            "TD_SERVER_ADDRESS": address,
+            "TD_SERVER_PORT": env("TD_SERVER_PORT"),
+            "TD_SERVER_USER": env("TD_SERVER_USER"),
+            "TD_SERVER_KEY_BASE64": env("TD_SERVER_KEY_BASE64"),
+            "TD_SERVER_PASSWORD": env("TD_SERVER_PASSWORD"),
+            // Debug-only: a host build being tried before it is published. See
+            // `ServerScripts.packageToInstall`.
+            "TD_SERVER_HOST_PACKAGE": env("TD_SERVER_HOST_PACKAGE"),
+        ]
+    }
+
+    /// Launch with what the run was given, with `changed` written over the top.
+    @discardableResult
+    private func launchApp(_ changed: [String: String] = [:]) -> XCUIApplication {
         app = XCUIApplication()
-        app.launchEnvironment["TD_SERVER_ADDRESS"] = address
-        app.launchEnvironment["TD_SERVER_PORT"] = env("TD_SERVER_PORT")
-        app.launchEnvironment["TD_SERVER_USER"] = env("TD_SERVER_USER")
-        app.launchEnvironment["TD_SERVER_KEY_BASE64"] = env("TD_SERVER_KEY_BASE64")
-        app.launchEnvironment["TD_SERVER_PASSWORD"] = env("TD_SERVER_PASSWORD")
+        for (name, value) in given.merging(changed, uniquingKeysWith: { _, new in new }) {
+            app.launchEnvironment[name] = value
+        }
         app.launch()
+        return app
     }
 
     /**
@@ -48,6 +79,7 @@ final class ServerLoginUITests: XCTestCase {
      * then everything about that server, then whether the host is on it.
      */
     func testLogsInToARealServerAndShowsWhatIsOnIt() throws {
+        launchApp()
         openTheLoginForm()
         shoot("server-login-form")
 
@@ -115,6 +147,7 @@ final class ServerLoginUITests: XCTestCase {
      * not correct is none of them.
      */
     func testTheCheckAndInstallStepIsPartOfTheLogin() throws {
+        launchApp()
         openTheLoginForm()
         XCTAssertTrue(app.buttons["serverLogin.submit"].isEnabled)
         app.buttons["serverLogin.submit"].tap()
@@ -165,6 +198,7 @@ final class ServerLoginUITests: XCTestCase {
         try XCTSkipIf(env("TD_SERVER_MAY_INSTALL") != "1",
                       "this case installs software on the far end; opt in explicitly")
 
+        launchApp()
         openTheLoginForm()
         shoot("live-01-form-filled")
         XCTAssertTrue(app.buttons["serverLogin.submit"].isEnabled)
@@ -231,6 +265,390 @@ final class ServerLoginUITests: XCTestCase {
         let connected = app.staticTexts["serverLogin.connected"].waitForExistence(timeout: 120)
         shoot("live-07-connected")
         XCTAssertTrue(connected, "connect ended nowhere — " + whatIsOnScreen())
+
+        // And the point of all of it: a shell on that machine, on this phone.
+        proveAShellOnThatMachine("live-08")
+    }
+
+    /**
+     * **A server that already has it**: log in, be told it is there, bring it
+     * up, connect.
+     *
+     * > *"It will check if the headless Terminal Deck exists on the server — if
+     * > it exists it brings it up and asks you to connect."*
+     *
+     * The other half of the sentence the case above proves, and it is a
+     * different code path rather than the same one with a flag: `HostStepCard`
+     * draws Install only when the probe found nothing, and draws *either* "Start
+     * it and connect" or "Connect" when it found something — which of the two
+     * depends on whether the host is running, and both are correct answers to
+     * "it exists". What would not be correct is an Install button on a machine
+     * that already has one, so that is asserted rather than assumed.
+     *
+     * `TD_SERVER_HAS_HOST=1`, because a server that has *not* got the host
+     * cannot pass this and skipping is the honest outcome rather than a failure
+     * about the far end.
+     */
+    func testAServerThatAlreadyHasTheHostIsBroughtUpAndConnected() throws {
+        try XCTSkipIf(env("TD_SERVER_HAS_HOST") != "1",
+                      "this case needs a server that already has the host on it")
+
+        launchApp()
+        openTheLoginForm()
+        XCTAssertTrue(app.buttons["serverLogin.submit"].isEnabled)
+        app.buttons["serverLogin.submit"].tap()
+
+        XCTAssertTrue(app.staticTexts["serverLogin.signedIn"].waitForExistence(timeout: 180),
+                      "the login never finished — " + whatIsOnScreen())
+        let hostLine = app.staticTexts["server.hostLine"]
+        XCTAssertTrue(hostLine.waitForExistence(timeout: 120),
+                      "the check step never ran — " + whatIsOnScreen())
+        shoot("has-01-it-is-there")
+
+        // It said so, in a sentence about a host that is present.
+        XCTAssertFalse(app.buttons["server.install"].exists,
+                       "offered to install onto a machine that already has it: \(hostLine.label)")
+
+        let bringUp = app.buttons["server.startConnect"]
+        let connect = app.buttons["server.connect"]
+        let offered = bringUp.waitForExistence(timeout: 30) || connect.waitForExistence(timeout: 5)
+        XCTAssertTrue(offered,
+                      "it found the host and offered no way to use it — " + whatIsOnScreen())
+        shoot("has-02-offered")
+
+        if bringUp.exists { bringUp.tap() } else { connect.tap() }
+
+        XCTAssertTrue(app.staticTexts["serverLogin.connected"].waitForExistence(timeout: 180),
+                      "connect ended nowhere — " + whatIsOnScreen())
+        shoot("has-03-connected")
+    }
+
+    /**
+     * **Disconnect, and connect again.**
+     *
+     * > *"…then you can connect, and disconnect if you want."*
+     *
+     * Disconnect is on the server's own page rather than on the login, because
+     * the login has already turned into a receipt by the time there is anything
+     * to disconnect — so this walks there the way a person would: Settings, the
+     * server under Servers, the same host card. What it is really checking is
+     * that unpairing leaves the server *usable*: the card has to come back
+     * offering a connect rather than an install, and the second connect has to
+     * work without signing in to the server again.
+     */
+    func testDisconnectsFromTheServerAndConnectsAgain() throws {
+        try XCTSkipIf(env("TD_SERVER_MAY_CONNECT") != "1",
+                      "this case pairs and unpairs this phone with the far end; opt in explicitly")
+
+        launchApp()
+        openTheLoginForm()
+        XCTAssertTrue(app.buttons["serverLogin.submit"].isEnabled,
+                      "the form is not complete, so Log in cannot be pressed")
+        app.buttons["serverLogin.submit"].tap()
+        XCTAssertTrue(app.staticTexts["serverLogin.signedIn"].waitForExistence(timeout: 180),
+                      "the login never finished — " + whatIsOnScreen())
+        XCTAssertTrue(app.staticTexts["server.hostLine"].waitForExistence(timeout: 120),
+                      "the check step never ran — " + whatIsOnScreen())
+
+        // The server's own page, which is where Disconnect lives: by the time
+        // there is anything to disconnect the login has turned into a receipt.
+        app.buttons["serverLogin.open"].tap()
+        XCTAssertTrue(app.staticTexts["server.hostLine"].waitForExistence(timeout: 60),
+                      "the server's own page never opened — " + whatIsOnScreen())
+
+        /*
+         * Connected, from whichever state this phone happens to be in.
+         *
+         * Deliberately not "connect, then disconnect, then connect": a phone
+         * that is already connected to this server is a normal way to arrive at
+         * this screen, and a case that could only start from one of the two
+         * would be describing a fixture rather than the product. What is being
+         * checked is the *cycle*, and it starts wherever the phone is.
+         */
+        if !app.buttons["server.disconnect"].exists {
+            let connect = app.buttons["server.connect"]
+            let bringUp = app.buttons["server.startConnect"]
+            guard connect.waitForExistence(timeout: 30) || bringUp.waitForExistence(timeout: 5)
+            else {
+                XCTFail("there is no host to connect to on this server — " + whatIsOnScreen())
+                return
+            }
+            if connect.exists { connect.tap() } else { bringUp.tap() }
+        }
+
+        let disconnect = app.buttons["server.disconnect"]
+        XCTAssertTrue(disconnect.waitForExistence(timeout: 180),
+                      "a connected server offers no way to disconnect — " + whatIsOnScreen())
+        shoot("cycle-01-connected")
+        disconnect.tap()
+
+        // Back to a server that is there, and not connected to.
+        let connect = app.buttons["server.connect"]
+        let bringUp = app.buttons["server.startConnect"]
+        let again = connect.waitForExistence(timeout: 60) || bringUp.waitForExistence(timeout: 10)
+        shoot("cycle-02-disconnected")
+        XCTAssertTrue(again,
+                      "after disconnecting there was nothing to connect with — " + whatIsOnScreen())
+        XCTAssertFalse(app.buttons["server.install"].exists,
+                       "disconnecting made the app forget the host is installed")
+
+        if connect.exists { connect.tap() } else { bringUp.tap() }
+        XCTAssertTrue(app.buttons["server.disconnect"].waitForExistence(timeout: 180),
+                      "the second connect never landed — " + whatIsOnScreen())
+        shoot("cycle-03-connected-again")
+    }
+
+    /**
+     * **A key that server never accepted**, and what it is told.
+     *
+     * A real handshake against a real sshd, refused by it. The claim being
+     * checked is not that something went red — it is that the sentence names
+     * *this* failure and not sign-in in general. "Sign-in is not available" is
+     * the shape this must never take: it is true of every failure and useful for
+     * none, and it is what somebody reads instead of "your key is not on that
+     * account".
+     */
+    func testAKeyTheServerNeverAcceptedIsRefusedInItsOwnWords() throws {
+        let wrong = env("TD_SERVER_WRONG_KEY_BASE64")
+        try XCTSkipIf(wrong.isEmpty, "no TD_SERVER_WRONG_KEY_BASE64 to be refused with")
+
+        launchApp(["TD_SERVER_KEY_BASE64": wrong])
+        openTheLoginForm()
+        XCTAssertTrue(app.buttons["serverLogin.submit"].isEnabled)
+        app.buttons["serverLogin.submit"].tap()
+
+        let headline = app.staticTexts["serverLogin.errorHeadline"]
+        XCTAssertTrue(headline.waitForExistence(timeout: 120),
+                      "a key the server never accepted was not refused — " + whatIsOnScreen())
+        shoot("refusal-01-wrong-key")
+
+        XCTAssertEqual(headline.label, "That sign-in was refused",
+                       "the refusal does not name what happened")
+        let advice = app.staticTexts["serverLogin.errorAdvice"].label
+        XCTAssertTrue(advice.localizedCaseInsensitiveContains("key"),
+                      "the advice never mentions the key: \(advice)")
+        assertNothingVague(headline.label + " " + advice)
+    }
+
+    /**
+     * **A port nothing is listening on**, and what it is told.
+     *
+     * The other refusal, and a different one on purpose: this one never reaches
+     * a sign-in at all, so a message about passwords and keys would be a lie.
+     * `SSHProblem.noAnswer` is the answer, and its advice is about the port.
+     */
+    func testAPortNothingListensOnIsRefusedInItsOwnWords() throws {
+        let wrong = env("TD_SERVER_WRONG_PORT").isEmpty ? "2201" : env("TD_SERVER_WRONG_PORT")
+
+        launchApp(["TD_SERVER_PORT": wrong])
+        openTheLoginForm()
+        XCTAssertEqual(app.textFields["serverLogin.port"].value as? String, wrong,
+                       "the port under test did not reach the form")
+        XCTAssertTrue(app.buttons["serverLogin.submit"].isEnabled)
+        app.buttons["serverLogin.submit"].tap()
+
+        let headline = app.staticTexts["serverLogin.errorHeadline"]
+        XCTAssertTrue(headline.waitForExistence(timeout: 180),
+                      "a port nothing listens on was not refused — " + whatIsOnScreen())
+        shoot("refusal-02-wrong-port")
+
+        XCTAssertEqual(headline.label, "That address did not answer",
+                       "the refusal does not name what happened")
+        let advice = app.staticTexts["serverLogin.errorAdvice"].label
+        XCTAssertTrue(advice.localizedCaseInsensitiveContains("port"),
+                      "the advice never mentions the port: \(advice)")
+        assertNothingVague(headline.label + " " + advice)
+    }
+
+    // MARK: - The parts the cases above are made of
+
+    /**
+     * Log in and connect, from a phone that may or may not already know this
+     * server — which is the whole point of it being a helper: the case that
+     * calls it is about what happens *after*.
+     */
+    private func connectThroughTheLogin() throws {
+        openTheLoginForm()
+        XCTAssertTrue(app.buttons["serverLogin.submit"].isEnabled,
+                      "the form is not complete, so Log in cannot be pressed")
+        app.buttons["serverLogin.submit"].tap()
+        XCTAssertTrue(app.staticTexts["serverLogin.signedIn"].waitForExistence(timeout: 180),
+                      "the login never finished — " + whatIsOnScreen())
+        XCTAssertTrue(app.staticTexts["server.hostLine"].waitForExistence(timeout: 120),
+                      "the check step never ran — " + whatIsOnScreen())
+
+        let connect = app.buttons["server.connect"]
+        let bringUp = app.buttons["server.startConnect"]
+        guard connect.waitForExistence(timeout: 30) || bringUp.waitForExistence(timeout: 5) else {
+            XCTFail("there is no host to connect to on this server — " + whatIsOnScreen())
+            return
+        }
+        if connect.exists { connect.tap() } else { bringUp.tap() }
+        XCTAssertTrue(app.staticTexts["serverLogin.connected"].waitForExistence(timeout: 180),
+                      "connect ended nowhere — " + whatIsOnScreen())
+    }
+
+    /**
+     * The server's own page, walked to the way a person reaches it.
+     *
+     * Not a deep link and not a launch argument: Settings holds the machines
+     * now, the server is a row under them, and if that walk breaks the feature
+     * is unreachable regardless of what the connector can do.
+     */
+    private func openServerPage() -> Bool {
+        guard app.openMachinesTab() else { return false }
+        let row = app.buttons["machines.server"].firstMatch
+        guard row.waitForExistence(timeout: 10) else { return false }
+        row.tap()
+        return app.staticTexts["server.hostLine"].waitForExistence(timeout: 60)
+    }
+
+    /**
+     * **A prompt from that machine**, which is the only thing any of this was
+     * for.
+     *
+     * Nothing here reads the terminal — it is a `UIKeyInput` drawing pixels, and
+     * an assertion that pretended to read it would be a worse claim than none.
+     * What this does is put a command in that only that machine can answer and
+     * photograph what came back, which is the same evidence a person has.
+     */
+    private func proveAShellOnThatMachine(_ prefix: String) {
+        app.buttons["serverLogin.openMachine"].tap()
+        app.openSessionsTab()
+
+        if startASession(prefix, "a") {
+            typeSomethingOnlyThatMachineCanAnswer(prefix)
+            return
+        }
+
+        /*
+         * **What the machine just told this phone to do.**
+         *
+         * *"Claude Code could not be found on this machine, so this session was
+         * not started. Install it on that machine, or choose a different one in
+         * its settings."* A server that this app installed the host onto a
+         * minute ago has no agent CLIs on it — the installer puts a Node runtime
+         * and this host on, and nothing else — so on the one machine this whole
+         * feature exists for, the first New Session says that. The remedy the
+         * sentence names is a real control on this phone's Settings screen, and
+         * following it is the walk a person takes, so it is the walk this takes.
+         */
+        shoot("\(prefix)-default-tool-not-there")
+        XCTAssertTrue(chooseShellAsTheMachinesDefault(prefix),
+                      "the machine said to choose a different tool in its settings, and there was "
+                          + "none to choose — " + whatIsOnScreen())
+        app.openSessionsTab()
+        XCTAssertTrue(startASession(prefix, "c"),
+                      "choosing this machine's own default tool did not let a session start — "
+                          + whatIsOnScreen())
+        typeSomethingOnlyThatMachineCanAnswer(prefix)
+    }
+
+    /// Press New Session and answer whether a terminal came up. Both outcomes
+    /// are real answers here, so this returns rather than failing.
+    private func startASession(_ prefix: String, _ leg: String) -> Bool {
+        let plus = app.buttons["sessions.new"]
+        let fromEmpty = app.buttons["sessions.newFromEmpty"]
+        guard plus.waitForExistence(timeout: 60) || fromEmpty.waitForExistence(timeout: 10) else {
+            shoot("\(prefix)\(leg)-no-way-to-start-a-session")
+            XCTFail("connected, and there is no way to start a session — " + whatIsOnScreen())
+            return false
+        }
+        shoot("\(prefix)\(leg)-sessions")
+        if fromEmpty.exists {
+            fromEmpty.tap()
+        } else {
+            plus.tap()
+            // A machine that granted folders draws a menu here; one that granted
+            // none starts the session on the first tap. Both are correct.
+            let menuItem = app.buttons["sessions.newDefault"]
+            if menuItem.waitForExistence(timeout: 3) { menuItem.tap() }
+        }
+        return app.buttons["terminal.keyboard"].waitForExistence(timeout: 60)
+    }
+
+    /**
+     * Change the machine's own default tool to a shell, from the phone.
+     *
+     * These two settings belong to the machine rather than to this phone, and
+     * the section says so on screen. A shell is on every machine there is, which
+     * is why it is the one worth choosing on a server that has just been built.
+     *
+     * ## Why this does not call `openSettingsTab()`
+     *
+     * Because it does not work from here, and finding that out cost this walk a
+     * run. That helper pops **once** — *"one Back is enough; this stack is one
+     * deep by construction"* — and by this point in the case it is two deep: the
+     * connect pushed Settings → Machines → the server's own page. One Back lands
+     * on Machines, `settings.github` is not there, and the helper reports it
+     * could not reach Settings while standing one screen away from it. So this
+     * pops until it arrives, and says which screen it gave up on.
+     */
+    private func chooseShellAsTheMachinesDefault(_ prefix: String) -> Bool {
+        app.openTab("Settings")
+        var atTheRoot = false
+        for _ in 0 ..< 4 {
+            if app.buttons["settings.machines"].waitForExistence(timeout: 4) {
+                atTheRoot = true
+                break
+            }
+            let back = app.navigationBars.buttons.element(boundBy: 0)
+            guard back.exists else { break }
+            back.tap()
+        }
+        guard atTheRoot else { return false }
+
+        /*
+         * The section is below the machines on a phone-sized screen, and a
+         * SwiftUI `ScrollView` will not always bring a control into view for a
+         * tap on its own. Scrolled to rather than reached for.
+         */
+        let shell = app.buttons["serverSetting.provider.shell"]
+        for _ in 0 ..< 5 where !shell.exists || !shell.isHittable {
+            app.swipeUp()
+        }
+        guard shell.exists else { return false }
+        shoot("\(prefix)b-machine-settings")
+        shell.tap()
+
+        /*
+         * The value drawn is always the machine's own re-read — a refused apply
+         * reverts by construction — so the chip becoming the selected one is the
+         * machine having accepted it, not this phone having drawn it hopefully.
+         */
+        var took = false
+        for _ in 0 ..< 20 {
+            if shell.isSelected { took = true; break }
+            _ = app.staticTexts["This server"].waitForExistence(timeout: 1)
+        }
+        shoot("\(prefix)b-default-tool-is-a-shell")
+        return took
+    }
+
+    /**
+     * **A prompt from that machine**, which is the only thing any of this was
+     * for.
+     *
+     * Nothing here reads the terminal — it is a `UIKeyInput` drawing pixels, and
+     * an assertion that pretended to read it would be a worse claim than none.
+     * What this does is put a command in that only that machine can answer and
+     * photograph what came back, which is the same evidence a person has.
+     */
+    private func typeSomethingOnlyThatMachineCanAnswer(_ prefix: String) {
+        shoot("\(prefix)-terminal")
+        app.buttons["terminal.keyboard"].tap()
+        app.typeText("hostname; uname -sr; uptime\n")
+        sleep(4)
+        shoot("\(prefix)-shell-prompt")
+    }
+
+    /// The sentence this whole lane exists to keep out of the app: one that is
+    /// true of every failure and therefore says nothing about this one.
+    private func assertNothingVague(_ said: String) {
+        for empty in ["not available", "something went wrong", "unknown error", "try again later"] {
+            XCTAssertFalse(said.localizedCaseInsensitiveContains(empty),
+                           "the refusal says \"\(empty)\", which is true of every failure: \(said)")
+        }
     }
 
     /**
