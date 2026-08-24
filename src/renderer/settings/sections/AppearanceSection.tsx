@@ -1,19 +1,49 @@
 import { useId, useState } from 'react'
-import { Row, SectionHead, SettingList } from '../controls'
-import { numberSetting, sectionMeta, stringSetting } from '../settings-schema'
+import { Group, Row, SectionHead, SettingControl, SettingList } from '../controls'
+import { getSetting, numberSetting, sectionMeta, stringSetting } from '../settings-schema'
 import type { SectionProps } from '../settings-bridge'
+import { TerminalColours } from './TerminalColours'
 
 /**
- * Appearance.
+ * Appearance: the app's own two rows, then everything about a terminal.
  *
- * Two rows are generated from the schema and one is placed by hand. The hand
- * one is the terminal font, and the reason is in {@link MONO_CANDIDATES}: a
- * font family typed in by name is a control that cannot tell you whether it
- * worked.
+ * ## The split, and why the pane has a heading in the middle of it now
+ *
+ * Two of the four settings here are about the *window* — its theme and its
+ * density — and the rest are about the inside of a session. That was never
+ * visible: the four were one flat list, so "Terminal font size" and "Terminal
+ * font" sat under "Density" as though the four were one subject, and the two
+ * that carry the word *Terminal* in their own labels were the only thing saying
+ * otherwise. A label that has to name its own section is a label doing the
+ * grouping the layout should have done.
+ *
+ * It also stopped being merely untidy the moment this pane grew a colour
+ * editor. Terminal appearance is now a scheme, twenty-one colours, a size and a
+ * face, and leaving those spread across a list with the window's own theme in
+ * the middle of it is the *"everything should be in one place so they don't have
+ * to think"* complaint that reorganised this whole rail.
+ *
+ * **Where the font size was**: right here, generated from the schema, third of
+ * four rows — between Density and the font. It has not moved file or changed
+ * its key; what changed is that it is drawn inside the Terminal group with the
+ * scheme and the face, through `SettingControl` rather than through
+ * `SettingList`, so there is still exactly one implementation of a number row.
+ *
+ * Two rows are still placed by hand rather than generated. The terminal font is
+ * one, and the reason is in {@link MONO_CANDIDATES}: a font family typed in by
+ * name is a control that cannot tell you whether it worked. The colours are the
+ * other, for a stronger version of the same argument — see `TerminalColours`.
  */
 
 /** The setting this section draws itself rather than letting the list draw it. */
 const FONT_SETTING = 'appearance.terminalFontFamily'
+
+/** Drawn inside the Terminal group below rather than in the generated list. */
+const TERMINAL_SETTINGS = [
+  'appearance.terminalScheme',
+  'appearance.terminalFontSize',
+  FONT_SETTING,
+] as const
 
 /**
  * The monospace faces worth offering, in the order they are worth offering.
@@ -187,7 +217,31 @@ export function AppearanceSection({ values, save, loading }: SectionProps) {
     return (
       <>
         <SectionHead title={meta.label} blurb={meta.blurb} />
-        <SettingList section="appearance" values={values} save={save} disabled={loading} />
+        <SettingList
+          section="appearance"
+          values={values}
+          save={save}
+          disabled={loading}
+          omit={[...TERMINAL_SETTINGS]}
+        />
+        <Group title="Terminal">
+          <TerminalColours values={values} save={save} disabled={loading} />
+          <SettingControl
+            setting={getSetting('appearance.terminalFontSize')!}
+            values={values}
+            save={save}
+            disabled={loading}
+          />
+          {/* No canvas, so nothing here can check what is installed and the
+              honest control is the schema's text field — the same reasoning as
+              below, minus the menu it cannot honestly draw. */}
+          <SettingControl
+            setting={getSetting(FONT_SETTING)!}
+            values={values}
+            save={save}
+            disabled={loading}
+          />
+        </Group>
       </>
     )
   }
@@ -211,9 +265,20 @@ export function AppearanceSection({ values, save, loading }: SectionProps) {
         values={values}
         save={save}
         disabled={loading}
-        // Drawn below instead. See MONO_CANDIDATES for why this one row is not
-        // generated from the schema like the others.
-        omit={[FONT_SETTING]}
+        // Drawn in the Terminal group below instead. See MONO_CANDIDATES for
+        // why the font is not generated from the schema like the others, and
+        // this file's header for why the size went with it.
+        omit={[...TERMINAL_SETTINGS]}
+      />
+
+      <Group title="Terminal">
+      <TerminalColours values={values} save={save} disabled={loading} />
+
+      <SettingControl
+        setting={getSetting('appearance.terminalFontSize')!}
+        values={values}
+        save={save}
+        disabled={loading}
       />
 
       <div className="settings-item">
@@ -272,6 +337,7 @@ export function AppearanceSection({ values, save, loading }: SectionProps) {
           </div>
         </div>
       </div>
+      </Group>
     </>
   )
 }

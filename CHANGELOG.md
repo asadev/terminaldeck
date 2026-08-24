@@ -10,6 +10,19 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+### Added
+
+- **A real terminal colour editor, on the desktop and in the browser client.** Settings → Appearance → Terminal now offers thirteen schemes, each drawn as a small terminal in its own colours — a line of shell output, a block cursor, a run of selected text and all sixteen ANSI swatches — rather than as a name in a list. Pure black is one of them, along with a dark grey, the app's own dark and light, Solarized Dark and Light, Nord, Dracula, Gruvbox Dark, One Half Dark and Light, Tango Dark and Campbell. Every published palette is its author's own values.
+- **Every colour is editable** — the background, the text, the cursor, the character under the cursor, the selection and all sixteen ANSI slots — with a colour picker and a hex field on each. Editing a scheme that came with the app makes you a copy of it rather than changing it for everybody, and your own schemes can be renamed, duplicated and deleted.
+- **Colours apply to sessions that are already open**, including sessions running on another machine or on a server, and while a colour picker is still moving.
+- **Paste a scheme you found, or copy one out as JSON.** Schemes written the way other terminals write them — `cursorColor`, `purple`, `brightPurple` — are understood, and what is copied out reads in both places.
+- **Terminal appearance is one group.** The terminal's font size and typeface moved out of the flat list on the Appearance pane and into the Terminal group with the colours, so nothing about a session's appearance is two places any more.
+- A pinned scheme is independent of the app's own light and dark: a light terminal in a dark window stays light. Following the app is still the default and is the first card in the picker.
+
+### Fixed
+
+- **The scrollbar gutter down the right of a session is no longer painted black** whatever the terminal is. `xterm.css` has always set it to `#000`; on a light terminal, or anywhere with classic scrollbars rather than macOS overlay ones, it was a black strip against the session's own paper.
+
 ## [0.10.1] — 2026-08-23
 
 ### Added

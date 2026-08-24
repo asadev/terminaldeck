@@ -539,6 +539,21 @@ kbd {
   overflow: hidden;
 }
 
+/* The scrollbar gutter, which xterm paints black whatever the terminal is.
+   `xterm.css` sets `.xterm .xterm-viewport { background-color: #000 }` — with a
+   comment saying it is so the scrollbar is opaque on macOS — and the emulator
+   never overrides it. On this Mac that is invisible, because overlay scrollbars
+   reserve no width; anywhere with classic scrollbars it is a black strip down
+   the right-hand edge of the session, and it has been there since the light
+   theme shipped. It is only *noticed* now, because a person can pin a cream
+   terminal in a dark window and a black bar beside it reads as a fault.
+   `--terminal-bg` rather than a literal, so it follows the pinned scheme —
+   `terminal-scheme.ts` overrides that token on `<html>` and carries the
+   reasoning for why one token covers every surface around a session. */
+.xterm .xterm-viewport {
+  background-color: var(--terminal-bg);
+}
+
 /* Safari's find bar: a small floating pill in the top-right of the session,
    the same glass as every other surface, over the text rather than pushing it. */
 .terminal-find {

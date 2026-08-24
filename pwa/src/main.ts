@@ -197,6 +197,15 @@ import {
   textSizeLabel,
   writeTextSize,
 } from './text-size'
+import {
+  readCustomSchemes,
+  readSchemeChoice,
+  resolveScheme,
+  writeCustomSchemes,
+  writeSchemeChoice,
+} from './terminal-scheme'
+import { schemeBlock, type SchemePickerHost } from './scheme-picker'
+import type { TerminalScheme } from '../../src/shared/terminal-theme'
 import { VERSION } from './version'
 import { clientIsAhead, hostKindNoun } from './host-version'
 import { normaliseCode } from '../../src/shared/short-code'
@@ -719,6 +728,22 @@ class Deck {
    * bounds and says why a browser needs this control when a phone barely does.
    */
   private textSize: number
+  /** The chosen scheme's id, or `follow-app`. See `terminal-scheme.ts`. */
+  private schemeChoice: string
+  /** The schemes this browser holds, in the order the picker draws them. */
+  private customSchemes: TerminalScheme[]
+  /*
+   * Whether the editor and the paste box are open, and what is in the box.
+   *
+   * On the app rather than in `scheme-picker.ts`, because this client rebuilds
+   * a whole screen for every state change — anything the picker kept for itself
+   * would close the moment somebody changed a colour.
+   */
+  private schemeEditing = false
+  private schemeImporting = false
+  private schemeDraft = ''
+  private schemeProblem: string | null = null
+  private schemeSaid: string | null = null
   private attachedId: string | null = null
   /** True once an `attach` has gone out for `attachedId` on this connection. */
   private attachSent = false
@@ -1097,6 +1122,18 @@ class Deck {
     document.title = BRAND.name
     this.portBook = new PortBook(this.stores, this.remember)
     this.textSize = readTextSize(this.stores.browser)
+    /*
+     * The terminal's colours, read before anything is drawn.
+     *
+     * Beside the text size and for the same reason: both are answers about this
+     * browser rather than about a machine, both are read once at construction,
+     * and both have to be in hand before the first terminal is *built* — xterm
+     * paints its first frame from what it was constructed with, so a session
+     * that appears in the app's colours and turns Solarized a frame later reads
+     * as a fault.
+     */
+    this.schemeChoice = readSchemeChoice(this.stores.browser)
+    this.customSchemes = readCustomSchemes(this.stores.browser)
 
     this.back.type = 'button'
     this.back.setAttribute('aria-label', 'Back')
@@ -4740,6 +4777,15 @@ class Deck {
           `it resizes the session on the ${this.noun}.`,
       ),
     )
+    /*
+     * The colours, under the same caption as the size.
+     *
+     * Both are "how a session is drawn on this browser", and the desktop pass
+     * that built this feature moved its own font size into the group with the
+     * colours for exactly that reason. Splitting terminal appearance across two
+     * places is the complaint the whole settings reorganisation came from.
+     */
+    screen.append(this.schemePicker())
 
     // The machine at the other end, when it said what build it is. A host older
     // than the `appVersion` field, or one this page has not reached, reports
@@ -4891,6 +4937,72 @@ class Deck {
     row.append(stepper)
     group.append(row)
     return group
+  }
+
+  /**
+   * What is painted right now, or null while sessions follow the appearance.
+   *
+   * Resolved on every read rather than held, so a scheme deleted in another tab
+   * — or by the block below, which rewrites the whole list — cannot leave a
+   * stale object being painted.
+   */
+  private scheme(): TerminalScheme | null {
+    return resolveScheme(this.schemeChoice, this.customSchemes)
+  }
+
+  /**
+   * The colour picker, and the four things it can ask this client to do.
+   *
+   * The block itself is `scheme-picker.ts`; what is here is the wiring, which
+   * is the part that has to know about the terminal and the store. Every write
+   * does the same three things in the same order — persist, repaint the open
+   * session, redraw the screen — because the order is what makes the picker
+   * feel like it is colouring a terminal rather than submitting a form.
+   */
+  private schemePicker(): HTMLElement {
+    const host: SchemePickerHost = {
+      chosen: this.schemeChoice,
+      customs: this.customSchemes,
+      editing: this.schemeEditing,
+      importing: this.schemeImporting,
+      draft: this.schemeDraft,
+      problem: this.schemeProblem,
+      said: this.schemeSaid,
+      choose: (id) => {
+        this.schemeChoice = id
+        writeSchemeChoice(this.stores.browser, id)
+        this.terminal?.setScheme(this.scheme())
+        this.renderContent()
+      },
+      keep: (customs, chooseId) => {
+        this.customSchemes = customs
+        writeCustomSchemes(this.stores.browser, customs)
+        if (chooseId !== undefined) {
+          this.schemeChoice = chooseId
+          writeSchemeChoice(this.stores.browser, chooseId)
+        }
+        this.terminal?.setScheme(this.scheme())
+        this.renderContent()
+      },
+      // A drag: paint it and store nothing. The commit that follows is what
+      // writes, which is also what stops one edit of a built-in making thirty
+      // copies of it.
+      preview: (scheme) => this.terminal?.setScheme(scheme),
+      refresh: () => {
+        this.schemeEditing = host.editing
+        this.schemeImporting = host.importing
+        this.schemeDraft = host.draft
+        this.schemeProblem = host.problem
+        this.schemeSaid = host.said
+        this.renderContent()
+      },
+    }
+    // Read back after the block has been built too: the picker mutates these
+    // while a person types into the paste box, and the field is what survives
+    // the next redraw.
+    const block = schemeBlock(host)
+    this.schemeDraft = host.draft
+    return block
   }
 
   /**
@@ -6424,6 +6536,10 @@ class Deck {
       // that appears at 13px and reflows to 18px one frame later is the same
       // failure with a different property.
       this.textSize,
+      // And in the scheme that is pinned, if one is. Same reason a third time:
+      // a session that appears in the app's charcoal and turns Solarized on the
+      // next frame is the flash this whole argument is about.
+      this.scheme(),
     )
     const keybar = createKeyBar({ onData: (data) => this.sendInput(data) })
 

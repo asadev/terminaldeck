@@ -5,6 +5,8 @@ import { SearchAddon } from '@xterm/addon-search'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { chordFor, formatChord } from '../keymap'
 import { subscribeTheme } from '../theme'
+import { pinnedScheme, subscribeTerminalScheme } from '../terminal-scheme'
+import { xtermTheme } from '../../shared/terminal-theme'
 import { attachRenderer } from '../terminal-renderer'
 import { attachClipboardOsc, pasteFilesInto, pastedFiles } from '../terminal-clipboard'
 import { TransferNote, useTransferNote } from './TransferNote'
@@ -71,11 +73,12 @@ export const DEFAULT_TERMINAL_FONT_SIZE = 13
  * the whole thing — see the note on that subscription further down for the bug
  * that taught this file the difference between a colour and a colour token.
  *
- * Exported because `RemoteTerminal` draws a session from another machine and
- * has to look identical to a local one; it is the same terminal to look at,
- * which is the whole promise of opening a remote session from here.
+ * Not exported, and no longer what a terminal is built with: it is the answer
+ * for the one case where nothing has been pinned. {@link terminalTheme} below
+ * is what every terminal actually calls, and it is still the only function any
+ * of them call — see the note there.
  */
-export function terminalTheme(): ITheme {
+function appPaletteTheme(): ITheme {
   return {
     /* `--terminal-bg` / `--terminal-fg` rather than the app's canvas and ink.
        They are the same values in the dark theme and deliberately not in the
@@ -107,6 +110,36 @@ export function terminalTheme(): ITheme {
     brightCyan: token('--ansi-bright-cyan', '#34e2e2'),
     brightWhite: token('--ansi-bright-white', '#eeeeec'),
   }
+}
+
+/**
+ * The colours this terminal is painted in, whichever way they were chosen.
+ *
+ * Two sources, one answer, and that is the whole point of the shape. Until a
+ * person opens Appearance → Terminal, nothing is pinned and this is exactly
+ * {@link appPaletteTheme} — the app's own theme, resolved from `tokens.css`,
+ * unchanged from the day this file was written. Once a scheme is chosen, it is
+ * that scheme's twenty-one colours instead, and the app's light/dark stops
+ * having any say over the inside of a session.
+ *
+ * That second sentence is a decision and not a side effect. Somebody who picks
+ * Solarized Light has picked Solarized Light; a terminal that threw it away
+ * because the desktop went dark at sunset would be the app overruling the one
+ * choice the pane exists to offer. Following the app is still available and
+ * still the default — it is the first entry in the picker, and it is what
+ * `null` here means.
+ *
+ * Exported because `RemoteTerminal` and `ServerTerminal` draw sessions from
+ * other machines and have to look identical to a local one; it is the same
+ * terminal to look at, which is the whole promise of opening a remote session
+ * from here. The cast is the seam between `src/shared`, which must not import
+ * a browser package for a type, and `ITheme`: every key in `XtermTheme` is an
+ * `ITheme` key, which `terminal-scheme.test.ts` asserts field by field rather
+ * than trusting this line.
+ */
+export function terminalTheme(): ITheme {
+  const scheme = pinnedScheme()
+  return scheme === null ? appPaletteTheme() : (xtermTheme(scheme) as ITheme)
 }
 
 /**
@@ -651,6 +684,20 @@ export function TerminalView({
     })
 
     /*
+     * And when the *scheme* changes, which the app theme knows nothing about.
+     *
+     * Appearance → Terminal can move all twenty-one colours without the app's
+     * light/dark moving at all, so `subscribeTheme` above never fires for it.
+     * Without this, choosing a scheme repainted only the terminals built after
+     * the choice — which on a window with three sessions open is two sessions
+     * in the old colours and one in the new, the exact defect the theme
+     * subscription above was written for, one layer along.
+     */
+    const offScheme = subscribeTerminalScheme(() => {
+      term.options.theme = terminalTheme()
+    })
+
+    /*
      * Publish this terminal so the copilot's focus overlay can point at it.
      *
      * The overlay is a window-level surface with no React relationship to any
@@ -686,6 +733,7 @@ export function TerminalView({
       backfill.stop()
       unregister()
       offTheme()
+      offScheme()
       offData()
       offExit()
       inputDisposable.dispose()

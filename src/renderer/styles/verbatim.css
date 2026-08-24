@@ -439,6 +439,16 @@
    phone shows, and a ligature welding two characters into one glyph is exactly
    the difference somebody would be looking for. */
 .servers-host-address-value,
+/* Added 2026-08-24 with the terminal colour editor. Three surfaces, all of
+   them machine text and one of them literally a terminal: the preview line
+   inside a scheme card is shell output and has to be redrawn exactly as a
+   session would draw it, the hex field holds a value that is compared
+   character by character against a palette somebody copied, and the paste box
+   holds JSON — where a ligature welding `=>` or `!=` into one glyph is the
+   difference between a scheme that parses and one that does not. */
+.scheme-preview-line,
+.settings-input.colour-hex,
+.scheme-paste,
 .servers-host-status pre {
   font-variant-ligatures: none;
 }

@@ -78,7 +78,7 @@ const ONE_WRITE_SUBMIT = /\bwrite[A-Za-z]*\s*\([^)]*`[^`]*\$\{[^`]*\}\\r`/
  * real server. A long `runCommand` on a shell with bracketed paste turned on is
  * the case that would prove it either way.
  */
-const ALLOWED = new Set(['machines/servers/ServerTerminal.tsx:461'])
+const ALLOWED = new Set(['machines/servers/ServerTerminal.tsx:476'])
 
 describe('a message is never sent as one write', () => {
   it('has no composer appending a carriage return to a template', () => {

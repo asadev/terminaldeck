@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { applyStoredTheme } from '../theme'
+import { applyTerminalScheme } from '../terminal-scheme'
 import { toStoredSettings } from './settings-bridge'
 import {
   DEFAULT_VALUES,
@@ -127,6 +128,18 @@ export function useAppSettings(): {
   useEffect(() => {
     document.documentElement.dataset.density = stringSetting(values, 'appearance.density')
     applyStoredTheme(values['appearance.theme'])
+    /*
+     * And the terminal's own colours, for the same reason the two above are
+     * here rather than in a component: no terminal is handed the settings, and
+     * a scheme that only took effect once Settings had been opened would be
+     * `appearance.density` all over again — inert on every launch until
+     * somebody visited the dialog that sets it.
+     *
+     * Order matters by one frame. This runs after the theme attribute is
+     * written, so a window launching on "follow the app" has the right tokens
+     * on `<html>` before any terminal resolves them.
+     */
+    applyTerminalScheme(values)
   }, [values])
 
   const apply = useCallback((next: SettingValues) => setValues(next), [])

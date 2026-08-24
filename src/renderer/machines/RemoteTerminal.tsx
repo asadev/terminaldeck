@@ -9,6 +9,7 @@ import { terminalTheme } from '../components/TerminalView'
 import { useTerminalFind } from '../components/TerminalView'
 import { holdUntilFilled, QUIET_MS } from '../components/terminal-backfill'
 import { subscribeTheme } from '../theme'
+import { subscribeTerminalScheme } from '../terminal-scheme'
 import { attachRenderer } from '../terminal-renderer'
 import { PASTE_TOO_BIG, attachClipboardOsc, pasteFilesInto, pastedFiles } from '../terminal-clipboard'
 import { TransferNote, useTransferNote } from '../components/TransferNote'
@@ -395,6 +396,20 @@ export function RemoteTerminal({
       term.options.theme = terminalTheme()
     })
 
+    /*
+     * And when the *scheme* changes, which the app theme knows nothing about.
+     *
+     * Appearance → Terminal can move all twenty-one colours without the app's
+     * light/dark moving at all, so `subscribeTheme` above never fires for it.
+     * Without this, choosing a scheme repainted only the terminals built after
+     * the choice — which on a window with three sessions open is two sessions
+     * in the old colours and one in the new, the exact defect the theme
+     * subscription above was written for, one layer along.
+     */
+    const offScheme = subscribeTerminalScheme(() => {
+      term.options.theme = terminalTheme()
+    })
+
     const input = term.onData((data) => {
       void bridge.writeToMachineSession(machineId, sessionId, data)
     })
@@ -414,6 +429,7 @@ export function RemoteTerminal({
       observer.disconnect()
       input.dispose()
       offTheme()
+      offScheme()
       offData()
       backfill.stop()
       // Detached explicitly, and only by the last pane showing this session.

@@ -163,6 +163,25 @@ export const SERVER_CONTROLS: readonly ServerControlEntry[] = [
     say: 'The window looks the way you set it, wherever a session happens to be running.',
   },
   {
+    local: 'Terminal colours',
+    mirrors: ['appearance.terminalScheme'],
+    verdict: 'carried',
+    /*
+     * Carried for free, and that is worth a line because it is the reason the
+     * scheme was built the way it was. A server's terminal resolves its palette
+     * through the same `terminalTheme()` every other terminal in this window
+     * calls, and subscribes to the same scheme change — so there was never a
+     * second implementation to teach about schemes. Had the colours been a prop
+     * threaded from `App.tsx`, this row would read `cannot`, exactly as the
+     * font size did before it was threaded.
+     */
+    say: 'A terminal on a server is drawn in the scheme you chose here, and repaints when you change it.',
+    traced: {
+      file: 'src/renderer/machines/servers/ServerTerminal.tsx',
+      says: 'subscribeTerminalScheme(',
+    },
+  },
+  {
     local: 'Terminal type',
     mirrors: ['appearance.terminalFontSize', 'appearance.terminalFontFamily'],
     verdict: 'carried',

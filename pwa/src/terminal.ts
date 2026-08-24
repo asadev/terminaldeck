@@ -21,6 +21,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { Terminal, type ITheme } from '@xterm/xterm'
 import { MAX_COLS, MAX_ROWS, MIN_COLS, MIN_ROWS } from '../../src/main/remote/protocol'
 import { controlByteForCode } from './keybar'
+import { xtermTheme, type TerminalScheme } from '../../src/shared/terminal-theme'
 import { clampTextSize, STANDARD_TEXT_SIZE } from './text-size'
 import type { Appearance } from './theme'
 
@@ -72,6 +73,21 @@ export interface TerminalHandle {
    * focus and the negotiated size, which is a high price for a colour.
    */
   setAppearance(appearance: Appearance): void
+  /**
+   * Paint a chosen colour scheme instead of the appearance, or `null` to go
+   * back to following it.
+   *
+   * The same trade `setAppearance` makes: the scrollback, the focus and the
+   * negotiated size all survive, because xterm re-renders what it already has
+   * when its theme object changes. Rebuilding the emulator to change a colour
+   * would lose the session.
+   *
+   * Held rather than applied and forgotten, because `setAppearance` can arrive
+   * afterwards — somebody switches the page to light while a dark scheme is
+   * pinned — and a scheme that is thrown away by the *next* appearance change
+   * is a choice the app quietly overrules.
+   */
+  setScheme(scheme: TerminalScheme | null): void
   /**
    * Redraw at another character size, without losing the session.
    *
@@ -203,6 +219,15 @@ export function createTerminal(
   handlers: TerminalHandlers,
   appearance: Appearance = 'dark',
   fontSize: number = STANDARD_TEXT_SIZE,
+  /**
+   * The scheme this session is pinned to, or null to follow the appearance.
+   *
+   * Passed at construction rather than set a frame later, for the reason the
+   * size and the appearance already are: xterm paints its first frame from the
+   * theme it was built with, and a terminal that appears charcoal and turns
+   * cream one frame afterwards reads as a fault rather than as a choice.
+   */
+  scheme: TerminalScheme | null = null,
 ): TerminalHandle {
   const element = document.createElement('div')
   element.className = 'terminal'
@@ -218,7 +243,7 @@ export function createTerminal(
     fontSize: clampTextSize(fontSize),
     lineHeight: 1.2,
     fontFamily: "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace",
-    theme: TERMINAL_THEMES[appearance],
+    theme: scheme === null ? TERMINAL_THEMES[appearance] : (xtermTheme(scheme) as ITheme),
     cursorBlink: true,
     // Enough to scroll back through a build, small enough that a phone with
     // 2 GB of RAM does not start swapping while a session logs at speed.
@@ -228,6 +253,14 @@ export function createTerminal(
     // expects, and without this Option+B walks a word on neither.
     macOptionIsMeta: true,
   })
+
+  /*
+   * What is pinned, and what the page is set to. Both, because the two are
+   * independent: pinning a scheme has to survive an appearance change, and
+   * clearing one has to land on whatever the page has become in the meantime.
+   */
+  let pinned: TerminalScheme | null = scheme
+  let painted: Appearance = appearance
 
   const fitAddon = new FitAddon()
   term.loadAddon(fitAddon)
@@ -288,7 +321,15 @@ export function createTerminal(
       term.options.cursorBlink = live
     },
     setAppearance(next: Appearance): void {
-      term.options.theme = TERMINAL_THEMES[next]
+      // The appearance is remembered whether or not it is being painted, so
+      // clearing a scheme later lands on the appearance that is actually on
+      // screen rather than on the one this terminal was built in.
+      painted = next
+      if (pinned === null) term.options.theme = TERMINAL_THEMES[next]
+    },
+    setScheme(next: TerminalScheme | null): void {
+      pinned = next
+      term.options.theme = next === null ? TERMINAL_THEMES[painted] : (xtermTheme(next) as ITheme)
     },
     setFontSize(size: number): void {
       // Clamped here as well as in the store, because this is the other door into

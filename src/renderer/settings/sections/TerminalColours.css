@@ -1,0 +1,250 @@
+/*
+ * The terminal colour picker.
+ *
+ * Two rules shape everything here.
+ *
+ * **A card is the scheme, not a chip in the app's palette.** The only colours
+ * this sheet states are the app's own — the ring on the selected card, the
+ * label above it. Everything inside a card comes from the scheme as an inline
+ * style, because there is no fixed set of them: half the schemes on screen were
+ * made by whoever is looking at them.
+ *
+ * **Nothing here paints a surface.** `settings-surface.test.ts` holds this
+ * window to one grey, and a grid of tinted cards is exactly how a settings pane
+ * grows a second one back. The cards sit on the pane; what separates them is a
+ * hairline and the scheme's own ground.
+ */
+
+.scheme-grid {
+  display: grid;
+  /* Measured rather than chosen: the two preview lines are 25 and 27 characters
+     of `--t-caption` mono, and at anything under about 228px the longer one
+     ends in an ellipsis on every card in the grid. Three across a settings pane
+     at the window's default width, two when the pane is narrower. */
+  grid-template-columns: repeat(auto-fill, minmax(228px, 1fr));
+  gap: var(--sp-2);
+  margin: var(--sp-3) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.scheme-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-15);
+  width: 100%;
+  /* Every card the same height, whatever is in it. The follow-the-app card has
+     two lines of prose where the others have a terminal, and left to itself it
+     sat as a stub in the corner of a grid of full-height cards — which reads as
+     a card that failed to load rather than as the one option with nothing to
+     preview. */
+  height: 100%;
+  padding: var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.scheme-card:hover {
+  border-color: var(--accent-line);
+}
+
+.scheme-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* The selected card is the accent, not a fill — the same rule the rail's
+   selected section lives by, and for the same reason: a fill over a surface
+   this window paints flat is a twenty-level difference nobody can see. */
+.scheme-card[aria-pressed='true'] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.scheme-card-name {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: var(--t-footnote);
+  font-weight: var(--w-semibold);
+  color: var(--text-primary);
+}
+
+.scheme-card-tag {
+  padding: 0 var(--sp-1);
+  border-radius: var(--radius-pill);
+  background: var(--fill-tertiary);
+  font-size: var(--t-caption);
+  font-weight: var(--w-semibold);
+  color: var(--text-muted);
+}
+
+.scheme-card-note {
+  font-size: var(--t-caption);
+  line-height: var(--lh-loose);
+  color: var(--text-muted);
+}
+
+/* The follow-the-app card has no preview to fill it, so it holds its own
+   height rather than being half the size of everything beside it. */
+.scheme-card--follow {
+  justify-content: flex-start;
+}
+
+.scheme-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--sp-15);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.scheme-preview-line {
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
+  line-height: 1.45;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* A block cursor, drawn as a block: the character under it takes the scheme's
+   `cursorAccent`, which is the only place on the card that slot is visible. */
+.scheme-preview-cursor {
+  display: inline-block;
+  min-width: 0.6em;
+}
+
+.scheme-swatches {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 2px;
+  margin-top: var(--sp-1);
+}
+
+/* A hairline inside each swatch, so a slot that is the same colour as the
+   ground it sits on is still visibly a slot. Two schemes here set ANSI black to
+   the background exactly — that is what their authors published — and without
+   this the row of sixteen silently becomes a row of fifteen. */
+.scheme-swatch {
+  height: 8px;
+  border-radius: 2px;
+  box-shadow: inset 0 0 0 1px rgba(127, 127, 127, 0.3);
+}
+
+.scheme-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+}
+
+/* Both of these sit inside `.settings-item-extra`, which is a flex row that
+   centres its children — right for a row of buttons and wrong for a block that
+   has to fill the pane. Written with both classes so the override actually
+   wins: one class against one class is a cascade race decided by whichever
+   sheet the bundler happened to put second, which is how the colour grid
+   shipped as a single centred column in the first draft of this file. */
+.settings-item-extra.scheme-import {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.scheme-paste {
+  width: 100%;
+  min-height: 96px;
+  font-family: var(--font-mono);
+  resize: vertical;
+}
+
+/* ------------------------------------------------------------- the editor -- */
+
+.settings-item-extra.colour-editor {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--sp-2);
+}
+
+/* The scheme being edited, at the top of the editor, because the card it was
+   picked from is twenty rows up the page by the time somebody is changing a
+   bright cyan. Wider than a card's preview: this one is what the change is
+   being judged on. */
+.colour-editing {
+  max-width: 420px;
+}
+
+/* Two columns where there is room. Twenty-one rows in one column is a scroll
+   the length of the pane, and the five surface slots then sit an entire screen
+   away from the sixteen they are meant to be judged against. */
+.colour-grid {
+  display: grid;
+  width: 100%;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: var(--sp-1) var(--sp-4);
+}
+
+.colour-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: var(--control-h);
+}
+
+.colour-row-label {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--t-footnote);
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The native colour well, stripped of the chrome the platform draws round it
+   so it reads as a swatch rather than as a button with a swatch in it. */
+.colour-chip {
+  flex-shrink: 0;
+  width: 28px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: none;
+  cursor: pointer;
+}
+
+.colour-chip::-webkit-color-swatch-wrapper {
+  padding: 2px;
+}
+
+.colour-chip::-webkit-color-swatch {
+  border: none;
+  border-radius: 3px;
+}
+
+/* Both classes, for the reason `.settings-item-extra.colour-editor` gives:
+   `.settings-input` sets its own width, and one class against one class is a
+   race the bundler decides. Eleven characters is `#rrggbbaa` plus room to
+   type, and holding the field to it keeps the twenty-one labels legible
+   instead of pushed against the left edge by a field that took the row. */
+.settings-input.colour-hex {
+  flex: 0 0 auto;
+  /* `min-width` as well as `width`: `.settings-input` sets a 148px floor for
+     the ordinary text rows in this window, and a floor beats a width. Twelve
+     characters is `#rrggbbaa` with room to type, and holding the field there is
+     what keeps twenty-one labels on one line each. */
+  width: 12ch;
+  min-width: 12ch;
+  padding: 0 var(--sp-2);
+  font-family: var(--font-mono);
+}
+
+/* A hex that is not a hex yet — half typed, or pasted with a stray character.
+   Said on the field rather than as a message, because the field is where the
+   character is. */
+.colour-hex[aria-invalid='true'] {
+  border-color: var(--color-critical);
+}
