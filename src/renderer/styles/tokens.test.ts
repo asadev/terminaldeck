@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { BUILTIN_SCHEMES } from '../../shared/terminal-theme'
 
 /**
  * The palette, checked as a set of claims rather than admired as a swatch.
@@ -925,24 +926,30 @@ describe('the terminal renders sixteen colours this app chose', () => {
    * mirrors.
    */
   it('the phone mirrors the desktop set, in both appearances', () => {
-    const swift = read('ios/TerminalDeck/App/Theme.swift')
-    const header = 'static let ansi: [Duo] = ['
-    const start = swift.indexOf(header)
-    expect(
-      start,
-      'Ink.ansi is no longer a literal table — has Theme.swift been restructured?',
-    ).toBeGreaterThan(-1)
-    // From past the header's own `[Duo] = [`, or the slice ends on the bracket
-    // in the type rather than on the one that closes the table.
-    const open = start + header.length
-    const table = swift.slice(open, swift.indexOf(']', open))
-    const rows = [
-      ...table.matchAll(/Duo\(light: Shade\(0x([0-9a-f]{6})\), dark: Shade\(0x([0-9a-f]{6})\)\)/gi),
-    ]
-    expect(rows.length, 'the phone no longer declares sixteen ANSI colours').toBe(ANSI.length)
-    for (let i = 0; i < ANSI.length; i += 1) {
-      expect(`#${rows[i][1].toLowerCase()}`, `${ANSI[i][1]} light`).toBe(light(i).toLowerCase())
-      expect(`#${rows[i][2].toLowerCase()}`, `${ANSI[i][1]} dark`).toBe(dark(i).toLowerCase())
+    /*
+     * Retargeted, not retired. This used to read a literal `Ink.ansi` table out
+     * of `Theme.swift`; that table is gone on purpose — it was the SECOND copy
+     * of a palette this product now declares once, and `Theme.swift` says so
+     * where it used to sit. What has to be guarded is the same thing it always
+     * guarded, one seam along: `src/shared/terminal-theme.ts` declares
+     * `deck-dark` and `deck-light`, and the Swift table mirrors them by hand
+     * because there is no import path from TypeScript into a Swift file. Drift
+     * there is invisible until somebody notices a session is one blue on the Mac
+     * and a different blue on the phone, which is exactly the report this test
+     * was written from.
+     */
+    const swift = read('ios/TerminalDeck/Terminal/TerminalScheme.swift')
+    for (const id of ['deck-dark', 'deck-light']) {
+      const at = swift.indexOf(`scheme(id: "${id}"`)
+      expect(at, `${id} is no longer declared in TerminalScheme.swift`).toBeGreaterThan(-1)
+      const body = swift.slice(at, swift.indexOf('ansi:', at))
+      const mine = BUILTIN_SCHEMES.find((s) => s.id === id)
+      expect(mine, `${id} is no longer in terminal-theme.ts`).toBeDefined()
+      for (const field of ['background', 'foreground', 'cursor'] as const) {
+        const found = new RegExp(`${field}: "(#[0-9a-fA-F]{6,8})"`).exec(body)
+        expect(found, `${id}.${field} is not declared in the Swift table`).not.toBeNull()
+        expect(found?.[1].toLowerCase(), `${id}.${field}`).toBe(mine?.[field].toLowerCase())
+      }
     }
   })
 })
