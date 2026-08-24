@@ -88,7 +88,7 @@ object TerminalSchemes {
      * It is stored for the desktop's benefit and this phone does not paint with it.
      */
     val terminalDeck = scheme(
-        id = "terminaldeck",
+        id = "deck-dark",
         name = "Terminal Deck",
         background = "#191919",
         foreground = "#ededed",
@@ -100,7 +100,7 @@ object TerminalSchemes {
 
     /** The same product scheme on paper. `--terminal-bg` / `--terminal-fg` from the light theme. */
     val terminalDeckLight = scheme(
-        id = "terminaldeck-light",
+        id = "deck-light",
         name = "Terminal Deck Light",
         background = "#e8e8e8",
         foreground = "#141414",
