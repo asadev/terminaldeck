@@ -201,6 +201,14 @@ describe('the files app.terminaldeck.dev is built from', () => {
       // `pairing-link.ts`, which crosses above.
       'src/shared/server-address.ts',
       'src/shared/short-code.ts',
+      // The terminal's colour schemes: the shape, the thirteen that ship, the
+      // parsing of a scheme somebody pasted and the object handed to xterm.
+      // Shared for the reason this fixture exists to make somebody state —
+      // the desktop and this client draw the *same sessions*, so a browser copy
+      // of the palette is two clients disagreeing about what Nord is, and the
+      // one somebody believes is whichever they looked at last. It imports
+      // nothing, so what crosses is the schemes and the functions over them.
+      'src/shared/terminal-theme.ts',
     ])
   })
 })

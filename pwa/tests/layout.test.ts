@@ -177,6 +177,14 @@ describe('the layout decisions that cannot be seen from a test', () => {
       '.header',
       '.keybar',
       '.pending',
+      // The three flex blocks of the terminal colour picker: a scheme card, the
+      // row of buttons under the grid, and one colour's row inside the editor.
+      // None is ever hidden — the editor and the paste box are built or not
+      // built by `scheme-picker.ts` when the settings screen is assembled, which
+      // is the same rule every copilot block above follows.
+      '.scheme',
+      '.scheme-actions',
+      '.scheme-row',
       '.session',
       '.session-line',
       '.setting',

@@ -3958,3 +3958,224 @@ a.browse__go {
   padding: 6px 14px;
   font-size: 13px;
 }
+
+/* ------------------------------------------------------- terminal colours -- */
+
+/*
+ * The scheme picker on the Settings screen.
+ *
+ * Two rules, the same two the desktop's sheet states, because it is the same
+ * control: a card is drawn in the scheme's own colours rather than named — a
+ * list of names is a list nobody can choose from — and nothing here paints a
+ * surface of its own, so the grid sits on the screen's ground with a hairline
+ * round each card instead of becoming a third grey.
+ */
+.schemes-block {
+  margin-top: 8px;
+}
+
+.schemes {
+  display: grid;
+  /* One column on a phone, two the moment there is room. The two preview lines
+     are 25 and 27 characters of mono at 11px and stop fitting under about
+     210px, which is where a second column would start truncating them. */
+  grid-template-columns: repeat(auto-fill, minmax(224px, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.scheme {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  height: 100%;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  color: var(--text-primary);
+  text-align: left;
+}
+
+.scheme:active {
+  background: var(--bg-hover);
+}
+
+/* The chosen card is the accent rather than a fill: a fill over a screen this
+   dark is a twenty-level difference nobody can see on a phone in daylight. */
+.scheme[aria-pressed='true'] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.scheme__name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.scheme__tag {
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.scheme__note {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.scheme__preview {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.scheme__line {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.scheme__cursor {
+  display: inline-block;
+  min-width: 0.6em;
+}
+
+.scheme__swatches {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 2px;
+  margin-top: 4px;
+}
+
+/* A hairline inside each swatch, so a slot painted the same colour as the
+   ground it sits on is still visibly a slot — two schemes here set ANSI black
+   to their own background, which is what their authors published. */
+.scheme__swatch {
+  height: 8px;
+  border-radius: 2px;
+  box-shadow: inset 0 0 0 1px rgba(127, 127, 127, 0.3);
+}
+
+.scheme-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.scheme-actions .button {
+  flex: none;
+  width: auto;
+  padding: 0 14px;
+}
+
+.scheme-import {
+  margin-top: 10px;
+}
+
+.scheme-paste {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 120px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  resize: vertical;
+}
+
+.scheme-edit {
+  margin-top: 12px;
+}
+
+.scheme-rows {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 2px 16px;
+  margin-top: 8px;
+}
+
+.scheme-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+}
+
+.scheme-row__label {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The native colour well, stripped of the frame the platform draws round it so
+   it reads as a swatch rather than as a button with a swatch inside it. Wider
+   than the desktop's: this one is a touch target. */
+.scheme-chip {
+  flex: none;
+  width: 44px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: none;
+}
+
+.scheme-chip::-webkit-color-swatch-wrapper {
+  padding: 3px;
+}
+
+.scheme-chip::-webkit-color-swatch {
+  border: none;
+  border-radius: 3px;
+}
+
+.scheme-hex {
+  flex: none;
+  box-sizing: border-box;
+  width: 12ch;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+/* A hex that is not one yet — half typed, or pasted with a stray character.
+   Said on the field, because the field is where the character is. */
+.scheme-hex--bad {
+  border-color: var(--color-critical);
+}
+
+/* The one refusal this block can produce: a paste that is not a scheme, or a
+   clipboard the browser would not hand over. */
+.note--warn {
+  margin: 8px 2px 0;
+  padding: 0;
+  border: none;
+  color: var(--color-critical);
+}

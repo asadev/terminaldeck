@@ -28,6 +28,7 @@
  * chosen. Declaring either here would create a second copy of the truth.
  */
 
+import { CUSTOM_SCHEME_PREFIX, FOLLOW_APP_SCHEME_ID } from '../../shared/terminal-theme'
 import type { Preferences } from '@shared/types'
 import type { UiPlatform } from '../platform'
 
@@ -84,7 +85,7 @@ export const SECTIONS = [
   {
     id: 'appearance',
     label: 'Appearance',
-    blurb: 'Theme, density and the terminal typeface.',
+    blurb: 'The window’s theme, and how a session is drawn.',
   },
   /*
    * Everything the app says without being asked, in one place. It used to be
@@ -779,6 +780,17 @@ export type Setting = ToggleSetting | SelectSetting | NumberSetting | TextSettin
 export const MAX_TEXT_LENGTH = 512
 
 /**
+ * Longest a keyed row's value may be, which is a scheme as JSON.
+ *
+ * Twenty-one colours, their names and a scheme name comes to a little over six
+ * hundred characters. Two thousand is room for a name in any script and still
+ * half of the store's own 4096-character cut — the cut that matters, because it
+ * is applied *silently*, and a value trimmed there would come back as a scheme
+ * with a torn colour in it rather than as an error.
+ */
+export const MAX_KEYED_LENGTH = 2048
+
+/**
  * The longest a `help` line may be.
  *
  * Measured rather than chosen: at this window's reading measure, 120 characters
@@ -972,6 +984,28 @@ export const SETTINGS: readonly Setting[] = [
       { value: 'comfortable', label: 'Comfortable' },
       { value: 'compact', label: 'Compact' },
     ],
+  },
+  /*
+   * The terminal's colours, declared here so the pane has a row for them and
+   * `settings.json` has a key — but drawn by hand, like the font below it.
+   *
+   * A `select` would be the honest kind and it is the wrong control, for the
+   * reason `MONO_CANDIDATES` gives about the font it replaced: a scheme is
+   * twenty-one colours and a name in a list says nothing about any of them.
+   * The pane draws each one as itself instead. The kind is `text` because what
+   * is stored is an id — a built-in's, or one of the person's own — and the
+   * options are not a fixed list this table could hold: half of them are made
+   * by whoever is reading it.
+   */
+  {
+    id: 'appearance.terminalScheme',
+    section: 'appearance',
+    label: 'Terminal colours',
+    help: 'The colour scheme every session is drawn in.',
+    more: 'Pick one of the schemes, or edit any colour to make your own. Editing a scheme that came with the app makes you a copy of it rather than changing it for everybody.',
+    store: 'extra',
+    kind: 'text',
+    default: FOLLOW_APP_SCHEME_ID,
   },
   {
     id: 'appearance.terminalFontSize',
@@ -1409,10 +1443,37 @@ export function migrateSettingsFile(raw: unknown, options: MergeOptions = {}): S
 export interface SettingsSplit {
   /** Goes to `prefs:set` — store.ts's state.json. */
   prefs: Partial<Preferences>
-  /** Goes to `settings:set` — settings-extra.ts's settings.json. */
-  extra: Record<string, SettingValue>
+  /**
+   * Goes to `settings:set` — settings-extra.ts's settings.json.
+   *
+   * `null` is a real value here and means *delete this key*, which is what
+   * `applyPatch` in the store already does with one. Only a keyed row can send
+   * one — see {@link isKeyedSettingId} — because a declared setting always has
+   * a default to go back to and a keyed one is the row itself going away.
+   */
+  extra: Record<string, SettingValue | null>
   /** Ids that are not in the schema. Never written; returned so a caller can log. */
   unknown: string[]
+}
+
+/**
+ * The one family of settings keys that is not a row in the table above.
+ *
+ * Every other setting in this app is declared: one id, one control, one
+ * default. A person's own terminal colour schemes cannot be, because there is
+ * no fixed number of them — they are made, renamed and deleted while the app is
+ * running, and each one is a key of its own so that no single string can grow
+ * past the store's 4096-character cut (`terminal-theme.ts` carries that
+ * argument in full).
+ *
+ * So the prefix is declared instead of the ids, and this is the *only* prefix.
+ * It is deliberately not a general escape hatch: `splitPatch` accepts a string
+ * or a delete under it and nothing else, which keeps the settings file what its
+ * store says it is — a list of small choices, not a document store — while
+ * still letting one feature keep a list that a person owns.
+ */
+export function isKeyedSettingId(id: string): boolean {
+  return id.startsWith(CUSTOM_SCHEME_PREFIX) && id.length > CUSTOM_SCHEME_PREFIX.length
 }
 
 /**
@@ -1425,10 +1486,22 @@ export interface SettingsSplit {
  */
 export function splitPatch(patch: Readonly<Record<string, unknown>>): SettingsSplit {
   const prefs: Record<string, SettingValue> = {}
-  const extra: Record<string, SettingValue> = {}
+  const extra: Record<string, SettingValue | null> = {}
   const unknown: string[] = []
 
   for (const [id, raw] of Object.entries(patch)) {
+    /*
+     * A keyed row — one of somebody's own colour schemes — before the table is
+     * consulted, because there is nothing in the table to consult. `null` is
+     * kept rather than dropped: it is how the picker deletes a scheme, and
+     * `applyPatch` in the store removes a key set to one.
+     */
+    if (isKeyedSettingId(id)) {
+      if (raw === null) extra[id] = null
+      else if (typeof raw === 'string') extra[id] = raw.slice(0, MAX_KEYED_LENGTH)
+      else unknown.push(id)
+      continue
+    }
     // Through `lookup`, so a write under an old name lands on the row it now
     // belongs to rather than being rejected as unknown. The value is stored
     // under `setting.id` below either way, so an alias can never split one
