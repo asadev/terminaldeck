@@ -67,6 +67,8 @@ import dev.terminaldeck.android.ui.CopilotConsentSheet
 import dev.terminaldeck.android.ui.CopilotScreen
 import dev.terminaldeck.android.ui.CopilotSessionsSheet
 import dev.terminaldeck.android.ui.AppearanceScreen
+import dev.terminaldeck.android.ui.TerminalSchemeEditorScreen
+import dev.terminaldeck.android.ui.TerminalSchemeScreen
 import dev.terminaldeck.android.ui.ArchivedSessionsSheet
 import dev.terminaldeck.android.ui.LocalhostBrowser
 import dev.terminaldeck.android.ui.LocalhostScreen
@@ -84,6 +86,8 @@ import dev.terminaldeck.android.ui.theme.AppearanceStore
 import dev.terminaldeck.android.ui.theme.DeckTheme
 import dev.terminaldeck.android.ui.theme.TerminalDeckTheme
 import dev.terminaldeck.android.ui.theme.currentAppearance
+import dev.terminaldeck.android.ui.theme.TerminalSchemeStore
+import dev.terminaldeck.android.ui.theme.currentTerminalScheme
 import dev.terminaldeck.android.ui.theme.installTerminalPalette
 
 class MainActivity : ComponentActivity() {
@@ -136,9 +140,14 @@ class MainActivity : ComponentActivity() {
          *
          * The vendored emulator holds its colour scheme in process-wide static state and a session
          * copies from it at construction, so this has to happen before any session exists — and
-         * again on every appearance change, which is what the effect below does.
+         * again on every appearance *or* scheme change, which is what the effect below does.
+         *
+         * Both stores are primed first, in this order, because the scheme the terminal draws with
+         * may be the reserved "match the app's appearance" choice — which is the default — and
+         * resolving that needs the appearance to have been read already.
          */
-        installTerminalPalette(dark)
+        TerminalSchemeStore.prime(this)
+        installTerminalPalette(TerminalSchemeStore.resolve(dark))
 
         setContent {
             TerminalDeckTheme {
@@ -156,12 +165,19 @@ class MainActivity : ComponentActivity() {
                  */
                 val nowDark = currentAppearance().isDark(LocalConfiguration.current)
                 val scrim = deckWindowColor(nowDark)
-                DisposableEffect(nowDark) {
+                /*
+                 * Keyed on the scheme as well as the appearance, and it has to be: editing a
+                 * colour changes neither the theme nor the choice, only the twenty-one values
+                 * behind it, so an effect keyed on `nowDark` alone would not re-run and the change
+                 * would appear on the *next* session rather than on the one being looked at.
+                 */
+                val terminalScheme = currentTerminalScheme(nowDark)
+                DisposableEffect(nowDark, terminalScheme) {
                     enableEdgeToEdge(
                         statusBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT) { nowDark },
                         navigationBarStyle = SystemBarStyle.auto(scrim, scrim) { nowDark },
                     )
-                    installTerminalPalette(nowDark)
+                    installTerminalPalette(terminalScheme)
                     onDispose { }
                 }
 
@@ -263,6 +279,17 @@ private const val ROUTE_DEVICES = "devices"
 private const val ROUTE_WATCH = "watch"
 private const val ROUTE_ALERTS = "alerts"
 private const val ROUTE_APPEARANCE = "appearance"
+
+/**
+ * The terminal's colours, and one scheme of them.
+ *
+ * Nested under `appearance/` rather than sitting beside it, because that is where somebody looks for
+ * it and because the back stack then reads the way the screens do: Settings, Appearance, Terminal
+ * colours, one scheme.
+ */
+private const val ROUTE_TERMINAL_SCHEME = "appearance/terminal"
+private const val ROUTE_TERMINAL_SCHEME_EDIT = "appearance/terminal/{schemeId}"
+private const val ARG_SCHEME_ID = "schemeId"
 
 /** The machine's ports and dev servers, and the page one of them is being served as. */
 private const val ROUTE_LOCALHOST = "localhost"
@@ -894,7 +921,28 @@ fun TerminalDeckApp(
         }
 
         composable(ROUTE_APPEARANCE) {
-            AppearanceScreen(onBack = { navController.popBackStack() })
+            AppearanceScreen(
+                onBack = { navController.popBackStack() },
+                onTerminalColours = { navController.navigate(ROUTE_TERMINAL_SCHEME) },
+            )
+        }
+        composable(ROUTE_TERMINAL_SCHEME) {
+            TerminalSchemeScreen(
+                onBack = { navController.popBackStack() },
+                // Encoded, because a custom scheme's id is generated here and a built-in's is a
+                // slug — but the route is a string and the next id format is not this function's
+                // to guarantee.
+                onEdit = { id -> navController.navigate("appearance/terminal/" + Uri.encode(id)) },
+            )
+        }
+        composable(
+            route = ROUTE_TERMINAL_SCHEME_EDIT,
+            arguments = listOf(navArgument(ARG_SCHEME_ID) { type = NavType.StringType }),
+        ) { entry ->
+            TerminalSchemeEditorScreen(
+                schemeId = entry.arguments?.getString(ARG_SCHEME_ID).orEmpty(),
+                onBack = { navController.popBackStack() },
+            )
         }
 
         composable(ROUTE_MACHINES) {

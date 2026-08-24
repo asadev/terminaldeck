@@ -2,13 +2,12 @@ package dev.terminaldeck.android.ui.theme
 
 import com.termux.terminal.TerminalColors
 import com.termux.terminal.TerminalSession
-import java.util.Locale
 import java.util.Properties
 
 /**
- * The desktop's sixteen ANSI colours, installed into the vendored emulator.
+ * A chosen colour scheme, installed into the vendored emulator.
  *
- * ## The bug this closes
+ * ## The bug this closed, and the request that widened it
  *
  * The emulator ships Termux's own default scheme — a brighter xterm chart with `#00cd00` for green,
  * `#6495ed` for blue and `#000000` for the ground. The desktop and iOS both render the Tango-derived
@@ -18,36 +17,48 @@ import java.util.Properties
  * and a compiler's error markers were all a different colour on the phone from the machine they
  * came from.
  *
- * Nothing in the vendored module is edited to fix it. `TerminalColorScheme.updateWith(Properties)`
- * is the emulator's own public door for exactly this — it is what Termux's own colour-properties
- * file goes through — and the keys it takes (`color0`…`color15`, `foreground`, `background`,
- * `cursor`) are the ones written below. See `VENDORED.md`: the rule is to reach the vendored code
- * through its API rather than to fork it, so that the next upgrade is a copy rather than a merge.
+ * That is fixed by handing the emulator this product's own sixteen. What changed since is that the
+ * sixteen are no longer the *only* sixteen: Asad asked for the terminal colour to be a choice, on
+ * *"phone also, for Windows, for MacBook, all of them"*. So this function takes a [TerminalScheme]
+ * rather than a boolean, and the boolean it used to take now lives one level up, in
+ * [TerminalSchemeStore.resolve], where *which* scheme is a question rather than an assumption.
+ *
+ * Nothing in the vendored module is edited. `TerminalColorScheme.updateWith(Properties)` is the
+ * emulator's own public door for exactly this — it is what Termux's own colour-properties file goes
+ * through — and the keys it takes (`color0`…`color15`, `foreground`, `background`, `cursor`) are the
+ * ones written below. See `VENDORED.md`: the rule is to reach the vendored code through its API
+ * rather than to fork it, so that the next upgrade is a copy rather than a merge.
  *
  * ## Why the cursor is stated rather than derived
  *
  * `updateWith` will pick a cursor for you when none is given — white on a dark ground, black on a
- * light one — and that is a reasonable default and the wrong answer here. The caret is the accent
- * in this product, on every client, because it is the one moving thing on the screen and the accent
- * is what this app uses to mean *here*. Passing `cursor` explicitly also stops
+ * light one — and that is a reasonable default and the wrong answer here. Every scheme states its
+ * own caret, and a scheme's caret is part of the scheme: Nord's is `#d8dee9` and Campbell's is white
+ * because their authors said so. Passing `cursor` explicitly also stops
  * `setCursorColorForBackground` from running at all, which is what makes the result deterministic
  * enough to assert in a test.
  *
+ * ## The three keys are all there are
+ *
+ * A scheme carries twenty-one colours and this hands over nineteen. `cursorAccent` and
+ * `selectionBackground` have no key here because the emulator has no slot for them — it inverts for
+ * both. [TerminalScheme] says so where the fields are declared, and the editor says so on the two
+ * rows. They are carried rather than dropped so that a scheme edited on a phone is still a whole
+ * scheme when it reaches a desktop.
+ *
  * ## When this runs
  *
- * Once before the first session is attached, and again on every appearance change. The scheme is
- * process-wide static state inside the emulator (`TerminalColors.COLOR_SCHEME`), and a
- * `TerminalColors` instance copies from it at construction — so a session that already exists keeps
- * the old table until it is told to re-read, which is what [refreshLiveSession] is for. That is the
- * same shape iOS needs for the same reason: `TerminalBridge.applyColors` re-applies on a trait
- * change because SwiftTerm flattens whatever colour it is handed at the instant it is handed it.
+ * Once before the first session is attached, and again on every change to the appearance *or* to the
+ * scheme. The table is process-wide static state inside the emulator (`TerminalColors.COLOR_SCHEME`),
+ * and a `TerminalColors` instance copies from it at construction — so a session that already exists
+ * keeps the old table until it is told to re-read, which is what [refreshLiveSession] is for.
  */
-fun installTerminalPalette(dark: Boolean) {
+fun installTerminalPalette(scheme: TerminalScheme) {
     val props = Properties()
-    Ink.ansi.forEachIndexed { index, duo -> props["color$index"] = hex(duo.shade(dark)) }
-    props["foreground"] = hex(Ink.terminalInk.shade(dark))
-    props["background"] = hex(Ink.terminalPaper.shade(dark))
-    props["cursor"] = hex(Ink.accent.shade(dark))
+    scheme.ansi.forEachIndexed { index, value -> props["color$index"] = value }
+    props["foreground"] = scheme.foreground
+    props["background"] = scheme.background
+    props["cursor"] = scheme.cursor
     TerminalColors.COLOR_SCHEME.updateWith(props)
 }
 
@@ -55,16 +66,16 @@ fun installTerminalPalette(dark: Boolean) {
  * Make a session already on screen re-read the scheme.
  *
  * `TerminalColors.reset()` copies the defaults back over the current table, which also discards any
- * colour a program set with `OSC 4` — and that is correct rather than regrettable. The appearance
- * just changed; a palette a program tuned for the ground that is no longer there is not worth
- * preserving, and a program that cares re-emits its own sequences on the next redraw.
+ * colour a program set with `OSC 4` — and that is correct rather than regrettable. The scheme just
+ * changed; a palette a program tuned for the ground that is no longer there is not worth preserving,
+ * and a program that cares re-emits its own sequences on the next redraw.
+ *
+ * This is the whole of what makes an edit land on a live session: somebody dragging a hex field in
+ * Settings is changing static state the open terminal has already copied, and without this the
+ * change would appear on the next session and never on the one they are looking at.
  *
  * Null-safe on the emulator because a session that has not been given a size yet has none.
  */
 fun refreshLiveSession(session: TerminalSession?) {
     session?.emulator?.mColors?.reset()
 }
-
-/** `#rrggbb`, which is the one form `TerminalColors.parse` accepts besides `rgb:`. */
-private fun hex(shade: Shade): String =
-    String.format(Locale.ROOT, "#%02x%02x%02x", shade.red, shade.green, shade.blue)

@@ -5,6 +5,7 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.inputmethod.InputMethodManager
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -65,6 +66,8 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.viewinterop.AndroidView
 import dev.terminaldeck.android.ui.theme.DeckTheme
 import dev.terminaldeck.android.ui.theme.DeckType
+import dev.terminaldeck.android.ui.theme.TerminalScheme
+import dev.terminaldeck.android.ui.theme.currentTerminalScheme
 import dev.terminaldeck.android.ui.theme.installTerminalPalette
 import dev.terminaldeck.android.ui.theme.refreshLiveSession
 import com.termux.terminal.KeyHandler
@@ -189,17 +192,22 @@ fun TerminalScreen(
     /*
      * The terminal's paper, and it is not the app's canvas.
      *
-     * `--terminal-bg`: `#e8e8e8` on paper and `#121212` in the dark, which are the same two hexes the
-     * desktop paints. In the light theme it is deliberately *not* `--bg-primary`, in the words of the
-     * person who reported it on the desktop: a terminal painted the canvas colour *"is pure white,
-     * and inside the terminal itself it is a little bit different, like kind of grey"* — it stops
-     * being a terminal and becomes an empty document with a cursor in it.
+     * In the light theme it is deliberately *not* `--bg-primary`, in the words of the person who
+     * reported it on the desktop: a terminal painted the canvas colour *"is pure white, and inside
+     * the terminal itself it is a little bit different, like kind of grey"* — it stops being a
+     * terminal and becomes an empty document with a cursor in it.
      *
      * This was one hard-coded `#0B0D10`, a blue-tinted near-black that exists nowhere else in the
-     * product and had no light half at all.
+     * product and had no light half at all. It then became `--terminal-bg`, one hex per appearance.
+     * It is now **the chosen scheme's own background**, which is the only version of this that can
+     * be right: a person who picked Pure black picked `#000000` for the well *and* for the ninety
+     * pixels of view around it that the emulator never paints, and taking the ground from the app's
+     * theme while the sixteen came from the scheme is exactly how a terminal ends up with a hairline
+     * of the wrong colour down one edge.
      */
-    val paper = DeckTheme.colors.terminalPaper
-    val paperIsDark = DeckTheme.colors.isDark
+    val scheme = currentTerminalScheme(DeckTheme.colors.isDark)
+    val paper = Color(TerminalScheme.parse(scheme.background))
+    val paperIsDark = scheme.isDark
 
     val terminalView = remember(binding) {
         TerminalView(context, null).apply {
@@ -216,16 +224,21 @@ fun TerminalScreen(
     }
 
     /*
-     * Re-applied on every appearance change, on the view *and* on the emulator.
+     * Re-applied on every scheme change, on the view *and* on the emulator.
      *
      * The `View` keeps whatever `setBackgroundColor` was last given, and the emulator's colour table
      * is a copy taken from the process-wide scheme when the session was constructed — so a session
-     * already open when somebody switches to Light keeps the dark palette until it is told to
-     * re-read. `refreshLiveSession` is that telling. iOS needs the identical pass for the identical
-     * reason: SwiftTerm flattens a colour at the instant it is handed one.
+     * already open when somebody switches to Light, or drags a hex field two screens away, keeps the
+     * old palette until it is told to re-read. `refreshLiveSession` is that telling, and
+     * `onScreenUpdated` is what makes the repaint happen on this frame rather than on the next byte
+     * of output — which matters most for the session nobody is typing into, the one that would
+     * otherwise sit there in the old colours looking like the setting did nothing.
+     *
+     * Keyed on the whole scheme, not on `paperIsDark`: editing green changes neither the appearance
+     * nor the choice, and an effect that only watched those two would miss every edit.
      */
-    LaunchedEffect(paperIsDark, binding) {
-        installTerminalPalette(paperIsDark)
+    LaunchedEffect(scheme, binding) {
+        installTerminalPalette(scheme)
         refreshLiveSession(binding.session)
         terminalView.setBackgroundColor(paper.toArgb())
         terminalView.onScreenUpdated()
@@ -459,13 +472,29 @@ fun TerminalScreen(
             }
         },
     ) { padding ->
+        /*
+         * The well the terminal sits in, and the hairline that makes it one.
+         *
+         * The inset and the radius used to be visible for free, because the terminal's paper was
+         * `--bg-sunken` — a step *below* the app's canvas — while the chrome around it was the
+         * canvas itself. That is no longer something this screen is allowed to assume: the ground
+         * is now whichever scheme somebody chose, and the product's own **Terminal Deck** scheme is
+         * `#191919`, which is exactly the app's canvas in the dark. Left alone, the default would
+         * have drawn a rounded rectangle in the same colour as the thing behind it, which is not a
+         * rounded rectangle — the precise defect the sunken paper was introduced to fix, arriving
+         * back through the front door.
+         *
+         * A hairline fixes it for *every* scheme rather than for the one that was checked, which is
+         * the only version of this that survives somebody typing their own hex into the editor.
+         */
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
                 .padding(horizontal = 6.dp, vertical = 4.dp)
                 .clip(RoundedCornerShape(8.dp))
-                .background(paper),
+                .background(paper)
+                .border(1.dp, DeckTheme.colors.hairline, RoundedCornerShape(8.dp)),
         ) {
             AndroidView(
                 factory = { terminalView },
