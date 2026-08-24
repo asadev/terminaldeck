@@ -1,14 +1,22 @@
 package dev.terminaldeck.android.ui
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import dev.terminaldeck.android.ui.kit.DeckFootnote
+import dev.terminaldeck.android.ui.kit.DeckGroup
+import dev.terminaldeck.android.ui.kit.DeckRow
 import dev.terminaldeck.android.ui.kit.DeckSegmented
 import dev.terminaldeck.android.ui.kit.DeckTopBar
 import dev.terminaldeck.android.ui.kit.SectionCaption
@@ -16,10 +24,12 @@ import dev.terminaldeck.android.ui.theme.Appearance
 import dev.terminaldeck.android.ui.theme.AppearanceStore
 import dev.terminaldeck.android.ui.theme.DeckTheme
 import dev.terminaldeck.android.ui.theme.Space
+import dev.terminaldeck.android.ui.theme.TerminalSchemeStore
+import dev.terminaldeck.android.ui.theme.TerminalSchemes
 import dev.terminaldeck.android.ui.theme.currentAppearance
 
 /**
- * System, Light or Dark — one control, and it takes effect on the press.
+ * System, Light or Dark — and, underneath it, what the terminal itself is painted in.
  *
  * Asad, of the other client: *"mobile iOS is only dark mode — it should have both, in settings."*
  * Android was in the same state and worse: pinned dark in four places, none of which any screenshot
@@ -33,20 +43,34 @@ import dev.terminaldeck.android.ui.theme.currentAppearance
  * to *did that do anything* — a confirm button here would put a step between a choice and its only
  * observable effect.
  *
- * ## Why the terminal is named out loud
+ * ## Why the terminal has its own row now
  *
- * Because it is the one surface where a person might reasonably expect the setting **not** to apply,
- * and it does: the emulator's palette is installed from the resolved appearance in `MainActivity`,
- * so a session opened in Light is drawn on paper rather than on ink. Saying so is cheaper than
- * somebody choosing Light, seeing their terminal go white, and assuming it is broken.
+ * Because the two settings answer different questions and one of them used to answer both. The
+ * app's appearance decides the chrome; the terminal's scheme decides the ninety per cent of the
+ * screen that is program output — and Asad asked for that to be a choice, on *"phone also, for
+ * Windows, for MacBook, all of them"*. Folding it into System/Light/Dark would mean somebody who
+ * wants a black terminal on a light phone cannot have one, which is one of the more ordinary things
+ * to want.
+ *
+ * The row still names the terminal on this screen, because this is where somebody comes looking. It
+ * carries the current scheme's name as its value, so the answer to *what is my terminal set to* does
+ * not require opening anything.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AppearanceScreen(onBack: () -> Unit) {
+fun AppearanceScreen(onBack: () -> Unit, onTerminalColours: () -> Unit) {
     val context = LocalContext.current
     val colors = DeckTheme.colors
     val current = currentAppearance()
     val options = Appearance.entries
+    val dark = current.isDark(LocalConfiguration.current)
+
+    // Subscribes to both, so choosing a scheme two screens down updates this row on the way back.
+    val chosenId = TerminalSchemeStore.selectedId.value ?: TerminalSchemes.MATCH_APPEARANCE
+    TerminalSchemeStore.customSchemes.value
+    val schemeName =
+        if (chosenId == TerminalSchemes.MATCH_APPEARANCE) "Match appearance"
+        else TerminalSchemeStore.scheme(chosenId)?.name ?: "Match appearance"
 
     Scaffold(
         containerColor = colors.background,
@@ -66,7 +90,23 @@ fun AppearanceScreen(onBack: () -> Unit) {
             )
             DeckFootnote(
                 "System follows the phone, including its dark schedule. The terminal follows this " +
-                    "too — a session opened in Light is drawn dark-on-paper."
+                    "too, unless you give it colours of its own below."
+            )
+
+            Spacer(Modifier.height(Space.x5))
+            SectionCaption("Terminal")
+            DeckGroup {
+                DeckRow(
+                    title = "Terminal colours",
+                    value = schemeName,
+                    icon = Icons.Filled.Palette,
+                    onClick = onTerminalColours,
+                    modifier = Modifier.testTag("row.terminalColours"),
+                )
+            }
+            DeckFootnote(
+                "Pure black, Solarized, Nord, Dracula and the rest — or your own. Changes reach an " +
+                    "open session straight away."
             )
         }
     }
