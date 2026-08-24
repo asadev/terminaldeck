@@ -104,7 +104,7 @@ final class DevServerUITests: XCTestCase {
 
         // The dev-server rows are on the Localhost tab now rather than under the
         // sessions. See `DeckModel.Tab` for why the list moved.
-        XCTAssertTrue(app.openLocalhostTab(), "the Localhost tab should be reachable")
+        XCTAssertTrue(app.openBrowserTab(), "the Browser tab should be reachable")
     }
 
     private static let notRunning =

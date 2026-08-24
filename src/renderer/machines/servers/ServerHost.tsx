@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Button } from '../../settings/controls'
 import { ServerTerminal } from './ServerTerminal'
+import { hostUpdateAvailable } from '../../../shared/host-version'
 import { asHostOffer, asHostState, succeeded } from './types'
 import type { HostOffer, HostRunning, HostState, Server, ServersBridge } from './types'
 
@@ -177,6 +178,22 @@ export function ServerHost({
           {controls.install && (
             <Button tone="primary" onClick={() => setAsking('install')}>
               Set it up
+            </Button>
+          )}
+          {/*
+            * Update, beside Set it up rather than instead of it — the two never
+            * appear together, because one is offered only when there is no host
+            * and the other only when there is one and it is behind.
+            *
+            * It runs the **install** path, which is the point: `installHostOnServer`
+            * stages this build's own release over the connection already open, so
+            * update and install cannot end a server on two different versions.
+            * The version is named on the button, since "Update" with no number is
+            * a control nobody can judge before pressing it.
+            */}
+          {controls.update !== null && (
+            <Button tone="primary" onClick={() => setAsking('install')}>
+              Update it to {controls.update}
             </Button>
           )}
           {controls.link && (
@@ -611,6 +628,16 @@ export interface HostControls {
   stop: boolean
   /** The reason there is no Install button. Null when there is one, or when busy. */
   why: string | null
+  /**
+   * The version to update that server to, or null when it is level or ahead.
+   *
+   * Separate from {@link HostControls.install}, which is only ever offered when
+   * there is **no** host — so for one release the only way to get a newer build
+   * onto a server this app had already installed to was a sentence telling
+   * somebody to do it by hand. Asad: *"whenever there is a new update… it should
+   * show the update button also next to where we install."*
+   */
+  update: string | null
   /** Whether it will still be there tomorrow. Null when there is no host, or when busy. */
   reach: string | null
   /** What this computer already calls it. Null when it is not linked, or when busy. */
@@ -635,6 +662,10 @@ export function hostControls(offer: HostOffer, busy: boolean): HostControls {
     // Nothing is offered while the terminal is in use: there is one of them, and
     // a second press would take it from the run that is using it.
     install: !busy && !here && offer.canInstall,
+    // Offered whenever there is a host and it is behind — running, stopped,
+    // linked or not. It runs the same verb Install does, so a server cannot end
+    // up on a version neither control agrees about.
+    update: busy ? null : hostUpdateAvailable(offer.host),
     /*
      * Offered for a host this computer is not linked to — and for one it is
      * linked to and cannot reach, which is the case this used to hide.

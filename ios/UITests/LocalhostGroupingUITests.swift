@@ -64,7 +64,7 @@ final class LocalhostGroupingUITests: XCTestCase {
         Self.reachable = connected
         try XCTSkipUnless(connected, Self.notRunning)
 
-        XCTAssertTrue(app.openLocalhostTab(), "the Localhost tab should be reachable")
+        XCTAssertTrue(app.openBrowserTab(), "the Browser tab should be reachable")
     }
 
     private static let notRunning =
@@ -113,7 +113,7 @@ final class LocalhostGroupingUITests: XCTestCase {
 
         app.terminate()
         app.launch()
-        XCTAssertTrue(app.openLocalhostTab(), "the Localhost tab should be reachable after a relaunch")
+        XCTAssertTrue(app.openBrowserTab(), "the Browser tab should be reachable after a relaunch")
         XCTAssertTrue(app.staticTexts["Harness page"].waitForExistence(timeout: 20),
                       "the name should have outlived the app")
 
@@ -146,7 +146,7 @@ final class LocalhostGroupingUITests: XCTestCase {
 
         app.terminate()
         app.launch()
-        XCTAssertTrue(app.openLocalhostTab(), "the Localhost tab should be reachable after a relaunch")
+        XCTAssertTrue(app.openBrowserTab(), "the Browser tab should be reachable after a relaunch")
         XCTAssertTrue(app.buttons["localhost.section.other"].waitForExistence(timeout: 20))
         XCTAssertTrue(app.buttons["localhost.section.other"].label.contains("Open"),
                       "the choice should have outlived the app")

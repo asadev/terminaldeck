@@ -266,7 +266,7 @@ final class AppearanceShotsUITests: XCTestCase {
     }
 
     private func localhost(_ scheme: Scheme) throws {
-        XCTAssertTrue(app.openLocalhostTab(), "the Localhost tab should be reachable")
+        XCTAssertTrue(app.openBrowserTab(), "the Browser tab should be reachable")
         let headers = app.buttons.matching(
             NSPredicate(format: "identifier BEGINSWITH 'localhost.section.'"))
         XCTAssertTrue(headers.firstMatch.waitForExistence(timeout: 30),
@@ -333,7 +333,9 @@ final class AppearanceShotsUITests: XCTestCase {
                  * gap named.
                  */
                 if app.buttons["localhost.done"].exists { app.buttons["localhost.done"].tap() }
-                _ = app.buttons["localhost.open"].waitForExistence(timeout: 15)
+                // The bar, not the `+` — the always-on control on this tab
+                // since the two became one Browser screen.
+                _ = app.textFields["browser.address"].waitForExistence(timeout: 15)
                 // The tunnel binds the same port number on the phone so that the
                 // page's own absolute links resolve, and closing the page hands
                 // that socket back a moment later. Opening the same port again

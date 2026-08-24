@@ -166,7 +166,7 @@ final class ReleaseShotsUITests: XCTestCase {
      * from outside the app at all.
      */
     private func localhostGroupsAndFolds() throws {
-        XCTAssertTrue(app.openLocalhostTab(), "the Localhost tab should be reachable")
+        XCTAssertTrue(app.openBrowserTab(), "the Browser tab should be reachable")
 
         let headers = app.buttons.matching(
             NSPredicate(format: "identifier BEGINSWITH 'localhost.section.'"))
@@ -231,7 +231,7 @@ final class ReleaseShotsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Basket"].waitForExistence(timeout: 15),
                       "Back should actually go back")
         app.buttons["localhost.done"].tap()
-        XCTAssertTrue(app.buttons["localhost.open"].waitForExistence(timeout: 15),
+        XCTAssertTrue(app.textFields["browser.address"].waitForExistence(timeout: 15),
                       "Done should return to the list")
     }
 

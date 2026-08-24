@@ -76,6 +76,8 @@
  */
 
 import { BRAND } from '../../shared/brand'
+import { hostUpdateAvailable } from '../../shared/host-version'
+export { hostUpdateAvailable }
 import { SERVER_ADDRESS_PREFIX, parseServerAddress } from '../../shared/server-address'
 import type { HostPackage } from './host-package'
 

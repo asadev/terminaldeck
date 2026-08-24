@@ -113,7 +113,7 @@ final class InspectUITests: XCTestCase {
     /// — see `DeckModel.Tab`. Called by each case rather than from `setUp`,
     /// because one of them starts a session first and that is on the other tab.
     private func openLocalhost() {
-        XCTAssertTrue(app.openLocalhostTab(), "the Localhost tab should be reachable")
+        XCTAssertTrue(app.openBrowserTab(), "the Browser tab should be reachable")
     }
 
     private static let notRunning =

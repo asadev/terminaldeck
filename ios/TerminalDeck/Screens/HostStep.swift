@@ -145,8 +145,54 @@ struct HostStepCard: View {
 
     /* ----------------------------------------------------------- controls -- */
 
+    /**
+     * **Update**, wherever the host is installed and behind.
+     *
+     * > *"whenever there is a new update for headless… it should show the update
+     * > button also next to where we install and we can see we installed it…
+     * > so we can just directly update anytime directly from the connected
+     * > device."*
+     *
+     * Drawn above the branch below rather than inside one of its arms, and that
+     * placement is the requirement rather than a layout choice: a host can be
+     * behind while stopped, while running, while connected and while refusing,
+     * and an Update that only appeared in one of those is the dead end this
+     * replaces — for one release the only way to get a newer build onto a server
+     * was a sentence telling you to go and find a desktop.
+     *
+     * It runs the same verb Install does. `ServerConnector.install` stages this
+     * app's own release tarball over the SSH connection already open and
+     * re-surveys afterwards, so *update* and *install* are one code path and
+     * cannot drift into two answers about what version a server ends up on.
+     *
+     * Silent when level or ahead — see `HostProbe.updateAvailable`.
+     */
+    @ViewBuilder
+    private func updateRow(_ host: HostOnServer) -> some View {
+        if let newer = HostProbe.updateAvailable(host) {
+            VStack(alignment: .leading, spacing: 6) {
+                action("Update it to \(newer)", "arrow.up.circle",
+                       identifier: "server.update",
+                       disabled: install.isBusy || isWorking) {
+                    Task { await connector.install(serverId) }
+                }
+                // The number it is on now, because "update" without it is a
+                // button that cannot be judged. Its own version is already on
+                // the line above this card; this is the other half of the
+                // comparison somebody is being asked to act on.
+                Text("This server is on \(host.version). Restarting it is part of the update, so "
+                     + "any session it is running ends.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.faint)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("server.updateNote")
+            }
+        }
+    }
+
     @ViewBuilder
     private func controls(server: StoredServer, host: HostOnServer, room: HostRoom) -> some View {
+        updateRow(host)
         if !host.isInstalled {
             if let refusal = HostProbe.whyNot(room) {
                 stated(refusal)

@@ -98,15 +98,28 @@ extension XCUIApplication {
         return buttons["settings.github"].waitForExistence(timeout: 10)
     }
 
-    /// The Localhost tab, and proof it arrived. There is no row that is always
-    /// present — a machine serving nothing has none — so the proof is the tab's
-    /// own toolbar control, which is on the screen in every state. It used to be
-    /// a Refresh button and it is the `+` that opens an address now; the pull
-    /// gesture took over the refreshing. See `LocalhostListView`.
+    /**
+     * The **Browser** tab, and proof it arrived.
+     *
+     * Called `openBrowserTab` until 2026-08-24, when the tab it opens stopped
+     * being called Localhost: *"instead of having local host page on the pill
+     * and one separate feature as watch browser in the settings page, we should
+     * have only one which will be called browser."* Renamed with it, because a
+     * helper that says Localhost and presses Browser is the next person's
+     * confusion.
+     *
+     * The proof moved too, and that is the more interesting half. There is no
+     * row that is always present — a machine serving nothing has none — so the
+     * proof has always been the tab's own always-on control. That was a Refresh
+     * button, then the `+` that opened an address, and it is now the **address
+     * bar**, which is on the screen itself rather than behind the `+` that used
+     * to raise it. Five suites failed on `localhost.open` the day the `+` went,
+     * which is exactly what this indirection is for.
+     */
     @discardableResult
-    func openLocalhostTab() -> Bool {
-        openTab("Localhost")
-        return buttons["localhost.open"].waitForExistence(timeout: 10)
+    func openBrowserTab() -> Bool {
+        openTab("Browser")
+        return textFields["browser.address"].waitForExistence(timeout: 10)
     }
 
     /**

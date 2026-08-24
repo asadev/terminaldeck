@@ -358,3 +358,75 @@ final class ServerProbeReadingTests: XCTestCase {
     #end ok
     """
 }
+
+/**
+ * Whether a server has an update waiting — **the same list `host-version.test.ts`
+ * pins**, and that is the point of the file rather than a coincidence.
+ *
+ * `hostUpdateAvailable` in `src/shared/host-version.ts` is this rule written a
+ * second time, because there is no module an Electron main process and a Swift
+ * app can both read. Two implementations of one rule drift silently unless
+ * something makes them fail together, so the cases are deliberately identical:
+ * a case added on one side is a case to add on the other.
+ */
+final class HostUpdateAvailableTests: XCTestCase {
+
+    private func on(_ version: String) -> HostOnServer {
+        var host = HostOnServer()
+        host.command = "/home/asad/.local/bin/terminaldeck"
+        host.version = version
+        return host
+    }
+
+    func testOffersThisBuildWhenTheServerIsBehind() {
+        XCTAssertEqual(HostProbe.updateAvailable(on("0.10.1"), mine: "0.10.3"), "0.10.3")
+        XCTAssertEqual(HostProbe.updateAvailable(on("0.9.9"), mine: "0.10.0"), "0.10.0")
+    }
+
+    /**
+     * The one a string comparison gets wrong, and the reason this is not `<`.
+     *
+     * `"0.9.1" < "0.10.1"` is **false** as text, because `9` sorts after `1`.
+     * This product has shipped both a 0.9 and a 0.10, so that ordering is the
+     * release this app is actually on rather than a hypothetical.
+     */
+    func testComparesFieldsAsNumbersNotAsText() {
+        XCTAssertEqual(HostProbe.updateAvailable(on("0.9.1"), mine: "0.10.1"), "0.10.1")
+        XCTAssertNil(HostProbe.updateAvailable(on("0.10.1"), mine: "0.9.1"))
+    }
+
+    func testSaysNothingWhenLevel() {
+        XCTAssertNil(HostProbe.updateAvailable(on("0.10.3"), mine: "0.10.3"))
+    }
+
+    /// A phone on an older TestFlight build than the server is a real case, and
+    /// offering to "update" that server *down* would make the machine worse.
+    func testSaysNothingWhenTheServerIsAhead() {
+        XCTAssertNil(HostProbe.updateAvailable(on("0.11.0"), mine: "0.10.3"))
+    }
+
+    func testSaysNothingWithNoHostToUpdate() {
+        var none = HostOnServer()
+        none.version = "0.1.0"
+        XCTAssertNil(HostProbe.updateAvailable(none, mine: "0.10.3"))
+    }
+
+    /// Silence rather than a guess: the cost is a missing button, and the cost
+    /// of guessing is an install nobody asked for.
+    func testSaysNothingRatherThanGuessing() {
+        for odd in ["", "unknown", "0.10.1-rc.1", "2026.08.24.1", "v", "0.a.1", "-1.0.0"] {
+            XCTAssertNil(HostProbe.updateAvailable(on(odd), mine: "0.10.3"), odd)
+        }
+    }
+
+    /// `--version` has carried a leading `v` on some builds.
+    func testToleratesALeadingV() {
+        XCTAssertEqual(HostProbe.updateAvailable(on("v0.10.1"), mine: "0.10.3"), "0.10.3")
+    }
+
+    /// A short version is padded rather than refused: `0.10` is `0.10.0`.
+    func testPadsAShortVersion() {
+        XCTAssertEqual(HostProbe.updateAvailable(on("0.10"), mine: "0.10.3"), "0.10.3")
+        XCTAssertNil(HostProbe.updateAvailable(on("1"), mine: "0.10.3"))
+    }
+}

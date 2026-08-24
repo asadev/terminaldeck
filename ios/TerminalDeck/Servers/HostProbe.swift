@@ -443,6 +443,65 @@ enum HostProbe {
         }
     }
 
+    /**
+     * Whether the host on that server is **older than this app**, and by which
+     * version — or nil when it is level, ahead, or has not said.
+     *
+     * > *"whenever there is a new update for headless… it should show the update
+     * > button also next to where we install and we can see we installed it…
+     * > so we can just directly update anytime directly from the connected
+     * > device."*
+     *
+     * The narrow case this generalises is `needsNewerBuild` above, which fires
+     * only for a host too old to print a server address — one failure, noticed
+     * because it produced a dead end. But a host can be a release behind without
+     * failing at anything yet, and the person holding the phone is the only one
+     * who can see both numbers: the app knows what it ships, and the probe has
+     * just read what is on the server. Nobody else in the system is in a
+     * position to notice, which is why nothing did.
+     *
+     * ## It compares, rather than trusting the strings to sort
+     *
+     * `"0.9.1" > "0.10.1"` is true as text and false as a version, and this
+     * product has already shipped a 0.9 and a 0.10. Each field is compared as a
+     * number, missing fields read as zero, and anything that is not a plain
+     * `x.y.z` answers nil rather than guessing — a host that prints something
+     * unexpected must not be told it is behind on the strength of a parse this
+     * code got wrong.
+     *
+     * ## Ahead is not behind
+     *
+     * A phone on an older TestFlight build than the server is a real case, and
+     * it must draw nothing: offering to "update" a server *down* to this app's
+     * version is a control that makes the machine worse. Level draws nothing
+     * either — the row exists to say *there is something newer*, and the honest
+     * answer when there is not is silence.
+     */
+    static func updateAvailable(_ host: HostOnServer, mine: String = Brand.version) -> String? {
+        guard host.isInstalled else { return nil }
+        guard let there = semver(host.version), let here = semver(mine) else { return nil }
+        for pair in zip(there, here) where pair.0 != pair.1 {
+            return pair.0 < pair.1 ? mine : nil
+        }
+        return nil
+    }
+
+    /// `x.y.z` as three numbers, padded, or nil for anything else. Trimmed of a
+    /// leading `v` because `--version` output has carried one on some builds.
+    private static func semver(_ text: String) -> [Int]? {
+        let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "v"))
+        let parts = clean.split(separator: ".", omittingEmptySubsequences: false)
+        guard !parts.isEmpty, parts.count <= 3 else { return nil }
+        var out: [Int] = []
+        for part in parts {
+            guard let n = Int(part), n >= 0 else { return nil }
+            out.append(n)
+        }
+        while out.count < 3 { out.append(0) }
+        return out
+    }
+
     /* ------------------------------------------------------ the way back -- */
 
     /// The button that takes it off again, named the way a person would say it.

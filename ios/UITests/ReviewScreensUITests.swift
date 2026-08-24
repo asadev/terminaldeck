@@ -126,13 +126,18 @@ final class ReviewScreensUITests: XCTestCase {
         app.launch()
         try connectToTheLiveHost()
 
-        XCTAssertTrue(app.openLocalhostTab())
-        app.buttons["localhost.open"].tap()
-        let field = app.textFields["localhost.open.field"]
+        XCTAssertTrue(app.openBrowserTab())
+        /*
+         * The bar is on the screen now — there is no `+` to press first and no
+         * Go button to press after. It was a sheet behind a `+` until
+         * 2026-08-24: *"we should have only one which will be called browser…
+         * where we can browse the localhost, we can type."* Typing and a return
+         * key is the whole interaction, which is what `onSubmit` is.
+         */
+        let field = app.textFields["browser.address"]
         XCTAssertTrue(field.waitForExistence(timeout: 10))
         field.tap()
-        field.typeText("localhost:\(port)/index.html")
-        app.buttons["localhost.open.go"].tap()
+        field.typeText("localhost:\(port)/index.html\n")
 
         /*
          * The page's own `<title>`, in the navigation bar.
@@ -171,7 +176,7 @@ final class ReviewScreensUITests: XCTestCase {
         app.launch()
         try connectToTheLiveHost()
 
-        XCTAssertTrue(app.openLocalhostTab())
+        XCTAssertTrue(app.openBrowserTab())
         let headers = app.buttons.matching(
             NSPredicate(format: "identifier BEGINSWITH 'localhost.section.'"))
         XCTAssertTrue(headers.firstMatch.waitForExistence(timeout: 30),
@@ -346,46 +351,50 @@ final class ReviewScreensUITests: XCTestCase {
     }
 
     /**
-     * The `+`, the sentence it shows, the refusal, and a real page at a path.
+     * The address bar, and where a real site goes.
      *
-     * The refusal is asserted as well as photographed, and it is the half of
-     * this feature that could rot silently: if a later change made a live link
-     * *load* instead of being refused, the page would come up looking perfectly
-     * correct and would be a lie about which computer it ran on.
+     * **The assertion here changed on 2026-08-24 and the safety property did
+     * not.** A site on the internet used to be *refused*, with a paragraph
+     * explaining that it would otherwise load on the phone rather than on the
+     * machine. That was true and it was the wrong conclusion — the machine has a
+     * browser, this app can open a page in it and can cast it back — so it is
+     * opened **there** now and appears under Windows on this same screen.
+     *
+     * What must still never happen is the thing the old assertion was guarding:
+     * the page loading *on the phone*. That would come up looking perfectly
+     * correct and be a lie about which computer it ran on. So the proof is
+     * two-sided — the app says it went to the machine, and no local page screen
+     * opened.
      */
     private func theAddressField(_ scheme: Scheme) throws {
-        XCTAssertTrue(app.openLocalhostTab(), "Localhost should be reachable")
-        let plus = app.buttons["localhost.open"]
-        XCTAssertTrue(plus.waitForExistence(timeout: 10), "the + should be in the toolbar")
-        XCTAssertTrue(plus.isEnabled, "the machine advertises localhost, so it should be live")
-        plus.tap()
-
-        let field = app.textFields["localhost.open.field"]
-        XCTAssertTrue(field.waitForExistence(timeout: 10), "the sheet should offer a field")
+        XCTAssertTrue(app.openBrowserTab(), "the Browser tab should be reachable")
+        let field = app.textFields["browser.address"]
+        XCTAssertTrue(field.waitForExistence(timeout: 10), "the bar should be on the screen")
         capture("\(scheme.rawValue)-08-open-address")
 
         field.tap()
-        field.typeText("example.com")
-        app.buttons["localhost.open.go"].tap()
-        let notice = app.staticTexts["localhost.open.notice"]
-        XCTAssertTrue(notice.waitForExistence(timeout: 5),
-                      "a site on the internet must be refused, not quietly loaded on the phone")
-        XCTAssertTrue(notice.label.contains("example.com"), "and the refusal should name it")
+        field.typeText("example.com\n")
+        let toast = app.staticTexts["localhost.list.toast"]
+        XCTAssertTrue(toast.waitForExistence(timeout: 5),
+                      "a site on the internet should open on the machine, and be said to")
+        XCTAssertFalse(app.buttons["localhost.page.done"].exists,
+                       "and it must not have loaded on the phone")
         capture("\(scheme.rawValue)-09-open-address-refused")
 
         // Now a real one, on the port this run's own page is served from, at a
         // path — which is the thing that was unreachable from this app before
         // the field existed.
         let port = env("TD_PAGE_PORT")
-        guard !port.isEmpty else {
-            app.buttons["localhost.open.cancel"].tap()
-            return
-        }
+        // Nothing to dismiss any more — the bar is the screen, not a sheet over
+        // it — so a run with no page to serve simply stops here.
+        guard !port.isEmpty else { return }
         field.tap()
+        // The bar clears itself on a send that went somewhere, so there is
+        // usually nothing to select; the long press stays for the run where the
+        // previous line was refused and left its text standing.
         field.press(forDuration: 1.2)
         if app.menuItems["Select All"].waitForExistence(timeout: 3) { app.menuItems["Select All"].tap() }
-        field.typeText("localhost:\(port)/index.html")
-        app.buttons["localhost.open.go"].tap()
+        field.typeText("localhost:\(port)/index.html\n")
 
         /*
          * Photographed **settled**, whichever way it settles.

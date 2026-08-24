@@ -147,7 +147,7 @@ final class LocalhostUITests: XCTestCase {
         // The ports are their own tab now rather than a second list under the
         // sessions — *"Sessions separately and local host separately in the pill
         // side"*. Every case below starts here.
-        XCTAssertTrue(app.openLocalhostTab(), "the Localhost tab should be reachable")
+        XCTAssertTrue(app.openBrowserTab(), "the Browser tab should be reachable")
     }
 
     /// The skip, and it names both halves of the setup — the host *and* the dev
