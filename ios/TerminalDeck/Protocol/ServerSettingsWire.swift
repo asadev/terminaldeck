@@ -43,6 +43,32 @@ struct ServerSettingWire: Equatable, Identifiable {
     let options: [String]?
 
     var id: ServerSettingKey { key }
+
+    /**
+     * A switch's value as three answers, not two.
+     *
+     * `on`, `off`, and **the machine has not said** — and the third one is the
+     * one this defect was made of. Asad photographed *"Restore sessions at
+     * launch"* ticked in one frame and unticked moments later with nothing
+     * touched in between; nothing had toggled, because nothing on this phone or
+     * that machine changes a server setting without an `apply` and an answer.
+     * What changed was the drawing: the row read `value == "true"`, and every
+     * other string on earth — including the empty one `WireCodec.serverSetting`
+     * produces for a value it could not read — collapsed into a confident,
+     * unticked **Off**.
+     *
+     * A control that cannot tell *off* from *I was not told* will eventually
+     * show somebody the wrong one, and this row's wrong one says their sessions
+     * are not being restored. So the unknown is a case, it is drawn as itself,
+     * and it cannot be pressed — see `ServerSettingsSection.toggleRow`.
+     */
+    var flag: Bool? {
+        switch value {
+        case "true": return true
+        case "false": return false
+        default: return nil
+        }
+    }
 }
 
 extension WireCodec {

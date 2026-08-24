@@ -85,6 +85,10 @@ struct ServerDetailView: View {
                             .font(.system(size: 14))
                             .foregroundStyle(Theme.secondary)
                     }
+
+
+                    // Pushed from Settings, so it keeps the bar and owes it room.
+                    TabBarClearance()
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 12)

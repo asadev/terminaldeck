@@ -447,6 +447,9 @@ struct MachinesView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 4)
                         .padding(.top, 18)
+
+                    // Machines keeps the bar, so it owes it room.
+                    TabBarClearance()
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
@@ -953,6 +956,11 @@ struct DeckSettingsView: View {
                         .padding(.horizontal, 4)
                         .padding(.top, 8)
                         .accessibilityIdentifier("settings.noPushNote")
+
+                    // And room for the pill that floats over the bottom of this
+                    // screen — the one he photographed drawn across the words
+                    // "Terminal Deck". See `TabBarClearance`.
+                    TabBarClearance()
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 12)

@@ -453,9 +453,57 @@ final class HostLink: Identifiable {
         copilot.refresh()
     }
 
-    /// Take this machine down without forgetting it — the app is closing, or the
-    /// user is unpairing and the store is about to be written by someone else.
+    /**
+     * Take this machine down and forget what it turned out to be — the app is
+     * closing, or the user is unpairing and the store is about to be written by
+     * someone else.
+     *
+     * The teardown and the forgetting are two things, and {@link restart} is the
+     * one that wants only the first. See the note on `copilot.forget()` below.
+     */
     func stop() {
+        drop()
+        // And what this machine turned out to be, for a sharper version of the
+        // reason `granted` is cleared in `drop()`: a permission remembered across
+        // a teardown is a permission this phone would draw controls for against a
+        // machine it has not been readmitted to. An unpair and a re-pair both run
+        // this, and a re-pair mints a **new** device id, so nothing about the old
+        // one may be carried across.
+        copilot.forget()
+    }
+
+    /**
+     * Put the socket down and bring it straight back up, keeping what this
+     * machine *is*.
+     *
+     * **A re-sign-in is not an unpair**, and treating it as one is what took the
+     * Copilot pill off the bar in front of him. `DeckModel.adoptSignedIn` ran
+     * `stop()` then `start()` on a machine that was already in the list — the
+     * right idea, because the transport has to pick up the credential that was
+     * just written rather than retry with the old one — but `stop()` also runs
+     * `copilot.forget()`, which clears `isOffered`, `isImplemented` and `linked`.
+     * The pill is drawn from exactly those three. So the bar went from four pills
+     * to three the moment he signed in again, and back to four a second or two
+     * later when the reconnect's `welcome` landed: *"at 3:25 the bar carries
+     * Copilot · Sessions · Localhost · Settings. Seconds later, on the same
+     * screen, Copilot is gone."*
+     *
+     * Nothing about the machine changed across that sign-in. It is the same
+     * host, the same relay slot and — since the trust store stopped minting a
+     * second row for a key it already knows — the same device id, so there was
+     * never anything for the phone to re-learn. What the socket held goes;
+     * what the machine is stays, and the tab bar does not restructure under a
+     * thumb.
+     */
+    func restart() {
+        drop()
+        start()
+    }
+
+    /// Everything a teardown drops: the socket, and every claim that belonged to
+    /// it. Shared by `stop()` and `restart()` so the two cannot drift about what
+    /// a dropped connection means on screen.
+    private func drop() {
         closeLocalhost()
         clearUpload()
         transport?.stop()
@@ -472,11 +520,11 @@ final class HostLink: Identifiable {
         // empty one across a stop would leave a phone refusing to offer New
         // Session on a machine that has simply not been asked yet.
         granted = nil
-        // And the copilot with it, for a sharper version of the same reason: a
-        // permission remembered across a teardown is a permission this phone
-        // would draw controls for against a machine it has not been readmitted
-        // to. `stop()` is what an unpair and a re-pair both run.
-        copilot.forget()
+        // The copilot's *connection* goes here with everything else the socket
+        // held; what the machine **is** is `stop()`'s to forget and `restart()`'s
+        // to keep. Splitting the two is the whole of the tab-bar fix — see
+        // `restart()`.
+        copilot.connectionLost()
         attached = []
         wanted = []
         bridges = [:]

@@ -34,6 +34,7 @@
 import {
   CAPABILITY,
   SERVER_SETTINGS,
+  settingFlag,
   type ClientMessage,
   type ServerMessage,
   type ServerSettingKey,
@@ -310,18 +311,27 @@ export class ServerSettings {
     return block
   }
 
+  /**
+   * The switch, in three states. See {@link settingFlag} — a row whose value is
+   * not one of the two words is *not told*, and drawing it as **Off** is how
+   * this browser and the phone both claimed a machine was not restoring
+   * sessions when neither had been told either way. It also refuses the press:
+   * a control that sends `apply` from a state it does not know can turn a
+   * setting off by being tapped while it was still catching up.
+   */
   private toggleRow(row: ServerSettingWire): HTMLElement {
-    const on = row.value === 'true'
+    const flag = settingFlag(row.value)
     const block = el('button', 'setting srvset__toggle')
     ;(block as HTMLButtonElement).type = 'button'
     block.append(el('span', 'setting__title', 'Restore sessions at launch'))
     const working = this.busy === row.key
-    block.append(el('span', 'setting__value', working ? 'Working…' : on ? 'On' : 'Off'))
-    block.setAttribute('aria-pressed', on ? 'true' : 'false')
-    if (working) {
+    const reading = working ? 'Working…' : flag === null ? '—' : flag ? 'On' : 'Off'
+    block.append(el('span', 'setting__value', reading))
+    if (flag !== null) block.setAttribute('aria-pressed', flag ? 'true' : 'false')
+    if (working || flag === null) {
       ;(block as HTMLButtonElement).disabled = true
     } else {
-      block.addEventListener('click', () => this.apply('general.restoreSessions', on ? 'false' : 'true'))
+      block.addEventListener('click', () => this.apply('general.restoreSessions', flag ? 'false' : 'true'))
     }
     return block
   }

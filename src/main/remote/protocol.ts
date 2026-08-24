@@ -2073,6 +2073,31 @@ export function serverSettingWire(raw: unknown): ServerSettingWire | null {
   return wire
 }
 
+/**
+ * A boolean setting's value as **three** answers: on, off, and *the machine has
+ * not said*.
+ *
+ * The third is the one a client keeps getting wrong, and it cost a defect on
+ * 2026-08-23: *"Restore sessions at launch"* was photographed ticked in one
+ * frame and unticked moments later with nothing touched in between. Nothing had
+ * toggled — no `settings.apply` was sent and no answer came back — but both
+ * clients read the row as `value === 'true'`, which turns every other string
+ * into a confident **Off**, the empty one that {@link serverSettingWire}
+ * produces for an unreadable value included.
+ *
+ * So the unknown is a value a caller has to handle rather than a case that
+ * quietly becomes "off". A switch that cannot tell *off* from *not told* will
+ * eventually show somebody the wrong one, and for this row the wrong one says
+ * their sessions are not being restored.
+ *
+ * The Swift client mirrors this exactly, as `ServerSettingWire.flag`.
+ */
+export function settingFlag(value: string): boolean | null {
+  if (value === 'true') return true
+  if (value === 'false') return false
+  return null
+}
+
 /** The longest a control's value may be. A model name is the long one. */
 export const MAX_CONTROL_VALUE_LENGTH = 64
 

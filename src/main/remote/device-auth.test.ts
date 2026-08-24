@@ -796,6 +796,211 @@ describe('sign-in mint', () => {
   })
 })
 
+/**
+ * **One device key is one row.** The defect Asad photographed on 0.10.1, from
+ * the file's side.
+ *
+ * Settings → Devices listed his phone twice: same name, same kind, and the same
+ * fingerprint `VK6R-M299-Q8P6-YJPK-BYNT-Q358` under both — one *Connected now*
+ * with a Sign out, one *Seen 7m ago* with a Remove, and no way to tell which was
+ * which. Two live credentials for one phone, and a Remove on the wrong row cuts
+ * off the phone in your hand.
+ *
+ * These are the rules that make that unrepresentable, and the one that reaches
+ * backwards into a file that already has it.
+ */
+describe('one live row per device key', () => {
+  const SIGN_IN_ADDR = '100.99.3.3'
+
+  it('refreshes the row when the same phone signs in again, rather than adding one', async () => {
+    const time = clock()
+    const auth = new RemoteAuth(tempDir(), { now: time.now })
+    const key = randomBytes(32)
+
+    const first = await auth.enrollDevice('iPhone', SIGN_IN_ADDR, key)
+    if (!first.ok) throw new Error('unreachable')
+    time.advance(7 * 60_000)
+    const again = await auth.enrollDevice('iPhone', SIGN_IN_ADDR, key)
+    if (!again.ok) throw new Error('unreachable')
+
+    // One row, not two — and the same row, so every per-device store keyed on
+    // this id (its kind, its folder grants, its window grants) still finds it.
+    expect(auth.listDevices()).toHaveLength(1)
+    expect(again.device.id).toBe(first.device.id)
+    // And one fingerprint cannot be sitting under two rows, because there is one.
+    expect(auth.listDevices().map((device) => device.fingerprint)).toEqual([first.device.fingerprint])
+    // When the machine first trusted this phone is a fact about the phone, not
+    // about the form just filled in.
+    expect(again.device.addedAt).toBe(first.device.addedAt)
+
+    // The new secret works and the one it replaced does not: a re-login retires
+    // the credential it replaces rather than leaving a second one live.
+    expect((await auth.verifyCredential(again.credential, SIGN_IN_ADDR)).ok).toBe(true)
+    const stale = await auth.verifyCredential(first.credential, SIGN_IN_ADDR)
+    expect(stale.ok).toBe(false)
+  }, 30_000)
+
+  it('takes the newer name and approves a row that was still waiting', async () => {
+    const auth = new RemoteAuth(tempDir())
+    const key = randomBytes(32)
+    const { token } = auth.createPairingToken()
+    const pending = await auth.redeemPairingToken(token, 'iPhone', ADDRESS, key)
+    if (!pending.ok) throw new Error('unreachable')
+    expect(pending.device.status).toBe('pending')
+
+    const signedIn = await auth.enrollDevice('Asad’s iPhone', SIGN_IN_ADDR, key)
+    if (!signedIn.ok) throw new Error('unreachable')
+    expect(auth.listDevices()).toHaveLength(1)
+    expect(signedIn.device.id).toBe(pending.device.id)
+    expect(signedIn.device.name).toBe('Asad’s iPhone')
+    // The login this machine accepted is the thing the pending state waits for.
+    expect(signedIn.device.status).toBe('approved')
+  }, 30_000)
+
+  it('lets a known phone sign in again even when the roster is full', async () => {
+    const auth = new RemoteAuth(tempDir())
+    const key = randomBytes(32)
+    const mine = await auth.enrollDevice('iPhone', SIGN_IN_ADDR, key)
+    if (!mine.ok) throw new Error('unreachable')
+    // Fill every remaining slot with devices that are still trusted, so
+    // `rosterWithRoom` can make no room honestly.
+    for (let i = 0; i < 63; i++) {
+      expect((await auth.enrollDevice(`filler-${i}`, SIGN_IN_ADDR, randomBytes(32))).ok).toBe(true)
+    }
+    expect(await auth.enrollDevice('stranger', SIGN_IN_ADDR, randomBytes(32))).toEqual({
+      ok: false,
+      reason: 'too-many-devices',
+    })
+    // But the phone that already holds a row is refreshed, not refused. Without
+    // this, the person whose list is full — quite possibly *of duplicates* — is
+    // locked out by the fix for the duplicates.
+    const again = await auth.enrollDevice('iPhone', SIGN_IN_ADDR, key)
+    expect(again.ok).toBe(true)
+    if (again.ok) expect(again.device.id).toBe(mine.device.id)
+  }, 60_000)
+
+  it('refreshes rather than duplicates when the same phone pairs again', async () => {
+    const auth = new RemoteAuth(tempDir())
+    const key = randomBytes(32)
+    const first = await auth.redeemPairingToken(auth.createPairingToken().token, 'iPhone', ADDRESS, key)
+    if (!first.ok) throw new Error('unreachable')
+    expect(auth.approveDevice(first.device.id)).toBe(true)
+
+    const again = await auth.redeemPairingToken(auth.createPairingToken().token, 'iPhone', ADDRESS, key)
+    if (!again.ok) throw new Error('unreachable')
+    expect(auth.listDevices()).toHaveLength(1)
+    expect(again.device.id).toBe(first.device.id)
+    // A row a human already approved stays approved: the only way to reach this
+    // branch is to hold the private key, which is to *be* the approved phone.
+    expect(again.device.status).toBe('approved')
+    expect((await auth.verifyCredential(again.credential, ADDRESS)).ok).toBe(true)
+    expect((await auth.verifyCredential(first.credential, ADDRESS)).ok).toBe(false)
+  }, 30_000)
+
+  it('never lands a new pairing back on a revoked row', async () => {
+    const auth = new RemoteAuth(tempDir())
+    const key = randomBytes(32)
+    const first = await auth.redeemPairingToken(auth.createPairingToken().token, 'iPhone', ADDRESS, key)
+    if (!first.ok) throw new Error('unreachable')
+    expect(auth.revokeDevice(first.device.id)).toBe(true)
+
+    const again = await auth.redeemPairingToken(auth.createPairingToken().token, 'iPhone', ADDRESS, key)
+    if (!again.ok) throw new Error('unreachable')
+    // A fresh id, pending again — which is what keeps `device-kind.ts`'s
+    // *"revoke, pair again, choose again"* working: the kind is re-asked because
+    // the id is new.
+    expect(again.device.id).not.toBe(first.device.id)
+    expect(again.device.status).toBe('pending')
+    expect((await auth.verifyCredential(first.credential, ADDRESS)).ok).toBe(false)
+  }, 30_000)
+
+  it('keeps two different phones as two rows, and never merges a keyless one', async () => {
+    const auth = new RemoteAuth(tempDir())
+    const one = await auth.enrollDevice('iPhone', SIGN_IN_ADDR, randomBytes(32))
+    const two = await auth.enrollDevice('iPhone', SIGN_IN_ADDR, randomBytes(32))
+    expect(one.ok && two.ok).toBe(true)
+    expect(auth.listDevices()).toHaveLength(2)
+
+    // A device that paired over the tailnet has no key, so nothing about it can
+    // be recognised. Two of them are two devices as far as this file can tell,
+    // and guessing otherwise would merge two strangers' phones on a name.
+    await pair(auth, 'tailnet phone')
+    await pair(auth, 'tailnet phone')
+    expect(auth.listDevices()).toHaveLength(4)
+  }, 30_000)
+
+  it('collapses a file that already holds two rows for one key, keeping the live one', async () => {
+    silenceErrors()
+    const dir = tempDir()
+    const time = clock()
+    const key = randomBytes(32)
+
+    // Build the shape his phone actually had. The mint paths refuse to write it
+    // now, so it is written by hand — two well-formed, approved rows carrying one
+    // public key, the second added seven minutes after the first.
+    const auth = new RemoteAuth(dir, { now: time.now })
+    const older = await auth.enrollDevice('iPhone', SIGN_IN_ADDR, randomBytes(32))
+    time.advance(7 * 60_000)
+    const newer = await auth.enrollDevice('iPhone', SIGN_IN_ADDR, randomBytes(32))
+    if (!older.ok || !newer.ok) throw new Error('unreachable')
+
+    const file = join(dir, REMOTE_AUTH_FILE)
+    const state = JSON.parse(readFileSync(file, 'utf8')) as {
+      devices: { id: string; publicKey: string }[]
+    }
+    expect(state.devices).toHaveLength(2)
+    const shared = key.toString('base64')
+    for (const device of state.devices) device.publicKey = shared
+    writeFileSync(file, JSON.stringify(state, null, 2))
+
+    const reloaded = new RemoteAuth(dir, { now: time.now })
+    const rows = reloaded.listDevices()
+    expect(rows).toHaveLength(1)
+    // The newest row is the one whose secret the phone is holding — his frames
+    // said so out loud: newest was "Connected now", the older one "Seen 7m ago".
+    expect(rows[0].id).toBe(newer.device.id)
+    expect((await reloaded.verifyCredential(newer.credential, SIGN_IN_ADDR)).ok).toBe(true)
+    expect((await reloaded.verifyCredential(older.credential, SIGN_IN_ADDR)).ok).toBe(false)
+
+    // Collapsed on disk, not merely hidden: a second process reading this file
+    // sees one row too.
+    const after = JSON.parse(readFileSync(file, 'utf8')) as { devices: unknown[] }
+    expect(after.devices).toHaveLength(1)
+    expect(new RemoteAuth(dir).listDevices()).toHaveLength(1)
+  }, 30_000)
+
+  it('keeps the approved row when the duplicate of it is still pending', async () => {
+    silenceErrors()
+    const dir = tempDir()
+    const time = clock()
+    const key = randomBytes(32)
+
+    const auth = new RemoteAuth(dir, { now: time.now })
+    const approved = await auth.enrollDevice('iPhone', SIGN_IN_ADDR, randomBytes(32))
+    time.advance(60_000)
+    const waiting = await auth.redeemPairingToken(
+      auth.createPairingToken().token,
+      'iPhone',
+      ADDRESS,
+      randomBytes(32),
+    )
+    if (!approved.ok || !waiting.ok) throw new Error('unreachable')
+
+    const file = join(dir, REMOTE_AUTH_FILE)
+    const state = JSON.parse(readFileSync(file, 'utf8')) as { devices: { publicKey: string }[] }
+    for (const device of state.devices) device.publicKey = key.toString('base64')
+    writeFileSync(file, JSON.stringify(state, null, 2))
+
+    // The pending row is newer and still loses: it opens nothing, and keeping it
+    // over a working one would sign the phone out until somebody walked to the
+    // machine.
+    const rows = new RemoteAuth(dir, { now: time.now }).listDevices()
+    expect(rows).toHaveLength(1)
+    expect(rows[0].id).toBe(approved.device.id)
+    expect(rows[0].status).toBe('approved')
+  }, 30_000)
+})
+
 describe('the sign-in limiter', () => {
   const SIGN_IN_ADDR = '100.99.2.2'
 

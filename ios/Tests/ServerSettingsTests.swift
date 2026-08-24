@@ -26,6 +26,41 @@ final class ServerSettingsTests: XCTestCase {
         XCTAssertEqual(merged.first?.value, "codex")
     }
 
+    /**
+     * **A switch reads three answers, and "I was not told" is one of them.**
+     *
+     * *"Restore sessions at launch: ticked in one frame, unticked moments later,
+     * with no interaction visible between them."* It never toggled — nothing
+     * changes a server setting without an `apply` and the machine's own answer —
+     * and the row was drawn from `value == "true"`, which turns every other
+     * string, the empty one included, into a confident **Off**. The empty one is
+     * not hypothetical: `WireCodec.serverSetting` produces exactly it for a value
+     * it could not read.
+     */
+    func testABooleanRowTellsOffApartFromNotKnowing() {
+        XCTAssertEqual(row(.restoreSessions, "true").flag, true)
+        XCTAssertEqual(row(.restoreSessions, "false").flag, false)
+        // The value the codec produces when the host sent nothing readable. It
+        // must not be Off — off is a claim about the machine.
+        XCTAssertNil(row(.restoreSessions, "").flag)
+        // And nothing else is a boolean either, however plausible it looks.
+        for lookalike in ["1", "0", "TRUE", "yes", "on", " true"] {
+            XCTAssertNil(row(.restoreSessions, lookalike).flag,
+                         "\(lookalike) is not the word the wire says this carries")
+        }
+    }
+
+    /// And the codec really does produce the unknown for a row with no usable
+    /// value, rather than inventing a word for it.
+    func testAValuelessRowDecodesToTheUnknownRatherThanToOff() throws {
+        let decoded = try XCTUnwrap(
+            WireCodec.serverSetting(["key": ServerSettingKey.restoreSessions.rawValue]))
+        XCTAssertNil(decoded.flag)
+        let nonsense = try XCTUnwrap(
+            WireCodec.serverSetting(["key": ServerSettingKey.restoreSessions.rawValue, "value": 1]))
+        XCTAssertNil(nonsense.flag)
+    }
+
     func testProviderLabelReadsBuiltinsAndFallsBackToTheId() {
         XCTAssertEqual(ServerSettingsText.providerLabel("claude"), "Claude Code")
         XCTAssertEqual(ServerSettingsText.providerLabel("custom:acme"), "custom:acme")

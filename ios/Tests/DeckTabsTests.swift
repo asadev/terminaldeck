@@ -379,6 +379,47 @@ final class DeckTabsTests: XCTestCase {
     }
 
     /**
+     * **Signing in again to a machine you already have does not restructure the
+     * bar.**
+     *
+     * The defect, from his own phone on 0.10.1: *"at 3:25 the bar carries
+     * Copilot · Sessions · Localhost · Settings. Seconds later, on the same
+     * screen, it carries Sessions · Localhost · Settings — Copilot is gone."*
+     *
+     * `DeckModel.adoptSignedIn` used to run `stop()` then `start()` on a machine
+     * already in the list, which is the right idea — the transport has to pick up
+     * the credential that was just written — and `stop()` also runs
+     * `copilot.forget()`. The Copilot pill is drawn from exactly the three flags
+     * that clears. So the fourth pill vanished the moment he signed in again and
+     * came back a second later with the reconnect's welcome, while he was
+     * standing on the screen watching it.
+     *
+     * Both halves are asserted, because the fix is a *split* rather than a
+     * removal: a restart keeps what the machine is, an unpair still forgets it.
+     * An assertion on only the first would pass just as well for a `stop()` that
+     * had quietly stopped forgetting anything.
+     */
+    func testSigningInAgainKeepsTheFourthPillAndUnpairingStillDropsIt() throws {
+        model.select(Self.macId)
+        let mac = try XCTUnwrap(model.host(Self.macId))
+        giveCopilot(to: mac)
+        XCTAssertTrue(model.showsCopilotTab)
+
+        // What `adoptSignedIn` does for a machine that is already here.
+        mac.restart()
+        XCTAssertTrue(model.showsCopilotTab,
+                      "signing in again is not an unpair — the bar must not restructure under a "
+                      + "thumb for a machine that has not changed")
+        // And the socket really did go: this is a restart, not a no-op.
+        XCTAssertFalse(mac.copilot.isOpen, "the connection belonged to the socket that was dropped")
+
+        // An unpair is a different act and still forgets the machine.
+        mac.stop()
+        XCTAssertFalse(model.showsCopilotTab,
+                       "a machine being torn down for good takes its pill with it")
+    }
+
+    /**
      * **Back goes where they came from**, and the session list is the fallback.
      *
      * *"There should be a back button to go back on home."* Home is the session

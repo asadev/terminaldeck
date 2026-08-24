@@ -1208,10 +1208,19 @@ final class DeckModel {
         pairingNotice = nil
         collectionError = nil
         if let link = hosts.first(where: { $0.id == hostId }) {
-            // Torn down and brought back up so the transport reads the credential
-            // that was just written rather than retrying with the old one.
-            link.stop()
-            link.start()
+            /*
+             * Restarted, not torn down, so the transport reads the credential
+             * that was just written rather than retrying with the old one.
+             *
+             * It was `link.stop(); link.start()`, and `stop()` also forgets what
+             * the machine *is* — which took the Copilot pill off the bar every
+             * time he signed in again to a machine he already had, and put it
+             * back a second later when the reconnect's welcome landed. The bar
+             * restructured under his thumb for a machine that had not changed at
+             * all. `HostLink.restart` is that split; the argument is written
+             * there.
+             */
+            link.restart()
             select(hostId)
         } else {
             let link = adopt(record)
