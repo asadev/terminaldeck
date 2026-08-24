@@ -399,6 +399,41 @@ final class ServerLoginUITests: XCTestCase {
     }
 
     /**
+     * **A prompt from that machine**, on a server that already has the host.
+     *
+     * The same ending as the install case and reachable without reinstalling, so
+     * the last step of the flow — the one the whole feature is *for* — can be
+     * driven on a server that has been set up once. `testInstallsOntoABareServerAndConnects`
+     * still walks it end to end from nothing; this is the same walk from the
+     * middle.
+     */
+    func testStartsASessionAndShowsAPromptFromThatMachine() throws {
+        try XCTSkipIf(env("TD_SERVER_MAY_CONNECT") != "1",
+                      "this case pairs this phone with the far end and runs a shell on it")
+
+        launchApp()
+        openTheLoginForm()
+        XCTAssertTrue(app.buttons["serverLogin.submit"].isEnabled)
+        app.buttons["serverLogin.submit"].tap()
+        XCTAssertTrue(app.staticTexts["serverLogin.signedIn"].waitForExistence(timeout: 180),
+                      "the login never finished — " + whatIsOnScreen())
+        XCTAssertTrue(app.staticTexts["server.hostLine"].waitForExistence(timeout: 120),
+                      "the check step never ran — " + whatIsOnScreen())
+
+        let connect = app.buttons["server.connect"]
+        let bringUp = app.buttons["server.startConnect"]
+        guard connect.waitForExistence(timeout: 30) || bringUp.waitForExistence(timeout: 5) else {
+            XCTFail("there is no host to connect to on this server — " + whatIsOnScreen())
+            return
+        }
+        if connect.exists { connect.tap() } else { bringUp.tap() }
+        XCTAssertTrue(app.staticTexts["serverLogin.connected"].waitForExistence(timeout: 180),
+                      "connect ended nowhere — " + whatIsOnScreen())
+
+        proveAShellOnThatMachine("prompt")
+    }
+
+    /**
      * **A key that server never accepted**, and what it is told.
      *
      * A real handshake against a real sshd, refused by it. The claim being
@@ -555,14 +590,45 @@ final class ServerLoginUITests: XCTestCase {
             return false
         }
         shoot("\(prefix)\(leg)-sessions")
-        if fromEmpty.exists {
+        /*
+         * **The toolbar's plus first, and the empty state's button only if there
+         * is no plus.**
+         *
+         * They are not the same control. The plus opens a menu that offers the
+         * folders this machine granted this phone; the button in the middle of
+         * the empty state calls `createSession(in: nil)` and has no folder in it
+         * at all. This walk had them the other way round, and on a server that
+         * is the difference between a session and a refusal — the folder matters
+         * (see the note below), and the empty list is exactly when this runs.
+         */
+        if !plus.exists && fromEmpty.exists {
             fromEmpty.tap()
         } else {
             plus.tap()
-            // A machine that granted folders draws a menu here; one that granted
-            // none starts the session on the first tap. Both are correct.
-            let menuItem = app.buttons["sessions.newDefault"]
-            if menuItem.waitForExistence(timeout: 3) { menuItem.tap() }
+            /*
+             * A machine that granted folders draws a menu here; one that granted
+             * none starts the session on the first tap.
+             *
+             * **The folder is chosen when there is one**, rather than the plain
+             * New Session above it, and that is not a preference. Plain New
+             * Session sends no folder at all, and a host that is asked to pick
+             * picks its own home directory — which on a server is the one folder
+             * a session can never start in: `confine` plants the file that tests
+             * the boundary in `$HOME`, so with `$HOME` *as* the boundary the
+             * test cannot fail and the host refuses, correctly. Measured on a
+             * real server: "the file used to test the boundary
+             * (/root/.terminaldeck-confine-probe-…) is inside it, so the test
+             * could not fail."
+             */
+            let inAFolder = app.buttons
+                .matching(NSPredicate(format: "identifier BEGINSWITH 'sessions.newIn.'"))
+                .firstMatch
+            if inAFolder.waitForExistence(timeout: 3) {
+                inAFolder.tap()
+            } else {
+                let menuItem = app.buttons["sessions.newDefault"]
+                if menuItem.waitForExistence(timeout: 3) { menuItem.tap() }
+            }
         }
         return app.buttons["terminal.keyboard"].waitForExistence(timeout: 60)
     }
