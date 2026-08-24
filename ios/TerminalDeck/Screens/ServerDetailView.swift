@@ -163,17 +163,20 @@ struct ServerDetailView: View {
     /* ------------------------------------------------------- the sign-in -- */
 
     /**
-     * How this phone gets back in — and the one switch that changes it.
+     * How this phone gets back in.
      *
-     * > *"Also give the face or fingerprint login there if somebody wants to
-     * > have that, also for the next time."*
+     * There was a Face ID switch on this card and it has gone up a level. It
+     * locked *this server's* password, which meant a prompt on every connection
+     * to it — and since the app reconnects to its last server as it opens, that
+     * was a prompt on every launch. Asad: *"I wanted this face lock actually not
+     * just for one specific server — make it for the overall application."* One
+     * switch now, on the main Settings page, locking the app rather than a
+     * credential: see `AppLockSection`.
      *
-     * The offer is made once, on the screen where the login just succeeded. This
-     * is the other half of that sentence: where it is turned **off** again, and
-     * where somebody who tapped *Not now* finds it later. It is never hidden on
-     * a phone that cannot do it — it is disabled with the reason underneath,
-     * because a person looking for a feature they were told about has to find
-     * out why it is not here rather than fail to find it at all.
+     * What is left is the true statement this card was always making underneath
+     * the switch — where the sign-in is kept. It is in this iPhone's Keychain,
+     * marked to this device and never synced, exactly as it was before the
+     * switch existed and exactly as it is after.
      */
     private func signInCard(_ server: StoredServer) -> some View {
         card {
@@ -188,7 +191,6 @@ struct ServerDetailView: View {
                 .font(.system(size: 12))
                 .foregroundStyle(Theme.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            BiometricLockRow(model: model, serverId: serverId)
         }
     }
 

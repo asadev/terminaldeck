@@ -83,9 +83,6 @@ struct ServerLoginView: View {
     @State private var username = ""
     @State private var secret = ""
     @State private var method: EnrollMethod = .password
-    /// Set when the Face ID offer has been declined on this login, so it does
-    /// not come back on the next redraw.
-    @State private var declinedBiometry = false
     @FocusState private var focused: Field?
 
     /**
@@ -1152,8 +1149,26 @@ struct ServerLoginView: View {
                 .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
 
-            BiometricOfferCard(model: model, serverId: server.id, declined: $declinedBiometry)
-
+            /*
+             * **There is no Face ID card here any more, and that is the change
+             * of 2026-08-24.**
+             *
+             * There was one: *"Use Face ID next time?"*, offered the moment a
+             * login succeeded, which put that server's password behind the
+             * sensor. It was the right offer at the wrong altitude. Because this
+             * app reconnects to the server it was last on as it opens, "ask
+             * before reading this server's password" turned out to mean "ask
+             * every single time the app opens" — Asad: *"I don't want it to come
+             * every time when we open the application. If it is that way then
+             * remove the face lock. I wanted this face lock actually not just
+             * for one specific server — make it for the overall application."*
+             *
+             * So the lock moved to the front door and became one switch on the
+             * main Settings page: `AppLockSection`. Nothing is offered here, on
+             * the server's own page, or anywhere else. A credential this phone
+             * holds is still in the Keychain, still device-only, and is read the
+             * way it always was.
+             */
             HostStepCard(model: model, serverId: server.id, justLoggedIn: true)
 
             if let trouble = connector.problems[server.id] {

@@ -185,17 +185,19 @@ final class ServerLoginUITests: XCTestCase {
         shoot("live-02-after-login")
         XCTAssertTrue(signedIn, "the login never finished — " + whatIsOnScreen())
 
-        // The receipt, the Face ID offer and the check step are one screen.
+        // The receipt and the check step are one screen.
         XCTAssertTrue(app.staticTexts["server.hostLine"].waitForExistence(timeout: 120),
                       "the check step never ran — " + whatIsOnScreen())
         shoot("live-02-logged-in-and-checked")
 
-        // The offer, if this simulator has biometry enrolled. Not asserted —
-        // a device with none must show nothing rather than an empty card, and
-        // that is itself the correct behaviour to photograph.
-        if app.staticTexts["biometry.offer"].exists {
-            shoot("live-03-faceid-offer")
-        }
+        // Nothing is offered after a login any more, and this is the assertion
+        // that says so. The Face ID card that used to sit between the receipt
+        // and the check step locked *this server's* password, which meant a
+        // prompt on every connection to it — a prompt on every launch, in
+        // practice. The lock is one switch on the main Settings page now and
+        // this screen mentions it nowhere.
+        XCTAssertFalse(app.staticTexts["biometry.offer"].exists,
+                       "the per-server Face ID offer is gone — " + whatIsOnScreen())
 
         let install = app.buttons["server.install"]
         XCTAssertTrue(install.waitForExistence(timeout: 30),

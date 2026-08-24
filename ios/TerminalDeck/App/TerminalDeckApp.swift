@@ -29,11 +29,24 @@ struct TerminalDeckApp: App {
     @State private var model = Composition.model()
     @State private var network = NetworkWatch()
     @State private var grace = BackgroundGrace()
+
+    /**
+     * The lock on the front door, owned here because it is older than any
+     * screen: a fresh process is a locked process, and `AppLock`'s initialiser
+     * is what decides that. Created before the first body is evaluated, so there
+     * is no frame in which the session list is on screen before the lock is.
+     */
+    @State private var lock = AppLock()
+
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
             RootView(model: model)
+                // Above the sheets, above the snapshot. See `AppLockShield`.
+                .appLock(lock)
+                // Read by the one row that changes it, on the main Settings page.
+                .environment(lock)
                 .task {
                     model.start()
                     network.onChange = { model.resume() }
@@ -51,6 +64,10 @@ struct TerminalDeckApp: App {
             switch phase {
             case .active:
                 model.isForeground = true
+                // Before anything else this line does: whether five minutes have
+                // passed is a question about the moment the app came back, not
+                // about the moment a refresh finished.
+                lock.becameActive()
                 // The assertion is released the moment the app is back: holding
                 // one that is not needed is how an app is killed for still
                 // holding it when the time runs out.
@@ -61,14 +78,21 @@ struct TerminalDeckApp: App {
                 Task { await model.refreshAlertPermission() }
             case .background:
                 model.isForeground = false
+                // The lock's clock starts here and nowhere else — the biometric
+                // sheet makes this app *inactive*, never backgrounded, which is
+                // exactly why the grace is measured from this phase.
+                lock.wentToBackground()
                 // Keep listening for as long as iOS allows. This is what makes
                 // an alert possible at all in the minute after the phone goes
                 // into a pocket — which is the minute people care about.
                 grace.begin()
             case .inactive:
                 // The notification-centre pull-down and the app switcher both
-                // land here and neither is leaving. Nothing to do.
-                break
+                // land here and neither is leaving, so nothing about the
+                // connection changes. The lock still wants to know: this is the
+                // moment before iOS takes the app-switcher snapshot, and with
+                // the lock on that snapshot must not be somebody's terminal.
+                lock.wentInactive()
             @unknown default:
                 break
             }

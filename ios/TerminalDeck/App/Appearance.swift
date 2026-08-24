@@ -80,6 +80,24 @@ enum Appearance: String, CaseIterable, Identifiable {
         }
     }
 
+    /**
+     * The same preference, stated the way UIKit states it for a whole window.
+     *
+     * There is exactly one caller and it could not use `colorScheme`: the lock
+     * screen is in a `UIWindow` of its own (see `AppLockShield`), which is
+     * outside every SwiftUI modifier `RootView` applies. `.unspecified` is the
+     * literal counterpart of `colorScheme`'s `nil` — the window keeps inheriting
+     * the phone's own trait collection rather than being pinned to whatever it
+     * happened to be at the moment the window was made.
+     */
+    var interfaceStyle: UIUserInterfaceStyle {
+        switch self {
+        case .system: return .unspecified
+        case .light: return .light
+        case .dark: return .dark
+        }
+    }
+
     /// What the control reads. Sentence case, like every other value in
     /// Settings.
     var label: String {

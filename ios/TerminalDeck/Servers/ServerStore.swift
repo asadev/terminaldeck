@@ -211,25 +211,25 @@ final class ServerStore {
             if let hostKey { already.hostKey = hostKey }
             if !secret.isEmpty, let data = secret.data(using: .utf8) {
                 /*
-                 * A re-login must not quietly unlock a locked server.
+                 * The new credential is written plainly, and a lock an older
+                 * build left on this server does not come back.
                  *
-                 * The new credential is written plainly first — the old item's
-                 * ACL is gone with it, which is what makes this writable at all
-                 * without a prompt — and then the lock is put straight back on
-                 * with `setBiometricLock`, using the secret still in hand. It is
-                 * two writes for one save and that is the cost of not asking for
-                 * Face ID in the middle of a password login.
+                 * This used to put the access control straight back on, because
+                 * a re-login must not quietly weaken a protection somebody chose.
+                 * There is nothing to put back any more: the per-server lock has
+                 * no switch, no offer and no way to be turned on — it moved to
+                 * the front door of the app, `AppLock`, exactly because asking
+                 * per server meant asking on every launch. So the flag follows
+                 * the item, and a re-login is one of the two places a leftover
+                 * lock is lifted for free. The other is `ServerConnector.secret`.
                  *
-                 * If putting the lock back fails, the flag follows the item down
-                 * rather than claiming a protection that is not there. A lock
-                 * that reads "on" over an unprotected item is worse than no lock.
+                 * The item itself is unchanged in every other respect: same
+                 * account, same `WhenUnlockedThisDeviceOnly` accessibility, never
+                 * synced off this phone.
                  */
                 delete(account: secretPrefix + already.id)
                 write(account: secretPrefix + already.id, data: data)
-                if already.isBiometricLocked {
-                    do { try setBiometricLock(true, for: already.id) }
-                    catch { already.biometricLock = false }
-                }
+                already.biometricLock = false
             }
             save(already)
             return already
