@@ -10,6 +10,24 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.10.2] — 2026-08-24
+
+### Added
+
+- **Choose the terminal's colours.** Appearance → Terminal now carries thirteen schemes — Pure black, Dark grey, Solarized, Nord, Dracula, Gruvbox, One Half, Tango, Campbell and the app's own — each shown as a real preview rather than a name in a list, and every one of the twenty-one colours can be edited by hand. Editing a built-in makes a copy rather than overwriting it. Changing a colour repaints the sessions already open, not only the next one. On Mac, Windows, the web client, iPhone and Android, from one shared table so a scheme is the same scheme everywhere.
+- **Lock the app with Face ID.** One switch on the main Settings page, off by default. It asks when the app starts, and again only if you have been away for more than five minutes — coming back from the app switcher or a share sheet does not ask. Turning it off asks once, so a phone handed over for a moment cannot be quietly unlocked. It replaces the per-server lock, which asked every single time the app opened because the app reconnects to your last server as it starts.
+
+### Fixed
+
+- **Installing Terminal Deck onto a server from your phone now installs the version you are running.** It fetched from the npm registry, which is three releases behind and predates the address a phone needs to dial, so the install reported success and the connection then failed. It takes the release's own package now.
+- **A phone signing in twice no longer becomes two devices.** The machine minted a second credential holding the same key, so the roster showed two rows nobody could tell apart and the older one kept working — and removing the wrong one cut off the phone in your hand. Existing duplicates are collapsed on the next start.
+- **The Copilot tab stops disappearing.** Signing in again tore down the link and cleared what the tab is drawn from, so it vanished and came back a second later. Same cause as the duplicate device.
+- **A setting the machine has not answered for no longer draws itself as "off".** "Restore sessions at launch" showed an empty circle while it was still being read, which looks exactly like somebody switching it off.
+- **The floating tab bar no longer covers the bottom of a screen.** Every scrolling screen reserved a hardcoded margin that was 55 points short of the bar.
+- **A store row reads like a shelf again** — logo, name, price and Install, with the licence, download, checksum and what was measured one press away instead of four lines deep on every row. Ten rows now fit where two did. Pressing Install on a server that needs a key asks for it then, rather than printing the form on the shelf.
+- **A session whose connection ended stops offering a composer to type into.**
+
+
 ### Added
 
 - **A real terminal colour editor, on the desktop and in the browser client.** Settings → Appearance → Terminal now offers thirteen schemes, each drawn as a small terminal in its own colours — a line of shell output, a block cursor, a run of selected text and all sixteen ANSI swatches — rather than as a name in a list. Pure black is one of them, along with a dark grey, the app's own dark and light, Solarized Dark and Light, Nord, Dracula, Gruvbox Dark, One Half Dark and Light, Tango Dark and Campbell. Every published palette is its author's own values.
@@ -2003,7 +2021,8 @@ First cut. macOS 12+, Apple silicon, unsigned.
 - Preferences with live dark/light theming
 - Session resume (`⌘⇧T`)
 
-[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.10.1...HEAD
+[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.10.2...HEAD
+[0.10.2]: https://github.com/asadev/terminaldeck/releases/tag/v0.10.2
 [0.10.1]: https://github.com/asadev/terminaldeck/releases/tag/v0.10.1
 [0.10.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.10.0
 [0.9.1]: https://github.com/asadev/terminaldeck/releases/tag/v0.9.1
