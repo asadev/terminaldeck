@@ -191,7 +191,7 @@ describe('when the agent exits', () => {
     expect(shellBar(SAW_SHELL)).toBe('')
   })
 
-  it('goes back to nothing on a dead pty, whatever is left on the screen', () => {
+  it('drops every control on a dead pty, whatever is left on the screen', () => {
     /*
      * The case that makes `exited` a required prop rather than a convenience.
      *
@@ -199,13 +199,49 @@ describe('when the agent exits', () => {
      * the last frame of a stopped session still carries the banner and the
      * footer the reader matches on — `SAW_AGENT` here is not a contrived
      * pairing, it is what the screen of a killed agent actually looks like.
-     * Answered off the record, this is a dead session and the cluster
-     * withdraws; answered off that leftover text, it would be live model and
-     * effort chips over a process that no longer exists, and pressing one would
-     * type into nothing. A default of `exited: false` on the prop would have
-     * produced exactly that, at any call site that forgot it, silently.
+     * Answered off the record, this is a dead session and every control goes;
+     * answered off that leftover text, it would be live model and effort chips
+     * over a process that no longer exists, and pressing one would type into
+     * nothing. A default of `exited: false` on the prop would have produced
+     * exactly that, at any call site that forgot it, silently.
      */
-    expect(shellBar(SAW_AGENT, true)).toBe('')
+    const html = shellBar(SAW_AGENT, true)
+    for (const control of ['model', 'effort', 'permission'] as const) {
+      expect(html, control).not.toContain(controlName(control))
+    }
+    expect(html, 'no chip at all — a chip is a control').not.toContain('cc-chip sc-summary')
+  })
+
+  it('says so, rather than leaving the space it cleared blank', () => {
+    /*
+     * This assertion is newer than the one above it and it is the half that was
+     * missing. From the lane this came out of:
+     *
+     *   > *"What replaces it should say what happened and what the person can
+     *   > do (reconnect? reopen? it is gone?), rather than simply disabling
+     *   > controls with no explanation."*
+     *
+     * An absence explains nothing. A bar that quietly loses four chips reads
+     * like a bar that has not finished loading, which is precisely the reading
+     * this file's opening story is about — a cluster that was missing for a
+     * reason nobody on screen could see.
+     *
+     * The word is drawn from `endedNotice`, so it is the same sentence the card
+     * over the terminal below is drawing in full. Two surfaces, one account of
+     * one event.
+     */
+    expect(shellBar(SAW_AGENT, true)).toContain('This session has ended')
+  })
+
+  it('keeps the reading, because a hidden reading and an absent one look alike', () => {
+    /*
+     * The one thing that does **not** go. `UsageBar` is a fact rather than a
+     * switch — the argument is in `SessionControls.tsx`, where it is what keeps
+     * it outside the fold — and nothing about the session ending makes the
+     * account's five-hour window less true than it was a minute ago. Asad asked
+     * for it twice; it is not something an exit may take away.
+     */
+    expect(shellBar(SAW_AGENT, true)).toContain('class="usage-bar"')
   })
 })
 

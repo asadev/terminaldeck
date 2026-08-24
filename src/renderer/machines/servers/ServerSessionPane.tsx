@@ -52,6 +52,8 @@ export function ServerSessionPane({
   visible,
   onEnded,
   onOpened,
+  serverName,
+  onReopen,
 }: {
   serverId: string
   /**
@@ -103,6 +105,22 @@ export function ServerSessionPane({
    * note for why this pane cannot mint it.
    */
   onOpened(shellId: string): void
+  /**
+   * What this server is called, for the card drawn when the shell ends.
+   *
+   * The row already carries it and keeps it in step through `renameServersIn`,
+   * so it is passed rather than looked up — a pane cannot reach the servers
+   * list, which lives inside a panel that is usually not the thing on screen.
+   */
+  serverName: string
+  /**
+   * Open another terminal on this server, from that card.
+   *
+   * The window's, because only the window can put a tab on the list. This is
+   * the press that answers the one question a closed SSH channel leaves open —
+   * whether the shell ended or the server did — by trying it.
+   */
+  onReopen(): void
 }) {
   /*
    * Read here rather than threaded down from the window.
@@ -142,6 +160,8 @@ export function ServerSessionPane({
         visible={visible}
         onEnded={onEnded}
         onOpened={onOpened}
+        serverName={serverName}
+        onReopen={onReopen}
       />
     </div>
   )

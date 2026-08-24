@@ -2840,10 +2840,10 @@
   border-radius: 0;
 }
 
-/* Why the terminal is not there, when it is not: a build with no connection
-   layer, or a server that refused. It sits above the terminal in the same pane,
-   so it is read on the dark ground the shell would have been drawn on. */
-.server-pane .servers-card-why {
-  padding: var(--sp-3) var(--sp-4) 0;
-  color: var(--text-secondary);
-}
+/* Why the terminal is not there, when it is not, used to be a sentence above it
+   in this pane. It is the ended card now — `shell/SessionEnded.tsx` — because a
+   shell that refused to open and a shell that has stopped are the same state to
+   the person in front of them, and drawing them two different ways meant only
+   one of the two ever said what to do about it. Nothing inside `.server-pane`
+   draws `.servers-card-why` any more; the class is still `ServerCard`'s and
+   `ServerHost`'s, on the page, where it is right. */

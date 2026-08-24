@@ -5,6 +5,8 @@ import { copySelection, terminalTheme, useTerminalFind } from '../../components/
 import { subscribeTheme } from '../../theme'
 import { attachRenderer } from '../../terminal-renderer'
 import { asShellId, asShellOutput, type ServersBridge, type ShellOutput } from './types'
+import { SessionEnded } from '../../shell/SessionEnded'
+import { freezeTerminal, shellGone, type SessionEnd } from '../../shell/session-end'
 
 /**
  * A shell on a server, on this screen.
@@ -208,6 +210,24 @@ interface Props {
    * asked for. This is the handle the main process holds the channel under.
    */
   onOpened?(shellId: string): void
+  /**
+   * What the server is called, for the sentence drawn when this ends.
+   *
+   * The row already carries it — `ServerSession.serverName`, kept in step by
+   * `renameServersIn` — and it is passed down rather than looked up here for the
+   * reason that field states: nothing this component can reach holds the servers
+   * list. Defaulted, so the two callers that render this component on its own
+   * are unchanged; the default is the neutral word rather than a made-up name.
+   */
+  serverName?: string
+  /**
+   * Open another terminal on this server, from the card drawn over a dead one.
+   *
+   * Optional, and its absence draws the card **without** the button rather than
+   * with a dead one. That is the same rule the account chip states next door: a
+   * control that cannot act is removed, not shown inert.
+   */
+  onReopen?(): void
 }
 
 export const DEFAULT_SERVER_FONT_SIZE = 13
@@ -229,6 +249,8 @@ export function ServerTerminal({
   visible = true,
   onEnded,
   onOpened,
+  serverName = 'that server',
+  onReopen,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
@@ -304,6 +326,37 @@ export function ServerTerminal({
    * somebody waits for a prompt that is never coming.
    */
   const [refused, setRefused] = useState<string | null>(null)
+  /**
+   * This terminal is over, and the pane says so on its own screen.
+   *
+   * ## What was here before, and why one line of text was not enough
+   *
+   * One `term.write` of `[The connection to this server ended.]` into the
+   * scrollback, and nothing else. That line is right and it is kept — it is the
+   * last line of this session's own output, said where the person is looking —
+   * but on its own it is the whole of the defect Asad's recording caught: the
+   * CLI's last frame is still underneath it, composer and placeholder and
+   * `xhigh · /effort` and the `⏵⏵ bypass permissions` footer, every one of them
+   * drawn exactly as it is drawn in a live session. A sentence in a scrollback
+   * loses to a composer with a cursor in it, and it should.
+   *
+   * So the end is a piece of state now rather than a line of output, and three
+   * things read it: the fade over the frozen frame, the card that covers the
+   * composer, and {@link freezeTerminal}, which takes the keyboard away from
+   * xterm itself. `session-end.ts` carries the argument for all three.
+   *
+   * A `refused` shell — one that never opened — is the same state reached from
+   * the other end, and it is folded in below rather than drawn as a second
+   * design: both are a pane with no live terminal in it, and a person looking at
+   * one wants the same three things said.
+   *
+   * A flag rather than the {@link SessionEnd} itself, so that the sentence names
+   * whatever the server is called **now**. A server can be renamed on its own
+   * page while a shell is open on it — `renameServersIn` exists to keep the row
+   * in step — and an end built at close time would keep printing the name the
+   * shell happened to be opened under.
+   */
+  const [ended, setEnded] = useState(false)
 
   useEffect(() => {
     const host = hostRef.current
@@ -388,9 +441,20 @@ export function ServerTerminal({
       if (chunk !== null && shellId !== null && chunk.shellId === shellId) {
         // Said in the terminal itself rather than as a notice beside it,
         // because that is where the person is looking and it is the last line
-        // of that session's own output.
-        term.write('\r\n\r\n[The connection to this server ended.]\r\n')
+        // of that session's own output. Dim, like the local session's own
+        // `[process exited]`, because it is this app talking and not the shell.
+        //
+        // The wording lost its claim about *the connection*. This end learns
+        // that a channel closed and nothing more — see the header of
+        // `session-end.ts` — and a line naming the connection was reporting a
+        // cause it had not observed.
+        term.write('\r\n\r\n\x1b[2m[This terminal ended.]\x1b[0m\r\n')
         shellId = null
+        // Before the callback, so the pane is already frozen by the time the
+        // window re-renders the row as exited. The other order draws one frame
+        // of a live-looking composer under a card that says it is not.
+        freezeTerminal(term, true)
+        setEnded(true)
         endedRef.current?.()
       }
     })
@@ -549,13 +613,42 @@ export function ServerTerminal({
    * `.servers-terminal` has nothing to be absolute to. The stylesheets belong to
    * another lane this pass; `position` changes no part of this box.
    */
+  /*
+   * The two ways this pane has nothing live in it, as one answer.
+   *
+   * `refused` is a shell that never opened and `ended` is one that has stopped,
+   * and until now they were drawn as two different things — a sentence above the
+   * terminal for the first, a line inside it for the second. They are the same
+   * state to the person in front of them: a rectangle they cannot type into.
+   * `never-opened` is the vocabulary's word for the first, so both arrive at the
+   * one card.
+   */
+  const over: SessionEnd | null =
+    refused !== null ? { kind: 'never-opened', why: refused } : ended ? shellGone(serverName) : null
+
   return (
-    <>
-      {refused !== null && <p className="servers-card-why">{refused}</p>}
-      <div className="servers-terminal" style={{ position: 'relative' }}>
-        <div ref={hostRef} className="terminal-surface" />
-        {findBar}
-      </div>
-    </>
+    <div
+      className="servers-terminal"
+      style={{ position: 'relative' }}
+      /*
+       * Read by one rule in `SessionEnded.css`, which fades and drains the
+       * frozen frame underneath the card. On the element rather than in the
+       * card, because what is being described is the *pane*: the card is one
+       * strip at the bottom of it and the thing that has stopped is all of it.
+       */
+      data-ended={over !== null}
+    >
+      <div ref={hostRef} className="terminal-surface" />
+      {findBar}
+      {over !== null && (
+        <SessionEnded
+          end={over}
+          /* `onReopen` is the window's — this component cannot put a tab on the
+             list. Null when the caller gave none, which draws the sentence with
+             no button rather than a button that does nothing. */
+          onAct={onReopen === undefined ? null : () => onReopen()}
+        />
+      )}
+    </div>
   )
 }

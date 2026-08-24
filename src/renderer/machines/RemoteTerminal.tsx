@@ -23,6 +23,8 @@ import {
   transferLine,
 } from '../terminal-drop'
 import type { MachinesBridge } from './types'
+import { SessionEnded } from '../shell/SessionEnded'
+import { freezeTerminal, type SessionEnd } from '../shell/session-end'
 
 /**
  * A session on another machine, on this screen.
@@ -167,6 +169,45 @@ interface Props {
   subscribe(handler: (data: string, replay: boolean) => void): () => void
   fontSize?: number
   fontFamily?: string
+  /**
+   * Why this session's screen is a photograph, or null while it is a session.
+   *
+   * ## The defect this prop is the whole of the answer to
+   *
+   * The keyboard handler below reads, in full:
+   *
+   *     const input = term.onData((data) => {
+   *       void bridge.writeToMachineSession(machineId, sessionId, data)
+   *     })
+   *
+   * `machines:input` answers a **boolean** — `links.get(id)?.input(…) ?? false`
+   * — and `false` is what it answers for every keystroke sent while there is no
+   * channel, which is every keystroke sent to a machine that is asleep, off, off
+   * the network, or being redialled. That answer was discarded at this call
+   * site, so the pane took the typing, dropped it, and went on showing the last
+   * frame the far machine painted: an agent composer with a placeholder in it, a
+   * `/effort` chip beside it and a permission footer under it, all of them
+   * drawn exactly as a live session draws them.
+   *
+   * The fix is not a check inside the handler. `freezeTerminal` in
+   * `session-end.ts` argues that at length: a guard leaves xterm focused,
+   * blinking a cursor over the composer and calling `onData` — everything a
+   * person can perceive still says the keyboard is connected — so what has to
+   * stop is the emulator reading at all.
+   *
+   * ## Why it is passed in rather than read here
+   *
+   * Because the answer is a fact about the *link*, and this component has one
+   * session id and no link. `endOfMachineSession` in `session-end.ts` is where
+   * the reading lives, and the window calls it — so the pane, the bar above the
+   * pane and the rail row all describe one event in one set of words.
+   *
+   * Null is the live state and it is genuinely reversible: a redialled link
+   * comes back and this goes to null, at which point the terminal is unfrozen
+   * rather than rebuilt. A terminal rebuilt on every network blip is the
+   * session's whole scrollback lost to four seconds of wifi.
+   */
+  end?: SessionEnd | null
 }
 
 export const DEFAULT_REMOTE_FONT_SIZE = 13
@@ -178,6 +219,7 @@ export function RemoteTerminal({
   subscribe,
   fontSize = DEFAULT_REMOTE_FONT_SIZE,
   fontFamily = '',
+  end = null,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
@@ -395,8 +437,31 @@ export function RemoteTerminal({
       term.options.theme = terminalTheme()
     })
 
+    /*
+     * The keyboard — and the answer it comes back with, which used to be thrown
+     * away.
+     *
+     * `machines:input` is `links.get(id)?.input(sessionId, data) ?? false`, and
+     * `input` itself answers false when `send` finds no channel or when a paste
+     * is over the cap. So the wire has always said *that went nowhere*, on the
+     * very call this handler makes, and `void` discarded it — which is how a
+     * keystroke into a machine that had gone away produced nothing at all: no
+     * echo, no error, no mark on the screen. The preload's own note beside this
+     * channel argues that a lost keystroke here is *"visible in that terminal a
+     * moment later"*, and that is exactly the assumption a frozen last frame
+     * breaks: the terminal shows the same composer it showed before, so nothing
+     * is visible and nothing ever will be.
+     *
+     * `end` freezes the terminal outright once the window has read the link, and
+     * that is the answer for every keystroke after the first. This is for the
+     * seconds before it: a socket dies between one key and the next, and
+     * whatever was typed in that window is gone with no state change to hang a
+     * card on. One line, in the same place a failed drop or paste says so.
+     */
     const input = term.onData((data) => {
-      void bridge.writeToMachineSession(machineId, sessionId, data)
+      void bridge.writeToMachineSession(machineId, sessionId, data).then((answer) => {
+        if (answer === false) say('That went nowhere — this window has no link to that machine right now.')
+      })
     })
 
     const observer = new ResizeObserver(() => {
@@ -556,6 +621,20 @@ export function RemoteTerminal({
   }, [fontSize, fontFamily])
 
   /*
+   * The keyboard, taken away and given back.
+   *
+   * Applied to the live terminal in its own effect for the same reason the font
+   * size above is: the terminal outlives every one of these changes, and a value
+   * read only at construction is a value that never reaches a pane that is
+   * already open. A link that drops and comes back moves through this twice.
+   */
+  useEffect(() => {
+    const term = termRef.current
+    if (!term) return
+    freezeTerminal(term, end !== null)
+  }, [end])
+
+  /*
    * Two elements now, arranged exactly as a local session is, and both halves
    * of that are deliberate.
    *
@@ -580,6 +659,7 @@ export function RemoteTerminal({
     <div
       className="machines-terminal"
       style={{ position: 'relative' }}
+      data-ended={end !== null}
       /*
        * `dragOver` has to preventDefault or `drop` never fires at all — that is
        * how the HTML drag-and-drop model works, and it is the single most common
@@ -597,6 +677,19 @@ export function RemoteTerminal({
       <div ref={hostRef} className="terminal-surface" />
       {findBar}
       <TransferNote line={note} />
+      {/* The card, and the fade behind it, over a screen that has stopped being
+          one. `data-ended` on the pane is what the fade keys off — see
+          `SessionEnded.css`.
+
+          Both presses a machine's card can offer are the same act — dial that
+          machine — because `connectMachine` is what ends a deliberate disconnect
+          *and* what shortcuts a backoff that has not fired yet. It is answered
+          here rather than by the window because this component already holds the
+          bridge and the machine's id, which is the whole of what it needs; a
+          callback threaded down for it would be a second route to one call. */}
+      {end !== null && (
+        <SessionEnded end={end} onAct={() => void bridge.connectMachine(machineId)} />
+      )}
     </div>
   )
 }

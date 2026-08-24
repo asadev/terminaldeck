@@ -412,6 +412,97 @@ describe('the session control cluster is told what is dead', () => {
 })
 
 /**
+ * A session that has ended says so on its own screen, and the record knows.
+ *
+ * ## The two halves, and why the second one made the first one useless
+ *
+ * From Asad's recording of the shipped app, *Session 2 on Office PC*: the
+ * transcript ends and everything under it is still a live session's screen —
+ * the agent's composer, its `Try "fix typecheck errors"` placeholder, an
+ * `xhigh · /effort` chip and a `⏵⏵ bypass permissions on (shift+tab to cycle)`
+ * footer. All four are the CLI's own last frame, so nothing repaints them and
+ * an emulator has no reason of its own to stop showing one.
+ *
+ * The pane half is the `end` prop on the three terminals — and a prop is worth
+ * nothing if what is passed to it is always null. `SessionMeta.exitCode` was read
+ * once at launch and **never written again**: `session:exit` had three
+ * subscribers in this renderer and not one of them put the code back on the
+ * session. The status arriving beside it hid that for months, because the
+ * rail's dot went grey on `session:status` and looked right.
+ *
+ * So both are pinned. A prop check alone would go green over a window in which
+ * no local session can ever be observed to have ended.
+ */
+describe('a dead session is told to its own pane', () => {
+  const app = read('renderer/App.tsx')
+
+  it('writes the exit code back onto the session record', () => {
+    /*
+     * The subscription, and that it lands on the store rather than on a local
+     * variable. Static, like everything else here: this project has no DOM to
+     * mount an effect in, and an effect that is never mounted is exactly the
+     * shape of miss this file exists for.
+     */
+    expect(app, 'nothing subscribes to session:exit in the window').toMatch(
+      /window\.deck\.onSessionExit\(\(id, exitCode\) => \{\s*setSessionExit\(id, exitCode\)/,
+    )
+    expect(app, 'the store call is not destructured, so the effect cannot reach it').toMatch(
+      /\n\s*setSessionExit,\n/,
+    )
+  })
+
+  it('hands every terminal a reading rather than a literal', () => {
+    /*
+     * `end={null}` typechecks and is the shortcut that would put this whole lane
+     * back — a frozen composer with a live cursor in it and nothing on screen
+     * saying otherwise. Every mount has to derive it.
+     *
+     * All the mounts, not the first: the window keeps one terminal per session
+     * and draws a second set inside a split, and a split can hold a live session
+     * beside a dead one.
+     */
+    const mounts = app.match(/<TerminalView\b[\s\S]*?\/>/g) ?? []
+    expect(mounts.length, 'a local terminal mount has appeared or gone').toBe(3)
+    for (const [index, tag] of mounts.entries()) {
+      const passed = propExpression(tag, 'end')
+      expect(passed, `local terminal ${index + 1} is never told its session ended`).not.toBeNull()
+      expect(passed, `local terminal ${index + 1} passes a literal`).not.toMatch(/^\s*null\s*$/)
+    }
+  })
+
+  it('reads a machine pane’s end off the link and not off the session alone', () => {
+    /*
+     * Four of the five answers are facts about the *link*: a machine that is
+     * asleep, one stopped from here, one being redialled and one waiting for
+     * approval over there. `guest.ts` empties the session list on every drop, so
+     * a pane that consulted only the session record would have nothing to read
+     * and would report the wrong event — see `endOfMachineSession`.
+     */
+    const tag = openingTag(app, 'MachineSessionPane')
+    expect(tag, 'the remote pane is not mounted').not.toBeNull()
+    expect(propExpression(tag ?? '', 'end'), 'a remote pane is never told its link went').toMatch(
+      /machinePaneEnd/,
+    )
+    expect(app, 'machinePaneEnd does not consult the link').toMatch(
+      /endOfMachineSession\(\s*[\s\S]{0,200}?row\?\.link/,
+    )
+  })
+
+  it('gives a server pane the name and the press its card needs', () => {
+    // A closed SSH channel is the one end this app cannot explain — `exit`, the
+    // agent quitting and the server dropping all arrive identically — so the
+    // card names both and offers the press that settles it. Without `onReopen`
+    // it is a sentence with no way out; without `serverName` it says "that
+    // server" over a machine that has a name.
+    const tag = openingTag(app, 'ServerSessionPane')
+    expect(tag, 'the server pane is not mounted').not.toBeNull()
+    for (const prop of ['serverName', 'onReopen']) {
+      expect(tag, `the server pane is missing ${prop}`).toMatch(new RegExp(`[\\s{]${prop}[=}]`))
+    }
+  })
+})
+
+/**
  * A session started from a paired phone has to arrive, and has to arrive
  * quietly.
  *

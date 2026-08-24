@@ -710,3 +710,32 @@
      able to do, however narrow it gets. */
   overflow: visible;
 }
+
+/* ------------------------------------------------------ a session that is over -- */
+
+/*
+  What stands where the chips were.
+
+  Not a chip. A `cc-chip` is a control — it has a hover, a press and a caret —
+  and this is a statement, so it takes none of them: no border, no fill, no
+  pointer. The distinction is the whole reason it is drawn at all rather than
+  leaving a gap, and drawing it as a chip would put an inert-looking control on
+  the bar, which is the state the account chip next door argues against.
+
+  The sentence lives in the `title`, through the app's own tooltip layer, and it
+  is the same sentence the card in the pane below is drawing in full — one end,
+  one set of words, two surfaces. See `session-end.ts`.
+*/
+.sc-ended {
+  flex: 0 1 auto;
+  min-width: 0;
+  padding: 0 var(--sp-1);
+  font-size: var(--t-footnote);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* The pointer is a `default` rather than nothing at all, so that hovering it
+     to read the sentence does not look like hovering something clickable. */
+  cursor: default;
+}

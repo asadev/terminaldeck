@@ -88,6 +88,7 @@ import { SessionControls } from './shell/SessionControls'
 // note: it is the router that made the model, effort and fast-mode cluster reach
 // a session on a paired machine and on a server.
 import type { ControlsTarget } from './shell/controls-target'
+import { endOfLocalSession, endOfMachineSession, shellGone, type SessionEnd } from './shell/session-end'
 import { PanelView } from './shell/PanelView'
 import { useSidebar } from './shell/useSidebar'
 import { PANELS, panelSpec, type PanelId } from './shell/panels'
@@ -250,6 +251,7 @@ function Workspace() {
     removeSession,
     setActiveSession,
     setSessionStatus,
+    setSessionExit,
     setSessionTitle,
   } = useStore()
 
@@ -2641,6 +2643,35 @@ function Workspace() {
   }, [setSessionStatus, notifier])
 
   /**
+   * The process ended: the record's own exit code, written down.
+   *
+   * ## Why this was missing and how it hid
+   *
+   * `session:exit` had three subscribers in this renderer — the alerts feed,
+   * the Overview board and the copilot's naming — and none of them put the code
+   * back on the session. `SessionMeta.exitCode` was therefore read once, at
+   * launch, and stayed `null` for every session this window ever started.
+   *
+   * The status arriving beside it is what hid it. `session:status` carries
+   * `'exited'` at the same moment, so the rail's dot went grey and the tab said
+   * the right thing, while every consumer that asks the *record* was told the
+   * session was alive. `controlsFor` is the one that shows: it answers
+   * `exited: local.exitCode !== null`, so a killed agent kept a pressable
+   * `Opus 5 1M ⌄ · Ultracode ⌄ · Connectors ⌄` on the bar above a terminal
+   * reading `[process exited]`, and `localSessionEnd` — the pane's own reading
+   * — could never fire at all.
+   *
+   * Its own effect rather than a line in the one above, because they are two
+   * channels: a status is a classification of output and can be re-broadcast at
+   * any time, and this is the operating system answering once.
+   */
+  useEffect(() => {
+    return window.deck.onSessionExit((id, exitCode) => {
+      setSessionExit(id, exitCode)
+    })
+  }, [setSessionExit])
+
+  /**
    * A link, arriving as a browser page in this window.
    *
    * Both kinds come down this one channel because both are the same request
@@ -4419,6 +4450,63 @@ function Workspace() {
   )
 
   /**
+   * Why a session on **this** computer has stopped being one, by its id.
+   *
+   * Looked up rather than taken from whatever record the call site happens to
+   * hold, because the three places that mount a local terminal hold three
+   * different shapes — the window's own `SessionMeta`, a split pane's, and
+   * `SwarmSession`, which carries a status and no exit code at all. One lookup
+   * against `windowSessions` is what stops the swarm's cells being the one
+   * surface in this window where a dead session still draws a live composer.
+   */
+  const localSessionEnd = (id: string): SessionEnd | null =>
+    endOfLocalSession(windowSessions.find((entry) => entry.id === id)?.exitCode ?? null)
+
+  /**
+   * Which folder a local session is in, by id — for the press on its ended card.
+   *
+   * Looked up for the reason {@link localSessionEnd} is: `SwarmSession` carries
+   * an id, a title and a status and no folder at all, so the swarm's cells would
+   * otherwise be the one place in the window where "start another one here" had
+   * to mean somewhere else.
+   */
+  const localSessionFolder = (id: string): string | null =>
+    windowSessions.find((entry) => entry.id === id)?.projectPath ?? null
+
+  /**
+   * Why a pane showing a session on a paired machine has stopped being one.
+   *
+   * ## Why the window answers this and not the pane
+   *
+   * Because four of the five answers are facts about the **link**, and a pane
+   * holds one session id and no link at all. A machine that is asleep, one that
+   * was disconnected from here on purpose, one whose socket fell over and is
+   * being redialled, and one that is refusing this desktop until somebody over
+   * there approves it are four different events that a person acts on four
+   * different ways — and `guest.ts` already publishes enough to tell them apart.
+   * `endOfMachineSession` is where that reading lives; this is the lookup in
+   * front of it.
+   *
+   * ## Why the pane survives all of them
+   *
+   * The prune above only drops a pane when a **connected** machine says the
+   * session is gone — *"a link drops and reconnects on its own, and a pane
+   * thrown away during those seconds is exactly the reload this list exists to
+   * remove."* That is right, and it is also precisely how a live-looking dead
+   * screen comes about: the pane stays, the terminal keeps the last frame the
+   * far machine painted, and until now nothing on it changed. So the same rule
+   * that keeps the pane is what makes this reading necessary.
+   */
+  const machinePaneEnd = (machineId: string, sessionId: string): SessionEnd | null => {
+    const row = machines.machines.find((entry) => entry.machine.id === machineId) ?? null
+    return endOfMachineSession(
+      row?.machine.name ?? 'that machine',
+      row?.link ?? null,
+      row?.link?.sessions.find((session) => session.id === sessionId) ?? null,
+    )
+  }
+
+  /**
    * Which session a set of controls acts on, and on which computer — for any
    * tab, of any of the three kinds.
    *
@@ -4464,6 +4552,16 @@ function Workspace() {
     cwd: string | null
     provider: ProviderId | undefined
     exited: boolean
+    /**
+     * Why it ended, in the same words the pane below the bar uses.
+     *
+     * Alongside `exited` rather than instead of it, because the two answer
+     * different questions: `exited` is *may these controls act*, and this is
+     * *what happened*. The bar needs the first to decide whether to draw a
+     * control at all and the second only to put a sentence on the word that
+     * replaces them.
+     */
+    end: SessionEnd | null
     target: ControlsTarget | undefined
   } | null => {
     if (tabId === null) return null
@@ -4479,6 +4577,10 @@ function Workspace() {
         // `servers:shell:closed` fired. There is no exit code on that channel
         // and none is invented here.
         exited: row.status === 'exited',
+        // And no *cause* is invented either — `shellGone` is the vocabulary's
+        // word for exactly this: a channel that closed, with the two things
+        // that could have closed it named rather than one of them guessed.
+        end: row.status === 'exited' ? shellGone(row.serverName) : null,
         target: { kind: 'server' },
       }
     }
@@ -4492,6 +4594,11 @@ function Workspace() {
         cwd: null,
         provider: isProviderId(live.provider) ? live.provider : undefined,
         exited: live.exitCode !== null,
+        // The same reading the pane below this bar draws its card from. Only the
+        // `online` branch of it can be reached here — a link that is down
+        // returns `null` from the lookup above, which withdraws the cluster
+        // entirely rather than leaving chips over a machine nobody can reach.
+        end: machinePaneEnd(remote.machineId, remote.sessionId),
         target: { kind: 'machine', machineId: remote.machineId },
       }
     }
@@ -4507,6 +4614,7 @@ function Workspace() {
          would keep live model and effort chips on the bar of a session whose
          process is already gone. */
       exited: local.exitCode !== null,
+      end: endOfLocalSession(local.exitCode),
       target: undefined,
     }
   }
@@ -4703,6 +4811,12 @@ function Workspace() {
               fontSize={terminalFontSize}
               fontFamily={terminalFontFamily}
               copyOnSelect={copyOnSelect}
+              /* Off the record rather than off the exit *event*, so the mark
+                 survives the pane being rebuilt — see the prop's own note. */
+              end={localSessionEnd(session.id)}
+              /* The press on the ended card, through the same dialog every other
+                 New session in this window opens — on this session's folder. */
+              onReopen={() => openNewSessionDialog(localSessionFolder(session.id))}
             />
           )}
         />
@@ -4870,6 +4984,9 @@ function Workspace() {
                              model and effort chips on the bar of a session whose
                              process is already gone. */
                           exited={paneControls.exited}
+                          /* And why, so the word that replaces the chips carries
+                             the same sentence the card in the pane does. */
+                          end={paneControls.end}
                           onOpenConnectors={openConnectors}
                           /* Which computer this pane's session is on. `undefined`
                              for one of this window's own, which is what every
@@ -4905,6 +5022,8 @@ function Workspace() {
                       fontSize={terminalFontSize}
                       fontFamily={terminalFontFamily}
                       copyOnSelect={copyOnSelect}
+                      end={localSessionEnd(session.id)}
+                      onReopen={() => openNewSessionDialog(localSessionFolder(session.id))}
                     />
                   ) : pageTab ? (
                     /*
@@ -5033,6 +5152,8 @@ function Workspace() {
                 fontSize={terminalFontSize}
                 fontFamily={terminalFontFamily}
                 copyOnSelect={copyOnSelect}
+                end={localSessionEnd(session.id)}
+                onReopen={() => openNewSessionDialog(localSessionFolder(session.id))}
               />
               {active && mode === 'chat' ? (
                 <ChatView
@@ -6451,6 +6572,7 @@ function Workspace() {
                of a session whose process is already gone: the screen those
                values are read from still carries a killed CLI's banner. */
                 exited={barControls.exited}
+                end={barControls.end}
                 onOpenConnectors={openConnectors}
                 /* Which computer to ask. Undefined for a session on this one,
                which is what every mount meant before the prop existed. */
@@ -6698,6 +6820,18 @@ function Workspace() {
                     /* The one thing this pane knows that the bar above it needs.
                        See `serverShellIds`. */
                     onOpened={(id) => serverShellOpened(entry.tabId, id)}
+                    /* Off the row rather than the servers list, which is what
+                       `renameServersIn` keeps in step for exactly this kind of
+                       reader. */
+                    serverName={entry.serverName}
+                    /* The press on the ended card. A closed SSH channel leaves
+                       one question — was that the shell or the server — and this
+                       app cannot answer it from here (`session-end.ts` says
+                       why), so the card offers the act that finds out. Same
+                       folder, so it lands where the last one did. */
+                    onReopen={() =>
+                      openServerShell(entry.serverId, entry.serverName, entry.startIn, entry.run)
+                    }
                   />
                   {chatting && shellId !== undefined ? (
                     <ServerChatPane
@@ -6756,6 +6890,14 @@ function Workspace() {
                   machineId={pane.machineId}
                   sessionId={pane.sessionId}
                   bridge={machinesBridge}
+                  /* Why this pane's screen is a photograph, or null while it is
+                     a session. Read here rather than in the pane because the
+                     answer is mostly a fact about the *link* — see
+                     `endOfMachineSession`, which is also what `controlsFor`
+                     below consults, so the bar over this pane and the card
+                     inside it cannot come to describe the same event
+                     differently. */
+                  end={machinePaneEnd(pane.machineId, pane.sessionId)}
                 />
               </div>
             ))}

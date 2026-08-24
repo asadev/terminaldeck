@@ -8,6 +8,8 @@ import { subscribeTheme } from '../theme'
 import { attachRenderer } from '../terminal-renderer'
 import { attachClipboardOsc, pasteFilesInto, pastedFiles } from '../terminal-clipboard'
 import { TransferNote, useTransferNote } from './TransferNote'
+import { SessionEnded } from '../shell/SessionEnded'
+import { freezeTerminal, type SessionEnd } from '../shell/session-end'
 import { draggingFiles, droppedPaths, droppedText, promptWord, resolveDropBridge } from '../terminal-drop'
 import { registerTerminal } from '../driving/terminal-registry'
 import { holdUntilFilled } from './terminal-backfill'
@@ -25,6 +27,44 @@ interface Props {
   fontFamily?: string
   /** General → Copy on select. */
   copyOnSelect?: boolean
+  /**
+   * Start another session in this folder, from the card drawn over a dead one.
+   *
+   * The window's, because only the window can open the New session dialog — and
+   * it is the *dialog* rather than a spawn, so this press asks the same
+   * questions every other New session in the app asks. *"It is not asking me for
+   * this kind of pop-ups when I am opening from here. Everywhere it should be
+   * consistent and it should be asking same things to me."*
+   *
+   * Optional, and its absence draws the card with no button rather than a dead
+   * one — the rule the account chip states next door.
+   */
+  onReopen?(): void
+  /**
+   * Why this session's screen is a photograph, or null while it is a session.
+   *
+   * ## Why a local terminal needs this at all
+   *
+   * The same defect the two remote panes have, one step milder. When a local
+   * pty ends, `onSessionExit` writes `[process exited]` into the scrollback and
+   * that is the whole of it: the CLI's last frame is still underneath — the
+   * composer, its placeholder, the `/effort` chip, the permission footer — and
+   * xterm is still focused with a cursor in it, still calling `onData`, still
+   * handing every keystroke to `writeToSession` for a pty that is gone.
+   *
+   * And that one line is worse than it looks, because it is written into
+   * *xterm* rather than into the buffer the main process holds. Every pane in
+   * this window is unmounted and rebuilt whenever the layout changes — opening
+   * Files or a split does it — and the rebuilt terminal asks main for the
+   * scrollback, which has no `[process exited]` in it. So the one honest mark on
+   * a dead local session disappears the first time somebody looks at anything
+   * else. Read off the record, this does not.
+   *
+   * Optional, so the callers that render a terminal with no session record
+   * behind it are unchanged, and null means *running* — the state every one of
+   * them is in.
+   */
+  end?: SessionEnd | null
 }
 
 /** Reads a CSS custom property so the terminal follows the app theme. */
@@ -468,6 +508,8 @@ export function TerminalView({
   fontSize = DEFAULT_TERMINAL_FONT_SIZE,
   fontFamily = '',
   copyOnSelect = false,
+  end = null,
+  onReopen,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
@@ -781,10 +823,27 @@ export function TerminalView({
     if (text !== '') term.paste(text)
   }, [])
 
+  /*
+   * The keyboard, taken away and given back, in its own effect.
+   *
+   * `freezeTerminal` rather than a guard in `onData`, for the reason written out
+   * beside it: a guard leaves xterm focused, blinking a cursor over the dead
+   * composer and reading keys it then drops, which is every perceivable signal
+   * still saying the keyboard is connected. Reversible because a session record
+   * can arrive before the first read settles, and because this component is
+   * rendered for whichever session the pane is showing.
+   */
+  useEffect(() => {
+    const term = termRef.current
+    if (!term) return
+    freezeTerminal(term, end !== null)
+  }, [end])
+
   return (
     <div
       className="terminal-host"
       data-visible={visible}
+      data-ended={end !== null}
       onDragOver={(event) => {
         if (!draggingFiles(event.dataTransfer) && !event.dataTransfer?.types.includes('text/plain')) return
         event.preventDefault()
@@ -795,6 +854,15 @@ export function TerminalView({
       <div ref={hostRef} className="terminal-surface" />
       {findBar}
       <TransferNote line={note} />
+      {/* The same card the two remote panes draw, over the same kind of frozen
+          frame — *"the shape of the application should not be changing for local
+          and remote devices."* The press goes back to the window, which opens
+          the New session dialog on this folder: the same questions every other
+          New session in this app asks, rather than a second spawn path with its
+          own answer for which agent and which folder. */}
+      {end !== null && (
+        <SessionEnded end={end} onAct={onReopen === undefined ? null : () => onReopen()} />
+      )}
     </div>
   )
 }
