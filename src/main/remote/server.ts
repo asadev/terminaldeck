@@ -5927,8 +5927,11 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
        * **Driving this machine's browser.**
        *
        * Every one of these answers with exactly one frame — the window list for
-       * most, a picture or a step list for the two that carry a payload — so the
-       * dispatch is one call and one send. `machineBrowser` never rejects: each
+       * most, and a picture, a step list or one picked element for the three that
+       * carry a payload — so the dispatch is one call and one send. Each of those
+       * three falls back to the window list with a sentence on every way it can
+       * fail, which is why this stack needs no per-verb branch for failure.
+       * `machineBrowser` never rejects: each
        * verb catches its own dependencies into a `notice` on the redraw, because
        * a phone that gets an `error` frame for *this browser cannot record*
        * shows a dead screen where the honest answer is a list with a sentence
@@ -5940,7 +5943,8 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
       case 'browser.window.act':
       case 'browser.window.bind':
       case 'browser.window.shot':
-      case 'browser.window.steps': {
+      case 'browser.window.steps':
+      case 'browser.window.pick': {
         const browser = options.machineBrowser
         if (browser === undefined || !ownDevice(connection.deviceId)) {
           // Unreachable through the ordinary path — the capability is not
@@ -5967,7 +5971,9 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
                   ? browser.bind(message)
                   : message.t === 'browser.window.shot'
                     ? browser.shot(message)
-                    : browser.steps(message)
+                    : message.t === 'browser.window.steps'
+                      ? browser.steps(message)
+                      : browser.pick(message)
         ).then(
           (answer) => {
             if (!live.has(connection.id)) return

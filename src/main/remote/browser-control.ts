@@ -2,7 +2,14 @@ import { attach, detach, ownerOf, slotName, windowClosed, windowMoved, windowsOf
 import { describeStep, type RecordedStep as DeskStep } from '../browser-steps'
 import { sanitizeLine } from '../selector'
 import { REPLAY_SUBMIT_GAP_MS, replayWrites } from '../switch-later'
-import type { ClientMessage, MachineWindow, RecordedStep, ServerMessage, WindowSession } from './protocol'
+import type {
+  ClientMessage,
+  MachineWindow,
+  PickedRect,
+  RecordedStep,
+  ServerMessage,
+  WindowSession,
+} from './protocol'
 
 /**
  * The machine's own browser, driven from the phone.
@@ -39,10 +46,11 @@ import type { ClientMessage, MachineWindow, RecordedStep, ServerMessage, WindowS
  * these verbs act on Chromium and the phone cannot see the result any other way.
  * A person who pressed Isolate sees the window come back isolated.
  *
- * {@link MachineBrowser.shot} and {@link MachineBrowser.steps} are the two
- * exceptions and they are exceptions only when they succeed: each carries a
- * payload of its own that no redraw could hold. Every way either of them can
- * fail comes back as the window list with a `notice`, because a phone holding a
+ * {@link MachineBrowser.shot}, {@link MachineBrowser.steps} and
+ * {@link MachineBrowser.pick} are the three exceptions and they are exceptions
+ * only when they succeed: each carries a payload of its own that no redraw could
+ * hold — a picture, a click flow, one element. Every way any of them can fail
+ * comes back as the window list with a `notice`, because a phone holding a
  * promise for a picture that never arrives is a screen that spins.
  *
  * ## Binding is the headline, and the store already existed
@@ -60,6 +68,27 @@ import type { ClientMessage, MachineWindow, RecordedStep, ServerMessage, WindowS
  * same store* the hook answer is composed from, so the agent reads `B1` in its
  * next turn without anything else being wired. That is the whole feature, and it
  * is one function call.
+ *
+ * ## The two things added after the recorded review of 2026-08-25
+ *
+ * Both are about a page a phone can see and could not act on.
+ *
+ *  - **`open` may attach what it opened.** A page opened *on the phone* is a web
+ *    view over a port tunnel: it is in no browser on the machine, so it has no
+ *    window id, so `bind` can never name it and *Attach to a session* was greyed
+ *    out. Asad: *"we should have this attachment thing for all of them, properly
+ *    working, and the same way on the sessions side also."* Re-opening the same
+ *    address on the machine is a move the phone already offers; what was missing
+ *    was that this method threw the new window's id away. It does not any more.
+ *  - **`pick` answers what is at a point.** Tapping one element and sending it
+ *    to an agent worked only in the browser rendered on the phone, because that
+ *    is the only one where the phone holds a real DOM. Over a screencast it holds
+ *    pixels. *"in the page, if I click on something, I don't have something to,
+ *    some option to specifically inspect one piece… all of them should be
+ *    identical, and all of them should have all the options."* So the hit test
+ *    moved to where the DOM is, and the answer uses the selector, label and
+ *    secret rules that were already there rather than a fourth opinion about
+ *    what a stable selector is.
  *
  * ## Isolated and shared mean what the desktop means by them
  *
@@ -204,6 +233,19 @@ export const TRUNCATED = 'truncated'
 /** A person's note attached to a screenshot, before it goes into a prompt. */
 export const MAX_SHOT_NOTE = 400
 
+/**
+ * Selector length in a `browser.window.picked`.
+ *
+ * `MAX_SELECTOR_CHARS` in `browser-driver.ts` — the longest selector the drive
+ * will act on — rather than a row's 160, because this string's whole job is to
+ * be handed back as something an agent can act on. A selector cut in half is a
+ * selector that matches something else, which is worse than one that is long.
+ */
+export const MAX_PICK_SELECTOR = 400
+
+/** Tag names and label-source words. Short by nature; bounded anyway. */
+export const MAX_PICK_WORD = 64
+
 /* ------------------------------------------------------------------ deps -- */
 
 /** One window the machine's browser is holding, as the layer under this knows it. */
@@ -255,6 +297,33 @@ export interface CapturedShot {
    * and failing to make one must never fail a capture that already succeeded.
    */
   preview: Buffer
+}
+
+/**
+ * One element on a page, as the layer under this reports it.
+ *
+ * Facts, never a verdict — the same discipline `PROBE_SCRIPT` keeps. What is
+ * *shown* to a person out of these is decided here, where it can be tested,
+ * rather than inside a page the site controls.
+ *
+ * `BrowserDrive.pickAt` answers a superset of this (it also carries the element's
+ * `type` and whether the rule calls it secret, both of which are how the main
+ * process decides things and neither of which is a thing a phone is told), so a
+ * host that has a drive satisfies this by handing that answer straight over.
+ */
+export interface PickedFacts {
+  /** False when nothing is at that point — an empty margin, or a blank page. */
+  found: boolean
+  /** The page has scrolled since the picture the point was measured against. */
+  moved: boolean
+  tag: string
+  selector: string
+  label: string
+  labelSource: string
+  /** Document coordinates, so an outline survives the page moving under it. */
+  rect: PickedRect
+  depth: number
+  maxUp: number
 }
 
 /** The click-flow recorder, when the machine's browser has one. */
@@ -315,6 +384,16 @@ export interface MachineBrowserDeps {
    * of pretending. **The window id must not change**; see the header.
    */
   repartition?(id: string, isolated: boolean): Promise<{ viewId: string | null } | null>
+  /**
+   * What is at one point on a window's page.
+   *
+   * Optional on the same rule every optional member here follows: a host with no
+   * way to run a script inside its own browser simply does not have this, and the
+   * phone is told so in a sentence instead of being given an inspect button that
+   * answers nothing. `x`/`y` are **document** coordinates and `up` is how many
+   * ancestors to climb — see `browser.window.pick` for why both.
+   */
+  pick?(input: { id: string; x: number; y: number; up: number }): Promise<PickedFacts>
   recorder?: ClickRecorder
   capture(id: string): Promise<CapturedShot>
   /** The sessions a window could be bound to. Read per verb, never cached. */
@@ -339,7 +418,10 @@ export interface MachineBrowserDeps {
 /** Exactly one host frame, ready to go on the wire. */
 export type BrowserAnswer = Extract<
   ServerMessage,
-  { t: 'browser.window.rows' } | { t: 'browser.shot' } | { t: 'browser.record.rows' }
+  | { t: 'browser.window.rows' }
+  | { t: 'browser.shot' }
+  | { t: 'browser.record.rows' }
+  | { t: 'browser.window.picked' }
 >
 
 type Frame<T extends ClientMessage['t']> = Extract<ClientMessage, { t: T }>
@@ -353,6 +435,7 @@ export interface MachineBrowser {
   bind(message: Frame<'browser.window.bind'>): Promise<BrowserAnswer>
   shot(message: Frame<'browser.window.shot'>): Promise<BrowserAnswer>
   steps(message: Frame<'browser.window.steps'>): Promise<BrowserAnswer>
+  pick(message: Frame<'browser.window.pick'>): Promise<BrowserAnswer>
 }
 
 /* --------------------------------------------------------------- helpers -- */
@@ -364,6 +447,24 @@ function trim(value: string | undefined, max: number): string {
 function why(error: unknown): string {
   const text = error instanceof Error ? error.message : String(error)
   return sanitizeLine(text, MAX_ROW_TEXT) || 'it did not say why'
+}
+
+/**
+ * A real number, or zero.
+ *
+ * Geometry that came out of a page. A node with no layout answers `NaN` for its
+ * rectangle, and a `NaN` on this wire is an outline drawn nowhere on the phone
+ * with nothing anywhere to explain it — `finiteNumber` in `protocol.ts` refuses
+ * one arriving; this stops one leaving.
+ */
+function finite(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+
+/** A whole count that is never negative. The two ancestor counters. */
+function whole(value: unknown): number {
+  const at = finite(value)
+  return at > 0 ? Math.floor(at) : 0
 }
 
 /**
@@ -529,7 +630,7 @@ export function machineBrowser(deps: MachineBrowserDeps): MachineBrowser {
   async function act(message: Frame<'browser.window.act'>): Promise<BrowserAnswer> {
     const window = await find(message.id)
     if (!window) return rows('That window is not open any more.')
-    const name = trim(window.title, MAX_ROW_TEXT) || trim(window.url, MAX_ROW_TEXT) || 'That window'
+    const name = nameOf(window)
 
     try {
       switch (message.action) {
@@ -591,10 +692,67 @@ export function machineBrowser(deps: MachineBrowserDeps): MachineBrowser {
     }
   }
 
+  /**
+   * The session an id names, or the sentence to answer with instead.
+   *
+   * Split out of {@link bind} when `browser.window.open` learned to attach what
+   * it just opened, and split rather than copied on purpose: this is the door
+   * that decides whether a client may name a session at all. *"Without it a
+   * client holding an id from an alert, an older list or a transcript path could
+   * attach a window to a session it was never shown — and every one of those ids
+   * is recoverable."* Two spellings of that check is one spelling that gets
+   * relaxed, and the relaxed one would be on the newer verb.
+   */
+  function sessionNamed(id: string): { session: HostSession } | { refusal: string } {
+    let sessions: readonly HostSession[] = []
+    try {
+      sessions = deps.sessions()
+    } catch (error) {
+      return { refusal: `This machine could not list its sessions: ${why(error)}.` }
+    }
+    const session = sessions.find((entry) => entry.id === id)
+    if (!session) return { refusal: 'No session by that name is running here.' }
+    return { session }
+  }
+
+  /**
+   * Attach one window to one session, and compose the line a person reads.
+   *
+   * The one place a slot is minted from this wire. `browser.window.bind` calls
+   * it and so does an `open` carrying a session, which is why the notice a
+   * person sees after *Open and attach* is byte for byte the notice they see
+   * after *Attach* — the two are one act with one sentence, not two features
+   * that happen to agree today.
+   */
+  function attachTo(window: OpenWindow, session: HostSession, name: string): string {
+    const attached = attach({
+      sessionId: session.id,
+      machineId,
+      browserTabId: window.id,
+      viewId: window.viewId ?? null,
+      url: window.url ?? '',
+      title: window.title ?? '',
+    })
+    return `${name} is ${slotName(attached.n)} in ${trim(session.title, MAX_ROW_TEXT)}.`
+  }
+
+  /**
+   * What a window is called in a sentence somebody reads.
+   *
+   * Its title, then its address, then a word — and never its id. Every verb that
+   * composes a line about a window goes through this, so *Closed Stripe.* and
+   * *Stripe is B1 in Session 1.* are the same window said the same way; four
+   * copies of this expression is four places for `browser:<epoch>:<uuid>` to
+   * come back onto a screen, which it was once.
+   */
+  function nameOf(window: OpenWindow): string {
+    return trim(window.title, MAX_ROW_TEXT) || trim(window.url, MAX_ROW_TEXT) || 'That window'
+  }
+
   async function bind(message: Frame<'browser.window.bind'>): Promise<BrowserAnswer> {
     const window = await find(message.id)
     if (!window) return rows('That window is not open any more.')
-    const name = trim(window.title, MAX_ROW_TEXT) || trim(window.url, MAX_ROW_TEXT) || 'That window'
+    const name = nameOf(window)
 
     if (message.session === undefined) {
       const held = ownerOf(message.id)
@@ -605,36 +763,79 @@ export function machineBrowser(deps: MachineBrowserDeps): MachineBrowser {
       return rows(`${name} is no longer attached to a session.`)
     }
 
-    let sessions: readonly HostSession[] = []
-    try {
-      sessions = deps.sessions()
-    } catch (error) {
-      return rows(`This machine could not list its sessions: ${why(error)}.`)
-    }
-    const session = sessions.find((entry) => entry.id === message.session)
-    /*
-     * Bound only to a session this host listed, and that is the door rather than
-     * a formality. Without it a client holding an id from an alert, an older
-     * list or a transcript path could attach a window to a session it was never
-     * shown — and every one of those ids is recoverable.
-     */
-    if (!session) return rows('No session by that name is running here.')
+    const found = sessionNamed(message.session)
+    if ('refusal' in found) return rows(found.refusal)
+    return rows(attachTo(window, found.session, name))
+  }
 
-    const attached = attach({
-      sessionId: session.id,
-      machineId,
-      browserTabId: message.id,
-      viewId: window.viewId ?? null,
-      url: window.url ?? '',
-      title: window.title ?? '',
-    })
-    return rows(`${name} is ${slotName(attached.n)} in ${trim(session.title, MAX_ROW_TEXT)}.`)
+  /**
+   * What is at one point on a window's page.
+   *
+   * The one verb in this family that answers with neither the window list nor a
+   * payload the phone asked for by name — it answers with an *element*, and it
+   * falls back to the list with a sentence for every way it can fail, on the
+   * same rule `shot` and `steps` follow. A phone holding a promise for an
+   * element that never arrives is a sheet that spins.
+   */
+  async function pick(message: Frame<'browser.window.pick'>): Promise<BrowserAnswer> {
+    if (!deps.pick) {
+      return rows("This machine's browser cannot point at one thing on a page.")
+    }
+    const window = await find(message.id)
+    if (!window) return rows('That window is not open any more.')
+    const name = nameOf(window)
+
+    let facts: PickedFacts
+    try {
+      facts = await deps.pick({ id: message.id, x: message.x, y: message.y, up: message.up ?? 0 })
+    } catch (error) {
+      return rows(`${name} could not be looked at: ${why(error)}.`)
+    }
+
+    if (!facts.found) {
+      /*
+       * Two different things, told apart, because the fix is different. A page
+       * that has scrolled is fixed by tapping again; an empty margin is fixed by
+       * tapping somewhere else. One sentence covering both would send half the
+       * people who read it to the wrong remedy.
+       */
+      return rows(
+        facts.moved
+          ? `${name} has scrolled since that picture — tap the same thing again.`
+          : `There is nothing at that spot on ${name}.`,
+      )
+    }
+
+    return {
+      t: 'browser.window.picked',
+      id: message.id,
+      tag: trim(facts.tag, MAX_PICK_WORD),
+      selector: trim(facts.selector, MAX_PICK_SELECTOR),
+      label: trim(facts.label, MAX_ROW_TEXT),
+      labelSource: trim(facts.labelSource, MAX_PICK_WORD),
+      /*
+       * The **window row's** address, not the page's own claim about where it
+       * is. This string is about to be handed to an agent, and a page that can
+       * lie about its address must not also get to name the site somebody is
+       * told they are looking at — the rule `selector.ts` keeps at the desktop's
+       * own guest boundary, applied one wire further out.
+       */
+      url: trim(window.url, MAX_ROW_URL),
+      rect: {
+        x: finite(facts.rect?.x),
+        y: finite(facts.rect?.y),
+        w: finite(facts.rect?.w),
+        h: finite(facts.rect?.h),
+      },
+      depth: whole(facts.depth),
+      maxUp: whole(facts.maxUp),
+    }
   }
 
   async function shot(message: Frame<'browser.window.shot'>): Promise<BrowserAnswer> {
     const window = await find(message.id)
     if (!window) return rows('That window is not open any more.')
-    const name = trim(window.title, MAX_ROW_TEXT) || trim(window.url, MAX_ROW_TEXT) || 'That window'
+    const name = nameOf(window)
 
     /*
      * The session is resolved *before* the capture, not after.
@@ -729,8 +930,41 @@ export function machineBrowser(deps: MachineBrowserDeps): MachineBrowser {
   return {
     windows: () => rows(''),
 
+    /**
+     * Open a window, and — when a session was named — attach it in the same act.
+     *
+     * ## Why attaching lives here rather than in a second frame
+     *
+     * The phone's *Open on this machine and attach* is one press, and the two
+     * halves of it cannot be two frames: `browser.window.bind` names a window,
+     * and until this method returns nobody outside the host knows which window
+     * was just made. The old shape threw that id away — it answered with the
+     * window *list* — so a client wanting to bind what it had just opened had to
+     * pick the new row out by comparing the list before with the list after.
+     * That is a race, and `src/headless/machine-browser.ts` records the same
+     * hack being removed from the layer below for the same reason: **two opens
+     * in flight each find both rows**. So the id never leaves this function; the
+     * attach happens while it is still in hand.
+     *
+     * ## Why the session is checked before anything opens
+     *
+     * `shot` makes this argument first and it holds here with more force: a
+     * picture taken for a session that turns out not to exist is a file on
+     * somebody's disk, and a *window* opened for one is a page on their screen
+     * that nobody asked for and nobody is present to close. So an unknown
+     * session is refused with `bind`'s own sentence and the browser is never
+     * touched.
+     */
     async open(message) {
       const isolated = message.isolated === true
+
+      let wanted: HostSession | null = null
+      if (message.session !== undefined) {
+        const found = sessionNamed(message.session)
+        if ('refusal' in found) return rows(found.refusal)
+        wanted = found.session
+      }
+
       let id: string | null = null
       try {
         id = await deps.open({
@@ -745,10 +979,25 @@ export function machineBrowser(deps: MachineBrowserDeps): MachineBrowser {
         const said = deps.whyNotOpen?.() ?? ''
         return rows(said || "This machine's browser did not open a window.")
       }
-      // Not bound to anything, and that is the rule rather than an omission.
-      // *"Nothing is chosen by default. Not the focused session, not the newest,
-      // not the only one"* — an automatic choice is the behaviour being replaced.
-      return rows(isolated ? 'Opened an isolated window.' : 'Opened a window.')
+
+      if (wanted === null) {
+        // Not bound to anything, and that is the rule rather than an omission.
+        // *"Nothing is chosen by default. Not the focused session, not the newest,
+        // not the only one"* — an automatic choice is the behaviour being replaced.
+        return rows(isolated ? 'Opened an isolated window.' : 'Opened a window.')
+      }
+
+      /*
+       * Read back before it is attached, because the binding store keeps a
+       * window's address and title and the only source for either is the list.
+       * A window that is not in the list yet is still attached — on the id,
+       * which is the binding key and the one thing that is certainly right —
+       * with the address that was asked for. `windowMoved` corrects the rest the
+       * moment the page reports itself, which is the same path a window opened
+       * at the keyboard takes.
+       */
+      const opened = (await find(id)) ?? { id, url: message.url ?? '', title: '' }
+      return rows(attachTo(opened, wanted, nameOf(opened)))
     },
 
     async go(message) {
@@ -766,5 +1015,6 @@ export function machineBrowser(deps: MachineBrowserDeps): MachineBrowser {
     bind,
     shot,
     steps,
+    pick,
   }
 }

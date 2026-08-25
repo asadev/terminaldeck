@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { BrowserDrive, boundKey, describeStep } from './browser-driver'
+import { MAX_PICK_ANCESTORS, PREAMBLE } from './browser-drive-script'
+import { MAX_PICK_UP, PICK_LABEL_SOURCES } from './remote/protocol'
 
 /**
  * The parts of the driver a test can hold still.
@@ -442,5 +444,192 @@ describe('refusing to drive, with a reason', () => {
     await expect(drive.open({ url: 'https://example.com', isolate: false })).rejects.toThrow(
       /Settings → Tools/,
     )
+  })
+})
+
+/**
+ * Pointing at one thing on a page.
+ *
+ * The hit test itself is a fact about a live document and is exercised against
+ * real sites by `scripts/check-browser-drive.mjs`, like every other script in
+ * `browser-drive-script.ts`. What is here is what this process decides **around**
+ * the page: which arguments it hands over, and what it refuses to believe when
+ * the answer comes back.
+ *
+ * The second of those is the one worth having. A page cannot be trusted to
+ * classify its own password box, so the secret rule is asked again out here — the
+ * same belt-and-braces `outline` puts on a field's value — and a rectangle a page
+ * could not measure comes back as `NaN`, which as a coordinate is an outline
+ * drawn nowhere on somebody's phone with nothing anywhere to explain it.
+ */
+describe('what is at one point on a page', () => {
+  const target = { key: boundKey('t1'), viewId: 'v1', browserTabId: 't1', name: 'B1' }
+
+  /** A page that answers one fixed value, and remembers the script it was given. */
+  function pageAnswering(answer: unknown) {
+    const ran: string[] = []
+    const page = {
+      url: () => 'https://example.com/admin',
+      title: () => 'Admin',
+      isGone: () => false,
+      loadURL: async () => undefined,
+      navigateGuarded: async () => 'navigated' as const,
+      attach: async () => undefined,
+      detach: () => undefined,
+      isAttached: () => true,
+      send: async () => ({}),
+      onEvent: () => () => undefined,
+      runInIsolatedWorld: async (code: string) => {
+        ran.push(code)
+        return answer
+      },
+      capture: async () => ({ width: 0, height: 0, rgba: Buffer.alloc(0) }),
+      isLoading: () => false,
+      onSettled: () => () => undefined,
+      onGone: () => () => undefined,
+      onDetached: () => () => undefined,
+      onDestroyed: () => undefined,
+      watchBlocks: () => undefined,
+    }
+    const drive = new BrowserDrive({
+      openTab: async () => null,
+      contentsFor: () => page as never,
+      publish: () => undefined,
+      now: () => 1_000,
+    })
+    return { drive, ran }
+  }
+
+  const element = {
+    found: true,
+    moved: false,
+    tag: 'button',
+    type: '',
+    selector: '#save',
+    label: 'Save changes',
+    labelSource: 'text',
+    secret: false,
+    rect: { x: 24, y: 1180, w: 128, h: 40 },
+    depth: 0,
+    maxUp: 6,
+  }
+
+  it('hands the page the point and the climb as JSON, and nothing else', async () => {
+    const rig = pageAnswering(element)
+    const picked = await rig.drive.pickAt(120, 1200, 2, target)
+
+    // The only thing a caller contributes to any of these scripts is a JSON
+    // value. There is no path from a tap to a page's JavaScript.
+    expect(rig.ran[0]).toContain('{"x":120,"y":1200,"up":2}')
+    expect(picked).toEqual(element)
+  })
+
+  it('never asks for more ancestors than the walk will do, and never a negative', async () => {
+    const rig = pageAnswering(element)
+    await rig.drive.pickAt(1, 1, 9_999, target)
+    await rig.drive.pickAt(1, 1, -4, target)
+    await rig.drive.pickAt(1, 1, Number.NaN, target)
+    expect(rig.ran.map((code) => code.includes(`"up":${MAX_PICK_ANCESTORS}}`))).toEqual([
+      true,
+      false,
+      false,
+    ])
+    expect(rig.ran[1]).toContain('"up":0')
+    expect(rig.ran[2]).toContain('"up":0')
+  })
+
+  /**
+   * The two spellings of sixty-four, pinned against each other.
+   *
+   * One bounds the walk inside a page, the other refuses a number at the wire's
+   * door, and the wire file imports nothing from `src/main` so that it reads as
+   * the whole language on its own. That is a good reason for two constants and
+   * no reason at all for two *values*.
+   */
+  it('bounds the climb at the same number the wire refuses past', () => {
+    expect(MAX_PICK_ANCESTORS).toBe(MAX_PICK_UP)
+  })
+
+  /**
+   * The words for *where the label came from*, pinned across the three screens
+   * that print them.
+   *
+   * The desktop's capture popup and the phone's inspect sheet both draw this
+   * word beside the label — *text "Sign in"*, *aria-label "Close"* — and the
+   * pick answer feeds the same sheet. So the label rule inside the page and the
+   * vocabulary the wire documents have to be one list, or an element comes back
+   * described with a word no screen has anything to say about.
+   *
+   * `value` is in the wire's list and is deliberately absent from the rule: it
+   * is `selector.ts`'s inheritance, and a field's contents are not something a
+   * point on a screen may fetch.
+   */
+  it('names only label sources the wire has a word for', () => {
+    const wire: readonly string[] = PICK_LABEL_SOURCES
+    const produced = ['text', 'label', 'aria-label', 'placeholder', 'title', 'name', 'alt', 'none']
+    for (const word of produced) {
+      expect(PREAMBLE, `the label rule should still be able to answer ${word}`).toContain(`'${word}'`)
+      expect(wire, `the wire should have a word for ${word}`).toContain(word)
+    }
+    expect(wire).toContain('value')
+    expect(PREAMBLE).not.toContain("source: 'value'")
+  })
+
+  it('drops a label a page said it read off a secret field’s own text', async () => {
+    /*
+     * Unreachable through the shipped rule — the label rule reads a field's
+     * attributes and never its text, exactly so that this cannot happen — and
+     * asserted anyway, for the reason `browser-drive-script.ts` gives about its
+     * own second check: the day one of those strings is edited in a hurry is the
+     * day the check out here earns its keep.
+     */
+    const rig = pageAnswering({ ...element, tag: 'input', type: 'password', label: 'hunter2' })
+    const picked = await rig.drive.pickAt(1, 1, 0, target)
+    expect(picked.secret).toBe(true)
+    expect(picked.label).toBe('')
+    expect(picked.labelSource).toBe('none')
+  })
+
+  it('keeps a secret field’s real label, which is the whole of what it may say', async () => {
+    const rig = pageAnswering({
+      ...element,
+      tag: 'input',
+      type: 'password',
+      label: 'Password',
+      labelSource: 'label',
+    })
+    const picked = await rig.drive.pickAt(1, 1, 0, target)
+    expect(picked).toMatchObject({ secret: true, label: 'Password', labelSource: 'label' })
+  })
+
+  it('turns geometry a page could not measure into zeroes rather than NaN', async () => {
+    const rig = pageAnswering({
+      ...element,
+      rect: { x: Number.NaN, y: 10, w: Number.POSITIVE_INFINITY, h: 40 },
+      depth: -2,
+      maxUp: 3.9,
+    })
+    const picked = await rig.drive.pickAt(1, 1, 0, target)
+    expect(picked.rect).toEqual({ x: 0, y: 10, w: 0, h: 40 })
+    expect(picked.depth).toBe(0)
+    expect(picked.maxUp).toBe(3)
+  })
+
+  it('carries a page that answered nothing straight back as not found', async () => {
+    const rig = pageAnswering({ found: false, moved: true })
+    const picked = await rig.drive.pickAt(1, 90_000, 0, target)
+    expect(picked.found).toBe(false)
+    expect(picked.moved).toBe(true)
+    expect(picked.selector).toBe('')
+  })
+
+  it('refuses on a window that is not open any more, in a sentence', async () => {
+    const drive = new BrowserDrive({
+      openTab: async () => null,
+      contentsFor: () => null,
+      publish: () => undefined,
+      now: () => 1_000,
+    })
+    await expect(drive.pickAt(1, 1, 0, target)).rejects.toThrow(/B1 is not open any more/)
   })
 })

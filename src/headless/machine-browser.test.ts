@@ -198,6 +198,8 @@ let browser: FakeBrowser
 let sessions: HostSession[]
 let typed: Array<{ session: string; data: string }>
 let shots: DriveTarget[]
+/** Every pick that reached the drive: the point asked about, and the target. */
+let picks: Array<{ x: number; y: number; up: number; target: DriveTarget }>
 let shotFile = ''
 let control: MachineBrowser
 
@@ -212,12 +214,33 @@ beforeEach(() => {
   sessions = []
   typed = []
   shots = []
+  picks = []
   control = serverMachineBrowser({
     windows: browser,
     shots: {
       screenshot: async (target) => {
         shots.push(target as DriveTarget)
         return { path: shotFile, width: 1200, height: 800 }
+      },
+      /*
+       * The drive's own `pickAt`, at its real signature. `host.ts` passes
+       * `BrowserDrive` in as `shots` and that class is where this method lives —
+       * so a rig that faked it at a different shape would be proving that this
+       * file agrees with itself rather than with the thing it is handed.
+       */
+      pickAt: async (x, y, up, target) => {
+        picks.push({ x, y, up, target: target as DriveTarget })
+        return {
+          found: true,
+          moved: false,
+          tag: 'button',
+          selector: '#save',
+          label: 'Save changes',
+          labelSource: 'text',
+          rect: { x: 24, y: 1180, w: 128, h: 40 },
+          depth: up,
+          maxUp: 6 - up,
+        }
       },
     },
     sessions: () => sessions,
@@ -574,6 +597,94 @@ describe('binding a window to a session', () => {
     const rows = rowsOf(await control.bind({ t: 'browser.window.bind', id, session: 'somebody-elses' }))
     expect(rows.notice).toContain('No session by that name')
     expect(ownerOf(id)).toBeNull()
+  })
+
+  /**
+   * Opening a window straight into a session, which is one press on the phone.
+   *
+   * The id the door mints never leaves the host. That is the point: this module's
+   * header records the sentinel-and-diff hack that used to recover a new window's
+   * id by comparing the binding store before and after, and why it had to go —
+   * *"two opens in flight would each find both rows"*. Attaching inside the open
+   * is the same argument one layer up.
+   */
+  it('binds the window it just opened, with the view id that steers its page', async () => {
+    sessions = [{ id: 'session-1', title: 'Orders' }]
+    const rows = rowsOf(
+      await control.open({ t: 'browser.window.open', url: 'https://example.com/pricing', session: 'session-1' }),
+    )
+
+    expect(rows.windows).toHaveLength(1)
+    const opened = rows.windows[0]
+    expect(opened.slot).toBe('B1')
+    expect(rows.notice).toBe('https://example.com/pricing is B1 in Orders.')
+    // The row the agent reads, keyed on the shell id and steering the real view.
+    expect(windowsOf('session-1', '')[0]).toMatchObject({
+      browserTabId: opened.id,
+      viewId: browser.byTab.get(opened.id),
+    })
+  })
+
+  it('opens no window at all when the session named is not running here', async () => {
+    const rows = rowsOf(
+      await control.open({ t: 'browser.window.open', url: 'https://example.com/', session: 'somebody-elses' }),
+    )
+    expect(rows.notice).toContain('No session by that name')
+    // Chromium was never asked. A window opened for a session that turns out not
+    // to exist is a page on a server nobody is present to close.
+    expect(browser.opened).toEqual([])
+    expect(rows.windows).toEqual([])
+  })
+})
+
+/* ---------------------------------------------------------------- picking -- */
+
+/**
+ * Pointing at one element in a window the phone is watching.
+ *
+ * A server can serve this with nothing new wired, and that is the fact worth
+ * pinning: the thing that photographs a page is the same drive that runs a script
+ * in it, so `pick` is one method on the object `host.ts` already passes in. What
+ * the assertions are really about is the **slot** — a pick and a screenshot of the
+ * same window must land in the same one, or they are two debuggers on one page
+ * each releasing the other's.
+ */
+describe('pointing at one element in a window', () => {
+  it('reaches the drive in the same slot a screenshot of that window does', async () => {
+    const id = await openOne('https://example.com/pricing')
+    const answer = await control.pick({ t: 'browser.window.pick', id, x: 40, y: 900, up: 2 })
+
+    expect(picks).toHaveLength(1)
+    expect(picks[0]).toMatchObject({ x: 40, y: 900, up: 2 })
+    expect(picks[0].target.key).toBe(boundKey(id))
+    expect(picks[0].target.browserTabId).toBe(id)
+    expect(picks[0].target.viewId).toBe(browser.byTab.get(id))
+    // Never the id in the name — `browser:<epoch>:<uuid>` on a screen was a
+    // defect once and must not come back through a refusal message.
+    expect(picks[0].target.name).not.toContain('browser:')
+
+    if (answer.t !== 'browser.window.picked') throw new Error(`expected an element, got ${answer.t}`)
+    expect(answer).toMatchObject({ id, selector: '#save', depth: 2, maxUp: 4 })
+    expect(answer.url).toBe('https://example.com/pricing')
+  })
+
+  it('names the slot a person says out loud once the window is bound', async () => {
+    sessions = [{ id: 'session-1', title: 'Orders' }]
+    const id = await openOne()
+    await control.bind({ t: 'browser.window.bind', id, session: 'session-1' })
+    await control.pick({ t: 'browser.window.pick', id, x: 1, y: 1 })
+    expect(picks[0].target.name).toBe('B1')
+    expect(picks[0].up).toBe(0)
+  })
+
+  it('says so rather than pointing when this server is no longer holding it', async () => {
+    const id = await openOne()
+    browser.lose(id)
+    // The list drops a window whose target has gone, so the verb answers on the
+    // window rather than on the drive — the same order every other verb takes.
+    const rows = rowsOf(await control.pick({ t: 'browser.window.pick', id, x: 1, y: 1 }))
+    expect(rows.notice).toBe('That window is not open any more.')
+    expect(picks).toEqual([])
   })
 })
 

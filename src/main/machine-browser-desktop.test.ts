@@ -67,11 +67,13 @@ interface Desktop {
   shot: CapturedShot
   /** Views the recorder has never heard of — a pane mid-mount. */
   unclaimed: Set<string>
+  /** Every pick that reached the drive, with the target `index.ts` would mint. */
+  picks: Array<{ id: string; viewId: string; name: string; x: number; y: number; up: number }>
 }
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 
-function desktop(options: { recorder?: boolean } = {}): Desktop {
+function desktop(options: { recorder?: boolean; pick?: boolean } = {}): Desktop {
   const rig: Desktop = {
     access: {} as DesktopBrowserAccess,
     panes: [],
@@ -89,6 +91,7 @@ function desktop(options: { recorder?: boolean } = {}): Desktop {
       preview: PNG,
     },
     unclaimed: new Set(),
+    picks: [],
   }
 
   rig.access = {
@@ -116,6 +119,31 @@ function desktop(options: { recorder?: boolean } = {}): Desktop {
     write: (session, data) => {
       rig.typed.push({ session, data })
     },
+  }
+
+  /*
+   * The drive, standing in for the one line `index.ts` supplies. Off by default
+   * so the *absent* case — a build with no drive wired — is what most of this
+   * file exercises, which is the state the desktop is actually in until that
+   * line lands.
+   */
+  if (options.pick === true) {
+    rig.access.pick = async (input) => {
+      rig.picks.push(input)
+      return {
+        found: true,
+        moved: false,
+        tag: 'button',
+        type: '',
+        selector: '#save',
+        label: 'Save changes',
+        labelSource: 'text',
+        secret: false,
+        rect: { x: 24, y: 1180, w: 128, h: 40 },
+        depth: input.up,
+        maxUp: 6 - input.up,
+      }
+    }
   }
 
   if (options.recorder !== false) {
@@ -468,6 +496,119 @@ describe('binding a window to a session', () => {
 
     expect(notice(answer)).toContain('No session by that name')
     expect(ownerOf('browser:1:1')).toBeNull()
+  })
+
+  it('attaches the pane it just opened, keyed on the pane and not on the view', async () => {
+    const rig = desktop()
+    rig.sessions = [{ id: 'pty-1', title: 'build' }]
+
+    const answer = await desktopMachineBrowser(rig.access).open({
+      t: 'browser.window.open',
+      url: 'https://example.com/',
+      session: 'pty-1',
+    })
+
+    // `openPane` answers the shell tab id and that id never leaves the host —
+    // the alternative was picking the new row out of the list afterwards, which
+    // is a race two taps apart.
+    expect(rig.did).toEqual(['open https://example.com/'])
+    expect(ownerOf('browser:9:9')?.sessionId).toBe('pty-1')
+    expect(ownerOf('view:browser:9:9')).toBeNull()
+    expect(windowsOf('pty-1')[0]).toMatchObject({ browserTabId: 'browser:9:9', viewId: 'view:browser:9:9' })
+    expect(rows(answer)[0].slot).toBe('B1')
+    expect(notice(answer)).toBe('https://example.com/ is B1 in build.')
+  })
+
+  it('opens nothing when the session named is not one this host listed', async () => {
+    const rig = desktop()
+
+    const answer = await desktopMachineBrowser(rig.access).open({
+      t: 'browser.window.open',
+      url: 'https://example.com/',
+      session: 'pty-elsewhere',
+    })
+
+    expect(notice(answer)).toContain('No session by that name')
+    // Nothing reached the shell. A window opened for a session that turns out
+    // not to exist is a page on somebody's screen nobody asked for.
+    expect(rig.did).toEqual([])
+    expect(rows(answer)).toHaveLength(0)
+  })
+})
+
+/* ---------------------------------------------------------------- picking -- */
+
+/**
+ * Pointing at one element, which this file declares and `index.ts` supplies.
+ *
+ * The mapping is the whole of what is here: the wire names a **window**, the
+ * drive needs the **view** inside it plus the name a person says out loud, and
+ * getting those the wrong way round is the defect the two different ids in this
+ * rig exist to catch. Whether the drive then finds anything is `browser-driver`'s
+ * business and is tested there.
+ */
+describe('pointing at one element', () => {
+  it('hands the drive the view inside the window, and the name a person reads', async () => {
+    const rig = desktop({ pick: true })
+    open(rig, 1, 'https://example.com/', 'Example')
+
+    const answer = await desktopMachineBrowser(rig.access).pick({
+      t: 'browser.window.pick',
+      id: 'browser:1:1',
+      x: 40,
+      y: 900,
+      up: 2,
+    })
+
+    expect(rig.picks).toEqual([
+      { id: 'browser:1:1', viewId: 'view:1', name: 'Example', x: 40, y: 900, up: 2 },
+    ])
+    if (answer.t !== 'browser.window.picked') throw new Error(`expected an element, got ${answer.t}`)
+    expect(answer).toMatchObject({ id: 'browser:1:1', selector: '#save', depth: 2, maxUp: 4 })
+    // The address is the window's, which on this host is the main process's own.
+    expect(answer.url).toBe('https://example.com/')
+  })
+
+  it('falls back to the address when the page has not said what it is called', async () => {
+    const rig = desktop({ pick: true })
+    open(rig, 1, 'https://example.com/')
+
+    await desktopMachineBrowser(rig.access).pick({ t: 'browser.window.pick', id: 'browser:1:1', x: 1, y: 1 })
+
+    // Never the id. `browser:1:1` in a sentence is a sentence nobody can act on.
+    expect(rig.picks[0].name).toBe('https://example.com/')
+    expect(rig.picks[0].up).toBe(0)
+  })
+
+  it('says a window with no page in it yet has none', async () => {
+    const rig = desktop({ pick: true })
+    rig.panes.push({ id: 'browser:1:1', viewId: null, url: '', title: '' })
+
+    const answer = await desktopMachineBrowser(rig.access).pick({
+      t: 'browser.window.pick',
+      id: 'browser:1:1',
+      x: 1,
+      y: 1,
+    })
+
+    expect(notice(answer)).toContain('no page in it yet')
+    expect(rig.picks).toEqual([])
+  })
+
+  it('tells the phone in one sentence when this build has no drive wired', async () => {
+    const rig = desktop()
+    open(rig, 1, 'https://example.com/')
+
+    const answer = await desktopMachineBrowser(rig.access).pick({
+      t: 'browser.window.pick',
+      id: 'browser:1:1',
+      x: 1,
+      y: 1,
+    })
+
+    // The honest state, and not a dead button. See the module header for the one
+    // line in `index.ts` that ends it.
+    expect(notice(answer)).toBe("This machine's browser cannot point at one thing on a page.")
   })
 })
 

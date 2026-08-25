@@ -14,7 +14,9 @@ import {
 } from './browser-drive'
 import {
   looksSecret,
+  MAX_PICK_ANCESTORS,
   OUTLINE_SCRIPT,
+  PICK_SCRIPT,
   PROBE_SCRIPT,
   SCROLL_SCRIPT,
   SECRET_RECTS_SCRIPT,
@@ -200,6 +202,38 @@ export interface ProbeResult {
   hit?: boolean
   hitNode?: string | null
   readyState?: string
+}
+
+/**
+ * One element, as {@link BrowserDrive.pickAt} answers for a point on a page.
+ *
+ * A superset of what crosses the wire: `type`, `secret` and `moved` are how this
+ * process decides things, not things a phone is told. `browser-control.ts`
+ * composes the frame from the rest, so a field added here is not a field
+ * published by accident.
+ *
+ * There is no `value` and there never will be. Pointing at a password box asks
+ * *what is this*, and the answer to that is its label.
+ */
+export interface PickedElement {
+  /** False when nothing is at that point — an empty margin, or a blank page. */
+  found: boolean
+  /** The page has scrolled since the picture the point was measured against. */
+  moved: boolean
+  tag: string
+  /** The `type` attribute, so {@link looksSecret} can be asked again out here. */
+  type: string
+  selector: string
+  label: string
+  /** Which rule produced the label — `text`, `aria-label`, `name`, and their like. */
+  labelSource: string
+  secret: boolean
+  /** Where it is on the **document**, not on the viewport. */
+  rect: { x: number; y: number; w: number; h: number }
+  /** How many ancestors up from the element the point actually hit. */
+  depth: number
+  /** How many further ancestors exist above it. Zero means Wider is at its end. */
+  maxUp: number
 }
 
 export type StepVerb = 'click' | 'type' | 'select' | 'check' | 'press' | 'submit'
@@ -1613,6 +1647,71 @@ export class BrowserDrive {
   }
 
   /**
+   * What is at one point on a page, and what encloses it.
+   *
+   * The engine behind `browser.window.pick`, and the reason a window the phone
+   * is only *watching* can now be inspected the way the page rendered on the
+   * phone itself always could. `PICK_SCRIPT` holds the argument for the document
+   * coordinates and for the ancestor walk; what this adds is the same two things
+   * every other read here adds — the ordinary hold, so a person who has taken the
+   * baton is not read behind, and the second look at the secret rule.
+   *
+   * Nothing is revealed and nothing is scrolled. Somebody is watching this page
+   * from a phone, and a window that jumps to the front because a finger landed
+   * on a screencast is a machine acting on its own.
+   */
+  async pickAt(
+    x: number,
+    y: number,
+    up: number,
+    target?: DriveTarget | null,
+  ): Promise<PickedElement> {
+    const { slot } = await this.hold(target)
+    const asked = Number.isFinite(up) && up > 0 ? Math.min(Math.floor(up), MAX_PICK_ANCESTORS) : 0
+    const raw = await this.run<Partial<PickedElement>>(PICK_SCRIPT, { x, y, up: asked }, slot)
+
+    const found = raw.found === true
+    // Asked again out here, exactly as `outline` asks again: the page-side
+    // predicate could in principle be defeated, and this one runs on a value
+    // that has already crossed back.
+    const secret = raw.secret === true || looksSecret({ type: raw.type })
+    const selector = String(raw.selector ?? '')
+    /*
+     * The drive remembers which selectors are secret so it can refuse to type
+     * into one later. Pointing at a password box is as good a way of learning
+     * that as probing it, and a second store of the same fact is a store that
+     * disagrees with the first.
+     */
+    if (found && selector !== '') this.noteSecret(slot, selector, secret)
+
+    const source = String(raw.labelSource ?? 'none')
+    return {
+      found,
+      moved: raw.moved === true,
+      tag: String(raw.tag ?? ''),
+      type: String(raw.type ?? ''),
+      selector,
+      /*
+       * Belt and braces over the page's own answer, the same shape `outline`
+       * puts on a field's value. The label rule never reads a secret field's
+       * text — it reads its attributes — so this drops nothing today; the day
+       * somebody edits that rule in a hurry is the day it earns its keep.
+       */
+      label: secret && source === 'text' ? '' : String(raw.label ?? ''),
+      labelSource: secret && source === 'text' ? 'none' : source,
+      secret,
+      rect: {
+        x: finite(raw.rect?.x),
+        y: finite(raw.rect?.y),
+        w: finite(raw.rect?.w),
+        h: finite(raw.rect?.h),
+      },
+      depth: counted(raw.depth),
+      maxUp: counted(raw.maxUp),
+    }
+  }
+
+  /**
    * Run one installed store tool's recipe against a page.
    *
    * The recipe is **arguments**, never code: it goes through the same
@@ -2766,6 +2865,23 @@ export class BrowserDrive {
 }
 
 /* ---------------------------------------------------------------- helpers -- */
+
+/**
+ * A real number, or zero.
+ *
+ * For geometry that came out of a page. A page can answer `NaN` for a rectangle
+ * — a node with no layout does — and a `NaN` sent as a coordinate is an outline
+ * drawn nowhere on the phone, with no error anywhere to explain it.
+ */
+function finite(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+
+/** A whole count that is never negative. For the two ancestor counters. */
+function counted(value: unknown): number {
+  const at = finite(value)
+  return at > 0 ? Math.floor(at) : 0
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
