@@ -220,20 +220,52 @@ var selectorFor = function (el) {
   return parts.join(' > ');
 };
 
-var labelFor = function (el) {
+/*
+ * The label, and the word for where it came from.
+ *
+ * One function, because the two answers are one decision. The outline needs only
+ * the label; {@link PICK_SCRIPT} needs both, because the sheet a person reads
+ * says *text "Sign in"* or *aria-label "Close"* and that second word is the
+ * difference between a name the page shows and a name only a screen reader ever
+ * says. Splitting them into two functions would be two copies of the fallback
+ * order, and a fallback order that disagrees with itself puts one word beside
+ * another element's name.
+ *
+ * The vocabulary is \`selector.ts\`'s \`LabelSource\` plus two the desktop's own
+ * capture cannot produce because it starts from a click rather than from a
+ * field: \`name\`, and \`label\` for a \`<label for="…">\` somewhere else in the
+ * document. \`value\` is in that list and deliberately never returned here —
+ * see the note below on why a field never wears its own contents.
+ */
+var labelWithSource = function (el) {
   var t = tagOf(el);
   if (t === 'input' || t === 'textarea' || t === 'select') {
     // Never the element's own text or value for a field. A <select>'s
     // textContent is all of its options concatenated, and an input's value is
     // whatever he last typed — \`browser-steps.ts\` records both mistakes.
-    var named = attr(el, 'aria-label') || attr(el, 'placeholder') || attr(el, 'title') || attr(el, 'name');
-    if (named) return named;
+    var order = ['aria-label', 'placeholder', 'title', 'name'];
+    for (var i = 0; i < order.length; i++) {
+      var named = attr(el, order[i]);
+      if (named) return { label: named, source: order[i] };
+    }
     var id = attr(el, 'id');
-    if (id) { var lab = qs('label[for="' + id.replace(/["\\\\]/g, '\\\\$&') + '"]'); if (lab) return line(lab) }
-    return '';
+    if (id) {
+      var lab = qs('label[for="' + id.replace(/["\\\\]/g, '\\\\$&') + '"]');
+      if (lab) { var written = line(lab); if (written) return { label: written, source: 'label' } }
+    }
+    return { label: '', source: 'none' };
   }
-  return line(el) || attr(el, 'aria-label') || attr(el, 'title') || attr(el, 'alt') || '';
+  var own = line(el);
+  if (own) return { label: own, source: 'text' };
+  var rest = ['aria-label', 'title', 'alt'];
+  for (var j = 0; j < rest.length; j++) {
+    var other = attr(el, rest[j]);
+    if (other) return { label: other, source: rest[j] };
+  }
+  return { label: '', source: 'none' };
 };
+
+var labelFor = function (el) { return labelWithSource(el).label };
 `
 
 /* ----------------------------------------------------------- the scripts -- */
@@ -509,6 +541,147 @@ return {
    * own, so the browser is what answers.
    */
   viewport: { width: window.innerWidth || 0, height: window.innerHeight || 0 },
+};
+})()`
+
+/**
+ * How many ancestors a pick may walk up before it stops.
+ *
+ * The same sixty-four `selector.ts` bounds its path at and the same number the
+ * phone's own inspector uses (`MAX_DEPTH` in `InspectScript.swift`). Deep DOMs
+ * exist; unbounded ones are an attack, and a walk with no ceiling is a loop a
+ * page can lengthen at will.
+ *
+ * Spelled here **and** as `MAX_PICK_UP` in `remote/protocol.ts`, on purpose and
+ * not by oversight: this one is a ceiling on a walk inside a page, that one is a
+ * refusal at the door for a number a client sent, and the wire file imports
+ * nothing from `src/main` so that it stays readable as the whole language on its
+ * own. `browser-driver.test.ts` asserts the two are the same number, which is
+ * the guard that makes the duplication safe rather than the comment.
+ */
+export const MAX_PICK_ANCESTORS = 64
+
+/**
+ * What is at one point on the page, and what encloses it.
+ *
+ * ## What this is for
+ *
+ * Tapping one thing on a page and telling an agent *change this* already
+ * existed twice — once on the desktop, where a click in the embedded browser
+ * goes through `browser-preload.ts` into `selector.ts`, and once on the phone,
+ * where a tap in the tunnelled page goes through `InspectScript.swift` into the
+ * same rules rewritten in Swift. Both start from a **click on a real DOM the
+ * client owns**. Neither could work on a window the phone is only *watching*:
+ * over a screencast the phone has pixels, and pixels have no elements in them.
+ * Asad, on that gap:
+ *
+ * > *"in the page, if I click on something, I don't have something to, some
+ * > option to specifically inspect one piece. Here I also don't have. And then
+ * > in the own, in the own this phone page, we have it, but we don't have the
+ * > rest of the options here… So everything should, all of them should be
+ * > identical, and all of them should have all the options."*
+ *
+ * So the hit test moves to where the DOM actually is. The phone sends a point
+ * and this answers with the element under it, exactly as the other two do, using
+ * the *same* selector rule, the same label rule and the same secret rule that
+ * are already in {@link PREAMBLE} — because the three inspectors feed one sheet
+ * and a fourth opinion about what a stable selector is would show up as the same
+ * element described two different ways on two screens.
+ *
+ * ## Why the point is in document coordinates
+ *
+ * `browser.frame` carries `scrollX`/`scrollY` beside every screencast frame, so
+ * the viewer can turn a tap into a point on the *document* rather than on the
+ * picture. Document coordinates are the one space that survives the round trip:
+ * the page can scroll between the frame being drawn and the tap arriving, and a
+ * viewport point measured against an old frame would then hit whatever has
+ * scrolled into that spot. This converts with the page's **own live scroll**,
+ * read here rather than trusted from the caller.
+ *
+ * When the point is no longer on screen at all the answer is \`moved\`, not a
+ * guess and not a scroll. Scrolling would move the page under somebody who is
+ * watching it — `SCROLL_SCRIPT` is a separate script for exactly that reason —
+ * and guessing would report an element nobody pointed at.
+ *
+ * ## Walking up, which is the whole of Wider/Narrower
+ *
+ * A fingertip is not a mouse pointer: a tap lands on whichever wrapper happens
+ * to be on top, and there is no second, more precise gesture to offer. So the
+ * correction is a control — `up` ancestors from the element actually hit — and
+ * the answer says how far up it went (\`depth\`) and how much further it could
+ * go (\`maxUp\`), which is what lets the sheet grey out Wider at the top of the
+ * document instead of stepping onto nothing.
+ *
+ * ## What it never returns
+ *
+ * A field's value, secret or not. There is no value in this answer at all: the
+ * label of a password box is its label, and its contents are not something a
+ * point on a screen has any business fetching.
+ */
+export const PICK_SCRIPT = `(function () {
+${PREAMBLE}
+var args = ${ARGS_TOKEN} || {};
+var MAX_UP = ${MAX_PICK_ANCESTORS};
+var num = function (v) { return typeof v === 'number' && isFinite(v) ? v : 0 };
+var x = num(args.x), y = num(args.y);
+var want = Math.floor(num(args.up));
+if (!(want > 0)) want = 0;
+if (want > MAX_UP) want = MAX_UP;
+
+/*
+ * Document point to viewport point, with the scroll the page has right now.
+ * Read from the isolated world's own \`window\`, which the page cannot redefine.
+ */
+var sx = window.scrollX || 0, sy = window.scrollY || 0;
+var vx = x - sx, vy = y - sy;
+var vw = window.innerWidth || 0, vh = window.innerHeight || 0;
+/*
+ * Only when there is a viewport to be outside of. A document that reports no
+ * size — one still laying out, or one with no body at all — cannot be judged
+ * this way, and saying *the page has scrolled* about it would send somebody to
+ * scroll a page that never moved. The hit test below answers honestly for it.
+ */
+if (vw > 0 && vh > 0 && (vx < 0 || vy < 0 || vx >= vw || vy >= vh)) {
+  return { found: false, moved: true };
+}
+
+var at = null;
+try { at = D.elementFromPoint.call(document, vx, vy) } catch (e) { at = null }
+if (!at || at.nodeType !== 1) return { found: false, moved: false };
+
+/*
+ * The element and everything above it, in one pass.
+ *
+ * Collected before anything is measured, because \`maxUp\` is a fact about the
+ * chain rather than about the element — a sheet that had to ask again to find
+ * out whether Wider is live would be a second round trip per press.
+ */
+var chain = [];
+var node = at;
+while (node && node.nodeType === 1 && chain.length <= MAX_UP) {
+  chain.push(node);
+  try { node = node.parentElement } catch (e) { node = null }
+}
+var depth = want >= chain.length ? chain.length - 1 : want;
+var el = chain[depth];
+var r = box(el);
+var named = labelWithSource(el);
+return {
+  found: true,
+  moved: false,
+  tag: tagOf(el),
+  type: typeOf(el),
+  selector: selectorFor(el),
+  label: named.label,
+  labelSource: named.source,
+  secret: isSecret(el),
+  /*
+   * Back into document coordinates, so the phone can draw the outline over the
+   * next frame it receives without knowing when this was measured.
+   */
+  rect: r ? { x: r.x + sx, y: r.y + sy, w: r.width, h: r.height } : { x: 0, y: 0, w: 0, h: 0 },
+  depth: depth,
+  maxUp: chain.length - 1 - depth,
 };
 })()`
 

@@ -1,4 +1,5 @@
 import { normalizeUrl } from './browser-url'
+import type { PickedElement } from './browser-driver'
 import type { RecordedStep } from './browser-steps'
 import {
   machineBrowser,
@@ -83,6 +84,28 @@ export type { CapturedShot, HostSession } from './remote/browser-control'
  * refused through {@link MachineBrowserDeps.whyNotOpen} rather than quietly
  * given a shared one in whichever profile happens to be switched on. A window
  * that says it is isolated and is not is a cookie jar somebody trusted.
+ *
+ * ## Pointing at one thing, which this file can serve and does not wire itself
+ *
+ * `browser.window.pick` — the tap that says *change this* on a window the phone
+ * is only watching — needs one script run inside the page, and on the desktop
+ * the only thing that runs scripts in a pane is the drive. So
+ * {@link DesktopBrowserAccess.pick} is declared here and `index.ts` supplies it,
+ * exactly as it already supplies {@link DesktopBrowserAccess.closePane} out of
+ * the same drive:
+ *
+ * ```ts
+ * pick: async ({ id, viewId, name, x, y, up }) => {
+ *   const drive = browserDrive()
+ *   if (drive === null) throw new Error('this window is not being driven')
+ *   return drive.pickAt(x, y, up, { key: boundKey(id), viewId, browserTabId: id, name })
+ * },
+ * ```
+ *
+ * Until that line exists the phone is told, in one sentence, that this machine's
+ * browser cannot point at one thing on a page — which is the honest state and
+ * not a dead button. A headless host needs no such line: its `MachineBrowser` is
+ * built over the drive already.
  *
  * The id discipline the switch demands is nevertheless already true here and
  * costs nothing: the desktop's binding is keyed on the pane, and the isolation
@@ -187,6 +210,31 @@ export interface DesktopBrowserAccess {
   closePane(input: { id: string; viewId: string; name: string }): Promise<boolean>
   /** The desktop's own screenshot path — same folder, same filename, same preview. */
   capture(viewId: string): Promise<CapturedShot>
+  /**
+   * What is at one point on a window's page — the tap that says *change this*.
+   *
+   * Shaped like {@link closePane} rather than like {@link capture}, and the
+   * difference is the reason: this goes through the **drive**, and a drive call
+   * names a window by all three of its ids plus the name a person says out loud.
+   * `index.ts` mints that target exactly as it does for a close —
+   * `drive.pickAt(x, y, up, { key: boundKey(id), viewId, browserTabId: id, name })`
+   * — so a pick lands in the *same* slot an agent driving the window uses rather
+   * than a second one, and the drive's own refusal (the person has taken the
+   * page during a handover) comes back as the sentence it wrote.
+   *
+   * Optional, on the rule every optional member of `MachineBrowserDeps` follows:
+   * a build with no drive wired simply does not have it, and the phone is told
+   * so in one sentence instead of being handed an inspect button that answers
+   * nothing.
+   */
+  pick?(input: {
+    id: string
+    viewId: string
+    name: string
+    x: number
+    y: number
+    up: number
+  }): Promise<PickedElement>
   /** Absent in a build with no recorder wired; the phone is then told so. */
   recorder?: DesktopRecorderAccess
   /** The sessions a window could be bound to. Read per verb, never cached. */
@@ -373,6 +421,33 @@ export function desktopMachineBrowser(access: DesktopBrowserAccess): MachineBrow
     write: (sessionId, data) => {
       access.write(sessionId, data)
     },
+  }
+
+  /*
+   * Pointing at one thing, on the same absence-is-the-switch rule as the
+   * recorder below. The ids swap here the way they do there — the wire names a
+   * window, the drive needs the view inside it and the name a person reads —
+   * which is the whole reason this is a wrapper rather than a pass-through.
+   *
+   * The name comes off the pane rather than being invented, because it is what
+   * the drive puts in its own refusals — *"B1 is not open any more"* — and an
+   * id in a sentence is a sentence nobody can act on. A pane whose page has not
+   * arrived still throws out of `viewOf`, and *that window has no page in it
+   * yet* is the right answer for it.
+   */
+  if (access.pick) {
+    const ask = access.pick
+    deps.pick = async ({ id, x, y, up }) => {
+      const pane = paneOf(id)
+      return ask({
+        id,
+        viewId: viewOf(id),
+        name: pane?.title || pane?.url || 'That window',
+        x,
+        y,
+        up,
+      })
+    }
   }
 
   /*

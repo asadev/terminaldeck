@@ -860,6 +860,61 @@ export interface RecordedStep {
 }
 
 /**
+ * Where a picked element sits, in the page's own coordinates.
+ *
+ * Document coordinates, not viewport ones, and `w`/`h` rather than
+ * `width`/`height` to match the geometry `browser.frame` already carries. A
+ * viewer draws this over the *next* frame it receives by subtracting that
+ * frame's scroll — so an outline stays on the thing it names while the page
+ * moves under it.
+ */
+export interface PickedRect {
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+/**
+ * How many ancestors one `browser.window.pick` may ask to walk up.
+ *
+ * A refusal at the door rather than a clamp, because a client sending a hundred
+ * thousand is not a person pressing Wider. The page-side walk has a ceiling of
+ * its own — `MAX_PICK_ANCESTORS` in `browser-drive-script.ts`, the same number —
+ * and that one stops a loop a page could otherwise lengthen at will. Two
+ * spellings because this file imports nothing from `src/main` and is meant to
+ * read as the whole language on its own; `browser-driver.test.ts` asserts they
+ * agree.
+ */
+export const MAX_PICK_UP = 64
+
+/**
+ * The words `browser.window.picked` uses for where a label came from.
+ *
+ * `selector.ts`'s `LabelSource` — which both the desktop's capture popup and the
+ * phone's inspect sheet already print — plus the two a field can produce that a
+ * click on a rendered element cannot: `name`, and `label` for a `<label for="…">`
+ * elsewhere in the document. `value` is in that list and is deliberately never
+ * sent: a field's contents are not something a point on a screen may fetch.
+ *
+ * A client must draw an unfamiliar word as it stands rather than refuse the
+ * frame. This list grows the day the label rule learns a new fallback, and a
+ * phone that rejected the whole answer over one unknown word would be a sheet
+ * that goes blank on an element it could have described perfectly.
+ */
+export const PICK_LABEL_SOURCES = [
+  'text',
+  'label',
+  'aria-label',
+  'placeholder',
+  'title',
+  'name',
+  'alt',
+  'value',
+  'none',
+] as const
+
+/**
  * Every extension this build knows how to serve.
  *
  * Not the same question as what a given desktop *offers*: starting a session
@@ -2992,9 +3047,30 @@ export type ClientMessage =
   /* ---- capability `browser.control`. Refused when not advertised. --------- */
   /** What the machine's browser has open, and which sessions could own one. */
   | { t: 'browser.windows' }
-  /** Open one there. `isolated` gives it a partition of its own that is thrown
-   *  away when it closes — the desktop's *isolated* session, over the wire. */
-  | { t: 'browser.window.open'; url?: string; profile?: string; isolated?: boolean }
+  /**
+   * Open one there. `isolated` gives it a partition of its own that is thrown
+   * away when it closes — the desktop's *isolated* session, over the wire.
+   *
+   * `session` opens it **and attaches it**, in one move, and it exists because
+   * of the one page a phone can show that no machine window can ever be bound
+   * to. A page opened *on the phone* is a web view over a port tunnel: it lives
+   * in no browser on the machine, so it has no window id, so `browser.window.bind`
+   * has nothing to name and the phone's *Attach to a session* was greyed out
+   * with a line explaining why. Asad asked for the greying to go — *"we should
+   * have this attachment thing for all of them, properly working"* — and the
+   * honest way to grant it is to re-open the same address in the machine's own
+   * browser and attach **that** window, which is a move the phone already
+   * offers.
+   *
+   * What was missing was the id: an open answers with the window *list*, and
+   * picking the new row back out of it by comparing lists is a race two taps
+   * apart. So the host carries the id inside itself instead — see
+   * `browser-control.ts` — and this field is how a client asks it to. The answer
+   * is still `browser.window.rows`; only the notice differs, and it is the bind
+   * notice, because what happened is a bind. An unknown session is refused the
+   * same way `browser.window.bind` refuses one.
+   */
+  | { t: 'browser.window.open'; url?: string; profile?: string; isolated?: boolean; session?: string }
   /** Send an open window somewhere. */
   | { t: 'browser.window.go'; id: string; url: string }
   /** Back, forward, reload, close, and start or stop recording the click flow. */
@@ -3007,6 +3083,26 @@ export type ClientMessage =
   | { t: 'browser.window.shot'; id: string; session?: string; note?: string }
   /** What the recorder has collected on that window so far. */
   | { t: 'browser.window.steps'; id: string }
+  /**
+   * What is at one point on that window's page — the tap that says *change this*.
+   *
+   * `x` and `y` are **document** coordinates: the same space `browser.frame`'s
+   * `scrollX`/`scrollY` are in, so a viewer turns a tap on a picture into a point
+   * on the page by adding the scroll of the frame it drew. Document coordinates
+   * rather than viewport ones because the page can scroll between the frame and
+   * the tap, and a viewport point measured against an old frame lands on whatever
+   * has scrolled into that spot since. The host converts back with the page's own
+   * live scroll, and says plainly when the point is no longer on screen.
+   *
+   * `up` is how many ancestors to walk up from the element actually hit, and it
+   * is the whole of Wider/Narrower. A fingertip is not a mouse pointer: a tap
+   * lands on whichever wrapper is on top and there is no more precise gesture to
+   * offer, so the correction is a control. Absent means zero — the element hit.
+   *
+   * Answered by {@link ServerMessage} `browser.window.picked`, or by the window
+   * list with one line when there is nothing there to point at.
+   */
+  | { t: 'browser.window.pick'; id: string; x: number; y: number; up?: number }
   /* ---- capability `browser.profiles`. Refused when not advertised. -------- */
   /** Which profiles this machine's browser has, and which one it is using. */
   | { t: 'browser.profiles' }
@@ -4003,6 +4099,41 @@ export type ServerMessage =
   | { t: 'browser.shot'; id: string; png: string; at: number }
   /** What the recorder collected. */
   | { t: 'browser.record.rows'; id: string; steps: RecordedStep[] }
+  /**
+   * One element on a window's page, for the sheet that says *change this*.
+   *
+   * The answer to `browser.window.pick`, and deliberately the same facts the
+   * desktop's capture popup and the phone's own inspect sheet already show —
+   * tag, selector, label, where the label came from, and the address. The three
+   * inspectors feed one sheet, so a fourth opinion about what a stable selector
+   * is would show up as the same element described two different ways on two
+   * screens.
+   *
+   * `url` is the **host's** knowledge of where the page is, never the page's own
+   * claim about it. This string reaches an agent's prompt, and a page that can
+   * lie about its address must not also get to name the site somebody is told
+   * they are looking at.
+   *
+   * `depth` is how many ancestors up this is from the element the point actually
+   * hit; `maxUp` is how many further ancestors exist above it, so a sheet can
+   * grey Wider out at the top of the document instead of stepping onto nothing.
+   *
+   * There is no value here, for a secret field or for any other. Pointing at a
+   * password box asks *what is this*, and the answer to that is its label.
+   */
+  | {
+      t: 'browser.window.picked'
+      id: string
+      tag: string
+      selector: string
+      label: string
+      /** One of {@link PICK_LABEL_SOURCES}. Drawn as it stands if unfamiliar. */
+      labelSource: string
+      url: string
+      rect: PickedRect
+      depth: number
+      maxUp: number
+    }
   /* ---- capability `localhost` ------------------------------------------- */
   | { t: 'ports'; ports: LocalPort[] }
   | { t: 'tunnel.opened'; id: string; port: number }
@@ -5830,6 +5961,22 @@ export function parseClientMessage(raw: unknown): ParseResult {
         if (typeof parsed.isolated !== 'boolean') return bad('browser.window.open with an unusable isolation')
         message.isolated = parsed.isolated
       }
+      const rawSession = parsed.session
+      /*
+       * Read exactly as `browser.window.bind` reads it, down to the sentence,
+       * because it is the same field doing the same job one frame earlier — the
+       * window this names has not been opened yet, and that is the only
+       * difference. Absent means *attached to nobody*, which is what every open
+       * did before this field existed and is still what the phone sends when
+       * nobody picked a session.
+       */
+      if (rawSession !== undefined) {
+        if (typeof rawSession !== 'string' || rawSession === '' || overBytes(rawSession, MAX_PANEL_WORD)) {
+          return bad('browser.window.open naming a session this build cannot address')
+        }
+        if (CONTROL_CHARS.test(rawSession)) return bad('browser.window.open naming an unusable session')
+        message.session = rawSession
+      }
       return { ok: true, message }
     }
     case 'browser.window.go': {
@@ -5906,6 +6053,41 @@ export function parseClientMessage(raw: unknown): ParseResult {
       }
       if (CONTROL_CHARS.test(rawId)) return bad('browser.window.steps naming a window this build cannot address')
       return { ok: true, message: { t: 'browser.window.steps', id: rawId } }
+    }
+    case 'browser.window.pick': {
+      const rawId = parsed.id
+      // The sixth verb that addresses a window, held to the same rule as the
+      // other five: an empty id is a broken client, not a person pressing
+      // something, and `server.ts` answers a parse failure by closing the socket.
+      if (typeof rawId !== 'string' || rawId === '' || overBytes(rawId, MAX_PANEL_WORD)) {
+        return bad('browser.window.pick naming a window this build cannot address')
+      }
+      if (CONTROL_CHARS.test(rawId)) return bad('browser.window.pick naming a window this build cannot address')
+      /*
+       * The point is not clamped to any page size, for the reason `browser.input`
+       * does not clamp a gesture: the host owns the mapping from a picture to a
+       * page and a document is any size. What is checked is that it is a real
+       * number — a `NaN` reaching `elementFromPoint` hits nothing, silently.
+       */
+      const x = finiteNumber(parsed.x)
+      const y = finiteNumber(parsed.y)
+      if (x === null || y === null) return bad('browser.window.pick without a point on the page')
+      const message: Extract<ClientMessage, { t: 'browser.window.pick' }> = {
+        t: 'browser.window.pick',
+        id: rawId,
+        x,
+        y,
+      }
+      const rawUp = parsed.up
+      if (rawUp !== undefined) {
+        // Absent is zero — the element the point actually hit — so a client that
+        // never offers Wider sends nothing rather than a number it had to know.
+        if (typeof rawUp !== 'number' || !Number.isInteger(rawUp) || rawUp < 0 || rawUp > MAX_PICK_UP) {
+          return bad('browser.window.pick asking for more of the page than this build walks')
+        }
+        message.up = rawUp
+      }
+      return { ok: true, message }
     }
     case 'browser.profiles':
       return { ok: true, message: { t: 'browser.profiles' } }

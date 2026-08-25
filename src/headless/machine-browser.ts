@@ -40,6 +40,12 @@
  *
  * `repartition` was the third, and is not any more — see below.
  *
+ * `pick` — *what is at this point on the page* — is present here and needs
+ * nothing new: it is one script run inside the page, and the drive this module
+ * already photographs through is the thing that runs scripts. That is why a
+ * server can inspect a watched window while the Electron desktop is still
+ * waiting on one line in `index.ts`; see `machine-browser-desktop.ts`.
+ *
  * ## The door, and the sentinel that used to stand in for it
  *
  * `HeadlessDriveHost` opens Chromium targets through three doors, and only two
@@ -221,13 +227,45 @@ export interface ServerWindows {
 }
 
 /**
- * The masked capture, as this file needs it.
+ * The two things this file asks of the drive itself.
  *
- * `BrowserDrive.screenshot` satisfies it; the `masked` count it also answers is
- * for an agent's tool result and has nowhere to go on a window list.
+ * `BrowserDrive` satisfies both as written, which is the property that matters:
+ * `host.ts` passes the drive straight in and never has to know that this
+ * interface grew. The `masked` count `screenshot` also answers is for an agent's
+ * tool result and has nowhere to go on a window list.
+ *
+ * `pickAt` is optional for the reason every optional dep in this family is: a
+ * host wired to something that is not a drive still lists, opens and closes
+ * windows, and the phone is told in one sentence that it cannot point at one
+ * thing on a page rather than being handed a button that answers nothing.
  */
 export interface ServerShots {
   screenshot(target?: DriveTarget | null): Promise<{ path: string; width: number; height: number }>
+  /**
+   * What is at one point on a page, and what encloses it.
+   *
+   * `x`/`y` are **document** coordinates and `up` is how many ancestors to climb
+   * — `browser.window.pick` in `remote/protocol.ts` argues for both. The answer
+   * is `BrowserDrive.pickAt`'s, handed on unchanged: it is already a superset of
+   * what the wire carries, and narrowing it here would be this file deciding
+   * what a phone is told, which is `browser-control.ts`'s job.
+   */
+  pickAt?(
+    x: number,
+    y: number,
+    up: number,
+    target?: DriveTarget | null,
+  ): Promise<{
+    found: boolean
+    moved: boolean
+    tag: string
+    selector: string
+    label: string
+    labelSource: string
+    rect: { x: number; y: number; w: number; h: number }
+    depth: number
+    maxUp: number
+  }>
 }
 
 /**
@@ -500,27 +538,38 @@ export function serverMachineBrowser(deps: ServerMachineBrowserDeps): ServerMach
   }
 
   /**
-   * Photograph a window, masked, and hand back both the file and the bytes.
+   * The drive's name for one of this host's windows.
    *
-   * The target is minted here from the two ids the drive needs — `boundKey` so
-   * this lands in the *same* slot an agent driving the window uses, never a
-   * second one, and the shell id so `showWindow` has something to raise (a
-   * success no-op on this host, and the drive asks for it anyway). The name is
-   * the slot the person says out loud, or nothing: `browser:<epoch>:<uuid>` on a
-   * screen was a defect once and must not come back through a refusal message.
+   * Minted from the two ids the drive needs — `boundKey` so a call lands in the
+   * *same* slot an agent driving the window uses, never a second one, and the
+   * shell id so `showWindow` has something to raise (a success no-op on this
+   * host, and the drive asks for it anyway). The name is the slot a person says
+   * out loud, or nothing: `browser:<epoch>:<uuid>` on a screen was a defect once
+   * and must not come back through a refusal message.
+   *
+   * One function rather than one copy per verb, because every drive call this
+   * module makes has to land in the same slot as the others. Two spellings of
+   * this target is a screenshot and an inspect attaching two debuggers to one
+   * page and each releasing the other's.
    */
-  async function capture(id: string): Promise<CapturedShot> {
+  function targetFor(id: string): DriveTarget {
     const entry = held.get(id)
     if (entry === undefined) throw new Error('this server is no longer holding that window')
     const owner = ownerOf(id)
     const window = owner?.windows.find((row) => row.browserTabId === id)
-    const target: DriveTarget = {
+    return {
       key: boundKey(id),
       viewId: entry.viewId,
       browserTabId: id,
       name: window === undefined ? 'That window' : slotName(window.n),
     }
-    const shot = await deps.shots.screenshot(target)
+  }
+
+  /**
+   * Photograph a window, masked, and hand back both the file and the bytes.
+   */
+  async function capture(id: string): Promise<CapturedShot> {
+    const shot = await deps.shots.screenshot(targetFor(id))
     /*
      * The file, read back as the picture that crosses. See the header: there is
      * no resize on this side, so what the wire is offered is the full-resolution
@@ -544,6 +593,23 @@ export function serverMachineBrowser(deps: ServerMachineBrowserDeps): ServerMach
     capture,
     sessions: () => deps.sessions(),
     write: (sessionId, data) => deps.write(sessionId, data),
+  }
+
+  /*
+   * Pointing at one thing on a page, when the thing under this is a drive.
+   *
+   * Present or absent rather than always-refusing, because `browser-control.ts`
+   * reads the absence and says one true sentence instead of drawing a control
+   * that answers nothing. A real server always has it: `host.ts` passes
+   * `BrowserDrive` in as `shots`, and that class is where `pickAt` lives.
+   *
+   * Handed on unchanged. The drive's answer is already a superset of what the
+   * wire carries, and narrowing it here would be this file deciding what a phone
+   * is told — which is the other module's job and is tested there.
+   */
+  const pickAt = deps.shots.pickAt
+  if (pickAt) {
+    wired.pick = ({ id, x, y, up }) => pickAt.call(deps.shots, x, y, up, targetFor(id))
   }
   /**
    * The windows this module opened, for the thing that casts them.

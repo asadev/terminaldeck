@@ -31,6 +31,7 @@ import {
   MAX_SURFACES_REPORTED,
   MAX_FRAME_DATA_CHARS,
   MAX_FRAME_MESSAGE_BYTES,
+  MAX_PICK_UP,
   PROTOCOL_ERROR_CODES,
   PROTOCOL_VERSION,
   chunkInput,
@@ -162,6 +163,7 @@ const CLIENT_TYPES: Record<ClientMessage['t'], true> = {
   'browser.window.bind': true,
   'browser.window.shot': true,
   'browser.window.steps': true,
+  'browser.window.pick': true,
 }
 
 /** Same guard for the other direction. */
@@ -234,6 +236,7 @@ const SERVER_TYPES: Record<ServerMessage['t'], true> = {
   'browser.window.rows': true,
   'browser.shot': true,
   'browser.record.rows': true,
+  'browser.window.picked': true,
 }
 
 const VALID_CLIENT: ClientMessage[] = [
@@ -471,6 +474,10 @@ const VALID_CLIENT: ClientMessage[] = [
   { t: 'browser.windows' },
   { t: 'browser.window.open' },
   { t: 'browser.window.open', url: 'http://localhost:3000/admin', profile: 'work', isolated: true },
+  // Open **and** attach, which is the one press behind *re-open this phone page
+  // on the machine and give it to a session*. The window it names does not exist
+  // yet, which is the whole reason this cannot be two frames.
+  { t: 'browser.window.open', url: 'http://localhost:3000/admin', session: SESSION_ID },
   { t: 'browser.window.go', id: 'browser:1', url: 'https://example.test/' },
   // One per verb of the closed list, because `WINDOW_ACTIONS` is the parser's
   // whole check on this frame and a word dropped from it is a refused press.
@@ -483,6 +490,10 @@ const VALID_CLIENT: ClientMessage[] = [
   { t: 'browser.window.shot', id: 'browser:1' },
   { t: 'browser.window.shot', id: 'browser:1', session: SESSION_ID, note: 'the admin page after signing in' },
   { t: 'browser.window.steps', id: 'browser:1' },
+  // A tap on a watched window, in document coordinates, and the same tap after
+  // Wider has been pressed three times.
+  { t: 'browser.window.pick', id: 'browser:1', x: 120.5, y: 2048 },
+  { t: 'browser.window.pick', id: 'browser:1', x: 0, y: 0, up: 3 },
 ]
 
 const SESSION: RemoteSession = {
@@ -1130,6 +1141,18 @@ const VALID_SERVER: ServerMessage[] = [
       { at: 1_756_000_000_000, kind: 'navigate', detail: 'http://localhost:3000/admin' },
       { at: 1_756_000_001_000, kind: 'click', selector: 'button.save', value: 'Save' },
     ],
+  },
+  {
+    t: 'browser.window.picked',
+    id: 'browser:1',
+    tag: 'button',
+    selector: '#save',
+    label: 'Save changes',
+    labelSource: 'text',
+    url: 'http://localhost:3000/admin',
+    rect: { x: 24, y: 1180.5, w: 128, h: 40 },
+    depth: 0,
+    maxUp: 6,
   },
 ]
 
@@ -3076,7 +3099,7 @@ describe('the watch frames a viewer sends', () => {
    * > *"there is no way to attach this one too. So it should be the same case,
    * > or all the options should be available at least."*
    *
-   * — and loosening these five is not how it arrives. `machineBrowser`'s
+   * — and loosening these six is not how it arrives. `machineBrowser`'s
    * `find(id)` resolves against `MachineBrowserDeps.list()`, and on a server the
    * drive's own slot is in neither authority that list is built from, so every
    * one of them would answer *"That window is not open any more"*. Worse, this
@@ -3086,17 +3109,92 @@ describe('the watch frames a viewer sends', () => {
    * disconnected and one that is answered. The fix belongs where the window is
    * opened — see `frontTab` in `src/main/screencast-host.ts`.
    */
-  it('refuses an empty window id on the five verbs that address a window', () => {
+  it('refuses an empty window id on the six verbs that address a window', () => {
     expect(parseClientMessage({ t: 'browser.window.go', id: '', url: 'https://example.test/' }).ok).toBe(false)
     expect(parseClientMessage({ t: 'browser.window.act', id: '', action: 'close' }).ok).toBe(false)
     expect(parseClientMessage({ t: 'browser.window.bind', id: '', session: SESSION_ID }).ok).toBe(false)
     expect(parseClientMessage({ t: 'browser.window.shot', id: '' }).ok).toBe(false)
     expect(parseClientMessage({ t: 'browser.window.steps', id: '' }).ok).toBe(false)
-    // And the same five take the shell id both machines really mint.
+    // The newest of the family, held to the same rule as the five before it.
+    expect(parseClientMessage({ t: 'browser.window.pick', id: '', x: 10, y: 10 }).ok).toBe(false)
+    // And the same six take the shell id both machines really mint.
     const id = 'browser:1787657125454:0a858ec8'
     expect(accepted({ t: 'browser.window.act', id, action: 'back' }))
       .toEqual({ t: 'browser.window.act', id, action: 'back' })
     expect(accepted({ t: 'browser.window.bind', id })).toEqual({ t: 'browser.window.bind', id })
+    expect(accepted({ t: 'browser.window.pick', id, x: 4, y: 8 }))
+      .toEqual({ t: 'browser.window.pick', id, x: 4, y: 8 })
+  })
+
+  /**
+   * **A point on a page, and how far up from it to look.**
+   *
+   * The two numbers are read on different rules and the difference is not
+   * arbitrary. `x`/`y` are a *coordinate*: they are not clamped to any page size,
+   * for the reason `browser.input` does not clamp a gesture — the host owns the
+   * mapping from a picture to a page, and a document is any size. The only thing
+   * asked of them is that they are real numbers, because a `NaN` reaching
+   * `elementFromPoint` hits nothing and says nothing.
+   *
+   * `up` is a *count of presses* of Wider, so it is bounded: a client sending a
+   * hundred thousand is not somebody's finger, and the walk it would ask for is a
+   * loop a hostile page could lengthen at will.
+   */
+  it('reads a pick’s point loosely and its ancestor count strictly', () => {
+    const id = 'browser:1787657125454:0a858ec8'
+    // A tap far down a long document, and a fractional coordinate off a
+    // scaled-down screencast. Both are ordinary.
+    expect(accepted({ t: 'browser.window.pick', id, x: 41.75, y: 98_000 })).toEqual({
+      t: 'browser.window.pick',
+      id,
+      x: 41.75,
+      y: 98_000,
+    })
+    // Negative is a real answer: a document can be scrolled into its own margin
+    // on a page with a right-to-left layout or an overscroll.
+    expect(accepted({ t: 'browser.window.pick', id, x: -12, y: -4 })).toMatchObject({ x: -12, y: -4 })
+
+    for (const bad of [
+      { t: 'browser.window.pick', id, x: Number.NaN, y: 0 },
+      { t: 'browser.window.pick', id, x: 0, y: Number.POSITIVE_INFINITY },
+      { t: 'browser.window.pick', id, y: 0 },
+      { t: 'browser.window.pick', id, x: '10', y: 0 },
+    ]) {
+      refused(bad, JSON.stringify(bad))
+    }
+
+    // Absent is zero — the element the point actually hit — so a client with no
+    // Wider button sends nothing rather than a number it had to know.
+    expect(accepted({ t: 'browser.window.pick', id, x: 1, y: 1 }).t).toBe('browser.window.pick')
+    expect(accepted({ t: 'browser.window.pick', id, x: 1, y: 1, up: 0 })).toMatchObject({ up: 0 })
+    expect(accepted({ t: 'browser.window.pick', id, x: 1, y: 1, up: MAX_PICK_UP })).toMatchObject({
+      up: MAX_PICK_UP,
+    })
+    for (const up of [-1, 1.5, MAX_PICK_UP + 1, Number.NaN, '2']) {
+      refused({ t: 'browser.window.pick', id, x: 1, y: 1, up }, `up ${String(up)}`)
+    }
+  })
+
+  /**
+   * **Open-and-attach reads its session exactly as bind does.**
+   *
+   * One field, two frames, one door. The check that a session id was one this
+   * host actually listed lives in `browser-control.ts` and is shared there; what
+   * is shared *here* is the shape — non-empty, bounded, no control characters —
+   * because the newer verb is the one that would quietly get the looser rule.
+   */
+  it('reads the session on an open the way it reads the session on a bind', () => {
+    expect(accepted({ t: 'browser.window.open', url: 'http://localhost:3000/', session: SESSION_ID })).toEqual({
+      t: 'browser.window.open',
+      url: 'http://localhost:3000/',
+      session: SESSION_ID,
+    })
+    // Absent is *attached to nobody*, which is what every open did before this
+    // field existed and is still what the phone sends when nobody picked one.
+    expect(accepted({ t: 'browser.window.open' })).toEqual({ t: 'browser.window.open' })
+    for (const session of ['', 'a\u0000b', 'x'.repeat(400), 7, null]) {
+      refused({ t: 'browser.window.open', session }, `session ${String(session)}`)
+    }
   })
 
   /**

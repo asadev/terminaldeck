@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { attach, resetForTests, windowsOf } from '../browser-binding'
 import type { RecordedStep as DeskStep } from '../browser-steps'
 import {
+  MAX_PICK_SELECTOR,
   MAX_ROW_TEXT,
   MAX_SHOT_BYTES,
   MAX_WINDOW_ROWS,
@@ -15,6 +16,7 @@ import {
   type HostSession,
   type MachineBrowserDeps,
   type OpenWindow,
+  type PickedFacts,
 } from './browser-control'
 import type { MachineWindow, ServerMessage } from './protocol'
 
@@ -60,10 +62,13 @@ interface Machine {
   shot: CapturedShot
   /** What the recorder has collected. */
   steps: DeskStep[]
+  /** What the next `pick` answers with, and every point it was asked about. */
+  picked: PickedFacts
+  pickedAt: Array<{ id: string; x: number; y: number; up: number }>
   /** Made to throw, per dep, by the failure tests. */
   breaks: Set<string>
   /** Absent deps, so the optional-member switch can be exercised. */
-  without: Set<'recorder' | 'repartition'>
+  without: Set<'recorder' | 'repartition' | 'pick'>
 }
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
@@ -77,6 +82,18 @@ function machine(): Machine {
     did: [],
     shot: { path: '/Pictures/Terminal Deck/example.com-20260823-120000.png', width: 1280, height: 800, preview: PNG },
     steps: [],
+    picked: {
+      found: true,
+      moved: false,
+      tag: 'button',
+      selector: '#save',
+      label: 'Save changes',
+      labelSource: 'text',
+      rect: { x: 24, y: 1180, w: 128, h: 40 },
+      depth: 0,
+      maxUp: 6,
+    },
+    pickedAt: [],
     breaks: new Set(),
     without: new Set(),
   }
@@ -153,6 +170,14 @@ function machine(): Machine {
           rig.did.push(`steps ${id}`)
           return { recording: true, steps: rig.steps }
         },
+      }
+    },
+    get pick() {
+      if (rig.without.has('pick')) return undefined
+      return async (input: { id: string; x: number; y: number; up: number }) => {
+        guard('pick')
+        rig.pickedAt.push(input)
+        return rig.picked
       }
     },
     get repartition() {
@@ -416,6 +441,272 @@ describe('attaching a window to a session', () => {
     })
     expect(rowsOf(answer).notice).toBe('No session by that name is running here.')
     expect(row(answer, 'w1').slot).toBeUndefined()
+  })
+})
+
+/* ------------------------------------------------------- open and attach -- */
+
+/**
+ * Opening a window and attaching it in one press.
+ *
+ * ## The thing this is really for
+ *
+ * A page shown *on the phone* is a web view over a port tunnel. It is in no
+ * browser on the machine, so it has no window id, so `browser.window.bind` has
+ * nothing to name — and the phone's *Attach to a session* was greyed out with a
+ * line saying so. Asad asked for the greying to go: *"we should have this
+ * attachment thing for all of them, properly working, and the same way on the
+ * sessions side also."* Re-opening the same address on the machine is a move the
+ * phone already has; what it could not do afterwards was attach what it had just
+ * opened, because an open answers with the window *list* and picking the new row
+ * back out of a list is a race two taps apart.
+ *
+ * So these assert the id never leaves the host: the window that comes back bound
+ * is the one this open made, with the slot minted from the same store the agent
+ * reads, in a single answer.
+ */
+describe('opening a window straight into a session', () => {
+  it('mints the slot on the window it just opened, and says so in bind’s own words', async () => {
+    const rig = machine()
+    rig.sessions.push({ id: 's1', title: 'Session 1' })
+
+    const answer = await machineBrowser(rig.deps).open({
+      t: 'browser.window.open',
+      url: 'http://localhost:3000/admin',
+      session: 's1',
+    })
+
+    const listed = rowsOf(answer)
+    expect(listed.windows).toHaveLength(1)
+    const opened = listed.windows[0]
+    expect(opened).toMatchObject({ slot: 'B1', session: 's1', sessionTitle: 'Session 1' })
+    /*
+     * The notice is the **bind** notice, not "Opened a window." One press, one
+     * act, one sentence: a person who pressed *Open and attach* is told what
+     * they now have, and it is the same line the Attach menu gives them two
+     * inches away.
+     */
+    expect(listed.notice).toBe('http://localhost:3000/admin is B1 in Session 1.')
+    // And in the store the agent reads, keyed on the window this open made.
+    expect(windowsOf('s1')[0]).toMatchObject({ browserTabId: opened.id, n: 1 })
+  })
+
+  it('carries the view id, so a URL from that session lands in this window', async () => {
+    const rig = machine()
+    rig.sessions.push({ id: 's1', title: 'Session 1' })
+    const answer = await machineBrowser(rig.deps).open({
+      t: 'browser.window.open',
+      url: 'https://example.com/',
+      session: 's1',
+    })
+    const opened = rowsOf(answer).windows[0]
+    // A binding holding no view id is a binding that names a window and steers
+    // nothing — the failure `windowMoved` exists to prevent, arriving one verb
+    // earlier.
+    expect(windowsOf('s1')[0].viewId).toBe(`view-${opened.id}`)
+  })
+
+  it('numbers the second one B2, exactly as binding two windows does', async () => {
+    const rig = machine()
+    rig.sessions.push({ id: 's1', title: 'Session 1' })
+    const browser = machineBrowser(rig.deps)
+    await browser.open({ t: 'browser.window.open', url: 'https://one.example/', session: 's1' })
+    const answer = await browser.open({ t: 'browser.window.open', url: 'https://two.example/', session: 's1' })
+    expect(rowsOf(answer).windows.map((entry) => entry.slot)).toEqual(['B1', 'B2'])
+  })
+
+  it('opens nothing at all when the session named is not running here', async () => {
+    const rig = machine()
+    const answer = await machineBrowser(rig.deps).open({
+      t: 'browser.window.open',
+      url: 'https://example.com/',
+      session: 'from-an-old-transcript',
+    })
+    // Bind's own sentence, so one refusal is one wording wherever it is met.
+    expect(rowsOf(answer).notice).toBe('No session by that name is running here.')
+    /*
+     * And nothing opened. `shot` makes this argument first — a picture taken for
+     * a session that turns out not to exist is a file on somebody's disk — and it
+     * is stronger here: a window is a page on their screen that nobody asked for
+     * and nobody is present to close.
+     */
+    expect(rowsOf(answer).windows).toEqual([])
+  })
+
+  it('leaves an open with no session attached to nobody, exactly as before', async () => {
+    const rig = machine()
+    rig.sessions.push({ id: 's1', title: 'Session 1' })
+    const answer = await machineBrowser(rig.deps).open({ t: 'browser.window.open', url: 'https://example.com/' })
+    expect(rowsOf(answer).notice).toBe('Opened a window.')
+    expect(rowsOf(answer).windows[0].slot).toBeUndefined()
+    expect(windowsOf('s1')).toEqual([])
+  })
+
+  it('attaches an isolated window too, and the notice is still the bind one', async () => {
+    const rig = machine()
+    rig.sessions.push({ id: 's1', title: 'Session 1' })
+    const answer = await machineBrowser(rig.deps).open({
+      t: 'browser.window.open',
+      url: 'https://example.com/',
+      isolated: true,
+      session: 's1',
+    })
+    expect(rowsOf(answer).windows[0]).toMatchObject({ isolated: true, slot: 'B1' })
+    expect(rowsOf(answer).notice).toBe('https://example.com/ is B1 in Session 1.')
+  })
+})
+
+/* ---------------------------------------------------------------- picking -- */
+
+/**
+ * Pointing at one thing on a page the phone is only watching.
+ *
+ * Tapping an element and sending it to an agent existed in the browser rendered
+ * *on the phone* and nowhere else, because that is the only page where the phone
+ * holds a real DOM. Over a screencast it holds pixels:
+ *
+ * > *"in the page, if I click on something, I don't have something to, some
+ * > option to specifically inspect one piece. Here I also don't have. And then in
+ * > the own, in the own this phone page, we have it, but we don't have the rest
+ * > of the options here… all of them should be identical, and all of them should
+ * > have all the options."*
+ *
+ * The hit test therefore runs where the DOM is. What is asserted here is the
+ * host's half of that: which point reached the machine, which address is put on
+ * the answer, and that every way this can fail comes back as the window list
+ * with one sentence rather than as a promise that never settles.
+ */
+describe('pointing at one element in a window', () => {
+  const at = (id: string, x: number, y: number, up?: number) =>
+    up === undefined
+      ? ({ t: 'browser.window.pick', id, x, y } as const)
+      : ({ t: 'browser.window.pick', id, x, y, up } as const)
+
+  it('answers with the element, and with the machine’s address for the page', async () => {
+    const rig = machine()
+    rig.windows.push({ id: 'w1', title: 'Admin', url: 'http://localhost:3000/admin' })
+
+    const answer = await machineBrowser(rig.deps).pick(at('w1', 120, 1200))
+    expect(answer).toEqual({
+      t: 'browser.window.picked',
+      id: 'w1',
+      tag: 'button',
+      selector: '#save',
+      label: 'Save changes',
+      labelSource: 'text',
+      /*
+       * The **window row's** address, not the page's own claim about where it is.
+       * This string is handed to an agent, and a page that can lie about its
+       * address must not also name the site somebody is told they are looking at.
+       */
+      url: 'http://localhost:3000/admin',
+      rect: { x: 24, y: 1180, w: 128, h: 40 },
+      depth: 0,
+      maxUp: 6,
+    })
+    // The point crossed unchanged, and no `up` means the element actually hit.
+    expect(rig.pickedAt).toEqual([{ id: 'w1', x: 120, y: 1200, up: 0 }])
+  })
+
+  it('passes Wider straight through as the number of ancestors to climb', async () => {
+    const rig = machine()
+    rig.windows.push({ id: 'w1', url: 'https://example.com/' })
+    await machineBrowser(rig.deps).pick(at('w1', 8, 8, 3))
+    expect(rig.pickedAt).toEqual([{ id: 'w1', x: 8, y: 8, up: 3 }])
+  })
+
+  it('never sends a value, whatever the field is', async () => {
+    const rig = machine()
+    rig.windows.push({ id: 'w1', url: 'https://bank.example/' })
+    rig.picked = {
+      found: true,
+      moved: false,
+      tag: 'input',
+      selector: '#password',
+      label: 'Password',
+      labelSource: 'label',
+      rect: { x: 0, y: 0, w: 240, h: 32 },
+      depth: 0,
+      maxUp: 4,
+    }
+    const answer = await machineBrowser(rig.deps).pick(at('w1', 10, 10))
+    if (answer.t !== 'browser.window.picked') throw new Error(`expected an element, got ${answer.t}`)
+    // A secret field says what it is called and never what is in it. The frame
+    // has no value field at all, which is the strongest form of that promise.
+    expect(answer.label).toBe('Password')
+    expect(Object.keys(answer)).not.toContain('value')
+  })
+
+  it('cuts a selector longer than the drive would ever act on', async () => {
+    const rig = machine()
+    rig.windows.push({ id: 'w1', url: 'https://example.com/' })
+    rig.picked = { ...rig.picked, selector: `#${'a'.repeat(600)}` }
+    const answer = await machineBrowser(rig.deps).pick(at('w1', 1, 1))
+    if (answer.t !== 'browser.window.picked') throw new Error('expected an element')
+    expect(answer.selector.length).toBe(MAX_PICK_SELECTOR + 1)
+    expect(answer.selector.endsWith('…')).toBe(true)
+    // Longer than a *row's* text, deliberately. A row is something to read; this
+    // is something an agent acts on, and a selector cut to a title's length is a
+    // selector that matches something else.
+    expect(answer.selector.length).toBeGreaterThan(MAX_ROW_TEXT)
+  })
+
+  it('turns a rectangle a page could not measure into zeroes rather than NaN', async () => {
+    const rig = machine()
+    rig.windows.push({ id: 'w1', url: 'https://example.com/' })
+    rig.picked = {
+      ...rig.picked,
+      rect: { x: Number.NaN, y: 12, w: Number.POSITIVE_INFINITY, h: 40 },
+      depth: -3,
+      maxUp: 2.7,
+    }
+    const answer = await machineBrowser(rig.deps).pick(at('w1', 1, 1))
+    if (answer.t !== 'browser.window.picked') throw new Error('expected an element')
+    // A NaN on this wire is an outline drawn nowhere, with nothing anywhere to
+    // explain it.
+    expect(answer.rect).toEqual({ x: 0, y: 12, w: 0, h: 40 })
+    expect(answer.depth).toBe(0)
+    expect(answer.maxUp).toBe(2)
+  })
+
+  it('tells a page that scrolled apart from a spot with nothing on it', async () => {
+    const rig = machine()
+    rig.windows.push({ id: 'w1', title: 'Admin', url: 'http://localhost:3000/admin' })
+    const browser = machineBrowser(rig.deps)
+
+    rig.picked = { ...rig.picked, found: false, moved: true }
+    expect(rowsOf(await browser.pick(at('w1', 1, 90_000))).notice).toBe(
+      'Admin has scrolled since that picture — tap the same thing again.',
+    )
+
+    rig.picked = { ...rig.picked, found: false, moved: false }
+    expect(rowsOf(await browser.pick(at('w1', 1, 1))).notice).toBe(
+      'There is nothing at that spot on Admin.',
+    )
+  })
+
+  it('says so rather than pointing when the window has already gone', async () => {
+    const rig = machine()
+    const answer = await machineBrowser(rig.deps).pick(at('ghost', 1, 1))
+    expect(rowsOf(answer).notice).toBe('That window is not open any more.')
+    expect(rig.pickedAt).toEqual([])
+  })
+
+  it('says the machine cannot, rather than drawing a control that answers nothing', async () => {
+    const rig = machine()
+    rig.windows.push({ id: 'w1', url: 'https://example.com/' })
+    rig.without.add('pick')
+    const answer = await machineBrowser(rig.deps).pick(at('w1', 1, 1))
+    expect(rowsOf(answer).notice).toBe("This machine's browser cannot point at one thing on a page.")
+  })
+
+  it('answers with the list and a sentence when the page refuses to be read', async () => {
+    const rig = machine()
+    rig.windows.push({ id: 'w1', title: 'Admin', url: 'http://localhost:3000/admin' })
+    rig.breaks.add('pick')
+    const answer = await machineBrowser(rig.deps).pick(at('w1', 1, 1))
+    expect(rowsOf(answer).notice).toBe('Admin could not be looked at: the pick dep is unwell.')
+    expect(rowsOf(answer).windows).toHaveLength(1)
   })
 })
 
@@ -700,7 +991,18 @@ describe('a dep that fails answers with a screen, never with a throw', () => {
   })
 
   it('never rejects, whichever dep is the one that is unwell', async () => {
-    for (const broken of ['list', 'open', 'go', 'history', 'close', 'capture', 'sessions', 'write', 'recorder']) {
+    for (const broken of [
+      'list',
+      'open',
+      'go',
+      'history',
+      'close',
+      'capture',
+      'sessions',
+      'write',
+      'recorder',
+      'pick',
+    ]) {
       const rig = machine()
       rig.windows.push({ id: 'w1', title: 'Stripe', url: 'https://stripe.com/' })
       rig.sessions.push({ id: 's1', title: 'Session 1' })
@@ -722,14 +1024,17 @@ describe('a dep that fails answers with a screen, never with a throw', () => {
         browser.act({ t: 'browser.window.act', id: 'w1', action: 'close' }),
         browser.act({ t: 'browser.window.act', id: 'w1', action: 'record.on' }),
         browser.act({ t: 'browser.window.act', id: 'w1', action: 'isolate' }),
+        browser.open({ t: 'browser.window.open', url: 'https://example.com/', session: 's1' }),
         browser.bind({ t: 'browser.window.bind', id: 'w1', session: 's1' }),
         browser.bind({ t: 'browser.window.bind', id: 'w1' }),
         browser.shot({ t: 'browser.window.shot', id: 'w1' }),
         browser.shot({ t: 'browser.window.shot', id: 'w1', session: 's1' }),
         browser.steps({ t: 'browser.window.steps', id: 'w1' }),
+        browser.pick({ t: 'browser.window.pick', id: 'w1', x: 4, y: 4 }),
+        browser.pick({ t: 'browser.window.pick', id: 'w1', x: 4, y: 4, up: 2 }),
       ])) {
         expect(
-          ['browser.window.rows', 'browser.shot', 'browser.record.rows'],
+          ['browser.window.rows', 'browser.shot', 'browser.record.rows', 'browser.window.picked'],
           `${broken} produced ${answer.t}`,
         ).toContain(answer.t)
       }
