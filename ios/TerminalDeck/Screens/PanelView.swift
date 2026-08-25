@@ -87,6 +87,20 @@ import SwiftUI
 // MARK: - The screen
 
 struct PanelView: View {
+
+    /**
+     * How much of a row's sentence is drawn at rest, and when the ⓘ appears.
+     *
+     * Two lines is what a row can carry without the list stopping being a list.
+     * The character count is deliberately a different question from the line
+     * count: a sentence can wrap to three lines on a narrow phone and still be
+     * short, and putting a dot next to a short sentence that merely wrapped is a
+     * control that opens a sheet saying what is already on screen. 150 is about
+     * two full lines at this size, measured on the 6.3-inch simulator these
+     * screens are reviewed on.
+     */
+    static let detailLines = 2
+    static let detailCharacters = 150
     /// The wire's panel id — `artifacts`, `store`, `readiness`, `mcp`. Passed
     /// through to `panel.read` untouched, so a host that grows a fifth panel
     /// needs one row in `MachineToolsSection` and nothing here.
@@ -689,10 +703,35 @@ struct PanelView: View {
                     .foregroundStyle(Theme.primary)
                     .fixedSize(horizontal: false, vertical: true)
                 if let detail = row.detail, !detail.isEmpty {
-                    Text(detail)
-                        .font(.system(size: 13))
-                        .foregroundStyle(Theme.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    /*
+                     * **Two lines, and the rest behind the ⓘ.**
+                     *
+                     * > *"Here you have a very long description… remove this
+                     * > full shit. I don't want any kind of long descriptions
+                     * > anywhere. Just if somewhere it's very required, give the
+                     * > i icon."*
+                     *
+                     * The host writes these and some of them are paragraphs: the
+                     * readiness scanner explains what a failing check costs, in
+                     * four or five lines, which is right in the desktop's panel
+                     * and turns a phone list into a wall. Photographed on his own
+                     * server before this: six rows filled a screen and a half.
+                     *
+                     * Clamped here rather than shortened at the host, because the
+                     * host is also the desktop's source and that text is correct
+                     * there. `PanelRow.detail` is a whole sentence either way;
+                     * what changes is how much of it a phone draws at rest.
+                     */
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(detail)
+                            .font(.system(size: 13))
+                            .foregroundStyle(Theme.secondary)
+                            .lineLimit(PanelView.detailLines)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if detail.count > PanelView.detailCharacters {
+                            InfoDot(about: row.title, text: detail)
+                        }
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

@@ -267,12 +267,22 @@ function formFields(draft: {
       // `local` is this folder and is not committed, `project` writes
       // `.mcp.json` beside the code and comes back needing an approval.
       id: 'scope',
-      label:
-        draft.projectPath === null
-          ? 'Save it for (user — the only scope without a project open)'
-          : 'Save it for (user, local or project)',
+      /*
+       * **A picker now, not a spelling test.**
+       *
+       * This was a text box with the three legal words written into its label,
+       * because `PanelField` had no way to say *one of these*. It has `choices`
+       * since 2026-08-25, so the label goes back to naming the field and the
+       * legal answers are the control itself — which also means a typo is no
+       * longer a refusal a person has to decipher.
+       *
+       * Without a project in view there is exactly one legal scope, and a
+       * picker with one position is a label: it is still sent as `choices` so
+       * the phone draws it as a settled value rather than an empty box.
+       */
+      label: 'Save it for',
       value: draft.scope,
-      placeholder: 'user',
+      choices: draft.projectPath === null ? ['user'] : ['user', 'project', 'local'],
       required: true,
     },
   ]

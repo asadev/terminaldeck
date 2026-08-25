@@ -378,7 +378,9 @@ describe('what a row says it is', () => {
       // Nothing is being served until somebody asks for it. A port in a row
       // nothing is listening on is worse than no port at all.
       preview: '-',
-      path: '/work/deck/demo/index.html',
+      // Composed, not spelled — `rowIdFor` uses `join`, so this is
+      // `\work\deck\demo\index.html` on Windows and Windows CI says so.
+      path: at('demo', 'index.html'),
     })
   })
 

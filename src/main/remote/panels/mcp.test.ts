@@ -75,15 +75,20 @@ function cli() {
     writes: {
       path: async () => '/usr/bin',
       exec: async (file: string, args: string[], options: { cwd: string }) => {
-        // `cmd /c "claude mcp …"` is one argument carrying the whole line;
-        // everywhere else the program is `file` and `args` is already the line.
-        const whole = args[0] === '/c' ? (args[1] ?? '') : args.join(' ')
-        calls.push({
-          file,
-          args,
-          line: whole.replace(/^claude\s+/, ''),
-          cwd: options.cwd,
-        })
+        /*
+         * `cmd.exe /c` is a prefix, and the arguments after it are the ordinary
+         * argv — not one string carrying the whole line. Assuming the latter
+         * made `line` the single word `claude` on the Windows runner and turned
+         * five green tests red for a second time. Drop the switch, then drop the
+         * program name, and what is left says what was asked for on either
+         * platform.
+         */
+        const rest = args[0] === '/c' ? args.slice(1) : args
+        const line = (rest[0] === 'claude' || rest[0]?.endsWith('claude.cmd') === true
+          ? rest.slice(1)
+          : rest
+        ).join(' ')
+        calls.push({ file, args, line, cwd: options.cwd })
         return { stdout: '', stderr: '' }
       },
     } satisfies McpPanelDeps['writes'],

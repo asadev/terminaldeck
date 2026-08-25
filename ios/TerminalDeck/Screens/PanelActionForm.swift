@@ -198,6 +198,10 @@ struct PanelActionForm: View {
 
     // MARK: - One field
 
+    /// Up to this many answers are drawn as segments; past it, a menu. Three
+    /// segments read at a glance on this screen's width and eight do not.
+    private static let segmentedChoices = 3
+
     private func row(_ field: PanelField) -> some View {
         let split = Self.split(field.placeholder)
         return VStack(alignment: .leading, spacing: 6) {
@@ -211,16 +215,67 @@ struct PanelActionForm: View {
                 }
                 Spacer(minLength: 0)
             }
-            TextField(split.placeholder ?? "", text: binding(field.id))
-                .font(.system(size: 16))
-                .foregroundStyle(Theme.primary)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .keyboardType(Self.keyboard(field))
-                .textContentType(Self.isAddress(field) ? .URL : nil)
-                .submitLabel(.done)
-                .accessibilityLabel(field.label)
-                .accessibilityIdentifier("panel.form.field.\(field.id)")
+            if field.choices.isEmpty {
+                TextField(split.placeholder ?? "", text: binding(field.id))
+                    .font(.system(size: 16))
+                    .foregroundStyle(Theme.primary)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .keyboardType(Self.keyboard(field))
+                    .textContentType(Self.isAddress(field) ? .URL : nil)
+                    .submitLabel(.done)
+                    .accessibilityLabel(field.label)
+                    .accessibilityIdentifier("panel.form.field.\(field.id)")
+            } else {
+                /*
+                 * **A field with a fixed set of answers is a picker, not a
+                 * keyboard.**
+                 *
+                 * The difference is not cosmetic: the MCP panel's scope field
+                 * was a text box with the three legal words written into its
+                 * label, and typing one of them wrongly is a refusal a person
+                 * has to decipher. `PanelField.choices` arrived for exactly this
+                 * — see its own doc — and the host still validates, because a
+                 * picker narrows what can be sent and is not a reason to trust
+                 * what arrived.
+                 *
+                 * Segmented while the answers are few and short, a `Menu` past
+                 * that: three segments read at a glance and eight do not. The
+                 * threshold is a measurement of this screen's width rather than
+                 * a preference, and it is named so the next field that needs it
+                 * does not re-derive it.
+                 */
+                if field.choices.count <= Self.segmentedChoices {
+                    Picker(field.label, selection: binding(field.id)) {
+                        ForEach(field.choices, id: \.self) { choice in
+                            Text(choice).tag(choice)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .accessibilityLabel(field.label)
+                    .accessibilityIdentifier("panel.form.field.\(field.id)")
+                } else {
+                    Menu {
+                        Picker(field.label, selection: binding(field.id)) {
+                            ForEach(field.choices, id: \.self) { choice in
+                                Text(choice).tag(choice)
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Text(text(field.id).isEmpty ? (field.choices.first ?? "") : text(field.id))
+                                .font(.system(size: 16))
+                                .foregroundStyle(Theme.primary)
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(Theme.faint)
+                            Spacer(minLength: 0)
+                        }
+                    }
+                    .accessibilityLabel(field.label)
+                    .accessibilityIdentifier("panel.form.field.\(field.id)")
+                }
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
