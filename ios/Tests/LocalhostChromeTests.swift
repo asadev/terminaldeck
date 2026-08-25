@@ -48,12 +48,39 @@
  * The `…` had been made the sixth control in the bottom row, which left the
  * header carrying a chevron, a title and nothing else — the exact opposite of
  * *"not only the bottom"*. It is a trailing item in the system navigation bar
- * now, `BrowserWindowActions`, on all four kinds of window; the row is the five
+ * now, `BrowserWindowActions`, on all four kinds of window; the row is the
  * verbs that act on the page; and there is no second door onto the same menu.
  *
  * On a page this phone is holding open it pushes that page's **own** settings
  * screen, the same way a machine window's does — *"all of them should have all
  * the options"* — rather than opening a menu with one item in it.
+ *
+ * ## And the round after that gave the page two things a picture cannot have
+ *
+ * > *"they can use the the mode currently we have this machine they can just
+ * > browse as phone view and it should have all the by the way views also they
+ * > can pinch and zoom also they can see all the different dimensions in
+ * > responsive views how it will look like in mobile how it will look like on
+ * > Windows so they can have different dimensions also in phone just like
+ * > MacBook."*
+ *
+ * > *"you are giving record flow button in the windows side the server side it
+ * > and you are not giving that into the if they are browsing locally in this
+ * > machine. So there are so many differences if they both are capable for a
+ * > feature why don't they both have."*
+ *
+ * Both land on **this** screen because this screen owns the document, and both
+ * are drawn on the shared bar so that a window on the machine shows the same
+ * control greyed with one sentence rather than not showing it at all — which is
+ * the rule the whole bar is built on.
+ *
+ * The cases below hold the two claims that are easy to fake and impossible to
+ * see in a screenshot: that a chosen width is a width the page is **laid out
+ * at** rather than a picture scaled up, and that a recorded flow speaks the same
+ * seven words the machine's recorder speaks — down to the sentence — so the two
+ * lists do not describe one click in two languages. And one claim that is about
+ * a person rather than about code: a menu row is a **name**, never a name with a
+ * line of explanation under it.
  *
  * ## Why half of these read the source
  *
@@ -218,7 +245,7 @@ final class LocalhostChromeTests: XCTestCase {
     }
 
     /**
-     * **The five controls, in one row, in his order — and no sixth.**
+     * **The controls, in one row, in his order — and the `…` not among them.**
      *
      * Read off `BrowserPageBar.verbRow`, which is the one place the row is
      * assembled and the reason every identifier is spelled there rather than
@@ -227,17 +254,23 @@ final class LocalhostChromeTests: XCTestCase {
      *
      * The order is asserted as a whole sequence rather than by picking out one
      * end of it. The row he blessed read back, reload, where-you-are, inspect,
-     * Done; what the passes since are allowed to have changed is exactly three
+     * Done; what the passes since are allowed to have changed is exactly four
      * things — Find joining the page's own history controls, Done leaving for the
-     * `…`, and the `…` itself leaving for the header — and a test that only
-     * checked one end would let the rest be shuffled.
+     * `…`, the `…` itself leaving for the header, and Size arriving at the end —
+     * and a test that only checked one end would let the rest be shuffled.
      *
-     * The absence of a sixth entry is half of what this case is for. *"Not only
-     * the bottom"* is answered by moving the `…` up, and it would be un-answered
-     * the moment somebody put a second copy of it back down here — which is also
-     * how one menu ends up with two doors.
+     * **Size is the sixth and the `…` is still not one of them**, which is the
+     * half of this case worth stating plainly, because the two look identical to a
+     * count. *"Not only the bottom"* was answered by moving the menu up, and it
+     * would be un-answered the moment somebody put a second copy of it back down
+     * here — which is also how one menu ends up with two doors. A verb that acts
+     * on the **page** is a different thing entirely, and how wide the page is laid
+     * out is pressed over and over while comparing one width against another:
+     *
+     * > *"they can see all the different dimensions in responsive views how it
+     * > will look like in mobile how it will look like on Windows."*
      */
-    func testTheFiveControlsAreOneRowInHisOrder() throws {
+    func testTheControlsAreOneRowInHisOrder() throws {
         let source = try Self.barSource()
         let lines = source.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
 
@@ -265,10 +298,14 @@ final class LocalhostChromeTests: XCTestCase {
             found.append(String(rest[..<end]))
         }
 
-        XCTAssertEqual(found, ["back", "forward", "reload", "find", "inspect"],
+        XCTAssertEqual(found, ["back", "forward", "reload", "find", "inspect", "size"],
                        "the bar's order changed. Back, Forward and Reload lead — the page's own "
-                       + "history first — then Find, then Inspect. The `…` is not one of these: "
-                       + "it belongs in the header now")
+                       + "history first — then Find, then Inspect, then Size. The `…` is not one "
+                       + "of these: it belongs in the header")
+
+        XCTAssertFalse(source.contains("id: \"\\(id).settings\""),
+                       "the `…` is back in the bottom row. It is a trailing item in the "
+                       + "navigation bar and there is exactly one of it")
     }
 
     /**
@@ -421,6 +458,530 @@ final class LocalhostChromeTests: XCTestCase {
             XCTFail("the field shows \"\(shown)\", which the app's own parser does not read as a "
                     + "port on the machine — so it could not be typed back in")
         }
+    }
+
+    // MARK: - Size: pinch, and the other widths
+
+    /**
+     * **A page can be pinched even when it says it must not be.**
+     *
+     * > *"they can pinch and zoom"*
+     *
+     * `user-scalable=no` is in the default template of every dev server anybody
+     * builds against — it is what stops a phone zooming an app-shaped site by
+     * accident — and `WKWebView` honours it. On a **browser** that is the wrong
+     * default: the entire reason for opening a page here is to examine it, and a
+     * page that cannot be zoomed on a six-inch screen cannot be examined.
+     *
+     * Asked of a real configuration rather than of the source, like the edge-swipe
+     * case above and for the same reason: what matters is the state of the object
+     * WebKit reads. Unlike that one this value is **not** the platform default, so
+     * a deleted line fails here rather than passing quietly.
+     */
+    func testAPageCanBePinchedWhateverTheSiteSays() {
+        let bridge = BrowserBridge()
+        defer { bridge.tearDown() }
+
+        XCTAssertTrue(bridge.webView.configuration.ignoresViewportScaleLimits,
+                      "the web view is honouring user-scalable=no again — that is on the default "
+                      + "template of every dev server, and it makes the page he opened to examine "
+                      + "the one page he cannot zoom into")
+    }
+
+    /**
+     * **Every width is a name, and the name carries the number.**
+     *
+     * > *"you are also putting so much of a description under the title of that
+     * > thing under the title of the feature instead of just i button or nothing
+     * > maybe so they have becomes too big you should compact all the features or
+     * > buttons and without losing any of them"*
+     *
+     * The menu is the list he would have complained about if it had grown a line
+     * of explanation under each row, so what a row may contain is asserted rather
+     * than left to taste: one line, no sentence, and — for every width that is a
+     * width — the number in the name, because *"different dimensions"* is the
+     * question and the number is the answer to it.
+     */
+    func testEveryWidthIsANameAndNotASentence() {
+        for width in PageWidth.allCases {
+            let name = width.name
+            XCTAssertFalse(name.isEmpty)
+            XCTAssertFalse(name.contains("\n"),
+                           "\(name) is two lines. A row is a title — the explanation goes on the ⓘ")
+            XCTAssertFalse(name.contains("."),
+                           "\(name) is a sentence. A menu row is a name he can point at")
+            XCTAssertLessThanOrEqual(name.count, 16,
+                                     "\(name) is long enough to be a description of itself")
+            guard let points = width.points else { continue }
+            XCTAssertTrue(name.contains("\(Int(points))"),
+                          "\(name) does not say what width it is, which is the whole question "
+                          + "being asked of this control")
+        }
+        XCTAssertNil(PageWidth.fit.points,
+                     "\"This phone\" must lay nothing out at anything — it is the state in which "
+                     + "this feature does not touch the page at all")
+    }
+
+    /**
+     * **A width is remembered for the site, not for the URL.**
+     *
+     * *Per page* read literally would be forgotten by the first link, and that is
+     * not a hypothetical: everything this feature exists to look at is a dev
+     * server, every dev server serves a single-page app, and every route change in
+     * one rewrites the URL. It is the same fact `seed` is built around. Keyed on
+     * the whole address, the width would drop back to this phone's the moment he
+     * tapped *Orders* — in the middle of checking how Orders looks on a laptop.
+     *
+     * The other half is the tunnel's own port, which must never be part of the
+     * key: this phone picks that number at random on every open, so a memory
+     * keyed on it would be a memory that never matched twice.
+     */
+    func testAWidthIsRememberedForTheSiteAndSurvivesTheTunnel() throws {
+        // Its own suite, so a test run cannot write a width onto the machine it is
+        // running from — the arrangement `PortBook` and `BrowserHistory` use.
+        let name = "test.pageWidths.\(UUID().uuidString)"
+        let suite = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { suite.removePersistentDomain(forName: name) }
+        let widths = PageWidths(defaults: suite)
+
+        let admin = PageWidths.site("http://127.0.0.1:52311/admin", machinePort: 3000)
+        XCTAssertEqual(admin, "localhost:3000",
+                       "a tunnelled page belongs to the port he chose, not to the loopback port "
+                       + "this phone bound at random")
+        widths.choose(.laptop, for: admin)
+
+        let orders = PageWidths.site("http://127.0.0.1:52311/orders?page=2", machinePort: 3000)
+        XCTAssertEqual(widths.width(for: orders), .laptop,
+                       "clicking a link inside the site he is examining must not put the page "
+                       + "back to phone width")
+
+        // A second open of the same port through a different listener — the case
+        // that decides whether the key was the right one.
+        let reopened = PageWidths.site("http://127.0.0.1:61099/admin", machinePort: 3000)
+        XCTAssertEqual(widths.width(for: reopened), .laptop)
+
+        XCTAssertEqual(widths.width(for: PageWidths.site("http://127.0.0.1:52311/", machinePort: 5173)),
+                       .fit,
+                       "and a different port is a different site, which starts where everything "
+                       + "starts: this phone's own width")
+
+        XCTAssertEqual(PageWidths.site("https://WWW.Example.com/x", machinePort: 3000),
+                       "www.example.com",
+                       "a real site is one site however it was typed")
+        XCTAssertEqual(PageWidths.site("about:blank", machinePort: 3000), "",
+                       "a page that is not anywhere is a page nothing can be remembered about")
+    }
+
+    /**
+     * **Size is drawn dead, with a reason, on a screen that only has a picture.**
+     *
+     * > *"it should be the same case, or all the options should be available at
+     * > least."*
+     *
+     * The bar's default for `whyNoSize` is what puts the greyed glyph under a
+     * machine window without that screen having to say anything, which is the
+     * arrangement Find and Inspect already use — one fact about one wire, written
+     * once, rather than four paraphrases that drift. The page on this phone passes
+     * nil instead, because the default sentence says *this page is on the machine*
+     * and that would be a lie printed over a closed tunnel.
+     */
+    func testSizeIsGreyedWhereThereIsNoLayoutToChange() throws {
+        let bar = try Self.barSource()
+        XCTAssertTrue(bar.contains("var whyNoSize: String? = BrowserChrome.sizeIsLocal"),
+                      "a machine window should get the greyed Size glyph and its sentence from "
+                      + "the bar's own default — every screen writing its own is how one control "
+                      + "comes to mean four different things")
+
+        let sentence = BrowserChrome.sizeIsLocal
+        XCTAssertTrue(sentence.contains("machine"),
+                      "the sentence has to name where the page actually is; \"this is off\" "
+                      + "without the reason is the dead control it is trying not to be")
+
+        let screen = try Self.browserSource()
+        XCTAssertTrue(screen.contains("size: isLive ? pageSize : nil"),
+                      "the page this phone holds is the one screen that can honour it, so it is "
+                      + "the one screen that passes it")
+        XCTAssertTrue(screen.contains("whyNoSize: nil"),
+                      "and it passes nil for the sentence, which otherwise says the page is on "
+                      + "the machine over a tunnel that has closed")
+    }
+
+    /**
+     * **The width is real: the view is that wide, and the page is told so.**
+     *
+     * This is the one claim in the whole feature that is worth a tripwire, because
+     * the cheap implementation of it looks identical in a screenshot and answers
+     * nothing. A CSS transform scales a phone layout up; the media queries that
+     * decide what a responsive page *does* fire off the viewport and never see it.
+     *
+     * So both halves are pinned. `WebSurface` lays the web view out at the chosen
+     * width in points and scales the **view** — which no CSS in the document can
+     * read — and `PageViewportScript` writes a viewport for the pages the first
+     * half does not reach: one that declares a fixed width of its own, and one
+     * that declares none and is laid out by WebKit at 980 whatever size the view
+     * is.
+     */
+    func testTheWidthIsTheViewsAndNotACSSTrick() throws {
+        let screen = try Self.browserSource()
+        XCTAssertTrue(screen.contains("WebSurface(browser: browser, layoutWidth: pageWidth.points)"),
+                      "the surface has to be given a real width. A page scaled instead of laid "
+                      + "out is a phone layout in bigger letters, which answers nothing about "
+                      + "how the page behaves on a laptop")
+        XCTAssertTrue(screen.contains("CGAffineTransform(scaleX: scale, y: scale)"),
+                      "and the fitting is a UIKit transform on the view — the document cannot "
+                      + "read one, which is exactly why it is the honest half")
+
+        XCTAssertTrue(PageViewportScript.apply(.laptop).contains("1280"),
+                      "the viewport instruction should carry the width itself")
+        XCTAssertTrue(PageViewportScript.apply(.fit).contains("(0)"),
+                      "and this phone's own width is the state that clears it")
+        XCTAssertFalse(PageViewportScript.source.contains("user-scalable=no"),
+                       "a viewport this app writes must never take the pinch away — pinch is "
+                       + "half of what this control is for")
+        XCTAssertTrue(PageViewportScript.source.contains("width=device-width"),
+                      "and going back to this phone has to leave a viewport that is true, "
+                      + "because whether WebKit re-reads one on removal is not a thing to bet a "
+                      + "screen on")
+    }
+
+    // MARK: - The click flow, recorded on this phone
+
+    /**
+     * **A flow says where it begins.**
+     *
+     * `setBrowserViewRecording` on the machine writes a `navigate` step the moment
+     * recording starts, with one line of comment: *"a flow that does not say where
+     * it starts cannot be replayed."* This side does the same, and it has to do it
+     * from the address **this app** knows the view is at — never from anything the
+     * page said about itself.
+     */
+    func testARecordingSaysWhereItBegins() {
+        let flow = PhoneClickFlow(now: { 1_000 })
+        flow.at(tab: "t1", url: "http://127.0.0.1:52311/admin")
+        XCTAssertTrue(flow.steps(tab: "t1").isEmpty,
+                      "knowing where the page is is not recording it")
+
+        flow.start(tab: "t1")
+        let steps = flow.steps(tab: "t1")
+        XCTAssertEqual(steps.count, 1)
+        XCTAssertEqual(steps.first?.kind, "navigate")
+        XCTAssertEqual(steps.first?.detail, "Go to http://127.0.0.1:52311/admin",
+                       "the first row is the machine's own sentence for a navigation — one "
+                       + "vocabulary, or the two lists describe the same click in two languages")
+        XCTAssertTrue(flow.isRecording(tab: "t1"))
+    }
+
+    /**
+     * **A password is a step, and never a value.**
+     *
+     * The step exists because a replay has to know a password was entered; the
+     * value never leaves the page, and never reaches the row. Two independent
+     * checks, exactly as `parseGuestStep` describes: the page-side script flags
+     * the field it knows to be secret, and the element's own `type` attribute
+     * catches a payload that arrived with the flag stripped off.
+     *
+     * The second half is the one worth a test — the first is a script, and a
+     * script is what an attacker edits.
+     */
+    func testAPasswordsValueIsNeverRecordedEvenWithTheFlagStripped() {
+        let flow = PhoneClickFlow(now: { 1_000 })
+        flow.at(tab: "t1", url: "http://127.0.0.1:52311/login")
+        flow.start(tab: "t1")
+
+        // No `secret` flag at all, and a value the page would very much like kept.
+        flow.note(Self.step(kind: "type",
+                            tag: "input",
+                            id: "pass",
+                            attributes: ["type": "password", "placeholder": "Password"],
+                            extra: ["value": "hunter2-the-real-one"]),
+                  url: "http://127.0.0.1:52311/login",
+                  tab: "t1")
+
+        let step = flow.steps(tab: "t1").last
+        XCTAssertEqual(step?.kind, "type", "the step still happened")
+        XCTAssertEqual(step?.detail, "Type the password into \"Password\" (`#pass`)",
+                       "and it says so in the machine's own words")
+        XCTAssertNil(step?.value,
+                     "the value must not be on the row. A field carrying a one-time code in "
+                     + "clear is not made safe by being short")
+        for row in flow.steps(tab: "t1") {
+            XCTAssertFalse((row.detail ?? "").contains("hunter2"))
+            XCTAssertFalse((row.value ?? "").contains("hunter2"))
+        }
+    }
+
+    /// A file input is the same rule and it is the half that gets forgotten: the
+    /// value is a path on somebody's own disk and names them before it names
+    /// anything else.
+    func testAFilePathIsNeverRecordedEither() {
+        let flow = PhoneClickFlow(now: { 1_000 })
+        flow.at(tab: "t1", url: "http://127.0.0.1:52311/upload")
+        flow.start(tab: "t1")
+        flow.note(Self.step(kind: "type",
+                            tag: "input",
+                            id: "cv",
+                            attributes: ["type": "file", "aria-label": "Résumé"],
+                            extra: ["value": "/Users/asad/Documents/passport.pdf"]),
+                  url: "http://127.0.0.1:52311/upload",
+                  tab: "t1")
+
+        XCTAssertNil(flow.steps(tab: "t1").last?.value)
+        XCTAssertFalse((flow.steps(tab: "t1").last?.detail ?? "").contains("Users"))
+    }
+
+    /**
+     * **A double-click is one step, and a corrected typo is one step.**
+     *
+     * Both rules are transcribed from `appendStep` rather than invented, and both
+     * are about a *replay*: nobody wants the second half of a double-click, and a
+     * replay that used the half-typed value from before the correction would type
+     * the typo.
+     *
+     * The clock is a seam here for the reason the house rule gives about never
+     * faking load to test timing — the merge window is 400ms and a test that slept
+     * through it would be a test that fails under a fleet.
+     */
+    func testOneGestureIsOneStep() {
+        var clock: Double = 1_000
+        let flow = PhoneClickFlow(now: { clock })
+        flow.at(tab: "t1", url: "http://127.0.0.1:52311/")
+        flow.start(tab: "t1")
+
+        let button = Self.step(kind: "click", tag: "button", id: "submit", text: "Sign in")
+        flow.note(button, url: "http://127.0.0.1:52311/", tab: "t1")
+        clock += 120
+        flow.note(button, url: "http://127.0.0.1:52311/", tab: "t1")
+        XCTAssertEqual(flow.steps(tab: "t1").count, 2,
+                       "the navigate and one click — two taps 120ms apart on one button is a "
+                       + "double-click, not two steps")
+
+        clock += 5_000
+        flow.note(button, url: "http://127.0.0.1:52311/", tab: "t1")
+        XCTAssertEqual(flow.steps(tab: "t1").count, 3,
+                       "and a deliberate second press five seconds later is a second step — a "
+                       + "stepper button really is pressed twice")
+
+        let field = { (value: String) in
+            Self.step(kind: "type", tag: "input", id: "email",
+                      attributes: ["placeholder": "Email"], extra: ["value": value])
+        }
+        clock += 1_000
+        flow.note(field("asad@exampl"), url: "http://127.0.0.1:52311/", tab: "t1")
+        clock += 1_000
+        flow.note(field("asad@example.com"), url: "http://127.0.0.1:52311/", tab: "t1")
+        XCTAssertEqual(flow.steps(tab: "t1").count, 4)
+        XCTAssertEqual(flow.steps(tab: "t1").last?.value, "asad@example.com",
+                       "tabbing back to fix a typo replaces the step; a replay must not use the "
+                       + "half-typed value")
+    }
+
+    /**
+     * **A flow that runs long keeps its beginning and says it was cut.**
+     *
+     * Two claims, and the second is the one a silent implementation gets wrong.
+     * The cap stops the list growing rather than dropping the oldest steps —
+     * *"one missing its beginning cannot be replayed at all, while one missing its
+     * end is still a shorter true flow"* — and the cut is drawn as a row of its
+     * own, in the `truncated` kind the machine uses, because a list that simply
+     * stops reads as *that is all of them*.
+     */
+    func testAFlowThatRunsLongKeepsItsBeginningAndSaysItWasCut() {
+        var clock: Double = 1_000
+        let flow = PhoneClickFlow(now: { clock })
+        flow.at(tab: "t1", url: "http://127.0.0.1:52311/")
+        flow.start(tab: "t1")
+
+        for index in 0 ..< (PhoneClickFlow.maxSteps + 40) {
+            clock += 1_000
+            flow.note(Self.step(kind: "click", tag: "button", id: "b\(index)", text: "Row \(index)"),
+                      url: "http://127.0.0.1:52311/", tab: "t1")
+        }
+
+        let steps = flow.steps(tab: "t1")
+        XCTAssertEqual(steps.count, PhoneClickFlow.maxSteps + 1,
+                       "two hundred steps and one row saying so")
+        XCTAssertEqual(steps.first?.kind, "navigate",
+                       "the beginning is what a flow cannot be replayed without, so it is the "
+                       + "one thing the cap may never drop")
+        XCTAssertEqual(steps.last?.kind, "truncated",
+                       "the cut is a row in the same vocabulary the machine cuts in — the two "
+                       + "lists are drawn by the same rows")
+        XCTAssertNotNil(steps.last?.detail)
+    }
+
+    /**
+     * **Nothing is collected until somebody asks for it, and Clear does not stop
+     * it.**
+     *
+     * The first half is the surveillance rule: a recorder that can be running
+     * without being started is not a feature. The second is `browser-view:record-
+     * clear`'s own behaviour — clearing is *start again from here*, which is what
+     * somebody does after a false start, and it re-seeds the beginning because a
+     * flow with no first line cannot be replayed.
+     */
+    func testNothingIsCollectedUntilItIsStartedAndClearKeepsItRunning() {
+        let flow = PhoneClickFlow(now: { 1_000 })
+        flow.at(tab: "t1", url: "http://127.0.0.1:52311/")
+        flow.note(Self.step(kind: "click", tag: "button", id: "b1", text: "Before"),
+                  url: "http://127.0.0.1:52311/", tab: "t1")
+        XCTAssertTrue(flow.steps(tab: "t1").isEmpty)
+        XCTAssertFalse(flow.isRecording(tab: "t1"))
+
+        flow.start(tab: "t1")
+        flow.note(Self.step(kind: "click", tag: "button", id: "b2", text: "After"),
+                  url: "http://127.0.0.1:52311/", tab: "t1")
+        XCTAssertEqual(flow.steps(tab: "t1").count, 2)
+
+        flow.clear(tab: "t1")
+        XCTAssertTrue(flow.isRecording(tab: "t1"), "Clear empties the flow, it does not end it")
+        XCTAssertEqual(flow.steps(tab: "t1").map(\.kind), ["navigate"],
+                       "and what is left is where the flow now begins")
+
+        flow.stop(tab: "t1")
+        XCTAssertFalse(flow.isRecording(tab: "t1"))
+        XCTAssertEqual(flow.steps(tab: "t1").count, 1,
+                       "stopping keeps the flow — it is the finished thing somebody is about to "
+                       + "hand to an agent")
+
+        flow.forget(tab: "t1")
+        XCTAssertTrue(flow.steps(tab: "t1").isEmpty)
+    }
+
+    /**
+     * **The line handed to an agent is one line, and it is the machine's line.**
+     *
+     * `flowLine` on the desktop, transcribed. Two claims: it is a single line,
+     * because Deck types this into a PTY running a coding CLI and a newline in it
+     * submits the prompt half-written; and it is built from the **same**
+     * sentences the rows are, so the card that sends a phone flow and the panel
+     * that sends a machine flow hand an agent the same words about the same
+     * click. Three spellings of one flow is how one of them comes to leak a
+     * password the other two redact.
+     */
+    func testTheFlowGoesToAnAgentAsOneLineInTheMachinesWords() {
+        let flow = PhoneClickFlow(now: { 1_000 })
+        XCTAssertEqual(flow.line(tab: "t1"), "", "nothing recorded is nothing to hand over")
+
+        flow.at(tab: "t1", url: "http://127.0.0.1:52311/login")
+        flow.start(tab: "t1")
+        flow.note(Self.step(kind: "type", tag: "input", id: "pass",
+                            attributes: ["type": "password", "placeholder": "Password"],
+                            extra: ["value": "hunter2-the-real-one"]),
+                  url: "http://127.0.0.1:52311/login", tab: "t1")
+        flow.note(Self.step(kind: "click", tag: "button", id: "submit", text: "Sign in"),
+                  url: "http://127.0.0.1:52311/login", tab: "t1")
+
+        let line = flow.line(tab: "t1")
+        XCTAssertFalse(line.contains("\n"),
+                       "a newline in this submits the prompt as its first line")
+        XCTAssertFalse(line.contains("hunter2"),
+                       "the redaction has to hold on every route out of this store, not only on "
+                       + "the one the list draws")
+        XCTAssertTrue(line.hasPrefix("[browser flow: 1) Go to http://127.0.0.1:52311/login;"))
+        XCTAssertTrue(line.contains("2) Type the password into \"Password\" (`#pass`)"))
+        XCTAssertTrue(line.hasSuffix("3) Click \"Sign in\" (`#submit`)]"))
+    }
+
+    /**
+     * **The phone speaks the machine's vocabulary, word for word.**
+     *
+     * The two recorders draw through the same rows, so a `kind` this side sends
+     * that the other side does not know — or a sentence phrased differently for
+     * the same click — is a list that describes one action in two languages. That
+     * is the exact class of difference he has now pointed at twice.
+     *
+     * The seven words are `StepKind` in `src/main/browser-steps.ts`; the sentences
+     * are `describeStep` in the same file.
+     */
+    func testTheStepsSpeakTheMachinesVocabulary() {
+        XCTAssertEqual(PhoneStep.Kind.allCases.map(\.rawValue),
+                       ["navigate", "click", "type", "select", "check", "press", "submit"],
+                       "an eighth kind on this side is a row the machine's list cannot draw")
+        XCTAssertEqual(PhoneClickFlow.notableKeys, ["Enter", "Escape", "Tab"],
+                       "logging every keystroke would bury the flow; these three are how a form "
+                       + "is submitted, dismissed and moved through")
+
+        var step = PhoneStep(kind: .click, at: 1)
+        step.selector = "#submit"
+        step.label = "Sign in"
+        step.tag = "button"
+        XCTAssertEqual(PhoneClickFlow.describe(step), "Click \"Sign in\" (`#submit`)")
+
+        step.kind = .submit
+        XCTAssertEqual(PhoneClickFlow.describe(step), "Submit \"Sign in\" (`#submit`)")
+
+        step.kind = .press
+        step.key = "Enter"
+        XCTAssertEqual(PhoneClickFlow.describe(step), "Press Enter in \"Sign in\" (`#submit`)")
+
+        step.kind = .check
+        step.checked = true
+        XCTAssertEqual(PhoneClickFlow.describe(step), "Check \"Sign in\" (`#submit`)")
+        step.checked = false
+        XCTAssertEqual(PhoneClickFlow.describe(step), "Uncheck \"Sign in\" (`#submit`)")
+
+        // An unnamed element is named by its selector alone, never by a guess.
+        var bare = PhoneStep(kind: .click, at: 1)
+        bare.tag = "div"
+        XCTAssertEqual(PhoneClickFlow.describe(bare), "Click <div>",
+                       "an element with no selector and no label is described by what it is, "
+                       + "never by a guess at what it might be called")
+    }
+
+    /**
+     * **A field is named by what names it, and a button by what is written on it.**
+     *
+     * Two rules, and the first exists because both obvious fallbacks were measured
+     * wrong on a real page: a capture falls back to an element's live value, which
+     * labels the email box with the email address, and a `<select>`'s text content
+     * is the concatenation of its own options — the city picker in that probe came
+     * back named `DubaiLahore`.
+     */
+    func testAFieldIsNamedByWhatNamesItAndNotByItsContents() {
+        let flow = PhoneClickFlow(now: { 1_000 })
+        flow.at(tab: "t1", url: "http://127.0.0.1:52311/")
+        flow.start(tab: "t1")
+
+        flow.note(Self.step(kind: "type", tag: "input", id: "email",
+                            attributes: ["placeholder": "Email", "value": "asad@example.com"],
+                            extra: ["value": "asad@example.com"]),
+                  url: "http://127.0.0.1:52311/", tab: "t1")
+        XCTAssertEqual(flow.steps(tab: "t1").last?.detail,
+                       "Type \"asad@example.com\" into \"Email\" (`#email`)",
+                       "the field is named by its placeholder — named by its own value it would "
+                       + "read \"into asad@example.com\"")
+
+        flow.note(Self.step(kind: "select", tag: "select", id: "city",
+                            attributes: ["name": "city"], text: "DubaiLahore",
+                            extra: ["value": "Lahore"]),
+                  url: "http://127.0.0.1:52311/", tab: "t1")
+        XCTAssertEqual(flow.steps(tab: "t1").last?.detail,
+                       "Choose \"Lahore\" in \"city\" (`#city`)",
+                       "a picker is not named by the list of things in it")
+    }
+
+    /// One payload from the page-side recorder, shaped exactly as
+    /// `PhoneRecordScript` sends one. Written here rather than in the script so
+    /// that a change to either side has to be made twice on purpose.
+    private static func step(kind: String,
+                             tag: String,
+                             id: String,
+                             attributes: [String: Any] = [:],
+                             text: String = "",
+                             extra: [String: Any] = [:]) -> [String: Any] {
+        var payload: [String: Any] = [
+            "v": 1,
+            "kind": kind,
+            "target": [
+                "v": 1,
+                "path": [["tag": tag, "id": id, "idUnique": true,
+                          "nthOfType": 1, "ofTypeCount": 1]],
+                "text": text,
+                "attributes": attributes,
+            ] as [String: Any],
+        ]
+        for (key, value) in extra { payload[key] = value }
+        return payload
     }
 
     // MARK: - Helpers

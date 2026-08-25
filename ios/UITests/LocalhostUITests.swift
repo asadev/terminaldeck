@@ -399,7 +399,7 @@ final class LocalhostUITests: XCTestCase {
      * > things and whatever we require to get the job done."*
      *
      * So the shape this measures is a **split**, and measuring it is the whole
-     * point of the case: five verbs that act on the page, below the middle of the
+     * point of the case: the verbs that act on the page, below the middle of the
      * screen where a thumb is; one control that acts on the window, in the header
      * where he asked for it. A case that only counted buttons would pass with all
      * six back in the row, which is the state his sentence rejects.
@@ -413,7 +413,7 @@ final class LocalhostUITests: XCTestCase {
      * different, from the bar under a window on the machine. It mounts the shared
      * `BrowserPageBar` now, so the row is:
      *
-     *     Back · Forward · Reload · Find · Inspect
+     *     Back · Forward · Reload · Find · Inspect · Size
      *
      * Done did not disappear: tearing the tunnel down is a thing you do to the
      * *window* rather than to the page, so it is the `Close this window` card on
@@ -437,8 +437,8 @@ final class LocalhostUITests: XCTestCase {
      *     the one that acts on the **window** is in the header — both measured
      *     against the middle of the screen, not asserted by looking at the
      *     source;
-     *  3. the row reads left to right as the same five, in the same order, that
-     *     `BrowserPageBar` puts under every other kind of browser window.
+     *  3. the row reads left to right as the same controls, in the same order,
+     *     that `BrowserPageBar` puts under every other kind of browser window.
      *
      * The order is measured off the real frames rather than read from the source,
      * which is the half of claim 3 that is worth having: a bar assembled in the
@@ -455,7 +455,7 @@ final class LocalhostUITests: XCTestCase {
      * the proof of that, and it is the only one, which is why the case was
      * rewritten rather than deleted with its name.
      */
-    func testTheChromeIsThePlatformsAndTheRowIsTheSameFive() throws {
+    func testTheChromeIsThePlatformsAndTheRowIsTheSharedOne() throws {
         let row = portRow()
         XCTAssertTrue(row.waitForExistence(timeout: 20),
                       "no row for port \(Self.port) — is .harness/.devsite/server.mjs running?")
@@ -479,10 +479,13 @@ final class LocalhostUITests: XCTestCase {
          * existence check on all five buttons, which is how the first version of
          * this screen looked correct in a test and wrong in the hand.
          *
-         * The five are the shared row and they are listed in the order they are
-         * meant to be read: Back · Forward · Reload · Find · Inspect. There is no
-         * sixth: the `…` is asserted separately, at the other end of the screen,
-         * because that is the requirement rather than an accident of layout.
+         * They are the shared row and they are listed in the order they are meant
+         * to be read: Back · Forward · Reload · Find · Inspect · Size. The `…` is
+         * not among them and is asserted separately, at the other end of the
+         * screen, because that is the requirement rather than an accident of
+         * layout — and Size is here rather than up there because how wide the
+         * page is laid out is a thing done to the **page**, over and over, while
+         * comparing one width against another.
          *
          * The length of the row is pinned by these five being present **and** by
          * Done being asserted absent below, rather than by counting the buttons
@@ -492,12 +495,16 @@ final class LocalhostUITests: XCTestCase {
          */
         let middle = app.frame.midY
         let controls = ["localhost.back", "localhost.forward", "localhost.reload",
-                        "localhost.find", "localhost.inspect"]
+                        "localhost.find", "localhost.inspect", "localhost.size"]
         for identifier in controls {
-            let button = app.buttons[identifier]
+            // Across every element type: Size is a `Menu` where the other five
+            // are `Button`s, and asking `buttons` for a SwiftUI menu is how an
+            // assertion comes to pass by never running.
+            let button = app.descendants(matching: .any)
+                .matching(identifier: identifier).firstMatch
             XCTAssertTrue(button.exists,
                           "\(identifier) is missing from the bar — the row under a page on this "
-                          + "phone is the same five as the row under every other browser window, "
+                          + "phone is the same as the row under every other browser window, "
                           + "and a shorter one is what he counted as two products")
             XCTAssertGreaterThan(button.frame.minY, middle,
                                  "\(identifier) is in the top half of the screen; browser controls "
@@ -550,7 +557,9 @@ final class LocalhostUITests: XCTestCase {
          * used to end it is up in the header — asserted above.
          */
         let byPosition = controls
-            .map { (id: $0, x: app.buttons[$0].frame.midX) }
+            .map { (id: $0,
+                    x: app.descendants(matching: .any)
+                        .matching(identifier: $0).firstMatch.frame.midX) }
             .sorted { $0.x < $1.x }
             .map(\.id)
         XCTAssertEqual(byPosition, controls,
@@ -582,6 +591,116 @@ final class LocalhostUITests: XCTestCase {
         XCTAssertFalse(hint.exists,
                        "turning it off should take the notice with it — a sentence left on screen "
                        + "for a mode nobody is in is a claim that they are")
+    }
+
+    /**
+     * **The page can be looked at at other widths, and the menu is names only.**
+     *
+     * > *"they can use the the mode currently we have this machine they can just
+     * > browse as phone view and it should have all the by the way views also
+     * > they can pinch and zoom also they can see all the different dimensions in
+     * > responsive views how it will look like in mobile how it will look like on
+     * > Windows so they can have different dimensions also in phone just like
+     * > MacBook."*
+     *
+     * Two claims, and the second one is about him rather than about layout.
+     *
+     * **The widths are there and they work.** The control is in the bottom row
+     * with the other page verbs, it opens onto the five widths, and choosing one
+     * leaves the page on screen — which is the thing a re-layout can break and a
+     * scaled screenshot cannot. What a test cannot honestly assert is what the
+     * page *looks* like at 1280: that is a picture, and the picture is the
+     * attachment. `LocalhostChromeTests` holds the claim underneath it — that the
+     * width is the web view's own rather than a transform the document cannot
+     * see — because that is the half that could be faked and still photograph
+     * correctly.
+     *
+     * **Every row is a name.** *"you are also putting so much of a description
+     * under the title of that thing under the title of the feature instead of
+     * just i button or nothing maybe so they have becomes too big."* So the
+     * labels are read off the real menu and checked for being names — the width
+     * and nothing else, no sentence, nothing under them. A menu that grew an
+     * explanation per row would pass every existence check anybody would write
+     * and would be the thing he asked twice to have removed.
+     *
+     * Nothing is dismissed by hand: choosing a width closes the menu, which is
+     * also what a person does. `dismissAnyMenu` taps low on the screen and this
+     * menu is presented **from** the bottom bar, so a blind dismiss here would
+     * land on the control that opened it.
+     */
+    func testThePageCanBeLookedAtAtOtherWidths() throws {
+        let row = portRow()
+        XCTAssertTrue(row.waitForExistence(timeout: 20),
+                      "no row for port \(Self.port) — is .harness/.devsite/server.mjs running?")
+        row.tap()
+
+        XCTAssertTrue(browserBar().waitForExistence(timeout: 15),
+                      "the browser screen should open on the tap")
+        XCTAssertTrue(app.staticTexts["Served from the Mac"].waitForExistence(timeout: 30),
+                      "the page never rendered — the tunnel did not carry the document")
+        add(screenshot(named: "the page at this phone's width"))
+
+        let size = any("localhost.size")
+        XCTAssertTrue(size.exists,
+                      "Size is one of the page verbs and belongs in the bottom row with them")
+        XCTAssertGreaterThan(size.frame.minY, app.frame.midY,
+                             "it is pressed over and over while comparing one width against "
+                             + "another, so it belongs under a thumb rather than in the header")
+        size.tap()
+
+        let widths = [("localhost.size.0", "This phone"),
+                      ("localhost.size.390", "Phone 390"),
+                      ("localhost.size.834", "Tablet 834"),
+                      ("localhost.size.1280", "Laptop 1280"),
+                      ("localhost.size.1440", "Desktop 1440")]
+        for (identifier, name) in widths {
+            let item = any(identifier)
+            XCTAssertTrue(item.waitForExistence(timeout: 6),
+                          "\(name) should be in the menu — \"different dimensions\" is five real "
+                          + "ones, not a slider that asks him to know the answer")
+            let label = item.label
+            XCTAssertTrue(label.contains(name), "\(identifier) reads \"\(label)\"")
+            XCTAssertFalse(label.contains("."),
+                           "\"\(label)\" is a sentence. A menu row is a name he can point at, and "
+                           + "the explanation goes on the ⓘ or nowhere")
+            XCTAssertLessThan(label.count, name.count + 14,
+                              "\"\(label)\" has grown a description under its title, which is the "
+                              + "thing that made these lists too big to read")
+        }
+
+        // And the three that magnify rather than re-lay-out, which are the pinch
+        // as buttons: a page laid out at 1440 on a phone needs a way back to a
+        // readable scale that does not depend on landing a two-finger gesture.
+        for (identifier, name) in [("localhost.size.in", "Zoom in"),
+                                   ("localhost.size.out", "Zoom out"),
+                                   ("localhost.size.actual", "Actual size")] {
+            XCTAssertTrue(any(identifier).exists, "\(name) should be in the menu")
+        }
+        add(screenshot(named: "the widths on offer"))
+
+        any("localhost.size.1280").tap()
+        XCTAssertTrue(app.staticTexts["Served from the Mac"].waitForExistence(timeout: 20),
+                      "the page should survive being laid out at 1280 — a width that loses the "
+                      + "document is worse than no width at all")
+        add(screenshot(named: "the page at laptop width"))
+
+        // A pinch on the page itself, which is the half of his sentence that is
+        // a gesture. What a test can hold on to is that it does not wedge the
+        // page: the document is still there and the bar is still under it, on the
+        // address row rather than swapped for something else.
+        let page = app.webViews.firstMatch
+        if page.exists {
+            page.pinch(withScale: 2.2, velocity: 1.2)
+            add(screenshot(named: "the page pinched"))
+            page.pinch(withScale: 0.4, velocity: -1.2)
+        }
+        XCTAssertTrue(app.textFields["localhost.address"].exists,
+                      "and the bar should still be under it with the address on it")
+
+        size.tap()
+        any("localhost.size.0").tap()
+        XCTAssertTrue(app.staticTexts["Served from the Mac"].waitForExistence(timeout: 20),
+                      "and back to this phone's own width, which is where it started")
     }
 
     /**
@@ -647,7 +766,7 @@ final class LocalhostUITests: XCTestCase {
      * browser window's. *"So top, header and footer, tab bar should be same in
      * all type of browsing windows."* Tearing a tunnel down is a thing you do to
      * the window rather than to the page, so it moved off the row and the row
-     * became the same five everywhere. Two taps instead of one, and the one-tap
+     * became the same everywhere. Two taps instead of one, and the one-tap
      * way out — the chevron — is unchanged, so nothing anybody does got longer.
      *
      * ## Where it moved to, and why that changed again
@@ -717,10 +836,23 @@ final class LocalhostUITests: XCTestCase {
     }
 
     /**
+     * One element by identifier, across every element type.
+     *
+     * Size is a SwiftUI `Menu` and its rows are `Toggle`s inside one; what
+     * XCUITest classifies either of those as is not a thing to have an opinion
+     * about. `BrowserPageBarUITests` learned this on the canvas — asking
+     * `otherElements` for it found nothing and skipped a case silently, which is
+     * the shape of a test that never runs.
+     */
+    private func any(_ identifier: String) -> XCUIElement {
+        app.descendants(matching: .any).matching(identifier: identifier).firstMatch
+    }
+
+    /**
      * Something that says the browser screen has arrived.
      *
      * `localhost.done` was this probe in five places in this file and there is no
-     * Done any more: the row under a page on this phone is the same five controls
+     * Done any more: the row under a page on this phone is the same controls
      * as the row under any other browser window, and the verb that tore the
      * tunnel down is the `Close this window` card on this page's own settings
      * screen, behind the `…` in the header. See `BrowserChrome`.
