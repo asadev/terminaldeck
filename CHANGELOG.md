@@ -10,6 +10,8 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-08-25
+
 ### Added
 
 - **Files, Source control, Artifacts, Store, AI readiness and MCP servers, on the phone.** The six panels the desktop has always had are now on the Menu tab, against any machine you are paired with — including a server with no screen. They are not read-only lists: every action the desktop offers is on the phone too. Add, edit, remove, connect and disconnect an MCP server; run the readiness scan and apply its fixes; install and remove from the Store; filter Artifacts by what an agent made or changed, by session, and by name. What a panel can do is decided by the machine and drawn by the phone, so a machine that cannot do something never shows a button for it.
@@ -29,7 +31,6 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 - **Back and forward work on a server's browser.** They were refused by a guard that could not read the frame they send.
 - **A server can hold more than one cookie jar**, so isolated and shared windows and named profiles mean something there.
 - **The app compiles what it says it compiles.** The repository's own typecheck command was a no-op — it checked nothing at all — which had hidden a dozen live errors, four of them defects a person could see.
-
 
 ## [0.10.2] — 2026-08-24
 
@@ -2042,7 +2043,8 @@ First cut. macOS 12+, Apple silicon, unsigned.
 - Preferences with live dark/light theming
 - Session resume (`⌘⇧T`)
 
-[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.10.2...HEAD
+[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.11.0
 [0.10.2]: https://github.com/asadev/terminaldeck/releases/tag/v0.10.2
 [0.10.1]: https://github.com/asadev/terminaldeck/releases/tag/v0.10.1
 [0.10.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.10.0

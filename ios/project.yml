@@ -101,7 +101,7 @@ targets:
         # through 0.1.5, 0.1.6, 0.1.7 and 0.1.8 because nothing but a release
         # reads it, and preflight is a `fail` rather than a warning precisely so
         # the drift cannot reach an upload.
-        MARKETING_VERSION: "0.10.3"
+        MARKETING_VERSION: "0.11.0"
         # A stamp in the same yymmddHHMM shape release.sh generates, not a
         # counter. "1" was not merely stale, it was a collision waiting: build
         # number 1 has already been uploaded to this app record, and App Store

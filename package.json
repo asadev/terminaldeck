@@ -1,7 +1,7 @@
 {
   "name": "terminaldeck",
-  "version": "0.10.3",
-  "description": "Run your coding agents on one deck \u2014 sessions, browsers, cost and context in a single window.",
+  "version": "0.11.0",
+  "description": "Run your coding agents on one deck — sessions, browsers, cost and context in a single window.",
   "main": "./out/main/index.js",
   "author": {
     "name": "Asad Iqbal",
