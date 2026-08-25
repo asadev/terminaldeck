@@ -254,18 +254,6 @@ final class ScreenWalkUITests: XCTestCase {
         }
         app.dismissAnyMenu()
 
-        /*
-         * 8. The Copilot pill, which a server now always has.
-         *
-         * The stop that most needed looking at: for every headless host this is
-         * a screen that did not exist a day ago, reached through a pill that was
-         * not drawn a day ago. A desktop shows the conversation instead, and
-         * both are worth a frame.
-         */
-        if app.openCopilotTab() {
-            capture("12-copilot")
-        }
-
         // 9. Menu — renamed from Settings, with the six machine tools at the top
         //    of it rather than buried behind a server page.
         XCTAssertTrue(app.openSettingsTab(), "Menu should be reachable")
@@ -400,6 +388,28 @@ final class ScreenWalkUITests: XCTestCase {
         //     open over the app.
         app.openSessionsTab()
         capture("20-sessions-again")
+
+        /*
+         * 14. The Copilot pill, **last**, and that ordering is the point.
+         *
+         * A server always has this pill, and the tab now *lands in a session* —
+         * *"when we land on the copilot page there should be directly a new
+         * session started."* A session is `.session`, which hides the tab bar
+         * correctly, so from here there is no bar to press and every later stop
+         * is unreachable. It failed exactly that way twice, which is how the
+         * landing was confirmed to work end to end.
+         *
+         * Rather than teach the walk to climb back out — one more thing to get
+         * wrong, on the one screen whose whole job is to be a dead end — this
+         * stop goes at the end, where having nowhere to go next costs nothing.
+         */
+        if app.openCopilotTab() {
+            // Landing is a navigation that has to survive the tab transition, so
+            // the frame worth taking is whatever it settles on rather than the
+            // first paint.
+            Thread.sleep(forTimeInterval: 4)
+            capture("21-copilot")
+        }
     }
 
     // MARK: - Helpers
