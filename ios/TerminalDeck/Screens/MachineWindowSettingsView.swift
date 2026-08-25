@@ -141,6 +141,10 @@ struct MachineWindowSettingsView: View {
      */
     var phoneTab: String? = nil
 
+    /// Used by exactly one control — Close, on a page this phone is drawing.
+    /// See `phoneCloseCard` for why that one and nothing else.
+    @Environment(\.dismiss) private var dismiss
+
     /// The picture this phone took of its own page, and how that went. See
     /// `PhonePageShot` at the foot of this file for why the phone has to render
     /// the page again rather than photograph the one it was showing.
@@ -854,12 +858,33 @@ struct MachineWindowSettingsView: View {
      * and does not pop a screen out from under a thumb.
      */
     @ViewBuilder
+    /**
+     * Close, and **leave** — the one place on this screen that dismisses itself.
+     *
+     * The rest of this file deliberately dismisses nothing: a window the machine
+     * drops out from under a thumb should draw its closed state rather than yank
+     * a screen away. That argument is about the *machine* acting. This is the
+     * person acting, on this screen, on this page, and the thing they closed is
+     * the thing the two screens above are made of.
+     *
+     * Measured, against a live host, before this line existed: pressing Close
+     * left him standing on a settings screen reading *"This page is closed"*,
+     * with the page still underneath it — the tab watcher on `LocalhostBrowser`
+     * pops the page, but it cannot pop what is stacked on top of it, so nothing
+     * appeared to happen. The live case
+     * `testClosingTheViewLeavesNoPageBehind` failed on exactly that, twice.
+     *
+     * So this screen goes first and the watcher below takes the page with it —
+     * two pops, both caused by his own press, landing him back on the Browser
+     * list where he started.
+     */
     private func phoneCloseCard(_ tab: BrowserTab) -> some View {
         SchemeSectionCaption("Window")
 
         SchemeGroup {
             Button {
                 model.browserTabs.close(tab, machine: model)
+                if pushed { dismiss() }
             } label: {
                 HStack(spacing: 12) {
                     Image(systemName: "xmark.circle")
