@@ -37,6 +37,25 @@
  * purpose, against the disposable stand-in. That is the right place for it and
  * this is not.
  *
+ * ## The session row has a `…` now, and it must not be the row
+ *
+ * > *"since we have this, when we flip, we drag it. So maybe we should not have
+ * > this arrow. Instead, this arrow, we can have three dots, and we can have more
+ * > options like the way we have inside, like this ones."*
+ *
+ * The chevron on a session row is a menu now, carrying the same verbs the swipe
+ * carries plus the ones that need a *choice* and so cannot be a swipe button —
+ * attaching a browser window, and the model cluster. Two cases below are about
+ * it, and they are here rather than in a menu suite for the reason the whole file
+ * exists: a second control inside a card that is itself one big button is a thing
+ * only a finger can settle. The failure it is guarding against is not a crash, it
+ * is a `…` that opens the session, which would make the corner worse than the
+ * arrow it replaced.
+ *
+ * The other half is that its **Close asks the same question the swipe asks**.
+ * Two doors onto one irreversible verb with two different amounts of care behind
+ * them is the defect `MachineRow` already has a case for, one screen over.
+ *
  * ## And two cases that are not about swiping at all
  *
  * `testEveryPillIsStillAddressableByItsName`. The tab bar lost its words on the
@@ -322,6 +341,88 @@ final class SwipeActionsUITests: XCTestCase {
         unpin.tap()
     }
 
+    // MARK: - The `…` on a session row
+
+    /**
+     * The `…` opens the row's menu, and does **not** open the session.
+     *
+     * > *"maybe we should not have this arrow. Instead, this arrow, we can have
+     * > three dots."*
+     *
+     * The whole card is a button that opens the session, so a control sitting
+     * inside it is exactly the thing that quietly does the wrong job: SwiftUI
+     * gives the tap to the button *around* a control nested in its label, and
+     * nothing in a build log says so. The row is drawn as two separate controls
+     * side by side with the card's fill behind both of them for that reason, and
+     * this is the case that proves it — the menu comes up, and when it is
+     * dismissed the list is still the screen on top with the row still on it.
+     *
+     * The item asserted is *Session details*, by **label**: an
+     * `accessibilityIdentifier` on a `Button` inside a SwiftUI `Menu` does not
+     * reliably reach the presented row, and the words are what a person reads
+     * anyway.
+     */
+    func testTheRowsDotsOpenTheMenuRatherThanTheSession() throws {
+        try openTheSessionList()
+        let row = firstSessionRow()
+        try XCTSkipUnless(row.waitForExistence(timeout: 12),
+                          "nothing is running on the machine, so there is no row to press")
+        let identifier = row.identifier
+
+        let dots = rowMenuButton()
+        XCTAssertTrue(dots.waitForExistence(timeout: 8),
+                      "a session row carries a `…` in the corner the chevron used to be in")
+        dots.tap()
+
+        XCTAssertTrue(app.buttons["Session details"].firstMatch.waitForExistence(timeout: 5),
+                      "the `…` should open the row's own menu")
+        capture("09-session-row-menu")
+        app.dismissAnyMenu()
+
+        XCTAssertTrue(app.buttons["sessions.more"].waitForExistence(timeout: 8),
+                      "pressing the `…` must leave the list on screen — a `…` that also opened "
+                      + "the session would be worse than the arrow it replaced")
+        XCTAssertTrue(app.buttons[identifier].exists, "with the row still on it")
+    }
+
+    /**
+     * The menu's Close asks the same question the swipe asks, and Cancel means it.
+     *
+     * Both doors set the same value and the confirmation is the only thing that
+     * closes anything. A menu wired straight through to `closeSession` while the
+     * swipe asked first would be two verbs sharing one word, which is the shape
+     * `testTheMenusForgetAsksTheSameQuestionAsTheSwipe` pins for machines.
+     *
+     * It **skips** where the item is absent rather than failing: a machine that
+     * never advertised `close` gets no Close at all, in the menu or on the swipe,
+     * and that is the product working.
+     */
+    func testTheRowsMenuClosesThroughTheSameConfirmationTheSwipeDoes() throws {
+        try openTheSessionList()
+        let row = firstSessionRow()
+        try XCTSkipUnless(row.waitForExistence(timeout: 12),
+                          "nothing is running on the machine, so there is no row to press")
+        let identifier = row.identifier
+
+        let dots = rowMenuButton()
+        XCTAssertTrue(dots.waitForExistence(timeout: 8))
+        dots.tap()
+
+        let close = app.buttons["Close"].firstMatch
+        try XCTSkipUnless(close.waitForExistence(timeout: 5),
+                          "this machine never advertised `close`, so the item is correctly absent")
+        close.tap()
+
+        let confirm = app.alerts.firstMatch.buttons["close.confirm"].firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5),
+                      "Close from the menu asks before it does anything, exactly as the swipe does")
+        capture("10-session-row-menu-close")
+        app.alerts.firstMatch.buttons["Cancel"].firstMatch.tap()
+
+        XCTAssertTrue(app.buttons[identifier].waitForExistence(timeout: 10),
+                      "declining should leave the session running and listed")
+    }
+
     // MARK: - The machines
 
     /**
@@ -552,9 +653,25 @@ final class SwipeActionsUITests: XCTestCase {
 
     /// The first session card. By prefix, and excluding the swipe buttons, which
     /// carry the same session id inside a longer identifier.
+    ///
+    /// The row's `…` needs no exclusion here and that is not luck: it is
+    /// `sessions.row.more.<id>` rather than `session.more.<id>` precisely so that
+    /// it cannot land in this query or in the fifteen others in this target that
+    /// find a row the same way and then take element zero. `SessionListView`
+    /// carries the argument.
     private func firstSessionRow() -> XCUIElement {
         app.buttons
             .matching(NSPredicate(format: "identifier BEGINSWITH 'session.' AND NOT identifier CONTAINS 'swipe'"))
+            .firstMatch
+    }
+
+    /// The `…` on the first session row. By prefix, because the identifier
+    /// carries a session id no test can know — the same shape this suite uses for
+    /// the machines list's own `…`, and `descendants(matching: .any)` for the
+    /// same reason `swipeAction` uses it.
+    private func rowMenuButton() -> XCUIElement {
+        app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'sessions.row.more.'"))
             .firstMatch
     }
 

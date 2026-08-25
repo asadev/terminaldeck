@@ -631,6 +631,7 @@ struct TerminalScreen: View {
             // that is about a session the two calls above have just pointed the
             // bar at.
             landChatFirstOnTheCopilotStack()
+            askWhatTheMachinesBrowserHasOpen()
         }
         .onDisappear {
             bridge.onCopy = nil
@@ -888,6 +889,8 @@ struct TerminalScreen: View {
                             .accessibilityIdentifier("terminal.controls")
                         }
 
+                        attachSection
+
                         Divider()
 
                         /*
@@ -1008,6 +1011,86 @@ struct TerminalScreen: View {
                     .accessibilityLabel("Session actions")
                     .accessibilityIdentifier("terminal.actions")
                 }
+    }
+
+    /**
+     * **Attach a browser window to this session, from inside the session.**
+     *
+     * > *"here we also don't have anything, like inside here, in the three dots,
+     * > we should have the options to click on something, and then all the
+     * > folders will come up, maybe here also. So we can connect the browser,
+     * > whichever browser we want to connect into the session."*
+     *
+     * The verb is `HostLink.bindMachineWindow`, which is the one the Browser
+     * tab's window settings press and the one the session row's `…` presses.
+     * Nothing is invented here; what was missing was a place to press it from
+     * while you are sitting in the session watching an agent that needs a page.
+     *
+     * ## Three things it has to get right, and each is a rule rather than a taste
+     *
+     *  - **Absent, not disabled.** A machine that will not be driven refuses the
+     *    bind at the source, and one with nothing open has nothing to offer. Both
+     *    come back as an empty list from `SessionWindowPicker.attachable`, and an
+     *    empty section is not drawn at all. See `attachableWindows`.
+     *  - **The one this session holds wears a checkmark**, rather than being left
+     *    out. A picker that hides the current answer is one somebody presses again
+     *    to find out.
+     *  - **A window another session holds says so**, because attaching **moves**
+     *    it and moves it silently. `SessionWindowPicker.row` is the sentence, and
+     *    it is the same sentence the session row's menu says.
+     *
+     * A bind is also what pops `SessionPageView` open over the terminal, because
+     * the answer to a bind is the window list and that pane opens the moment it
+     * finds a window that is this session's. That is the point of pressing this,
+     * not a side effect to suppress.
+     */
+    @ViewBuilder
+    private var attachSection: some View {
+        let windows = attachableWindows
+        if !windows.isEmpty {
+            Section("Attach a browser window") {
+                ForEach(windows) { window in
+                    Button {
+                        host?.bindMachineWindow(window.id, to: sessionID)
+                    } label: {
+                        Label(SessionWindowPicker.row(window, session: sessionID),
+                              systemImage: SessionWindowPicker.holds(window, session: sessionID)
+                                  ? "checkmark" : "macwindow")
+                    }
+                }
+            }
+        }
+    }
+
+    /// The machine's open windows, or nothing at all where nothing may be
+    /// offered. `SessionWindowPicker` owns the rule so this screen and the
+    /// session row cannot come to disagree about it.
+    private var attachableWindows: [MachineWindow] {
+        SessionWindowPicker.attachable(host?.machineBrowser?.windows,
+                                       canDrive: host?.canDriveBrowser == true)
+    }
+
+    /**
+     * Ask what the machine's browser has open, once, on the way in.
+     *
+     * `browser.window.rows` is **answer-only**: it is built for a request and
+     * there is no push for it anywhere on this wire, so a menu that did not ask
+     * would be empty the first time it was opened, every time.
+     *
+     * Guarded on nothing having landed yet, because the pane above this screen
+     * asks too — `SessionPageView` reads it on appear and again on every
+     * `browser.surfaces.rows` push, which is the frame that says the machine's
+     * browser moved. That covers a window opened while somebody sits here. This
+     * is the first answer, and the guard is what keeps the two from sending the
+     * same small question twice on every arrival.
+     *
+     * It is written here rather than left to the pane on purpose: a menu whose
+     * contents depend on a side effect in a **different view** is a menu that
+     * empties itself the day somebody edits that view.
+     */
+    private func askWhatTheMachinesBrowserHasOpen() {
+        guard host?.machineBrowser == nil else { return }
+        host?.readMachineWindows()
     }
 
     /**
