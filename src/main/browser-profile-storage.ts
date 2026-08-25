@@ -276,6 +276,18 @@ export async function clearProfileStorage(input: {
   profileId: string
   /** The partition string, for the Electron spelling of the same profile. */
   partition: string
+  /**
+   * The removal itself. Injected only so a test can make it fail.
+   *
+   * The `held` outcome — *"something on this machine still has those files
+   * open"* — is the one this whole module exists to be able to report, and it
+   * was proved with a `chmod 0o555` on the parent directory. **Windows ignores
+   * POSIX mode bits**, so on the Windows runner the removal succeeded, the
+   * outcome was `cleared`, and the test failed on a machine where the product
+   * was behaving correctly. Simulating a locked file through the filesystem is
+   * not portable; simulating it here is.
+   */
+  remove?: (dir: string) => Promise<void>
 }): Promise<ProfileClear> {
   const candidates = profileDirCandidates(input)
   if (candidates.length === 0) {
@@ -300,7 +312,7 @@ export async function clearProfileStorage(input: {
   }
 
   for (const dir of present) {
-    await rm(dir, { recursive: true, force: true }).catch(() => undefined)
+    await (input.remove?.(dir) ?? rm(dir, { recursive: true, force: true })).catch(() => undefined)
   }
 
   const left = present.filter((dir) => existsSync(dir))

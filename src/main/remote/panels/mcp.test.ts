@@ -53,14 +53,37 @@ function server(over: Partial<McpServerConfig> = {}): McpServerConfig {
  * and a unit test that spawns `/bin/sh -lc` to answer a question about a text
  * field is a unit test that fails on a busy machine.
  */
+/**
+ * The CLI, recorded rather than run — and recorded **as a command line**.
+ *
+ * `args` alone is not portable and Windows CI proved it: `mcp-add.ts` launches
+ * through `cmd.exe /c claude …` on Windows, because `claude` is a `.cmd` shim
+ * and `execFile` cannot run one, so the same press arrives here as
+ * `['/c', 'claude mcp remove --scope user mine']` instead of
+ * `['mcp', 'remove', '--scope', 'user', 'mine']`. Two tests asserted the POSIX
+ * shape and failed on a machine where the product was behaving correctly.
+ *
+ * `line` is what every assertion reads: the whole invocation with the launcher
+ * and the program name taken off, so it says what was *asked for* on either
+ * platform. `file` and `args` are still recorded, for the one test that is about
+ * the launcher itself.
+ */
 function cli() {
-  const calls: { args: string[]; cwd: string }[] = []
+  const calls: { file: string; args: string[]; line: string; cwd: string }[] = []
   return {
     calls,
     writes: {
       path: async () => '/usr/bin',
-      exec: async (_file: string, args: string[], options: { cwd: string }) => {
-        calls.push({ args, cwd: options.cwd })
+      exec: async (file: string, args: string[], options: { cwd: string }) => {
+        // `cmd /c "claude mcp …"` is one argument carrying the whole line;
+        // everywhere else the program is `file` and `args` is already the line.
+        const whole = args[0] === '/c' ? (args[1] ?? '') : args.join(' ')
+        calls.push({
+          file,
+          args,
+          line: whole.replace(/^claude\s+/, ''),
+          cwd: options.cwd,
+        })
         return { stdout: '', stderr: '' }
       },
     } satisfies McpPanelDeps['writes'],
@@ -216,8 +239,8 @@ describe('adding a server', () => {
     })
 
     expect(spawn.calls).toHaveLength(1)
-    expect(spawn.calls[0].args).toContain('project')
-    expect(spawn.calls[0].args.join(' ')).toContain('mcp add --scope project files --')
+    expect(spawn.calls[0].line).toContain('--scope project')
+    expect(spawn.calls[0].line).toContain('mcp add --scope project files --')
     /*
      * `normalize`, not the literal. `resolveRequest` canonicalises the path for
      * the machine it runs on, and on Windows that rewrites the separators — the
@@ -238,7 +261,7 @@ describe('adding a server', () => {
       fields: { name: 'files', command: 'npx -y @me/thing', scope: 'user', 'env.4': 'API_KEY=fresh' },
     })
 
-    expect(spawn.calls[0].args.join(' ')).toContain('-e API_KEY=fresh')
+    expect(spawn.calls[0].line).toContain('-e API_KEY=fresh')
   })
 
   it('asks for a command or a URL rather than naming only the command box', async () => {
@@ -311,10 +334,12 @@ describe('editing a server', () => {
     })
 
     // An edit is a remove and then an add, because the CLI that owns the file
-    // has no replace.
-    expect(spawn.calls.map((call) => call.args[1])).toEqual(['remove', 'add'])
-    expect(spawn.calls[1].args.join(' ')).toContain('-e API_KEY=secret-value')
-    expect(spawn.calls[1].args.join(' ')).toContain('-- npx -y @me/thing --verbose')
+    // has no replace. Read off the command line rather than off `args[1]`: on
+    // Windows the whole invocation is one argument behind `cmd /c`, so that
+    // index is the program's name there and the verb here.
+    expect(spawn.calls.map((call) => call.line.split(' ')[1])).toEqual(['remove', 'add'])
+    expect(spawn.calls[1].line).toContain('-e API_KEY=secret-value')
+    expect(spawn.calls[1].line).toContain('-- npx -y @me/thing --verbose')
   })
 
   it('drops a variable whose box was cleared', async () => {
@@ -328,8 +353,8 @@ describe('editing a server', () => {
       fields: { name: 'mine', command: 'npx -y @me/thing', url: '', scope: 'user', 'env.4': '' },
     })
 
-    expect(spawn.calls[1].args).not.toContain('-e')
-    expect(spawn.calls[1].args.join(' ')).not.toContain('API_KEY')
+    expect(spawn.calls[1].line).not.toContain('-e ')
+    expect(spawn.calls[1].line).not.toContain('API_KEY')
   })
 
   it('answers a row that is gone with a sentence rather than a write', async () => {
@@ -360,7 +385,7 @@ describe('removing a server', () => {
 
     const view = await act(panel, { path: AT, action: 'remove', id: 'user:mine', fields: {} })
 
-    expect(spawn.calls[0].args.join(' ')).toBe('mcp remove --scope user mine')
+    expect(spawn.calls[0].line).toBe('mcp remove --scope user mine')
     expect(view.notice).toContain('mine')
   })
 

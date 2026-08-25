@@ -4,6 +4,10 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import type { AddressInfo, Socket } from 'node:net'
+// The machine's own word for itself — `Mac` here, `PC` on the Windows runner.
+// Composed rather than spelled, so an assertion about a sentence the product
+// builds cannot be right on one platform and wrong on another.
+import { currentPlatform, machineNoun } from '../platform/host'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   CAPABILITIES,
@@ -1927,13 +1931,20 @@ describe('closing', () => {
     // Same sentence as any other refusal: which of the two happened is not a
     // remote caller's business.
     //
-    // The wording names the machine rather than "the desktop app" since
-    // 2026-08-24 — a headless server has no desktop app, and telling somebody
-    // holding a phone to open one is a dead end. What this case actually
-    // guards is unchanged and is asserted below: the sentence must not say
-    // *revoked*.
+    /*
+     * The wording names the machine rather than "the desktop app" since
+     * 2026-08-24 — a headless server has no desktop app, and telling somebody
+     * holding a phone to open one is a dead end. What this case actually guards
+     * is unchanged and is asserted below: the sentence must not say *revoked*.
+     *
+     * The noun is **composed from the same call the product makes**, because it
+     * is the running machine's own word: `Mac` here, `PC` on the Windows runner.
+     * Spelling it out passed on a Mac and failed in CI on a machine where the
+     * product was behaving perfectly — the sixth shape of Mac-only test this
+     * repository has shipped.
+     */
     expect(error.t === 'error' && error.message).toBe(
-      'This device is not allowed in. Pair it again from the app on that Mac.',
+      `This device is not allowed in. Pair it again from the app on that ${machineNoun(currentPlatform())}.`,
     )
     expect(error.t === 'error' && error.message).not.toMatch(/revok/i)
     await expect(client.closed).resolves.toBe(CLOSE.policyViolation)
@@ -2219,7 +2230,7 @@ describe('pairing, against the real trust store', () => {
     // "revoked" and "never heard of you" have to read the same from outside, or
     // the refusal is an oracle for which device ids are real.
     expect(after.ok === false && after.message).toBe(
-      'This device is not allowed in. Pair it again from the app on that Mac.',
+      `This device is not allowed in. Pair it again from the app on that ${machineNoun(currentPlatform())}.`,
     )
   })
 })

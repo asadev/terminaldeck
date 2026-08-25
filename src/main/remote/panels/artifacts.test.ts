@@ -1,3 +1,4 @@
+import { join, sep } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import type { Artifact, ArtifactList, ListArtifactsOptions } from '../../artifacts'
 import type { ArtifactPreviews, PreviewHandle } from '../../artifact-preview'
@@ -32,7 +33,20 @@ import {
 const NOW = Date.UTC(2026, 7, 24, 12, 0, 0)
 const HOUR = 60 * 60 * 1000
 
-const HERE = '/work/deck'
+/*
+ * The project root these fixtures hang off, **built with the platform's own
+ * separator**.
+ *
+ * A literal `'/work/deck'` was fine on a Mac and wrong on Windows: `rowIdFor`
+ * composes the absolute path with `join`, so the answer came back
+ * `\work\deck\…` while the assertion still said `/work/deck/…`. Windows CI
+ * caught both, which is what it is for — the same shape of Mac-only test that
+ * has blocked a release twice before.
+ */
+const HERE = join(sep, 'work', 'deck')
+
+/** That root as the platform writes it, for an assertion about a whole path. */
+const at = (...parts: string[]): string => join(HERE, ...parts)
 
 function artifact(over: Partial<Artifact> & { relPath: string }): Artifact {
   return {
@@ -416,7 +430,7 @@ describe('what a row says it is', () => {
 
   it('keeps the absolute path last, so a name with a space in it survives', () => {
     const id = rowIdFor(artifact({ relPath: 'design notes/read me.md' }), HERE, null)
-    expect(readId(id).path).toBe('/work/deck/design notes/read me.md')
+    expect(readId(id).path).toBe(at('design notes', 'read me.md'))
     expect(readId(id).kind).toBe('text')
   })
 })

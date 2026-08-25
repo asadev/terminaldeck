@@ -246,20 +246,26 @@ describe('clearing a profile', () => {
   it('does not call a removal that left files behind a clear', async () => {
     /*
      * The check the broken version had no equivalent of: the disk is looked at
-     * **after** the removal. This is the Windows case in the shape a Mac can
-     * produce — a directory whose parent refuses the unlink — and the answer has
-     * to name it rather than report the call that was made.
+     * **after** the removal, so a removal that reported success while leaving
+     * the cookies where they were cannot be reported as a clear.
+     *
+     * The failure is injected rather than staged on the filesystem. It was
+     * staged, with `chmod 0o555` on the parent — and **Windows ignores POSIX
+     * mode bits**, so on the Windows runner the files were removed, the outcome
+     * was `cleared`, and this failed on a machine where the product was doing
+     * exactly the right thing. A removal that silently does nothing is the
+     * behaviour under test; which syscall refused is not.
      */
-    if (process.getuid?.() === 0) return // root ignores the permission bits
     const dir = headlessProfileDir(userData, DEFAULT_PROFILE_ID)
     mkdirSync(dir, { recursive: true })
     writeFileSync(join(dir, 'Cookies'), 'a session token')
-    chmodSync(join(userData, 'Partitions'), 0o555)
 
     const outcome = await clearProfileStorage({
       userData,
       profileId: DEFAULT_PROFILE_ID,
       partition: DEFAULT_PARTITION,
+      // Answers, removes nothing — a file held open, on any platform.
+      remove: async () => undefined,
     })
 
     expect(outcome.state).toBe('held')
