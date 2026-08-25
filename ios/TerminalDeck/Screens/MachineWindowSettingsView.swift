@@ -1,90 +1,146 @@
 /**
- * The settings of one window: whose cookies it gets, which session owns it, what
- * it looks like, and what it recorded.
+ * **The settings of one browser window — one screen, one title, one order of
+ * cards, whichever machine is drawing the pixels.**
  *
  * > *"When we click on three dots then we can see the settings — per window
  * > also, inside the window: settings of per window, how to connect to it, how
  * > to make it shared or isolated, all of these things should be inside of the
  * > window."*
  *
- * That sentence is the whole specification of this file. The Browser tab's home
- * lists windows and nothing else; a row's `…` carries only what you do to a
- * window from outside it — close, archive, connect to a session; and everything
- * *about* a window is here, reached from inside the window.
+ * That sentence is what this file is for. The Browser tab's home lists windows
+ * and nothing else; a row's `…` carries only what you do to a window from
+ * outside it; and everything *about* a window is here.
  *
- * ## Two placements, one implementation
+ * ## What he said the second time, which is what this round rebuilt
  *
- * `pushed` says which. On a window the machine is casting, `MachineWindowView`
- * is the live page and this is a screen behind the `…` on its bar. On a window
- * it will not cast, there is no page to be, so this **is** the body of that
- * screen. The same cards either way — a settings screen that dropped a control
- * because of how it was reached would be two products.
+ * > *"on Windows side so we have two separate kind of pages Windows page,
+ * > windows settings and page settings both are like for the browser window I
+ * > don't know why do you call one of them as page one of them as window since
+ * > they both do the same thing … if it is open in local in this machine it is
+ * > like page setting and if it is open in other server machine it calls as
+ * > window it should not be like that"*
  *
- * The one thing that differs is the line at the top. Where this is the body, it
- * says the machine is not offering this window for watching, because that is why
- * you are looking at cards instead of at a page. Where it is pushed, the page is
- * one Back away and saying so would be noise.
+ * > *"why do we even have two different than different versions of the browser
+ * > settings and page setting kind of thing window setting thing. Why not like
+ * > one name title should be same everything"*
  *
- * And it says it **only when the machine advertises `watch` at all**. A host that
- * never offered a cast — every shipped build before this wave, and the public
- * demo box, which passes no `screencast` engine on purpose — is not withholding
- * anything, and a sentence about a cast there is an apology for a feature that
- * was never on the table.
+ * He is right and the two screens were not even close to each other. A window on
+ * the machine drew *Window settings* over Isolation, Session, Screenshot, Click
+ * flow, Close. A page on this phone drew *Page settings* over This page,
+ * Session, Screenshot, Open somewhere else, Close — a different name, a
+ * different first card, a card in the middle that existed nowhere else, and no
+ * recorder at all. A page the machine casts without listing as a window drew a
+ * third thing again: three cards, two of them a paragraph of apology.
  *
- * ## And the third shape: a page the machine has no window row for
+ * **So there is one screen now.** One title. Six cards, in this order, on every
+ * shape a browser window can come in:
  *
- * `MachineWindowView` is the one browser-window screen now — the machine's own
- * front tab opens it too — so the `…` on its bar reaches this screen for a page
- * that is in `browser.surfaces` and in no window list at all. Most controls here
- * are a `browser.window.*` verb addressed by a window id, and
- * `src/main/remote/protocol.ts` refuses an empty one on every member of that
- * family, so those cannot be put on the wire for that page.
+ *  1. **Window** — what it is, where it is drawn, and what state it is in.
+ *  2. **Isolation** — whose cookies it gets.
+ *  3. **Session** — which agent can drive it.
+ *  4. **Screenshot** — photograph it, and hand the picture to a session.
+ *  5. **Click flow** — record what is clicked on it.
+ *  6. **Close** — end it.
  *
- * > *"there is no way to attach this one too. So it should be the same case, or
- * > all the options should be available at least."*
+ * Every card is drawn for every shape. A card that cannot act on this particular
+ * window is **greyed in its place**, with the reason on its section's ⓘ — never
+ * missing, and never a paragraph on the screen. `cards` is six calls in a fixed
+ * order and each of those six switches inside itself, which is the structural
+ * guarantee: there is no branch of this file that can draw a differently shaped
+ * screen from another branch, because there is no branch that decides which
+ * cards exist.
  *
- * **Attaching is not one of them, and that took two rounds to see.** The round
- * that answered him drew both controls dead under one line about window ids, and
- * the line was doing too much work: closing has to name the window that exists,
- * and attaching does not. `browser.window.open` takes an *address* and carries a
- * session, so this page's own address — which this screen is already drawing —
- * opens a new window over there and binds *that*. So the attach is live wherever
- * there is an address to re-open, in both places a page like this can be reached
- * from, and Close is what stays dead with the id reason. See `noWindowCards`.
+ * ## Where the page really is, is one line rather than a different screen
  *
- * Isolation, the screenshot and the click flow are named in that reason and are
- * not drawn, and that is not the rule being bent twice: each of those cards is
- * built out of a **fact** — shared or isolated, which profile, whether a
- * recording is running — that the machine has never reported for a page with no
- * window row. A dead button is honest; a card labelled *Shared* about a page
- * nobody said that of is invented data.
+ * A page this phone is drawing is not a window in the machine's browser, and
+ * that fact changes what four of these cards can do. It is said once, as a mark
+ * on the Window card — **On this phone** — and after that it is a reason on the
+ * ⓘ of whichever card it limits. It is not a different title, a different order,
+ * or a card that only that shape has.
  *
- * ## And the fourth shape: a page **this phone** is drawing
+ * ## Every row is a title, and that is all
  *
- * > *"all of them should be identical, and all of them should have all the
- * > options. Should not be that much of difference in all of them."*
+ * > *"you are giving too much space to the options to the features so all the
+ * > list and drop downs becoming too bigger because the you are also putting so
+ * > much of a description under the title of that thing under the title of the
+ * > feature instead of just i button or nothing maybe so they have becomes too
+ * > big you should compact all the features or buttons and without losing any of
+ * > them"*
  *
- * A page opened over a tunnel had no settings screen at all. Its row on the
- * Browser tab opened the page; the page had no `…`; and everything a window on
- * the machine could be asked for was simply somewhere that kind of window did
- * not go. Reached now from that row's `…` — `phoneTab` carries the tab's id and
- * `windowID` is empty, because there is no window on the machine to name.
+ * > *"many of the even buttons. Are so much of confusing I can't understand what
+ * > they mean"*
  *
- * The rule for it is the rule for the shape above, applied honestly rather than
- * defensively: work out which controls can **really** act on a page this phone
- * renders, and build those. Four can — attach (by opening the same address on
- * the machine and binding *that* window), photograph with a note and hand it to
- * a session, open it in the machine's browser, and close it. One cannot: the
- * click-flow recorder is the machine's, watching the machine's own browser, so
- * it is left out with the reason on the ⓘ rather than drawn dead. See
- * `phonePageCards`.
+ * Every row on this screen used to carry a second grey line explaining it —
+ * *"Signed in the way DESKTOP-DDGMNCV is."*, *"Signed into nothing, and
+ * forgotten when the window closes."*, *"The page stays open here, untouched.
+ * What the session gets is …"*. He read those and could not tell the options
+ * apart, which is the tell: a row that needs a sentence is a row with the wrong
+ * name on it.
  *
- * ## What is deliberately not here
+ * So a row is its title and nothing else, the title is three or four words he
+ * can point at, and the sentence that used to sit under it is on the section's
+ * ⓘ where it can be read once by whoever wants it. Nothing was deleted — every
+ * fact those lines carried is on an ⓘ, and the ⓘ is also the VoiceOver hint of
+ * the control it belongs to, so nothing was lost for a screen reader either.
  *
- * The address and the four page verbs. They are on `MachineWindowView`'s bar,
- * where a browser keeps them and where the page they act on is. Drawing them
- * here as well would be two sets of the same four buttons on two screens, which
- * is exactly how the Browser tab ended up with two lists of one thing.
+ * ## The four shapes a browser window comes in, and why they are shapes and not
+ * screens
+ *
+ * `WindowShape` resolves them once, at the top, off the live model:
+ *
+ *  - **A window on the machine.** Everything works.
+ *  - **A page this phone is drawing** over a tunnel — `phoneTab` carries the
+ *    tab's id and `windowID` is empty, because there is no window on the machine
+ *    to name. Isolation cannot convert it (it is not in that browser) so the
+ *    card offers the move that puts it there; everything else is real, including
+ *    the recorder — see below.
+ *  - **A page the machine is casting that its window list does not name** — the
+ *    machine's own front tab, which `openTab` mints no shell id for. Most
+ *    `browser.window.*` verbs are addressed by a window id and
+ *    `src/main/remote/protocol.ts` refuses an empty one on every member of that
+ *    family, so those cards are greyed. Attaching is the exception and it took
+ *    two rounds to see: `browser.window.open` takes an **address** and carries a
+ *    session, so this page's own address opens a new window over there and binds
+ *    *that*.
+ *  - **A page this phone had, that has since been closed.** One line, because
+ *    nothing pops this screen.
+ *
+ * ## The recorder follows a page on this phone now
+ *
+ * > *"you are giving record flow button in the windows side the server side it
+ * > and you are not giving that into the if they are browsing locally in this
+ * > machine. So there are so many differences if they both are capable for a
+ * > feature why don't they both have."*
+ *
+ * The last round argued the click recorder could not follow: it is the machine's
+ * recorder (`src/main/browser-steps.ts`) watching the machine's own browser. The
+ * premise was true and the conclusion was wrong — the phone owns a real
+ * `WKWebView`, so the phone can watch its own page. `PhoneClickFlow` does that
+ * and this screen draws it through exactly the same step rows the machine's
+ * recorder gets, so the two look identical because they *are* the same list.
+ *
+ * ## A screen that contradicted itself, and how it was allowed to
+ *
+ * His screenshot of *Window settings* has the banner **"This machine's browser
+ * cannot record a click flow."** with a live blue **"Record the click flow"**
+ * eleven points underneath it. One of the two was lying, and it was the button.
+ *
+ * The mechanism, traced end to end: this screen asks `browser.window.steps` on
+ * appear. A host with no recorder answers that — and `record.on`/`record.off` —
+ * with `rows("This machine's browser cannot record a click flow.")`
+ * (`src/main/remote/browser-control.ts`, and the headless host says the same
+ * sentence). That lands as `MachineBrowserState.notice`, which the banner draws.
+ * The card underneath was drawn unconditionally, because nothing on the wire
+ * says *this machine has a recorder* — there is no capability field for it, and
+ * a refusal only exists as a sentence in a notice.
+ *
+ * So the sentence is what this screen listens to. `recorderRefused` latches the
+ * moment the machine says it, the card greys with that reason on its ⓘ, and the
+ * banner stops repeating a fact that is now attached to the control it is about.
+ * Matching a sentence across the wire is a real coupling and it is written down
+ * rather than hidden: the phrase is one constant, it is matched as a substring
+ * so the host may reword the rest of the line, and the honest fix is a capability
+ * field — which is not this lane's file to add.
  *
  * ## The two screenshots are deliberately not one control
  *
@@ -99,20 +155,19 @@
  * case — look at it — a two-step, and would hide the fact that the interesting
  * case is the one where this phone receives nothing at all.
  *
- * The session picker is therefore on that card rather than a screen away, which
- * is what his sentence asks for: *whatever session we want to send*.
- *
  * ## It holds an id, never a window
  *
  * Every verb on this family answers with the **whole** window list, so a
  * `MachineWindow` captured when this screen appeared is stale the moment
  * anything on it is pressed — a binding made here would leave the slot badge
  * showing the old answer. The id is stable and the row is looked up on every
- * redraw.
+ * redraw. The same rule is why `phoneTab` is a tab **id**: a tab's title and
+ * path move under it as the page navigates.
  *
- * Nothing here dismisses itself either, including Close: `MachineWindowView`
- * owns the single watcher that pops the pair of them when the window leaves the
- * machine's list. One watcher, because two would race to pop the same stack.
+ * Nothing here dismisses itself except Close on a page this phone owns — see
+ * `closeCard`. `MachineWindowView` owns the single watcher that pops the pair of
+ * screens when a machine window leaves the list. One watcher, because two would
+ * race to pop the same stack.
  */
 
 import SwiftUI
@@ -123,8 +178,10 @@ struct MachineWindowSettingsView: View {
     let model: DeckModel
     let windowID: String
     /// Whether this is its own screen, pushed from the `…` on a window that is
-    /// being cast — or the body of the window's screen, on one that is not. See
-    /// the header.
+    /// being cast — or the body of the window's screen, on one that is not. It
+    /// decides the title and the banner and **nothing else**: the cards are the
+    /// same six either way, which is the whole of *"one name title should be
+    /// same everything"*.
     let pushed: Bool
 
     /**
@@ -135,14 +192,11 @@ struct MachineWindowSettingsView: View {
      * not a `MachineWindow`: a tab's title and path move under it as the page
      * navigates, and a value captured when this screen appeared would name the
      * page somebody left two taps ago. It is resolved on every redraw.
-     *
-     * A default so the two existing call sites in `MachineWindowView` are
-     * untouched — the same shape `MachineBrowserView` uses for its `shelf`.
      */
     var phoneTab: String? = nil
 
     /// Used by exactly one control — Close, on a page this phone is drawing.
-    /// See `phoneCloseCard` for why that one and nothing else.
+    /// See `closeCard` for why that one and nothing else.
     @Environment(\.dismiss) private var dismiss
 
     /// The picture this phone took of its own page, and how that went. See
@@ -170,6 +224,25 @@ struct MachineWindowSettingsView: View {
     /// raw `Data`, so watching the value itself would be a byte-for-byte compare
     /// of a megabyte on every redraw.
     @State private var picture: UIImage?
+
+    /**
+     * Whether **this machine** has told us its browser has no click recorder.
+     *
+     * The fix for the screen that contradicted itself — see the file header for
+     * the whole trace. There is no capability on the wire that says *this
+     * machine can record*; the only evidence is the sentence the host puts in
+     * `browser.window.rows.notice` when it refuses `record.on`, `record.off` or
+     * `browser.window.steps`. This screen asks for steps on appear, so on a host
+     * with no recorder that refusal arrives within one round trip of the screen
+     * opening — which is exactly what his screenshot caught, with the banner
+     * saying it and the button below still lit.
+     *
+     * It **latches** rather than tracking the notice, because a notice is
+     * transient: the next plain window list clears it, and a card that ungreyed
+     * itself a second later would be the same contradiction with a delay on it.
+     * Reset when the machine changes, because it is a fact about one machine.
+     */
+    @State private var recorderRefused = false
 
     private var host: HostLink? { model.current }
     private var state: MachineBrowserState? { host?.machineBrowser }
@@ -204,7 +277,15 @@ struct MachineWindowSettingsView: View {
      * browser at all can still photograph the page and send it.
      */
     private var agentSessions: [RemoteSession] { host?.agentTargets ?? [] }
+
+    /// What the machine's recorder collected for this window.
     private var steps: [RecordedStep] { host?.machineSteps[windowID] ?? [] }
+
+    /// The recorder that watches a page **this phone** is drawing. The seam W6
+    /// is built across: this file draws the card, `PhoneClickFlow` owns the
+    /// watching, and both sides speak in `RecordedStep` so the rows below are
+    /// literally the same rows the machine's flow gets.
+    private var phoneFlow: PhoneClickFlow { .shared }
 
     /// Whether this machine will cast a window back at all — a different
     /// capability from the one every control here is gated on, negotiated in a
@@ -225,21 +306,83 @@ struct MachineWindowSettingsView: View {
         shot.map { "\($0.id)@\($0.at)" }
     }
 
+    /**
+     * The phrase every host uses when it has no click recorder.
+     *
+     * `src/main/remote/browser-control.ts` and `src/headless/machine-browser.ts`
+     * both answer *"This machine's browser cannot record a click flow."* — one
+     * sentence, written twice, and nothing else on the wire carries the fact.
+     * Matched as a **substring** rather than compared whole, so a host that
+     * reworded the rest of the line still greys the card rather than silently
+     * going back to a lit button over a banner denying it.
+     */
+    private static let noRecorderPhrase = "cannot record a click flow"
+
+    /**
+     * The machine's last word, minus the one sentence this screen now says in a
+     * better place.
+     *
+     * A banner repeating *the browser cannot record a click flow* over a card
+     * that is already greyed with that reason on its ⓘ is the same fact twice,
+     * and it is the half of his screenshot that was telling the truth. The
+     * control is where the fact belongs; the banner keeps everything else.
+     */
+    private var visibleNotice: String? {
+        guard let notice = state?.notice, !notice.isEmpty else { return nil }
+        if recorderRefused, notice.localizedCaseInsensitiveContains(Self.noRecorderPhrase) {
+            return nil
+        }
+        return notice
+    }
+
+    /**
+     * Which of the four shapes this is, decided once.
+     *
+     * Resolved at the top and handed to all six cards, rather than each card
+     * asking the model its own question. That is what makes *"one name title
+     * should be same everything"* structural instead of a promise: a card cannot
+     * disagree with another card about what it is looking at, and nothing below
+     * can add a seventh card for one shape only.
+     */
+    private enum WindowShape {
+        /// A window in the machine's browser. Everything works.
+        case machine(MachineWindow)
+        /// A page this phone is drawing over a tunnel.
+        case phone(BrowserTab)
+        /// A page the machine is casting that its window list does not name —
+        /// the machine's own front tab, most of the time.
+        case cast(BrowserSurfaceRow)
+        /// A page this phone had, closed while this screen was up.
+        case gone
+        /// Nothing has landed yet. Not the same answer as *nothing is there*.
+        case unknown
+    }
+
+    private var windowShape: WindowShape {
+        if phoneTab != nil { return tab.map { WindowShape.phone($0) } ?? .gone }
+        if let window { return .machine(window) }
+        if let surface { return .cast(surface) }
+        return .unknown
+    }
+
     var body: some View {
         screen
             .onAppear {
-                // Steps have no push and are not carried on the window list, so
-                // the only way to know what a recording has collected is to ask.
-                // Asked on arrival rather than only when a recording stops,
-                // because a window may already have been recording for ten
-                // minutes before anybody opened this screen.
-                //
-                // Not for a page this phone is drawing: there is no recorder on
-                // it and `windowID` is the empty string, which the host refuses
-                // at the parser on every member of this family. Asking anyway
-                // would put a frame on the wire whose only possible answer is a
-                // refusal.
+                /*
+                 * Steps have no push and are not carried on the window list, so
+                 * the only way to know what a recording has collected is to ask.
+                 * Asked on arrival rather than only when a recording stops,
+                 * because a window may already have been recording for ten
+                 * minutes before anybody opened this screen.
+                 *
+                 * Not for a page this phone is drawing: that flow is
+                 * `PhoneClickFlow`'s, held in this app, and `windowID` is the
+                 * empty string, which the host refuses at the parser on every
+                 * member of this family. Asking anyway would put a frame on the
+                 * wire whose only possible answer is a refusal.
+                 */
                 if phoneTab == nil { host?.readMachineSteps(windowID) }
+                noteRecorder(state?.notice)
                 refreshPicture()
             }
             /*
@@ -252,12 +395,39 @@ struct MachineWindowSettingsView: View {
             .onChange(of: window?.recording) { was, now in
                 if was == true && now == false { host?.readMachineSteps(windowID) }
             }
+            // The only way this phone ever learns the machine has no recorder.
+            // See `recorderRefused`.
+            .onChange(of: state?.notice) { _, now in noteRecorder(now) }
+            // A different machine is a different browser, and its own answer
+            // about whether it can record.
+            .onChange(of: host?.id) { _, _ in recorderRefused = false }
             .onChange(of: shotStamp) { _, _ in refreshPicture() }
     }
 
-    /// The title belongs to whichever screen this is. Pushed, it names what is
-    /// behind the `…`; inline, `MachineWindowView` has already named the window
-    /// and a second title would overwrite it with a less useful one.
+    /// Latch the machine's refusal, if that is what it just said.
+    private func noteRecorder(_ notice: String?) {
+        guard let notice, notice.localizedCaseInsensitiveContains(Self.noRecorderPhrase) else {
+            return
+        }
+        recorderRefused = true
+    }
+
+    /**
+     * **One title, for every shape.**
+     *
+     * > *"Why not like one name title should be same everything"*
+     *
+     * It said *Window settings* over a window on the machine and *Page settings*
+     * over a page on this phone, which is the split he read as two products. It
+     * is a browser window either way — the list calls all three kinds a window,
+     * the row's menu says *Close window*, and the card at the foot of this
+     * screen says *Close this window*. So the title is the plain one that is
+     * true of all of them and it does not branch.
+     *
+     * Only drawn when this is a screen of its own. Inline,
+     * `MachineWindowView` has already named the window and a second title would
+     * overwrite it with a less useful one.
+     */
     @ViewBuilder
     private var screen: some View {
         if pushed {
@@ -273,14 +443,14 @@ struct MachineWindowSettingsView: View {
              * and a second copy would be the same line twice.
              */
             VStack(spacing: 0) {
-                if let notice = state?.notice, !notice.isEmpty {
+                if let notice = visibleNotice {
                     Banner(text: notice, tone: .neutral)
                         .accessibilityIdentifier("browser.machine.window.settingsNotice")
                 }
                 content
             }
             .background(Theme.background)
-            .navigationTitle(phoneTab == nil ? "Window settings" : "Page settings")
+            .navigationTitle("Window settings")
             .navigationBarTitleDisplayMode(.inline)
         } else {
             content
@@ -302,132 +472,122 @@ struct MachineWindowSettingsView: View {
         .scrollDismissesKeyboard(.interactively)
     }
 
+    /**
+     * **The six cards, in one order, for every shape.**
+     *
+     * This is the answer to *"why do we even have two different than different
+     * versions of the browser settings and page setting"*, and it is written as
+     * six unconditional calls on purpose. There is no `if` here that could grow
+     * a seventh card for one shape, and no branch that could reorder them: each
+     * card is handed the shape and decides internally whether it can act — and
+     * where it cannot, it draws itself greyed with the reason on its own ⓘ
+     * rather than disappearing.
+     *
+     * The two states that are not a window at all are the exceptions and they
+     * are exceptions to *there being a window*, not to the order: a page that
+     * has been closed has nothing to configure, and a list that has not landed
+     * is not the same answer as an empty one.
+     */
     @ViewBuilder
     private var cards: some View {
-        if phoneTab != nil {
-            phonePageCards
-        } else if let window {
-            notWatchable
-            isolationCard(window)
-            sessionCard(window)
-            screenshotCard
-            recordingCard(window)
-            closeCard(window)
-        } else if surface != nil {
-            noWindowCards
-        } else {
+        switch windowShape {
+        case .gone:
+            /*
+             * Closed while this screen was up — usually by the Close card,
+             * because nothing else pops this screen.
+             *
+             * `MachineWindowView` owns the one watcher that pops a window's pair
+             * of screens when the machine stops listing it, and there is no such
+             * watcher for a tab this phone owns. Saying the page is gone is
+             * better than popping out from under a thumb.
+             */
+            SchemeSectionCaption("Window")
+            SchemeGroup {
+                plainNote("This page is closed.", id: "browser.phone.page.gone")
+            }
+        case .unknown:
             ProgressView()
                 .controlSize(.regular)
                 .frame(maxWidth: .infinity)
                 .padding(.top, 40)
                 .accessibilityIdentifier("browser.machine.window.settingsLoading")
+        default:
+            windowCard
+            isolationCard
+            sessionCard
+            screenshotCard
+            clickFlowCard
+            closeCard
         }
     }
 
-    /* ---- a page this phone is drawing ------------------------------------- */
+    /* ---- 1. what this window is -------------------------------------------- */
 
     /**
-     * The settings of a page **this phone** is holding open over a tunnel.
+     * **The one card that says which window this is, and where it is drawn.**
      *
-     * > *"all of them should be identical, and all of them should have all the
-     * > options. Should not be that much of difference in all of them."*
+     * It replaces three different first cards: a page on this phone had *This
+     * page* with a title, an address and a mark; a cast with no window row had
+     * *This page* with a paragraph of apology under it; and a window on the
+     * machine had **nothing at all** — it opened straight onto Isolation, so the
+     * two screens did not even begin the same way.
      *
-     * A page like this used to have no settings screen at all: the row on the
-     * Browser tab opened the page, the page had no `…`, and everything a window
-     * on the machine could be asked for was simply somewhere this kind of window
-     * did not go. So the comparison he was making — this row can do four things,
-     * that row can do one — was true, and the honest fix is not to grey four rows
-     * here. It is to work out which of them can **really** be done for a page
-     * this phone renders, and to build those.
+     * Three facts, in the same three places every time: the window's name, its
+     * address, and a row of marks. The marks are where *"if it is open in local
+     * in this machine"* is said — one word-sized capsule, **On this phone** or
+     * **On DESKTOP-X** — rather than a second screen with a second name.
      *
-     * Four can:
+     * ## And the sentence about watching is a mark now
      *
-     *  - **Attach to a session.** Not this page — an agent cannot reach this
-     *    app's own web view and never will. Attaching opens the same address in
-     *    the machine's browser and binds *that* window, in one ask, and the card
-     *    says so in a sentence rather than implying the page moved. Shared or
-     *    isolated, because that is his choice on the `+` and it was being made
-     *    for him here.
-     *  - **Screenshot, with a note, sent to a session.** This phone renders the
-     *    page, so this phone can photograph it. See `PhonePageShot`.
-     *  - **Open in the machine's browser** — the honest analogue of the
-     *    isolation row. There is no shared-or-isolated to convert here because
-     *    the page is not in that browser at all; what there is is the move to
-     *    put it there, which is the same one the new-window sheet offers.
-     *  - **Close this window.** It was already real.
+     * A window the machine will not cast used to get its own card and its own
+     * grey line: *"This machine is not offering this window for watching."* It
+     * was drawn only in the inline shape, which meant the screen behind the `…`
+     * and the screen you land on when there is no `…` had a card between them
+     * that differed. It is **No live picture** here, on the same row as
+     * everything else this window is, and the reason is on this card's ⓘ.
      *
-     * One cannot, and it is left out rather than greyed: the **click-flow
-     * recorder** is the machine's recorder watching the machine's own browser
-     * (`src/main/browser-steps.ts`), and there is nothing for it to watch here.
-     * A dead Record button would be a control that can never work in any state,
-     * which is worse than an absence with a reason — so the reason is on the ⓘ
-     * at the top of the screen, and it names the move that gets him a recording:
-     * open the page over there.
-     *
-     * Nothing here is optimistic. The attach and the open both answer with the
-     * whole window list, which redraws the Browser tab and carries the machine's
-     * own notice; the two acts that leave nothing behind — a picture starting to
-     * upload — hold a line for two and a half seconds saying what was asked, the
-     * same way every other silent act in this app does.
+     * Drawn only where it answers a question somebody is holding — an inline
+     * screen on a machine that casts other windows. A host that never offered a
+     * cast (every shipped build before this wave, and the public demo box, which
+     * passes no `screencast` engine on purpose) is not withholding anything, and
+     * a mark about a cast there is an apology for a feature that was never on
+     * the table.
      */
     @ViewBuilder
-    private var phonePageCards: some View {
-        if let tab {
-            phoneIdentityCard(tab)
-            phoneSessionCard(tab)
-            phoneScreenshotCard(tab)
-            phoneOtherWayCard(tab)
-            phoneCloseCard(tab)
-        } else {
-            /*
-             * Closed while this screen was up — usually by the Close card below,
-             * because nothing pops this screen.
-             *
-             * `MachineWindowView` owns the one watcher that pops a window's pair
-             * of screens when the machine stops listing it, and there is no such
-             * watcher for a tab this phone owns. Saying the page is gone is
-             * better than popping out from under a thumb, and it is what the rest
-             * of this file already does.
-             */
-            SchemeSectionCaption("This page")
-
-            SchemeGroup {
-                plainNote("This page is closed. It is not open on this phone any more.",
-                          id: "browser.phone.page.gone")
-            }
-        }
-    }
-
-    /// What this page is, and where it is being served from. The mark is the
-    /// same one the row on the Browser tab wears, so the two screens agree about
-    /// which machine is drawing the pixels.
-    @ViewBuilder
-    private func phoneIdentityCard(_ tab: BrowserTab) -> some View {
-        SchemeSectionCaption(
-            "This page",
-            about: "a page open on this phone",
-            info: "This page is drawn by this app, over a tunnel to \(machineName). It is not a "
-                + "window in \(machineName)'s browser, so it has its own cookies and its own "
-                + "logins.\n\nEverything on this screen works on it except recording a click "
-                + "flow. That recorder is \(machineName)'s, and it watches \(machineName)'s own "
-                + "browser — it cannot see a page this phone is drawing. Open this address in "
-                + "\(machineName)'s browser, below, and the recorder is on that window.")
+    private var windowCard: some View {
+        SchemeSectionCaption("Window", about: "this window", info: windowInfo)
 
         SchemeGroup {
             VStack(alignment: .leading, spacing: 4) {
-                Text(tab.label)
+                Text(windowTitle)
                     .font(.system(size: 16))
                     .foregroundStyle(Theme.primary)
                     .lineLimit(1)
-                    .accessibilityIdentifier("browser.phone.page.title")
-                Text(phoneAddress(tab))
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(Theme.faint)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .accessibilityIdentifier("browser.phone.page.address")
+                    .accessibilityIdentifier(idPrefix + ".title")
+
+                if !windowAddress.isEmpty {
+                    Text(windowAddress)
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(Theme.faint)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        /*
+                         * `.url` and not `.address`. `BrowserPageBar` names its
+                         * editable field `\(id).address`, and on a window the
+                         * machine will not cast that bar and these cards are the
+                         * **same screen** — two elements answering to one
+                         * identifier, one a text field and one a label. A query
+                         * that did not also filter by element type would pick
+                         * whichever the tree happened to hand back first.
+                         */
+                        .accessibilityIdentifier(idPrefix + ".url")
+                }
+
                 HStack(spacing: 6) {
-                    MachineWindowMark(text: "On this phone", tone: Theme.secondary)
+                    ForEach(windowMarks, id: \.text) { mark in
+                        MachineWindowMark(text: mark.text, tone: mark.tone)
+                            .accessibilityIdentifier(mark.id)
+                    }
                     Spacer(minLength: 0)
                 }
                 .padding(.top, 2)
@@ -438,117 +598,1177 @@ struct MachineWindowSettingsView: View {
         }
     }
 
+    /// A capsule on the Window card. `id` so a mark that is a *state* — being
+    /// watched, not being cast — can be asserted, which a sentence in a
+    /// `ContentUnavailableView` never could.
+    private struct WindowMark {
+        let text: String
+        let tone: Color
+        let id: String
+    }
+
+    /// What this window is called. The page's own title wherever there is one,
+    /// for the reason `MachineWindow.label` prefers it: *Untitled* tells nobody
+    /// which of their windows they are looking at.
+    private var windowTitle: String {
+        switch windowShape {
+        case let .machine(window): return window.label
+        case let .phone(tab): return tab.label
+        case let .cast(surface): return MachineBrowserText.surfaceLabel(surface)
+        case .gone, .unknown: return ""
+        }
+    }
+
+    /// Where it is, as an address. Empty is a real answer — a blank window has
+    /// none — and the row is simply not drawn rather than showing a placeholder
+    /// in the line that says *where you are*.
+    private var windowAddress: String {
+        switch windowShape {
+        case let .machine(window): return window.url == window.label ? "" : window.url
+        case let .phone(tab): return phoneAddress(tab)
+        case let .cast(surface): return surface.url
+        case .gone, .unknown: return ""
+        }
+    }
+
     /**
-     * *"How to connect to it"*, for a page the machine is not showing.
+     * The facts a settings screen cannot leave implicit, as capsules.
      *
-     * The picker is the same picker the machine's windows get and the verb
-     * behind it is the same one — `browser.window.open`, carrying the session so
-     * the host binds before it answers. What is different is the sentence under
-     * it, and that sentence is the whole reason this control is allowed to
-     * exist: the page on this phone does not move, a second window opens on the
-     * machine at the same address, and that window has the machine's cookies.
-     * Somebody signed into a dev server here may not be signed in over there.
-     * A card that said "Attached" and left that out would be the app claiming
-     * something it cannot do.
+     * Whose renderer draws it comes first and is on every shape, because that is
+     * the difference he asked to stop being a different screen. The rest are
+     * states somebody can be left in without meaning to — a recording running, a
+     * window signed into nothing, a page being watched — which is exactly what
+     * the row on the Browser tab marks and for the same reason.
+     */
+    private var windowMarks: [WindowMark] {
+        var marks: [WindowMark] = []
+        switch windowShape {
+        case let .machine(window):
+            marks.append(WindowMark(text: "On \(machineName)", tone: Theme.secondary,
+                                    id: "browser.machine.window.where"))
+            if let slot = window.slot {
+                marks.append(WindowMark(text: slot, tone: Theme.accent,
+                                        id: "browser.machine.window.slot"))
+            }
+            if surface?.live == true {
+                marks.append(WindowMark(text: "Live", tone: Theme.positive,
+                                        id: "browser.machine.window.live"))
+            }
+            if window.isolated {
+                marks.append(WindowMark(text: "Isolated", tone: Theme.secondary,
+                                        id: "browser.machine.window.isolatedMark"))
+            }
+            if window.recording {
+                marks.append(WindowMark(text: "Recording", tone: Theme.critical,
+                                        id: "browser.machine.window.recordingMark"))
+            }
+            /*
+             * The line that used to be a card of its own, and only in one of the
+             * two shapes of this screen. See the card's header: it is drawn only
+             * where the question *why am I looking at settings instead of at the
+             * page* actually exists.
+             */
+            if !pushed && canWatch && surface == nil {
+                marks.append(WindowMark(text: "No live picture", tone: Theme.faint,
+                                        id: "browser.machine.window.notWatchable"))
+            }
+        case let .phone(tab):
+            marks.append(WindowMark(text: "On this phone", tone: Theme.secondary,
+                                    id: "browser.phone.page.where"))
+            if phoneFlow.isRecording(tab: tab.id) {
+                marks.append(WindowMark(text: "Recording", tone: Theme.critical,
+                                        id: "browser.phone.page.recordingMark"))
+            }
+        case let .cast(surface):
+            marks.append(WindowMark(text: "On \(machineName)", tone: Theme.secondary,
+                                    id: "browser.machine.window.where"))
+            if surface.live {
+                marks.append(WindowMark(text: "Live", tone: Theme.positive,
+                                        id: "browser.machine.window.live"))
+            }
+        case .gone, .unknown:
+            break
+        }
+        return marks
+    }
+
+    /**
+     * The ⓘ on the Window card: everything the old first cards said in prose.
      *
-     * ## Two rows, because where that window lands is his choice and was not
+     * Nothing here is new writing. It is the paragraph that used to sit under
+     * *This page*, the sentence that used to be its own card about watching, and
+     * the id explanation that used to head three greyed rows — collected behind
+     * one dot, on the card whose subject they all are.
+     */
+    private var windowInfo: String {
+        switch windowShape {
+        case .machine:
+            var text = "A window in \(machineName)'s browser. It uses \(machineName)'s cookies "
+                + "and whatever it is signed into, unless it is isolated."
+            if !pushed && canWatch && surface == nil {
+                text += "\n\n\(machineName) is not offering this window for watching, which is why "
+                    + "these settings are the screen rather than a live picture. It is a real "
+                    + "state and not a fault: a server offers its own front tab and the windows "
+                    + "its sessions hold, and one opened from the + here can be driven without "
+                    + "being watched."
+            }
+            return text
+        case .phone:
+            return "This page is drawn by this app, over a tunnel to \(machineName). It is not a "
+                + "window in \(machineName)'s browser, so it has its own cookies and its own "
+                + "logins — someone signed into a dev server here may not be signed in over "
+                + "there.\n\nEverything on this screen works on it. Where a control has to act "
+                + "inside \(machineName)'s browser, it opens this same address there as a new "
+                + "window and acts on that one — the page here is never moved or changed."
+        case .cast:
+            let which = windowID.isEmpty
+                ? "This is \(machineName)'s own tab rather than one of its windows."
+                : "\(machineName) is casting this page and its window list does not name it."
+            // The clause about typing an address is kept for the empty-id case
+            // and only for it. The machine's own front tab is where a page
+            // opened from the phone's address bar lands, so an address really is
+            // one of the two things it takes; a cast the window list simply
+            // cannot be joined to takes only the watching, and saying otherwise
+            // would be a sentence offering a control that is not there.
+            let takes = windowID.isEmpty
+                ? "Watching it and typing an address are what it does take."
+                : "Watching it is what it does take."
+            return which + " The machine names each of its windows with an id, and closing, "
+                + "isolating, photographing and recording one are all addressed by that id — so "
+                + "none of those can be sent for this page.\n\n" + takes
+                + " Its address can still be opened on \(machineName) as a new window, and that "
+                + "window has an id and can be attached to a session."
+        case .gone, .unknown:
+            return ""
+        }
+    }
+
+    /// The identifier family this shape's controls belong to. Two prefixes and
+    /// not three: a page this phone draws is its own family because
+    /// `LocalhostUITests` reaches `browser.phone.page.close` by name, and both
+    /// machine shapes have always shared `browser.machine.window.`.
+    private var idPrefix: String {
+        if case .phone = windowShape { return "browser.phone.page" }
+        return "browser.machine.window"
+    }
+
+    /* ---- 2. whose cookies it gets ------------------------------------------ */
+
+    /**
+     * **Which jar this window's cookies land in — the same card on every shape.**
      *
-     * > *"all of them should be identical, and all of them should have all the
-     * > options."*
+     * *"Making a browsing session into an isolated or shared one."*
      *
-     * There was one row and it opened a **shared** window, always. Isolation is
-     * a choice he makes deliberately when he opens a window from the `+` — the
-     * isolated one is signed into nothing and forgets everything when it closes
-     * — and making it silently for him here decided whose cookies the page an
-     * agent is about to drive gets. Two rows now, in the New window sheet's own
-     * words, and neither is hidden behind the other.
+     * On a window in the machine's browser it is convertible in both directions,
+     * and the word on the button is the **destination** rather than the state,
+     * because the state is already the label beside it — a button saying
+     * *Isolated* next to a label saying *Shared* is two readings of the same word
+     * and somebody will press it to find out.
+     *
+     * ## On a page this phone draws, the honest analogue is where it can go
+     *
+     * There is no shared-or-isolated to convert, because the page is not in that
+     * browser at all. What there *is* is the move that puts it there, in either
+     * jar — and that used to be a card called *Open somewhere else* that existed
+     * on one shape of this screen and nowhere else, which is precisely the
+     * *"different versions of the browser settings"* he read. It is this card
+     * now: same position, same caption, same two-row shape, and the rows are the
+     * two places a window can go.
+     *
+     * Both rows, because it is his choice and it was being made for him: the
+     * isolated window is the one signed into nothing, and one row that quietly
+     * opened a shared one decided whose cookies the page an agent is about to
+     * drive gets.
+     *
+     * ## And the rows are names now, not sentences
+     *
+     * They were *"Open in DESKTOP-DDGMNCV's browser"* over *"Signed in the way
+     * DESKTOP-DDGMNCV is."* and *"Open an isolated window on DESKTOP-DDGMNCV"*
+     * over *"Signed into nothing, and forgotten when the window closes."* — four
+     * lines of grey for two controls, and he could not tell them apart. Two
+     * names now; the difference between them is on the ⓘ above, once.
      */
     @ViewBuilder
-    private func phoneSessionCard(_ tab: BrowserTab) -> some View {
-        SchemeSectionCaption(
-            "Session",
-            about: "attaching a page to a session",
-            info: "A session's agent can drive a window in \(machineName)'s browser. It cannot "
-                + "reach a page this phone is drawing — the page is rendered here, in this app."
-                + "\n\nSo attaching opens this same address in \(machineName)'s browser and "
-                + "attaches that window. It gets a slot name — B1, B2 — and the session's tools "
-                + "address it by that name.\n\nThe window can be a shared one, using "
-                + "\(machineName)'s own cookies and logins, or an isolated one that is signed "
-                + "into nothing and is thrown away when it closes.")
+    private var isolationCard: some View {
+        SchemeSectionCaption("Isolation", about: "isolated windows", info: isolationInfo)
 
         SchemeGroup {
-            if canDrive && !sessions.isEmpty {
-                attachMenuRow(title: "Open on \(machineName) and attach",
-                              meaning: "Signed in the way \(machineName) is.",
-                              icon: "link",
-                              id: "browser.phone.page.attach") { session in
-                    attachOnMachine(tab, to: session, isolated: false)
+            switch windowShape {
+            case let .machine(window):
+                HStack(spacing: 10) {
+                    Text(window.isolated ? "Isolated" : "Shared")
+                        .font(.system(size: 16))
+                        .foregroundStyle(Theme.primary)
+                    /*
+                     * The profile as a capsule rather than as a second line
+                     * under the state. It is a **name** — the Chromium partition
+                     * this window runs in — and a name beside the state reads at
+                     * a glance, where the same name underneath it read as one
+                     * more grey explanation.
+                     */
+                    if let profile = window.profile, !profile.isEmpty, !window.isolated {
+                        MachineWindowMark(text: profile, tone: Theme.secondary)
+                    }
+                    Spacer(minLength: 8)
+                    Button {
+                        host?.actOnMachineWindow(windowID, window.isolated ? .share : .isolate)
+                    } label: {
+                        Text(window.isolated ? "Make shared" : "Make isolated")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(Theme.accent)
+                            .padding(.vertical, 4)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("browser.machine.window.isolation")
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 13)
+
+            case let .phone(tab):
+                if canDrive {
+                    actionRow("Open on \(machineName)", icon: "globe",
+                              id: "browser.phone.page.otherWay",
+                              hint: "Opens this address in \(machineName)'s browser, in its own "
+                                  + "profile. The page here is left as it is.") {
+                        host?.openMachineWindow(url: phoneAddress(tab), isolated: false)
+                    }
+
+                    rowDivider(inset: 16)
+
+                    actionRow("Open isolated", icon: "eye.slash",
+                              id: "browser.phone.page.otherWayIsolated",
+                              hint: "Opens this address in \(machineName)'s browser in a partition "
+                                  + "of its own, signed into nothing.") {
+                        host?.openMachineWindow(url: phoneAddress(tab), isolated: true)
+                    }
+                } else {
+                    deadRow("Open on \(machineName)", icon: "globe",
+                            id: "browser.phone.page.otherWay", why: isolationInfo)
+
+                    rowDivider(inset: 16)
+
+                    deadRow("Open isolated", icon: "eye.slash",
+                            id: "browser.phone.page.otherWayIsolated", why: isolationInfo)
                 }
 
-                rowDivider(inset: 16)
+            case .cast:
+                /*
+                 * Greyed rather than absent, and that is the round's rule
+                 * winning over an argument this file used to make. The old code
+                 * left this card out entirely, on the reasoning that a card
+                 * labelled *Shared* about a page the machine never said that of
+                 * would be invented data. The reasoning is right and it only
+                 * ever applied to the **state**: a greyed *Make isolated* claims
+                 * nothing about which jar this page is in, and its absence was
+                 * one more way this shape drew a different screen.
+                 */
+                deadRow("Make isolated", icon: "eye.slash",
+                        id: "browser.machine.window.isolation",
+                        why: "This page has no window id for the machine to isolate.")
 
-                attachMenuRow(title: "Open isolated and attach",
-                              meaning: "Signed into nothing, and forgotten when the window closes.",
-                              icon: "eye.slash",
-                              id: "browser.phone.page.attachIsolated") { session in
-                    attachOnMachine(tab, to: session, isolated: true)
+            case .gone, .unknown:
+                EmptyView()
+            }
+        }
+    }
+
+    /// The ⓘ on Isolation: the difference between the two jars, and — where the
+    /// card is greyed — why. One string, because a control's reason and a
+    /// section's explanation are the same sentence read from two directions.
+    private var isolationInfo: String {
+        let jars = "A shared window uses \(machineName)'s own profile — its cookies and whatever "
+            + "it is signed into. An isolated one gets a partition of its own, and that partition "
+            + "is thrown away when the window closes."
+        switch windowShape {
+        case .machine:
+            return jars
+        case .phone:
+            let head = "This page is not in \(machineName)'s browser, so there is no jar here to "
+                + "move it between. What this card offers is the move that puts the same address "
+                + "there, in either jar. The page on this phone stays exactly as it is — you end "
+                + "up with both.\n\n"
+            return canDrive
+                ? head + jars
+                : head + "\(machineName) is not offering its browser to this phone, so no window "
+                    + "can be opened there.\n\n" + jars
+        case .cast:
+            return "The machine names each of its windows with an id and addresses isolation by "
+                + "it. This page is one the machine's window list does not name, so it cannot be "
+                + "moved between jars from here.\n\n" + jars
+        case .gone, .unknown:
+            return jars
+        }
+    }
+
+    /* ---- 3. which session owns it ------------------------------------------ */
+
+    /**
+     * **Which agent can drive this window** — *"how to connect to it"*, the
+     * headline of this screen and the reason this family exists at all.
+     *
+     * > *"We don't have an option to connect any browsing window to any session,
+     * > so the session knows which browsing window it is working on."*
+     *
+     * A bound window gets a slot name — `B1`, `B2` — and the session's tools
+     * address it by that name, which is why the slot is drawn as an identifier
+     * rather than as a status: it is the word appearing in that agent's
+     * transcript.
+     *
+     * ## The same card for a page the machine is not holding, because there is a
+     * real move
+     *
+     * > *"there is no way to attach this one too. So it should be the same case,
+     * > or all the options should be available at least."*
+     *
+     * An agent cannot reach this app's own web view and never will, and it
+     * cannot address a page the machine's window list does not name. Neither of
+     * those is a reason for an empty card: `browser.window.open` takes an
+     * **address** and carries a session, so this page's own address opens a new
+     * window over there and the host binds *that* one before it answers. One
+     * ask, and the row lands already wearing its slot.
+     *
+     * ## Rows are names; what actually happens is on the ⓘ
+     *
+     * These were the worst offenders on the screen — two menu rows, each with a
+     * grey sentence under it, and a third row underneath that was a whole
+     * paragraph of prose explaining that the page does not move. Three lines of
+     * explanation for two controls. The paragraph is on the ⓘ now, where it is
+     * read once by whoever wants it, and the rows are the two things they do.
+     */
+    @ViewBuilder
+    private var sessionCard: some View {
+        SchemeSectionCaption("Session", about: "attaching a window to a session", info: sessionInfo)
+
+        SchemeGroup {
+            switch windowShape {
+            case let .machine(window):
+                if let slot = window.slot {
+                    HStack(spacing: 10) {
+                        MachineWindowMark(text: slot, tone: Theme.accent)
+                        Text(MachineBrowserText.owner(window) ?? "A session")
+                            .font(.system(size: 16))
+                            .foregroundStyle(Theme.primary)
+                            .lineLimit(1)
+                        Spacer(minLength: 8)
+                        Button {
+                            host?.bindMachineWindow(windowID, to: nil)
+                        } label: {
+                            Text("Detach")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(Theme.critical)
+                                .padding(.vertical, 4)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityHint("The session stops being able to reach this window")
+                        .accessibilityIdentifier("browser.machine.window.detach")
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 13)
+
+                    rowDivider(inset: 16)
                 }
 
-                rowDivider(inset: 16)
+                if sessions.isEmpty {
+                    deadRow(window.isBound ? "Attach to another session" : "Attach to a session",
+                            icon: "link", id: "browser.machine.window.attach", why: sessionInfo)
+                } else {
+                    sessionMenuRow(window.isBound ? "Attach to another session"
+                                                  : "Attach to a session",
+                                   icon: "link",
+                                   id: "browser.machine.window.attach",
+                                   hint: "Hands this window to a session. It gets a slot name — "
+                                       + "B1, B2 — and that session's tools address it by that "
+                                       + "name.",
+                                   chosen: window.session) { session in
+                        host?.bindMachineWindow(windowID, to: session)
+                    }
+                }
 
-                plainNote("The page stays open here, untouched. What the session gets is a new "
-                          + "window on \(machineName) at this address — either way it may not be "
-                          + "signed in the way this page is.",
-                          id: "browser.phone.page.attachNote")
-            } else if canDrive {
-                // No control at all rather than a picker with nothing in it: a
-                // machine running no sessions has nowhere to bind, and the fix is
-                // a session rather than anything on this screen.
-                plainNote("No sessions on \(machineName) to attach it to.",
-                          id: "browser.phone.page.noSessions")
-            } else {
-                deadRow("Open on \(machineName) and attach", icon: "link",
-                        id: "browser.phone.page.attach",
-                        why: "\(machineName) is not offering its browser to this phone, so no "
-                            + "window can be opened there to attach.")
+            case let .phone(tab):
+                attachPair(id: "browser.phone.page.attach",
+                           isolatedID: "browser.phone.page.attachIsolated",
+                           address: phoneAddress(tab))
 
-                rowDivider(inset: 16)
+            case let .cast(surface):
+                attachPair(id: "browser.machine.window.attach",
+                           isolatedID: "browser.machine.window.attachIsolated",
+                           address: MachineBrowserText.reopenable(surface.url))
 
-                deadRow("Open isolated and attach", icon: "eye.slash",
-                        id: "browser.phone.page.attachIsolated",
-                        why: "\(machineName) is not offering its browser to this phone, so no "
-                            + "window can be opened there to attach.")
+            case .gone, .unknown:
+                EmptyView()
             }
         }
     }
 
     /**
-     * One row that offers a place, and hands the session picker over when it is
-     * pressed.
+     * The two rows that hand a **new** window on the machine to a session, for
+     * the two shapes that cannot bind the page they are about.
      *
-     * Two lines rather than one, and the second is not decoration: *Machine* and
-     * *Isolated* mean nothing on their own to somebody who has not read the
-     * sheet, and the whole point of drawing both is that the difference is the
-     * thing being chosen. The words are the New window sheet's own, so the two
-     * places in this app where a window is started cannot come to describe the
-     * same choice differently.
-     *
-     * **The accessibility label is set explicitly**, and that is the trap
-     * `NewWindowSheet.destinationRow` measured and wrote down: a control holding
-     * two `Text`s is read by VoiceOver as both of them joined, so the row would
-     * answer to a sentence rather than to its own name and any test asking for
-     * the name would report it missing while it sat plainly on screen. The
-     * meaning becomes the hint, which is where VoiceOver expects the
-     * explanation of a control anyway.
+     * One builder rather than two copies, because the two shapes reached it a
+     * round apart and the copies had already drifted into describing the same
+     * act with different words. `address` is optional for the one case that
+     * really has nothing to re-open — a blank tab, `about:blank`, or one of
+     * Chromium's own `chrome://` screens, none of which the machine's
+     * `normalizeUrl` will take (`src/main/browser-url.ts` keeps
+     * `ALLOWED_PROTOCOLS` at `http` and `https`).
      */
-    private func attachMenuRow(title: String, meaning: String, icon: String, id: String,
-                               open: @escaping (String) -> Void) -> some View {
+    @ViewBuilder
+    private func attachPair(id: String, isolatedID: String, address: String?) -> some View {
+        if canDrive, !sessions.isEmpty, let address {
+            sessionMenuRow("Attach a window", icon: "link", id: id,
+                           hint: "Opens this address on \(machineName) as a new window and hands "
+                               + "that window to the session. The page here does not move.",
+                           chosen: nil) { session in
+                host?.openMachineWindow(url: address, isolated: false, session: session)
+            }
+
+            rowDivider(inset: 16)
+
+            sessionMenuRow("Attach an isolated window", icon: "eye.slash", id: isolatedID,
+                           hint: "The same, in a window signed into nothing that is thrown away "
+                               + "when it closes.",
+                           chosen: nil) { session in
+                host?.openMachineWindow(url: address, isolated: true, session: session)
+            }
+        } else {
+            deadRow("Attach a window", icon: "link", id: id, why: sessionInfo)
+
+            rowDivider(inset: 16)
+
+            deadRow("Attach an isolated window", icon: "eye.slash", id: isolatedID, why: sessionInfo)
+        }
+    }
+
+    /**
+     * The ⓘ on Session: what a binding is, what the attach really does on a page
+     * the machine is not holding, and — where the rows are greyed — which of the
+     * three things it needs is missing.
+     *
+     * The three reasons are asked in the order they stop the move, so the answer
+     * is the one that is actually true of this machine and this page rather than
+     * a general apology. That ordering is the correction from the round before
+     * last: one sentence about window ids used to head a greyed attach, and it
+     * was the reason an attach that was perfectly possible never got built.
+     */
+    private var sessionInfo: String {
+        let slots = "A bound window gets a slot name — B1, B2 — and the session's tools address "
+            + "it by that name. A session that already holds three windows names the next one B4."
+        switch windowShape {
+        case .machine:
+            return sessions.isEmpty
+                ? "Nothing is running on \(machineName) to attach this window to.\n\n" + slots
+                : slots
+        case .phone, .cast:
+            let what = "An agent cannot reach the page you are looking at — it is drawn here, in "
+                + "this app, or it is a page \(machineName)'s window list does not name. So "
+                + "attaching opens this same address in \(machineName)'s browser and hands that "
+                + "window to the session. The page here stays open and untouched; there will be "
+                + "two pages on that address afterwards, and the one over there has "
+                + "\(machineName)'s cookies, so it may not be signed in the way this one is.\n\n"
+            if !canDrive {
+                return what + "\(machineName) is not offering its browser to this phone, so no "
+                    + "window can be opened there to attach.\n\n" + slots
+            }
+            if case let .cast(surface) = windowShape, MachineBrowserText.reopenable(surface.url) == nil {
+                return what + "This tab has no web address to open again — a blank tab has "
+                    + "nothing to re-open.\n\n" + slots
+            }
+            if sessions.isEmpty {
+                return what + "Nothing is running on \(machineName) to attach a window to.\n\n"
+                    + slots
+            }
+            return what + slots
+        case .gone, .unknown:
+            return slots
+        }
+    }
+
+    /* ---- 4. what it looks like --------------------------------------------- */
+
+    /**
+     * **Photograph it, and choose who gets the photograph** — the same card, in
+     * the same place, on every shape.
+     *
+     * > *"creating a screenshot and sending it to the session, whatever session
+     * > we want to send."*
+     *
+     * Two controls, because they have two outcomes — see the file header. The
+     * note travels only with the second, so the field is drawn only where there
+     * is a session to send to; a field whose contents can never leave the phone
+     * is a control that cannot act.
+     *
+     * ## The two halves are photographed by two different machines
+     *
+     * On a window in the machine's browser this is `browser.window.shot` and the
+     * machine takes the picture. On a page this phone is drawing there is no
+     * such verb to lean on — that page is not in that browser — so this phone
+     * does both halves itself, and the consequence is said on the ⓘ rather than
+     * discovered: it loads the address again in a web view of its own, so what
+     * comes back is the page as it loads now, not the scroll position or the
+     * half-filled form left behind. See `PhonePageShot`.
+     *
+     * ## How a picture from this phone gets into a session
+     *
+     * The sentence goes first, through `sendToAgent`, which attaches the session
+     * when this phone has not opened it — and that ordering is load-bearing
+     * rather than tidy: `HostLink.send(_:into:)` drops the landed path in silence
+     * for a session with no bridge, so a picture sent to a session nobody had
+     * opened would upload perfectly and arrive nowhere. The file follows, and its
+     * path lands in that same prompt when the upload finishes. Nothing is
+     * submitted — the same rule every other *sent to an agent* path in this app
+     * follows, and the reason there is no newline anywhere in it.
+     */
+    @ViewBuilder
+    private var screenshotCard: some View {
+        SchemeSectionCaption("Screenshot", about: "photographing this window", info: screenshotInfo)
+
+        SchemeGroup {
+            switch windowShape {
+            case .machine:
+                if !sessions.isEmpty {
+                    noteField(id: "browser.machine.window.shotNote")
+                    rowDivider(inset: 16)
+                }
+
+                shotStrip(shoot: { host?.shotMachineWindow(windowID) },
+                          shootID: "browser.machine.window.shot",
+                          shootHint: "Takes a picture of this window and shows it here",
+                          canShoot: true,
+                          sendID: "browser.machine.window.shotTo",
+                          sendHint: "Uploads the picture to that session",
+                          canSend: !sessions.isEmpty,
+                          targets: sessions.map {
+                              ShotTarget(id: $0.id, title: MachineBrowserText.sessionRow($0))
+                          },
+                          send: { send(to: $0) })
+
+                if let picture {
+                    rowDivider(inset: 16)
+                    /*
+                     * Drawn at whatever width the card gives it, aspect kept.
+                     *
+                     * A machine's window is far wider than a phone, so this is a
+                     * thumbnail of a desktop page and it is deliberately not
+                     * zoomable: the point of looking at it here is *did the page
+                     * do the thing*, and the point of the control beside it is
+                     * that the agent gets the full-size picture rather than this
+                     * phone squinting at one.
+                     */
+                    pictureRow(picture, of: windowTitle, at: shot?.at,
+                               id: "browser.machine.window.picture")
+                }
+
+            case let .phone(tab):
+                if canSendShot {
+                    noteField(id: "browser.phone.page.shotNote")
+                    rowDivider(inset: 16)
+                }
+
+                shotStrip(shoot: { Task { await takePhoneShot(tab) } },
+                          shootID: "browser.phone.page.shot",
+                          shootHint: "Takes a picture of this page and shows it here",
+                          canShoot: phoneShot.phase != .working,
+                          sendID: "browser.phone.page.shotTo",
+                          sendHint: phoneShot.png == nil
+                              ? "Take the picture first — there is nothing to send yet"
+                              : "Uploads the picture and types its name into that session",
+                          canSend: canSendShot && phoneShot.png != nil,
+                          targets: agentSessions.map { ShotTarget(id: $0.id, title: $0.title) },
+                          send: { sendPhoneShot(to: $0, tab: tab) })
+
+                switch phoneShot.phase {
+                case .working:
+                    rowDivider(inset: 16)
+                    HStack(spacing: 10) {
+                        ProgressView().controlSize(.small)
+                        Text("Loading the page to photograph it…")
+                            .font(.system(size: 14))
+                            .foregroundStyle(Theme.faint)
+                            .accessibilityIdentifier("browser.phone.page.shotWorking")
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 15)
+                case let .failed(why):
+                    rowDivider(inset: 16)
+                    plainNote(why, id: "browser.phone.page.shotFailed")
+                case .idle:
+                    EmptyView()
+                }
+
+                if let taken = phoneShot.image {
+                    rowDivider(inset: 16)
+                    pictureRow(taken, of: tab.label, at: phoneShot.takenAt,
+                               id: "browser.phone.page.picture")
+                }
+
+                if let sentLine {
+                    rowDivider(inset: 16)
+                    plainNote(sentLine, id: "browser.phone.page.sent")
+                }
+
+            case .cast:
+                shotStrip(shoot: {}, shootID: "browser.machine.window.shot",
+                          shootHint: screenshotInfo, canShoot: false,
+                          sendID: "browser.machine.window.shotTo", sendHint: screenshotInfo,
+                          canSend: false, targets: [], send: { _ in })
+
+            case .gone, .unknown:
+                EmptyView()
+            }
+        }
+    }
+
+    /// One place a picture can be sent, as a named value rather than a tuple.
+    /// A `ForEach` needs an `Identifiable` element or a key path, and Swift has
+    /// no key path to a tuple label — so a two-field struct is not ceremony
+    /// here, it is the only shape that compiles.
+    private struct ShotTarget: Identifiable {
+        let id: String
+        let title: String
+    }
+
+    /// Whether a picture taken here has anywhere to go. Both halves are real
+    /// conditions: a machine that will not take a file, and a machine with
+    /// nothing running to hand one to.
+    private var canSendShot: Bool { model.canSendFiles && !agentSessions.isEmpty }
+
+    /// The ⓘ on Screenshot. Where the card is greyed, the reason is the whole of
+    /// it — a control that cannot act owes the sentence, and this is where the
+    /// sentence lives now.
+    private var screenshotInfo: String {
+        switch windowShape {
+        case .machine:
+            return "The machine photographs the whole window and sends the picture here. Sent to "
+                + "a session instead, the file lands on \(machineName) and its name is typed into "
+                + "that session with your note — press Return there to send it."
+        case .phone:
+            return "This phone takes the picture itself. It loads the address again in a web view "
+                + "of its own and photographs that — so what you get is the page as it loads now, "
+                + "not the scroll position or the half-filled form you left behind. It is the "
+                + "same signed-in browser, so a page you are logged into is photographed logged "
+                + "in.\n\nSent to a session, the picture is uploaded to \(machineName) and its "
+                + "file name is typed into that session with your note. Press Return there to "
+                + "send it."
+        case .cast:
+            return "The machine photographs a window by its id, and this page is one the "
+                + "machine's window list does not name — so there is no window for it to "
+                + "photograph. Opening this address on \(machineName) as a window, above, gives "
+                + "you one that can be."
+        case .gone, .unknown:
+            return ""
+        }
+    }
+
+    /// The note that travels with a picture handed to a session. One row, one
+    /// placeholder, no explanation under it — the ⓘ above says where the note
+    /// ends up.
+    private func noteField(id: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "text.bubble")
+                .font(.system(size: 17, weight: .light))
+                .foregroundStyle(Theme.faint)
+                .frame(width: 24, height: 26)
+            TextField("Note (optional)", text: $shotNote)
+                .textFieldStyle(.plain)
+                .font(.system(size: 15))
+                .foregroundStyle(Theme.primary)
+                .submitLabel(.done)
+                .accessibilityIdentifier(id)
+        }
+        .padding(.leading, 16)
+        .padding(.trailing, 12)
+        .padding(.vertical, 10)
+    }
+
+    /**
+     * The two buttons, side by side, in the same shape on every kind of window.
+     *
+     * `canSend` false draws the Send half **greyed rather than absent**, which is
+     * the round's rule and a change from the code this replaces: the machine's
+     * window drew no Send control at all when the machine had no sessions, so
+     * the card was one button wide there and two buttons wide next door. A
+     * screen whose card changes width between shapes is the *"two different
+     * versions"* complaint in miniature.
+     */
+    private func shotStrip(shoot: @escaping () -> Void,
+                           shootID: String,
+                           shootHint: String,
+                           canShoot: Bool,
+                           sendID: String,
+                           sendHint: String,
+                           canSend: Bool,
+                           targets: [ShotTarget],
+                           send: @escaping (String) -> Void) -> some View {
+        HStack(spacing: 0) {
+            Button(action: shoot) {
+                stripLabel("camera", "Screenshot", lit: canShoot)
+            }
+            .buttonStyle(.plain)
+            .disabled(!canShoot)
+            .accessibilityHint(shootHint)
+            .accessibilityIdentifier(shootID)
+
+            Menu {
+                ForEach(targets) { target in
+                    Button {
+                        send(target.id)
+                    } label: {
+                        Label(target.title, systemImage: "terminal")
+                    }
+                }
+            } label: {
+                stripLabel("paperplane", "Send to a session", lit: canSend)
+            }
+            .disabled(!canSend || targets.isEmpty)
+            .accessibilityLabel("Send to a session")
+            .accessibilityHint(sendHint)
+            .accessibilityIdentifier(sendID)
+        }
+        .padding(.vertical, 12)
+    }
+
+    private func stripLabel(_ icon: String, _ title: String, lit: Bool) -> some View {
+        VStack(spacing: 5) {
+            Image(systemName: icon)
+                .font(.system(size: 17, weight: .medium))
+            Text(title)
+                .font(.system(size: 11))
+        }
+        .foregroundStyle(lit ? Theme.accent : Theme.faint)
+        .frame(maxWidth: .infinity)
+        .contentShape(Rectangle())
+    }
+
+    /// The picture, and when it was taken. One row shape for both photographers,
+    /// so a picture from the machine and a picture from this phone are drawn
+    /// identically — which is the whole argument of this round applied to a
+    /// thing nobody would think to check.
+    private func pictureRow(_ image: UIImage, of name: String, at when: Double?,
+                            id: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Image(uiImage: image)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(maxWidth: .infinity)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(Theme.hairline))
+                .accessibilityLabel("Screenshot of \(name.isEmpty ? "this window" : name)")
+                .accessibilityIdentifier(id)
+
+            if let line = SessionDetails.activityLine(when) {
+                Text("Taken \(line)")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.faint)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 13)
+    }
+
+    /* ---- 5. what it recorded ----------------------------------------------- */
+
+    /**
+     * **The click flow — on the phone's own pages too, and greyed where the
+     * machine says it cannot.**
+     *
+     * Two of his sentences meet on this card and they pull in opposite
+     * directions, which is why it is the one that had to be rebuilt rather than
+     * trimmed.
+     *
+     * ## The first: if both can do it, both get it
+     *
+     * > *"you are giving record flow button in the windows side the server side
+     * > it and you are not giving that into the if they are browsing locally in
+     * > this machine. So there are so many differences if they both are capable
+     * > for a feature why don't they both have."*
+     *
+     * The last round left this card out of a page this phone draws, and wrote
+     * the reason on the screen: the recorder is the machine's
+     * (`src/main/browser-steps.ts`), watching the machine's own browser, and
+     * there is nothing for it to watch here. Every word of that is true about
+     * *the machine's* recorder and none of it is a reason the phone cannot have
+     * one — the phone owns a real `WKWebView` and can watch its own page.
+     * `PhoneClickFlow` does exactly that, and this card draws it through the same
+     * `stepRow` the machine's flow uses, so the two lists are not merely similar,
+     * they are the same rows.
+     *
+     * ## The second: a screen may not contradict itself
+     *
+     * His screenshot of this screen has the banner *"This machine's browser
+     * cannot record a click flow."* with a live blue **Record the click flow**
+     * directly under it. The banner was the machine's answer to the
+     * `browser.window.steps` this screen sends on appear; the button was drawn
+     * unconditionally, because nothing on the wire says whether a machine has a
+     * recorder. So the button was lit over a sentence denying it, and pressing it
+     * would have produced the same sentence again.
+     *
+     * `recorderRefused` closes that: the moment the machine says it, the row
+     * greys and the reason moves onto this card's ⓘ, where it belongs — attached
+     * to the control it is about instead of floating at the top of the screen.
+     * The banner stops repeating it, because a fact said twice on one screen is
+     * how somebody ends up trusting neither copy.
+     *
+     * ## Reading what was collected
+     *
+     * The machine's steps are not on the window list and there is no push for
+     * them, so they are asked for on arrival, again the moment a recording
+     * stops, and on the control beside the toggle — the honest answer for a flow
+     * that is still growing while somebody is looking at it. This phone's own
+     * flow needs none of that: it is in this process, `PhoneClickFlow` is
+     * `@Observable`, and the rows arrive as they are collected. What that half
+     * gets instead is **Clear**, which the machine has no verb for.
+     */
+    @ViewBuilder
+    private var clickFlowCard: some View {
+        SchemeSectionCaption("Click flow", about: "recording a click flow", info: clickFlowInfo)
+
+        SchemeGroup {
+            switch windowShape {
+            case let .machine(window):
+                if recorderRefused {
+                    deadRow("Record the click flow", icon: "record.circle",
+                            id: "browser.machine.window.record", why: clickFlowInfo)
+                } else {
+                    HStack(spacing: 12) {
+                        Button {
+                            host?.actOnMachineWindow(windowID,
+                                                     window.recording ? .recordOff : .recordOn)
+                        } label: {
+                            recordLabel(on: window.recording)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("browser.machine.window.record")
+
+                        Spacer(minLength: 8)
+
+                        if window.recording {
+                            MachineWindowMark(text: "Recording", tone: Theme.critical)
+                                .accessibilityHidden(true)
+                        }
+
+                        Button {
+                            host?.readMachineSteps(windowID)
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(Theme.faint)
+                                .frame(width: 34, height: 30)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Read the steps again")
+                        .accessibilityIdentifier("browser.machine.window.steps.refresh")
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+
+                    stepList(steps, recording: window.recording,
+                             prefix: "browser.machine.window")
+                }
+
+            case let .phone(tab):
+                let running = phoneFlow.isRecording(tab: tab.id)
+                let collected = phoneFlow.steps(tab: tab.id)
+
+                HStack(spacing: 12) {
+                    Button {
+                        if running { phoneFlow.stop(tab: tab.id) } else { phoneFlow.start(tab: tab.id) }
+                    } label: {
+                        recordLabel(on: running)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("browser.phone.page.record")
+
+                    Spacer(minLength: 8)
+
+                    if running {
+                        MachineWindowMark(text: "Recording", tone: Theme.critical)
+                            .accessibilityHidden(true)
+                    }
+
+                    /*
+                     * Clear rather than the machine half's refresh, and both are
+                     * one glyph in the same slot so the two cards read as one
+                     * control set. There is nothing to re-read here — the flow is
+                     * in this process and `PhoneClickFlow` is `@Observable`, so
+                     * the rows arrive as they are collected — and there *is*
+                     * something to throw away, which the machine has no verb for.
+                     */
+                    Button {
+                        phoneFlow.clear(tab: tab.id)
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(Theme.faint.opacity(collected.isEmpty ? 0.4 : 1))
+                            .frame(width: 34, height: 30)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(collected.isEmpty)
+                    .accessibilityLabel("Clear the steps")
+                    .accessibilityIdentifier("browser.phone.page.steps.clear")
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+
+                stepList(collected, recording: running, prefix: "browser.phone.page")
+
+            case .cast:
+                deadRow("Record the click flow", icon: "record.circle",
+                        id: "browser.machine.window.record", why: clickFlowInfo)
+
+            case .gone, .unknown:
+                EmptyView()
+            }
+        }
+
+        /*
+         * The cut, for the same reason and with the same limit as the window
+         * list's: `WireCodec.recordedSteps` takes a `prefix` and keeps no record
+         * of what it dropped, so this can say there may be more and cannot say
+         * how many. The host caps its own side as well — see `MAX_STEPS` in
+         * `src/main/browser-steps.ts` — which is the cap somebody would actually
+         * hit first. Only the machine's flow crosses a wire, so only the
+         * machine's flow can be cut by one.
+         */
+        if case .machine = windowShape, steps.count >= MachineBrowserWire.maxSteps {
+            HStack(spacing: 6) {
+                Text("Showing the first \(MachineBrowserWire.maxSteps)")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.faint)
+                InfoDot(
+                    about: "the step limit",
+                    text: "This phone draws \(MachineBrowserWire.maxSteps) steps of a flow. The "
+                        + "recording on the machine is not truncated by what is shown here.")
+            }
+            .padding(.top, 12)
+            .padding(.leading, 4)
+            .accessibilityIdentifier("browser.machine.window.stepsCapped")
+        }
+    }
+
+    /// The word on the recorder, which is the verb and never the state. *Stop
+    /// recording* while it runs, because a button labelled with what is already
+    /// happening is one somebody presses to find out.
+    private func recordLabel(on: Bool) -> some View {
+        HStack(spacing: 9) {
+            Image(systemName: on ? "stop.circle" : "record.circle")
+                .font(.system(size: 19, weight: .light))
+                .frame(width: 24)
+            Text(on ? "Stop recording" : "Record the click flow")
+                .font(.system(size: 16))
+        }
+        .foregroundStyle(on ? Theme.critical : Theme.accent)
+        .contentShape(Rectangle())
+    }
+
+    /// The steps of one flow, whoever collected them. Identical rows for the two
+    /// recorders — the point of W6 is that they are the same feature, and a list
+    /// that looked different would say they were not.
+    @ViewBuilder
+    private func stepList(_ collected: [RecordedStep], recording: Bool, prefix: String) -> some View {
+        if !collected.isEmpty {
+            let first = collected.first?.at ?? 0
+            ForEach(collected) { step in
+                rowDivider(inset: 16)
+                stepRow(step, from: first, prefix: prefix)
+            }
+        } else if recording {
+            rowDivider(inset: 16)
+            plainNote("Nothing yet.", id: prefix + ".noSteps")
+        }
+    }
+
+    /// The ⓘ on Click flow. On a machine that has refused, the refusal is the
+    /// first thing in it — which is the whole of W8: the reason moves from a
+    /// banner floating above the screen onto the control it is about.
+    private var clickFlowInfo: String {
+        let what = "A recording collects what is clicked, typed and submitted on the page, in "
+            + "order, so a flow can be handed to an agent as steps rather than as a description."
+        switch windowShape {
+        case .machine:
+            return recorderRefused
+                ? "\(machineName)'s browser cannot record a click flow — it is running without a "
+                    + "recorder, so there is nothing to switch on.\n\n" + what
+                : what
+        case .phone:
+            /*
+             * Deliberately says what is true of *any* recorder living in this
+             * process and nothing about how `PhoneClickFlow` schedules itself.
+             * A sentence on a screen that guesses at another lane's behaviour is
+             * how this file ended up with a card that contradicted a banner.
+             */
+            return what + "\n\nThis page is drawn by this app, so this app is what watches it. "
+                + "The steps stay on this phone — nothing is sent to \(machineName) — until you "
+                + "clear them."
+        case .cast:
+            return "The machine's recorder is addressed by a window id, and this page is one the "
+                + "machine's window list does not name — so a recording cannot be started for it. "
+                + "Opening this address on \(machineName) as a window, above, gives you one that "
+                + "can be recorded.\n\n" + what
+        case .gone, .unknown:
+            return what
+        }
+    }
+
+    /* ---- 6. and the end of it ---------------------------------------------- */
+
+    /**
+     * **Close the window, from inside it** — last, alone, and away from
+     * everything else on the screen, because it is the one control here that
+     * ends something.
+     *
+     * It is also on the home's row — on the `…` and on the swipe — which is not
+     * a duplicate: closing a window you are looking at and closing one from a
+     * list are two different moments, and the list's whole point is not having
+     * to open a window to deal with it.
+     *
+     * ## One of these dismisses and the rest do not, and that took a failure
+     *
+     * A machine window does not dismiss on the press. `MachineWindowView` watches
+     * for the window leaving the machine's list and pops both screens then — one
+     * watcher, because two would race to pop the same stack.
+     *
+     * A page **this phone** owns has no such watcher, and leaving it out was
+     * measured against a live host: pressing Close left him standing on a
+     * settings screen reading *"This page is closed"* with the page still
+     * underneath it, because `LocalhostBrowser`'s tab watcher pops the page and
+     * cannot pop what is stacked on top of it. Nothing appeared to happen. The
+     * live case `testClosingTheViewLeavesNoPageBehind` failed on exactly that,
+     * twice. So this screen goes first and the watcher below takes the page with
+     * it — two pops, both caused by his own press, landing him back on the
+     * Browser list where he started.
+     */
+    @ViewBuilder
+    private var closeCard: some View {
+        SchemeSectionCaption("Close", about: "closing this window", info: closeInfo)
+
+        SchemeGroup {
+            switch windowShape {
+            case let .machine(window):
+                closeRow(id: "browser.machine.window.close",
+                         hint: "Closes \(window.label) in \(machineName)'s browser") {
+                    host?.actOnMachineWindow(windowID, .close)
+                }
+            case let .phone(tab):
+                closeRow(id: "browser.phone.page.close",
+                         hint: "Closes this page and the tunnel it was using, on this phone") {
+                    model.browserTabs.close(tab, machine: model)
+                    if pushed { dismiss() }
+                }
+            case .cast:
+                deadRow("Close this window", icon: "xmark.circle",
+                        id: "browser.machine.window.close", why: closeInfo)
+            case .gone, .unknown:
+                EmptyView()
+            }
+        }
+    }
+
+    private func closeRow(id: String, hint: String, act: @escaping () -> Void) -> some View {
+        Button(action: act) {
+            HStack(spacing: 12) {
+                Image(systemName: "xmark.circle")
+                    .font(.system(size: 19, weight: .light))
+                    .frame(width: 24)
+                Text("Close this window")
+                    .font(.system(size: 16))
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(Theme.critical)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 13)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint(hint)
+        .accessibilityIdentifier(id)
+    }
+
+    /// The ⓘ on Close. Short on the two shapes where the button works, because a
+    /// verb that does what it says needs no essay; the whole reason on the one
+    /// where it cannot.
+    private var closeInfo: String {
+        switch windowShape {
+        case .machine:
+            return "Closes this window in \(machineName)'s browser. Anything unsaved on the page "
+                + "goes with it."
+        case .phone:
+            return "Closes this page on this phone and the tunnel it was using. Nothing on "
+                + "\(machineName) is closed."
+        case .cast:
+            return "The machine closes a window by its id, and this page is one the machine's "
+                + "window list does not name — so there is no window here for it to close."
+        case .gone, .unknown:
+            return ""
+        }
+    }
+
+    // MARK: - Rows
+
+    /**
+     * **One live row: an icon, a name, and nothing else.**
+     *
+     * The shape every control on this screen collapsed into this round. It used
+     * to carry a `meaning` as a second grey line — *"Signed in the way
+     * DESKTOP-DDGMNCV is."* — and that line is what he was reading when he said
+     * the rows *"have becomes too big"* and that he *"can't understand what they
+     * mean"*. Two lines of explanation do not make a row clearer; a better name
+     * does, and the explanation goes to the section's ⓘ.
+     *
+     * The sentence survives as the **hint**, which is where VoiceOver expects the
+     * explanation of a control anyway, so nothing was lost for a screen reader
+     * when it came off the glass.
+     */
+    private func actionRow(_ title: String, icon: String, id: String, hint: String,
+                           act: @escaping () -> Void) -> some View {
+        Button(action: act) {
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .font(.system(size: 17, weight: .light))
+                    .foregroundStyle(Theme.accent)
+                    .frame(width: 24)
+                Text(title)
+                    .font(.system(size: 16))
+                    .foregroundStyle(Theme.accent)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 13)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint(hint)
+        .accessibilityIdentifier(id)
+    }
+
+    /**
+     * One row that names a place and hands the session picker over when pressed.
+     *
+     * The row is a **name**; which session gets it is the menu behind it. The
+     * label is set explicitly and that is not decoration: the trap
+     * `NewWindowSheet.destinationRow` measured is that a control holding two
+     * `Text`s is read by VoiceOver as both of them joined, so the row answers to
+     * a sentence rather than to its own name and a test asking for the name
+     * reports it missing while it sits plainly on screen. There is one `Text`
+     * here now, which is the same fix arrived at from the other direction — the
+     * explicit label stays so a second one can never reopen the hole.
+     */
+    private func sessionMenuRow(_ title: String, icon: String, id: String, hint: String,
+                                chosen: String?,
+                                pick: @escaping (String) -> Void) -> some View {
         Menu {
             ForEach(sessions) { session in
                 Button {
-                    open(session.id)
+                    pick(session.id)
                 } label: {
-                    Label(MachineBrowserText.sessionRow(session), systemImage: "terminal")
+                    Label(MachineBrowserText.sessionRow(session),
+                          systemImage: session.id == chosen ? "checkmark" : "terminal")
                 }
             }
         } label: {
@@ -557,17 +1777,10 @@ struct MachineWindowSettingsView: View {
                     .font(.system(size: 17, weight: .light))
                     .foregroundStyle(Theme.accent)
                     .frame(width: 24)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(title)
-                        .font(.system(size: 16))
-                        .foregroundStyle(Theme.accent)
-                        .multilineTextAlignment(.leading)
-                    Text(meaning)
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.faint)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .multilineTextAlignment(.leading)
-                }
+                Text(title)
+                    .font(.system(size: 16))
+                    .foregroundStyle(Theme.accent)
+                    .lineLimit(1)
                 Spacer(minLength: 8)
                 Image(systemName: "chevron.up.chevron.down")
                     .font(.system(size: 10, weight: .semibold))
@@ -578,334 +1791,137 @@ struct MachineWindowSettingsView: View {
             .contentShape(Rectangle())
         }
         .accessibilityLabel(title)
-        .accessibilityHint(meaning)
+        .accessibilityHint(hint)
         .accessibilityIdentifier(id)
     }
 
     /**
-     * Photograph the page, and choose who gets the photograph.
+     * A control in its place, greyed, with the reason on the hint and on the
+     * section's ⓘ above it.
      *
-     * The same two controls the machine's windows get, for the same reason —
-     * looking at it here and handing it to an agent are different acts with
-     * different outcomes — and the same note field, on the same card, because
-     * *"creating a screenshot and sending it to the session, whatever session we
-     * want to send"* is one move rather than two screens.
-     *
-     * ## How a picture gets from this phone into a session
-     *
-     * There is no `browser.window.shot` to lean on: that verb photographs a
-     * window in the **machine's** browser and hands the bytes to a session at the
-     * machine's end, and this page is not in that browser. So this phone does
-     * both halves itself. The sentence goes first, through `sendToAgent`, which
-     * attaches the session when this phone has not opened it — and that ordering
-     * is load-bearing rather than tidy: `HostLink.send(_:into:)` drops the landed
-     * path in silence for a session with no bridge, so a picture sent to a
-     * session nobody had opened would upload perfectly and arrive nowhere. The
-     * file follows, and its path lands in that same prompt when the upload
-     * finishes. Nothing is submitted — the same rule every other "sent to an
-     * agent" path in this app follows, and the reason there is no newline
-     * anywhere in it.
+     * `.disabled(true)` rather than a button that answers with a sentence: a
+     * control that replies instead of acting is still a control that did not do
+     * what it says. Which is where every one of these ends up now — the reason
+     * is the ⓘ of the card it is in, so a greyed row is never silent and never a
+     * paragraph.
      */
-    @ViewBuilder
-    private func phoneScreenshotCard(_ tab: BrowserTab) -> some View {
-        SchemeSectionCaption(
-            "Screenshot",
-            about: "photographing a page on this phone",
-            info: "This phone takes the picture itself. It loads the address again in a web view "
-                + "of its own and photographs that — so what you get is the page as it loads now, "
-                + "not the scroll position or the half-filled form you left behind. It is the "
-                + "same signed-in browser, so a page you are logged into is photographed logged "
-                + "in.\n\nSent to a session, the picture is uploaded to \(machineName) and its "
-                + "file name is typed into that session with your note. Press Return there to "
-                + "send it.")
-
-        SchemeGroup {
-            if canSendShot {
-                HStack(spacing: 12) {
-                    Image(systemName: "text.bubble")
-                        .font(.system(size: 17, weight: .light))
-                        .foregroundStyle(Theme.faint)
-                        .frame(width: 24, height: 26)
-                    TextField("Note for the session (optional)", text: $shotNote)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 15))
-                        .foregroundStyle(Theme.primary)
-                        .submitLabel(.done)
-                        .accessibilityIdentifier("browser.phone.page.shotNote")
-                }
-                .padding(.leading, 16)
-                .padding(.trailing, 12)
-                .padding(.vertical, 10)
-
-                rowDivider(inset: 16)
-            }
-
-            HStack(spacing: 0) {
-                Button {
-                    Task { await takePhoneShot(tab) }
-                } label: {
-                    VStack(spacing: 5) {
-                        Image(systemName: "camera")
-                            .font(.system(size: 17, weight: .medium))
-                        Text("Screenshot")
-                            .font(.system(size: 11))
-                    }
-                    .foregroundStyle(phoneShot.phase == .working ? Theme.faint : Theme.accent)
-                    .frame(maxWidth: .infinity)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .disabled(phoneShot.phase == .working)
-                .accessibilityHint("Takes a picture of this page and shows it here")
-                .accessibilityIdentifier("browser.phone.page.shot")
-
-                if canSendShot {
-                    Menu {
-                        ForEach(agentSessions) { session in
-                            Button {
-                                sendPhoneShot(to: session.id, tab: tab)
-                            } label: {
-                                Label(session.title, systemImage: "terminal")
-                            }
-                        }
-                    } label: {
-                        VStack(spacing: 5) {
-                            Image(systemName: "paperplane")
-                                .font(.system(size: 17, weight: .medium))
-                            Text("Send to a session")
-                                .font(.system(size: 11))
-                        }
-                        .foregroundStyle(phoneShot.png == nil ? Theme.faint : Theme.accent)
-                        .frame(maxWidth: .infinity)
-                        .contentShape(Rectangle())
-                    }
-                    .disabled(phoneShot.png == nil)
-                    .accessibilityLabel("Send a screenshot to a session")
-                    .accessibilityHint(phoneShot.png == nil
-                                       ? "Take the picture first — there is nothing to send yet"
-                                       : "Uploads the picture and types its name into that session")
-                    .accessibilityIdentifier("browser.phone.page.shotTo")
-                }
-            }
-            .padding(.vertical, 12)
-
-            switch phoneShot.phase {
-            case .working:
-                rowDivider(inset: 16)
-                HStack(spacing: 10) {
-                    ProgressView().controlSize(.small)
-                    Text("Loading the page to photograph it…")
-                        .font(.system(size: 14))
-                        .foregroundStyle(Theme.faint)
-                        .accessibilityIdentifier("browser.phone.page.shotWorking")
-                    Spacer(minLength: 0)
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 15)
-            case let .failed(why):
-                rowDivider(inset: 16)
-                plainNote(why, id: "browser.phone.page.shotFailed")
-            case .idle:
-                EmptyView()
-            }
-
-            if let picture = phoneShot.image {
-                rowDivider(inset: 16)
-                VStack(alignment: .leading, spacing: 8) {
-                    Image(uiImage: picture)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .frame(maxWidth: .infinity)
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .stroke(Theme.hairline))
-                        .accessibilityLabel("Screenshot of \(tab.label)")
-                        .accessibilityIdentifier("browser.phone.page.picture")
-
-                    if let line = SessionDetails.activityLine(phoneShot.takenAt) {
-                        Text("Taken \(line)")
-                            .font(.system(size: 12))
-                            .foregroundStyle(Theme.faint)
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 13)
-            }
-
-            if let sentLine {
-                rowDivider(inset: 16)
-                plainNote(sentLine, id: "browser.phone.page.sent")
-            }
-        }
-    }
-
-    /// Whether a picture has anywhere to go. Both halves are real conditions: a
-    /// machine that will not take a file, and a machine with nothing running to
-    /// hand one to.
-    private var canSendShot: Bool { model.canSendFiles && !agentSessions.isEmpty }
-
-    /**
-     * The honest analogue of the isolation row.
-     *
-     * A window on the machine can be moved between the shared jar and a
-     * partition of its own. This page is in neither, because it is not in that
-     * browser — so the row that belongs here is the one that puts it there, and
-     * the card says what changes when it does. The page on this phone is left
-     * exactly as it is; the sheet's own `otherWay` offers the same move from the
-     * other end.
-     *
-     * No sentence of its own on the press. `browser.window.open` answers with the
-     * whole window list carrying the machine's own notice, and on this screen
-     * that notice is the banner two inches above this card — a second line here
-     * would be the same fact twice, and the one written here would be a guess
-     * printed before the machine had agreed to anything.
-     *
-     * ## Both places, because this is the same choice the `+` asks
-     *
-     * One row opened a shared window and there was no second row, so the one
-     * thing an isolated window is *for* — a throwaway profile signed into
-     * nothing — was unreachable from the screen whose whole subject is where
-     * this page can go. Two rows now, and the pair is the honest analogue of the
-     * isolation card a window on the machine gets: that card converts an
-     * existing window between the two, and this one chooses between them for a
-     * window that does not exist yet.
-     */
-    @ViewBuilder
-    private func phoneOtherWayCard(_ tab: BrowserTab) -> some View {
-        SchemeSectionCaption(
-            "Open somewhere else",
-            about: "opening this address on the machine",
-            info: "The same address can be opened in \(machineName)'s own browser. That window is "
-                + "\(machineName)'s: it can be watched and driven from this phone, and it can "
-                + "record a click flow. The page here is left exactly as it is — you end up with "
-                + "both.\n\nA shared window uses \(machineName)'s cookies and whatever it is "
-                + "signed into. An isolated one gets a partition of its own, signed into nothing, "
-                + "and that partition is thrown away when the window closes.")
-
-        SchemeGroup {
-            if canDrive {
-                openThereRow(title: "Open in \(machineName)'s browser",
-                             meaning: "Signed in the way \(machineName) is.",
-                             icon: "globe",
-                             id: "browser.phone.page.otherWay") {
-                    host?.openMachineWindow(url: phoneAddress(tab), isolated: false)
-                }
-
-                rowDivider(inset: 16)
-
-                openThereRow(title: "Open an isolated window on \(machineName)",
-                             meaning: "Signed into nothing, and forgotten when the window closes.",
-                             icon: "eye.slash",
-                             id: "browser.phone.page.otherWayIsolated") {
-                    host?.openMachineWindow(url: phoneAddress(tab), isolated: true)
-                }
-            } else {
-                deadRow("Open in \(machineName)'s browser", icon: "globe",
-                        id: "browser.phone.page.otherWay",
-                        why: "\(machineName) is not offering its browser to this phone.")
-
-                rowDivider(inset: 16)
-
-                deadRow("Open an isolated window on \(machineName)", icon: "eye.slash",
-                        id: "browser.phone.page.otherWayIsolated",
-                        why: "\(machineName) is not offering its browser to this phone.")
-            }
-        }
-    }
-
-    /// One place this address can be opened, as a row that says what choosing it
-    /// means. The label is set explicitly for the reason `attachMenuRow` gives:
-    /// a control holding two `Text`s is spoken as both of them joined, and then
-    /// it no longer answers to its own name.
-    private func openThereRow(title: String, meaning: String, icon: String, id: String,
-                              act: @escaping () -> Void) -> some View {
-        Button(action: act) {
+    private func deadRow(_ title: String, icon: String, id: String, why: String) -> some View {
+        Button {} label: {
             HStack(spacing: 12) {
                 Image(systemName: icon)
-                    .font(.system(size: 19, weight: .light))
-                    .foregroundStyle(Theme.accent)
+                    .font(.system(size: 17, weight: .light))
                     .frame(width: 24)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(title)
-                        .font(.system(size: 16))
-                        .foregroundStyle(Theme.accent)
-                        .multilineTextAlignment(.leading)
-                    Text(meaning)
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.faint)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .multilineTextAlignment(.leading)
-                }
-                Spacer(minLength: 8)
+                Text(title)
+                    .font(.system(size: 16))
+                    .lineLimit(1)
+                Spacer(minLength: 0)
             }
+            .foregroundStyle(Theme.faint)
             .padding(.horizontal, 16)
             .padding(.vertical, 13)
-            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(title)
-        .accessibilityHint(meaning)
+        .disabled(true)
+        .accessibilityHint(why)
         .accessibilityIdentifier(id)
     }
 
     /**
-     * Close the page, from inside its settings.
+     * One step: when, what, and to what.
      *
-     * This phone's own socket, so it takes effect immediately and there is no
-     * answer to wait for — the one act on this screen that is not a round trip.
-     * Nothing is dismissed on the press, for the reason this file's header
-     * gives: `phonePageCards` draws the closed state instead, which is honest
-     * and does not pop a screen out from under a thumb.
+     * The offset is relative to the first step rather than a clock time, because
+     * a flow is read as a sequence — *click, type, click, submit* — and the
+     * useful question about step nine is how long after step one it happened. For
+     * the machine's recorder `at` is the machine's main-process clock in epoch
+     * milliseconds, stamped there rather than by the page: *"the page never gets
+     * to stamp its own steps"* (`src/main/browser-steps.ts`). `PhoneClickFlow`
+     * stamps its own the same way and in the same unit, which is what lets one
+     * row draw both.
      */
-    @ViewBuilder
-    /**
-     * Close, and **leave** — the one place on this screen that dismisses itself.
-     *
-     * The rest of this file deliberately dismisses nothing: a window the machine
-     * drops out from under a thumb should draw its closed state rather than yank
-     * a screen away. That argument is about the *machine* acting. This is the
-     * person acting, on this screen, on this page, and the thing they closed is
-     * the thing the two screens above are made of.
-     *
-     * Measured, against a live host, before this line existed: pressing Close
-     * left him standing on a settings screen reading *"This page is closed"*,
-     * with the page still underneath it — the tab watcher on `LocalhostBrowser`
-     * pops the page, but it cannot pop what is stacked on top of it, so nothing
-     * appeared to happen. The live case
-     * `testClosingTheViewLeavesNoPageBehind` failed on exactly that, twice.
-     *
-     * So this screen goes first and the watcher below takes the page with it —
-     * two pops, both caused by his own press, landing him back on the Browser
-     * list where he started.
-     */
-    private func phoneCloseCard(_ tab: BrowserTab) -> some View {
-        SchemeSectionCaption("Window")
-
-        SchemeGroup {
-            Button {
-                model.browserTabs.close(tab, machine: model)
-                if pushed { dismiss() }
-            } label: {
-                HStack(spacing: 12) {
-                    Image(systemName: "xmark.circle")
-                        .font(.system(size: 19, weight: .light))
-                        .frame(width: 24)
-                    Text("Close this window")
-                        .font(.system(size: 16))
+    private func stepRow(_ step: RecordedStep, from first: Double, prefix: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text(offset(step, from: first))
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(Theme.faint)
+                .frame(width: 44, alignment: .trailing)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    MachineWindowMark(text: step.kind, tone: Theme.secondary)
+                    if let detail = step.detail, !detail.isEmpty {
+                        Text(detail)
+                            .font(.system(size: 14))
+                            .foregroundStyle(Theme.primary)
+                            .lineLimit(1)
+                    }
                     Spacer(minLength: 0)
                 }
-                .foregroundStyle(Theme.critical)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 13)
-                .contentShape(Rectangle())
+                if let value = step.value, !value.isEmpty {
+                    Text(value)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.secondary)
+                        .lineLimit(1)
+                }
+                if let selector = step.selector, !selector.isEmpty {
+                    // Truncated in the middle: a selector's two ends are the tag
+                    // and the thing that makes it unique, and the wrapper chain
+                    // between them is the part nobody reads on a phone.
+                    Text(selector)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(Theme.faint)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
             }
-            .buttonStyle(.plain)
-            .accessibilityHint("Closes this page and the tunnel it was using, on this phone")
-            .accessibilityIdentifier("browser.phone.page.close")
         }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("\(prefix).step.\(step.index)")
     }
 
-    // MARK: - What a page on this phone can be asked for
+    /// `+1.2s` from the start of the flow, and nothing at all when either stamp
+    /// is missing — a step drawn as `+0.0s` because the machine sent no time is
+    /// a number somebody would read as a fact.
+    private func offset(_ step: RecordedStep, from first: Double) -> String {
+        guard step.at > 0, first > 0, step.at >= first else { return "" }
+        let seconds = (step.at - first) / 1000
+        guard seconds.isFinite else { return "" }
+        return seconds < 10 ? String(format: "+%.1fs", seconds) : "+\(Int(seconds))s"
+    }
+
+    /**
+     * A line of prose as a row inside a card. Four of them left on this screen,
+     * and every one is a **state** rather than an explanation — the page is
+     * closed, nothing has been collected yet, that picture failed, that picture
+     * has been sent.
+     *
+     * The identifier goes on the **text**, never on the card around it: an
+     * `accessibilityIdentifier` on a container makes that container an
+     * accessibility element and everything inside it stops existing — measured
+     * on iOS 26.4, and written down in `TabNavigation.swift`.
+     */
+    private func plainNote(_ text: String, id: String) -> some View {
+        Text(text)
+            .font(.system(size: 14))
+            .foregroundStyle(Theme.faint)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 15)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityIdentifier(id)
+    }
+
+    /// 16 rather than a list row's 52: the rows in these cards have no icon
+    /// column to line a divider up under.
+    private func rowDivider(inset: CGFloat) -> some View {
+        Rectangle()
+            .fill(Theme.hairline)
+            .frame(height: 0.5)
+            .padding(.leading, inset)
+    }
+
+    // MARK: - Actions
 
     /// The address this page is on, as the machine would have to be given it.
     /// `String(port)` and never the `Int` interpolated: a port dropped straight
@@ -913,17 +1929,6 @@ struct MachineWindowSettingsView: View {
     /// comes out as `localhost:3,000`.
     private func phoneAddress(_ tab: BrowserTab) -> String {
         "http://localhost:\(String(tab.port))\(tab.path)"
-    }
-
-    /// Open this address on the machine and hand that window to a session, in
-    /// one ask. The confirmation is the machine's own answer — the window list
-    /// comes back carrying the bind notice, which the banner above draws.
-    ///
-    /// `isolated` is a parameter rather than a constant `false`, because that
-    /// constant was this screen choosing whose cookies the page an agent is
-    /// about to drive gets. Both places are on the card.
-    private func attachOnMachine(_ tab: BrowserTab, to session: String, isolated: Bool) {
-        host?.openMachineWindow(url: phoneAddress(tab), isolated: isolated, session: session)
     }
 
     /**
@@ -1000,8 +2005,16 @@ struct MachineWindowSettingsView: View {
         model.send(PickedFile(url: file, name: name, size: png.count, temporary: true),
                    into: session)
         shotNote = ""
-        say("Sending it. The picture's name is typed into that session — press Return there to "
-            + "send it.")
+        say("Sent. Press Return in that session to send it.")
+    }
+
+    /// Hand the machine's picture to a session. The confirmation is the
+    /// machine's own answer — the window list comes back carrying the notice,
+    /// which the banner above draws — so nothing is said here.
+    private func send(to session: String) {
+        let line = shotNote.trimmingCharacters(in: .whitespacesAndNewlines)
+        host?.shotMachineWindow(windowID, to: session, note: line.isEmpty ? nil : line)
+        shotNote = ""
     }
 
     /// Hold a line for two and a half seconds, the same as every other silent
@@ -1020,737 +2033,12 @@ struct MachineWindowSettingsView: View {
         }
     }
 
-    /* ---- a page the machine has no window row for -------------------------- */
-
-    /**
-     * The same controls he named — and the attach among them is real now,
-     * wherever this page has an address.
-     *
-     * > *"there is no way to attach this one too. So it should be the same case,
-     * > or all the options should be available at least."*
-     *
-     * ## What this screen said before, and the half of it that was untrue
-     *
-     * Both controls were dead under one line about window ids. The id fact is
-     * real: the machine names its windows with an id, `src/main/remote/
-     * protocol.ts` refuses an empty one on every member of the
-     * `browser.window.*` family, and this page has none — so it can never be
-     * **bound as itself**, and Close really cannot be sent.
-     *
-     * Attaching never needed the id. `browser.window.open` takes an **address**
-     * and carries a session, so the move is to open this page's address over
-     * there as a new window and hand *that* window over. `BrowserSurfaceRow.url`
-     * is the address, and this screen was already drawing the same page's title
-     * from the same row while telling him nothing could be done with it.
-     *
-     * So this card matches the row's own `…` on the Browser tab exactly, which
-     * is the point: a control that is live one tap back and dead here is the
-     * *"two different type"* complaint reappearing between two views of one
-     * page.
-     *
-     * ## And the sentence says a new window, because it is one
-     *
-     * The tab he is watching is not moved, bound or changed. There will be two
-     * pages on that address afterwards — his and the agent's — which is a thing
-     * to read before pressing rather than to work out afterwards.
-     *
-     * Close stays dead under the reason that is the whole truth about it, and it
-     * is the only claim this screen still makes about ids.
-     */
-    @ViewBuilder
-    private var noWindowCards: some View {
-        SchemeSectionCaption(
-            "This page",
-            about: "a page with no window row",
-            info: "The machine names each of its windows with an id, and closing, isolating, "
-                + "photographing or recording one is addressed by that id. This page is one the "
-                + "machine's window list does not name, so none of those can be sent for it."
-                + "\n\nIt can still be watched — and its address can still be opened as a new "
-                + "window on the machine, which is a window that has an id and can be attached to "
-                + "a session.")
-
-        SchemeGroup {
-            plainNote(whyNoWindow, id: "browser.machine.window.noWindowRow")
-        }
-
-        SchemeSectionCaption(
-            "Session",
-            about: "attaching a page with no window row",
-            info: "A bound window gets a slot name — B1, B2 — and the session's tools address it by "
-                + "that name. The machine addresses the binding by the window's id, which this page "
-                + "does not have — so this page itself cannot be bound.\n\nWhat can be done is to "
-                + "open the same address on \(machineName) as a new window and attach that one. "
-                + "The tab here is left exactly as it is. The new window can be a shared one, "
-                + "using \(machineName)'s own cookies and logins, or an isolated one that is "
-                + "signed into nothing and thrown away when it closes.")
-
-        SchemeGroup {
-            if canDrive, !sessions.isEmpty, let address = surfaceAddress {
-                attachMenuRow(title: "Open on \(machineName) and attach",
-                              meaning: "Signed in the way \(machineName) is.",
-                              icon: "link",
-                              id: "browser.machine.window.attach") { session in
-                    host?.openMachineWindow(url: address, isolated: false, session: session)
-                }
-
-                rowDivider(inset: 16)
-
-                attachMenuRow(title: "Open isolated and attach",
-                              meaning: "Signed into nothing, and forgotten when the window closes.",
-                              icon: "eye.slash",
-                              id: "browser.machine.window.attachIsolated") { session in
-                    host?.openMachineWindow(url: address, isolated: true, session: session)
-                }
-
-                rowDivider(inset: 16)
-
-                plainNote("The tab you are watching stays as it is. What the session gets is a new "
-                          + "window on \(machineName) at the same address.",
-                          id: "browser.machine.window.attachNote")
-            } else {
-                deadRow("Open on \(machineName) and attach", icon: "link",
-                        id: "browser.machine.window.attach",
-                        why: whyNoSurfaceAttach)
-            }
-        }
-
-        SchemeSectionCaption("Window")
-
-        SchemeGroup {
-            deadRow("Close this window", icon: "xmark.circle",
-                    id: "browser.machine.window.close",
-                    why: "This page has no window id for the machine to close.")
-        }
-    }
-
-    /// The address this page can be opened **again** at, or nil when it has
-    /// none. `MachineBrowserText.reopenable` holds the rule and the reason it is
-    /// `http` and `https` only — it is the machine's own, read off
-    /// `src/main/browser-url.ts`.
-    private var surfaceAddress: String? {
-        guard let surface else { return nil }
-        return MachineBrowserText.reopenable(surface.url)
-    }
-
-    /// Why this page's address cannot be opened over there and attached, when it
-    /// cannot. Three facts, asked in the order they stop the move, so the line
-    /// under a dead control is the one that is actually true of this machine and
-    /// this page rather than a general apology about window ids.
-    private var whyNoSurfaceAttach: String {
-        if !canDrive {
-            return "\(machineName) is not offering its browser to this phone, so no window can be "
-                + "opened there to attach."
-        }
-        if surfaceAddress == nil {
-            return "This tab has no web address to open again as a window — a blank tab has "
-                + "nothing to re-open."
-        }
-        return "Nothing is running on \(machineName) to attach a window to."
-    }
-
-    /**
-     * Which of the two pages with no window row this is, said out loud.
-     *
-     * The empty id is the machine's **own tab** — the slot `openTab` mints no
-     * shell id for, where a page opened from the phone's address bar lands — and
-     * it is by far the common one. A non-empty id that no window row names is the
-     * other: a cast this list cannot join to a window, which is what a machine
-     * offering `watch` without `browser.control` produces. Naming the right one
-     * matters because the two have different fixes and only one of them is
-     * ordinary.
-     *
-     * **Attaching is no longer in the list of things it cannot do**, and that is
-     * the correction rather than a rewording: it was in that list while the card
-     * below could perfectly well open the same address as a new window and bind
-     * that. A sentence in this app is not allowed to be the reason a control was
-     * never built.
-     */
-    private var whyNoWindow: String {
-        let name = machineName
-        let lead = windowID.isEmpty
-            ? "This is \(name)'s own tab rather than one of its windows"
-            : "\(name) is casting this page and its window list does not name it"
-        let alsoTakes = windowID.isEmpty
-            ? "Watching it and typing an address are what it does take."
-            : "Watching it is what it takes."
-        let attaching = surfaceAddress == nil
-            ? ""
-            : " Its address can still be opened on \(name) as a new window, and that window can be "
-                + "attached to a session — below."
-        return "\(lead), so it cannot be closed, isolated, photographed or recorded from here. "
-            + alsoTakes + attaching
-    }
-
-    /**
-     * A control in its place, greyed, with the reason on the hint.
-     *
-     * `.disabled(true)` rather than a button that answers with a sentence: a
-     * control that replies instead of acting is still a control that did not do
-     * what it says. The line above the card is where the reason is read; this is
-     * what keeps the screen the same screen.
-     */
-    private func deadRow(_ title: String, icon: String, id: String, why: String) -> some View {
-        Button {} label: {
-            HStack(spacing: 12) {
-                Image(systemName: icon)
-                    .font(.system(size: 17, weight: .light))
-                    .frame(width: 24)
-                Text(title)
-                    .font(.system(size: 16))
-                Spacer(minLength: 0)
-            }
-            .foregroundStyle(Theme.faint)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 13)
-        }
-        .buttonStyle(.plain)
-        .disabled(true)
-        .accessibilityHint(why)
-        .accessibilityIdentifier(id)
-    }
-
-    /* ---- why there is no picture, when there is a reason ------------------- */
-
-    /**
-     * One line, drawn only where it answers a question somebody is holding.
-     *
-     * The question is *why am I looking at settings instead of at the page*, and
-     * it only exists in the inline shape on a machine that does cast other
-     * windows. See the file header for the two conditions and why each is
-     * separate.
-     *
-     * A sentence rather than a disabled Watch row. It is a real state and not a
-     * fault — a server lists a window opened from the phone's own `+` under
-     * `browser.window.rows` and not under `browser.surfaces` — and the ⓘ carries
-     * the why, so the line itself stays one line.
-     */
-    @ViewBuilder
-    private var notWatchable: some View {
-        if !pushed && canWatch {
-            SchemeSectionCaption(
-                "Live",
-                about: "watching a window",
-                info: "The machine streams a page as pictures and sends your taps, swipes and typing "
-                    + "back to it. Not every window can be streamed: a server offers its own front "
-                    + "tab and the windows its sessions hold, and one opened from the + here can be "
-                    + "driven without being watched.")
-
-            SchemeGroup {
-                plainNote("This machine is not offering this window for watching.",
-                          id: "browser.machine.window.notWatchable")
-            }
-        }
-    }
-
-    /* ---- shared or its own jar --------------------------------------------- */
-
-    /**
-     * Which jar this window's cookies land in, and the one control that moves it.
-     *
-     * *"Making a browsing session into an isolated or shared one."* It is
-     * convertible in both directions and the word on the button is the
-     * destination rather than the state, because the state is already the line
-     * beside it — a button saying "Isolated" next to a label saying "Shared" is
-     * two readings of the same word and somebody will press it to find out.
-     *
-     * The choice is also offered at the moment a window is opened, on the
-     * Browser tab's `+`, and that is not a duplicate control: a login typed into
-     * a window that turned out to be shared is already in the machine's jar by
-     * the time anybody thinks to convert it, so the choice has to exist before
-     * the window does *and* after.
-     */
-    @ViewBuilder
-    private func isolationCard(_ window: MachineWindow) -> some View {
-        SchemeSectionCaption(
-            "Isolation",
-            about: "isolated windows",
-            info: "A shared window uses the machine's own profile — its cookies and whatever it is "
-                + "signed into. An isolated one gets a partition of its own, and that partition is "
-                + "thrown away when the window closes.")
-
-        SchemeGroup {
-            HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(window.isolated ? "Isolated" : "Shared")
-                        .font(.system(size: 16))
-                        .foregroundStyle(Theme.primary)
-                    if let profile = window.profile, !profile.isEmpty, !window.isolated {
-                        Text(profile)
-                            .font(.system(size: 12))
-                            .foregroundStyle(Theme.faint)
-                            .lineLimit(1)
-                    }
-                }
-                Spacer(minLength: 8)
-                Button {
-                    host?.actOnMachineWindow(windowID, window.isolated ? .share : .isolate)
-                } label: {
-                    Text(window.isolated ? "Make shared" : "Make isolated")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(Theme.accent)
-                        .padding(.vertical, 4)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("browser.machine.window.isolation")
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 13)
-        }
-    }
-
-    /* ---- which session owns it --------------------------------------------- */
-
-    /**
-     * *"How to connect to it"* — the headline of this screen, and the reason
-     * this family exists at all.
-     *
-     * > *"We don't have an option to connect any browsing window to any session,
-     * > so the session knows which browsing window it is working on."*
-     *
-     * The desktop has had this since `src/main/browser-binding.ts`; what the
-     * phone lacked was a way to press it. A bound window gets a slot name — `B1`,
-     * `B2` — and the session's tools address it by that name, which is why the
-     * slot is drawn as an identifier rather than as a status: it is the word
-     * appearing in that agent's transcript.
-     *
-     * It is also on the row's `…` on the home, deliberately, because attaching is
-     * one of the three things he named as a thing you do to a window *from the
-     * outside*. Both reach the same verb with the same picker.
-     */
-    @ViewBuilder
-    private func sessionCard(_ window: MachineWindow) -> some View {
-        SchemeSectionCaption(
-            "Session",
-            about: "window binding",
-            info: "A bound window gets a slot name — B1, B2 — and the session's tools address it by "
-                + "that name. A session that already holds three windows names the next one B4.")
-
-        SchemeGroup {
-            if let slot = window.slot {
-                HStack(spacing: 10) {
-                    MachineWindowMark(text: slot, tone: Theme.accent)
-                    Text(MachineBrowserText.owner(window) ?? "A session")
-                        .font(.system(size: 16))
-                        .foregroundStyle(Theme.primary)
-                        .lineLimit(1)
-                    Spacer(minLength: 8)
-                    Button {
-                        host?.bindMachineWindow(windowID, to: nil)
-                    } label: {
-                        Text("Detach")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(Theme.critical)
-                            .padding(.vertical, 4)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityHint("The session stops being able to reach this window")
-                    .accessibilityIdentifier("browser.machine.window.detach")
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 13)
-            }
-
-            if !sessions.isEmpty {
-                if window.isBound { rowDivider(inset: 16) }
-                Menu {
-                    ForEach(sessions) { session in
-                        Button {
-                            host?.bindMachineWindow(windowID, to: session.id)
-                        } label: {
-                            Label(MachineBrowserText.sessionRow(session),
-                                  systemImage: session.id == window.session ? "checkmark" : "terminal")
-                        }
-                    }
-                } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: "link")
-                            .font(.system(size: 17, weight: .light))
-                            .foregroundStyle(Theme.accent)
-                            .frame(width: 24)
-                        Text(window.isBound ? "Attach to another session" : "Attach to a session")
-                            .font(.system(size: 16))
-                            .foregroundStyle(Theme.accent)
-                        Spacer(minLength: 8)
-                        Image(systemName: "chevron.up.chevron.down")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(Theme.faint)
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 13)
-                    .contentShape(Rectangle())
-                }
-                .accessibilityIdentifier("browser.machine.window.attach")
-            } else if !window.isBound {
-                // No control at all rather than a picker with nothing in it: a
-                // machine running no sessions has nowhere to bind, and the fix
-                // is a session rather than anything on this screen.
-                plainNote("No sessions on the machine.", id: "browser.machine.window.noSessions")
-            }
-        }
-    }
-
-    /* ---- what it looks like ------------------------------------------------ */
-
-    /**
-     * Photograph it, and choose who gets the photograph.
-     *
-     * Two controls, because they have two outcomes — see the file header. The
-     * note travels only with the second, so it is drawn only when there is a
-     * session to send to; a field whose contents can never leave the phone is a
-     * control that cannot act.
-     */
-    @ViewBuilder
-    private var screenshotCard: some View {
-        SchemeSectionCaption("Screenshot")
-
-        SchemeGroup {
-            if !sessions.isEmpty {
-                HStack(spacing: 12) {
-                    Image(systemName: "text.bubble")
-                        .font(.system(size: 17, weight: .light))
-                        .foregroundStyle(Theme.faint)
-                        .frame(width: 24, height: 26)
-                    TextField("Note for the session (optional)", text: $shotNote)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 15))
-                        .foregroundStyle(Theme.primary)
-                        .submitLabel(.done)
-                        .accessibilityIdentifier("browser.machine.window.shotNote")
-                }
-                .padding(.leading, 16)
-                .padding(.trailing, 12)
-                .padding(.vertical, 10)
-
-                rowDivider(inset: 16)
-            }
-
-            HStack(spacing: 0) {
-                Button {
-                    host?.shotMachineWindow(windowID)
-                } label: {
-                    VStack(spacing: 5) {
-                        Image(systemName: "camera")
-                            .font(.system(size: 17, weight: .medium))
-                        Text("Screenshot")
-                            .font(.system(size: 11))
-                    }
-                    .foregroundStyle(Theme.accent)
-                    .frame(maxWidth: .infinity)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityHint("Takes a picture of this window and shows it here")
-                .accessibilityIdentifier("browser.machine.window.shot")
-
-                if !sessions.isEmpty {
-                    Menu {
-                        ForEach(sessions) { session in
-                            Button {
-                                send(to: session.id)
-                            } label: {
-                                Label(MachineBrowserText.sessionRow(session), systemImage: "terminal")
-                            }
-                        }
-                    } label: {
-                        VStack(spacing: 5) {
-                            Image(systemName: "paperplane")
-                                .font(.system(size: 17, weight: .medium))
-                            Text("Send to a session")
-                                .font(.system(size: 11))
-                        }
-                        .foregroundStyle(Theme.accent)
-                        .frame(maxWidth: .infinity)
-                        .contentShape(Rectangle())
-                    }
-                    .accessibilityLabel("Send a screenshot to a session")
-                    .accessibilityIdentifier("browser.machine.window.shotTo")
-                }
-            }
-            .padding(.vertical, 12)
-
-            if let picture {
-                rowDivider(inset: 16)
-                VStack(alignment: .leading, spacing: 8) {
-                    /*
-                     * Drawn at whatever width the card gives it, aspect kept.
-                     *
-                     * A machine's window is far wider than a phone, so this is a
-                     * thumbnail of a desktop page and it is deliberately not
-                     * zoomable: the point of looking at it here is *did the page
-                     * do the thing*, and the point of the control beside it is
-                     * that the agent gets the full-size picture rather than this
-                     * phone squinting at one.
-                     */
-                    Image(uiImage: picture)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .frame(maxWidth: .infinity)
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .stroke(Theme.hairline))
-                        .accessibilityLabel("Screenshot of \(window?.label ?? "this window")")
-                        .accessibilityIdentifier("browser.machine.window.picture")
-
-                    if let line = SessionDetails.activityLine(shot?.at) {
-                        Text("Taken \(line)")
-                            .font(.system(size: 12))
-                            .foregroundStyle(Theme.faint)
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 13)
-            }
-        }
-    }
-
-    /* ---- what it recorded -------------------------------------------------- */
-
-    /**
-     * The click flow, and the fact that it is running.
-     *
-     * *"Recording the clicks flow"* is the one control on this screen with a
-     * state somebody can walk away from, so it says so twice — the word on the
-     * button changes, and a red mark sits beside it — and the row on the Browser
-     * tab's home says it a third time. A page quietly collecting every
-     * interaction is not something to learn about by opening a screen.
-     *
-     * `readMachineSteps` is the only way to see what was collected: the steps are
-     * not on the window list and there is no push for them. So they are asked for
-     * on arrival, again the moment a recording stops, and on the control beside
-     * the toggle — which is the honest answer for a flow that is still growing
-     * while somebody is looking at it.
-     */
-    @ViewBuilder
-    private func recordingCard(_ window: MachineWindow) -> some View {
-        SchemeSectionCaption("Click flow")
-
-        SchemeGroup {
-            HStack(spacing: 12) {
-                Button {
-                    host?.actOnMachineWindow(windowID, window.recording ? .recordOff : .recordOn)
-                } label: {
-                    HStack(spacing: 9) {
-                        Image(systemName: window.recording ? "stop.circle" : "record.circle")
-                            .font(.system(size: 19, weight: .light))
-                            .frame(width: 24)
-                        Text(window.recording ? "Stop recording" : "Record the click flow")
-                            .font(.system(size: 16))
-                    }
-                    .foregroundStyle(window.recording ? Theme.critical : Theme.accent)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("browser.machine.window.record")
-
-                Spacer(minLength: 8)
-
-                if window.recording {
-                    MachineWindowMark(text: "Recording", tone: Theme.critical)
-                        .accessibilityHidden(true)
-                }
-
-                Button {
-                    host?.readMachineSteps(windowID)
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(Theme.faint)
-                        .frame(width: 34, height: 30)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Read the steps again")
-                .accessibilityIdentifier("browser.machine.window.steps.refresh")
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-
-            if !steps.isEmpty {
-                let first = steps.first?.at ?? 0
-                ForEach(steps) { step in
-                    rowDivider(inset: 16)
-                    stepRow(step, from: first)
-                }
-            } else if window.recording {
-                rowDivider(inset: 16)
-                plainNote("Nothing yet.", id: "browser.machine.window.noSteps")
-            }
-        }
-
-        /*
-         * The cut, for the same reason and with the same limit as the window
-         * list's: `WireCodec.recordedSteps` takes a `prefix` and keeps no record
-         * of what it dropped, so this can say there may be more and cannot say
-         * how many. The host caps its own side as well — see `MAX_STEPS` in
-         * `src/main/browser-steps.ts` — which is the cap somebody would actually
-         * hit first.
-         */
-        if steps.count >= MachineBrowserWire.maxSteps {
-            HStack(spacing: 6) {
-                Text("Showing the first \(MachineBrowserWire.maxSteps)")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.faint)
-                InfoDot(
-                    about: "the step limit",
-                    text: "This phone draws \(MachineBrowserWire.maxSteps) steps of a flow. The "
-                        + "recording on the machine is not truncated by what is shown here.")
-            }
-            .padding(.top, 12)
-            .padding(.leading, 4)
-            .accessibilityIdentifier("browser.machine.window.stepsCapped")
-        }
-    }
-
-    /**
-     * One step: when, what, and to what.
-     *
-     * The offset is relative to the first step rather than a clock time, because
-     * a flow is read as a sequence — *click, type, click, submit* — and the
-     * useful question about step nine is how long after step one it happened.
-     * `at` is the machine's main-process clock in epoch milliseconds, stamped
-     * there rather than by the page: *"the page never gets to stamp its own
-     * steps"* (`src/main/browser-steps.ts`).
-     */
-    private func stepRow(_ step: RecordedStep, from first: Double) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Text(offset(step, from: first))
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(Theme.faint)
-                .frame(width: 44, alignment: .trailing)
-                .padding(.top, 2)
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    MachineWindowMark(text: step.kind, tone: Theme.secondary)
-                    if let detail = step.detail, !detail.isEmpty {
-                        Text(detail)
-                            .font(.system(size: 14))
-                            .foregroundStyle(Theme.primary)
-                            .lineLimit(1)
-                    }
-                    Spacer(minLength: 0)
-                }
-                if let value = step.value, !value.isEmpty {
-                    Text(value)
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.secondary)
-                        .lineLimit(1)
-                }
-                if let selector = step.selector, !selector.isEmpty {
-                    // Truncated in the middle: a selector's two ends are the tag
-                    // and the thing that makes it unique, and the wrapper chain
-                    // between them is the part nobody reads on a phone.
-                    Text(selector)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(Theme.faint)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("browser.machine.window.step.\(step.index)")
-    }
-
-    /* ---- and the end of it ------------------------------------------------- */
-
-    /**
-     * Close the window, from inside it.
-     *
-     * Last, alone, and away from everything else on the screen, because it is
-     * the one control here that ends something. It is also on the home's row —
-     * on the `…` and on the swipe — which is not a duplicate: closing a window
-     * you are looking at and closing one from a list are two different moments,
-     * and the list's whole point is not having to open a window to deal with it.
-     *
-     * Nothing is dismissed on the press. `MachineWindowView` watches for the
-     * window leaving the machine's list and pops both screens then — see this
-     * file's header on why that watcher is not also here.
-     */
-    @ViewBuilder
-    private func closeCard(_ window: MachineWindow) -> some View {
-        SchemeSectionCaption("Window")
-
-        SchemeGroup {
-            Button {
-                host?.actOnMachineWindow(windowID, .close)
-            } label: {
-                HStack(spacing: 12) {
-                    Image(systemName: "xmark.circle")
-                        .font(.system(size: 19, weight: .light))
-                        .frame(width: 24)
-                    Text("Close this window")
-                        .font(.system(size: 16))
-                    Spacer(minLength: 0)
-                }
-                .foregroundStyle(Theme.critical)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 13)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityHint("Closes \(window.label) in \(model.theMachine)'s browser")
-            .accessibilityIdentifier("browser.machine.window.close")
-        }
-    }
-
-    /// `+1.2s` from the start of the flow, and nothing at all when either stamp
-    /// is missing — a step drawn as `+0.0s` because the machine sent no time is
-    /// a number somebody would read as a fact.
-    private func offset(_ step: RecordedStep, from first: Double) -> String {
-        guard step.at > 0, first > 0, step.at >= first else { return "" }
-        let seconds = (step.at - first) / 1000
-        guard seconds.isFinite else { return "" }
-        return seconds < 10 ? String(format: "+%.1fs", seconds) : "+\(Int(seconds))s"
-    }
-
-    // MARK: - Actions
-
-    private func send(to session: String) {
-        let line = shotNote.trimmingCharacters(in: .whitespacesAndNewlines)
-        host?.shotMachineWindow(windowID, to: session, note: line.isEmpty ? nil : line)
-        shotNote = ""
-    }
-
     private func refreshPicture() {
         guard let data = shot?.png, !data.isEmpty else {
             picture = nil
             return
         }
         picture = UIImage(data: data)
-    }
-
-    // MARK: - Chrome
-
-    /**
-     * A line of prose as a row inside a card.
-     *
-     * The identifier goes on the **text**, never on the card around it: an
-     * `accessibilityIdentifier` on a container makes that container an
-     * accessibility element and everything inside it stops existing — measured
-     * on iOS 26.4, and written down in `TabNavigation.swift`.
-     */
-    private func plainNote(_ text: String, id: String) -> some View {
-        Text(text)
-            .font(.system(size: 14))
-            .foregroundStyle(Theme.faint)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 15)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .accessibilityIdentifier(id)
-    }
-
-    /// 16 rather than a list row's 52: the rows in these cards have no icon
-    /// column to line a divider up under.
-    private func rowDivider(inset: CGFloat) -> some View {
-        Rectangle()
-            .fill(Theme.hairline)
-            .frame(height: 0.5)
-            .padding(.leading, inset)
     }
 }
 

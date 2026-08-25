@@ -49,6 +49,29 @@
  *  - **no windows open** — the home is an empty state with a way in on it, and
  *    every per-window control is legitimately absent.
  *
+ * ## What the second review added to it
+ *
+ * Three claims that only a running app can settle, and all three are about the
+ * screens being the **same** rather than about any one control:
+ *
+ *  - **One settings screen.** *"Why not like one name title should be same
+ *    everything."* Two cases walk the two routes into
+ *    `MachineWindowSettingsView` — a window on the machine, and a page this
+ *    phone is drawing — and assert the same navigation title and the same six
+ *    card captions in `settingsCards`. A card that appears on one kind of window
+ *    and not the other is the *"two separate kind of pages"* complaint coming
+ *    back, and it is invisible in a diff.
+ *  - **Rows are names.** *"You are also putting so much of a description under
+ *    the title of that thing… they have becomes too big."* Checked as a set
+ *    difference over **labels** — the names are still pressable, the sentences
+ *    that were under them are gone from the screen, and the ⓘ that now holds
+ *    them is asserted present, because *"without losing any of them"* is half
+ *    the instruction.
+ *  - **The screen may not contradict itself.** His screenshot of *Window
+ *    settings* had *"This machine's browser cannot record a click flow."* over a
+ *    live blue **Record the click flow**. That is asserted as an invariant: the
+ *    sentence and a pressable Record may never be on screen together.
+ *
  * ## Nothing here presses anything that changes a machine
  *
  * This runs against Asad's live server. A window on the home is somebody's real
@@ -109,6 +132,26 @@ final class MachineBrowserUITests: XCTestCase {
     private static let noPhonePage =
         "This phone is holding no page of its own over a tunnel, so there is no On this phone row "
         + "to walk. Open one from the + and choose This phone."
+
+    /**
+     * **The six cards every browser window's settings carry, in this order.**
+     *
+     * > *"why do we even have two different than different versions of the
+     * > browser settings and page setting kind of thing window setting thing.
+     * > Why not like one name title should be same everything"*
+     *
+     * The claim this array makes is the whole of W2 and it is the kind of claim
+     * that cannot be read off the code: `MachineWindowSettingsView` draws six
+     * cards unconditionally and each decides internally whether it can act, but
+     * *"the same six appear on a real machine for a real window of each kind"* is
+     * a question about a running app on a real host.
+     *
+     * They are `SchemeSectionCaption`s, which draw `Text(text.uppercased())` with
+     * no identifier on them — a caption is not a control — so they are asked for
+     * by their words, which is the same rule this file follows for menu rows.
+     */
+    private static let settingsCards = ["WINDOW", "ISOLATION", "SESSION",
+                                        "SCREENSHOT", "CLICK FLOW", "CLOSE"]
 
     private static let noFrontTab =
         "This machine is listing no front tab of its own — the surface named '' that a server "
@@ -337,6 +380,69 @@ final class MachineBrowserUITests: XCTestCase {
                       "Cancel should come back to the home without opening anything")
     }
 
+    /**
+     * **A destination is a name. The sentence under it is gone.**
+     *
+     * > *"you are giving too much space to the options to the features so all
+     * > the list and drop downs becoming too bigger because the you are also
+     * > putting so much of a description under the title of that thing under the
+     * > title of the feature instead of just i button or nothing maybe so they
+     * > have becomes too big you should compact all the features or buttons and
+     * > without losing any of them"*
+     *
+     * Each row on this card carried its own paragraph — *"Opens in
+     * DESKTOP-DDGMNCV's own browser, signed in the way DESKTOP-DDGMNCV is."*,
+     * *"Opens in DESKTOP-DDGMNCV's browser signed into nothing, and forgets
+     * everything when the window closes."*, *"Opens here on this phone, over a
+     * tunnel to DESKTOP-DDGMNCV. Only DESKTOP-DDGMNCV's own ports."* — three
+     * names and three paragraphs above an address field he had not typed in yet.
+     *
+     * Asserted as a **set difference over labels**, which is the only way this
+     * kind of change can be checked: the names are still there and press the same
+     * way, and no element on the sheet begins with the sentences that came off.
+     * An identifier would prove nothing — the rows kept theirs while the
+     * paragraphs sat underneath.
+     *
+     * *"Without losing any of them"* is the other half, and it is why the ⓘ is
+     * asserted too: every one of those sentences is behind it. A caption with no
+     * dot on it after a pass like this is a pass that deleted rather than moved.
+     *
+     * **Cancelled, never submitted.**
+     */
+    func testTheDestinationRowsAreNamesRatherThanParagraphs() throws {
+        let plus = app.buttons["browser.new"]
+        try XCTSkipUnless(plus.waitForExistence(timeout: 20), Self.notDrivable)
+        plus.tap()
+        XCTAssertTrue(app.textFields["browser.address"].waitForExistence(timeout: 8),
+                      "the sheet should open")
+
+        XCTAssertTrue(app.otherElements["browser.open.isolation"].exists,
+                      "where a window opens is a card of rows, in every state of this sheet — "
+                      + "including the one where the machine offers a single destination, which "
+                      + "used to be a line of grey prose instead")
+
+        // Still pressable by the words two other suites press them by.
+        for name in ["Machine", "Isolated"] {
+            XCTAssertTrue(app.buttons[name].exists, "\(name) should still be a row of its own")
+        }
+
+        for sentence in ["Opens in ", "Opens here on this phone"] {
+            XCTAssertFalse(app.descendants(matching: .any)
+                .matching(NSPredicate(format: "label BEGINSWITH %@", sentence)).firstMatch.exists,
+                           "no row on this card explains itself in prose any more — \(sentence)… "
+                           + "belongs on the information dot beside the caption")
+        }
+
+        XCTAssertTrue(app.buttons["info.where-a-window-opens"].exists,
+                      "and it is on the dot rather than deleted — every sentence that came off "
+                      + "these rows is behind this one control")
+        capture("42-destination-names")
+
+        app.buttons["browser.open.cancel"].tap()
+        XCTAssertTrue(app.buttons["browser.more"].waitForExistence(timeout: 8),
+                      "Cancel should come back to the home without opening anything")
+    }
+
     // MARK: - A row, from the outside
 
     /**
@@ -458,8 +564,7 @@ final class MachineBrowserUITests: XCTestCase {
              * sessions" look identical from here.
              */
             let attach = app.descendants(matching: .any)
-                .matching(NSPredicate(format: "label BEGINSWITH 'Attach to'"
-                                      + " OR label CONTAINS 'and attach'")).firstMatch
+                .matching(NSPredicate(format: "label BEGINSWITH 'Attach'")).firstMatch
             if !attach.exists {
                 XCTContext.runActivity(named: "no sessions to attach to, from \(row)") { _ in }
             }
@@ -604,15 +709,131 @@ final class MachineBrowserUITests: XCTestCase {
          * whatever session we want to send."* Two screens apart, this is a
          * feature nobody uses.
          *
-         * Drawn only when the machine has a session to send to, so its absence
-         * is recorded rather than asserted: a control that could only ever
-         * refuse is one this app does not draw.
+         * It is now drawn on every shape of this screen and **greyed** where
+         * there is nowhere to send, which is the round's rule: a card that
+         * changed width between two kinds of window was the *"two different
+         * versions"* complaint in miniature. So its existence no longer says
+         * anything and `isEnabled` is the question — the note field travels with
+         * a picture that can actually be handed over.
          */
-        if app.buttons["browser.machine.window.shotTo"].exists {
+        if app.buttons["browser.machine.window.shotTo"].isEnabled {
             XCTAssertTrue(app.textFields["browser.machine.window.shotNote"].exists,
                           "a note travels with a picture handed to a session")
         } else {
             XCTContext.runActivity(named: "no sessions on this machine to send a picture to") { _ in }
+        }
+    }
+
+    /**
+     * **One screen, one title, one order of cards — whichever machine is drawing
+     * the window.**
+     *
+     * > *"on Windows side so we have two separate kind of pages Windows page,
+     * > windows settings and page settings both are like for the browser window
+     * > I don't know why do you call one of them as page one of them as window
+     * > since they both do the same thing … if it is open in local in this
+     * > machine it is like page setting and if it is open in other server
+     * > machine it calls as window it should not be like that"*
+     *
+     * This is the half of that comparison that walks a window **on the machine**;
+     * `testAPhonePagesMenuAttachesAndItsSettingsAreReal` walks the page on this
+     * phone and asserts the same six captions and the same title. Two cases
+     * rather than one, because reaching the two shapes needs two different routes
+     * and each can legitimately skip on its own.
+     *
+     * The title is asserted only where this screen **is** a screen. On a window
+     * the machine will not cast there is no `…` and the cards are the body of
+     * `MachineWindowView`, which has already named the window in the bar — a
+     * second title there would overwrite a more useful one. What must be the same
+     * in both shapes is the cards, and that is what is asserted unconditionally.
+     *
+     * Nothing is pressed. Every control here acts on somebody's real window.
+     */
+    func testTheWindowSettingsAreOneScreenWhicheverWindowItIs() throws {
+        try openTheFirstWindow()
+
+        let dots = app.buttons["browser.machine.window.settings"]
+        if dots.waitForExistence(timeout: 6) {
+            dots.tap()
+            XCTAssertTrue(app.staticTexts["ISOLATION"].waitForExistence(timeout: 8),
+                          "the settings should come up behind the dots")
+            XCTAssertTrue(app.navigationBars["Window settings"].exists,
+                          "one name for one screen — not Window settings here and Page settings "
+                          + "for the same six cards next door")
+        }
+
+        for caption in Self.settingsCards {
+            XCTAssertTrue(app.staticTexts[caption].exists,
+                          "\(caption) is one of the six cards every browser window's settings "
+                          + "carry, in this order — a card that is missing on one kind of window "
+                          + "and present on another is the two-screens complaint coming back")
+        }
+        capture("40-window-settings-cards")
+    }
+
+    /**
+     * **A screen may not contradict itself.**
+     *
+     * His screenshot of *Window settings* has the banner *"This machine's
+     * browser cannot record a click flow."* with a live blue **Record the click
+     * flow** eleven points underneath it. One of the two was lying, and it was
+     * the button: the banner is the machine's answer to the
+     * `browser.window.steps` the screen sends on appear
+     * (`src/main/remote/browser-control.ts` answers `rows("This machine's
+     * browser cannot record a click flow.")` when it has no recorder), and the
+     * card was drawn unconditionally because nothing on the wire says whether a
+     * machine has one.
+     *
+     * The assertion is the contradiction itself rather than either half, because
+     * both halves are legitimate on their own: a machine **with** a recorder
+     * draws a live button and no such banner, and a machine without one draws a
+     * greyed button with the reason on its ⓘ. What may never be on screen at
+     * once is the sentence and a pressable button.
+     *
+     * Skips on a machine that has never said it, which is most of them — that is
+     * the product working, and a case that demanded the refusal would be a case
+     * about which host happened to be running.
+     */
+    func testTheRecorderCardNeverContradictsTheBanner() throws {
+        try openTheFirstWindow()
+
+        let dots = app.buttons["browser.machine.window.settings"]
+        if dots.waitForExistence(timeout: 6) { dots.tap() }
+
+        let record = app.buttons["browser.machine.window.record"]
+        try XCTSkipUnless(record.waitForExistence(timeout: 10), Self.noWindows)
+
+        /*
+         * The invariant, stated as the thing his screenshot showed: the refusal
+         * and a pressable Record may not be on screen together.
+         *
+         * Asserted as an invariant rather than as a demand for the refused state,
+         * because most machines have a recorder and a case that required the
+         * refusal would be a case about which host happened to be running. Both
+         * legitimate states pass it — a machine with a recorder draws a live
+         * button and no such sentence; one without draws a greyed button with the
+         * reason on the card's ⓘ, where a hint is not a label and does not appear
+         * here at all.
+         *
+         * Both directions are checked, because the fix has two halves and either
+         * could be undone on its own: the card can stop reading the machine's
+         * answer, or the banner can start repeating a fact the card already
+         * carries.
+         */
+        let refusal = app.descendants(matching: .any).matching(
+            NSPredicate(format: "label CONTAINS %@", "cannot record a click flow")).firstMatch
+        let sentenceOnScreen = refusal.waitForExistence(timeout: 5)
+
+        capture("41-recorder-card")
+        if sentenceOnScreen {
+            XCTAssertFalse(record.isEnabled,
+                           "the machine has said its browser cannot record a click flow, so the "
+                           + "button that starts one may not be lit over that sentence — grey it "
+                           + "and put the reason on the card's information dot")
+        } else if record.isEnabled {
+            XCTContext.runActivity(named: "this machine's browser has a click recorder") { _ in }
+        } else {
+            XCTContext.runActivity(named: "the recorder is refused and the card says so quietly") { _ in }
         }
     }
 
@@ -671,7 +892,7 @@ final class MachineBrowserUITests: XCTestCase {
         let attach = app.descendants(matching: .any).matching(
             NSPredicate(format: "label CONTAINS %@ OR label CONTAINS %@"
                         + " OR label CONTAINS %@ OR label CONTAINS %@",
-                        "and attach",
+                        "Attach a window",
                         "no web address to open again",
                         "Nothing is running on",
                         "not offering its browser")).firstMatch
@@ -681,11 +902,23 @@ final class MachineBrowserUITests: XCTestCase {
                       + "window ids, which is not why an attach would fail")
         capture("39-front-tab-menu")
 
+        /*
+         * **Both places, named rather than described.**
+         *
+         * The two section headers used to be *"Open on DESKTOP-X and attach —
+         * signed in the way DESKTOP-X is"* and *"Open isolated and attach —
+         * signed into nothing, forgotten when it closes"*, and this case asked
+         * for them by those clauses. He read that menu and could not tell the
+         * two apart, so they are names now and the difference is on the window
+         * settings screen's Session ⓘ. Asked for by their words either way: an
+         * `accessibilityIdentifier` on a `Button` inside a SwiftUI `Menu` does
+         * not reach the presented row.
+         */
         let shared = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "label CONTAINS 'signed in the way'")).firstMatch
+            .matching(NSPredicate(format: "label == 'Attach a window'")).firstMatch
         if shared.exists {
             XCTAssertTrue(app.descendants(matching: .any)
-                .matching(NSPredicate(format: "label CONTAINS 'signed into nothing'"))
+                .matching(NSPredicate(format: "label == 'Attach an isolated window'"))
                 .firstMatch.exists,
                           "where the attach is live, the isolated window is offered beside the "
                           + "shared one — he chooses that on the + and it was being chosen for him")
@@ -735,7 +968,7 @@ final class MachineBrowserUITests: XCTestCase {
 
         let attach = app.descendants(matching: .any).matching(
             NSPredicate(format: "label CONTAINS %@ OR label CONTAINS %@ OR label CONTAINS %@",
-                        "and attach",
+                        "Attach a window",
                         "Nothing is running on",
                         "not offering its browser")).firstMatch
         XCTAssertTrue(attach.waitForExistence(timeout: 5),
@@ -755,15 +988,31 @@ final class MachineBrowserUITests: XCTestCase {
          * the only handle on a presented menu row.
          */
         let shared = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "label CONTAINS 'signed in the way'")).firstMatch
+            .matching(NSPredicate(format: "label == 'Attach a window'")).firstMatch
         if shared.exists {
             XCTAssertTrue(app.descendants(matching: .any)
-                .matching(NSPredicate(format: "label CONTAINS 'signed into nothing'"))
+                .matching(NSPredicate(format: "label == 'Attach an isolated window'"))
                 .firstMatch.exists,
                           "the isolated window should be offered beside the shared one")
         }
 
-        let settings = app.buttons["Page settings"]
+        /*
+         * **One name.**
+         *
+         * > *"why do we even have two different than different versions of the
+         * > browser settings and page setting kind of thing window setting
+         * > thing. Why not like one name title should be same everything"*
+         *
+         * This row said *Page settings* and opened a screen titled *Page
+         * settings*, while the same screen reached from a window on the machine
+         * said *Window settings*. Both halves are asserted — the row's word here,
+         * and the title on the screen below — because renaming one and leaving
+         * the other is exactly how this got two names in the first place.
+         */
+        XCTAssertFalse(app.buttons["Page settings"].exists,
+                       "a page on this phone is a browser window like any other — there is no "
+                       + "second word for its settings")
+        let settings = app.buttons["Window settings"]
         XCTAssertTrue(settings.exists,
                       "a page this phone draws has no bar of its own, so its settings are on the "
                       + "menu")
@@ -790,21 +1039,61 @@ final class MachineBrowserUITests: XCTestCase {
         }
         XCTAssertTrue(app.buttons["browser.phone.page.close"].exists,
                       "and close it")
+
+        /*
+         * **The recorder follows the page now, which is the reversal.**
+         *
+         * > *"you are giving record flow button in the windows side the server
+         * > side it and you are not giving that into the if they are browsing
+         * > locally in this machine. So there are so many differences if they
+         * > both are capable for a feature why don't they both have."*
+         *
+         * This case used to assert the **absence** of a recorder here, on the
+         * reasoning that the recorder is the machine's — `src/main/browser-steps.ts`
+         * — watching the machine's own browser. True of that recorder and never
+         * a reason the phone could not have one: this app owns the web view, so
+         * this app can watch it. `PhoneClickFlow` does, and the card is drawn off
+         * it with the same step rows the machine's flow gets.
+         *
+         * The machine's identifier is still asserted absent, and that is not
+         * belt-and-braces: drawing `browser.machine.window.record` on this screen
+         * would mean the phone's card was wired to a `browser.window.act` verb
+         * the host refuses at the parser for an empty window id — a button that
+         * can only ever answer with a refusal.
+         */
+        XCTAssertTrue(app.buttons["browser.phone.page.record"].exists,
+                      "this phone draws the page, so this phone can record what is clicked on it "
+                      + "— if both are capable of a feature, both have it")
         XCTAssertFalse(app.buttons["browser.machine.window.record"].exists,
-                       "the click recorder is the machine's, watching the machine's own browser — "
-                       + "it must not be drawn for a page this phone is rendering")
+                       "and it is the phone's own recorder, not a machine verb addressed by a "
+                       + "window id this page has not got")
         capture("38-phone-page-settings")
 
         /*
-         * The note field is drawn only where there is somewhere to send a
-         * picture, so its absence is recorded rather than asserted — a control
-         * that could only ever refuse is one this app does not draw.
+         * The Send control is drawn on every shape now — greyed where there is
+         * nowhere to send — so its **existence** no longer says anything. The
+         * note field travels with a picture that can actually be handed over, so
+         * the question is whether the control is live.
          */
-        if app.buttons["browser.phone.page.shotTo"].exists {
+        if app.buttons["browser.phone.page.shotTo"].isEnabled {
             XCTAssertTrue(app.textFields["browser.phone.page.shotNote"].exists,
                           "a note travels with a picture handed to a session")
         } else {
             XCTContext.runActivity(named: "nothing running on this machine to send a picture to") { _ in }
+        }
+
+        /*
+         * **One title, and the same six cards under it.** The other half of the
+         * comparison is in `testTheWindowSettingsAreOneScreenWhicheverWindowItIs`,
+         * which walks a window on the machine; this is the phone's side, asserted
+         * here because this case is the one that has a page on this phone.
+         */
+        XCTAssertTrue(app.navigationBars["Window settings"].exists,
+                      "one name for one screen — a page on this phone is a browser window too")
+        for caption in Self.settingsCards {
+            XCTAssertTrue(app.staticTexts[caption].exists,
+                          "\(caption) is one of the six cards every browser window's settings "
+                          + "carry, in this order, whichever machine draws the page")
         }
 
         app.navigationBars.buttons.firstMatch.tap()
