@@ -288,15 +288,34 @@ struct MachineWindowView: View {
                         .accessibilityIdentifier("browser.machine.window.notice")
                 }
 
+                /*
+                 * The load line, in the one place a browser has ever put it and
+                 * the same place the page on this phone puts it — directly under
+                 * the navigation bar. *"top, header and footer… should be same in
+                 * all type of browsing windows"*, and this is the top: a page
+                 * fetching something says so identically whichever kind of window
+                 * it is in.
+                 *
+                 * `MachineWindow.loading` is a real field on the wire, so this is
+                 * the machine's own answer rather than a guess made here. What
+                 * cannot follow it across is Stop — there is no such verb in
+                 * `MachineWindow.Act` — so the bar keeps a live Reload while this
+                 * line runs. See `BrowserPageBar.stop`.
+                 */
+                if window?.loading == true {
+                    ProgressView()
+                        .progressViewStyle(.linear)
+                        .tint(Theme.accent)
+                        .accessibilityIdentifier("browser.machine.window.pageLoading")
+                }
+
                 stage
             }
         }
-        // The window's own name, the surface's where there is no window row —
-        // both are the page's title with its address behind it — and the noun
-        // only while neither list has landed.
-        .navigationTitle(window?.label
-                         ?? liveSurface.map(MachineBrowserText.surfaceLabel)
-                         ?? "Window")
+        // The page's own title, its address until it has one, and the noun only
+        // while neither list has landed. One rule for every kind of window — see
+        // `BrowserChrome.pageTitle`.
+        .navigationTitle(pageTitle)
         .navigationBarTitleDisplayMode(.inline)
         .safeAreaInset(edge: .bottom) { bar }
         /*
@@ -356,6 +375,28 @@ struct MachineWindowView: View {
     }
 
     // MARK: - What is on the screen
+
+    /**
+     * What this window is called, by the one rule every browser window in this
+     * app is named by.
+     *
+     * It reproduces exactly what two expressions used to say between them —
+     * `MachineWindow.label` for a window row, `MachineBrowserText.surfaceLabel`
+     * for a cast with no row — and says it once. The fallback is where those two
+     * differed: a surface with neither a title nor an address is the machine's
+     * own front tab (`""`) or a named slot, and a window whose row has simply not
+     * landed yet is not yet anything, so it is the noun.
+     */
+    private var pageTitle: String {
+        BrowserChrome.pageTitle(title: window?.title ?? liveSurface?.title ?? "",
+                                address: window?.url ?? liveSurface?.url ?? "",
+                                fallback: fallbackName)
+    }
+
+    private var fallbackName: String {
+        guard window != nil || liveSurface != nil else { return "Window" }
+        return windowID.isEmpty ? "Front tab" : windowID
+    }
 
     @ViewBuilder
     private var stage: some View {
@@ -470,17 +511,26 @@ struct MachineWindowView: View {
      * being the video — and the answer to that, a round later, was to stop having
      * two screens.
      *
-     * ## The same four controls on every page, and the reason where one is dead
+     * ## The same six controls on every page, and the reason where one is dead
      *
      * > *"it should be the same case, or all the options should be available at
      * > least."*
      *
-     * So the row is the same row under every page this screen shows, and which of
-     * them can act is decided **per verb from what the wire will carry**, never
-     * by leaving a gap:
+     * > *"So top, header and footer, tab bar should be same in all type of
+     * > browsing windows, including on this phone, including isolated, including
+     * > the server."*
      *
-     *  - **A window this phone can drive** — all four are `browser.window.*` and
-     *    all four are live.
+     * The row is Back · Forward · Reload · Find · Inspect · More, and it is that
+     * row under a window on the machine, an isolated window on the machine, and a
+     * page this phone is holding open over a tunnel. Find and Inspect joined it
+     * here from the phone's side, where they work; on this screen they are drawn
+     * greyed with the reason, because a picture of a page is not a page.
+     *
+     * Which of them can act is decided **per verb from what the wire will
+     * carry**, never by leaving a gap:
+     *
+     *  - **A window this phone can drive** — the address, Back, Forward and
+     *    Reload are all `browser.window.*` and all live.
      *  - **The machine's own front tab** — the address and Reload are `web.open`,
      *    which lands in that same slot. Back and Forward are drawn dead: the
      *    codec refuses an empty window id on `browser.window.act`, so there is no
@@ -490,9 +540,11 @@ struct MachineWindowView: View {
      *    read-only at the machine's last word on it, and all three verbs are dead
      *    with the reason.
      *
-     * The `…` is drawn only where the settings are somewhere else — on a window
-     * with no cast they **are** the body of this screen, and a control that leads
-     * to where you are standing is worse than no control.
+     * The `…` **acts** only where the settings are somewhere else — on a window
+     * with no cast they *are* the body of this screen, and a control that leads to
+     * where you are standing is worse than no control. It is still drawn, greyed,
+     * saying that: leaving a gap there is the thing that made one window's bar
+     * shorter than another's.
      *
      * Absent entirely only where there is neither a window to drive nor a picture
      * to be under: a bar with nothing above it is not a browser's bar.
@@ -512,7 +564,49 @@ struct MachineWindowView: View {
                 reload: reloadVerb,
                 page: liveSurface?.window,
                 more: liveSurface != nil ? { showingSettings = true } : nil,
-                unavailable: whyLimited)
+                unavailable: whyLimited,
+                /*
+                 * **No history state, and that is deliberately not a `false`.**
+                 *
+                 * `MachineWindow` carries no `canGoBack`. The desktop's own
+                 * back-forward list never comes over this wire, so nil is the only
+                 * honest answer and the bar reads it as *do not grey these*. The
+                 * page on this phone owns a `WKWebView` and passes the real thing.
+                 */
+                canGoBack: nil,
+                canGoForward: nil,
+                loading: window?.loading == true,
+                /*
+                 * There is no stop verb. `MachineWindow.Act` is back, forward,
+                 * reload, close, record on, record off, share and isolate — a
+                 * Stop drawn here would be a glyph with no frame to send. The load
+                 * line under the header carries the state instead and Reload stays
+                 * live, which is the useful half of Stop anyway.
+                 */
+                stop: nil,
+                /*
+                 * **The seam Find and Inspect arrive through.**
+                 *
+                 * Both are `nil` because both need the page itself and this screen
+                 * has a picture of it. The sentences are `BrowserChrome`'s
+                 * defaults, so nothing is written here — the day a host learns to
+                 * search a window, or to hand back the element under a tap, this
+                 * call gains one closure and the greyed glyph becomes a live one
+                 * with no other change anywhere.
+                 */
+                find: nil,
+                inspect: nil,
+                /*
+                 * The `…` leads to the settings **unless they are already the body
+                 * of this screen**, which is the shape a window the machine will
+                 * not cast takes. A control that leads to where you are standing
+                 * is the worst kind of dead control; leaving a gap where it was is
+                 * what made two windows look like two products. So it is drawn,
+                 * greyed, saying so.
+                 */
+                whyNoMore: liveSurface == nil
+                    ? "This window's settings are already on the screen below."
+                    : nil)
         }
     }
 

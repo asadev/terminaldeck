@@ -65,6 +65,45 @@
  * The bottom row is the page verbs. It is the same row on both screens with the
  * ones that cannot act left out, rather than two rows that drift.
  *
+ * ## Three screens now, and the row grew to the union of what they carried
+ *
+ * > *"So top, header and footer, tab bar should be same in all type of browsing
+ * > windows, including on this phone, including isolated, including the server."*
+ *
+ * `LocalhostBrowser` — a page this phone is holding open over a tunnel — used to
+ * have a bar of its own: the system `UIToolbar`, with Back, Forward, a Reload
+ * that doubled as Stop, Find, Inspect and Done, and **no address anywhere**. It
+ * mounts this bar now, so there are three screens on it and one row under all of
+ * them:
+ *
+ *     Back · Forward · Reload · Find · Inspect · More
+ *
+ * That is the union of the two rows that existed, with one move in it: Done tore
+ * the tunnel down, which is a thing you do to the *window* rather than to the
+ * page, so it is `Close this window` inside the `…` and the row is six controls
+ * everywhere. See `BrowserChrome` for why the `…` is here rather than in the
+ * navigation bar.
+ *
+ * ## Two kinds of *cannot*, kept apart on purpose
+ *
+ *  - **Nowhere to go.** `canGoBack` / `canGoForward` are the page's real history
+ *    state where the page can be asked for one — a `WKWebView` this phone owns
+ *    answers honestly, through KVO, including for the `pushState` navigations a
+ *    dev server makes constantly. The button is disabled and owes no
+ *    explanation: *the first page of a site has nothing behind it* is a fact
+ *    anybody reads off a grey chevron.
+ *  - **Cannot be asked at all.** `MachineWindow` carries no history state — the
+ *    desktop's back-forward list is not on this wire — so on a machine window
+ *    these are left `nil`, which means *do not grey this*. Guessing in the
+ *    common direction (a window with history, drawn dead) is the exact defect
+ *    the tunnel browser's own Back had for months. What genuinely cannot be put
+ *    on the wire is a `nil` **action** with a sentence, and that is drawn greyed
+ *    in its own place with the reason on the ⓘ.
+ *
+ * The two must not be unified. A grey button that means *not yet* and a grey
+ * button that means *never here* look identical, and only one of them is worth a
+ * sentence.
+ *
  * ## The keyboard verb is gone, and this bar follows the canvas instead
  *
  * > *"This keyboard should not be working like this. If we just click inside and
@@ -144,8 +183,82 @@ struct BrowserPageBar: View {
      * a page with no window id, a machine that has stopped offering its browser,
      * a cast with no `web` behind it — and *this control is off* without the
      * reason is the dead control it is trying not to be.
+     *
+     * It is the **page-wide** reason. Three controls can also be refused on their
+     * own terms — Find and Inspect need the page to be on this phone, and the `…`
+     * has nothing to open on a window whose settings are already the body — so
+     * each of those carries a sentence of its own and every one of them ends up
+     * in the same popover. See `why`.
      */
     var unavailable: String?
+
+    /**
+     * Whether there is anywhere to go back to — or **nil where this page does not
+     * say**, which is not the same as *no*.
+     *
+     * A `WKWebView` this phone owns answers this honestly and live, so the page
+     * on the phone greys its own chevron at the start of a site. `MachineWindow`
+     * carries nothing of the kind: the desktop's back-forward list never comes
+     * over this wire, so a machine window passes nil and the button stays lit.
+     * Greying it there would be a guess, and the guess that is wrong in the
+     * common direction — a window deep in a site, drawn dead — is precisely the
+     * bug the tunnel browser's Back had for months.
+     */
+    var canGoBack: Bool? = nil
+    var canGoForward: Bool? = nil
+
+    /// Whether the page is fetching something right now. Draws the load line the
+    /// screens put under their header, and turns Reload into Stop where the page
+    /// can actually be stopped.
+    var loading: Bool = false
+
+    /**
+     * Stop the load in flight, or nil for a page nothing can call off.
+     *
+     * `WKWebView.stopLoading` is a local call and always works, so the phone's
+     * page passes one. A window on the machine reports `loading` and there is
+     * **no stop in `MachineWindow.Act`** — back, forward, reload, close, record,
+     * share, isolate and nothing else — so passing nil there is the honest
+     * answer, and the slot keeps drawing a live Reload rather than a dead Stop.
+     * A Reload that works is worth more than a Stop that does not, and reloading
+     * a page that is still loading is a real thing to do: it starts it again.
+     */
+    var stop: (() -> Void)? = nil
+
+    /// Search the words on this page, or nil where the page is not on this
+    /// phone. `whyNoFind` is the sentence for that case.
+    var find: (() -> Void)? = nil
+    /// Whether the find bar is up, which fills the glyph the way Inspect's is
+    /// filled — the page gets shorter and something visible has to explain it.
+    var finding: Bool = false
+    var whyNoFind: String? = BrowserChrome.findIsLocal
+
+    /**
+     * Describe whatever is tapped on the page, or nil where this phone cannot
+     * reach into it.
+     *
+     * The seam the machine side arrives through: a screen that cannot inspect
+     * passes `nil` and lets `whyNoInspect` stand, and the day the host can be
+     * asked, that screen passes the closure and drops the sentence. Nothing else
+     * about this bar changes.
+     */
+    var inspect: (() -> Void)? = nil
+    var inspecting: Bool = false
+    var whyNoInspect: String? = BrowserChrome.inspectIsLocal
+
+    /// Why the `…` is greyed, where it is — the one case being a window whose
+    /// settings are already the body of the screen you are standing on.
+    var whyNoMore: String? = nil
+
+    /**
+     * The short list behind the `…`, for a page whose *everything else* is a
+     * list rather than a screen.
+     *
+     * `more` and this fill the same slot and never both: `more` pushes a screen,
+     * this opens a menu in place. See `BrowserPageMenu` for which page wants
+     * which and why the answer is not the same for both.
+     */
+    var menu: BrowserPageMenu? = nil
 
     @FocusState private var focused: Bool
 
@@ -158,7 +271,7 @@ struct BrowserPageBar: View {
             if typing {
                 keyRow
                 topDivider
-            } else if go != nil || unavailable != nil {
+            } else if go != nil || why != nil {
                 addressRow
                 topDivider
             }
@@ -285,8 +398,8 @@ struct BrowserPageBar: View {
     /// The globe, or the ⓘ that replaces it on a page with something to explain.
     @ViewBuilder
     private var leadingGlyph: some View {
-        if let unavailable {
-            InfoDot(about: "this page", text: unavailable)
+        if let why {
+            InfoDot(about: "this page", text: why)
                 .frame(width: 24, height: 28)
         } else {
             Image(systemName: "globe")
@@ -373,23 +486,6 @@ struct BrowserPageBar: View {
     // MARK: - The verbs
 
     /**
-     * Back, forward, reload — and the `…` where there is something behind it.
-     *
-     * A verb that **can** be sent is never *disabled*, and that is not the
-     * never-dead-click rule being bent. `MachineWindow` carries no `canGoBack`:
-     * the desktop's own history state is not on this wire, so a phone that greyed
-     * Back out would be guessing, and the guess that is wrong in the common
-     * direction — a window with history, drawn dead — is the exact defect the
-     * tunnel browser's Back had for months.
-     *
-     * A verb this page has **no way to ask for at all** is a different thing, and
-     * since *"it should be the same case, or all the options should be available
-     * at least"* it is drawn in its place and greyed rather than left out. The
-     * reason is on the ⓘ in the address row, which is why `unavailable` is one
-     * sentence for the whole bar and not one per glyph: the answer is a fact about
-     * the page, and three copies of it would be three places for it to drift.
-     */
-    /**
      * Whether the bottom row has anything left on it.
      *
      * It can be empty, which it could not be before the keyboard verb went: that
@@ -398,56 +494,157 @@ struct BrowserPageBar: View {
      * with no model behind it — has nothing else and nothing to say about why.
      * Twenty points of empty bar is chrome pretending to be a control, so the row
      * goes rather than standing there. A page that *does* have a reason draws the
-     * three dead verbs and the reason beside them.
+     * six dead glyphs and the sentence on the ⓘ beside them, because *"it should
+     * be the same case, or all the options should be available at least."*
      *
      * The `VStack` around it stays either way, because it is what carries the
      * subscription that puts the typing row up.
      */
     private var hasVerbs: Bool {
-        back != nil || forward != nil || reload != nil || more != nil || unavailable != nil
+        back != nil || forward != nil || reload != nil || find != nil || inspect != nil
+            || more != nil || menu != nil || why != nil
     }
 
+    /**
+     * The six, in his order, in the same places under every page.
+     *
+     * Every identifier this row hands out is written here rather than inside the
+     * helpers, so that the order of the row can be read straight off this
+     * function — which is what `LocalhostChromeTests` walks. A row whose order is
+     * assembled somewhere else is a row nobody can pin.
+     */
     private var verbRow: some View {
         HStack(spacing: 0) {
-            slot("Back", "chevron.left", id: "\(id).back", act: back)
-            slot("Forward", "chevron.right", id: "\(id).forward", act: forward)
-            slot("Reload", "arrow.clockwise", id: "\(id).reload", act: reload)
-            if let more {
-                verb("More", "ellipsis", id: "\(id).settings", act: more)
-            }
+            slot("Back", "chevron.left", id: "\(id).back", act: back, enabled: canGoBack ?? true)
+            slot("Forward", "chevron.right", id: "\(id).forward",
+                 act: forward, enabled: canGoForward ?? true)
+            reloadSlot(id: "\(id).reload")
+            slot("Find", finding ? "magnifyingglass.circle.fill" : "magnifyingglass",
+                 id: "\(id).find", act: find, why: whyNoFind)
+            slot("Inspect", inspecting ? "square.dashed.inset.filled" : "square.dashed",
+                 id: "\(id).inspect", act: inspect, why: whyNoInspect)
+            moreSlot(id: "\(id).settings")
         }
         .padding(.vertical, 10)
     }
 
-    /// One place in the row: the verb where it can act, the same glyph dead where
-    /// the page cannot be asked for it and the bar has a reason, and nothing at
-    /// all where it has neither.
+    /**
+     * Reload, and Stop while the page is fetching — one control, one identifier.
+     *
+     * The identifier does not change with the state, deliberately: it is the same
+     * button doing the same job at two moments of it, and a test that had to know
+     * which half of a load it caught would be a test nobody could write. The
+     * spoken label does change, because *Reload* on a button that stops a load is
+     * the kind of wrong VoiceOver cannot recover from.
+     *
+     * Where there is no `stop` the glyph stays Reload however loud `loading` is —
+     * see the property for why a machine window has no stop to give.
+     */
+    @ViewBuilder
+    private func reloadSlot(id: String) -> some View {
+        if loading, let stop {
+            verb("Stop", "xmark", id: id, act: stop, label: "Stop loading")
+        } else {
+            slot("Reload", "arrow.clockwise", id: id, act: reload)
+        }
+    }
+
+    /**
+     * The `…`, in whichever of its two shapes this page has.
+     *
+     * A screen to push, a menu to open in place, or — on a window whose settings
+     * are already the body underneath this bar — the glyph greyed with that
+     * sentence, because a control leading to where you are standing is the worst
+     * kind of dead control and leaving a gap where it was is what made the bar
+     * look like two products.
+     */
+    @ViewBuilder
+    private func moreSlot(id: String) -> some View {
+        if let menu {
+            Menu {
+                menuItems(menu)
+            } label: {
+                verbLabel("More", "ellipsis", tint: Theme.accent)
+            }
+            .accessibilityLabel("More")
+            .accessibilityIdentifier(id)
+        } else {
+            slot("More", "ellipsis", id: id, act: more, why: whyNoMore)
+        }
+    }
+
+    @ViewBuilder
+    private func menuItems(_ menu: BrowserPageMenu) -> some View {
+        // A plain label rather than a `Section` header: iOS draws a bare `Text`
+        // in a menu un-tappable and greyed, which is exactly what a line of fact
+        // among a list of verbs should look like.
+        if let note = menu.note {
+            Text(note)
+        }
+        ForEach(menu.items) { item in
+            Button(role: item.destructive ? ButtonRole.destructive : nil, action: item.act) {
+                Label(item.title, systemImage: item.icon)
+            }
+            .accessibilityIdentifier(item.id)
+        }
+    }
+
+    /**
+     * One place in the row: the verb where it can act, the same glyph dead where
+     * the page cannot be asked for it and there is a sentence saying why, and
+     * nothing at all where there is neither.
+     *
+     * `enabled` is the *other* kind of off and it never reaches `dead`: a live
+     * verb with nowhere to go is disabled and silent, because the grey chevron at
+     * the start of a site explains itself and a sentence about it would be noise
+     * on every first page anybody opens.
+     */
     @ViewBuilder
     private func slot(_ title: String, _ icon: String,
-                      id: String, act: (() -> Void)?) -> some View {
+                      id: String, act: (() -> Void)?,
+                      enabled: Bool = true,
+                      why: String? = nil) -> some View {
         if let act {
-            verb(title, icon, id: id, act: act)
-        } else if let unavailable {
-            dead(title, icon, id: id, why: unavailable)
+            verb(title, icon, id: id, act: act, enabled: enabled)
+        } else if let sentence = why ?? unavailable {
+            dead(title, icon, id: id, why: sentence)
         }
     }
 
     private func verb(_ title: String, _ icon: String,
-                      id: String, act: @escaping () -> Void) -> some View {
+                      id: String, act: @escaping () -> Void,
+                      enabled: Bool = true,
+                      label: String? = nil) -> some View {
         Button(action: act) {
-            VStack(spacing: 5) {
-                Image(systemName: icon)
-                    .font(.system(size: 17, weight: .medium))
-                Text(title)
-                    .font(.system(size: 11))
-            }
-            .foregroundStyle(Theme.accent)
-            .frame(maxWidth: .infinity)
-            .contentShape(Rectangle())
+            verbLabel(title, icon, tint: enabled ? Theme.accent : Theme.faint)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(title)
+        .disabled(!enabled)
+        .accessibilityLabel(label ?? title)
         .accessibilityIdentifier(id)
+    }
+
+    /// The glyph and its word, drawn identically wherever this row puts one —
+    /// including inside the `Menu` that fills the `…` on some pages, which is why
+    /// this is its own function rather than the body of `verb`.
+    private func verbLabel(_ title: String, _ icon: String, tint: Color) -> some View {
+        VStack(spacing: 5) {
+            Image(systemName: icon)
+                .font(.system(size: 17, weight: .medium))
+            Text(title)
+                .font(.system(size: 11))
+                // Six shares of a phone's width is about sixty points each, and
+                // *Forward* is the longest word in the row. It fits — measured —
+                // and these two lines are what keeps it fitting on the narrowest
+                // phone this app still runs on rather than wrapping the word onto
+                // a second line and making one control taller than its five
+                // neighbours.
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        .foregroundStyle(tint)
+        .frame(maxWidth: .infinity)
     }
 
     /**
@@ -462,20 +659,47 @@ struct BrowserPageBar: View {
     private func dead(_ title: String, _ icon: String,
                       id: String, why: String) -> some View {
         Button {} label: {
-            VStack(spacing: 5) {
-                Image(systemName: icon)
-                    .font(.system(size: 17, weight: .medium))
-                Text(title)
-                    .font(.system(size: 11))
-            }
-            .foregroundStyle(Theme.faint)
-            .frame(maxWidth: .infinity)
+            verbLabel(title, icon, tint: Theme.faint)
         }
         .buttonStyle(.plain)
         .disabled(true)
         .accessibilityLabel(title)
         .accessibilityHint(why)
         .accessibilityIdentifier(id)
+    }
+
+    /**
+     * Everything this bar has to explain, in one popover.
+     *
+     * There is one ⓘ and it holds every sentence, rather than an ⓘ per greyed
+     * glyph. Two arguments, and the second is the one that settled it:
+     *
+     *  - Six glyphs with a dot beside each is a bar about itself. His standing
+     *    rule is *"I don't want any kind of long descriptions anywhere. Just if
+     *    somewhere it's very required, give the i icon"* — one, where the globe
+     *    would be, is what every other screen in this app does.
+     *  - The sentences are not independent. A page nothing can be sent to has one
+     *    reason for all of it, and reading it once beats reading three
+     *    paraphrases of it; a page that can be driven but not searched has one
+     *    line and nothing else to say.
+     *
+     * `unavailable` leads because it is the fact about the whole page. A per-verb
+     * sentence is named so that a reader can tell which grey glyph it is about,
+     * and it is skipped when it would only repeat the bar-wide one.
+     */
+    private var why: String? {
+        var lines: [String] = []
+        if let unavailable, !unavailable.isEmpty { lines.append(unavailable) }
+        if find == nil, let whyNoFind, whyNoFind != unavailable {
+            lines.append("Find — \(whyNoFind)")
+        }
+        if inspect == nil, let whyNoInspect, whyNoInspect != unavailable {
+            lines.append("Inspect — \(whyNoInspect)")
+        }
+        if more == nil, menu == nil, let whyNoMore, whyNoMore != unavailable {
+            lines.append("More — \(whyNoMore)")
+        }
+        return lines.isEmpty ? nil : lines.joined(separator: "\n\n")
     }
 
     // MARK: - Actions

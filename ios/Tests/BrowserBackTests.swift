@@ -59,6 +59,21 @@
  * beside `canGoBack`, and it would have had the identical same-document bug for
  * the identical reason had it been read off the delegate instead.
  * `LocalhostChromeTests` owns the rest of that decision.
+ *
+ * ## And the header, which is now one line on every kind of window
+ *
+ * > *"even if we remove the top header of paperclip and all of this basic
+ * > information might not be required from the outside. We can just see and
+ * > enter."*
+ *
+ * The page on this phone used to name itself in two lines — its title over a
+ * mono `http://127.0.0.1:52311/admin  ·  3 connections`. It is one line now, by
+ * the same rule a window on the machine is named by: the page's own title, its
+ * address until it has one. That rule is `BrowserChrome.pageTitle` and its
+ * unit cases are in `LocalhostChromeTests`; the case at the bottom of this file
+ * is the half those cannot reach — a **real** document handing over a real title
+ * and then taking it away again, which is what a single-page app does on every
+ * route change and is the exact moment a header goes stale.
  */
 
 import UIKit
@@ -251,6 +266,48 @@ final class BrowserBackTests: XCTestCase {
         try await waitUntil("Forward went dead at the end of the history") { !bridge.canGoForward }
         XCTAssertTrue(bridge.canGoBack,
                       "and Back is live again, because the first entry is behind this one")
+    }
+
+    // MARK: - The header
+
+    /**
+     * **The page names itself, and falls back to where it is.**
+     *
+     * One line on every kind of browser window now, by one rule — see the type
+     * header. What a unit test on `BrowserChrome.pageTitle` cannot reach is the
+     * part that made the two-line header worth deleting: the title is a **live**
+     * property of a document that changes under you. `WKWebView` reports the
+     * previous page's title until the next one has loaded, and a single-page app
+     * changes its own title from script on every route change.
+     *
+     * So this walks a real document through both states. With a title, the header
+     * is the title. With the title cleared — which is exactly what a router does
+     * for half a frame — the header is the address rather than blank, because a
+     * header that empties itself reads as the page having gone.
+     *
+     * `document.title = ''` rather than a second page load: it is the same
+     * transition a route change makes, it is KVO-observed the same way, and it
+     * costs no second web content process.
+     */
+    func testTheHeaderNamesThePageAndFallsBackToItsAddress() async throws {
+        let bridge = try await loadedBridge()
+
+        try await waitUntil("the document handed over its title") { !bridge.title.isEmpty }
+        XCTAssertEqual(BrowserChrome.pageTitle(title: bridge.title,
+                                               address: bridge.address,
+                                               fallback: "localhost:3000"),
+                       "A page",
+                       "a page that has named itself is called what it called itself")
+
+        _ = try await bridge.webView.evaluateJavaScript("document.title = ''; 1")
+        try await waitUntil("the page took its own title away") { bridge.title.isEmpty }
+
+        let named = BrowserChrome.pageTitle(title: bridge.title,
+                                            address: bridge.address,
+                                            fallback: "localhost:3000")
+        XCTAssertTrue(named.hasSuffix(Self.fileName),
+                      "an untitled page is named by where it is, not by a placeholder and not by "
+                      + "nothing — the header said \"\(named)\"")
     }
 
     // MARK: - Helpers

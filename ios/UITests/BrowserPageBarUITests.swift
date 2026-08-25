@@ -32,6 +32,25 @@
  * behind the surface. Nothing on the Browser tab reaches it, so nothing in this
  * suite does either.
  *
+ * ## And the third kind: a page this phone is holding open
+ *
+ * There is one more row on that home — `browser.machine.page.`, a port on the
+ * machine tunnelled to this phone and shown in this app's own web view. It is a
+ * different screen (`LocalhostBrowser`) and a different type behind it, and this
+ * suite used to leave it alone on the grounds that it had none of the controls
+ * below. That *was* the defect:
+ *
+ * > *"So top, header and footer, tab bar should be same in all type of browsing
+ * > windows, including on this phone, including isolated, including the server."*
+ *
+ * > *"if it is in this phone, I cannot edit the link and make a change and search
+ * > it again."*
+ *
+ * It mounts the same `BrowserPageBar` now, under the prefix `localhost`, so one
+ * case here opens one and puts it through the same six-control assertion the
+ * machine's windows go through. Everything else in this file still stays on the
+ * machine's side.
+ *
  * ## Why this is a suite and not a unit test
  *
  * The geometry is unit-tested — `WatchTests` pins `fit`, `clampDrawn` and
@@ -97,6 +116,10 @@ final class BrowserPageBarUITests: XCTestCase {
         "No row on the Browser home opens onto a page — this machine offers neither its browser "
         + "nor a cast, or has nothing open. Both are the product working."
 
+    private static let noLocalPage =
+        "No page is open on this phone. Those rows exist once a port on the machine has been "
+        + "opened here through a tunnel; a Browser home with none is the product working."
+
     override func setUpWithError() throws {
         continueAfterFailure = false
         app = XCUIApplication()
@@ -118,10 +141,12 @@ final class BrowserPageBarUITests: XCTestCase {
      * tab — the screen that had no address bar on it, and the one he was holding
      * when he said a window *"feels like just like a video."*
      *
-     * `browser.machine.page.` is deliberately **not** in the query. That row is a
-     * page this phone is holding over a tunnel, it opens in this app's own web
-     * view, and it has none of the controls below because it is not a page on the
-     * machine at all.
+     * `browser.machine.page.` is deliberately **not** in this query. That row is
+     * a page this phone is holding over a tunnel and it opens on a different
+     * screen with a different model behind it — it wears the same bar now, and it
+     * has its own case below rather than being folded in here, because the two
+     * screens have to be reached separately for *"it should be the same case"* to
+     * mean anything.
      *
      * Arrival is the bar or the canvas, in that order, because a window the
      * machine will not cast has a bar and no picture and is still this screen.
@@ -194,34 +219,39 @@ final class BrowserPageBarUITests: XCTestCase {
     }
 
     /**
-     * **The same three verbs under every page, and the dead ones say why.**
+     * **The same six verbs under every page, and the dead ones say why.**
      *
      * > *"In iMatch, one of them has different menu options here in the bottom,
      * > the tab menu, and this one has different only reload, nothing else. So
      * > why they are two different type… **it should be the same case, or all the
      * > options should be available at least.**"*
      *
-     * Back, Forward and Reload are on the bar under every page this screen shows,
-     * and that is asserted first and unconditionally, because it is his sentence:
-     * the bar under one page is the same bar as under any other. A verb that
-     * genuinely cannot be put on the wire is **drawn in its place and greyed**,
-     * never left out — `BrowserPageBar.slot` draws the dead glyph, and the row
-     * that used to be shorter on some pages is the defect this whole round is
-     * about.
+     * > *"So top, header and footer, tab bar should be same in all type of
+     * > browsing windows, including on this phone, including isolated, including
+     * > the server."*
+     *
+     * Back · Forward · Reload · Find · Inspect · More is the row, and all six are
+     * asserted first and unconditionally, because that is his sentence: the bar
+     * under one page is the same bar as under any other. A verb that genuinely
+     * cannot be put on the wire is **drawn in its place and greyed**, never left
+     * out — `BrowserPageBar.slot` draws the dead glyph — and the row that used to
+     * be shorter on some pages is the defect this whole round is about.
      *
      * Which of them can act is then read off the page rather than off the row it
-     * came from, and the reading is exact: `BrowserPageBar` draws the ⓘ in the
-     * address row's leading slot — `info.this-page` — if and only if
-     * `unavailable` is set, and `unavailable` is set if and only if `nil` verbs
-     * are being drawn dead. So the ⓘ is the discriminator, and it is the one the
-     * app itself uses.
+     * came from, and `info.this-page` — the ⓘ that stands where the globe does —
+     * is the app's own discriminator: `BrowserPageBar` draws it if and only if
+     * something on this bar is greyed for a reason.
      *
-     *  - **ⓘ on the bar** — Back and Forward are `nil` for this page in every
-     *    case that sets it, so both must be present and **disabled**, and the
-     *    sentence behind the ⓘ must actually say why. Reload is deliberately not
-     *    asserted either way: the machine's own front tab reloads through
-     *    `web.open` and is live there while Back and Forward are dead.
-     *  - **No ⓘ** — this page can be asked for everything, so all three act.
+     *  - **ⓘ on the bar** — at least one control must be disabled, and the
+     *    popover must actually carry a sentence about it. Which one is disabled
+     *    is not pinned here, because it differs honestly by page: a window this
+     *    phone can drive greys only Find and Inspect, the machine's own front tab
+     *    greys Back and Forward as well, and a cast with no control behind it
+     *    greys everything.
+     *  - **No ⓘ** — this page can be asked for everything, so Reload, Find,
+     *    Inspect and More all act. Back and Forward are deliberately exempt from
+     *    that: on a page this phone holds open they are the page's real history
+     *    and are honestly disabled at the start of a site.
      *
      * The keyboard verb was the one thing every one of these bars drew, and it is
      * gone from all of them:
@@ -237,43 +267,118 @@ final class BrowserPageBarUITests: XCTestCase {
      */
     func testTheSameVerbsAreOnEveryPageAndTheDeadOnesSayWhy() throws {
         let row = try openAPage()
-
-        let back = app.buttons["\(Self.bar).back"]
-        let forward = app.buttons["\(Self.bar).forward"]
-        XCTAssertTrue(back.waitForExistence(timeout: 20),
-                      "Back belongs on the bar under every page, greyed where it cannot act — "
-                      + "a shorter bar on some pages is what he counted as two products (\(row))")
-        XCTAssertTrue(forward.exists, "and Forward beside it")
-        XCTAssertTrue(app.buttons["\(Self.bar).reload"].exists, "and Reload beside that")
-
-        let why = app.buttons["info.this-page"]
-        if why.exists {
-            XCTAssertFalse(back.isEnabled,
-                           "this page has no window id to address `browser.window.act` to, so Back "
-                           + "is drawn and does nothing rather than being left out")
-            XCTAssertFalse(forward.isEnabled, "and the same for Forward")
-
-            why.tap()
-            let reason = app.descendants(matching: .any).matching(
-                NSPredicate(format: "label CONTAINS %@ OR label CONTAINS %@",
-                            "cannot be addressed to it",
-                            "nothing on this bar can be sent to it")).firstMatch
-            XCTAssertTrue(reason.waitForExistence(timeout: 6),
-                          "a greyed verb with no reason behind it is the dead control this round "
-                          + "is about — the ⓘ should open on the sentence that names the machine "
-                          + "and says what cannot be sent")
-            capture("66-why-the-verbs-are-dead")
-            app.dismissAnyMenu()
-        } else {
-            XCTAssertTrue(back.isEnabled,
-                          "a bar with nothing to explain is a page that can be asked for "
-                          + "everything, so none of its verbs may be drawn dead")
-            XCTAssertTrue(forward.isEnabled)
-        }
+        try assertTheSixControls(on: Self.bar, page: row)
 
         XCTAssertFalse(app.buttons["\(Self.bar).keyboard"].exists,
                        "the keyboard verb is deleted; the page raises the keyboard when it is "
                        + "tapped, and the keyboard's own accessory puts it away")
+    }
+
+    /**
+     * **The page on this phone wears the same bar, with the address he asked for.**
+     *
+     * > *"if it is in this phone, I cannot edit the link and make a change and
+     * > search it again."*
+     *
+     * This is the kind of window the rest of this suite deliberately skips —
+     * `browser.machine.page.` is a port on the machine held open through a tunnel
+     * and shown in this app's own web view, which for two rounds meant it had a
+     * different bar and no address anywhere. It mounts `BrowserPageBar` now under
+     * the prefix `localhost`, so the same six controls are asserted by the same
+     * function, and the address is asserted to be a **field** rather than a line:
+     * that is the whole of what he could not do.
+     *
+     * Done is asserted **gone**. It closed the tunnel, which is a thing you do to
+     * the window rather than to the page, so it is `Close this window` inside the
+     * `…` — and a Done left standing in the row would make this bar one control
+     * longer than every other one, which is where this round started.
+     */
+    func testThePageOnThisPhoneHasTheSameBarAndAnEditableAddress() throws {
+        let row = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'browser.machine.page.'"))
+            .firstMatch
+        guard row.waitForExistence(timeout: 25) else { throw XCTSkip(Self.noLocalPage) }
+        let name = row.identifier
+        row.tap()
+
+        let address = app.textFields["localhost.address"]
+        guard address.waitForExistence(timeout: 30) else { throw XCTSkip(Self.noLocalPage) }
+
+        let shown = (address.value as? String) ?? ""
+        XCTAssertFalse(shown.isEmpty,
+                       "the field should be seeded from the page it is showing, not left blank — "
+                       + "an address bar that is always empty is not one (\(name))")
+        capture("67-phone-page-bar")
+
+        try assertTheSixControls(on: "localhost", page: name)
+
+        XCTAssertFalse(app.buttons["localhost.done"].exists,
+                       "Done left the row; closing the window is inside the `…` now, so the bar "
+                       + "under this page is the same length as the bar under every other")
+
+        address.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 8),
+                      "and the address takes a cursor — \"I cannot edit the link and make a "
+                      + "change\" is the sentence this case exists for")
+        capture("68-phone-address-editing")
+    }
+
+    /**
+     * The row, under whichever page is on screen: six controls, and a reason
+     * behind every greyed one.
+     *
+     * Shared by both cases above rather than written twice, because *"it should
+     * be the same case"* is a claim about two screens and a claim asserted by two
+     * different functions is two claims.
+     */
+    private func assertTheSixControls(on bar: String, page: String) throws {
+        let back = app.buttons["\(bar).back"]
+        XCTAssertTrue(back.waitForExistence(timeout: 20),
+                      "Back belongs on the bar under every page, greyed where it cannot act — "
+                      + "a shorter bar on some pages is what he counted as two products (\(page))")
+        let forward = app.buttons["\(bar).forward"]
+        let reload = app.buttons["\(bar).reload"]
+        let find = app.buttons["\(bar).find"]
+        let inspect = app.buttons["\(bar).inspect"]
+        let more = app.buttons["\(bar).settings"]
+        XCTAssertTrue(forward.exists, "and Forward beside it")
+        XCTAssertTrue(reload.exists, "and Reload beside that")
+        XCTAssertTrue(find.exists, "Find is on every one of these bars now, greyed where the page "
+                      + "is not on this phone to be searched")
+        XCTAssertTrue(inspect.exists, "and Inspect, on the same terms")
+        XCTAssertTrue(more.exists, "and the `…`, which is where Close this window lives")
+
+        let why = app.buttons["info.this-page"]
+        if why.exists {
+            let greyed = [back, forward, reload, find, inspect, more].filter { !$0.isEnabled }
+            XCTAssertFalse(greyed.isEmpty,
+                           "the ⓘ is drawn if and only if something on this bar is greyed for a "
+                           + "reason — a bar with the reason and nothing greyed is an explanation "
+                           + "of nothing")
+
+            why.tap()
+            let reason = app.descendants(matching: .any).matching(
+                NSPredicate(format: "label CONTAINS %@ OR label CONTAINS %@ OR label CONTAINS %@",
+                            "cannot be addressed to it",
+                            "nothing on this bar can be sent to it",
+                            "is on the machine")).firstMatch
+            XCTAssertTrue(reason.waitForExistence(timeout: 6),
+                          "a greyed verb with no reason behind it is the dead control this round "
+                          + "is about — the ⓘ should open on the sentence that says what cannot "
+                          + "be done here and why")
+            capture("66-why-the-verbs-are-dead")
+            app.dismissAnyMenu()
+        } else {
+            // Back and Forward are exempt: on a page this phone holds open they
+            // carry real history and start out with nowhere to go, which is an
+            // honest disabled rather than a dead control.
+            XCTAssertTrue(reload.isEnabled,
+                          "a bar with nothing to explain is a page that can be asked for "
+                          + "everything, so none of its verbs may be drawn dead")
+            XCTAssertTrue(find.isEnabled)
+            XCTAssertTrue(inspect.isEnabled)
+            XCTAssertTrue(more.isEnabled)
+        }
     }
 
     /**
