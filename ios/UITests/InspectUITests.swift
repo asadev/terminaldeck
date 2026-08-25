@@ -179,7 +179,12 @@ final class InspectUITests: XCTestCase {
                       "the dev server on \(Self.port) should be offered without anyone typing a port")
         row.tap()
 
-        XCTAssertTrue(app.buttons["localhost.done"].waitForExistence(timeout: 15))
+        // The screen has arrived. Reload rather than Done, which no longer
+        // exists — the row under a page on this phone is the same six controls
+        // as the row under every other browser window, and the verb that tore
+        // the tunnel down is `Close this window` inside the `…`. The next line is
+        // what says the page itself is really there.
+        XCTAssertTrue(app.buttons["localhost.reload"].waitForExistence(timeout: 15))
         XCTAssertTrue(app.staticTexts["Served from the Mac"].waitForExistence(timeout: 30),
                       "the page never rendered — the tunnel did not carry the document")
         capture("10-page-loaded")

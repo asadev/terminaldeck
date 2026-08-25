@@ -373,6 +373,32 @@ struct WatchViewerScreen: View {
      * Reload is `web.open` with the address the surface itself reports, which on
      * the drive's front slot re-navigates the page that is already there — and it
      * is offered on that slot only, for the reason `canNavigate` gives.
+     *
+     * ## Most of this row is greyed, and three of them say their own line
+     *
+     * Five controls are dead here on a surface this screen can navigate, and all
+     * six on one it cannot.
+     *
+     * `unavailable` is the fact about **the whole page** and it is the right
+     * sentence for Back, Forward and — where there is nothing to send — Reload:
+     * nothing on this bar can be addressed to a page the machine has not made a
+     * window of, and one sentence covers all three at once.
+     *
+     * It is the wrong sentence for the other three, and it was being used for one
+     * of them. Find and Inspect already carry their own — `BrowserChrome`'s
+     * defaults, which say the page is on the machine rather than on this phone,
+     * which is a different fact and a truer one for those two controls. The `…`
+     * had nothing, so `BrowserPageBar.slot` fell back to the page-wide line and a
+     * person tapping the ⓘ read *nothing on this bar can be sent to it* under a
+     * heading about a menu. That is not false, and it does not answer the
+     * question the tap asked, which was *what is behind those three dots*.
+     *
+     * So `whyNoMore` is given here, in one line, in the same shape as the other
+     * two: what the `…` normally holds, and why this page has none of it. The
+     * answer is short because the screen is: this is the surface viewer, reached
+     * from Settings, showing a page the machine is casting without owning — there
+     * is no window to close, no recording to keep and no settings screen behind
+     * it, because all three are addressed by a name this page does not have.
      */
     private var bar: some View {
         BrowserPageBar(
@@ -387,7 +413,34 @@ struct WatchViewerScreen: View {
             reload: canNavigate && !surface.url.isEmpty ? reload : nil,
             page: surface.window,
             more: nil,
-            unavailable: whyLimited)
+            unavailable: whyLimited,
+            // Find and Inspect are deliberately left at `BrowserPageBar`'s
+            // defaults. Those say the page is on the machine and there is nothing
+            // on this phone to search or tap into, which is exactly the case
+            // here — repeating them in this file would be two more copies of one
+            // fact about one wire, and two more places for it to drift.
+            whyNoMore: whyNoMenu)
+    }
+
+    /**
+     * What is behind the `…` on other browser windows, and why there is none of
+     * it here — one line, in plain words.
+     *
+     * The menu is the window's own things: closing it, its recording, the jar its
+     * cookies land in. Every one of those is asked for by the name the machine
+     * gives a window, and this page has no name — it is the machine's own tab,
+     * cast to this phone, which is why Back and Forward cannot be sent either.
+     *
+     * **Two clauses and no more.** It shares the ⓘ with the page-wide sentence
+     * and with Find's and Inspect's, and *"I don't want any kind of long
+     * descriptions anywhere"* is the standing rule about that popover. Said as
+     * *the machine* rather than as a window id, because the person reading it did
+     * not open a window: they opened Settings and tapped a page that was already
+     * being shown.
+     */
+    private var whyNoMenu: String {
+        "This menu holds a window's own things — closing it, recording it, its settings. The "
+            + "machine has not made a window of this page, so there is nothing here to open."
     }
 
     /**

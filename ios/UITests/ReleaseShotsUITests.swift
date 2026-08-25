@@ -231,9 +231,22 @@ final class ReleaseShotsUITests: XCTestCase {
         back.tap()
         XCTAssertTrue(app.staticTexts["Basket"].waitForExistence(timeout: 15),
                       "Back should actually go back")
-        app.buttons["localhost.done"].tap()
+        /*
+         * Out by the chevron top left, which is where this case's last claim
+         * lives now.
+         *
+         * It tapped `localhost.done` until this round. There is no Done: the row
+         * under a page on this phone is the same six controls as the row under
+         * every other browser window — *"top, header and footer, tab bar should
+         * be same in all type of browsing windows"* — and closing the tunnel is
+         * `Close this window` inside the `…`. Nothing about this case is about
+         * that verb; it is about the Back button after a `pushState`, and it
+         * needs to get off the page afterwards. Popping the screen is the whole
+         * teardown and always was.
+         */
+        app.navigationBars.buttons.element(boundBy: 0).tap()
         XCTAssertTrue(app.textFields["browser.address"].waitForExistence(timeout: 15),
-                      "Done should return to the list")
+                      "leaving the page should return to the list")
     }
 
     /**

@@ -351,7 +351,27 @@ final class AppearanceShotsUITests: XCTestCase {
                  * a tap here that can never fire would be worse than leaving the
                  * gap named.
                  */
-                if app.buttons["localhost.done"].exists { app.buttons["localhost.done"].tap() }
+                /*
+                 * Off the page again, by the chevron top left.
+                 *
+                 * This tapped `localhost.done` until this round, and there is no
+                 * Done: the row under a page on this phone is the same six
+                 * controls as the row under every other browser window, and the
+                 * verb that tears the tunnel down is `Close this window` inside
+                 * the `…`. Popping the screen does exactly the same thing in one
+                 * tap, which is why the verb could move at all.
+                 *
+                 * Still guarded, and guarded on **the page's own bar** rather
+                 * than on a chevron: the tap above may have been refused before
+                 * anything opened — see the note below on why it is, on this
+                 * harness — and pressing whatever back button happens to be on
+                 * screen would then walk the tour off the Browser tab entirely.
+                 * Reload is drawn in every phase of a tunnel, greyed until it can
+                 * act, so it is the honest answer to *is the page screen up*.
+                 */
+                if app.buttons["localhost.reload"].exists {
+                    app.navigationBars.buttons.element(boundBy: 0).tap()
+                }
                 // The bar, not the `+` — the always-on control on this tab
                 // since the two became one Browser screen.
                 _ = app.textFields["browser.address"].waitForExistence(timeout: 15)
