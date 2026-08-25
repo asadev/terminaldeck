@@ -76,13 +76,33 @@
  * mounts this bar now, so there are three screens on it and one row under all of
  * them:
  *
- *     Back · Forward · Reload · Find · Inspect · More
+ *     Back · Forward · Reload · Find · Inspect
  *
- * That is the union of the two rows that existed, with one move in it: Done tore
- * the tunnel down, which is a thing you do to the *window* rather than to the
- * page, so it is `Close this window` inside the `…` and the row is six controls
- * everywhere. See `BrowserChrome` for why the `…` is here rather than in the
- * navigation bar.
+ * ## Five, not six — the `…` went up to the header
+ *
+ * > *"Maybe we can give some better one header also, not only the bottom, so we
+ * > can have most of the important controls for the flow, for this kind of
+ * > things and whatever we require to get the job done."*
+ *
+ * There was a sixth slot here holding the `…`, put here by the round before this
+ * one on the argument that the top-right corner of a phone is the furthest pixel
+ * from a thumb. That argument is true and it is not an answer to *not only the
+ * bottom*, which is the sentence — so the `…` is a trailing item in the system
+ * navigation bar now (`BrowserWindowActions`) and this row is the five verbs
+ * that act on the **page**.
+ *
+ * The split is not arbitrary and it is what makes the thumb argument survive
+ * the move: everything you press *while reading a page* is still down here, and
+ * what went up is the door you go through once to do something to the **window**
+ * — close it, bind it to a session, photograph it.
+ *
+ * The row does **not** keep a greyed sixth slot as a stand-in. There is one `…`
+ * in this app's browser and it is up there; a dead one down here would be the
+ * second door this whole round exists to remove.
+ *
+ * Done went with the same reasoning a round earlier: it tore the tunnel down,
+ * which is a thing you do to the window rather than to the page, so it is
+ * `Close this window` on the page's own settings screen behind that `…`.
  *
  * ## Two kinds of *cannot*, kept apart on purpose
  *
@@ -167,9 +187,6 @@ struct BrowserPageBar: View {
     /// page verbs, and has nothing to send a keystroke to.
     let page: String?
 
-    /// The `…`, for a screen that has somewhere to put one.
-    let more: (() -> Void)?
-
     /**
      * Why this page cannot be asked for the verbs it is not being given — or nil
      * on a page that can be asked for everything.
@@ -184,11 +201,15 @@ struct BrowserPageBar: View {
      * a cast with no `web` behind it — and *this control is off* without the
      * reason is the dead control it is trying not to be.
      *
-     * It is the **page-wide** reason. Three controls can also be refused on their
-     * own terms — Find and Inspect need the page to be on this phone, and the `…`
-     * has nothing to open on a window whose settings are already the body — so
-     * each of those carries a sentence of its own and every one of them ends up
-     * in the same popover. See `why`.
+     * It is the **page-wide** reason. Two controls can also be refused on their
+     * own terms — Find and Inspect both need the page to be on this phone rather
+     * than a picture of it — so each of those carries a sentence of its own and
+     * every one of them ends up in the same popover. See `why`.
+     *
+     * The `…` used to be a third and is not one any more: it left this bar for
+     * the header, and it is drawn there only where it opens something. A control
+     * that is not on the screen owes no explanation, so there is no `whyNoMore`
+     * here to collect.
      */
     var unavailable: String?
 
@@ -237,28 +258,19 @@ struct BrowserPageBar: View {
      * Describe whatever is tapped on the page, or nil where this phone cannot
      * reach into it.
      *
-     * The seam the machine side arrives through: a screen that cannot inspect
-     * passes `nil` and lets `whyNoInspect` stand, and the day the host can be
-     * asked, that screen passes the closure and drops the sentence. Nothing else
-     * about this bar changes.
+     * **This is built on both sides and it works.** The page this phone holds
+     * open answers a tap in its own JavaScript (`InspectScript`), and a window on
+     * the machine answers it over the wire — `browser.window.pick`, sent by
+     * `MachineWindowView.toggleInspecting`, answered by the machine's own
+     * browser. Both land in one `InspectSheet`.
+     *
+     * What is left `nil` is the one screen that has no way to ask at all: the
+     * surface viewer reached from Settings, which holds a `WatchLink` and no
+     * model, so `whyNoInspect` stands there and the glyph is greyed with it.
      */
     var inspect: (() -> Void)? = nil
     var inspecting: Bool = false
     var whyNoInspect: String? = BrowserChrome.inspectIsLocal
-
-    /// Why the `…` is greyed, where it is — the one case being a window whose
-    /// settings are already the body of the screen you are standing on.
-    var whyNoMore: String? = nil
-
-    /**
-     * The short list behind the `…`, for a page whose *everything else* is a
-     * list rather than a screen.
-     *
-     * `more` and this fill the same slot and never both: `more` pushes a screen,
-     * this opens a menu in place. See `BrowserPageMenu` for which page wants
-     * which and why the answer is not the same for both.
-     */
-    var menu: BrowserPageMenu? = nil
 
     @FocusState private var focused: Bool
 
@@ -494,7 +506,7 @@ struct BrowserPageBar: View {
      * with no model behind it — has nothing else and nothing to say about why.
      * Twenty points of empty bar is chrome pretending to be a control, so the row
      * goes rather than standing there. A page that *does* have a reason draws the
-     * six dead glyphs and the sentence on the ⓘ beside them, because *"it should
+     * five dead glyphs and the sentence on the ⓘ beside them, because *"it should
      * be the same case, or all the options should be available at least."*
      *
      * The `VStack` around it stays either way, because it is what carries the
@@ -502,16 +514,21 @@ struct BrowserPageBar: View {
      */
     private var hasVerbs: Bool {
         back != nil || forward != nil || reload != nil || find != nil || inspect != nil
-            || more != nil || menu != nil || why != nil
+            || why != nil
     }
 
     /**
-     * The six, in his order, in the same places under every page.
+     * The five, in his order, in the same places under every page.
      *
      * Every identifier this row hands out is written here rather than inside the
      * helpers, so that the order of the row can be read straight off this
      * function — which is what `LocalhostChromeTests` walks. A row whose order is
      * assembled somewhere else is a row nobody can pin.
+     *
+     * There is no sixth slot and there is no gap where one was. The `…` is a
+     * trailing item in the navigation bar (`BrowserWindowActions`), which is what
+     * *"not only the bottom"* asked for, and these five are what a thumb reaches
+     * for while it is reading the page above them.
      */
     private var verbRow: some View {
         HStack(spacing: 0) {
@@ -523,7 +540,6 @@ struct BrowserPageBar: View {
                  id: "\(id).find", act: find, why: whyNoFind)
             slot("Inspect", inspecting ? "square.dashed.inset.filled" : "square.dashed",
                  id: "\(id).inspect", act: inspect, why: whyNoInspect)
-            moreSlot(id: "\(id).settings")
         }
         .padding(.vertical, 10)
     }
@@ -546,46 +562,6 @@ struct BrowserPageBar: View {
             verb("Stop", "xmark", id: id, act: stop, label: "Stop loading")
         } else {
             slot("Reload", "arrow.clockwise", id: id, act: reload)
-        }
-    }
-
-    /**
-     * The `…`, in whichever of its two shapes this page has.
-     *
-     * A screen to push, a menu to open in place, or — on a window whose settings
-     * are already the body underneath this bar — the glyph greyed with that
-     * sentence, because a control leading to where you are standing is the worst
-     * kind of dead control and leaving a gap where it was is what made the bar
-     * look like two products.
-     */
-    @ViewBuilder
-    private func moreSlot(id: String) -> some View {
-        if let menu {
-            Menu {
-                menuItems(menu)
-            } label: {
-                verbLabel("More", "ellipsis", tint: Theme.accent)
-            }
-            .accessibilityLabel("More")
-            .accessibilityIdentifier(id)
-        } else {
-            slot("More", "ellipsis", id: id, act: more, why: whyNoMore)
-        }
-    }
-
-    @ViewBuilder
-    private func menuItems(_ menu: BrowserPageMenu) -> some View {
-        // A plain label rather than a `Section` header: iOS draws a bare `Text`
-        // in a menu un-tappable and greyed, which is exactly what a line of fact
-        // among a list of verbs should look like.
-        if let note = menu.note {
-            Text(note)
-        }
-        ForEach(menu.items) { item in
-            Button(role: item.destructive ? ButtonRole.destructive : nil, action: item.act) {
-                Label(item.title, systemImage: item.icon)
-            }
-            .accessibilityIdentifier(item.id)
         }
     }
 
@@ -626,20 +602,22 @@ struct BrowserPageBar: View {
     }
 
     /// The glyph and its word, drawn identically wherever this row puts one —
-    /// including inside the `Menu` that fills the `…` on some pages, which is why
-    /// this is its own function rather than the body of `verb`.
+    /// live, or greyed with a reason. Its own function rather than the body of
+    /// `verb` because `dead` draws exactly the same thing and the two must not be
+    /// allowed to drift a point apart.
     private func verbLabel(_ title: String, _ icon: String, tint: Color) -> some View {
         VStack(spacing: 5) {
             Image(systemName: icon)
                 .font(.system(size: 17, weight: .medium))
             Text(title)
                 .font(.system(size: 11))
-                // Six shares of a phone's width is about sixty points each, and
-                // *Forward* is the longest word in the row. It fits — measured —
-                // and these two lines are what keeps it fitting on the narrowest
-                // phone this app still runs on rather than wrapping the word onto
-                // a second line and making one control taller than its five
-                // neighbours.
+                // Five shares of a phone's width is about seventy-five points
+                // each — it was sixty when the `…` was down here — and *Forward*
+                // is the longest word in the row. It fits, with room it did not
+                // have before, and these two lines are what keeps it fitting on
+                // the narrowest phone this app still runs on rather than wrapping
+                // the word onto a second line and making one control taller than
+                // its four neighbours.
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
         }
@@ -674,7 +652,7 @@ struct BrowserPageBar: View {
      * There is one ⓘ and it holds every sentence, rather than an ⓘ per greyed
      * glyph. Two arguments, and the second is the one that settled it:
      *
-     *  - Six glyphs with a dot beside each is a bar about itself. His standing
+     *  - Five glyphs with a dot beside each is a bar about itself. His standing
      *    rule is *"I don't want any kind of long descriptions anywhere. Just if
      *    somewhere it's very required, give the i icon"* — one, where the globe
      *    would be, is what every other screen in this app does.
@@ -695,9 +673,6 @@ struct BrowserPageBar: View {
         }
         if inspect == nil, let whyNoInspect, whyNoInspect != unavailable {
             lines.append("Inspect — \(whyNoInspect)")
-        }
-        if more == nil, menu == nil, let whyNoMore, whyNoMore != unavailable {
-            lines.append("More — \(whyNoMore)")
         }
         return lines.isEmpty ? nil : lines.joined(separator: "\n\n")
     }

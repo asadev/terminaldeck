@@ -47,9 +47,9 @@
  * > it again."*
  *
  * It mounts the same `BrowserPageBar` now, under the prefix `localhost`, so one
- * case here opens one and puts it through the same six-control assertion the
- * machine's windows go through. Everything else in this file still stays on the
- * machine's side.
+ * case here opens one and puts it through the same assertion the machine's
+ * windows go through — the five verbs in the row, and the `…` above them in the
+ * header. Everything else in this file still stays on the machine's side.
  *
  * ## Why this is a suite and not a unit test
  *
@@ -103,9 +103,10 @@ final class BrowserPageBarUITests: XCTestCase {
 
     private var shots: String { ProcessInfo.processInfo.environment["TD_SHOTS"] ?? "" }
 
-    /// The one bar there is. `MachineWindowView` names it, and every control
-    /// below hangs off it — the address, the three page verbs, the `…`, and the
-    /// typing row that replaces the address while the canvas holds the keyboard.
+    /// The one prefix there is. `MachineWindowView` names it, and every control
+    /// below hangs off it — the address, the page verbs, the typing row that
+    /// replaces the address while the canvas holds the keyboard, and the `…`,
+    /// which kept this same name when it moved up into the header.
     private static let bar = "browser.machine.window"
 
     private static let noMachine =
@@ -219,7 +220,8 @@ final class BrowserPageBarUITests: XCTestCase {
     }
 
     /**
-     * **The same six verbs under every page, and the dead ones say why.**
+     * **The same five verbs under every page, the `…` above them, and the dead
+     * ones say why.**
      *
      * > *"In iMatch, one of them has different menu options here in the bottom,
      * > the tab menu, and this one has different only reload, nothing else. So
@@ -230,12 +232,21 @@ final class BrowserPageBarUITests: XCTestCase {
      * > browsing windows, including on this phone, including isolated, including
      * > the server."*
      *
-     * Back · Forward · Reload · Find · Inspect · More is the row, and all six are
+     * Back · Forward · Reload · Find · Inspect is the row, and all five are
      * asserted first and unconditionally, because that is his sentence: the bar
      * under one page is the same bar as under any other. A verb that genuinely
      * cannot be put on the wire is **drawn in its place and greyed**, never left
      * out — `BrowserPageBar.slot` draws the dead glyph — and the row that used to
      * be shorter on some pages is the defect this whole round is about.
+     *
+     * The sixth control is not in the row any more:
+     *
+     * > *"Maybe we can give some better one header also, not only the bottom, so
+     * > we can have most of the important controls for the flow."*
+     *
+     * The `…` is a trailing item in the navigation bar, under the same
+     * identifier it always had, and it is asserted on its own terms below —
+     * because unlike the five it is drawn only where it opens something.
      *
      * Which of them can act is then read off the page rather than off the row it
      * came from, and `info.this-page` — the ⓘ that stands where the globe does —
@@ -248,10 +259,10 @@ final class BrowserPageBarUITests: XCTestCase {
      *    phone can drive greys only Find and Inspect, the machine's own front tab
      *    greys Back and Forward as well, and a cast with no control behind it
      *    greys everything.
-     *  - **No ⓘ** — this page can be asked for everything, so Reload, Find,
-     *    Inspect and More all act. Back and Forward are deliberately exempt from
-     *    that: on a page this phone holds open they are the page's real history
-     *    and are honestly disabled at the start of a site.
+     *  - **No ⓘ** — this page can be asked for everything, so Reload, Find and
+     *    Inspect all act. Back and Forward are deliberately exempt from that: on
+     *    a page this phone holds open they are the page's real history and are
+     *    honestly disabled at the start of a site.
      *
      * The keyboard verb was the one thing every one of these bars drew, and it is
      * gone from all of them:
@@ -267,7 +278,7 @@ final class BrowserPageBarUITests: XCTestCase {
      */
     func testTheSameVerbsAreOnEveryPageAndTheDeadOnesSayWhy() throws {
         let row = try openAPage()
-        try assertTheSixControls(on: Self.bar, page: row)
+        try assertTheRowAndTheHeader(on: Self.bar, page: row)
 
         XCTAssertFalse(app.buttons["\(Self.bar).keyboard"].exists,
                        "the keyboard verb is deleted; the page raises the keyboard when it is "
@@ -284,14 +295,15 @@ final class BrowserPageBarUITests: XCTestCase {
      * `browser.machine.page.` is a port on the machine held open through a tunnel
      * and shown in this app's own web view, which for two rounds meant it had a
      * different bar and no address anywhere. It mounts `BrowserPageBar` now under
-     * the prefix `localhost`, so the same six controls are asserted by the same
+     * the prefix `localhost`, so the same controls are asserted by the same
      * function, and the address is asserted to be a **field** rather than a line:
      * that is the whole of what he could not do.
      *
      * Done is asserted **gone**. It closed the tunnel, which is a thing you do to
-     * the window rather than to the page, so it is `Close this window` inside the
-     * `…` — and a Done left standing in the row would make this bar one control
-     * longer than every other one, which is where this round started.
+     * the window rather than to the page, so it is the `Close this window` card
+     * on this page's own settings screen behind the `…` — and a Done left
+     * standing in the row would make this bar one control longer than every other
+     * one, which is where this round started.
      */
     func testThePageOnThisPhoneHasTheSameBarAndAnEditableAddress() throws {
         let row = app.descendants(matching: .any)
@@ -310,7 +322,7 @@ final class BrowserPageBarUITests: XCTestCase {
                        + "an address bar that is always empty is not one (\(name))")
         capture("67-phone-page-bar")
 
-        try assertTheSixControls(on: "localhost", page: name)
+        try assertTheRowAndTheHeader(on: "localhost", page: name)
 
         XCTAssertFalse(app.buttons["localhost.done"].exists,
                        "Done left the row; closing the window is inside the `…` now, so the bar "
@@ -324,14 +336,35 @@ final class BrowserPageBarUITests: XCTestCase {
     }
 
     /**
-     * The row, under whichever page is on screen: six controls, and a reason
-     * behind every greyed one.
+     * The row under whichever page is on screen — five controls, with a reason
+     * behind every greyed one — and the `…` above it in the header.
      *
      * Shared by both cases above rather than written twice, because *"it should
      * be the same case"* is a claim about two screens and a claim asserted by two
      * different functions is two claims.
+     *
+     * ## Why the `…` is asserted differently from the five
+     *
+     * The five are unconditional: a verb that cannot act is drawn dead in its
+     * slot, so the row is the same length under every page and a missing one is
+     * always a defect.
+     *
+     * The `…` is not. It is drawn where it **opens** something, and there is one
+     * honest shape of this screen where it opens nothing: a window the machine
+     * refuses to cast draws `MachineWindowSettingsView` as its own body, so a `…`
+     * there would lead to where you are already standing. That state is visible
+     * from out here — the settings cards are on screen, and the click recorder is
+     * one of them — so the two are asserted as an exclusive pair, exactly the way
+     * `MachineBrowserUITests` asserts it: *"a window is either being cast —
+     * settings behind the dots — or it is not, and its settings are the screen.
+     * Never both and never neither."*
+     *
+     * On a page this phone is holding open there is no such shape and no such
+     * recorder, so the pair collapses to *the `…` is there*, which is the claim
+     * V9(b) is about: that page's `…` pushes its own settings screen now instead
+     * of opening a menu with one item in it.
      */
-    private func assertTheSixControls(on bar: String, page: String) throws {
+    private func assertTheRowAndTheHeader(on bar: String, page: String) throws {
         let back = app.buttons["\(bar).back"]
         XCTAssertTrue(back.waitForExistence(timeout: 20),
                       "Back belongs on the bar under every page, greyed where it cannot act — "
@@ -340,17 +373,34 @@ final class BrowserPageBarUITests: XCTestCase {
         let reload = app.buttons["\(bar).reload"]
         let find = app.buttons["\(bar).find"]
         let inspect = app.buttons["\(bar).inspect"]
-        let more = app.buttons["\(bar).settings"]
         XCTAssertTrue(forward.exists, "and Forward beside it")
         XCTAssertTrue(reload.exists, "and Reload beside that")
         XCTAssertTrue(find.exists, "Find is on every one of these bars now, greyed where the page "
                       + "is not on this phone to be searched")
         XCTAssertTrue(inspect.exists, "and Inspect, on the same terms")
-        XCTAssertTrue(more.exists, "and the `…`, which is where Close this window lives")
+
+        // The `…`, up in the header, and the one state where it is honestly not
+        // drawn. `browser.machine.window.record` is the click recorder, which is
+        // only ever on screen when the settings *are* the body of this screen.
+        let more = app.buttons["\(bar).settings"]
+        let settingsAreTheBody = app.buttons["browser.machine.window.record"].exists
+        XCTAssertNotEqual(more.exists, settingsAreTheBody,
+                          "a browser window either has its `…` in the header or has its settings "
+                          + "as the body of the screen. Never both — that is a control leading to "
+                          + "where you are standing — and never neither (\(page))")
+        if more.exists {
+            XCTAssertGreaterThan(app.frame.midY, more.frame.maxY,
+                                 "the `…` belongs in the header — \"not only the bottom, so we can "
+                                 + "have most of the important controls for the flow\" is a "
+                                 + "sentence about the top of the screen")
+            XCTAssertTrue(more.isEnabled,
+                          "the `…` is drawn only where it opens something, so a greyed one is a "
+                          + "control that should not have been there at all")
+        }
 
         let why = app.buttons["info.this-page"]
         if why.exists {
-            let greyed = [back, forward, reload, find, inspect, more].filter { !$0.isEnabled }
+            let greyed = [back, forward, reload, find, inspect].filter { !$0.isEnabled }
             XCTAssertFalse(greyed.isEmpty,
                            "the ⓘ is drawn if and only if something on this bar is greyed for a "
                            + "reason — a bar with the reason and nothing greyed is an explanation "
@@ -377,7 +427,6 @@ final class BrowserPageBarUITests: XCTestCase {
                           + "everything, so none of its verbs may be drawn dead")
             XCTAssertTrue(find.isEnabled)
             XCTAssertTrue(inspect.isEnabled)
-            XCTAssertTrue(more.isEnabled)
         }
     }
 

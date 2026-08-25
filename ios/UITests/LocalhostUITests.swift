@@ -381,16 +381,28 @@ final class LocalhostUITests: XCTestCase {
     }
 
     /**
-     * **The chrome on a page is the platform's, and the row is the same six
-     * controls that every other browser window wears.**
+     * **The chrome on a page is the platform's: five page controls along the
+     * bottom, and the window's `…` in the header.**
      *
-     * ## What this case used to claim, and why the claim had to change
+     * ## What this case used to claim, and why the claim had to change — twice
      *
      * It was called `testTheChromeIsThePlatformsAndDoneIsLast` and its third
      * assertion pinned **Done as the last control in the row** — *"last button I
-     * think is on its correct place"*, said of a row that ended with it. That
-     * sentence is still true of where the sixth control sits; the control is no
-     * longer Done.
+     * think is on its correct place"*, said of a row that ended with it. Done
+     * left for the `…`, and the case was rewritten to pin six controls in a row
+     * instead.
+     *
+     * Then the `…` left the row too:
+     *
+     * > *"Maybe we can give some better one header also, not only the bottom, so
+     * > we can have most of the important controls for the flow, for this kind of
+     * > things and whatever we require to get the job done."*
+     *
+     * So the shape this measures is a **split**, and measuring it is the whole
+     * point of the case: five verbs that act on the page, below the middle of the
+     * screen where a thumb is; one control that acts on the window, in the header
+     * where he asked for it. A case that only counted buttons would pass with all
+     * six back in the row, which is the state his sentence rejects.
      *
      * > *"So top, header and footer, tab bar should be same in all type of
      * > browsing windows, including on this phone, including isolated, including
@@ -401,13 +413,13 @@ final class LocalhostUITests: XCTestCase {
      * different, from the bar under a window on the machine. It mounts the shared
      * `BrowserPageBar` now, so the row is:
      *
-     *     Back · Forward · Reload · Find · Inspect · More
+     *     Back · Forward · Reload · Find · Inspect
      *
      * Done did not disappear: tearing the tunnel down is a thing you do to the
-     * *window* rather than to the page, so it is `Close this window` inside the
-     * `…` — `localhost.settings` then `localhost.close` — and
-     * `testClosingTheViewLeavesNoPageBehind` walks it there. The chevron top left
-     * does exactly the same thing in one tap and always did.
+     * *window* rather than to the page, so it is the `Close this window` card on
+     * this page's own settings screen, behind `localhost.settings` in the header
+     * — and `testClosingTheViewLeavesNoPageBehind` walks it there. The chevron
+     * top left does exactly the same thing in one tap and always did.
      *
      * ## The three claims this case makes, none of which a unit test can
      *
@@ -421,24 +433,29 @@ final class LocalhostUITests: XCTestCase {
      * the bottom. So:
      *
      *  1. a system navigation bar is on this screen;
-     *  2. every browser control is at the *bottom* of it — measured against the
-     *     middle of the screen, not asserted by looking at the source;
-     *  3. the row reads left to right as the same six, in the same order, that
+     *  2. every control that acts on the **page** is at the *bottom* of it, and
+     *     the one that acts on the **window** is in the header — both measured
+     *     against the middle of the screen, not asserted by looking at the
+     *     source;
+     *  3. the row reads left to right as the same five, in the same order, that
      *     `BrowserPageBar` puts under every other kind of browser window.
      *
      * The order is measured off the real frames rather than read from the source,
      * which is the half of claim 3 that is worth having: a bar assembled in the
      * right order and laid out in the wrong one passes every existence check
-     * anybody would think to write.
+     * anybody would think to write. Claim 2 is measured the same way and for a
+     * sharper reason now — where a control *is* is the entire requirement, so a
+     * `…` that had quietly slid back down into the row would pass every
+     * existence check in this repository and fail his sentence.
      *
      * `LocalhostChromeTests` is the tripwire for the same three in the unit
      * suite, which runs on a laptop with nothing listening, and
-     * `BrowserPageBarUITests` asserts the same six exist on all three kinds of
+     * `BrowserPageBarUITests` asserts the same controls exist on every kind of
      * window. Neither of those can say **where on the screen** they are. This is
      * the proof of that, and it is the only one, which is why the case was
      * rewritten rather than deleted with its name.
      */
-    func testTheChromeIsThePlatformsAndTheRowIsTheSameSix() throws {
+    func testTheChromeIsThePlatformsAndTheRowIsTheSameFive() throws {
         let row = portRow()
         XCTAssertTrue(row.waitForExistence(timeout: 20),
                       "no row for port \(Self.port) — is .harness/.devsite/server.mjs running?")
@@ -456,18 +473,18 @@ final class LocalhostUITests: XCTestCase {
                       + "standard title and the swipe that pops this screen")
 
         /*
-         * 2. Every control below the middle of the screen.
+         * 2. Every control that acts on the page, below the middle of the screen.
          *
          * A bar that had quietly gone back to the top would still pass an
-         * existence check on all six buttons, which is how the first version of
+         * existence check on all five buttons, which is how the first version of
          * this screen looked correct in a test and wrong in the hand.
          *
-         * The six are the shared row and they are listed in the order they are
-         * meant to be read: Back · Forward · Reload · Find · Inspect · More. The
-         * sixth is `localhost.settings` — the `…` — which is where Done went;
-         * see this case's header.
+         * The five are the shared row and they are listed in the order they are
+         * meant to be read: Back · Forward · Reload · Find · Inspect. There is no
+         * sixth: the `…` is asserted separately, at the other end of the screen,
+         * because that is the requirement rather than an accident of layout.
          *
-         * The length of the row is pinned by these six being present **and** by
+         * The length of the row is pinned by these five being present **and** by
          * Done being asserted absent below, rather than by counting the buttons
          * on screen: the bar's other half is up there too — the address field, its
          * Go, the ⓘ when there is something to explain — so a raw count would be
@@ -475,12 +492,12 @@ final class LocalhostUITests: XCTestCase {
          */
         let middle = app.frame.midY
         let controls = ["localhost.back", "localhost.forward", "localhost.reload",
-                        "localhost.find", "localhost.inspect", "localhost.settings"]
+                        "localhost.find", "localhost.inspect"]
         for identifier in controls {
             let button = app.buttons[identifier]
             XCTAssertTrue(button.exists,
                           "\(identifier) is missing from the bar — the row under a page on this "
-                          + "phone is the same six as the row under every other browser window, "
+                          + "phone is the same five as the row under every other browser window, "
                           + "and a shorter one is what he counted as two products")
             XCTAssertGreaterThan(button.frame.minY, middle,
                                  "\(identifier) is in the top half of the screen; browser controls "
@@ -488,19 +505,49 @@ final class LocalhostUITests: XCTestCase {
         }
         XCTAssertLessThan(bar.frame.maxY, middle, "the navigation bar should be above the page")
 
+        /*
+         * And the sixth control, at the other end of the screen, which is the
+         * point of this half of the case.
+         *
+         * > *"Maybe we can give some better one header also, not only the bottom,
+         * > so we can have most of the important controls for the flow, for this
+         * > kind of things and whatever we require to get the job done."*
+         *
+         * `localhost.settings` is the `…`. It kept its name when it moved, so
+         * nothing else in this repository had to move — and its **frame** is the
+         * whole assertion, because a `…` back in the bottom row would pass every
+         * existence check anybody would write and would be the state he rejected.
+         * Inside the navigation bar's own rectangle rather than merely above the
+         * middle: that is the difference between *it is in the header* and *it
+         * happens to be drawn high up*.
+         */
+        let more = app.buttons["localhost.settings"]
+        XCTAssertTrue(more.exists,
+                      "the `…` is missing — the header is a chevron, one line of title and this, "
+                      + "and \"not only the bottom\" is the sentence it answers")
+        XCTAssertLessThan(more.frame.maxY, middle,
+                          "the `…` is in the bottom half of the screen; it belongs in the header")
+        XCTAssertTrue(bar.frame.contains(CGPoint(x: more.frame.midX, y: more.frame.midY)),
+                      "the `…` should be inside the navigation bar itself, on the trailing side — "
+                      + "drawn high on the page is not the same thing as being in the header")
+        XCTAssertGreaterThan(more.frame.midX, bar.frame.midX,
+                             "and on the trailing side of it, opposite the chevron")
+
         // And Done is gone from the row rather than merely unused. A Done left
-        // standing beside the `…` would make this bar one control longer than
-        // every other one, which is where this round started.
+        // standing in the row would make this bar one control longer than every
+        // other one, which is where this round started.
         XCTAssertFalse(app.buttons["localhost.done"].exists,
-                       "Done left the row; closing the window is inside the `…` now")
+                       "Done left the row; closing the window is a card on this page's own "
+                       + "settings screen behind the `…` now")
 
         /*
          * 3. The order, left to right, read off the real frames rather than off
          *    the declaration — because a `Spacer` in the wrong place reorders
          *    what a thumb sees without touching what the source says.
          *
-         * *"Last button I think is on its correct place"* was said of the sixth
-         * slot, and the sixth slot is unchanged. What is in it is the `…`.
+         * *"Last button I think is on its correct place"* was said of a row that
+         * ended with Done. What ends the row now is Inspect, and the control that
+         * used to end it is up in the header — asserted above.
          */
         let byPosition = controls
             .map { (id: $0, x: app.buttons[$0].frame.midX) }
@@ -599,9 +646,30 @@ final class LocalhostUITests: XCTestCase {
      * seventh control that made the phone's row different from every other
      * browser window's. *"So top, header and footer, tab bar should be same in
      * all type of browsing windows."* Tearing a tunnel down is a thing you do to
-     * the window rather than to the page, so it moved into the menu and the row
-     * became the same six everywhere. Two taps instead of one, and the one-tap
+     * the window rather than to the page, so it moved off the row and the row
+     * became the same five everywhere. Two taps instead of one, and the one-tap
      * way out — the chevron — is unchanged, so nothing anybody does got longer.
+     *
+     * ## Where it moved to, and why that changed again
+     *
+     * For one round it was the single item in a menu the `…` opened, because a
+     * page over a tunnel had no settings screen anywhere. It has one now — the
+     * same `MachineWindowSettingsView` a window on the machine opens, handed this
+     * page's tab — and Close is a card on it:
+     *
+     * > *"all of them should have all the options. Should not be that much of
+     * > difference in all of them."*
+     *
+     * So this walks the same two taps it always did, and the second one lands on
+     * a screen instead of in a menu: `localhost.settings` in the header, then
+     * `browser.phone.page.close`.
+     *
+     * The pop afterwards is worth a word, because nothing on that settings screen
+     * dismisses itself — deliberately, so that a screen is never yanked out from
+     * under a thumb. `LocalhostBrowser` watches the tab instead and leaves when
+     * the store stops listing it, which takes the settings screen with it. That
+     * is the same watcher a window on the machine has always had, and this case
+     * is what proves it fires.
      *
      * Asserted on this side by the page being gone and the list being back; the
      * other half — that the Mac's socket went with it — is asserted by whoever
@@ -627,13 +695,14 @@ final class LocalhostUITests: XCTestCase {
 
         let more = app.buttons["localhost.settings"]
         XCTAssertTrue(more.waitForExistence(timeout: 10),
-                      "the `…` is the sixth control on the bar and it is where closing this "
-                      + "window lives")
+                      "the `…` is in this page's header and it is the way to everything this "
+                      + "window can be asked for, closing it included")
         more.tap()
-        let close = app.buttons["localhost.close"]
-        XCTAssertTrue(close.waitForExistence(timeout: 10),
-                      "the menu behind the `…` should offer Close this window — the verb that used "
-                      + "to be Done in this screen's own toolbar")
+        let close = app.buttons["browser.phone.page.close"]
+        XCTAssertTrue(close.waitForExistence(timeout: 15),
+                      "the `…` should open this page's own settings, and Close this window should "
+                      + "be a card on it — the verb that used to be Done in this screen's own "
+                      + "toolbar, on the same screen a window on the machine gets")
         close.tap()
 
         XCTAssertTrue(backOnTheBrowserList(), "closing should come back to the Browser list")
@@ -651,9 +720,10 @@ final class LocalhostUITests: XCTestCase {
      * Something that says the browser screen has arrived.
      *
      * `localhost.done` was this probe in five places in this file and there is no
-     * Done any more: the row under a page on this phone is the same six controls
+     * Done any more: the row under a page on this phone is the same five controls
      * as the row under any other browser window, and the verb that tore the
-     * tunnel down is `Close this window` inside the `…`. See `BrowserChrome`.
+     * tunnel down is the `Close this window` card on this page's own settings
+     * screen, behind the `…` in the header. See `BrowserChrome`.
      *
      * **Reload rather than the address**, and the difference matters at exactly
      * the moment this is called. The bar draws Reload in every phase of a tunnel
@@ -702,8 +772,24 @@ final class LocalhostUITests: XCTestCase {
         app.navigationBars["Browser"].waitForExistence(timeout: 10)
     }
 
+    /**
+     * Out by the chevron, which is what a thumb does.
+     *
+     * **The `…` is in this header too now**, so *the first button in the
+     * navigation bar* stopped being a safe way to name the chevron: it is the
+     * leading item and it does come first, but that is an ordering nothing in
+     * this file controls, and a run that tapped the trailing item instead would
+     * push the settings screen and then fail somewhere else entirely with a
+     * message about a page that did not close.
+     *
+     * So it is named by what it is not. There is no identifier on a system back
+     * button to ask for, and excluding the one control up there that *does* have
+     * a name is the honest way to say *the other one*.
+     */
     private func leaveTheBrowser() {
-        let back = app.navigationBars.buttons.element(boundBy: 0)
+        let back = app.navigationBars.buttons
+            .matching(NSPredicate(format: "NOT (identifier == %@)", "localhost.settings"))
+            .element(boundBy: 0)
         XCTAssertTrue(back.waitForExistence(timeout: 10),
                       "the page keeps the system navigation bar, so there is always a chevron out "
                       + "of it")

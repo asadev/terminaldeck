@@ -46,8 +46,8 @@
  * > should be inside of the window."*
  *
  * Tapping a window gives you the window. Its settings are behind a `…` **on this
- * screen**, which is the sentence's second half — *inside of the window* — and
- * they are `MachineWindowSettingsView`.
+ * screen** — the trailing item in its header — which is the sentence's second
+ * half, *inside of the window*, and they are `MachineWindowSettingsView`.
  *
  * ## One way: a session opens a window, a window never opens a session
  *
@@ -63,8 +63,8 @@
  * not the list behind it. The reverse direction is untouched and is the half he
  * wants: a session opens the browser window it is bound to, in `SessionPageView`.
  * Which session owns a window is still on the window — it is a window setting
- * behind the `…`, in `MachineWindowSettingsView`, where attaching and detaching
- * already live.
+ * behind the header's `…`, in `MachineWindowSettingsView`, where attaching and
+ * detaching already live.
  *
  * ## Two shapes, because the two capabilities come apart
  *
@@ -74,14 +74,14 @@
  * both directions:
  *
  *  - **The machine is casting this window** — the body is the live picture,
- *    full-bleed, and the `…` on the bar leads to the settings. This is the
+ *    full-bleed, and the `…` in the header leads to the settings. This is the
  *    ordinary shape.
- *  - **It is not** — the body *is* the settings, and there is no `…` on the bar,
- *    because a menu leading to the screen you are already looking at is the
- *    worst kind of dead control. A line at the top of it says the machine is not
- *    offering this window for watching, and only when the machine advertises
- *    `watch` at all: on a host that never offered a cast, a sentence about one
- *    is an apology for a feature that was never on the table.
+ *  - **It is not** — the body *is* the settings, and there is no `…` in the
+ *    header, because a control leading to the screen you are already looking at
+ *    is the worst kind of dead control. A line at the top of it says the machine
+ *    is not offering this window for watching, and only when the machine
+ *    advertises `watch` at all: on a host that never offered a cast, a sentence
+ *    about one is an apology for a feature that was never on the table.
  *
  * The second case is not an error and it is not rare. A server lists a window
  * opened from the Browser tab's `+` under `browser.window.rows` and **not**
@@ -97,7 +97,11 @@
  * of it — `go`, `act`, `bind`, `shot`, `steps` each open with
  * `rawId === '' → bad(…)`. So for the front tab, Back, Forward, Reload, attaching
  * to a session, detaching, the screenshot, the recorder and Close are not
- * *withheld* by this app: they cannot be put on the wire at all.
+ * *withheld* by this app: they cannot be put on the wire at all. The settings
+ * screen behind the `…` is still opened for it — that screen is where those
+ * controls are drawn dead with the reason, which is what *"all the options
+ * should be available at least"* asks for — so nothing here may say the
+ * settings cannot be opened. See `whyLimited`.
  *
  * What it **can** be asked is `web.open`, and only because of where that verb
  * lands. On a headless host `openUrl` is `browserDrive.open({ url, isolate:
@@ -139,12 +143,17 @@
  *
  * ## Why the bar carries the page verbs and the settings screen does not
  *
+ *
  * Because they are the same four verbs and drawing them twice is how two screens
  * end up disagreeing. They belong with the address, and the address belongs
  * under the page — that is what a browser is. What is left for the settings is
  * everything that is *about the window* rather than about the page it happens to
  * be showing: the jar its cookies land in, the session that owns it, the picture
- * and the recorder.
+ * and the recorder. That is also the line the `…` is on the other side of, which
+ * is why it sits in the header rather than in the row of page verbs:
+ *
+ * > *"Maybe we can give some better one header also, not only the bottom, so we
+ * > can have most of the important controls for the flow."*
  *
  * ## And why the bar itself is not written here any more
  *
@@ -366,6 +375,32 @@ struct MachineWindowView: View {
         // `BrowserChrome.pageTitle`.
         .navigationTitle(pageTitle)
         .navigationBarTitleDisplayMode(.inline)
+        /*
+         * **The header carries a control, and it is the only `…` on this screen.**
+         *
+         * > *"Maybe we can give some better one header also, not only the bottom,
+         * > so we can have most of the important controls for the flow, for this
+         * > kind of things and whatever we require to get the job done."*
+         *
+         * The chevron, one line of title, and this. Nothing to read — *"we can
+         * just see and enter"* — and the same trailing item on a window, an
+         * isolated window, the machine's own front tab and a page on this phone.
+         *
+         * Drawn only where it opens something. On a window the machine will not
+         * cast, `stage` draws `MachineWindowSettingsView` as the **body** of this
+         * screen: a `…` there would lead to where you are already standing, so
+         * there is none and there is no sentence about one either. The condition
+         * is `liveSurface`, which is the same thing `stage` branches on, so the
+         * two can never disagree about which shape this screen is in.
+         */
+        .toolbar {
+            if liveSurface != nil {
+                ToolbarItem(placement: .topBarTrailing) {
+                    BrowserWindowActions(id: "browser.machine.window",
+                                         open: { showingSettings = true })
+                }
+            }
+        }
         .safeAreaInset(edge: .bottom) { bar }
         /*
          * The tab bar's floating pill would sit over the bar below, and over the
@@ -594,7 +629,7 @@ struct MachineWindowView: View {
              *
              * Which session owns this window, and attaching it to another one,
              * are not lost with the row — they are window settings and they are
-             * behind the `…` on the bar, where the whole binding card already
+             * behind the `…` in the header, where the whole binding card already
              * lives: *"settings of per window, how to connect to it, how to make
              * it shared or isolated, all of these things should be inside of the
              * window."* What went is the route, not the fact.
@@ -662,7 +697,7 @@ struct MachineWindowView: View {
      * being the video — and the answer to that, a round later, was to stop having
      * two screens.
      *
-     * ## The same six controls on every page, and the reason where one is dead
+     * ## The same five controls on every page, and the reason where one is dead
      *
      * > *"it should be the same case, or all the options should be available at
      * > least."*
@@ -671,11 +706,17 @@ struct MachineWindowView: View {
      * > browsing windows, including on this phone, including isolated, including
      * > the server."*
      *
-     * The row is Back · Forward · Reload · Find · Inspect · More, and it is that
-     * row under a window on the machine, an isolated window on the machine, and a
-     * page this phone is holding open over a tunnel. Find and Inspect joined it
-     * here from the phone's side, where they work; on this screen they are drawn
-     * greyed with the reason, because a picture of a page is not a page.
+     * The row is Back · Forward · Reload · Find · Inspect, and it is that row
+     * under a window on the machine, an isolated window on the machine, the
+     * machine's own front tab, and a page this phone is holding open over a
+     * tunnel. Find and Inspect joined it here from the phone's side, where they
+     * work; on this screen Find is drawn greyed with the reason, because a
+     * picture of a page has no words on this phone to search.
+     *
+     * The sixth used to be the `…`. It is the header's now — see the `.toolbar`
+     * on `body` and `BrowserChrome` — because *"not only the bottom"* was a
+     * sentence about the header being empty, and because the `…` is the one
+     * thing in this chrome that acts on the **window** rather than on the page.
      *
      * Which of them can act is decided **per verb from what the wire will
      * carry**, never by leaving a gap:
@@ -691,14 +732,9 @@ struct MachineWindowView: View {
      *    read-only at the machine's last word on it, and all three verbs are dead
      *    with the reason.
      *
-     * The `…` **acts** only where the settings are somewhere else — on a window
-     * with no cast they *are* the body of this screen, and a control that leads to
-     * where you are standing is worse than no control. It is still drawn, greyed,
-     * saying that: leaving a gap there is the thing that made one window's bar
-     * shorter than another's.
-     *
-     * Absent entirely only where there is neither a window to drive nor a picture
-     * to be under: a bar with nothing above it is not a browser's bar.
+     * The bar is absent entirely only where there is neither a window to drive
+     * nor a picture to be under: a bar with nothing above it is not a browser's
+     * bar.
      */
     @ViewBuilder
     private var bar: some View {
@@ -714,7 +750,6 @@ struct MachineWindowView: View {
                 forward: drivable ? { host?.actOnMachineWindow(windowID, .forward) } : nil,
                 reload: reloadVerb,
                 page: liveSurface?.window,
-                more: liveSurface != nil ? { showingSettings = true } : nil,
                 unavailable: whyLimited,
                 /*
                  * **No history state, and that is deliberately not a `false`.**
@@ -765,17 +800,6 @@ struct MachineWindowView: View {
                 inspecting: inspecting,
                 whyNoInspect: (drivable && liveSurface == nil)
                     ? BrowserChrome.inspectNeedsThePicture
-                    : nil,
-                /*
-                 * The `…` leads to the settings **unless they are already the body
-                 * of this screen**, which is the shape a window the machine will
-                 * not cast takes. A control that leads to where you are standing
-                 * is the worst kind of dead control; leaving a gap where it was is
-                 * what made two windows look like two products. So it is drawn,
-                 * greyed, saying so.
-                 */
-                whyNoMore: liveSurface == nil
-                    ? "This window's settings are already on the screen below."
                     : nil)
         }
     }
@@ -802,14 +826,29 @@ struct MachineWindowView: View {
      * fact about the page, and three copies of it would be three places for it to
      * drift. Both cases name the machine, because somebody with two paired needs
      * to know which one is refusing.
+     *
+     * ## One clause was taken out of the first sentence because it was not true
+     *
+     * It used to end *"…and the window's own settings cannot be addressed to
+     * it"*, on the machine's own front tab. The `…` in the header of that exact
+     * screen **opens those settings**, and has all along: the front tab is always
+     * being cast, so `liveSurface` is never nil for it, so the control is drawn
+     * and it works. What the person then reads over there is a screen of controls
+     * drawn dead with their own reason, which is the honest answer and is what
+     * *"all the options should be available at least"* asks for.
+     *
+     * A sentence that contradicts the button next to it is worse than no
+     * sentence: it teaches somebody not to trust the next one. So the clause is
+     * gone, and what is left is only what genuinely cannot be put on this wire —
+     * the two history verbs, and pointing at one thing on the page.
      */
     private var whyLimited: String? {
         guard !drivable else { return nil }
         let name = model.current?.label ?? model.theMachine
         if windowID.isEmpty {
             return "This is \(name)'s own tab rather than one of its windows. The machine names a "
-                + "window with an id and this page has none, so Back, Forward, pointing at one "
-                + "thing on the page, and the window's own settings cannot be addressed to it."
+                + "window with an id and this page has none, so Back, Forward and pointing at one "
+                + "thing on the page cannot be addressed to it."
                 + "\n\nTyping an address still moves this page: that is a different verb, and it "
                 + "lands in this same tab."
         }

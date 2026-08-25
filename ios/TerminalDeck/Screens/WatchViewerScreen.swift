@@ -71,6 +71,16 @@
  * desktop's history is not on this wire and a surface with no window id could not
  * be named in a `browser.window.act` even if it were.
  *
+ * ## And this screen's header is a chevron and a title, with nothing beside them
+ *
+ * Every other browser window carries a `…` in the header now — *"not only the
+ * bottom, so we can have most of the important controls"* — and it is drawn only
+ * where it opens something. This screen is the one that has nothing: a page the
+ * machine is casting without owning has no settings screen, because every card
+ * on one is addressed by a window id and this page has none. So there is no
+ * trailing button here and no line explaining its absence, which is the same
+ * rule the bar follows for a control that would have led nowhere.
+ *
  * Typing is not a control on this bar at all any more. *"If we just click inside
  * and type from our keyboard, it should work… I should not have to have this
  * separate button of keyboard."* A tap on the picture raises the system keyboard
@@ -374,31 +384,38 @@ struct WatchViewerScreen: View {
      * the drive's front slot re-navigates the page that is already there — and it
      * is offered on that slot only, for the reason `canNavigate` gives.
      *
-     * ## Most of this row is greyed, and three of them say their own line
+     * ## Most of this row is greyed, and two of them say their own line
      *
-     * Five controls are dead here on a surface this screen can navigate, and all
-     * six on one it cannot.
+     * Four controls are dead here on a surface this screen can navigate, and all
+     * five on one it cannot.
      *
      * `unavailable` is the fact about **the whole page** and it is the right
      * sentence for Back, Forward and — where there is nothing to send — Reload:
      * nothing on this bar can be addressed to a page the machine has not made a
      * window of, and one sentence covers all three at once.
      *
-     * It is the wrong sentence for the other three, and it was being used for one
-     * of them. Find and Inspect already carry their own — `BrowserChrome`'s
-     * defaults, which say the page is on the machine rather than on this phone,
-     * which is a different fact and a truer one for those two controls. The `…`
-     * had nothing, so `BrowserPageBar.slot` fell back to the page-wide line and a
-     * person tapping the ⓘ read *nothing on this bar can be sent to it* under a
-     * heading about a menu. That is not false, and it does not answer the
-     * question the tap asked, which was *what is behind those three dots*.
+     * It is the wrong sentence for the other two, and Find and Inspect carry
+     * their own — `BrowserChrome`'s defaults, which say the page is on the
+     * machine rather than on this phone, a different fact and a truer one for
+     * those two controls.
      *
-     * So `whyNoMore` is given here, in one line, in the same shape as the other
-     * two: what the `…` normally holds, and why this page has none of it. The
-     * answer is short because the screen is: this is the surface viewer, reached
-     * from Settings, showing a page the machine is casting without owning — there
-     * is no window to close, no recording to keep and no settings screen behind
-     * it, because all three are addressed by a name this page does not have.
+     * ## There is no `…` on this screen at all, and no sentence about one
+     *
+     * There used to be a sixth slot in the row holding it, greyed, with a line
+     * saying what a window's menu normally holds and why this page has none of
+     * it. The `…` is a header control now (`BrowserWindowActions`), and it is
+     * drawn only where it opens something — so on this screen it is simply not
+     * there, and the line went with it.
+     *
+     * That is not the *"all the options should be available at least"* rule being
+     * bent. That rule is about the **row**, which is what he counted: five under
+     * a window, five under a page on the phone, five here, with the ones that
+     * cannot act greyed in their places. A header with no trailing button is not
+     * a gap in a row; it is a screen that has nothing to put there. This is the
+     * surface viewer, reached from Settings, showing a page the machine is
+     * casting without owning — there is no window to close, no recording to keep
+     * and no settings screen behind it, because all three are addressed by a name
+     * this page does not have.
      */
     private var bar: some View {
         BrowserPageBar(
@@ -412,35 +429,13 @@ struct WatchViewerScreen: View {
             forward: nil,
             reload: canNavigate && !surface.url.isEmpty ? reload : nil,
             page: surface.window,
-            more: nil,
             unavailable: whyLimited,
             // Find and Inspect are deliberately left at `BrowserPageBar`'s
             // defaults. Those say the page is on the machine and there is nothing
             // on this phone to search or tap into, which is exactly the case
             // here — repeating them in this file would be two more copies of one
             // fact about one wire, and two more places for it to drift.
-            whyNoMore: whyNoMenu)
-    }
-
-    /**
-     * What is behind the `…` on other browser windows, and why there is none of
-     * it here — one line, in plain words.
-     *
-     * The menu is the window's own things: closing it, its recording, the jar its
-     * cookies land in. Every one of those is asked for by the name the machine
-     * gives a window, and this page has no name — it is the machine's own tab,
-     * cast to this phone, which is why Back and Forward cannot be sent either.
-     *
-     * **Two clauses and no more.** It shares the ⓘ with the page-wide sentence
-     * and with Find's and Inspect's, and *"I don't want any kind of long
-     * descriptions anywhere"* is the standing rule about that popover. Said as
-     * *the machine* rather than as a window id, because the person reading it did
-     * not open a window: they opened Settings and tapped a page that was already
-     * being shown.
-     */
-    private var whyNoMenu: String {
-        "This menu holds a window's own things — closing it, recording it, its settings. The "
-            + "machine has not made a window of this page, so there is nothing here to open."
+        )
     }
 
     /**

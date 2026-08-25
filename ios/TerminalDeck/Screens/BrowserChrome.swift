@@ -1,5 +1,5 @@
 /**
- * One browser, three kinds of window — and the rules all three share.
+ * One browser, four kinds of window — and the rules all four share.
  *
  * > *"So top, header and footer, tab bar should be same in all type of browsing
  * > windows, including on this phone, including isolated, including the server."*
@@ -8,16 +8,19 @@
  * > different kind of looks, all of them. So let's just try to make them all
  * > simple, easier."*
  *
- * ## What the three kinds were, and why they looked like three products
+ * ## What the kinds were, and why they looked like separate products
  *
- * There are three things this app calls a browser window and until this pass
- * each of them wore its own chrome:
+ * There are four things this app calls a browser window and each of them used to
+ * wear its own chrome:
  *
  *  - **a window on the machine**, and **an isolated window on the machine** —
  *    the same Swift type (`MachineWindow`, one `isolated` flag) on the same
  *    screen, `MachineWindowView`. Header: the window's name. Bottom:
  *    `BrowserPageBar` — an address field and Go, then Back, Forward, Reload and
  *    a `…`.
+ *  - **the machine's own front tab** — the page that opens when nobody named a
+ *    window, which the machine lists under the empty name. Same screen; it used
+ *    to land somewhere else entirely with one Reload on it.
  *  - **a page on this phone** — a different type entirely (`BrowserTab`: a port
  *    and a path claimed on a tunnel) on its own screen, `LocalhostBrowser`.
  *    Header: two lines, the page's title over a mono line reading
@@ -36,11 +39,11 @@
  * > to, this overall buttons needs to be more better. They can be much better
  * > than now."*
  *
- * ## The shape both screens mount now
+ * ## The shape every one of them mounts now
  *
- * **Header** — the system's back chevron, the page's name on one line, and
- * nothing else. What came off it is the half he called information rather than
- * control:
+ * **Header** — the system's back chevron, the page's name on one line, and the
+ * `…` that opens everything this window can be asked for. Nothing else, and in
+ * particular nothing to *read*:
  *
  * > *"even if we remove the top header of paperclip and all of this basic
  * > information might not be required from the outside. We can just see and
@@ -48,41 +51,63 @@
  *
  * So the mono address line and the `· 3 connections` count are gone from the top
  * of the phone's page. Neither is lost: the address is now a **field** in the
- * bar, which is the thing he asked for and could not have before, and the
- * connection count is one line inside the `…`. *From the outside* it is gone.
+ * bar, which is the thing he asked for and could not have before. *From the
+ * outside* it is gone.
  *
  * **Bottom bar** — `BrowserPageBar`, two rows, the same two rows under every one
- * of the three kinds:
+ * of the four kinds:
  *
  *  - the address, editable, with Go;
- *  - Back · Forward · Reload · Find · Inspect · More.
+ *  - Back · Forward · Reload · Find · Inspect.
  *
- * ## Where the `…` lives, decided once
+ * ## Where the `…` lives, and the round that moved it back
  *
- * In the **bar**, as the sixth control, and not in the header — one door, and it
- * is the door under a thumb. Three reasons, in the order they mattered:
+ * **In the header, trailing side.** The pass before this one put it in the bar
+ * as a sixth control and wrote three reasons down: a menu in the top-right
+ * corner of a six-inch phone is the furthest pixel from a thumb; a header that
+ * is only a chevron and a title has nothing left on it that can drift between
+ * kinds of window; and two doors onto one menu is what that round was undoing.
  *
- *  1. A menu in the top-right corner of a six-inch phone is the furthest pixel
- *     from a thumb on the screen, and *"this overall buttons needs to be more
- *     better"* is a sentence about the bottom of the screen.
- *  2. *"top, header and footer… should be same in all type"* is satisfied more
- *     completely by a header that is the system chevron and one line of title on
- *     every kind — there is then nothing left up there that can drift.
- *  3. Two doors onto the same menu is the thing this whole pass is undoing.
+ * Every one of those is true and **none of them is what he asked for**:
  *
- * The bar's More therefore carries **everything else this window can do**,
- * including the verb that used to be a button of its own on the phone: Done tore
- * the tunnel down, and it is `Close this window` in that menu now. The chevron
- * top-left still leaves the page and still closes the tunnel, so the one-tap way
- * out was never the button.
+ * > *"Maybe we can give some better one header also, not only the bottom, so we
+ * > can have most of the important controls for the flow, for this kind of
+ * > things and whatever we require to get the job done."*
+ *
+ * *Not only the bottom* is the sentence, and a header carrying zero controls is
+ * the exact opposite of it. So the three sentences he said about this header are
+ * read together, because they are one instruction rather than three:
+ *
+ *  - the header carries the important **controls** — *"not only the bottom"*;
+ *  - the header carries no **information** — *"we can just see and enter"*;
+ *  - and it is the **same** on every kind of browsing window.
+ *
+ * Which resolves to: the header carries control and not information, and the
+ * same control everywhere. The `…` is the window's own things — closing it, the
+ * jar its cookies land in, the session that owns it, the screenshot, the
+ * recorder — so it is the control that belongs up there, and the bar keeps the
+ * five verbs that act on the *page*, which is what a thumb reaches for while
+ * reading one.
+ *
+ * The thumb argument survives the move and is answered rather than ignored:
+ * nothing that is pressed while working a page went up there. Back, Forward,
+ * Reload, Find and Inspect are all still under the thumb; what moved is the door
+ * you go through once, to do something to the window rather than to the page.
+ *
+ * **There is still exactly one door.** The bar does not keep a More slot, not
+ * even a greyed one — `BrowserWindowActions` below is the only `…` in this app's
+ * browser, and it is drawn only where it opens something. On a window the
+ * machine will not cast, the settings *are* the body of the screen; a `…` there
+ * would lead to where you are already standing, so there is none, and there is
+ * no sentence about one either.
  *
  * ## What lives in this file
  *
- * The rules that would otherwise be written twice and drift: how a page is
- * named, how a loopback address is spelled for a person to read, and the two
- * sentences that explain why a control this phone cannot honour is greyed. The
- * drawing is `BrowserPageBar`; the two screens are `MachineWindowView` and
- * `LocalhostBrowser`.
+ * The rules that would otherwise be written four times and drift: how a page is
+ * named, how a loopback address is spelled for a person to read, the two
+ * sentences that explain why a control this phone cannot honour is greyed, and
+ * the header's `…` itself. The bottom bar is `BrowserPageBar`; the screens are
+ * `MachineWindowView`, `LocalhostBrowser` and `WatchViewerScreen`.
  */
 
 import SwiftUI
@@ -95,9 +120,9 @@ enum BrowserChrome {
      * The page's own title once it has one, its address until then, and a
      * last-resort name for a page that has neither yet. This is not a new rule —
      * it is `MachineWindow.label` (`title.isEmpty ? url : title`) with the third
-     * case spelled out, and it is written here so that the two screens cannot
-     * grow two versions of it. *"Untitled"* tells nobody which of their four
-     * windows they are looking at, which is exactly when the name matters.
+     * case spelled out, and it is written here so that the screens cannot grow
+     * four versions of it. *"Untitled"* tells nobody which of their four windows
+     * they are looking at, which is exactly when the name matters.
      */
     static func pageTitle(title: String, address: String, fallback: String) -> String {
         if !title.isEmpty { return title }
@@ -153,7 +178,7 @@ enum BrowserChrome {
      * `browser.window.*` family that would ask the machine to look for us.
      *
      * A default on the bar rather than a sentence each screen writes, because it
-     * is one fact about one wire and three copies of it would be three places for
+     * is one fact about one wire and four copies of it would be four places for
      * it to drift. The day a host learns to search a window, the screen passes a
      * closure and this sentence stops being read.
      */
@@ -165,11 +190,11 @@ enum BrowserChrome {
      * Why Inspect is greyed on a screen that is **only watching** a page.
      *
      * It used to say *"tapping into a window on the machine is not ready yet"*,
-     * and that sentence is gone because the thing it apologised for is built: a
-     * tap on a machine window's picture becomes `browser.window.pick`, the
-     * machine's own browser answers with the element, and one sheet draws both.
-     * See `MachineWindowView.bar`, which supplies the closure this default exists
-     * to stand in for.
+     * and that sentence is gone because the thing it apologised for **is built
+     * and is wired up**: a tap on a machine window's picture becomes
+     * `browser.window.pick`, the machine's own browser answers with the element,
+     * and one sheet draws both. `MachineWindowView.bar` passes the closure, and
+     * `MachineWindowView.toggleInspecting` arms the canvas for it.
      *
      * What is left is the one screen that genuinely cannot ask. `WatchViewerScreen`
      * is reached from **Settings**, holding a `WatchLink` and no model — so there
@@ -207,23 +232,128 @@ enum BrowserChrome {
 }
 
 /**
- * What the `…` at the end of the bar opens, on a page whose *everything else* is
- * a short list rather than a screen.
+ * The `…` in the header of every browser window, and the only one in the app.
  *
- * Two shapes fill that one slot and they are not interchangeable, which is why
- * `BrowserPageBar` takes both:
+ * > *"Maybe we can give some better one header also, not only the bottom, so we
+ * > can have most of the important controls for the flow."*
  *
- *  - **`more`, an action.** A window on the machine has a whole screen of things
- *    that are about the window rather than about the page — the jar its cookies
- *    land in, the session that owns it, the screenshot, the recorder, Close. The
- *    `…` pushes `MachineWindowSettingsView`, and a menu in front of that screen
- *    would be one tap of nothing.
- *  - **`menu`, this.** A page on this phone has no window on the machine and so
- *    no such screen. What it has is one verb — the Done that used to sit in the
- *    toolbar and tears the tunnel down — and one fact worth keeping, the number
- *    of connections the tunnel is holding open, which is the honest signal that
- *    a hot-reload socket is still talking with nothing on screen changing. A
- *    menu is the right size for that; a screen would be a page of white space.
+ * Placed by each screen as a trailing item in the system navigation bar, so it
+ * sits beside the title with the chevron opposite it — the same two things in
+ * the same two corners on a machine window, an isolated window, the machine's
+ * own front tab, and a page this phone is holding open. The header carries this
+ * and nothing else: a control, never a line to read.
+ *
+ * ## One identifier, wherever it is drawn
+ *
+ * `"\(id).settings"`, built here from the bar's own prefix rather than by the
+ * screens, so `browser.machine.window.settings` and `localhost.settings` still
+ * name this control after it changed places. Six suites reach for those two
+ * strings and none of them had to move.
+ *
+ * ## Two shapes, and they are not interchangeable
+ *
+ *  - **`open`, a screen.** Every kind of window that has one: a window on the
+ *    machine, the machine's own front tab, and — since this round — a page on
+ *    this phone. All three push `MachineWindowSettingsView`, which is where
+ *    *"settings of per window, how to connect to it, how to make it shared or
+ *    isolated, all of these things should be inside of the window"* lives. A
+ *    menu in front of a screen would be one tap of nothing.
+ *  - **`menu`, a short list.** The one page with no settings screen behind it:
+ *    a prototype opened straight from a file, which `ArtifactView` pushes at a
+ *    tunnel without a row in the Browser tab's list to hang settings off. What it
+ *    has is one verb and one fact, and a screen for that would be a page of white
+ *    space.
+ *
+ * ## Drawn only where it opens something
+ *
+ * There is no greyed shape of this and no sentence explaining one. The case that
+ * would have wanted them is a window the machine refuses to cast: that screen
+ * draws its settings **as its body**, so a `…` leading to them would lead to
+ * where you are already standing. An absent trailing button in a header is not
+ * the gap a missing slot in a row of six was — the row was the thing he counted,
+ * and the row is now five under every page.
+ */
+struct BrowserWindowActions: View {
+
+    /// The bar's prefix for this screen — `browser.machine.window`, `localhost`.
+    /// The suffix is added here so the name is spelled in one place.
+    let id: String
+
+    /// Push the window's settings. Nil where this page has a list instead, or
+    /// nothing at all.
+    var open: (() -> Void)?
+
+    /// The short list, for the one page whose everything-else is not a screen.
+    var menu: BrowserPageMenu?
+
+    var body: some View {
+        if let menu {
+            Menu {
+                items(menu)
+            } label: {
+                glyph
+            }
+            .accessibilityLabel("More")
+            .accessibilityIdentifier("\(id).settings")
+        } else if let open {
+            // No `.buttonStyle` on either shape, deliberately. iOS 26 wraps a
+            // navigation-bar item in its own glass capsule, and a `.plain` on one
+            // of the two would draw the phone page's `…` and a machine window's
+            // `…` differently — which is the exact drift *"top, header and
+            // footer… should be same in all type of browsing windows"* is about.
+            Button(action: open) {
+                glyph
+            }
+            .accessibilityLabel("More")
+            .accessibilityIdentifier("\(id).settings")
+        }
+    }
+
+    /// The same three dots the bar used to draw, at the weight the system bar's
+    /// own items are drawn at. Tinted explicitly rather than inherited: this app
+    /// states its accent everywhere else and a header item that took the system
+    /// default would be the one blue thing on the screen.
+    private var glyph: some View {
+        Image(systemName: "ellipsis")
+            .font(.system(size: 17, weight: .semibold))
+            .foregroundStyle(Theme.accent)
+            .frame(width: 30, height: 30)
+            .contentShape(Rectangle())
+    }
+
+    @ViewBuilder
+    private func items(_ menu: BrowserPageMenu) -> some View {
+        // A plain label rather than a `Section` header: iOS draws a bare `Text`
+        // in a menu un-tappable and greyed, which is exactly what a line of fact
+        // among a list of verbs should look like.
+        if let note = menu.note {
+            Text(note)
+        }
+        ForEach(menu.items) { item in
+            Button(role: item.destructive ? ButtonRole.destructive : nil, action: item.act) {
+                Label(item.title, systemImage: item.icon)
+            }
+            .accessibilityIdentifier(item.id)
+        }
+    }
+}
+
+/**
+ * What the header's `…` opens on a page whose *everything else* is a short list
+ * rather than a screen.
+ *
+ * One page is left in that shape and it is not one of the four kinds of browsing
+ * window: a prototype `ArtifactView` opens straight from a file, pushed at a
+ * tunnel with no row in the Browser tab's list and therefore no `BrowserTab` id
+ * to carry into `MachineWindowSettingsView`. What it has is one verb — the Done
+ * that used to sit in the toolbar and tears the tunnel down — and one fact worth
+ * keeping, the number of connections the tunnel is holding open, which is the
+ * honest signal that a hot-reload socket is still talking with nothing on screen
+ * changing.
+ *
+ * Every page that *does* have a row — every page on the Browser tab — pushes the
+ * settings screen instead, because it exists now and *"all of them should have
+ * all the options."*
  */
 struct BrowserPageMenu {
 

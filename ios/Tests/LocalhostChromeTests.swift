@@ -21,10 +21,10 @@
  * That was fixed Safari's way: keep the navigation bar, put the browser's
  * controls along the bottom.
  *
- * ## And where it ended up: three windows, one bar
+ * ## And where it ended up: four windows, one bar and one header
  *
- * A round later he counted the browser windows this app has and found three
- * different chromes:
+ * A round later he counted the browser windows this app has and found different
+ * chromes on each:
  *
  * > *"So top, header and footer, tab bar should be same in all type of browsing
  * > windows, including on this phone, including isolated, including the server."*
@@ -35,9 +35,25 @@
  * So the bottom bar written on the phone's page is gone and that screen mounts
  * `BrowserPageBar` — the same view a window on the machine mounts — with the
  * same two rows: the address and Go, then Back · Forward · Reload · Find ·
- * Inspect · More. Done left the row; it tore the tunnel down, which is a thing
- * you do to the window rather than to the page, so it is `Close this window`
- * inside the `…`.
+ * Inspect. Done left the row; it tore the tunnel down, which is a thing you do
+ * to the window rather than to the page, so it is `Close this window` behind the
+ * `…`.
+ *
+ * ## And the round after that put the `…` where he asked for it
+ *
+ * > *"Maybe we can give some better one header also, not only the bottom, so we
+ * > can have most of the important controls for the flow, for this kind of things
+ * > and whatever we require to get the job done."*
+ *
+ * The `…` had been made the sixth control in the bottom row, which left the
+ * header carrying a chevron, a title and nothing else — the exact opposite of
+ * *"not only the bottom"*. It is a trailing item in the system navigation bar
+ * now, `BrowserWindowActions`, on all four kinds of window; the row is the five
+ * verbs that act on the page; and there is no second door onto the same menu.
+ *
+ * On a page this phone is holding open it pushes that page's **own** settings
+ * screen, the same way a machine window's does — *"all of them should have all
+ * the options"* — rather than opening a menu with one item in it.
  *
  * ## Why half of these read the source
  *
@@ -51,8 +67,9 @@
  * *proof*. This file is the **tripwire**: it runs on a laptop with nothing
  * listening, in the suite that always runs, so that putting
  * `.toolbar(.hidden, for: .navigationBar)` back — or growing a second bottom bar
- * of this screen's own, or shuffling the six controls — fails immediately rather
- * than surviving until somebody next has a desktop to test against.
+ * of this screen's own, or shuffling the row, or putting the `…` back into it —
+ * fails immediately rather than surviving until somebody next has a desktop to
+ * test against.
  *
  * `#filePath` is the compile-time location of this file, which gives the
  * checkout; a Simulator process can read the Mac's filesystem, which is how
@@ -159,8 +176,9 @@ final class LocalhostChromeTests: XCTestCase {
                        + "kind of browser window now — a principal view is this screen taking "
                        + "that space back for a mono address and a connection count")
         XCTAssertFalse(source.contains("connections\""),
-                       "the connection count moved into the `…`; a copy of it left in the header "
-                       + "is the line he asked to be removed from the outside of the page")
+                       "the connection count is not a line on the header; the header line ended "
+                       + "in that word, and a copy of it left up there is the thing he asked to "
+                       + "be removed from the outside of the page")
     }
 
     /**
@@ -192,14 +210,15 @@ final class LocalhostChromeTests: XCTestCase {
         // the point of the explanation.
         XCTAssertFalse(source.contains("\"localhost.done\""),
                        "Done left the row — it tore the tunnel down, so it is \"Close this "
-                       + "window\" inside the `…` under localhost.close")
+                       + "window\" behind the `…`")
         XCTAssertTrue(source.contains("\"localhost.close\""),
-                      "and the verb itself is not lost: closing the window is what that menu "
-                      + "item does, and it is the same teardown Done was")
+                      "and the verb itself is not lost. It is a card on the page's own settings "
+                      + "screen for a page with a row on the Browser list, and this menu item for "
+                      + "the one route that has no row — a prototype opened from a file")
     }
 
     /**
-     * **The six controls, in one row, in his order.**
+     * **The five controls, in one row, in his order — and no sixth.**
      *
      * Read off `BrowserPageBar.verbRow`, which is the one place the row is
      * assembled and the reason every identifier is spelled there rather than
@@ -208,11 +227,17 @@ final class LocalhostChromeTests: XCTestCase {
      *
      * The order is asserted as a whole sequence rather than by picking out one
      * end of it. The row he blessed read back, reload, where-you-are, inspect,
-     * Done; what this pass is allowed to have changed is exactly two things —
-     * Find joining the page's own history controls, and Done leaving for the
-     * `…` — and a test that only checked one end would let the rest be shuffled.
+     * Done; what the passes since are allowed to have changed is exactly three
+     * things — Find joining the page's own history controls, Done leaving for the
+     * `…`, and the `…` itself leaving for the header — and a test that only
+     * checked one end would let the rest be shuffled.
+     *
+     * The absence of a sixth entry is half of what this case is for. *"Not only
+     * the bottom"* is answered by moving the `…` up, and it would be un-answered
+     * the moment somebody put a second copy of it back down here — which is also
+     * how one menu ends up with two doors.
      */
-    func testTheSixControlsAreOneRowInHisOrder() throws {
+    func testTheFiveControlsAreOneRowInHisOrder() throws {
         let source = try Self.barSource()
         let lines = source.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
 
@@ -240,9 +265,81 @@ final class LocalhostChromeTests: XCTestCase {
             found.append(String(rest[..<end]))
         }
 
-        XCTAssertEqual(found, ["back", "forward", "reload", "find", "inspect", "settings"],
+        XCTAssertEqual(found, ["back", "forward", "reload", "find", "inspect"],
                        "the bar's order changed. Back, Forward and Reload lead — the page's own "
-                       + "history first — then Find, then Inspect, and the `…` last")
+                       + "history first — then Find, then Inspect. The `…` is not one of these: "
+                       + "it belongs in the header now")
+    }
+
+    /**
+     * **The `…` is in the header, it is written once, and it keeps its name.**
+     *
+     * > *"Maybe we can give some better one header also, not only the bottom, so
+     * > we can have most of the important controls for the flow."*
+     *
+     * Three claims, and each of them is a different way the move could be undone:
+     *
+     *  1. `BrowserWindowActions` exists in `BrowserChrome` and is the one place
+     *     the control is drawn, so the four screens cannot grow four `…` that
+     *     drift apart — which is the whole subject of this file;
+     *  2. it is named `\(id).settings`, unchanged from when it sat in the bar, so
+     *     the six suites that reach for `browser.machine.window.settings` and
+     *     `localhost.settings` did not have to move;
+     *  3. every screen with a live page places it as a **trailing item in the
+     *     navigation bar** — asserted per screen, because a header that carries
+     *     it on one kind of window and not another is the drift he counted.
+     *
+     * The surface viewer reached from Settings is deliberately not in that list:
+     * it has no settings screen behind it, and the rule is that the control is
+     * drawn only where it opens something.
+     */
+    func testTheMenuIsAHeaderControlWrittenOnce() throws {
+        let chrome = try Self.chromeSource()
+
+        XCTAssertTrue(chrome.contains("struct BrowserWindowActions"),
+                      "the header's `…` should be one view in BrowserChrome — four screens each "
+                      + "drawing their own is how three chromes happened in the first place")
+        XCTAssertTrue(chrome.contains("\"\\(id).settings\""),
+                      "the `…` changed places and must not have changed name: six suites reach "
+                      + "for browser.machine.window.settings and localhost.settings")
+
+        for (screen, source) in [("the page on this phone", try Self.browserSource()),
+                                 ("a window on the machine", try Self.machineWindowSource())] {
+            XCTAssertTrue(source.contains("BrowserWindowActions("),
+                          "\(screen) should mount the shared header control")
+            XCTAssertTrue(source.contains("ToolbarItem(placement: .topBarTrailing)"),
+                          "\(screen) should put it in the header, trailing side — \"not only the "
+                          + "bottom\" is a sentence about the top of the screen")
+        }
+    }
+
+    /**
+     * **A page on this phone opens the same kind of settings screen a window
+     * does.**
+     *
+     * > *"all of them should have all the options. Should not be that much of
+     * > difference in all of them."*
+     *
+     * For one round the `…` on this screen opened a menu with a single item in
+     * it — Close — while a machine window's pushed a whole screen. The screen for
+     * a phone page exists: `MachineWindowSettingsView` takes a `phoneTab:` and
+     * draws that page's own cards, Close among them. It was reachable only from
+     * the row's menu out on the Browser list, which is the *outside* of the
+     * window, and his sentence is about the inside.
+     *
+     * Asserted on the call rather than on the absence of the menu, because the
+     * menu is still right for exactly one page — a prototype `ArtifactView`
+     * pushes straight at a tunnel, with no row and so no tab id to hand over.
+     */
+    func testThePhonePagesMenuOpensItsOwnSettings() throws {
+        let source = try Self.browserSource()
+
+        XCTAssertTrue(source.contains("phoneTab: tabID"),
+                      "the `…` on a page this phone is holding open should push that page's own "
+                      + "settings — the same screen a window on the machine pushes, which is what "
+                      + "\"all of them should have all the options\" asks for")
+        XCTAssertTrue(source.contains("MachineWindowSettingsView("),
+                      "and it should be that screen rather than a second one written here")
     }
 
     // MARK: - The rules the two screens share
@@ -336,6 +433,17 @@ final class LocalhostChromeTests: XCTestCase {
     /// The one bar's source.
     private static func barSource() throws -> String {
         try read("TerminalDeck/Screens/BrowserPageBar.swift")
+    }
+
+    /// The rules the four kinds of window share, including the header's `…`.
+    private static func chromeSource() throws -> String {
+        try read("TerminalDeck/Screens/BrowserChrome.swift")
+    }
+
+    /// A window on the machine — the other screen that has to wear the same
+    /// header, and the one this file did not read until the `…` moved up into it.
+    private static func machineWindowSource() throws -> String {
+        try read("TerminalDeck/Screens/MachineWindowView.swift")
     }
 
     private static func read(_ relative: String) throws -> String {

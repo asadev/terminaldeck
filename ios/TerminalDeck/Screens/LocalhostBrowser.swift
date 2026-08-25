@@ -69,7 +69,7 @@
  * a pushed screen, so `DeckTabs` states it and this screen only reports that it
  * is up — `DeckModel.localhostPageIsOpen`. `DeckChrome` holds the rule.
  *
- * ## The bar is `BrowserPageBar` now, and the header lost its second line
+ * ## The bar is `BrowserPageBar` now, and the header traded a line for a control
  *
  * The bottom row used to be a system `UIToolbar` written here, carrying Back,
  * Forward, Reload, Find, Inspect and Done. It was a good toolbar and it was the
@@ -88,27 +88,52 @@
  *
  * So this screen mounts the same `BrowserPageBar` those windows mount, with the
  * same two rows — the address and Go, then Back · Forward · Reload · Find ·
- * Inspect · More — and the toolbar written here is gone. What moved:
+ * Inspect — and the toolbar written here is gone. What moved:
  *
  *  - **The address arrived**, as a real field. It is spelled the way the person
  *    who opened it thinks of it — `localhost:3000/admin`, not the random
  *    loopback port this phone bound — and both spellings are accepted back. See
  *    `BrowserChrome.shownAddress`.
  *  - **Done left the bar.** It tore the tunnel down, which is a thing you do to
- *    the window rather than to the page, so it is `Close this window` inside the
+ *    the window rather than to the page, so it is `Close this window` behind the
  *    `…`. He blessed Done's position — *"last button I think is on its correct
- *    place"* — in a round where the row ended with it; the row is the same six
- *    controls under all three kinds of window now, and the one-tap way out was
+ *    place"* — in a round where the row ended with it; the row is the same five
+ *    controls under all four kinds of window now, and the one-tap way out was
  *    never that button anyway. The chevron top left leaves this screen and
  *    closes the tunnel exactly as Done did.
- *  - **The header lost its second line.** It was the page title over a mono
- *    `http://127.0.0.1:52311/admin  ·  3 connections`. *"even if we remove the
- *    top header of paperclip and all of this basic information might not be
- *    required from the outside. We can just see and enter."* The address is in
- *    the field now, which is better than a label of it, and the connection count
- *    is one line inside the `…` — the honest signal that a hot-reload socket is
- *    still talking with nothing on screen changing, kept, and off the top of the
- *    page.
+ *  - **The header lost its second line and gained the `…`.** The line was the
+ *    page title over a mono `http://127.0.0.1:52311/admin  ·  3 connections`.
+ *    *"even if we remove the top header of paperclip and all of this basic
+ *    information might not be required from the outside. We can just see and
+ *    enter."* The address is in the field now, which is better than a label of
+ *    it. What took that space is a control rather than a line, which is the
+ *    other half of what he asked for:
+ *
+ *    > *"Maybe we can give some better one header also, not only the bottom, so
+ *    > we can have most of the important controls for the flow, for this kind of
+ *    > things and whatever we require to get the job done."*
+ *
+ * ## And the `…` opens the page's own settings, exactly as a window's does
+ *
+ * > *"all of them should be identical, and all of them should have all the
+ * > options. Should not be that much of difference in all of them."*
+ *
+ * For one round it opened a menu with a single item in it, Close — because a page
+ * over a tunnel had no settings screen anywhere. It has one now:
+ * `MachineWindowSettingsView` takes a `phoneTab:` and draws this page's own
+ * cards — what it is, which session to hand it to, a screenshot with a note, the
+ * move that opens the same address in the machine's browser, and Close. It was
+ * reachable only from the `…` on the **row out on the Browser list**, which is
+ * the outside of the window; his sentence is about the inside.
+ *
+ * So the `…` here pushes that screen and the one-item menu is gone. Close is not
+ * lost — it is a card on that screen, and the chevron top left still does the
+ * same thing in one tap.
+ *
+ * The one page that keeps a menu is the prototype `ArtifactView` opens: it is
+ * pushed straight at a tunnel with no row on the Browser list, so there is no
+ * `BrowserTab` id to carry into those settings and nothing for that screen to
+ * draw. See `pageMenu`.
  *
  * ## Forward exists because the gesture that used to do it does not
  *
@@ -205,6 +230,11 @@ struct LocalhostBrowser: View {
     /// phone's own refusal — a `file:` URL, a port out of range, a port that is
     /// not the one this page is on.
     @State private var refused: String?
+
+    /// Whether this page's own settings are pushed. A `Bool` rather than a
+    /// destination value because there is exactly one thing this screen pushes,
+    /// which is the same shape `MachineWindowView` uses for the same control.
+    @State private var showingSettings = false
 
     var body: some View {
         ZStack {
@@ -305,6 +335,61 @@ struct LocalhostBrowser: View {
          */
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
+        /*
+         * **The header carries a control now, and it is the same one every other
+         * browser window has.**
+         *
+         * > *"Maybe we can give some better one header also, not only the bottom,
+         * > so we can have most of the important controls for the flow."*
+         *
+         * The chevron, one line of title, and the `…`. `BrowserWindowActions`
+         * draws it, so this page's is the same glyph in the same corner under the
+         * same identifier as a machine window's — *"top, header and footer, tab
+         * bar should be same in all type of browsing windows."*
+         *
+         * What it opens depends on whether this page is a **window on the Browser
+         * list** or a preview pushed straight at a tunnel; `settingsPush` and
+         * `pageMenu` are the two answers and only one of them is ever handed
+         * over.
+         */
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                BrowserWindowActions(id: "localhost",
+                                     open: settingsPush,
+                                     menu: settingsPush == nil ? pageMenu : nil)
+            }
+        }
+        .navigationDestination(isPresented: $showingSettings) {
+            if let tabID {
+                MachineWindowSettingsView(model: model, windowID: "",
+                                          pushed: true, phoneTab: tabID)
+            }
+        }
+        /*
+         * **Leave when the page does.**
+         *
+         * Close now lives on the settings screen pushed on top of this one, and
+         * pressing it there tears the tunnel down without popping anything —
+         * `MachineWindowSettingsView` deliberately dismisses nothing, because
+         * popping a screen out from under a thumb is worse than drawing the
+         * closed state.
+         *
+         * So this is the watcher that does it, and it is the same one
+         * `MachineWindowView` has kept for a window on the machine: when the tab
+         * stops being listed, the page is over and the screen goes with it. Not
+         * optimistic — nothing is dismissed on the press, only when the store
+         * really has dropped the tab — and it cannot fire for the preview route,
+         * where `tabID` is nil from the start and `onChange` therefore never sees
+         * a change.
+         *
+         * `dismiss` rather than `dismiss()` from the environment: the closure this
+         * screen was handed is what also clears the pushed value on the list
+         * behind it, and popping without it would leave that list holding a
+         * tunnel nobody is looking at.
+         */
+        .onChange(of: tabIsGone) { was, gone in
+            if gone && !was { dismiss() }
+        }
         // Presented off a flag rather than off the capture itself. `.sheet(item:)`
         // tears the sheet down and builds a new one whenever the identity changes,
         // and Wider/Narrower change the capture on every press — which would make
@@ -420,15 +505,17 @@ struct LocalhostBrowser: View {
      *
      * `BrowserPageBar`, the same view `MachineWindowView` mounts, with the same
      * two rows under it — the address and Go, then Back · Forward · Reload · Find
-     * · Inspect · More. There is no bar written on this screen any more, and that
-     * is the point of the round: *"top, header and footer, tab bar should be same
-     * in all type of browsing windows, including on this phone, including
-     * isolated, including the server."*
+     * · Inspect. There is no bar written on this screen any more, and that is the
+     * point of the round: *"top, header and footer, tab bar should be same in all
+     * type of browsing windows, including on this phone, including isolated,
+     * including the server."*
      *
      * The prefix is `localhost`, unchanged, so every control keeps the name it
      * had — `localhost.back`, `localhost.reload`, `localhost.inspect`. The one
-     * name that goes is `localhost.done`: that verb is `Close this window` in the
-     * menu now, under `localhost.close`.
+     * name that goes is `localhost.done`: that verb is the `Close this window`
+     * card on this page's own settings screen, behind the `…` in the header,
+     * under `browser.phone.page.close`. `localhost.settings` is the `…` itself
+     * and it kept its name through the move up there.
      *
      * ## What this screen answers that a machine window cannot, and the reverse
      *
@@ -441,11 +528,15 @@ struct LocalhostBrowser: View {
      *  - **Reload really does stop.** `BrowserBridge.reload` calls `stopLoading`
      *    while a load is in flight, so the glyph that becomes an ✕ does what the
      *    ✕ says. A machine window has no stop verb on the wire at all.
-     *  - **Find and Inspect are live here and only here.** Both need the document
-     *    rather than a picture of it, which is why they are greyed with a reason
-     *    on the other screen. `whyNoFind` and `whyNoInspect` are passed as nil
-     *    rather than left at their defaults: those defaults say *this page is on
-     *    the machine*, which would be a lie printed over a closed tunnel.
+     *  - **Find is live here and only here.** It needs the document rather than a
+     *    picture of it, which is why it is greyed with a reason on the other
+     *    screen. Inspect works on both now — the machine answers a tap over the
+     *    wire — but the two are still passed differently, because here it is a
+     *    script inside the page and there it is a frame on a wire.
+     *
+     * `whyNoFind` and `whyNoInspect` are passed as nil rather than left at their
+     * defaults: those defaults say *this page is on the machine*, which would be
+     * a lie printed over a closed tunnel.
      */
     private var bar: some View {
         BrowserPageBar(
@@ -461,7 +552,6 @@ struct LocalhostBrowser: View {
             // No canvas on this screen: the keyboard belongs to a real web view
             // and comes up when a field in the page is tapped.
             page: nil,
-            more: nil,
             unavailable: whyLimited,
             canGoBack: browser.canGoBack,
             canGoForward: browser.canGoForward,
@@ -472,24 +562,56 @@ struct LocalhostBrowser: View {
             whyNoFind: nil,
             inspect: isLive ? { browser.setInspecting(!browser.inspecting) } : nil,
             inspecting: browser.inspecting,
-            whyNoInspect: nil,
-            menu: pageMenu)
+            whyNoInspect: nil)
     }
 
     /**
-     * What the `…` opens on a page this phone is holding open.
+     * What the header's `…` does on a page that has a row on the Browser list:
+     * it pushes that page's own settings, exactly as a machine window's does.
      *
-     * A menu rather than a screen, because there is no screen: a page over a
-     * tunnel has no window on the machine and so nothing that
-     * `MachineWindowSettingsView` would have to show. What it has is one verb and
-     * one fact.
+     * > *"all of them should have all the options. Should not be that much of
+     * > difference in all of them."*
      *
-     * The verb is the old Done. *"Last button I think is on its correct place"*
-     * was said of a row that ended with it; the row is now the same six controls
-     * under all three kinds of window, and this is the thing that made the phone's
-     * row different. Nothing is lost by the move — closing the screen **is** the
-     * teardown, so the chevron top left has always done exactly this, and it is
-     * still one tap.
+     * Nil for the one route that has no row — `ArtifactView` pushes this screen
+     * straight at a tunnel to preview a prototype, so there is no `BrowserTab` id
+     * and `MachineWindowSettingsView` would have nothing to resolve. That page
+     * gets `pageMenu` instead.
+     */
+    private var settingsPush: (() -> Void)? {
+        guard tabID != nil else { return nil }
+        return { showingSettings = true }
+    }
+
+    /**
+     * Whether the tab this screen is drawing has stopped being listed.
+     *
+     * Read live off the store rather than captured, for the same reason
+     * `MachineWindowView` looks its window up on every redraw: a value taken when
+     * the screen was pushed would go on saying whatever was true then. False for
+     * the preview route, which has no tab and can therefore never lose one.
+     */
+    private var tabIsGone: Bool {
+        guard let tabID else { return false }
+        return model.browserTabs.tab(tabID) == nil
+    }
+
+    /**
+     * What the `…` opens on the one page with no settings screen behind it.
+     *
+     * **Not** a page on the Browser tab. Every one of those has a `BrowserTab`
+     * row, so its `…` pushes `MachineWindowSettingsView` and this is never
+     * reached — see `settingsPush`, and see the file header for why a one-item
+     * menu stopped being the right answer the moment that screen existed.
+     *
+     * What is left is the prototype `ArtifactView` previews: pushed straight at a
+     * tunnel, with no row on any list, so there is no tab id to carry into those
+     * settings and nothing for them to draw. For that page a menu is the right
+     * size and a screen would be a page of white space.
+     *
+     * The verb is the old Done, which on that route means *come back to the
+     * artifact* — the closure the screen was handed. Nothing is lost by it being
+     * two taps: closing the screen **is** the teardown, so the chevron top left
+     * has always done exactly this in one.
      *
      * The fact is the connection count, which used to be the second line of the
      * header and is the honest signal that something is still talking: a
