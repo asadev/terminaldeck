@@ -88,7 +88,7 @@
  *
  * So this screen mounts the same `BrowserPageBar` those windows mount, with the
  * same two rows — the address and Go, then Back · Forward · Reload · Find ·
- * Inspect — and the toolbar written here is gone. What moved:
+ * Inspect · Size — and the toolbar written here is gone. What moved:
  *
  *  - **The address arrived**, as a real field. It is spelled the way the person
  *    who opened it thinks of it — `localhost:3000/admin`, not the random
@@ -97,7 +97,7 @@
  *  - **Done left the bar.** It tore the tunnel down, which is a thing you do to
  *    the window rather than to the page, so it is `Close this window` behind the
  *    `…`. He blessed Done's position — *"last button I think is on its correct
- *    place"* — in a round where the row ended with it; the row is the same five
+ *    place"* — in a round where the row ended with it; the row is the same
  *    controls under all four kinds of window now, and the one-tap way out was
  *    never that button anyway. The chevron top left leaves this screen and
  *    closes the tunnel exactly as Done did.
@@ -134,6 +134,45 @@
  * pushed straight at a tunnel with no row on the Browser list, so there is no
  * `BrowserTab` id to carry into those settings and nothing for that screen to
  * draw. See `pageMenu`.
+ *
+ * ## Two things this screen can do that a picture of a page cannot
+ *
+ * Both were asked for twice, and both are here rather than on the machine's side
+ * for the same reason: **this phone owns the document**.
+ *
+ * **Size — pinch, and other widths.**
+ *
+ * > *"they can use the the mode currently we have this machine they can just
+ * > browse as phone view and it should have all the by the way views also they
+ * > can pinch and zoom also they can see all the different dimensions in
+ * > responsive views how it will look like in mobile how it will look like on
+ * > Windows so they can have different dimensions also in phone just like
+ * > MacBook."*
+ *
+ * Pinch is `ignoresViewportScaleLimits` on the configuration — every dev server's
+ * default template ships `user-scalable=no`, and a browser is exactly the place
+ * that override belongs. The widths are the honest kind: `WebSurface` lays the
+ * `WKWebView` out at 1280 or 1440 **points** and scales the view to fit, so the
+ * page's own media queries fire at that width, and `PageViewportScript` writes a
+ * viewport for the pages that would otherwise be laid out at their own fixed
+ * width or at WebKit's 980 default. The choice is remembered per site
+ * (`PageWidths`). A window on the machine draws that control greyed with one
+ * sentence: it sends pictures, and there is no layout here to change.
+ *
+ * **The click-flow recorder.**
+ *
+ * > *"you are giving record flow button in the windows side the server side it
+ * > and you are not giving that into the if they are browsing locally in this
+ * > machine. So there are so many differences if they both are capable for a
+ * > feature why don't they both have."*
+ *
+ * The round before this left it out on the argument that a flow recorded here is
+ * about a page the machine never loaded. That was true of a screenshot and false
+ * of a flow — a flow is a list of sentences about the **site's** DOM, and the
+ * site is the machine's. `PhoneClickFlow` holds it, `PhoneRecordScript` watches
+ * the page, and the rows come out as the same `RecordedStep` the machine's
+ * recorder fills, so one list draws both. The card that starts it is on this
+ * page's own settings screen, beside the one a machine window has.
  *
  * ## Forward exists because the gesture that used to do it does not
  *
@@ -180,6 +219,23 @@ struct LocalhostBrowser: View {
     /// The phone's own browsing history. Injected rather than reached for, the
     /// same way `PortSuggestions` takes its `PortBook`.
     var history: BrowserHistory = .shared
+    /**
+     * The click flows this phone is holding, one per tab.
+     *
+     * > *"you are giving record flow button in the windows side the server side
+     * > it and you are not giving that into the if they are browsing locally in
+     * > this machine. So there are so many differences if they both are capable
+     * > for a feature why don't they both have."*
+     *
+     * The card that starts and stops it is on this page's own settings screen —
+     * the same card a machine window has — and it reaches the same store from
+     * there. This screen's job is the half only it can do: the web view is here,
+     * so the listening happens here. See `PhoneClickFlow` for why the reason this
+     * was left out last round was the wrong reason.
+     */
+    var flow: PhoneClickFlow = .shared
+    /// Which width each site was last looked at in. Injected on the same terms.
+    var widths: PageWidths = .shared
     /**
      * The tab this page is in, if it is in one.
      *
@@ -388,7 +444,14 @@ struct LocalhostBrowser: View {
          * tunnel nobody is looking at.
          */
         .onChange(of: tabIsGone) { was, gone in
-            if gone && !was { dismiss() }
+            guard gone, !was else { return }
+            // The flow goes with the window. It is held per tab and the tab is
+            // over, so keeping it would be holding a list of clicks nobody can
+            // reach — the machine's recorder loses its steps with the view for
+            // the same reason. Before the dismiss rather than after, because
+            // after it this closure's `tabID` names a row that is already gone.
+            if let tabID { flow.forget(tab: tabID) }
+            dismiss()
         }
         // Presented off a flag rather than off the capture itself. `.sheet(item:)`
         // tears the sheet down and builds a new one whenever the identity changes,
@@ -441,9 +504,66 @@ struct LocalhostBrowser: View {
             history.retitle(address: browser.address, title: title, host: model.current?.id ?? "")
             if let tabID { model.browserTabs.retitle(title, for: tabID, machine: model) }
         }
+        /*
+         * **The page moved, so the flow gets a line and the width gets re-applied.**
+         *
+         * Stated as its own hook rather than folded into the history one above,
+         * because the two make different claims and one of them is about a page
+         * that has not finished being one. `flow.at` is told where the view is on
+         * every navigation whether or not anything is recording — a recording
+         * started later still has to be able to say where it began — and it
+         * writes a `navigate` step only while one is running. The address is this
+         * app's own view of the web view, never the page's claim about itself,
+         * which is the rule `browser-steps.ts` is emphatic about.
+         *
+         * The width is re-applied because a **document** navigation replaces the
+         * document, and with it the viewport meta this app wrote into the last
+         * one. `BrowserBridge` re-applies on `didCommit` as well, which is the
+         * earlier of the two and the one that catches it before layout; this
+         * catches the same-document route changes a single-page app makes, where
+         * `didCommit` never fires.
+         */
+        .onChange(of: browser.address) { _, address in
+            if let tabID { flow.at(tab: tabID, url: address) }
+            browser.setPageWidth(pageWidth)
+        }
+        /*
+         * **The recorder is turned on and off from a card this screen cannot
+         * see.**
+         *
+         * It lives on `MachineWindowSettingsView`, pushed on top of this screen,
+         * and it calls `PhoneClickFlow` directly — so what reaches here is a
+         * change in an `@Observable` store rather than a call. Watching the store
+         * is what lets the two stay strangers: the card knows nothing about a web
+         * view and this screen knows nothing about a card.
+         */
+        .onChange(of: recording) { _, on in
+            browser.setRecording(on)
+        }
+        /*
+         * **The chosen width, applied to the page.**
+         *
+         * Two halves and they are not the same mechanism. The view's own width is
+         * `WebSurface`'s job — the `WKWebView` is genuinely laid out at 1440
+         * points and the *view* is scaled to fit, which no CSS in the document can
+         * see. This hook is the other half: the viewport instruction for pages
+         * that declare a fixed width of their own or none at all, which WebKit
+         * would otherwise lay out at 320 or at 980 whatever size the view is. See
+         * `PageWidths` for why both halves are needed and which pages each one
+         * reaches.
+         */
+        .onChange(of: pageWidth) { _, width in
+            browser.setPageWidth(width)
+        }
         .onAppear {
+            // The tab first: it is what a recorded step is filed under, and a
+            // click that arrived before the bridge knew the tab would be dropped
+            // rather than mis-filed.
+            browser.attach(tab: tabID, flow: flow)
             if case let .live(url) = tunnel.phase { browser.load(first(url)) }
             seed()
+            browser.setPageWidth(pageWidth)
+            browser.setRecording(recording)
         }
         .onDisappear {
             // The handler holds the page's only way back into this app, and the
@@ -562,7 +682,64 @@ struct LocalhostBrowser: View {
             whyNoFind: nil,
             inspect: isLive ? { browser.setInspecting(!browser.inspecting) } : nil,
             inspecting: browser.inspecting,
-            whyNoInspect: nil)
+            whyNoInspect: nil,
+            size: isLive ? pageSize : nil,
+            whyNoSize: nil)
+    }
+
+    /**
+     * The Size control, on the one kind of browser window that can honour it.
+     *
+     * > *"they can pinch and zoom also they can see all the different dimensions
+     * > in responsive views how it will look like in mobile how it will look like
+     * > on Windows so they can have different dimensions also in phone just like
+     * > MacBook."*
+     *
+     * This screen owns a real `WKWebView`, so both halves are real: the width is
+     * a width the page is genuinely laid out at — its media queries fire — and
+     * the zoom is the web view's own magnification, the same one a pinch drives.
+     * A window on the machine gets the greyed glyph and
+     * `BrowserChrome.sizeIsLocal`, which says why in one sentence.
+     *
+     * `whyNoSize: nil` for the same reason `whyNoFind` and `whyNoInspect` are
+     * nil here: the default sentence says *this page is on the machine*, which
+     * would be a lie printed over a closed tunnel.
+     */
+    private var pageSize: BrowserPageSize {
+        BrowserPageSize(
+            width: pageWidth,
+            choose: { widths.choose($0, for: site) },
+            zoomIn: { browser.zoom(by: 1.25) },
+            zoomOut: { browser.zoom(by: 0.8) },
+            actualSize: { browser.actualSize() })
+    }
+
+    /**
+     * The width this page is being looked at in, and the site it is remembered
+     * against.
+     *
+     * Both read live off the store on every redraw rather than being held in
+     * `@State`, which is what makes the choice survive this screen being rebuilt
+     * — a tunnel reconnecting does that — and what makes it apply to the next
+     * window opened on the same site. See `PageWidths` for why the memory is per
+     * site rather than per URL, which is the one place a literal reading of *per
+     * page* would have made the feature forget itself on the first link.
+     */
+    private var pageWidth: PageWidth { widths.width(for: site) }
+
+    private var site: String {
+        let raw = browser.address.isEmpty
+            ? (origin.map { resolve(path, against: $0).absoluteString } ?? "")
+            : browser.address
+        return PageWidths.site(raw, machinePort: tunnel.port)
+    }
+
+    /// Whether the recorder is running on this page. False for the preview route,
+    /// which has no tab to key a recording on — see `pageMenu` for what that
+    /// route is and why it has no settings screen either.
+    private var recording: Bool {
+        guard let tabID else { return false }
+        return flow.isRecording(tab: tabID)
     }
 
     /**
@@ -688,7 +865,7 @@ struct LocalhostBrowser: View {
             waiting("Opening port \(tunnel.port) on \(model.theMachine)…")
         case .live:
             ZStack {
-                WebSurface(browser: browser)
+                WebSurface(browser: browser, layoutWidth: pageWidth.points)
                 if let failure = browser.failure {
                     // The tunnel is up and the *page* failed, which is a
                     // different sentence from the tunnel having gone: the dev
@@ -965,6 +1142,31 @@ final class BrowserBridge: NSObject, WKNavigationDelegate {
     /// The element the last tap described, or nil. Drives the sheet.
     private(set) var capture: ElementCapture?
 
+    /**
+     * Which tab's flow a recorded click belongs to, or nil for the preview route.
+     *
+     * Set by the screen on appear rather than passed to `init`, because this
+     * object is `@State` and a `@State` initialiser cannot see the view's own
+     * properties. Nil is a real case that stays supported — `ArtifactView` pushes
+     * this screen straight at a tunnel with no row on any list — and a click that
+     * arrives with no tab is dropped rather than filed somewhere plausible.
+     */
+    private(set) var tab: String?
+
+    /// Where a recorded click goes. Held rather than reached for, so the store a
+    /// screen was given is the store its clicks land in — the same seam
+    /// `LocalhostBrowser.flow` is, carried one layer down.
+    private var flow: PhoneClickFlow = .shared
+
+    /// The recorder's own state, mirrored here so a new document can be re-armed
+    /// without asking the store. The store is still the truth; this is what the
+    /// delegate reads at a moment when the screen is not being redrawn.
+    private(set) var recording = false
+
+    /// The width the page is being laid out at, kept for the same reason: a new
+    /// document arrives with no viewport of ours in it and has to be told again.
+    private(set) var pageWidth: PageWidth = .fit
+
     let webView: WKWebView
 
     /**
@@ -994,6 +1196,25 @@ final class BrowserBridge: NSObject, WKNavigationDelegate {
         // ephemeral store would make every open a fresh browser.
         configuration.websiteDataStore = .default()
         configuration.allowsInlineMediaPlayback = true
+        /*
+         * **Pinch works on every page, including the ones that forbid it.**
+         *
+         * > *"they can pinch and zoom"*
+         *
+         * `WKWebView` honours a page's own `user-scalable=no` by default, and
+         * that meta is on more or less every app-shaped site and every dev
+         * server's default template — it is what stops a phone zooming a native
+         * feeling web app by accident. On a **browser** it is the wrong default:
+         * the entire reason for looking at a page here is to examine it, and a
+         * page that cannot be zoomed on a six-inch screen cannot be examined at
+         * all. Safari has the same override behind *Request Desktop Website*.
+         *
+         * It has to be set on the configuration rather than on the view, so it is
+         * here rather than beside the other view properties below: a
+         * `WKWebViewConfiguration` is copied at `init` and changes to it
+         * afterwards reach nothing.
+         */
+        configuration.ignoresViewportScaleLimits = true
         webView = WKWebView(frame: .zero, configuration: configuration)
         super.init()
         webView.navigationDelegate = self
@@ -1035,11 +1256,38 @@ final class BrowserBridge: NSObject, WKNavigationDelegate {
                                               injectionTime: .atDocumentStart,
                                               forMainFrameOnly: true,
                                               in: Self.world))
+        /*
+         * The click recorder, on the same terms and in the same world.
+         *
+         * A second script rather than more of the first, because the two must be
+         * able to run at different times and one of them **cancels** the events
+         * it sees while the other must never touch them — see
+         * `PhoneRecordScript`. Like the inspector it defines its functions and
+         * stops; nothing is observed until `enable` is called, so the cost on a
+         * page nobody is recording is one closure that ran once.
+         */
+        controller.addUserScript(WKUserScript(source: PhoneRecordScript.source,
+                                              injectionTime: .atDocumentStart,
+                                              forMainFrameOnly: true,
+                                              in: Self.world))
+        /*
+         * And the viewport hook, which writes nothing into any document until a
+         * width other than this phone's has been chosen. See `PageViewportScript`
+         * for why it is document-start rather than something evaluated later: a
+         * viewport that arrives after layout is a viewport the page has already
+         * been laid out without.
+         */
+        controller.addUserScript(WKUserScript(source: PageViewportScript.source,
+                                              injectionTime: .atDocumentStart,
+                                              forMainFrameOnly: true,
+                                              in: Self.world))
         // Weak, through a proxy. `WKUserContentController` retains its handlers,
         // and the controller belongs to the web view this object owns — so
         // registering `self` directly is a cycle that keeps a web view, its
         // process and its page alive for the life of the app.
         controller.add(ScriptRelay(self), contentWorld: Self.world, name: InspectScript.messageHandler)
+        controller.add(ScriptRelay(self), contentWorld: Self.world,
+                       name: PhoneRecordScript.messageHandler)
 
         watchNavigationState()
     }
@@ -1111,8 +1359,17 @@ final class BrowserBridge: NSObject, WKNavigationDelegate {
     /// Drop the page's only route back into this app. Called when the screen goes.
     func tearDown() {
         setInspecting(false)
-        webView.configuration.userContentController
-            .removeScriptMessageHandler(forName: InspectScript.messageHandler, contentWorld: Self.world)
+        // The recorder comes down with the screen even though the *flow* does
+        // not: the steps live in `PhoneClickFlow` and are still there when the
+        // page is opened again, but a page that is no longer on screen is not a
+        // page anybody is clicking, and a listener left on it would be a listener
+        // on a document nobody can see.
+        setRecording(false)
+        let controller = webView.configuration.userContentController
+        controller.removeScriptMessageHandler(forName: InspectScript.messageHandler,
+                                              contentWorld: Self.world)
+        controller.removeScriptMessageHandler(forName: PhoneRecordScript.messageHandler,
+                                              contentWorld: Self.world)
         webView.stopLoading()
         // Before the web view is released rather than after: an observation left
         // registered against a deallocated object is the classic KVO crash, and
@@ -1148,6 +1405,83 @@ final class BrowserBridge: NSObject, WKNavigationDelegate {
     /// binding invisible.
     func goForward() {
         if webView.canGoForward { webView.goForward() }
+    }
+
+    // MARK: - The tab, the recorder and the width
+
+    /// Which flow this page's clicks belong to, and which store holds it. See
+    /// `tab`.
+    func attach(tab: String?, flow: PhoneClickFlow = .shared) {
+        self.tab = tab
+        self.flow = flow
+    }
+
+    /**
+     * Start or stop watching what is done to the page.
+     *
+     * The source is evaluated before `enable` for the reason `SavedLogins.install`
+     * gives about its own script: a `WKUserScript` is injected at the *start of
+     * the next document*, so a view already showing a page would not be watched
+     * until somebody navigated away from it and back. The script's own
+     * `if (window.__terminaldeckRecord) return` makes the double-install a no-op
+     * on every page that gets both.
+     */
+    func setRecording(_ on: Bool) {
+        recording = on
+        guard on else {
+            run("window.__terminaldeckRecord && window.__terminaldeckRecord.disable()")
+            return
+        }
+        webView.evaluateJavaScript(PhoneRecordScript.source, in: nil, in: Self.world) { _ in }
+        run("window.__terminaldeckRecord && window.__terminaldeckRecord.enable()")
+    }
+
+    /**
+     * Lay the page out at another width.
+     *
+     * This is only the **viewport** half — the half that reaches a page which
+     * declares a fixed width of its own, or none. The other half is the web
+     * view's real width and belongs to the view (`WebSurface`), because a
+     * document cannot be told about it and does not need to be: it simply is that
+     * wide. See `PageWidths`.
+     */
+    func setPageWidth(_ width: PageWidth) {
+        pageWidth = width
+        webView.evaluateJavaScript(PageViewportScript.source, in: nil, in: Self.world) { _ in }
+        run(PageViewportScript.apply(width))
+    }
+
+    /**
+     * Magnify what is on screen, the way a pinch does.
+     *
+     * `scrollView.zoomScale` rather than `pageZoom`, and the difference is the
+     * whole point of keeping these two features apart. `pageZoom` reflows: it
+     * changes how many CSS pixels the viewport holds, which is exactly what
+     * `PageWidth` is for and would quietly make the chosen width a lie — a page
+     * asked for 1440 and zoomed to 80% would be laid out at 1800. Magnification
+     * leaves the layout alone and makes the result bigger, which is what a person
+     * examining a laptop layout on a phone actually wants.
+     *
+     * Clamped to the scroll view's own bounds rather than to numbers of ours:
+     * WebKit derives those from the page's viewport, and a scale outside them is
+     * one it would refuse anyway.
+     */
+    func zoom(by factor: CGFloat) {
+        let scroller = webView.scrollView
+        let wanted = scroller.zoomScale * factor
+        scroller.setZoomScale(clampZoom(wanted), animated: true)
+    }
+
+    /// Back to one page pixel per point. Not `1` blindly: on a page WebKit has
+    /// decided cannot be zoomed out that far, one is outside the bounds and
+    /// setting it would be silently ignored rather than clamped.
+    func actualSize() {
+        webView.scrollView.setZoomScale(clampZoom(1), animated: true)
+    }
+
+    private func clampZoom(_ value: CGFloat) -> CGFloat {
+        let scroller = webView.scrollView
+        return min(max(value, scroller.minimumZoomScale), scroller.maximumZoomScale)
     }
 
     // MARK: - Inspecting
@@ -1193,10 +1527,40 @@ final class BrowserBridge: NSObject, WKNavigationDelegate {
         capture = parsed
     }
 
+    /**
+     * A payload from the page-side **recorder**.
+     *
+     * The URL is read off the web view here too, and for the same reason: a
+     * payload that could name its own page could write a flow that says it was
+     * recorded on a site it was not. `PhoneClickFlow.note` refuses rather than
+     * repairs, and drops anything that arrives while nothing is recording — which
+     * happens for real, in the window between the store being turned off and the
+     * page-side listeners coming down.
+     */
+    fileprivate func recorded(_ body: Any) {
+        guard let tab, recording else { return }
+        flow.note(body, url: webView.url?.absoluteString ?? address, tab: tab)
+    }
+
     // MARK: - WKNavigationDelegate
 
     nonisolated func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         MainActor.assumeIsolated { sync(loading: true) }
+    }
+
+    /**
+     * The new document exists and its document-start scripts have run.
+     *
+     * This is where the width is re-applied, and the reason it is here rather
+     * than only in `didFinish` is layout: a viewport that arrives after the page
+     * has finished loading is a viewport the page has already been laid out
+     * without, and the result is a visible re-flow — or, on a page that measures
+     * itself once on load, no re-flow at all and a layout that is quietly wrong.
+     */
+    nonisolated func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        MainActor.assumeIsolated {
+            if pageWidth != .fit { setPageWidth(pageWidth) }
+        }
     }
 
     nonisolated func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -1208,6 +1572,12 @@ final class BrowserBridge: NSObject, WKNavigationDelegate {
             // first time a dev server hot-reloads a route change — which is the
             // most common thing that happens on the page being inspected.
             if inspecting { run("window.__terminaldeck.enable()") }
+            // The recorder has exactly the same problem and it is worse there: a
+            // recording that quietly stopped collecting after the first
+            // navigation would hand somebody a flow that is missing everything
+            // they did after step one, and look complete.
+            if recording { setRecording(true) }
+            if pageWidth != .fit { setPageWidth(pageWidth) }
         }
     }
 
@@ -1264,16 +1634,115 @@ final class BrowserBridge: NSObject, WKNavigationDelegate {
     }
 }
 
+/**
+ * The page, at whatever width it is being looked at.
+ *
+ * The representable's own view is a plain container rather than the `WKWebView`
+ * itself, and that is the whole of how the width feature is built. SwiftUI sizes
+ * the container to the screen; the container puts the web view inside it at the
+ * chosen **layout** width and scales it to fit. A `UIView` transform is not
+ * something the document can see — it is not a CSS transform, it changes no
+ * property the page can read, and `window.innerWidth` inside a 1440-point web
+ * view is 1440 no matter what its superview does with the result.
+ *
+ * That is the difference between this and the cheap version of the feature, and
+ * it is the difference he would notice in a second: scale a phone layout up and
+ * you have a phone layout in bigger letters, which answers nothing about how the
+ * page behaves on a laptop.
+ */
 private struct WebSurface: UIViewRepresentable {
     let browser: BrowserBridge
+    /// The CSS width to lay the page out at, or nil for this phone's own — in
+    /// which case nothing here is touched and the view is the size it always was.
+    var layoutWidth: CGFloat?
 
-    func makeUIView(context: Context) -> WKWebView {
-        browser.webView
+    func makeUIView(context: Context) -> ScaledPageView {
+        ScaledPageView(browser.webView)
     }
 
-    func updateUIView(_ view: WKWebView, context: Context) {
-        // Nothing: every change goes through `BrowserBridge`, which owns the
-        // view. Reloading from here would restart the page on every redraw.
+    func updateUIView(_ view: ScaledPageView, context: Context) {
+        // The width is the only thing that comes through here. Every other change
+        // goes through `BrowserBridge`, which owns the web view — reloading from
+        // here would restart the page on every redraw.
+        view.layoutWidth = layoutWidth
+    }
+}
+
+/**
+ * A box that holds the web view at one width and draws it at another.
+ *
+ * ## Why the height is the phone's and not a laptop's
+ *
+ * A laptop window is 1440 × 900, and a 1440 × 900 rectangle scaled to fit a
+ * phone's *width* is about a quarter of the screen tall with the rest of it
+ * empty — you would be reading a postage stamp. So the height fills what is
+ * there: the page is given a 1440-wide viewport as tall as the phone's aspect
+ * ratio makes it, which is an unusually tall desktop window and nothing stranger.
+ *
+ * What that costs is written down rather than hidden, because somebody will hit
+ * it: `100vh` blocks come out taller than they would on a laptop, so a hero
+ * section that exactly fills a laptop screen overflows this one. Width is what
+ * responsive layout keys off and width is exact; the height is the approximate
+ * half.
+ *
+ * ## `bounds` and `center`, never `frame`
+ *
+ * A view's `frame` is undefined while a non-identity transform is on it — UIKit
+ * says so outright — and the symptom of getting it wrong is not a crash, it is a
+ * page drifting a few points further off-centre on every redraw. So the transform
+ * is cleared, the size is set on `bounds`, the transform goes back on, and the
+ * position is set with `center`, which is transform-independent.
+ */
+final class ScaledPageView: UIView {
+
+    private let web: WKWebView
+
+    /// The CSS width to lay out at, or nil for the container's own width.
+    var layoutWidth: CGFloat? {
+        didSet {
+            guard layoutWidth != oldValue else { return }
+            setNeedsLayout()
+        }
+    }
+
+    init(_ web: WKWebView) {
+        self.web = web
+        super.init(frame: .zero)
+        // The web view is owned by `BrowserBridge` and outlives this container,
+        // which is rebuilt whenever SwiftUI feels like it. Re-adopting a view
+        // that already has a superview is a move rather than a copy, so this is
+        // safe on the second and every later mount.
+        addSubview(web)
+        // Manual layout throughout: `layoutSubviews` below is the only thing that
+        // may position this view, and an autoresizing mask would fight it every
+        // time the container changed size.
+        web.autoresizingMask = []
+        web.translatesAutoresizingMaskIntoConstraints = true
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("not from a nib")
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let box = bounds.size
+        guard box.width > 0, box.height > 0 else { return }
+
+        guard let wanted = layoutWidth, wanted > 0 else {
+            // The ordinary path, and it is byte-for-byte what this screen did
+            // before the width control existed: the web view is the container.
+            web.transform = .identity
+            web.frame = bounds
+            return
+        }
+
+        let scale = box.width / wanted
+        web.transform = .identity
+        web.bounds = CGRect(x: 0, y: 0, width: wanted, height: box.height / scale)
+        web.transform = CGAffineTransform(scaleX: scale, y: scale)
+        web.center = CGPoint(x: box.midX, y: box.midY)
     }
 }
 
@@ -1294,10 +1763,26 @@ private final class ScriptRelay: NSObject, WKScriptMessageHandler {
         self.bridge = bridge
     }
 
+    /**
+     * Two scripts post through this, and they are told apart by the **handler
+     * name** rather than by a field in the payload.
+     *
+     * The name is chosen by whoever registered the handler; a field in the body
+     * is chosen by whatever posted the message. Only one of those is a fact this
+     * side owns, and the whole of this file's security posture is that the page
+     * is never allowed to decide what its message is.
+     */
     nonisolated func userContentController(
         _ controller: WKUserContentController,
         didReceive message: WKScriptMessage,
     ) {
-        MainActor.assumeIsolated { bridge?.received(message.body) }
+        let name = message.name
+        let body = message.body
+        MainActor.assumeIsolated {
+            switch name {
+            case PhoneRecordScript.messageHandler: bridge?.recorded(body)
+            default: bridge?.received(body)
+            }
+        }
     }
 }

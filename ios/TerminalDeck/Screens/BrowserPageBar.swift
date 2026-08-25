@@ -76,29 +76,53 @@
  * mounts this bar now, so there are three screens on it and one row under all of
  * them:
  *
- *     Back · Forward · Reload · Find · Inspect
+ *     Back · Forward · Reload · Find · Inspect · Size
  *
- * ## Five, not six — the `…` went up to the header
+ * ## The row is the verbs that act on the page — and the `…` is not one of them
  *
  * > *"Maybe we can give some better one header also, not only the bottom, so we
  * > can have most of the important controls for the flow, for this kind of
  * > things and whatever we require to get the job done."*
  *
- * There was a sixth slot here holding the `…`, put here by the round before this
- * one on the argument that the top-right corner of a phone is the furthest pixel
- * from a thumb. That argument is true and it is not an answer to *not only the
- * bottom*, which is the sentence — so the `…` is a trailing item in the system
- * navigation bar now (`BrowserWindowActions`) and this row is the five verbs
- * that act on the **page**.
+ * There was a slot here holding the `…`, put here by a round before this one on
+ * the argument that the top-right corner of a phone is the furthest pixel from a
+ * thumb. That argument is true and it is not an answer to *not only the bottom*,
+ * which is the sentence — so the `…` is a trailing item in the system navigation
+ * bar now (`BrowserWindowActions`) and this row holds only verbs that act on the
+ * **page**.
  *
  * The split is not arbitrary and it is what makes the thumb argument survive
  * the move: everything you press *while reading a page* is still down here, and
  * what went up is the door you go through once to do something to the **window**
  * — close it, bind it to a session, photograph it.
  *
- * The row does **not** keep a greyed sixth slot as a stand-in. There is one `…`
+ * The row does **not** keep a greyed slot as a stand-in for it. There is one `…`
  * in this app's browser and it is up there; a dead one down here would be the
- * second door this whole round exists to remove.
+ * second door an earlier round exists to have removed.
+ *
+ * ## Size is the sixth, and it is on this side of that line
+ *
+ * > *"they can pinch and zoom also they can see all the different dimensions in
+ * > responsive views how it will look like in mobile how it will look like on
+ * > Windows so they can have different dimensions also in phone just like
+ * > MacBook."*
+ *
+ * How wide the page is laid out is a thing done **to the page**, in front of your
+ * eyes, over and over while you compare — which is the test this row is drawn
+ * against. So it is here rather than behind the `…`, and *"five, not six"* was
+ * never a count anybody asked for: it was shorthand for *the menu is not a page
+ * verb*. That is unchanged, and the reason the sentence above was rewritten
+ * rather than deleted is that somebody will otherwise put the `…` back.
+ *
+ * Six shares of a phone's width is about sixty-five points each, which is what
+ * this row was when the `…` was still in it and it fitted then. `verbLabel`
+ * carries the two lines that keep the longest word in the row on one line.
+ *
+ * The menu it opens is names and nothing else — *This phone*, *Laptop 1280* —
+ * because *"you are also putting so much of a description under the title of that
+ * thing under the title of the feature instead of just i button or nothing."* The
+ * width in the name **is** the explanation; there is no second line under any of
+ * them.
  *
  * Done went with the same reasoning a round earlier: it tore the tunnel down,
  * which is a thing you do to the window rather than to the page, so it is
@@ -271,6 +295,24 @@ struct BrowserPageBar: View {
     var inspect: (() -> Void)? = nil
     var inspecting: Bool = false
     var whyNoInspect: String? = BrowserChrome.inspectIsLocal
+
+    /**
+     * Look at the page at another width, and zoom into it — or nil where this
+     * screen has no document of its own to re-lay-out.
+     *
+     * > *"they can pinch and zoom also they can see all the different dimensions
+     * > in responsive views how it will look like in mobile how it will look
+     * > like on Windows."*
+     *
+     * Nil on every screen that draws a **picture** of a page rather than the page
+     * — see `BrowserChrome.sizeIsLocal` for why magnifying a screenshot is the
+     * one thing this control must never quietly become. Those screens draw the
+     * glyph dead in its slot with that sentence on the ⓘ, which is the rule the
+     * whole row follows: *"it should be the same case, or all the options should
+     * be available at least."*
+     */
+    var size: BrowserPageSize? = nil
+    var whyNoSize: String? = BrowserChrome.sizeIsLocal
 
     @FocusState private var focused: Bool
 
@@ -506,15 +548,15 @@ struct BrowserPageBar: View {
      * with no model behind it — has nothing else and nothing to say about why.
      * Twenty points of empty bar is chrome pretending to be a control, so the row
      * goes rather than standing there. A page that *does* have a reason draws the
-     * five dead glyphs and the sentence on the ⓘ beside them, because *"it should
-     * be the same case, or all the options should be available at least."*
+     * dead glyphs and the sentence on the ⓘ beside them, because *"it should be
+     * the same case, or all the options should be available at least."*
      *
      * The `VStack` around it stays either way, because it is what carries the
      * subscription that puts the typing row up.
      */
     private var hasVerbs: Bool {
         back != nil || forward != nil || reload != nil || find != nil || inspect != nil
-            || why != nil
+            || size != nil || why != nil
     }
 
     /**
@@ -525,10 +567,12 @@ struct BrowserPageBar: View {
      * function — which is what `LocalhostChromeTests` walks. A row whose order is
      * assembled somewhere else is a row nobody can pin.
      *
-     * There is no sixth slot and there is no gap where one was. The `…` is a
-     * trailing item in the navigation bar (`BrowserWindowActions`), which is what
-     * *"not only the bottom"* asked for, and these five are what a thumb reaches
-     * for while it is reading the page above them.
+     * The `…` is not among them and there is no gap where it was: it is a trailing
+     * item in the navigation bar (`BrowserWindowActions`), which is what *"not
+     * only the bottom"* asked for. What these six have in common is that every
+     * one of them does something to the **page** a thumb is reading — including
+     * Size, which is pressed over and over while comparing one width against
+     * another and would be a poor thing to keep two taps away.
      */
     private var verbRow: some View {
         HStack(spacing: 0) {
@@ -540,8 +584,75 @@ struct BrowserPageBar: View {
                  id: "\(id).find", act: find, why: whyNoFind)
             slot("Inspect", inspecting ? "square.dashed.inset.filled" : "square.dashed",
                  id: "\(id).inspect", act: inspect, why: whyNoInspect)
+            sizeSlot(id: "\(id).size")
         }
         .padding(.vertical, 10)
+    }
+
+    /**
+     * Size: a menu where the other five are buttons, and dead in its slot where
+     * this screen has only a picture.
+     *
+     * A `Menu` rather than a `Button` because there is nothing to toggle — the
+     * answer is *which* width, out of five — and a sheet for five one-word rows
+     * would be a screen of white space. It wears `verbLabel` like every other
+     * slot, so the row is six identical shapes rather than five and a special
+     * one.
+     *
+     * No `.buttonStyle` and no menu-order arguments: the widths lead because they
+     * are the question he asked, and the three zoom verbs follow behind a
+     * divider because they are about looking closer at whatever is already there.
+     */
+    @ViewBuilder
+    private func sizeSlot(id: String) -> some View {
+        if let size {
+            Menu {
+                sizeItems(size)
+            } label: {
+                verbLabel("Size", "macbook.and.iphone", tint: Theme.accent)
+                    .contentShape(Rectangle())
+            }
+            .accessibilityLabel("Size")
+            .accessibilityIdentifier(id)
+        } else if let sentence = whyNoSize ?? unavailable {
+            dead("Size", "macbook.and.iphone", id: id, why: sentence)
+        }
+    }
+
+    /**
+     * What is in that menu: names, and nothing under them.
+     *
+     * A `Toggle` per width rather than a `Picker`, for one reason that is about
+     * him rather than about SwiftUI: iOS draws a toggle in a menu as a row with a
+     * checkmark, which is the same shape as the widths themselves, and a
+     * `Picker`'s inline section arrives with a header — one more line of prose in
+     * a menu he has now twice asked to be made shorter.
+     *
+     * The current width's row is still live and does nothing when pressed. That
+     * is deliberate: this is a five-way choice and un-choosing is not one of the
+     * five, so the press closes the menu and changes nothing, which is what
+     * pressing the ticked row does everywhere else on the phone.
+     */
+    @ViewBuilder
+    private func sizeItems(_ size: BrowserPageSize) -> some View {
+        ForEach(PageWidth.allCases) { width in
+            Toggle(width.name, isOn: Binding(get: { size.width == width },
+                                             set: { if $0 { size.choose(width) } }))
+                .accessibilityIdentifier("\(id).size.\(width.rawValue)")
+        }
+        Divider()
+        Button { size.zoomIn() } label: {
+            Label("Zoom in", systemImage: "plus.magnifyingglass")
+        }
+        .accessibilityIdentifier("\(id).size.in")
+        Button { size.zoomOut() } label: {
+            Label("Zoom out", systemImage: "minus.magnifyingglass")
+        }
+        .accessibilityIdentifier("\(id).size.out")
+        Button { size.actualSize() } label: {
+            Label("Actual size", systemImage: "1.magnifyingglass")
+        }
+        .accessibilityIdentifier("\(id).size.actual")
     }
 
     /**
@@ -611,13 +722,12 @@ struct BrowserPageBar: View {
                 .font(.system(size: 17, weight: .medium))
             Text(title)
                 .font(.system(size: 11))
-                // Five shares of a phone's width is about seventy-five points
-                // each — it was sixty when the `…` was down here — and *Forward*
-                // is the longest word in the row. It fits, with room it did not
-                // have before, and these two lines are what keeps it fitting on
-                // the narrowest phone this app still runs on rather than wrapping
-                // the word onto a second line and making one control taller than
-                // its four neighbours.
+                // Six shares of a phone's width is about sixty-five points
+                // each — the width this row had when the `…` was still in it —
+                // and *Forward* is the longest word in it. These two lines are
+                // what keeps it on one line on the narrowest phone this app still
+                // runs on, rather than wrapping the word and making one control
+                // taller than its five neighbours.
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
         }
@@ -652,7 +762,7 @@ struct BrowserPageBar: View {
      * There is one ⓘ and it holds every sentence, rather than an ⓘ per greyed
      * glyph. Two arguments, and the second is the one that settled it:
      *
-     *  - Five glyphs with a dot beside each is a bar about itself. His standing
+     *  - A dot beside every glyph is a bar about itself. His standing
      *    rule is *"I don't want any kind of long descriptions anywhere. Just if
      *    somewhere it's very required, give the i icon"* — one, where the globe
      *    would be, is what every other screen in this app does.
@@ -673,6 +783,9 @@ struct BrowserPageBar: View {
         }
         if inspect == nil, let whyNoInspect, whyNoInspect != unavailable {
             lines.append("Inspect — \(whyNoInspect)")
+        }
+        if size == nil, let whyNoSize, whyNoSize != unavailable {
+            lines.append("Size — \(whyNoSize)")
         }
         return lines.isEmpty ? nil : lines.joined(separator: "\n\n")
     }
@@ -697,4 +810,45 @@ struct BrowserPageBar: View {
         guard let page else { return }
         WatchStage.post(.endTyping, to: page)
     }
+}
+
+/**
+ * Everything the Size slot needs, handed over by the screen that owns the page.
+ *
+ * A small struct rather than four separate parameters on the bar, for the reason
+ * every one of them is the same decision: a screen either owns a document — in
+ * which case it can re-lay it out **and** magnify it — or it owns a picture, in
+ * which case it can do neither. Four optionals would make four states possible
+ * where there are two, and three of them would be screens where the menu opens
+ * onto rows that do nothing.
+ *
+ * `width` is the choice as it stands, so the menu can tick it. It is read rather
+ * than bound because the store behind it is per **site** and outlives this
+ * screen — see `PageWidths` for why the memory is not per URL.
+ */
+struct BrowserPageSize {
+
+    /// The width the page is being laid out at right now.
+    var width: PageWidth
+
+    /// Lay it out at another one. The screen writes the choice down.
+    var choose: (PageWidth) -> Void
+
+    /**
+     * Magnify what is on screen, without touching the layout.
+     *
+     * These are the pinch, as buttons. The gesture is the thing he asked for and
+     * it is the web view's own — see `LocalhostBrowser`'s configuration — but a
+     * page laid out at 1440 CSS px and scaled onto a phone needs a way *back* to
+     * a readable scale that does not depend on landing a two-finger gesture
+     * precisely, and a way to step in that does not overshoot.
+     *
+     * Deliberately separate from `choose`: magnification and layout width are two
+     * different questions about the same page, and a control that mixed them
+     * would answer *"how does this look on a laptop"* by making a phone layout
+     * bigger, which is the fake this whole feature exists to avoid.
+     */
+    var zoomIn: () -> Void
+    var zoomOut: () -> Void
+    var actualSize: () -> Void
 }

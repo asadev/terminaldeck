@@ -58,7 +58,7 @@
  * of the four kinds:
  *
  *  - the address, editable, with Go;
- *  - Back · Forward · Reload · Find · Inspect.
+ *  - Back · Forward · Reload · Find · Inspect · Size.
  *
  * ## Where the `…` lives, and the round that moved it back
  *
@@ -86,7 +86,7 @@
  * same control everywhere. The `…` is the window's own things — closing it, the
  * jar its cookies land in, the session that owns it, the screenshot, the
  * recorder — so it is the control that belongs up there, and the bar keeps the
- * five verbs that act on the *page*, which is what a thumb reaches for while
+ * verbs that act on the *page*, which is what a thumb reaches for while
  * reading one.
  *
  * The thumb argument survives the move and is answered rather than ignored:
@@ -229,6 +229,38 @@ enum BrowserChrome {
     static let inspectNeedsThePicture =
         "Pointing at one thing needs the page on screen to point at. This machine is not showing "
         + "this window, so there is only its settings here."
+
+    /**
+     * Why Size is greyed on a window that lives on the machine.
+     *
+     * > *"they can pinch and zoom also they can see all the different dimensions
+     * > in responsive views how it will look like in mobile how it will look like
+     * > on Windows."*
+     *
+     * Both halves of that control need a **document**, and a machine window is a
+     * picture of one. Re-laying a page out at 1280 CSS px is a viewport
+     * instruction to the engine that owns the DOM: the engine here is the
+     * machine's, the window it is drawing has whatever size the machine gave it,
+     * and there is no verb in `MachineWindow.Act` that carries a width — back,
+     * forward, reload, close, record, share and isolate, and nothing else.
+     * Magnifying the picture instead is the thing this control must never be: it
+     * would answer *"how does this look on a laptop"* with a phone layout in
+     * bigger letters, which is the exact fake the honest implementation exists to
+     * avoid (see `PageWidths`).
+     *
+     * That is a fact about this wire rather than about this feature, so the day a
+     * host learns `browser.window.size` the screen passes a closure and this
+     * sentence stops being read. Until then it is one sentence in one place, and
+     * the four screens cannot grow four paraphrases of it.
+     *
+     * Pinching a machine window is not lost and is not what this is about: that
+     * screen's canvas has had its own magnification for rounds, and
+     * `BrowserPageBarUITests` performs one. What it cannot do is change the
+     * width the page was laid out at.
+     */
+    static let sizeIsLocal =
+        "Page size re-lays out a page this phone has open. This one is on the machine, which "
+        + "sends pictures, so there is no layout here to change."
 }
 
 /**

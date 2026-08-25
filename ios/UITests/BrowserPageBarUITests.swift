@@ -48,7 +48,7 @@
  *
  * It mounts the same `BrowserPageBar` now, under the prefix `localhost`, so one
  * case here opens one and puts it through the same assertion the machine's
- * windows go through — the five verbs in the row, and the `…` above them in the
+ * windows go through — the verbs in the row, and the `…` above them in the
  * header. Everything else in this file still stays on the machine's side.
  *
  * ## Why this is a suite and not a unit test
@@ -220,7 +220,7 @@ final class BrowserPageBarUITests: XCTestCase {
     }
 
     /**
-     * **The same five verbs under every page, the `…` above them, and the dead
+     * **The same verbs under every page, the `…` above them, and the dead
      * ones say why.**
      *
      * > *"In iMatch, one of them has different menu options here in the bottom,
@@ -232,7 +232,7 @@ final class BrowserPageBarUITests: XCTestCase {
      * > browsing windows, including on this phone, including isolated, including
      * > the server."*
      *
-     * Back · Forward · Reload · Find · Inspect is the row, and all five are
+     * Back · Forward · Reload · Find · Inspect · Size is the row, and all six are
      * asserted first and unconditionally, because that is his sentence: the bar
      * under one page is the same bar as under any other. A verb that genuinely
      * cannot be put on the wire is **drawn in its place and greyed**, never left
@@ -246,7 +246,7 @@ final class BrowserPageBarUITests: XCTestCase {
      *
      * The `…` is a trailing item in the navigation bar, under the same
      * identifier it always had, and it is asserted on its own terms below —
-     * because unlike the five it is drawn only where it opens something.
+     * because unlike them it is drawn only where it opens something.
      *
      * Which of them can act is then read off the page rather than off the row it
      * came from, and `info.this-page` — the ⓘ that stands where the globe does —
@@ -336,14 +336,14 @@ final class BrowserPageBarUITests: XCTestCase {
     }
 
     /**
-     * The row under whichever page is on screen — five controls, with a reason
+     * The row under whichever page is on screen — its controls, with a reason
      * behind every greyed one — and the `…` above it in the header.
      *
      * Shared by both cases above rather than written twice, because *"it should
      * be the same case"* is a claim about two screens and a claim asserted by two
      * different functions is two claims.
      *
-     * ## Why the `…` is asserted differently from the five
+     * ## Why the `…` is asserted differently from the verbs
      *
      * The five are unconditional: a verb that cannot act is drawn dead in its
      * slot, so the row is the same length under every page and a missing one is
@@ -373,11 +373,23 @@ final class BrowserPageBarUITests: XCTestCase {
         let reload = app.buttons["\(bar).reload"]
         let find = app.buttons["\(bar).find"]
         let inspect = app.buttons["\(bar).inspect"]
+        /*
+         * Size is queried across every element type rather than as a button: it
+         * is a `Menu` where the other five are `Button`s, and what XCUITest
+         * classifies a SwiftUI menu as is not a thing to have an opinion about.
+         * Asking `buttons` for it and getting nothing would skip the claim
+         * silently, which is the shape of an assertion that never runs.
+         */
+        let size = any("\(bar).size")
         XCTAssertTrue(forward.exists, "and Forward beside it")
         XCTAssertTrue(reload.exists, "and Reload beside that")
         XCTAssertTrue(find.exists, "Find is on every one of these bars now, greyed where the page "
                       + "is not on this phone to be searched")
         XCTAssertTrue(inspect.exists, "and Inspect, on the same terms")
+        XCTAssertTrue(size.exists,
+                      "Size is on every one of these bars, and greyed on a window the machine is "
+                      + "only sending pictures of — \"it should be the same case, or all the "
+                      + "options should be available at least\"")
 
         // The `…`, up in the header, and the one state where it is honestly not
         // drawn. `browser.machine.window.record` is the click recorder, which is
@@ -400,7 +412,7 @@ final class BrowserPageBarUITests: XCTestCase {
 
         let why = app.buttons["info.this-page"]
         if why.exists {
-            let greyed = [back, forward, reload, find, inspect].filter { !$0.isEnabled }
+            let greyed = [back, forward, reload, find, inspect, size].filter { !$0.isEnabled }
             XCTAssertFalse(greyed.isEmpty,
                            "the ⓘ is drawn if and only if something on this bar is greyed for a "
                            + "reason — a bar with the reason and nothing greyed is an explanation "
@@ -427,6 +439,7 @@ final class BrowserPageBarUITests: XCTestCase {
                           + "everything, so none of its verbs may be drawn dead")
             XCTAssertTrue(find.isEnabled)
             XCTAssertTrue(inspect.isEnabled)
+            XCTAssertTrue(size.isEnabled)
         }
     }
 
