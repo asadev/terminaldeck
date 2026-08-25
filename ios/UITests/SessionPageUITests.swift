@@ -54,14 +54,34 @@
  * the feature without it. The session is left with no window attached at the end,
  * which is the other line the same mechanism prints.
  *
- * The two controls this suite opens and does **not** press through are the attach
- * sections on the session side — the one on the session row's `…` and the one
- * inside the session's own `…`. Their rows are every window the machine has open,
- * they are named by their own page titles, and there is no way from here to tell
- * which of them is the one this suite opened. Pressing a row it cannot name would
- * be binding a stranger's window to a stranger's agent. So that case proves both
- * doors are there and offer something, and the bind itself is walked from the
- * window's own end, where the window is named.
+ * The rows it will **not** press are the ones that borrow a window: the machine's
+ * own open windows, listed on the session row's `…` and inside the session's own
+ * `…`. They are named by their pages' titles and there is no way from here to
+ * tell which of them is the one this suite opened, so pressing one would be
+ * binding a stranger's window to a stranger's agent. That case proves both doors
+ * are there and offer something, and the bind itself is walked from the window's
+ * own end, where the window is named.
+ *
+ * The row it **does** press is the one that makes a new window —
+ * *Open a window for this session* — because that row touches nothing that
+ * existed before the press. `testOnePressInsideASessionLeavesItHoldingAWindow`
+ * walks it and records what it made in `mine`, so `tearDown` takes it back like
+ * everything else.
+ *
+ * ## The `…` had nothing in it, which is the same complaint from inside
+ *
+ * > *"here we also don't have anything, like inside here, in the three dots, we
+ * > should have the options to click on something, and then all the folders will
+ * > come up, maybe here also. So we can connect the browser, whichever browser we
+ * > want to connect into the session."*
+ *
+ * Both attach sections shipped drawn `if !windows.isEmpty`, so a machine whose
+ * browser simply had no window open — an ordinary laptop, and what he was looking
+ * at — put nothing at all under either `…`, and the only route back was the
+ * Browser tab. Every case below that opens one of those menus now asserts the two
+ * rows that make a window as well as the ones that borrow one; see
+ * `assertOffersANewWindow`, which is the check that would have failed against
+ * what shipped.
  *
  * ## The session screen itself has to stay clean
  *
@@ -347,6 +367,7 @@ final class SessionPageUITests: XCTestCase {
         XCTAssertTrue(rowMenu.contains("Archive"), "including the one the swipe carries")
         assertOffersAWindow(rowMenu, fixed: Self.rowMenuItems,
                             where_: "the session row's `…`")
+        assertOffersANewWindow(rowMenu, where_: "the session row's `…`")
 
         app.dismissAnyMenu()
 
@@ -379,9 +400,116 @@ final class SessionPageUITests: XCTestCase {
                       "this is the terminal's own menu, so its own items are still in it")
         assertOffersAWindow(sessionMenu, fixed: Self.sessionMenuItems,
                             where_: "the session's own `…`")
+        assertOffersANewWindow(sessionMenu, where_: "the session's own `…`")
 
         app.dismissAnyMenu()
         app.navigationBars.buttons.element(boundBy: 0).tap()
+    }
+
+    /**
+     * **One press from inside a session, and that session is holding a window.**
+     *
+     * > *"here we also don't have anything, like inside here, in the three dots,
+     * > we should have the options to click on something, and then all the
+     * > folders will come up, maybe here also. So we can connect the browser,
+     * > whichever browser we want to connect into the session."*
+     *
+     * The case above proves both `…` menus **contain** the way in. This one
+     * presses it, and it is the only case in this suite that walks the whole
+     * sentence: a person sitting in a session, with no browser window open
+     * anywhere, ending up with one attached — without leaving for the Browser
+     * tab, which is the walk the menus were added to delete.
+     *
+     * ## Why this one is allowed to press where the case above is not
+     *
+     * That case refuses to press a row because the rows are the machine's own
+     * windows and *"pressing a row it cannot name would be binding a stranger's
+     * window to a stranger's agent."* This row names nothing of anybody's: it
+     * makes a **new** window, blank, and binds that. Nothing that existed before
+     * the press is touched, which is the same standard `openAWindow` already
+     * meets. And what it makes is recorded in `mine`, so `tearDown` detaches and
+     * closes it exactly as it does the one opened from the `+`.
+     *
+     * ## No address, on purpose
+     *
+     * `browser.window.open` with an empty `url` is a real ask — the New window
+     * sheet's Open is not disabled for an empty field either. A blank window is
+     * the browser, waiting, on the machine, already belonging to this session,
+     * and wherever the agent sends it next is one `go` away. It also means this
+     * case loads nothing off the network, so it cannot fail because a site was
+     * slow.
+     *
+     * ## What is asserted, in the order the app answers
+     *
+     *  1. **The strip**, on the session screen. `SessionPageView` draws it for
+     *     the window this session *holds*, so its arrival is the bind — the host
+     *     binds before it answers, which is why one press is enough and there is
+     *     no second round trip to wait through.
+     *  2. **A real window on the machine**, found on the Browser home by
+     *     difference against the rows that were there before. The strip alone
+     *     would be satisfied by a phone that believed something; a row on the
+     *     machine's own list is the machine agreeing.
+     */
+    func testOnePressInsideASessionLeavesItHoldingAWindow() throws {
+        /*
+         * The baseline, on the Browser home, where `setUp` leaves the app.
+         *
+         * A settle first: `browser.window.rows` is answer-only and the list is
+         * asked for on arrival, so a snapshot taken in the first frame would be
+         * empty on a machine that has four windows — and every one of them would
+         * then look like the one this case made. An empty baseline after the
+         * wait is the honest answer and the ordinary one.
+         */
+        _ = app.buttons
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'browser.machine.row.'"))
+            .firstMatch
+            .waitForExistence(timeout: 8)
+        let before = rowIDs()
+
+        app.openSessionsTab()
+        let row = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'session.'"
+                                                  + " AND NOT identifier CONTAINS 'swipe'"))
+            .firstMatch
+        try XCTSkipUnless(row.waitForExistence(timeout: 20), Self.noSessions)
+        row.tap()
+        try XCTSkipUnless(app.buttons["terminal.actions"].waitForExistence(timeout: 25),
+                          "the session screen never came up, so there is nothing to press")
+
+        app.buttons["terminal.actions"].tap()
+        _ = app.buttons.element(boundBy: 0).waitForExistence(timeout: 3)
+        capture("90-inside-the-sessions-dots")
+
+        let make = app.buttons[Self.openForThisSession].firstMatch
+        try XCTSkipUnless(make.waitForExistence(timeout: 5), Self.noControl)
+        make.tap()
+
+        // 1. The session is holding something. The bind happens on the machine
+        //    before it answers, so this is the first thing that changes here.
+        let strip = any("session.page.title")
+        XCTAssertTrue(strip.waitForExistence(timeout: 30),
+                      "one press from inside the session should leave it holding a window — "
+                      + "“so we can connect the browser… into the session”")
+        capture("91-the-session-is-holding-it")
+
+        // 2. And the machine agrees: a row that was not on the Browser home
+        //    before. Recorded first, so a failure after this line still hands the
+        //    window back in tearDown.
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.openBrowserTab(), "the Browser tab's root should be reachable")
+
+        var found: String?
+        for _ in 0 ..< 60 {
+            if let id = rowIDs().subtracting(before).first {
+                found = id
+                break
+            }
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+        let id = try XCTUnwrap(found, Self.noWindow)
+        mine = id
+        XCTAssertTrue(app.buttons["browser.machine.row.\(id)"].exists,
+                      "the window the session was given is a window on the machine's own list")
+        capture("92-the-window-it-made")
     }
 
     /**
@@ -737,6 +865,16 @@ final class SessionPageUITests: XCTestCase {
      * `isEnabled` is asserted rather than mere existence, because a window
      * another session holds is still one this session can be handed, and a menu
      * whose rows were all dead would be a picker that cannot pick.
+     *
+     * **One thing it cannot tell apart, written down rather than worked around.**
+     * These menus now also list the pages *this phone* is showing, under their
+     * own header, and those rows are named by the page's title — as unknowable
+     * from here as a window's. So a phone with a localhost page open and a
+     * machine with no window open would satisfy this check on the strength of
+     * that page alone. Nothing in this suite opens a localhost page and its
+     * teardown closes what it opens, so the situation does not arise here; the
+     * two fixed rows are asserted by name in `assertOffersANewWindow` precisely
+     * because they are the only ones whose words are known in advance.
      */
     private func assertOffersAWindow(_ appeared: Set<String>, fixed: Set<String>, where_: String) {
         let windows = appeared.filter { label in
@@ -751,16 +889,67 @@ final class SessionPageUITests: XCTestCase {
         }
     }
 
+    /**
+     * A menu offers the way to **make** a window, not only to borrow one.
+     *
+     * This is the assertion that would have failed against what shipped. Both
+     * sections were drawn `if !windows.isEmpty`, so on a machine whose browser
+     * had no window open the `…` opened onto nothing — which is the ordinary
+     * state of a laptop, and the state he was sitting in:
+     *
+     * > *"here we also don't have anything, like inside here, in the three dots,
+     * > we should have the options to click on something, and then all the
+     * > folders will come up, maybe here also. So we can connect the browser,
+     * > whichever browser we want to connect into the session."*
+     *
+     * By **label** and not by identifier, like every other check in this file:
+     * an `accessibilityIdentifier` on a `Button` inside a SwiftUI `Menu` does not
+     * reach the presented row, measured twice in this target. These two rows are
+     * the only ones in either menu whose words are fixed and known in advance,
+     * which is what makes them assertable at all.
+     *
+     * Both are pressed for, not just the first: the isolated one is a **second
+     * named row** rather than a switch, because a `Toggle` in a `Menu` closes the
+     * menu on the press and choosing would have cost one opening of the `…` and
+     * acting a second. A build that quietly turned it back into a flag would
+     * still pass a check that only looked for the first row.
+     */
+    private func assertOffersANewWindow(_ appeared: Set<String>, where_: String) {
+        XCTAssertTrue(appeared.contains(Self.openForThisSession),
+                      "\(where_) has to offer a window even when the machine has none open — "
+                      + "what appeared was \(appeared.sorted())")
+        XCTAssertTrue(appeared.contains(Self.openSignedIntoNothing),
+                      "and the isolated choice beside it, as words rather than a switch")
+        XCTAssertTrue(app.buttons[Self.openForThisSession].firstMatch.isEnabled,
+                      "a row that cannot be pressed is the same dead end in a different shape")
+    }
+
     /// Every button label on screen right now, which is the before and after a
     /// menu is measured against.
     private func labels() -> Set<String> {
         Set(app.buttons.allElementsBoundByIndex.map(\.label))
     }
 
+    /**
+     * The two rows that make a window rather than borrow one, verbatim from
+     * `SessionWindowPicker`.
+     *
+     * They are the answer to *"we should have the options to click on something"*
+     * on a machine with nothing open, and they are in **both** menus. They are
+     * also why the two fixed sets below had to grow: `assertOffersAWindow` calls
+     * everything it does not recognise a window, so a menu that offered only
+     * these two would have passed a check that means *the machine's own windows
+     * are offered here*. They are named rather than folded into the sets so the
+     * cases can assert their presence directly.
+     */
+    private static let openForThisSession = "Open a window for this session"
+    private static let openSignedIntoNothing = "Open one signed into nothing"
+
     /// What the session row's `…` always carries, whatever machine it is against.
     /// Anything else that appears with it is a window — see `assertOffersAWindow`.
     private static let rowMenuItems: Set<String> = [
         "Session details", "Model & effort", "Pin", "Unpin", "Archive", "Close",
+        openForThisSession, openSignedIntoNothing,
     ]
 
     /// And the terminal's own menu, verbatim from `TerminalScreen`. The two
@@ -770,6 +959,7 @@ final class SessionPageUITests: XCTestCase {
         "Find in output", "Session details", "Model & effort",
         "Copy Screen", "Paste", "Share output",
         "Send Photo or Video", "Send File", "Re-attach",
+        openForThisSession, openSignedIntoNothing,
     ]
 
     private static let fixedPrefixes = ["Bigger text", "Smaller text"]

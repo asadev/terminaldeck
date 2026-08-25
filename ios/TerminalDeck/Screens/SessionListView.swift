@@ -834,24 +834,63 @@ struct SessionListView: View {
      * > *"the ones that more suits outside, like connecting with the browser and
      * > kind of stuff."*
      *
-     * The same section the session's own `…` carries and the same one verb the
-     * Browser tab presses — `HostLink.bindMachineWindow`. `SessionWindowPicker`
-     * owns which windows may be offered, which one wears the checkmark and what a
-     * row says, so the three screens that can attach a window cannot drift into
-     * saying different things about the same one.
+     * The same section the session's own `…` carries, built from the same
+     * `SessionWindowPicker` — which windows may be offered, which one wears the
+     * checkmark, what a row says and what the two new-window rows are called. The
+     * two menus cannot drift into saying different things about the same window,
+     * and `SessionPageTests` pins every one of those decisions without a
+     * simulator.
      *
-     * Absent, not disabled, when the machine will not be driven or has nothing
-     * open: both come back as an empty list, and an empty section is not drawn.
-     * A window another session holds is still offered and says whose it is,
-     * because attaching **moves** it and moves it silently.
+     * ## Empty is not the same as impossible, and this drew nothing for both
+     *
+     * It was `if !windows.isEmpty`, which meant that on a machine whose browser
+     * simply had no window open — the ordinary state — this `…` had no section
+     * in it at all, and the only route to attaching one was the Browser tab.
+     * That is the walk he recorded, from the other menu:
+     *
+     * > *"here we also don't have anything, like inside here, in the three dots,
+     * > we should have the options to click on something, and then all the
+     * > folders will come up, maybe here also. So we can connect the browser,
+     * > whichever browser we want to connect into the session."*
+     *
+     * So the gate is `showsAttach(canDrive:)` — the machine, not its windows —
+     * and the section always ends with the two rows that make a window instead of
+     * borrowing one. `openMachineWindow(session:)` opens it and binds it in one
+     * ask; the host checks the session is really running before it touches the
+     * browser, so a refusal is a sentence rather than a stray window on somebody's
+     * screen.
+     *
+     * ## And the pages this phone is already showing
+     *
+     * > *"And these three dots, we should have this attachment thing for all of
+     * > them, properly working, and the same way on the sessions side also."*
+     *
+     * The Browser tab's row menu learned this; the sessions side could not do it
+     * at all. It is the same one ask at the same address, and the header over
+     * those rows says the page on the phone stays where it is — because it does.
+     * What the session is handed is a **second** window, on the machine, with the
+     * machine's cookies and logins.
+     *
+     * Absent, not disabled, on a machine that will not be driven: every row here
+     * ends in a frame that machine refuses at the source. A window another
+     * session holds is still offered and says whose it is, because attaching
+     * **moves** it and moves it silently.
+     *
+     * ## No sentence on the press, and that is this screen rather than a choice
+     *
+     * The session's own `…` puts one up — it has a toast. This screen has a
+     * banner strip for the connection and for the machine's own errors and
+     * nothing that says *what you just did*, and inventing one here would be a
+     * fourth kind of message on a list that is meant to be read at a glance. The
+     * machine's answer is the confirmation either way: a window arrives bound,
+     * the session's row starts drawing it, and a refusal comes back as the
+     * machine's own line.
      */
     @ViewBuilder
     private func attachSection(_ session: RemoteSession) -> some View {
-        let windows = SessionWindowPicker.attachable(model.machineBrowser?.windows,
-                                                     canDrive: model.canDriveBrowser)
-        if !windows.isEmpty {
+        if SessionWindowPicker.showsAttach(canDrive: model.canDriveBrowser) {
             Section("Attach a browser window") {
-                ForEach(windows) { window in
+                ForEach(attachableWindows) { window in
                     Button {
                         model.bindMachineWindow(window.id, to: session.id)
                     } label: {
@@ -860,9 +899,60 @@ struct SessionListView: View {
                                   ? "checkmark" : "macwindow")
                     }
                 }
+
+                openRow(for: session, isolated: false, icon: "macwindow.badge.plus")
+                openRow(for: session, isolated: true, icon: "eye.slash")
+            }
+
+            let pages = phonePages
+            if !pages.isEmpty {
+                Section(SessionWindowPicker.phoneSection(machine: machineName)) {
+                    ForEach(pages) { tab in
+                        Button {
+                            model.openMachineWindow(url: SessionWindowPicker.address(tab),
+                                                    isolated: false,
+                                                    session: session.id)
+                        } label: {
+                            Label(SessionWindowPicker.phoneRow(tab), systemImage: "iphone")
+                        }
+                    }
+                }
             }
         }
     }
+
+    /// One of the two rows that make a window rather than borrow one. Both are
+    /// the same call with one word different, so they are one function: two
+    /// copies of an `openMachineWindow(session:)` is two places for the session
+    /// to stop being passed, and a window that opens attached to nothing looks
+    /// exactly like one that opened attached to this session.
+    private func openRow(for session: RemoteSession, isolated: Bool, icon: String) -> some View {
+        Button {
+            model.openMachineWindow(isolated: isolated, session: session.id)
+        } label: {
+            Label(isolated ? SessionWindowPicker.openIsolated : SessionWindowPicker.openHere,
+                  systemImage: icon)
+        }
+        .accessibilityHint(SessionWindowPicker.meaning(isolated: isolated, machine: machineName))
+    }
+
+    /// The machine's open windows, or nothing where nothing may be offered.
+    private var attachableWindows: [MachineWindow] {
+        SessionWindowPicker.attachable(model.machineBrowser?.windows,
+                                       canDrive: model.canDriveBrowser)
+    }
+
+    /// The pages this phone has open on the machine these rows belong to. The
+    /// filter is the picker's, so this screen and the session's own menu cannot
+    /// come to offer different pages.
+    private var phonePages: [BrowserTab] {
+        SessionWindowPicker.phonePages(model.browserTabs.tabs(on: model),
+                                       on: hostId,
+                                       canDrive: model.canDriveBrowser)
+    }
+
+    /// What this machine is called in a sentence somebody reads.
+    private var machineName: String { model.current?.label ?? model.theMachine }
 
     /**
      * Whether *Model & effort* is worth offering on a row.
@@ -897,8 +987,11 @@ struct SessionListView: View {
      * the first time somebody opens a menu.
      *
      * `browser.window.rows` is **answer-only** — there is no push for it anywhere
-     * on this wire — so a screen that never asked would draw no section at all,
-     * for ever, on a machine with four windows open.
+     * on this wire — so a screen that never asked would show a machine with four
+     * windows open as a machine with none, for ever. The section itself is drawn
+     * either way now (see `attachSection`), which makes this *worse* to get
+     * wrong rather than better: the menu would look furnished, offer to open a
+     * new window, and silently hide the four that were already there.
      *
      * Two events and no timer, which is the pattern `SessionPageView` argues at
      * length: the screen arriving, and `browser.surfaces.rows` landing, which is
