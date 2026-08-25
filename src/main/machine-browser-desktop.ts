@@ -85,14 +85,17 @@ export type { CapturedShot, HostSession } from './remote/browser-control'
  * given a shared one in whichever profile happens to be switched on. A window
  * that says it is isolated and is not is a cookie jar somebody trusted.
  *
- * ## Pointing at one thing, which this file can serve and does not wire itself
+ * ## Pointing at one thing, declared here and wired in `index.ts`
  *
  * `browser.window.pick` — the tap that says *change this* on a window the phone
  * is only watching — needs one script run inside the page, and on the desktop
- * the only thing that runs scripts in a pane is the drive. So
- * {@link DesktopBrowserAccess.pick} is declared here and `index.ts` supplies it,
- * exactly as it already supplies {@link DesktopBrowserAccess.closePane} out of
- * the same drive:
+ * the only thing that runs scripts in a pane is the drive, which this file
+ * cannot reach. So {@link DesktopBrowserAccess.pick} is declared here and
+ * `index.ts` supplies it, exactly as it already supplies
+ * {@link DesktopBrowserAccess.closePane} out of the same drive. This is the
+ * entry it supplies, and the two paragraphs under it are why it is shaped that
+ * way — read the one beside it in `index.ts` for the same argument from the
+ * other end:
  *
  * ```ts
  * pick: async ({ id, viewId, name, x, y, up }) => {
