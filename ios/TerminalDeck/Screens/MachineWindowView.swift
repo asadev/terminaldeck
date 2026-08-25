@@ -197,6 +197,30 @@ struct MachineWindowView: View {
     /// the half this phone decided.
     @State private var refused: String?
 
+    /**
+     * Whether a tap on the picture describes what is under it instead of
+     * pressing it.
+     *
+     * The same mode the page on this phone has had, on the window that could not
+     * have it — *"in the page, if I click on something, I don't have something
+     * to, some option to specifically inspect one piece."* Held here rather than
+     * in the canvas because it is the bar's state as much as the canvas's: the
+     * dashed-box glyph fills while it is on, and the hint under the header says
+     * what a tap will now do.
+     *
+     * Turned off by leaving the screen, and by the window closing under us. It is
+     * deliberately **not** turned off by the sheet being put away: the next thing
+     * anybody wants after describing one element is to describe the one beside
+     * it, and making them press Inspect again between every two taps would be the
+     * mode fighting the work.
+     */
+    @State private var inspecting = false
+
+    /// What just happened with the agent, for a moment. The machine's own
+    /// sentences arrive on `state?.notice`; this is the half about a line that
+    /// left this phone.
+    @State private var said: String?
+
     /// The height the canvas says the picture is being drawn at. Zero until the
     /// first frame lands. See `stage` for what it is for and
     /// `WatchSurface.onPageHeight` for why the canvas is the thing that knows.
@@ -283,6 +307,12 @@ struct MachineWindowView: View {
                 if let refused {
                     Banner(text: refused, tone: .warning)
                         .accessibilityIdentifier("browser.machine.window.refused")
+                } else if let said {
+                    // Above the machine's notice, because it is the answer to the
+                    // thing that was just pressed and the notice is usually about
+                    // the window list having been re-read.
+                    Banner(text: said, tone: .neutral)
+                        .accessibilityIdentifier("browser.machine.window.said")
                 } else if let notice = state?.notice, !notice.isEmpty {
                     Banner(text: notice, tone: .neutral)
                         .accessibilityIdentifier("browser.machine.window.notice")
@@ -307,6 +337,25 @@ struct MachineWindowView: View {
                         .progressViewStyle(.linear)
                         .tint(Theme.accent)
                         .accessibilityIdentifier("browser.machine.window.pageLoading")
+                }
+
+                /*
+                 * What inspect mode is waiting for, in the same place and the same
+                 * words the page on this phone puts it — *"all of them should be
+                 * identical"* is about this as much as about the controls. At the
+                 * top rather than beside the control that turned it on, which is
+                 * at the bottom: this is a sentence about the page, and the page
+                 * is what the eye is on.
+                 *
+                 * The verb differs by one word and it has to. On the phone's own
+                 * page a tap is answered here; on a machine window it is a
+                 * question for the machine, and the answer can be *nothing is
+                 * there* or *the page has moved since that picture* — so the hint
+                 * says *ask about it* rather than promising a description.
+                 */
+                if inspecting {
+                    inspectHint
+                    Divider().overlay(Theme.hairline)
                 }
 
                 stage
@@ -347,6 +396,11 @@ struct MachineWindowView: View {
             // responder behind a dismissed view is a keyboard nobody can put
             // away, and the canvas is torn down a moment later anyway.
             if typing, let surface = liveSurface { WatchStage.post(.endTyping, to: surface.window) }
+            // And so does inspect mode. `MachinePick` is one static for one
+            // canvas, so a screen that walked off still armed would take the
+            // first tap on whatever mounts next and turn it into a question
+            // about a window nobody is looking at.
+            stopInspecting()
         }
         .onChange(of: window?.url) { _, _ in seed() }
         // And the same for a page with no window row: its address moves on the
@@ -367,11 +421,108 @@ struct MachineWindowView: View {
          * lives over there, and this is what pops the pair of them.
          */
         .onChange(of: closed) { _, gone in
-            if gone { dismiss() }
+            guard gone else { return }
+            // The mode goes before the screen does. `dismiss()` is asynchronous
+            // enough that a tap landing in between would ask about a window the
+            // machine has already told us is gone.
+            stopInspecting()
+            dismiss()
         }
         .navigationDestination(isPresented: $showingSettings) {
             MachineWindowSettingsView(model: model, windowID: windowID, pushed: true)
         }
+        /*
+         * The element that was pointed at, in the sheet both browsers share.
+         *
+         * Presented off a **flag** rather than off the value, for the reason
+         * `LocalhostBrowser` gives at its own copy of this line: `.sheet(item:)`
+         * tears the sheet down and builds a new one whenever the identity
+         * changes, and Wider/Narrower change the element on every press — which
+         * would make the correction control dismiss and re-present the sheet it
+         * lives in.
+         *
+         * `picked` is nil for an answer about a *different* window, so a phone
+         * with two browser screens on its stack cannot draw the wrong one's
+         * element.
+         */
+        .sheet(isPresented: Binding(get: { picked != nil },
+                                    set: { if !$0 { model.clearMachinePick() } })) {
+            if let element = picked {
+                InspectSheet(
+                    element: element,
+                    targets: model.agentTargets,
+                    target: Binding(get: { model.agentTarget }, set: { model.agentTarget = $0 }),
+                    step: stepInspection,
+                    send: { line, session in
+                        let sentence = model.sendToAgent(line, into: session)
+                        say(sentence)
+                        return sentence
+                    },
+                    // A correction on this kind of window is a frame over a wire
+                    // and back, and nothing on the sheet moves until it lands.
+                    // The page on this phone answers in the same runloop turn and
+                    // passes false, which is why this is a parameter rather than
+                    // something the sheet works out.
+                    pending: asking,
+                    dismiss: { model.clearMachinePick() })
+            }
+        }
+    }
+
+    /**
+     * The element the machine described, when it is about **this** window.
+     *
+     * `HostLink` holds one answer and this phone's stack can hold more than one
+     * browser screen — a window, its settings, another window reached from a
+     * session. Matching on the id is what stops the screen on top drawing an
+     * element that belongs to the one underneath it.
+     */
+    private var picked: InspectedElement? {
+        guard let held = model.machinePicked, held.window == windowID else { return nil }
+        return held.element
+    }
+
+    /// Whether an ask about this window is in flight. Read in two places — the
+    /// hint row and the sheet — so it is written once.
+    private var asking: Bool { model.pickingInMachineWindow == windowID }
+
+    /**
+     * What inspect mode is waiting for, said once, at the top of the page.
+     *
+     * The same row, the same glyph and the same place as `LocalhostBrowser`'s.
+     * *"Should not be that much of difference in all of them."*
+     *
+     * ## And what it says while an answer is on its way
+     *
+     * The one difference between the two browsers that is not cosmetic: on the
+     * page this phone holds, a tap is answered in the same runloop turn — there
+     * is no moment to describe. Here it is a frame over a wire to a machine and
+     * back, and on a phone connection that is a second or two with the sheet not
+     * yet up and the picture unchanged. A row that went on saying *tap anything*
+     * through that would be the screen inviting a second tap while the first was
+     * still in flight, which is two asks and one answer somebody has to reconcile.
+     *
+     * So the row says which of the two states it is in. Every way the ask can
+     * fail comes back as a sentence in the banner above this line, and `pickingIn`
+     * is cleared by that same frame — so this never outlives the answer, whichever
+     * answer it was.
+     */
+    private var inspectHint: some View {
+        HStack(spacing: 6) {
+            Image(systemName: asking ? "hourglass" : "hand.tap")
+                .font(.system(size: 10))
+            Text(asking
+                 ? "Asking the machine what that is\u{2026}"
+                 : "Tap anything on the page to ask what it is.")
+                .font(.system(size: 11))
+            Spacer(minLength: 0)
+        }
+        .foregroundStyle(Theme.accent)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 7)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.surface)
+        .accessibilityIdentifier("browser.machine.window.inspectHint")
     }
 
     // MARK: - What is on the screen
@@ -585,17 +736,36 @@ struct MachineWindowView: View {
                  */
                 stop: nil,
                 /*
-                 * **The seam Find and Inspect arrive through.**
+                 * **Find is still the seam; Inspect has come through it.**
                  *
-                 * Both are `nil` because both need the page itself and this screen
-                 * has a picture of it. The sentences are `BrowserChrome`'s
-                 * defaults, so nothing is written here — the day a host learns to
-                 * search a window, or to hand back the element under a tap, this
-                 * call gains one closure and the greyed glyph becomes a live one
-                 * with no other change anywhere.
+                 * Find is `nil` and stays `nil`: it reads the words out of a
+                 * document *this phone has loaded*, and there is no verb in the
+                 * `browser.window.*` family that would ask the machine to look for
+                 * us. `BrowserChrome.findIsLocal` is still the sentence.
+                 *
+                 * Inspect was `nil` for the same-shaped reason and is not any
+                 * more. The host answers `browser.window.pick` with the element at
+                 * a point — the same facts its own capture popup shows — so this
+                 * screen passes the closure the seam was built for and the greyed
+                 * glyph becomes a live one. Nothing else about this bar changed,
+                 * which is what the seam was for.
+                 *
+                 * Two conditions, and both are needed. `drivable` is the wire: the
+                 * machine has to be offering `browser.control` and this page has
+                 * to have a window id that family can carry, because the codec
+                 * refuses an empty one. `liveSurface` is the screen: pointing at a
+                 * thing needs a picture of the thing to point at, and a window the
+                 * machine will not cast draws its settings as its body. Where the
+                 * second is missing the sentence is Inspect's own; where the first
+                 * is, the bar-wide `unavailable` already says it and a second
+                 * paraphrase underneath would be the bar apologising twice.
                  */
                 find: nil,
-                inspect: nil,
+                inspect: (drivable && liveSurface != nil) ? toggleInspecting : nil,
+                inspecting: inspecting,
+                whyNoInspect: (drivable && liveSurface == nil)
+                    ? BrowserChrome.inspectNeedsThePicture
+                    : nil,
                 /*
                  * The `…` leads to the settings **unless they are already the body
                  * of this screen**, which is the shape a window the machine will
@@ -638,9 +808,10 @@ struct MachineWindowView: View {
         let name = model.current?.label ?? model.theMachine
         if windowID.isEmpty {
             return "This is \(name)'s own tab rather than one of its windows. The machine names a "
-                + "window with an id and this page has none, so Back, Forward and the window's own "
-                + "settings cannot be addressed to it.\n\nTyping an address still moves this page: "
-                + "that is a different verb, and it lands in this same tab."
+                + "window with an id and this page has none, so Back, Forward, pointing at one "
+                + "thing on the page, and the window's own settings cannot be addressed to it."
+                + "\n\nTyping an address still moves this page: that is a different verb, and it "
+                + "lands in this same tab."
         }
         return "\(name) is casting this page and is not offering its browser to this phone, so "
             + "nothing on this bar can be sent to it. The address is what the machine last "
@@ -700,6 +871,81 @@ struct MachineWindowView: View {
             host?.goMachineWindow(windowID, to: url)
         } else {
             model.openPageOnMachine(url)
+        }
+    }
+
+    // MARK: - Pointing at one thing
+
+    /**
+     * Turn the mode on, or off.
+     *
+     * On: the canvas is told, through `MachinePick`, that a tap on this window's
+     * picture is a **question** rather than a click — so nothing is pressed on
+     * the far page, exactly as `InspectScript` cancels the click on the page this
+     * phone holds. The point it hands back is already in document coordinates.
+     *
+     * Off: the mode ends and so does whatever was being looked at. Leaving the
+     * sheet's element behind would be a description of something nobody is asking
+     * about any more, and Wider on it would walk up a chain measured against a
+     * page that has since scrolled.
+     */
+    private func toggleInspecting() {
+        if inspecting { return stopInspecting() }
+        inspecting = true
+        // The window is captured by value and the model by reference; nothing of
+        // this `View` struct is. A closure held in a static that reached back into
+        // a redrawn screen would be the stale-capture bug `WatchSurface` warns
+        // about at `updateUIView`.
+        MachinePick.arm(window: windowID) { [model, windowID] x, y in
+            model.pickInMachineWindow(windowID, x: x, y: y, up: 0)
+        }
+    }
+
+    /// End the mode, wherever it is ended from — the control, leaving the screen,
+    /// or the window closing under us. Written once because three callers each
+    /// doing two things is how one of them ends up doing one.
+    private func stopInspecting() {
+        guard inspecting || MachinePick.isArmed(window: windowID) else { return }
+        inspecting = false
+        MachinePick.disarm()
+        model.clearMachinePick()
+    }
+
+    /**
+     * Wider and Narrower, on a window whose ancestors live on the far machine.
+     *
+     * The same point, asked again with a different `up` — which is why the host
+     * takes `up` as a field on the pick rather than as a verb of its own, and why
+     * `MachinePick` keeps the point rather than the screen deriving one from the
+     * answer. There is nothing in a `browser.window.picked` to re-derive a
+     * fingertip's position from.
+     *
+     * Clamped twice on the way out, and the second clamp is not belt and braces.
+     * `MachinePick.step` holds the range and the codec holds it again on the last
+     * line before the wire, because the host checks `up` in its **parser** and
+     * `server.ts` answers a parse failure by closing the socket. Pressing Wider
+     * once too often must cost a greyed button, not somebody's terminals.
+     */
+    private func stepInspection(_ delta: Int) {
+        guard let element = picked, let point = MachinePick.lastPoint else { return }
+        let next = MachinePick.step(from: element.depth, by: delta)
+        // Nothing to ask about: the answer would be the element already on
+        // screen, and a frame that changes nothing is a frame that makes the
+        // sheet flash *Asking the machine…* for no reason.
+        guard next != element.depth else { return }
+        model.pickInMachineWindow(windowID, x: point.x, y: point.y, up: next)
+    }
+
+    /// Say something for a moment. The sentence a hand-off to an agent comes back
+    /// with is about a line that has left this phone, and the machine's own
+    /// notices are about the window list — so it gets its own line rather than
+    /// overwriting one of those.
+    private func say(_ sentence: String) {
+        guard !sentence.isEmpty else { return }
+        withAnimation { said = sentence }
+        Task {
+            try? await Task.sleep(for: .seconds(3))
+            withAnimation { said = nil }
         }
     }
 

@@ -841,9 +841,29 @@ enum ClientMessage: Equatable {
 
     /// What the machine's browser has open, and which sessions could own one.
     case machineWindows
-    /// Open one there. `isolated` gives it a partition of its own that is thrown
-    /// away when the window closes.
-    case machineWindowOpen(url: String?, profile: String?, isolated: Bool)
+    /**
+     * Open one there. `isolated` gives it a partition of its own that is thrown
+     * away when the window closes.
+     *
+     * `session` opens it **and attaches it, in one move**, and it exists because
+     * of the one page a phone can show that no machine window can ever be bound
+     * to. A page opened *on this phone* is a web view over a port tunnel: it
+     * lives in no browser on the machine, so it has no window id, so
+     * `browser.window.bind` has nothing to name — and *Attach to a session* was
+     * greyed out with a line explaining why. Asad asked for the greying to go —
+     * *"we should have this attachment thing for all of them, properly
+     * working"* — and the honest way to grant it is to re-open the same address
+     * in the machine's own browser and attach **that** window.
+     *
+     * What was missing was the id. An open answers with the window *list*, and
+     * picking the new row back out of it by comparing lists is a race two taps
+     * apart — `browser-control.ts` records the same hack being removed one layer
+     * down, where **two opens in flight each find both rows**. So the host keeps
+     * the id inside itself and does the attach while it still holds it; this
+     * field is how a client asks for that. The answer is still the window list,
+     * and the notice on it is the *bind* notice, because what happened is a bind.
+     */
+    case machineWindowOpen(url: String?, profile: String?, isolated: Bool, session: String?)
     /// Send an open window somewhere.
     case machineWindowGo(id: String, url: String)
     /// Back, forward, reload, close, record on or off, share or isolate.
@@ -858,6 +878,28 @@ enum ClientMessage: Equatable {
     case machineWindowShot(id: String, session: String?, note: String?)
     /// What the recorder has collected on that window so far.
     case machineWindowSteps(id: String)
+    /**
+     * What is at one point on that window's page — the tap that says *change this*.
+     *
+     * `x` and `y` are **document** coordinates: the same space `browser.frame`'s
+     * `scrollX`/`scrollY` are in, so a viewer turns a tap on a picture into a
+     * point on the page by adding the scroll of the frame it drew.
+     * `MachinePick.documentPoint` is where this end does that, and it does it
+     * with the frame's own numbers rather than with a guess at the geometry.
+     *
+     * Document rather than viewport, because the page can scroll between the
+     * frame arriving and the tap landing, and a viewport point measured against
+     * an old frame hits whatever has scrolled into that spot since. The host
+     * converts back with the page's own live scroll and says plainly, in a
+     * sentence, when the point is no longer on screen.
+     *
+     * `up` is how many ancestors to walk up from the element actually hit, and
+     * it is the whole of Wider/Narrower. **It must never exceed
+     * `MachineBrowserWire.maxPickUp`**: the host checks that range in its
+     * *parser*, and a parse failure is answered by closing the socket rather
+     * than by refusing the frame. Wider clamps here; see that constant.
+     */
+    case machineWindowPick(id: String, x: Double, y: Double, up: Int)
 
     /* ---- capability `browser.profiles` ------------------------------------- */
 
@@ -1454,6 +1496,20 @@ enum ServerMessage: Equatable {
     case machineShot(MachineShot)
     /// What the recorder collected on one window.
     case machineRecordRows(id: String, steps: [RecordedStep])
+    /**
+     * One element on a machine window's page — the answer to `browser.window.pick`.
+     *
+     * The third frame in this family that does not answer with the window list,
+     * beside the picture and the recorder's steps, and for the same reason: it
+     * carries something the phone asked for by name. Every *failure* still comes
+     * back as the list with one sentence on it — nothing to point at, a page that
+     * has scrolled, a machine whose browser cannot be reached into at all — which
+     * is what stops a sheet spinning on a promise that will never be kept.
+     *
+     * `id` is the window, so a screen can ignore an answer about a window it is
+     * no longer showing.
+     */
+    case machineWindowPicked(id: String, element: InspectedElement)
     /// The machine's profiles and which one its browser is using — the answer to
     /// all three verbs of the family.
     case browserProfileRows(MachineProfileList)

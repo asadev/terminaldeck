@@ -605,9 +605,30 @@ final class HostLink: Identifiable {
         transport?.send(.machineWindows)
     }
 
-    func openMachineWindow(url: String? = nil, profile: String? = nil, isolated: Bool = false) {
+    /**
+     * Open a window on the machine, and — when a session is named — hand it to
+     * that session in the same act.
+     *
+     * The two halves cannot be two calls, and that is a fact about the wire
+     * rather than a preference. `browser.window.bind` names a window by its id,
+     * and until the host's own `open` returns nobody outside the machine knows
+     * which window was just made: an open answers with the window *list*, so a
+     * client wanting to bind what it just opened would have to pick the new row
+     * out by comparing the list before with the list after. That is a race two
+     * taps apart, and `browser-control.ts` records the same hack being removed
+     * one layer down because **two opens in flight each find both rows**.
+     *
+     * So the session rides on the open. The host checks it is really running
+     * *before* it touches the browser — a window opened for a session that turns
+     * out not to exist is a page on somebody's screen that nobody asked for and
+     * nobody is there to close — and the answer is the window list carrying the
+     * bind notice, because what happened is a bind.
+     */
+    func openMachineWindow(url: String? = nil, profile: String? = nil,
+                           isolated: Bool = false, session: String? = nil) {
         guard canDriveBrowser else { return }
-        transport?.send(.machineWindowOpen(url: url, profile: profile, isolated: isolated))
+        transport?.send(.machineWindowOpen(url: url, profile: profile,
+                                           isolated: isolated, session: session))
     }
 
     func goMachineWindow(_ id: String, to url: String) {
@@ -644,6 +665,54 @@ final class HostLink: Identifiable {
     func readMachineSteps(_ id: String) {
         guard canDriveBrowser else { return }
         transport?.send(.machineWindowSteps(id: id))
+    }
+
+    /**
+     * The element the machine last described, and the window it is on.
+     *
+     * Nil is *nothing has been pointed at* — the ordinary state, and what
+     * putting the sheet away goes back to. The window is carried with it because
+     * two windows can be open on this phone's stack and an answer about the one
+     * that is no longer on screen is not an answer to draw.
+     */
+    private(set) var machinePicked: MachinePickResult?
+
+    /**
+     * The window a pick is in flight for, or nil.
+     *
+     * The screen draws a line off this while it waits. It matters more than the
+     * usual spinner does, because **every way a pick can fail comes back as the
+     * window list with one sentence on it** rather than as a refusal of the ask:
+     * nothing at that spot, a page that has scrolled since the picture, a machine
+     * whose browser cannot be reached into at all. So this is cleared by the
+     * list as well as by an answer — a phone that only cleared it on success
+     * would sit there looking like a hang while the sentence explaining it was
+     * already on the screen above.
+     */
+    private(set) var pickingIn: String?
+
+    /**
+     * Ask what is at one point on a machine window's page.
+     *
+     * `x` and `y` are **document** coordinates — see `MachinePick.documentPoint`,
+     * which is the one place a tap on the picture becomes them. `up` is how many
+     * ancestors to climb and it is clamped again in the codec, on the last line
+     * before the wire, because an out-of-range one closes the socket rather than
+     * drawing a refusal.
+     */
+    func pickInMachineWindow(_ id: String, x: Double, y: Double, up: Int = 0) {
+        guard canDriveBrowser, !id.isEmpty else { return }
+        pickingIn = id
+        transport?.send(.machineWindowPick(id: id, x: x, y: y, up: up))
+    }
+
+    /// The sheet was put away, or inspecting was turned off. The held element
+    /// goes with it — an element still on this phone after the screen that asked
+    /// about it has moved on is one Wider would walk up from a page nobody is
+    /// looking at.
+    func clearMachinePick() {
+        machinePicked = nil
+        pickingIn = nil
     }
 
     /// What the picker last asked for, so a stale answer can be told from the
@@ -1623,6 +1692,30 @@ final class HostLink: Identifiable {
 
         case let .machineWindowRows(state):
             machineBrowser = state
+            /*
+             * And a pick that was in flight is over.
+             *
+             * This is the whole of *do not look like a hang*. Every refusal in
+             * the pick family arrives here rather than as an error frame — *"This
+             * machine's browser cannot point at one thing on a page."*, *"…has
+             * scrolled since that picture — tap the same thing again."*, *"There
+             * is nothing at that spot…"* — each of them as a `notice` on this
+             * list, which the window screen already draws in its banner. What was
+             * missing was ending the wait: without this the sentence appears at
+             * the top of the screen while a *Reading the page…* line sits under
+             * it for ever, and the person reads the second one.
+             *
+             * The element already on screen is deliberately **not** cleared. A
+             * list arrives for reasons that have nothing to do with inspecting —
+             * somebody at the machine opening a tab, a session binding a window —
+             * and taking the sheet away under a thumb because an unrelated row
+             * moved would be worse than leaving it.
+             */
+            pickingIn = nil
+
+        case let .machineWindowPicked(id, element):
+            machinePicked = MachinePickResult(window: id, element: element)
+            pickingIn = nil
 
         case let .machineShot(shot):
             machineShot = shot

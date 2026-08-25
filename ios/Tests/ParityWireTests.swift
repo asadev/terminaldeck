@@ -426,6 +426,230 @@ final class ParityWireTests: XCTestCase {
         XCTAssertFalse(pushed.mine)
     }
 
+    // MARK: - pointing at one thing on a machine window
+
+    /**
+     * The ask, both shapes of it.
+     *
+     * `up` is omitted at zero rather than sent, because absent already means *the
+     * element the point actually hit* — so a client that never offers Wider sends
+     * a frame with nothing in it it had to know about.
+     */
+    func testAPickCarriesThePointAndOnlyCarriesUpWhenThereIsOne() {
+        let first = WireCodec.encode(.machineWindowPick(id: "B2", x: 120.5, y: 640, up: 0))
+        let one = try! JSONSerialization.jsonObject(with: first.data(using: .utf8)!) as! [String: Any]
+        XCTAssertEqual(one["t"] as? String, "browser.window.pick")
+        XCTAssertEqual(one["id"] as? String, "B2")
+        XCTAssertEqual(one["x"] as? Double, 120.5)
+        XCTAssertEqual(one["y"] as? Double, 640)
+        XCTAssertNil(one["up"], "zero is what absent already means")
+
+        let wider = WireCodec.encode(.machineWindowPick(id: "B2", x: 1, y: 2, up: 3))
+        let two = try! JSONSerialization.jsonObject(with: wider.data(using: .utf8)!) as! [String: Any]
+        XCTAssertEqual(two["up"] as? Int, 3)
+    }
+
+    /**
+     * **An out-of-range `up` never reaches the wire, and this is the test that
+     * keeps somebody's session up.**
+     *
+     * The host checks that range in its *parser*, and `server.ts` answers a parse
+     * failure by **closing the socket** — not by refusing the frame. So a Wider
+     * pressed once past the ceiling would not draw a sentence, it would drop the
+     * terminals, the cast and everything else riding that connection. The screen
+     * greys the control at the top of the chain and `MachinePick.step` clamps the
+     * arithmetic; this is the last lock, on the line before the frame leaves.
+     */
+    func testAPickNeverAsksForMoreOfThePageThanTheHostWillParse() {
+        let far = WireCodec.encode(.machineWindowPick(id: "B2", x: 0, y: 0,
+                                                      up: MachineBrowserWire.maxPickUp + 500))
+        let object = try! JSONSerialization.jsonObject(with: far.data(using: .utf8)!) as! [String: Any]
+        XCTAssertEqual(object["up"] as? Int, MachineBrowserWire.maxPickUp)
+
+        // And the other end of the range, which a Narrower at the tap could reach
+        // through a caller that did not clamp: negative is not a walk, it is zero.
+        let under = WireCodec.encode(.machineWindowPick(id: "B2", x: 0, y: 0, up: -4))
+        let low = try! JSONSerialization.jsonObject(with: under.data(using: .utf8)!) as! [String: Any]
+        XCTAssertNil(low["up"])
+    }
+
+    /// The number itself, so a host that raises `MAX_PICK_UP` and a phone that
+    /// does not are caught here rather than by a dropped connection.
+    func testTheWalkCeilingMatchesTheHost() {
+        XCTAssertEqual(MachineBrowserWire.maxPickUp, 64)
+    }
+
+    /**
+     * The answer: the same facts the desktop's own capture popup shows.
+     *
+     * `depth` and `maxUp` are the two that make Wider and Narrower exact rather
+     * than hopeful — how far up from the tap this already is, and how much
+     * further the chain goes.
+     */
+    func testAPickedElementDecodesWithItsPlaceInTheChain() {
+        let json = """
+        {"t":"browser.window.picked","id":"B2","tag":"button","selector":"#pay-now",
+         "label":"Pay now","labelSource":"text","url":"https://shop.example/checkout",
+         "rect":{"x":40,"y":900,"w":120,"h":44},"depth":2,"maxUp":5}
+        """
+        guard case let .machineWindowPicked(id, element) = decoded(json) else {
+            return XCTFail("expected a browser.window.picked")
+        }
+        XCTAssertEqual(id, "B2")
+        XCTAssertEqual(element.tag, "button")
+        XCTAssertEqual(element.selector, "#pay-now")
+        XCTAssertEqual(element.label, "Pay now")
+        XCTAssertEqual(element.labelSource, "text")
+        XCTAssertEqual(element.url, "https://shop.example/checkout")
+        XCTAssertEqual(element.depth, 2)
+        XCTAssertEqual(element.maxUp, 5)
+        XCTAssertEqual(element.rect, PickedRect(x: 40, y: 900, w: 120, h: 44))
+        XCTAssertTrue(element.canGoWider)
+        XCTAssertTrue(element.canGoNarrower)
+    }
+
+    /**
+     * **An unfamiliar `labelSource` is printed, never refused.**
+     *
+     * `PICK_LABEL_SOURCES` is `selector.ts`'s own list plus two words only a form
+     * field can produce — `name`, and `label` for a `<label for="…">` elsewhere in
+     * the document — and neither of those is in the phone's own `LabelSource`
+     * enum, because a click on a rendered element cannot produce them. That list
+     * grows again the day the label rule learns a new fallback.
+     *
+     * So this field crosses as a **word**. A Swift enum with no default case
+     * would have decoded `name` as nil and, in the shape that was nearly written,
+     * failed the whole frame — a sheet going blank on an element it could have
+     * described perfectly.
+     */
+    func testALabelSourceThisBuildHasNeverSeenIsDrawnAsItStands() {
+        for word in ["name", "label", "some-future-rule"] {
+            let json = """
+            {"t":"browser.window.picked","id":"B1","tag":"input","selector":"#email",
+             "label":"Email address","labelSource":"\(word)","url":"https://x/","depth":0,"maxUp":0}
+            """
+            guard case let .machineWindowPicked(_, element) = decoded(json) else {
+                return XCTFail("a picked element with labelSource \(word) should still decode")
+            }
+            XCTAssertEqual(element.labelSource, word)
+            XCTAssertEqual(Inspect.describeLabelSource(element.labelSource), word,
+                           "the sheet draws the word it was sent")
+        }
+
+        // `none` is the one word that is not a place a label came from, so the
+        // sheet draws nothing rather than a chip reading "none" beside a label.
+        XCTAssertEqual(Inspect.describeLabelSource("none"), "")
+    }
+
+    /**
+     * Refused when there is nothing to act on, and sanitised when there is.
+     *
+     * No selector is not an element — there is nothing an agent could be told to
+     * change — and no id cannot be matched to the screen that asked. Both are
+     * dropped rather than drawn as a sheet with blanks in it.
+     *
+     * The sanitising is the half that is easy to think is the host's job. It
+     * trims these to its own lengths, and that says nothing at all about control
+     * characters: this line is typed into a PTY running a coding agent, where a
+     * newline **submits the prompt early** and an ESC repaints the terminal it
+     * lands in. The label is words out of a document the machine loaded.
+     */
+    func testAPickedElementIsRefusedWithoutASelectorAndCleanedWhenItHasOne() {
+        let noSelector = """
+        {"t":"browser.window.picked","id":"B1","tag":"div","selector":"","url":"x"}
+        """
+        XCTAssertNil(decoded(noSelector),
+                     "an element with no selector is nothing anything can be told to change")
+
+        let noWindow = """
+        {"t":"browser.window.picked","tag":"div","selector":"#a","url":"x"}
+        """
+        XCTAssertNil(decoded(noWindow),
+                     "an answer naming no window cannot be matched to the screen that asked")
+
+        // A real newline and a real ESC, written as JSON escapes so what is under
+        // test is the decode rather than this file's own quoting.
+        let nasty = """
+        {"t":"browser.window.picked","id":"B1","tag":"button","selector":"#a",
+         "label":"Pay\\nnow\\u001b[2J","labelSource":"text","url":"https://x/",
+         "depth":0,"maxUp":0}
+        """
+        guard case let .machineWindowPicked(_, element) = decoded(nasty) else {
+            return XCTFail("a label with controls in it is cleaned, not refused")
+        }
+        // Removed rather than escaped, and each one leaves the space a collapsed
+        // run of whitespace leaves — `sanitizeLine`'s rule, on both clients and
+        // on the desktop, so the three produce one string for one element.
+        XCTAssertEqual(element.label, "Pay now [2J")
+        XCTAssertFalse(element.label.contains("\n"),
+                       "a newline in this line submits an agent's prompt early")
+        XCTAssertFalse(element.label.unicodeScalars.contains { $0.value == 0x1b },
+                       "an ESC in this line repaints the terminal it lands in")
+    }
+
+    /**
+     * Nonsense in the rectangle drops the rectangle, and only the rectangle.
+     *
+     * A half-read box would put an outline in the wrong place rather than
+     * nowhere, and the element it describes is perfectly usable without one.
+     */
+    func testABadRectangleDoesNotCostTheElement() {
+        let json = """
+        {"t":"browser.window.picked","id":"B1","tag":"div","selector":"#a","label":"",
+         "labelSource":"none","url":"https://x/","rect":{"x":1,"y":2},"depth":0,"maxUp":0}
+        """
+        guard case let .machineWindowPicked(_, element) = decoded(json) else { return XCTFail() }
+        XCTAssertNil(element.rect)
+        XCTAssertEqual(element.selector, "#a")
+    }
+
+    /**
+     * Depth and reach are never negative, whatever arrives.
+     *
+     * They grey two controls between them, and the safe direction for a number
+     * that cannot be read is the one that offers less: a control drawn dead when
+     * it could have worked is a nuisance, and one drawn live over nothing sends a
+     * frame the host answers with a sentence.
+     */
+    func testAPickedElementNarrowsItsCountsDefensively() {
+        let json = """
+        {"t":"browser.window.picked","id":"B1","tag":"div","selector":"#a","label":"x",
+         "labelSource":"text","url":"https://x/","depth":-3,"maxUp":"lots"}
+        """
+        guard case let .machineWindowPicked(_, element) = decoded(json) else { return XCTFail() }
+        XCTAssertEqual(element.depth, 0)
+        XCTAssertEqual(element.maxUp, 0)
+        XCTAssertFalse(element.canGoWider)
+        XCTAssertFalse(element.canGoNarrower)
+    }
+
+    /**
+     * Opening a window and attaching it is **one** frame.
+     *
+     * The two halves cannot be two: `browser.window.bind` names a window by its
+     * id, and until the host's own open returns nobody outside the machine knows
+     * which window was just made. A client that bound what it had just opened by
+     * comparing the list before with the list after would be racing two taps
+     * apart — and with two opens in flight, each finds both rows.
+     */
+    func testAnOpenCanCarryTheSessionItIsToBeAttachedTo() {
+        let plain = WireCodec.encode(.machineWindowOpen(url: "https://x/", profile: nil,
+                                                        isolated: false, session: nil))
+        let one = try! JSONSerialization.jsonObject(with: plain.data(using: .utf8)!) as! [String: Any]
+        XCTAssertEqual(one["t"] as? String, "browser.window.open")
+        XCTAssertEqual(one["url"] as? String, "https://x/")
+        XCTAssertNil(one["session"], "absent is *do not attach this to anything*")
+        XCTAssertNil(one["isolated"])
+
+        let attached = WireCodec.encode(.machineWindowOpen(url: "http://localhost:3000/admin",
+                                                            profile: nil, isolated: true,
+                                                            session: "s-9"))
+        let two = try! JSONSerialization.jsonObject(with: attached.data(using: .utf8)!) as! [String: Any]
+        XCTAssertEqual(two["session"] as? String, "s-9")
+        XCTAssertEqual(two["isolated"] as? Bool, true)
+        XCTAssertEqual(two["url"] as? String, "http://localhost:3000/admin")
+    }
+
     /**
      * Read the safe way round, and refused when it names no surface.
      *

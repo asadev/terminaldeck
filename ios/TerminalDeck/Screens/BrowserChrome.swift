@@ -162,17 +162,48 @@ enum BrowserChrome {
         + "so there is nothing here to search."
 
     /**
-     * Why Inspect is greyed on a page that lives on the machine.
+     * Why Inspect is greyed on a screen that is **only watching** a page.
      *
-     * Same shape as Find and a different reason: inspecting runs a script inside
-     * the page and reads an element back out of it, which needs the page itself
-     * rather than a picture of it. Reaching into a window on the machine is real
-     * work on the host and it is not built yet — see `MachineWindowView.bar` for
-     * the seam it will arrive through.
+     * It used to say *"tapping into a window on the machine is not ready yet"*,
+     * and that sentence is gone because the thing it apologised for is built: a
+     * tap on a machine window's picture becomes `browser.window.pick`, the
+     * machine's own browser answers with the element, and one sheet draws both.
+     * See `MachineWindowView.bar`, which supplies the closure this default exists
+     * to stand in for.
+     *
+     * What is left is the one screen that genuinely cannot ask. `WatchViewerScreen`
+     * is reached from **Settings**, holding a `WatchLink` and no model — so there
+     * is no `HostLink` behind it and no `browser.control` verb it could send,
+     * whatever the machine is offering. A picture is all it has.
+     *
+     * A default on the bar rather than a sentence each screen writes, because it
+     * is one fact about one wire and copies of it would be places for it to
+     * drift.
      */
     static let inspectIsLocal =
-        "Inspect describes whatever you tap on a page this phone has open. Tapping into a window "
-        + "on the machine is not ready yet."
+        "Pointing at one thing on a page is asked of the machine's own browser. This screen is "
+        + "only watching a picture of it, so there is nothing here to ask."
+
+    /**
+     * Why Inspect is greyed on a window the machine is **not casting**.
+     *
+     * This one is not about the wire at all — the verb is there and the window
+     * can be sent it. There is simply nothing on the screen to point at: a window
+     * the machine will not cast draws its own settings as the body, and *tap the
+     * thing you mean* has no picture to be a tap on.
+     *
+     * It is a real state and not a rare one. A window opened from the Browser
+     * tab's `+` is minted through `openForSession(NO_SESSION)` and detached in
+     * the same breath, so it holds no binding row and `castWindows` cannot see
+     * it: it is in `browser.window.rows` and in no `browser.surfaces` entry. So
+     * this sentence is what somebody reads on the first window they open, which
+     * is why it names what is on the screen instead — the settings are the body
+     * of that screen, and saying so is what stops the greyed glyph reading as a
+     * feature that is missing.
+     */
+    static let inspectNeedsThePicture =
+        "Pointing at one thing needs the page on screen to point at. This machine is not showing "
+        + "this window, so there is only its settings here."
 }
 
 /**
