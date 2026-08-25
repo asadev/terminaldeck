@@ -142,18 +142,21 @@ final class ReviewScreensUITests: XCTestCase {
         /*
          * The page's own `<title>`, in the navigation bar.
          *
-         * That string is the proof and nothing weaker will do: the header falls
-         * back to `localhost:<port>` until the document has a title, so waiting
-         * for the screen — or for the Done button, which is drawn in all three
-         * phases — would pass over a tunnel that never opened. This is bytes
-         * from the machine, rendered.
+         * That string is the proof and nothing weaker will do. The name at the
+         * top falls back to the address, and to `localhost:<port>` before there
+         * is even that, so waiting for the screen — or for any control on its bar,
+         * every one of which is drawn in all three phases of a tunnel, greyed
+         * until it can act — would pass over a tunnel that never opened. This is
+         * bytes from the machine, rendered.
          */
         let title = app.staticTexts["Basket"]
         XCTAssertTrue(title.waitForExistence(timeout: 60),
                       "the machine never served the page — the tunnel stayed in `opening`")
         expecting = .dark
         capture("page-from-the-machine", measured: false)
-        app.buttons["localhost.done"].tap()
+        // Out by the chevron. Leaving the screen is the teardown — it always was,
+        // which is why the verb could move into the `…` as `Close this window`.
+        leaveThePage()
     }
 
     /**
@@ -192,10 +195,13 @@ final class ReviewScreensUITests: XCTestCase {
             .firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 20), "something should be listening")
         row.tap()
-        XCTAssertTrue(app.buttons["localhost.done"].waitForExistence(timeout: 30))
+        // Reload rather than Done, which no longer exists: the bar under a page
+        // on this phone is the same six controls as the bar under every other
+        // browser window, and it is drawn as soon as the screen is.
+        XCTAssertTrue(app.buttons["localhost.reload"].waitForExistence(timeout: 30))
         sleep(20)
         capture("control-02-localhost-page", measured: false)
-        app.buttons["localhost.done"].tap()
+        leaveThePage()
     }
 
     /// The tab bar itself, which is the change he stated most plainly.
@@ -378,7 +384,17 @@ final class ReviewScreensUITests: XCTestCase {
         let toast = app.staticTexts["localhost.list.toast"]
         XCTAssertTrue(toast.waitForExistence(timeout: 5),
                       "a site on the internet should open on the machine, and be said to")
-        XCTAssertFalse(app.buttons["localhost.page.done"].exists,
+        /*
+         * Nothing opened on this phone.
+         *
+         * Asked of Reload on the page's own bar, which is drawn in every phase of
+         * a tunnel — greyed while the port is opening, live once it is — so this
+         * is false whether a page half-opened or never started. The line it
+         * replaces asked for `localhost.page.done`, an identifier that never
+         * existed in this app at all, which meant this assertion had been passing
+         * unconditionally since it was written.
+         */
+        XCTAssertFalse(app.buttons["localhost.reload"].exists,
                        "and it must not have loaded on the phone")
         capture("\(scheme.rawValue)-09-open-address-refused")
 
@@ -414,7 +430,7 @@ final class ReviewScreensUITests: XCTestCase {
          * is belongs to the machine; that the phone reaches an end state at all
          * belongs here.
          */
-        XCTAssertTrue(app.buttons["localhost.done"].waitForExistence(timeout: 40),
+        XCTAssertTrue(app.buttons["localhost.reload"].waitForExistence(timeout: 40),
                       "the browser screen should open")
         let settled = NSPredicate(format: "exists == true")
         let outcome = app.staticTexts.matching(
@@ -423,7 +439,7 @@ final class ReviewScreensUITests: XCTestCase {
         expectation(for: settled, evaluatedWith: outcome)
         waitForExpectations(timeout: PortTunnelSettleTimeout)
         capture("\(scheme.rawValue)-10-typed-address-settled", measured: false)
-        app.buttons["localhost.done"].tap()
+        leaveThePage()
         sleep(1)
     }
 
@@ -489,6 +505,30 @@ final class ReviewScreensUITests: XCTestCase {
         app.buttons
             .matching(NSPredicate(format: "identifier BEGINSWITH 'session.' AND NOT identifier CONTAINS 'swipe'"))
             .firstMatch
+    }
+
+    /**
+     * Leave a page this phone is holding open, and take its tunnel with it.
+     *
+     * Three cases in this file used to tap `localhost.done`, and there is no
+     * Done: the row under a page on this phone is now the same six controls as
+     * the row under every other browser window — *"top, header and footer, tab
+     * bar should be same in all type of browsing windows"* — and the verb that
+     * tore the tunnel down is `Close this window` inside the `…`.
+     *
+     * The chevron rather than that menu item, because none of the three cases is
+     * **about** closing: all three photograph a page and then need to be off it
+     * before the next frame is taken. Popping the screen is the whole
+     * teardown — the listener goes, the machine's socket goes — which is exactly
+     * why the verb could move into a menu without anybody losing a one-tap way
+     * out. `LocalhostUITests` is where the menu item itself is walked.
+     */
+    private func leaveThePage() {
+        let back = app.navigationBars.buttons.element(boundBy: 0)
+        XCTAssertTrue(back.waitForExistence(timeout: 10),
+                      "a page from the machine keeps the system navigation bar, so there is always "
+                      + "a chevron out of it")
+        back.tap()
     }
 
     // MARK: - Against the stand-in, which is the only host with a copilot

@@ -265,19 +265,25 @@ final class DevServerUITests: XCTestCase {
 
         app.buttons["devserver.\(Self.project)"].tap()
 
-        XCTAssertTrue(app.buttons["localhost.done"].waitForExistence(timeout: 20),
+        // Reload rather than Done, which no longer exists: the page on this
+        // phone wears the same six controls as every other browser window, and
+        // Reload is drawn as soon as the screen is — greyed while the tunnel is
+        // still opening, which against this stand-in host is as far as it gets.
+        XCTAssertTrue(app.buttons["localhost.reload"].waitForExistence(timeout: 20),
                       "tapping a ready row should open the browser")
         // The port, on screen, in the view that was opened. Asserted rather than
         // taken for granted because carrying the *wrong* number here is the one
         // way this tap can be subtly wrong: a dev server's absolute URLs are all
         // scoped to its own port, so a view opened on a different one half-works
         // in a way that looks like the framework being broken.
-        let address = app.staticTexts["localhost:\(Self.port)"]
-        XCTAssertTrue(address.waitForExistence(timeout: 20),
+        XCTAssertTrue(namesThePort(timeout: 20),
                       "the browser should be opened on the port the machine proved")
         save("devserver-04-opened-on-its-port")
 
-        app.buttons["localhost.done"].tap()
+        // Out by the chevron. Popping the screen is the teardown, exactly as the
+        // old Done was — see `LocalhostUITests` for the verb itself, which is
+        // `Close this window` inside the `…` now.
+        app.navigationBars.buttons.element(boundBy: 0).tap()
     }
 
     // MARK: - Helpers
@@ -292,6 +298,49 @@ final class DevServerUITests: XCTestCase {
             throw XCTSkip(Self.notRunning)
         }
         return code
+    }
+
+    /**
+     * Whether the browser screen that just opened says it is on **our** port.
+     *
+     * This was one line — `app.staticTexts["localhost:3210"]` — and that line was
+     * reading the mono address the phone's page used to print as the second line
+     * of its own header. That header is gone: *"even if we remove the top header
+     * of paperclip and all of this basic information might not be required from
+     * the outside. We can just see and enter."* The address became a real field
+     * in the bar, which is the thing he could not have before.
+     *
+     * So the number now appears in one of two places depending on how far the
+     * tunnel got, and this asks both rather than picking one:
+     *
+     *  - **the address field**, once the page can be navigated. Its `value` is
+     *    the whole address — `localhost:3210/`, and a path after it once the page
+     *    has moved — so this is a *contains*, not an equality.
+     *  - **the name at the top**, before there is a page to take a name from. It
+     *    falls back to `localhost:<port>` exactly then, which is the state this
+     *    case reaches against the stand-in host: it answers no `tunnel.*` at all,
+     *    so the screen opens, says it is connecting, and stays there.
+     *
+     * Asking only the first would fail against this harness and asking only the
+     * second would fail against the real one — where the page loads and the name
+     * at the top becomes the page's own title. The old single line happened to
+     * survive both because the header printed the address in every phase, and it
+     * is exactly that line the round removed.
+     *
+     * A poll rather than one predicated query because the two are different kinds
+     * of element — a field's `value` and a label — and a query that spans both
+     * would have to be written twice anyway.
+     */
+    private func namesThePort(timeout: TimeInterval) -> Bool {
+        let needle = "localhost:\(Self.port)"
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            let field = app.textFields["localhost.address"]
+            if field.exists, ((field.value as? String) ?? "").contains(needle) { return true }
+            if app.staticTexts[needle].exists { return true }
+            usleep(300_000)
+        } while Date() < deadline
+        return false
     }
 
     /// Scroll until an element is genuinely on screen. `exists` and `isHittable`

@@ -196,11 +196,19 @@ extension XCUIApplication {
          * on the screen these suites were written against.
          *
          * The sheet opens on *Machine* — the common case is a window in the
-         * machine's own browser — and a port tapped there opens over there, which
-         * is a page a `localhost.done` query will never find. Every suite that
-         * comes through this helper and then taps a port row is a suite about
-         * this phone's own tunnel browsing; the one that does not tap a row at
-         * all (the swipe suite) is unaffected by which destination is lit.
+         * machine's own browser — and a port tapped there opens over there, on a
+         * screen whose controls are named `browser.machine.window.…` rather than
+         * `localhost.…`, so a suite waiting for this phone's own page never sees
+         * it arrive. Every suite that comes through this helper and then taps a
+         * port row is a suite about this phone's own tunnel browsing; the one
+         * that does not tap a row at all (the swipe suite) is unaffected by which
+         * destination is lit.
+         *
+         * The probe used to be named here as `localhost.done`, and there is no
+         * Done any more: the page on this phone wears the same six controls as
+         * every other browser window and closing the tunnel moved into the `…`
+         * as `localhost.close`. The prefix is unchanged, so `localhost.reload`
+         * and the rest still say which screen arrived.
          *
          * Absent on a machine that will not serve a port to a phone, which is a
          * real state and not a failure: the destination is simply not drawn, and
