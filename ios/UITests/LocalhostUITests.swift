@@ -372,7 +372,7 @@ final class LocalhostUITests: XCTestCase {
         sleep(6)
 
         leaveTheBrowser()
-        XCTAssertTrue(portRow().waitForExistence(timeout: 10), "leaving should come back to the list")
+        XCTAssertTrue(backOnTheBrowserList(), "leaving should come back to the Browser list")
         // And the bar comes back with it. A hidden tab bar that stays hidden
         // after the screen it belonged to has gone is the other half of the same
         // bug, and it strands somebody on one tab.
@@ -574,7 +574,7 @@ final class LocalhostUITests: XCTestCase {
         let across = app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5))
         edge.press(forDuration: 0.05, thenDragTo: across)
 
-        XCTAssertTrue(portRow().waitForExistence(timeout: 10),
+        XCTAssertTrue(backOnTheBrowserList(),
                       "the edge swipe did not pop the screen — the web view is taking the gesture "
                       + "again, which is what \"still not native\" was about")
         XCTAssertFalse(app.staticTexts["Served from the Mac"].exists,
@@ -636,7 +636,7 @@ final class LocalhostUITests: XCTestCase {
                       + "to be Done in this screen's own toolbar")
         close.tap()
 
-        XCTAssertTrue(portRow().waitForExistence(timeout: 10), "closing should come back to the list")
+        XCTAssertTrue(backOnTheBrowserList(), "closing should come back to the Browser list")
         XCTAssertFalse(app.staticTexts["Served from the Mac"].exists,
                        "the page is still on screen after the tunnel was closed")
     }
@@ -682,6 +682,26 @@ final class LocalhostUITests: XCTestCase {
      * here. It is the case *about* the verb, so it walks the menu to it; this is
      * for the cases that were only ever getting off the screen.
      */
+    /**
+     * Back on the Browser tab's own list.
+     *
+     * **Not** `portRow()`, and this is the mistake this replaced. The ports live
+     * in the **New window** sheet, and opening a page from that sheet dismisses
+     * it — so every way out of a page (the old Done, the chevron, the edge swipe,
+     * closing the tunnel) lands on the Browser tab's *home*, where there is no
+     * port row and never was one. Measured 2026-08-25 against a live host: all
+     * three cases that asked for a port row after leaving failed on the commit
+     * *before* the chrome was unified, and failed in exactly the same way after,
+     * while the app was behaving perfectly on screen. A test that can only pass
+     * where the app is wrong is worse than no test.
+     *
+     * The navigation bar is the honest question — *is the list on screen* — and
+     * it is one query rather than a proxy for one.
+     */
+    private func backOnTheBrowserList() -> Bool {
+        app.navigationBars["Browser"].waitForExistence(timeout: 10)
+    }
+
     private func leaveTheBrowser() {
         let back = app.navigationBars.buttons.element(boundBy: 0)
         XCTAssertTrue(back.waitForExistence(timeout: 10),
