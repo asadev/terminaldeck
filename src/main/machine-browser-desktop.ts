@@ -97,15 +97,23 @@ export type { CapturedShot, HostSession } from './remote/browser-control'
  * ```ts
  * pick: async ({ id, viewId, name, x, y, up }) => {
  *   const drive = browserDrive()
- *   if (drive === null) throw new Error('this window is not being driven')
+ *   if (drive === null) throw new Error(NO_DRIVE_TO_PICK)
  *   return drive.pickAt(x, y, up, { key: boundKey(id), viewId, browserTabId: id, name })
  * },
  * ```
  *
- * Until that line exists the phone is told, in one sentence, that this machine's
- * browser cannot point at one thing on a page — which is the honest state and
- * not a dead button. A headless host needs no such line: its `MachineBrowser` is
- * built over the drive already.
+ * Two details of that entry are load-bearing and were got wrong once. It is
+ * supplied **unconditionally**, and resolves the drive on each call, because
+ * `machineBrowserHere()` is composed hundreds of lines before the drive is
+ * published — supplying it only where a drive already exists would have left
+ * the feature silently dead on every boot. And a null drive is a fact about the
+ * whole app, not about one window: `BrowserDrive.slotFor` mints a slot the first
+ * time a window is named, so a window nobody has ever driven picks fine. The
+ * sentence is therefore *"this app has no browser running"*, which the phone
+ * shows as *"B2 could not be looked at: this app has no browser running."*
+ *
+ * A headless host needs no such line: its `MachineBrowser` is built over the
+ * drive already.
  *
  * The id discipline the switch demands is nevertheless already true here and
  * costs nothing: the desktop's binding is keyed on the pane, and the isolation
