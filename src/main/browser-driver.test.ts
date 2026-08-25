@@ -187,6 +187,183 @@ describe('the driver casts a page and curtains it on handover', () => {
     expect(fp.sent.some((s) => s.method === 'Page.stopScreencast')).toBe(true)
   })
 
+  /**
+   * The whole round trip, over the driver: the copilot asks for a person, a phone
+   * says *that person is me*, types, and hands the page back.
+   *
+   * `browser-watch.test.ts` pins the masking and the two doors on the cast
+   * itself. What is here is the glue the driver owns — that a take is refused
+   * unless a handover is actually outstanding, that `handBackHandover` routes
+   * into the same `resume` the desktop banner calls rather than a second copy of
+   * it, and that the agent is refused for the whole of it.
+   */
+  function driveWithTwoWatchers() {
+    const fp = fakePage()
+    const drive = new BrowserDrive({
+      openTab: async () => null,
+      contentsFor: () => fp.page as never,
+      publish: () => undefined,
+      now: () => 1_000,
+    })
+    const phone: Array<{ seq: number; masked?: true; prompt?: string; data: string }> = []
+    const laptop: Array<{ seq: number; masked?: true; prompt?: string; data: string }> = []
+    return { fp, drive, phone, laptop }
+  }
+
+  async function bothWatching(rig: ReturnType<typeof driveWithTwoWatchers>) {
+    await rig.drive.startCast({
+      target,
+      watcherId: 'phone',
+      window: 'B1',
+      options: { maxWidth: 800, quality: 50 },
+      emit: (f) => rig.phone.push({ seq: f.seq, masked: f.masked, prompt: f.prompt, data: f.data }),
+    })
+    await rig.drive.startCast({
+      target,
+      watcherId: 'laptop',
+      window: 'B1',
+      options: { maxWidth: 800, quality: 50 },
+      emit: (f) => rig.laptop.push({ seq: f.seq, masked: f.masked, prompt: f.prompt, data: f.data }),
+    })
+  }
+
+  it('lets the phone being asked answer, and keeps the agent shut out while it does', async () => {
+    const rig = driveWithTwoWatchers()
+    await bothWatching(rig)
+
+    // Nothing to take before anything is asked.
+    expect(await rig.drive.takeHandover(target, 'phone')).toMatchObject({ ok: false })
+    expect(rig.drive.handoverHolding(target)).toEqual({ asking: false, prompt: '', taker: null })
+
+    const asked = rig.drive.handover('Sign in and then press Done.', 60_000, target)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(rig.drive.handoverHolding(target)).toMatchObject({ asking: true, taker: null })
+    expect(rig.drive.handoverHolding(target).prompt).toContain('Sign in')
+
+    expect(await rig.drive.takeHandover(target, 'phone')).toEqual({ ok: true })
+    expect(rig.drive.handoverHolding(target).taker).toBe('phone')
+    // A second watcher of the same page cannot take it out from under them.
+    expect(await rig.drive.takeHandover(target, 'laptop')).toMatchObject({ ok: false })
+
+    // The taker sees the page; the other watcher does not.
+    rig.drive.ackCast(target, 'phone', rig.phone[rig.phone.length - 1].seq)
+    rig.drive.ackCast(target, 'laptop', rig.laptop[rig.laptop.length - 1].seq)
+    rig.fp.fire('Page.screencastFrame', frame())
+    expect(rig.phone[rig.phone.length - 1].masked).toBeUndefined()
+    expect(rig.phone[rig.phone.length - 1].data.length).toBeGreaterThan(0)
+    expect(rig.laptop[rig.laptop.length - 1].masked).toBe(true)
+
+    // The taker types and it reaches the page; the other watcher's tap does not.
+    const typed = await rig.drive.castInput(target, 'phone', {
+      t: 'browser.input',
+      window: 'B1',
+      seq: rig.phone[rig.phone.length - 1].seq,
+      paste: 'hunter2',
+    })
+    expect(typed.ok).toBe(true)
+    expect(rig.fp.sent.filter((s) => s.method === 'Input.insertText')).toHaveLength(1)
+    const refused = await rig.drive.castInput(target, 'laptop', {
+      t: 'browser.input',
+      window: 'B1',
+      seq: 1,
+      mouse: { type: 'down', x: 10, y: 10 },
+    })
+    expect(refused.ok).toBe(false)
+    expect(rig.fp.sent.filter((s) => s.method === 'Input.dispatchMouseEvent')).toHaveLength(0)
+
+    /*
+     * And the agent, throughout. The baton never left `human`, so every verb it
+     * has is still refused at the mechanism — which is the property the taker was
+     * built not to touch.
+     */
+    await expect(rig.drive.outline(20, 200, target)).rejects.toThrow()
+    await expect(rig.drive.probe('#password', target)).rejects.toThrow()
+
+    // Done, carry on: the baton comes back and the blocked call reports `resumed`.
+    expect(await rig.drive.handBackHandover(target, 'phone', true)).toEqual({ ok: true })
+    expect((await asked).outcome).toBe('resumed')
+    expect(rig.drive.handoverHolding(target)).toEqual({ asking: false, prompt: '', taker: null })
+    expect(rig.drive.status().state).toBe('agent')
+
+    // The curtain is off for everybody, not only for whoever had taken it.
+    rig.drive.ackCast(target, 'laptop', rig.laptop[rig.laptop.length - 1].seq)
+    rig.fp.fire('Page.screencastFrame', frame())
+    expect(rig.laptop[rig.laptop.length - 1].masked).toBeUndefined()
+  })
+
+  it('refuses a hand-back from a watcher that is not the one holding it', async () => {
+    /*
+     * The one that would be quiet and wrong. Two phones on one page: without this
+     * the second could press Done on behalf of the person halfway through typing
+     * a password, and the agent would resume driving a half-filled form.
+     */
+    const rig = driveWithTwoWatchers()
+    await bothWatching(rig)
+    const asked = rig.drive.handover('Sign in and then press Done.', 60_000, target)
+    await new Promise((r) => setTimeout(r, 0))
+    await rig.drive.takeHandover(target, 'phone')
+
+    const stolen = await rig.drive.handBackHandover(target, 'laptop', true)
+    expect(stolen.ok).toBe(false)
+    expect(stolen.reason).toContain('not yours to hand back')
+    // Nothing moved: the question is still outstanding and still theirs.
+    expect(rig.drive.handoverHolding(target)).toMatchObject({ asking: true, taker: 'phone' })
+    expect(rig.drive.status().state).toBe('human')
+
+    await rig.drive.handBackHandover(target, 'phone', true)
+    expect((await asked).outcome).toBe('resumed')
+  })
+
+  it('ends the drive when the answer is “stop, I’ll take it from here”', async () => {
+    /*
+     * `carryOn: false` is a refusal to the agent rather than a resume, which is
+     * why it releases the slot instead of returning the baton. Routed into the
+     * same `resume(false)` the desktop banner calls — a second copy of that
+     * sequence here is how the two halves come to disagree about what Done means.
+     */
+    const rig = driveWithTwoWatchers()
+    await bothWatching(rig)
+    const asked = rig.drive.handover('Sign in and then press Done.', 60_000, target)
+    await new Promise((r) => setTimeout(r, 0))
+    await rig.drive.takeHandover(target, 'phone')
+
+    expect(await rig.drive.handBackHandover(target, 'phone', false)).toEqual({ ok: true })
+    expect((await asked).outcome).toBe('stopped')
+    expect(rig.drive.status().state).toBe('idle')
+    expect(rig.drive.handoverHolding(target)).toEqual({ asking: false, prompt: '', taker: null })
+  })
+
+  it('curtains a watcher that arrives after the person was handed the page', async () => {
+    /*
+     * A phone that reconnected mid-handover, or one that rotated. It used to be
+     * refused outright — *"the person has this page right now"*, said to the one
+     * screen the question was for — which threw the handover away on a rotation
+     * and left a reconnecting phone unable to see or answer it.
+     */
+    const rig = driveWithTwoWatchers()
+    const asked = rig.drive.handover('Type the code from your phone.', 60_000, target)
+    await new Promise((r) => setTimeout(r, 0))
+
+    const late: Array<{ masked?: true; prompt?: string; data: string }> = []
+    const result = await rig.drive.startCast({
+      target,
+      watcherId: 'phone',
+      window: 'B1',
+      options: { maxWidth: 800, quality: 50 },
+      emit: (f) => late.push({ masked: f.masked, prompt: f.prompt, data: f.data }),
+    })
+    expect(result.ok).toBe(true)
+    // It gets the question, drawn as a lock card — not pixels, and not silence.
+    expect(late).toHaveLength(1)
+    expect(late[0].masked).toBe(true)
+    expect(late[0].data).toBe('')
+    expect(late[0].prompt).toContain('Type the code')
+    // …and it can now answer it, which is the entire point of letting it watch.
+    expect(await rig.drive.takeHandover(target, 'phone')).toEqual({ ok: true })
+    await rig.drive.handBackHandover(target, 'phone', true)
+    expect((await asked).outcome).toBe('resumed')
+  })
+
   it('curtains every watcher of a page when the person is handed it', async () => {
     const fp = fakePage()
     const drive = new BrowserDrive({

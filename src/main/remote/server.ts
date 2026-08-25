@@ -761,6 +761,24 @@ export interface RemoteConnection {
   tunnels: TunnelInfo[]
 }
 
+/**
+ * Who holds the handover on one window — the host half of
+ * {@link BrowserHandoverStateFrame}.
+ *
+ * Everything on the wire frame except `mine`, which is not a property of the
+ * page: the same state is *mine* for one recipient and not for the others, so
+ * the engine answers `taker` and this file turns it into `mine` per connection
+ * as it writes. That split is the frame's own argument, kept on this side of it.
+ */
+export interface HandoverState {
+  /** Is a handover outstanding on this window at all? */
+  asking: boolean
+  /** The agent's own sentence, already sanitised by the driver. */
+  prompt: string
+  /** The `watcherId` — which is a connection id — that answered it, or null. */
+  taker: string | null
+}
+
 /** One watchable surface — a row of the browser's tab strip, as data. */
 export interface ScreencastSurface {
   window: string
@@ -804,6 +822,37 @@ export interface ScreencastHost {
     watcherId: string
     window: string
     frame: BrowserInputFrame
+  }): Promise<{ ok: boolean; reason?: string }>
+  /**
+   * Who holds the handover on one window.
+   *
+   * Read on demand rather than pushed at this file, because it is three fields
+   * off a slot the driver already holds and the alternative — a subscription
+   * from the engine into the endpoint — would be a second fan-out beside the one
+   * `tellHandover` already is.
+   */
+  handover(window: string): Promise<HandoverState> | HandoverState
+  /**
+   * One watcher answers an outstanding handover: *that person is me*.
+   *
+   * Decides nothing about permission — `server.ts` has already checked the
+   * window-grants axis before calling. What this refuses is about the *page*: no
+   * handover outstanding, the window not being cast, the connection not one of
+   * its watchers, or somebody else already holding it.
+   */
+  take(input: { watcherId: string; window: string }): Promise<{ ok: boolean; reason?: string }>
+  /**
+   * The taker hands it back — `carryOn` true to return the baton to the agent,
+   * false to end the drive.
+   *
+   * Refused for a connection that is not the taker, which is the rule that stops
+   * a second phone handing a page back on behalf of the person typing a password
+   * into it.
+   */
+  handBack(input: {
+    watcherId: string
+    window: string
+    carryOn: boolean
   }): Promise<{ ok: boolean; reason?: string }>
   /** The watchable surfaces — the browser's tab strip, as data. */
   surfaces(): Promise<ScreencastSurface[]> | ScreencastSurface[]
@@ -1007,6 +1056,11 @@ export interface RemoteEndpointOptions {
    * machine's, so `''` is its front tab and `B2` is one of its slots, the same
    * naming the driver keeps. Wired in `src/headless/host.ts` over the same
    * `BrowserDrive` the `serveWindows` path drives.
+   *
+   * It is also the engine behind the **handover** — the copilot asking for a
+   * person, answered from the phone that is watching rather than from a banner
+   * nobody is standing in front of. Same three rules: it decides no permission,
+   * it touches no socket, and it is addressed by window name.
    */
   screencast?: ScreencastHost
   /**
@@ -1329,6 +1383,24 @@ export interface RemoteEndpoint {
    */
   surfacesChanged(): number
   /**
+   * A handover moved on this machine's browser — the agent asked for a person,
+   * somebody answered, or somebody handed the page back. Push
+   * `browser.handover.state` to every connection watching the window, and return
+   * how many were told.
+   *
+   * The case that needs it is the **start**: `browser.handover` is a conversation
+   * between an agent and the driver that this endpoint is no part of, so without
+   * a fan-out the phone watching the page gets a lock card and never learns there
+   * is a question under it that it is allowed to answer. Both hosts fire this off
+   * the drive status they already publish.
+   *
+   * With no `window` it pushes about every window every eligible connection is
+   * watching, which is what a host firing off a drive-status change can honestly
+   * say — the status names one slot, and nothing at that layer maps a slot to the
+   * name a watcher knows it by. Read `tellHandover`.
+   */
+  handoverChanged(window?: string): number
+  /**
    * The device roster moved — a device paired, was approved, or was revoked.
    * Push `devices.changed` to every connection that may hear it, and return how
    * many were told.
@@ -1447,6 +1519,24 @@ export interface RemoteServer {
    * never appeared in the list on that phone.
    */
   surfacesChanged(): number
+  /**
+   * A handover moved on this machine's browser — the agent asked for a person,
+   * somebody answered, or somebody handed the page back. Push
+   * `browser.handover.state` to every connection watching the window, and return
+   * how many were told.
+   *
+   * The case that needs it is the **start**: `browser.handover` is a conversation
+   * between an agent and the driver that this endpoint is no part of, so without
+   * a fan-out the phone watching the page gets a lock card and never learns there
+   * is a question under it that it is allowed to answer. Both hosts fire this off
+   * the drive status they already publish.
+   *
+   * With no `window` it pushes about every window every eligible connection is
+   * watching, which is what a host firing off a drive-status change can honestly
+   * say — the status names one slot, and nothing at that layer maps a slot to the
+   * name a watcher knows it by. Read `tellHandover`.
+   */
+  handoverChanged(window?: string): number
   /**
    * The device roster moved. Push `devices.changed` to every eligible
    * connection; zero when the server is down or none may hear it.
@@ -4455,6 +4545,129 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
   }
 
   /**
+   * One window's handover state, addressed to one connection.
+   *
+   * Here rather than at each of the four places that send it, because two of its
+   * five fields are derived from the same `taker` and they are **not** the same
+   * question:
+   *
+   *  - `mine` — *may I type into this page?* True for exactly one recipient.
+   *  - `taken` — *does anybody hold it?* The same answer for everybody.
+   *
+   * `asking && !mine` used to be the only way a client could ask the second one,
+   * and it is two situations wearing one face: *nobody has answered, the button
+   * is yours* and *another phone is typing the password right now*. A client
+   * could only separate them by inferring ownership from the shape of the traffic
+   * — a second unsolicited push while the question stayed open — which works and
+   * is a guess, and read backwards is either a button that deadlocks a waiting
+   * agent or two people in one password field. The host knows the answer, so the
+   * host says it, in one place.
+   */
+  function handoverFrameFor(
+    connection: LiveConnection,
+    window: string,
+    state: HandoverState,
+    rid?: string,
+  ): Extract<ServerMessage, { t: 'browser.handover.state' }> {
+    return {
+      t: 'browser.handover.state',
+      ...(rid === undefined ? {} : { rid }),
+      window,
+      asking: state.asking,
+      prompt: state.prompt,
+      mine: state.taker !== null && state.taker === connection.id,
+      taken: state.taker !== null,
+    }
+  }
+
+  /**
+   * Push *who holds the handover* to every connection watching a window.
+   *
+   * ## What this is for
+   *
+   * `browser.handover` is the copilot saying it needs a person. Against a server
+   * watched from a phone, that person is the one holding the phone — and the only
+   * thing they were sent was a lock card, because the curtain and the baton were
+   * both written for a desktop where the person is already at the keyboard. This
+   * frame is what turns that lock card into a question with a button under it.
+   *
+   * The **start** of a handover is the case that needs a push rather than an
+   * answer: the agent asks, the driver curtains, and nothing on this endpoint was
+   * part of that conversation. Both hosts fire `handoverChanged()` off the drive
+   * status they already publish. The other moves — a take, a hand-back, a taker's
+   * socket closing — are seen here and pushed from where they happen.
+   *
+   * ## Per connection, computed at send time
+   *
+   * `mine` is the only per-recipient field on the frame, and it is why the state
+   * is read once per *window* and written once per *connection*: two phones on one
+   * page get the same `asking` and the same `prompt` and opposite `mine`, which is
+   * exactly what stops the second one offering a button that the tap would be
+   * refused from.
+   *
+   * Both gates are the ones `browser.watch` rides and both are re-read inside the
+   * loop, the property `tellSurfaces` and `tellDevices` state: a device demoted to
+   * a guest, or one whose window grant was cleared between the handover starting
+   * and this loop, hears nothing about a page it may no longer watch.
+   *
+   * With `window` given, only that window is pushed — the shape a take or a
+   * hand-back wants, because exactly one window moved. With none, every window
+   * every eligible connection is watching, which is what a host firing off a
+   * drive-status change can honestly say: the status names one slot and this file
+   * has no map from a slot to a wire name.
+   *
+   * `except` is the connection that caused the move. It has already been answered
+   * on its own `rid`, and the answer carries the same state this push would; a
+   * second copy of it arriving unsolicited is a client having to work out that
+   * the two say the same thing. So a take or a hand-back answers the asker and
+   * pushes to *everybody else*.
+   *
+   * Asynchronous and unawaited like the fan-out beside it. A state that could not
+   * be read is a push that does not happen, never a throw into a driver's event.
+   */
+  function tellHandover(window?: string, except?: string): number {
+    const cast = options.screencast
+    if (!cast) return 0
+    const listeners = [...live.values()].filter(
+      (connection) =>
+        connection.deviceId !== '' && connection.id !== except && mayWatchNow(connection),
+    )
+    if (listeners.length === 0) return 0
+    /*
+     * The union of what they are watching, so one window is read once however
+     * many connections are looking at it. A `window` argument narrows it to the
+     * one that moved — and still only to the connections actually watching that
+     * one, because a frame about a window a device never asked for is a frame it
+     * has no viewer to draw.
+     */
+    const windows = new Set<string>()
+    for (const connection of listeners) {
+      for (const watched of connection.watching) {
+        if (window === undefined || watched === window) windows.add(watched)
+      }
+    }
+    if (windows.size === 0) return 0
+    let told = 0
+    for (const name of windows) {
+      const audience = listeners.filter((connection) => connection.watching.has(name))
+      told += audience.length
+      void Promise.resolve(cast.handover(name))
+        .then((state) => {
+          for (const connection of audience) {
+            // Re-checked here rather than trusted from the filter above: reading
+            // the state is a round trip to a browser, and a socket can close or a
+            // grant can be cleared inside it.
+            if (!live.has(connection.id) || !mayWatchNow(connection)) continue
+            if (!connection.watching.has(name)) continue
+            send(connection, handoverFrameFor(connection, name, state))
+          }
+        })
+        .catch(() => undefined)
+    }
+    return told
+  }
+
+  /**
    * Push the device roster to every connection that may hear it, without waiting
    * for one to ask. Fired when a device pairs, is approved, or is revoked.
    *
@@ -6198,7 +6411,44 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
             },
           })
           .then((result) => {
-            if (!result.ok) connection.watching.delete(window)
+            if (!result.ok) {
+              connection.watching.delete(window)
+              return
+            }
+            /*
+             * **The question, replayed to a viewer that arrived after it was
+             * asked.**
+             *
+             * Nothing else replays it. `browser.handover.state` is a push, and
+             * every push there is fires on a *change* — so a connection that
+             * begins watching a window with a handover already outstanding is
+             * shown a curtained page, an agent's sentence printed inside a lock
+             * card, and no indication that the question is one it is allowed to
+             * answer. It would find out at the next state move, which on a
+             * question waiting for this very device is never.
+             *
+             * Two ordinary cases land here and both were dead ends before it: a
+             * phone that backgrounded and came back with a new connection id and
+             * an empty watch set, and a viewer *renegotiating* — a rotation is a
+             * second `browser.watch`. The driver's side of both is why
+             * `BrowserDrive.startCast` no longer refuses a page the person holds;
+             * this is the other half, and without it that half only buys a lock
+             * card with no button under it.
+             *
+             * Gated by the same two things every other handover push is, re-read
+             * here rather than trusted from the top of the handler: the read is a
+             * round trip to a browser and a socket can close or a grant can be
+             * cleared inside it. `asking: false` is sent as readily as `true` —
+             * it is the frame that tells a viewer to draw no button at all, and a
+             * client that got nothing would have to decide what silence meant.
+             */
+            void Promise.resolve(cast.handover(window))
+              .then((state) => {
+                if (!live.has(connection.id) || !mayWatchNow(connection)) return
+                if (!connection.watching.has(window)) return
+                send(connection, handoverFrameFor(connection, window, state))
+              })
+              .catch(() => undefined)
           })
           .catch(() => {
             connection.watching.delete(window)
@@ -6239,6 +6489,74 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
         void Promise.resolve(
           cast.input({ watcherId: connection.id, window: message.window, frame: message }),
         ).catch(() => undefined)
+        return
+      }
+      case 'browser.handover.take': {
+        /*
+         * *That person is me.* [wave-3 follow-on]
+         *
+         * The phone answering a `browser.handover` it is watching. Gated on the
+         * **same axis** `browser.watch` rides and one more the input path already
+         * takes: a device may only take a window it is watching. Taking a page you
+         * cannot see is not a thing to allow, and the pixels the taker is about to
+         * be shown are the ones already flowing down this connection.
+         *
+         * Answered rather than dropped, unlike `browser.watch`. A watch that is
+         * refused shows itself — no frames arrive — but a *take* that vanished
+         * would leave a button that does nothing, so the reply is the state as it
+         * actually is: `mine: false` and `asking` whatever it is, which is a
+         * client's cue to put the button back or take it away.
+         *
+         * Then the same state to everybody **else** watching it, so a second phone
+         * learns the question has an owner instead of offering to answer it twice.
+         */
+        const cast = options.screencast
+        if (!cast || !mayWatchNow(connection)) return
+        if (!connection.watching.has(message.window)) return
+        const window = message.window
+        const rid = message.rid
+        void Promise.resolve(cast.take({ watcherId: connection.id, window }))
+          .catch(() => undefined)
+          .then(() => Promise.resolve(cast.handover(window)))
+          .then((state) => {
+            if (!live.has(connection.id) || !mayWatchNow(connection)) return
+            send(connection, handoverFrameFor(connection, window, state, rid))
+            tellHandover(window, connection.id)
+          })
+          .catch(() => undefined)
+        return
+      }
+      case 'browser.handover.done': {
+        /*
+         * *Done, carry on* — or *stop, I'll take it from here*.
+         *
+         * The same two gates, and the refusal that matters is one layer in:
+         * `ScreencastHost.handBack` obeys only the connection that actually holds
+         * the handover. A `done` from a second watcher is refused rather than
+         * obeyed, because otherwise a phone that happened to be looking at the
+         * page could hand it back on behalf of the person halfway through typing a
+         * password into it, and the agent would resume driving a half-filled form.
+         *
+         * The answer and the push are the same pair `take` sends, for the same
+         * reason: this connection needs to know whether its Done did anything, and
+         * every other watcher needs to know the question is over.
+         */
+        const cast = options.screencast
+        if (!cast || !mayWatchNow(connection)) return
+        if (!connection.watching.has(message.window)) return
+        const window = message.window
+        const rid = message.rid
+        void Promise.resolve(
+          cast.handBack({ watcherId: connection.id, window, carryOn: message.carryOn }),
+        )
+          .catch(() => undefined)
+          .then(() => Promise.resolve(cast.handover(window)))
+          .then((state) => {
+            if (!live.has(connection.id) || !mayWatchNow(connection)) return
+            send(connection, handoverFrameFor(connection, window, state, rid))
+            tellHandover(window, connection.id)
+          })
+          .catch(() => undefined)
         return
       }
       case 'browser.surfaces': {
@@ -6436,8 +6754,22 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
          * claimed by a watcher that no longer existed, and the next connection
          * asking for the same window found a cast nobody could ack.
          */
+        /*
+         * Remembered before the set is cleared, because a socket that closed may
+         * have been holding a **handover**, and the watchers left behind have to
+         * be told. `PageCast.untake` puts the curtain back on the machine side —
+         * a taker that went into a tunnel must not leave a half-filled login form
+         * unmasked for whoever watches next — and this is the other half of that:
+         * the frame that takes *somebody else has this* off the second phone's
+         * screen and offers it the button instead.
+         */
+        const wasWatching = [...connection.watching]
         connection.watching.clear()
-        void Promise.resolve(options.screencast?.dropWatcher(connection.id)).catch(() => undefined)
+        void Promise.resolve(options.screencast?.dropWatcher(connection.id))
+          .then(() => {
+            for (const window of wasWatching) tellHandover(window)
+          })
+          .catch(() => undefined)
         if (deviceId !== null) {
           // After the delete above, so the proxy's own "is it still reachable"
           // check cannot see the socket that has just gone. A git waiting on a
@@ -6643,6 +6975,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     foldersChanged: tellFolders,
     sessionsChanged: tellSessions,
     surfacesChanged: tellSurfaces,
+    handoverChanged: (window?: string) => tellHandover(window),
     rosterChanged: tellRoster,
     windowsHeldChanged: tellWindowsHeld,
     copilotGrantChanged: tellCopilotGrant,
@@ -7339,6 +7672,7 @@ export function createRemoteServer(options: RemoteServerOptions): RemoteServer {
     // one reads the list it missed in its `welcome` the next time it is.
     sessionsChanged: () => endpoint?.sessionsChanged() ?? 0,
     surfacesChanged: () => endpoint?.surfacesChanged() ?? 0,
+    handoverChanged: (window?: string) => endpoint?.handoverChanged(window) ?? 0,
     // Same rule, same reason: with the server down there is no socket to push a
     // roster on, and every eligible device reads the current one in its next
     // `welcome`.

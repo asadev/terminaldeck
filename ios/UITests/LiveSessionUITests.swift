@@ -98,9 +98,15 @@ final class LiveSessionUITests: XCTestCase {
     func testTheKeyBarSendsToTheSession() throws {
         try sessionRows().first!.tap()
 
-        let keyboard = app.buttons["terminal.keyboard"]
-        XCTAssertTrue(keyboard.waitForExistence(timeout: 10), "the terminal screen should appear")
-        keyboard.tap()
+        // A tap on the terminal raises the keyboard, and it is the only thing
+        // that does since the toolbar's keyboard button was deleted — *"we don't
+        // need keyboard button also, even in terminal pages, even on copilot
+        // pages."* `TerminalScreen.onAppear` wires the tap to `focus()` rather
+        // than leaving it to SwiftTerm's own recogniser; `MultiHostUITests`
+        // carries the measurement that made that necessary.
+        let terminal = app.descendants(matching: .any).matching(identifier: "terminal.view").firstMatch
+        XCTAssertTrue(terminal.waitForExistence(timeout: 10), "the terminal screen should appear")
+        terminal.tap()
 
         // The bar is the reason a terminal is usable on a phone, and these are
         // the keys that never move: none of them exists on an iOS keyboard, and

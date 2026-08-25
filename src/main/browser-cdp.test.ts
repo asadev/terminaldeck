@@ -10,8 +10,10 @@ import {
   isDrivableUrl,
   SCREENED_FULFIL_HEADERS,
   SCREENED_RESOURCE_TYPES,
+  PERSON_METHODS,
   screenCommand,
   screenHistoryEntry,
+  screenPersonCommand,
   type DriveState,
 } from './browser-cdp'
 
@@ -73,10 +75,38 @@ describe('the debugger channel is not reachable from anywhere else', () => {
     // which screens it first. Matching the text rather than the behaviour is the
     // point: `page.send(` reached without the screen ahead of it would fail here.
     const driver = source('browser-driver.ts')
-    const sendBody = driver.slice(driver.indexOf('private async send('), driver.indexOf('private async input('))
+    const sendBody = driver.slice(driver.indexOf('private async send('), driver.indexOf('private async sendAsPerson('))
     expect(sendBody).toContain('screenCommand(')
     expect(sendBody).toContain('page.send(')
     expect(sendBody.indexOf('screenCommand(')).toBeLessThan(sendBody.indexOf('page.send('))
+  })
+
+  it('has exactly two doors onto that transport, and the second screens with the person’s rules', () => {
+    /*
+     * The handover door, pinned by enumeration the way the first one is.
+     *
+     * A person answering a `browser.handover` from a phone has to be able to type
+     * into the page, and the baton refuses the agent's `send` for exactly as long
+     * as they hold it. That could have been a flag on `screenCommand`, and a flag
+     * would have turned the mechanism back into a policy — every caller one edit
+     * from passing it, and this grep proving nothing. So it is a second function
+     * with the inverse condition, and what is asserted here is that there are
+     * **two** ways to reach the transport in this file and no more, and that the
+     * second one screens before it dispatches exactly as the first does.
+     */
+    const driver = source('browser-driver.ts')
+    expect(driver.match(/page\.send\(/g) ?? []).toHaveLength(2)
+    const personBody = driver.slice(
+      driver.indexOf('private async sendAsPerson('),
+      driver.indexOf('/**\n   * Send an input event.'),
+    )
+    expect(personBody).toContain('screenPersonCommand(')
+    expect(personBody).toContain('page.send(')
+    expect(personBody.indexOf('screenPersonCommand(')).toBeLessThan(personBody.indexOf('page.send('))
+    // And it screens with the person's rules, never the agent's — a `sendAsPerson`
+    // that reached for `screenCommand` would be a door that refuses every caller
+    // it exists for.
+    expect(personBody).not.toContain('screenCommand({')
   })
 
   /*
@@ -896,6 +926,118 @@ describe('the screencast is allow-listed on both transports and its arguments ar
   it('refuses the whole cast while the person has the page, reads and input alike', () => {
     for (const method of ['Page.startScreencast', 'Page.stopScreencast', 'Page.screencastFrameAck', 'Input.dispatchTouchEvent']) {
       expect(screenCommand({ transport: 'cdp', state: 'human', method, params: cast }).ok).toBe(false)
+    }
+  })
+})
+
+/* ------------------------------------------------------- the other door -- */
+
+/**
+ * The person's own hands, and why they are a second door rather than a hole in
+ * the first.
+ *
+ * `screenCommand`'s baton refusal is the whole enforcement story for a password:
+ * during `human` the agent is shut out of reads as well as writes, at a
+ * mechanism rather than by a policy. Everything above pins that, and nothing
+ * below weakens it — the tests here are about a *different function* with the
+ * exact inverse condition on it.
+ *
+ * The shape being asserted is: agent-send refuses while a person holds the page,
+ * person-send refuses unless a person holds it, and the two allow-lists do not
+ * grow into each other. A phone watching a server is the person the copilot
+ * asked for; this is the only way its keystrokes reach the page.
+ */
+describe('the door a person answering a handover types through', () => {
+  const cast = { format: 'jpeg', quality: 50, maxWidth: 800 }
+
+  it('refuses everything unless somebody has actually been handed the page', () => {
+    // The mirror image of "refuses everything while the person has the page".
+    // A person-send outside a handover has no standing, whatever it names.
+    for (const state of ['idle', 'agent'] as DriveState[]) {
+      for (const method of PERSON_METHODS) {
+        const verdict = screenPersonCommand({ state, method, params: cast })
+        expect(verdict.ok).toBe(false)
+        if (!verdict.ok) expect(verdict.reason).toContain('nobody has been handed this page')
+      }
+    }
+  })
+
+  it('carries the taps, the keystrokes and the view while the person holds it', () => {
+    expect(screenPersonCommand({ state: 'human', method: 'Input.dispatchMouseEvent', params: { type: 'mousePressed', x: 1, y: 2 } }).ok).toBe(true)
+    expect(screenPersonCommand({ state: 'human', method: 'Input.dispatchKeyEvent', params: { type: 'char', text: 'a' } }).ok).toBe(true)
+    expect(screenPersonCommand({ state: 'human', method: 'Input.insertText', params: { text: 'hunter2' } }).ok).toBe(true)
+    /*
+     * And the three that are the *seeing* rather than the typing. They are on the
+     * list because `curtain()` stops the screencast before the baton flips, and
+     * because CDP's screencast is ack-driven — so without them the person would
+     * hold a live keyboard over a page frozen at one frame, or at none.
+     */
+    expect(screenPersonCommand({ state: 'human', method: 'Page.startScreencast', params: cast }).ok).toBe(true)
+    expect(screenPersonCommand({ state: 'human', method: 'Page.screencastFrameAck', params: { sessionId: 1 } }).ok).toBe(true)
+    expect(screenPersonCommand({ state: 'human', method: 'Page.stopScreencast', params: {} }).ok).toBe(true)
+  })
+
+  it('is not a second copy of the agent’s reach', () => {
+    /*
+     * The claim that matters. A person on a phone is being lent a pointer and a
+     * keyboard over a page they are already being shown — never navigation, never
+     * evaluation, never the network, never a screenshot, and never the cookie
+     * read the CDP transport allows an agent.
+     */
+    for (const method of [
+      'Page.navigate',
+      'Runtime.evaluate',
+      'Runtime.callFunctionOn',
+      'Page.captureScreenshot',
+      'Network.getCookies',
+      'Fetch.enable',
+      'Target.createTarget',
+      'Browser.setDownloadBehavior',
+      'Input.setIgnoreInputEvents',
+    ]) {
+      const verdict = screenPersonCommand({ state: 'human', method })
+      expect(verdict.ok).toBe(false)
+      if (!verdict.ok) expect(verdict.reason).toContain('a person answering a handover may send')
+    }
+  })
+
+  it('screens the two arguments that carry a capability, with the same rules', () => {
+    // One spelling of each rule, shared with the agent's door rather than copied.
+    expect(screenPersonCommand({ state: 'human', method: 'Page.startScreencast', params: { ...cast, format: 'png' } }).ok).toBe(false)
+    expect(screenPersonCommand({ state: 'human', method: 'Page.startScreencast', params: { ...cast, quality: 0 } }).ok).toBe(false)
+    const many = Array.from({ length: 11 }, (_, i) => ({ x: i, y: i }))
+    expect(screenPersonCommand({ state: 'human', method: 'Input.dispatchTouchEvent', params: { type: 'touchStart', touchPoints: many } }).ok).toBe(false)
+    expect(screenPersonCommand({ state: 'human', method: 'Input.dispatchTouchEvent', params: { type: 'touchEnd', touchPoints: [] } }).ok).toBe(true)
+  })
+
+  it('names nothing an agent could not already have sent on either transport', () => {
+    /*
+     * The subset property the person door's own comment claims, asserted rather
+     * than asserted-in-prose. It is why that function takes no `transport`: every
+     * method on its list is already permitted to an agent by *both* tables, so
+     * the door can only ever be narrower than either of them.
+     */
+    const electron = new Set(ALLOWED_METHODS)
+    const cdp = new Set(CDP_ALLOWED_METHODS)
+    for (const method of PERSON_METHODS) {
+      expect(electron.has(method), `${method} missing from the electron table`).toBe(true)
+      expect(cdp.has(method), `${method} missing from the cdp table`).toBe(true)
+    }
+  })
+
+  it('leaves the agent’s refusal exactly where it was', () => {
+    /*
+     * The rule that must not bend, restated from this side. Adding a second door
+     * must not have widened the first one by a single method: during `human` the
+     * agent is still refused everything, reads included, and that includes the
+     * seven the person may send.
+     */
+    for (const method of PERSON_METHODS) {
+      for (const transport of ['electron', 'cdp'] as const) {
+        const verdict = screenCommand({ transport, state: 'human', method, params: cast })
+        expect(verdict.ok).toBe(false)
+        if (!verdict.ok) expect(verdict.reason).toContain('the person is using this page')
+      }
     }
   })
 })

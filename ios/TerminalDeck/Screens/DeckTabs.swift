@@ -126,27 +126,6 @@ struct DeckTabs: View {
                             switch route {
                             case let .session(host, id):
                                 TerminalScreen(model: model, hostID: host, sessionID: id)
-                                    /*
-                                     * **The copilot's controls, on the screen it
-                                     * lands you on.**
-                                     *
-                                     * The tab now opens straight into a session
-                                     * in chat mode, so this terminal *is* the
-                                     * Copilot screen most of the time — and the
-                                     * gear has to be on it, or it disappears
-                                     * exactly when somebody is looking at the
-                                     * thing it configures.
-                                     *
-                                     * Here rather than in `TerminalScreen`
-                                     * because the same screen is pushed from
-                                     * both stacks and only this file knows which
-                                     * one it is on. The identical line at the
-                                     * Sessions stack's destination below is
-                                     * deliberately absent: a terminal reached
-                                     * from the session list is a session, not a
-                                     * copilot.
-                                     */
-                                    .copilotControlsButton(model: model, hostID: host)
                             }
                         }
                 }
@@ -257,6 +236,10 @@ struct DeckTabs: View {
                             ServerDetailView(model: model, serverId: id)
                         case let .machine(id):
                             MachineDetailView(model: model, hostID: id)
+                        case .copilot:
+                            if let host = model.current {
+                                CopilotControlView(model: model, hostID: host.id)
+                            }
                         case .terminalTheme:
                             TerminalThemeView()
                         }
@@ -378,7 +361,51 @@ private struct CopilotTabScreen: View {
 
     var body: some View {
         if let host = model.current {
-            CopilotView(model: model, hostID: host.id)
+            if let session = CopilotOnServer.tabSession(for: host) {
+                /*
+                 * **The Copilot tab is the conversation.**
+                 *
+                 * > *"This page needs to go. It should directly land in terminal
+                 * > or chat mode, and user can set its default from settings."*
+                 *
+                 * Said over a photograph of the screen this branch replaces: a
+                 * headline, and a row reading *Open the conversation*. A tab
+                 * whose job is to put somebody in a conversation, offering a
+                 * button that puts them in the conversation, had not done its
+                 * job — and for two rounds the way it *did* do it was to write a
+                 * path onto `copilotRoute` at the moment the tab was still
+                 * transitioning on screen, which SwiftUI discards. Everything
+                 * built to survive that — a retry loop, a clock that told a
+                 * discarded path from a person pressing Back — is deleted with
+                 * the push, because the content of a view body is not something
+                 * SwiftUI reverts.
+                 *
+                 * `leaveTab` is the other half. There is no chevron over a tab's
+                 * root and no gesture that pops one, so the screen draws its own,
+                 * and it goes where the copilot's has always gone:
+                 * `DeckModel.leaveCopilot()`, to whichever tab this one was
+                 * entered from. **One press, out of the tab** — which is what
+                 * Back does at the root of every other tab in the app, and which
+                 * is the whole of *"I cannot go back more than that."*
+                 *
+                 * The gear is applied here for the reason it always was: the same
+                 * screen is built from two stacks and only this file knows which.
+                 * The folder-recorder beside it is why starting a session unasked
+                 * is safe at all — see `CopilotFolderFromItsSession`.
+                 */
+                TerminalScreen(model: model,
+                               hostID: host.id,
+                               sessionID: session.id,
+                               leaveTab: { model.leaveCopilot() })
+                    .copilotFolderFromItsSession(model: model,
+                                                 hostID: host.id,
+                                                 sessionID: session.id)
+            } else {
+                // No conversation to show: the copilot's own screen, which on a
+                // server is the one that starts one and on a desktop is the
+                // copilot itself.
+                CopilotView(model: model, hostID: host.id)
+            }
         } else {
             // Unreachable while `RootView` gates on `isPaired`, and written out
             // rather than left as an `EmptyView` so that the day something else
@@ -1254,6 +1281,32 @@ struct DeckSettingsView: View {
                          * is. Nothing on a phone can move that, so nothing on a
                          * phone offers to.
                          */
+
+                        /*
+                         * **The copilot's settings, on the page that is a list
+                         * of settings.**
+                         *
+                         * > *"Let's move settings option for copilot to main
+                         * > settings page instead of inside the copilot page, so
+                         * > we can have three dots in left along with chat vs
+                         * > terminal switch."*
+                         *
+                         * Drawn only where there is a copilot to configure — the
+                         * same rule every machine-scoped row on this page keeps.
+                         * `showsCopilotTab` is that question already answered:
+                         * a machine with a copilot pill has a copilot, and one
+                         * without has nothing for this screen to set.
+                         */
+                        if model.showsCopilotTab {
+                            SettingsRow(title: "Copilot",
+                                        value: model.copilotSettingsValue,
+                                        icon: "sparkles") {
+                                model.settingsRoute.append(.copilot)
+                            }
+                            .accessibilityIdentifier("settings.copilot")
+
+                            SettingsDivider()
+                        }
 
                         SettingsRow(title: "GitHub",
                                     value: model.gitHubAccount.map { "@\($0.login)" } ?? "Not connected",

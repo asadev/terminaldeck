@@ -483,10 +483,15 @@ final class FindShareAndAlertsUITests: XCTestCase {
         XCTAssertTrue(more.waitForExistence(timeout: 10), "the session list should be showing")
     }
 
+    /// Raise the keyboard by tapping the terminal, which is the only way in since
+    /// the toolbar's keyboard button was deleted — *"we don't need keyboard
+    /// button also, even in terminal pages, even on copilot pages."* SwiftTerm's
+    /// own tap is what makes the view first responder; `TerminalGestures` adds
+    /// its recogniser alongside that one rather than in place of it.
     private func raiseTheKeyboard() {
-        let keyboard = app.buttons["terminal.keyboard"]
-        XCTAssertTrue(keyboard.waitForExistence(timeout: 20), "the terminal toolbar should be up")
-        if !app.buttons["keys.dismiss"].exists { keyboard.tap() }
+        let terminal = app.descendants(matching: .any).matching(identifier: "terminal.view").firstMatch
+        XCTAssertTrue(terminal.waitForExistence(timeout: 20), "the terminal screen should be up")
+        if !app.buttons["keys.dismiss"].exists { terminal.tap() }
         // The QuickPath tutorial the system keyboard puts up on a fresh
         // simulator sits over the bar. Nothing to do with this app.
         let continueButton = app.buttons["Continue"]

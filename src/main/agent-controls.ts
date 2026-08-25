@@ -118,6 +118,15 @@ import {
 } from '../shared/model-catalog'
 import { stripAnsi } from './session-activity'
 import { claudeConfigDir, listTranscripts, transcriptDirs } from './transcript'
+/*
+ * The one function in this repository that knows how to put a line back into a
+ * CLI's composer, and the rules it carries with it — two writes rather than
+ * one, and no trailing space on a line nobody is going to press Enter on. See
+ * {@link putBackDraft} for why the second write is never taken here. Imported
+ * rather than reimplemented on purpose: a second, weaker copy of this is how
+ * one of the two would drift.
+ */
+import { replayWrites } from './switch-later'
 
 /* -------------------------------------------------------------------------- */
 /* Types                                                                       */
@@ -208,7 +217,7 @@ export interface AgentPresence {
 export const NO_AGENT: AgentPresence = { running: false, evidence: null, saw: null }
 
 /**
- * Whether a command could be typed at this session *right now*, and why not.
+ * Whether a control could be applied at this session *right now*, and why not.
  *
  * ## Why the refusal had to become part of the reading
  *
@@ -223,27 +232,47 @@ export const NO_AGENT: AgentPresence = { running: false, evidence: null, saw: nu
  *
  * So the gate is read where every other value here is read — off the session's
  * own screen, on the same settle-and-re-read the rest of the panel already runs
- * — and the renderer can draw the control as unavailable *before* it is pressed,
- * quoting this sentence. There is exactly one place these words are written
- * (`refuseToType`), so the pre-click reason and the post-click refusal cannot
- * drift into two different explanations of one situation.
+ * — and the renderer can draw the control as unavailable *before* it is pressed.
  *
- * `canType` is deliberately not the same question as "is an agent running".
- * A session can hold Claude Code and still be un-typeable — mid-turn, or with a
- * dialog up, or with a draft in the composer — and all three are temporary. The
- * renderer is expected to treat this as a *state*, re-read on the next flush of
- * output, and not as a capability.
+ * ## A draft is no longer one of the reasons, and that is the point
+ *
+ * It used to be. `canType` went false the moment there was unsent text at the
+ * prompt, and the sentence that travelled with it told the reader to go and
+ * clear the prompt by hand. Asad opened the phone's Controls sheet, tapped
+ * **Model**, and got that paragraph where the list of models should have been:
+ *
+ *   > *"they are also not control they are just descriptions which i dont want
+ *   > always"*
+ *
+ * He is right, and the fix is not to word the paragraph better. The draft is
+ * already known — it is quoted in the sentence — and `switch-later.ts` has held
+ * a typed line across an action and replayed it afterwards since 0.8. So
+ * {@link readCarry} answers a different question from "is the composer empty":
+ * it answers *can this app take the keyboard, use it, and give it back*. A
+ * single-row draft it can see whole is `carry`, the gate stays **open**, and
+ * {@link carryDraft} lifts the line, runs the command and puts the line back
+ * unsent. Nothing is described at somebody who came to pick a model.
+ *
+ * What is left behind this flag is only what the app genuinely cannot clear: a
+ * turn in flight, a dialog that owns the keyboard, a prompt that is not on
+ * screen to be read, and a draft that spans more rows than can be read back.
+ * All four are states rather than capabilities — re-read on the next flush of
+ * output — and each one's `reason` is now **one short line** rather than a
+ * paragraph, because it is drawn beside a live control and not in place of one.
+ * The long-form explanation still exists and is still the only wording used
+ * after a press: see {@link refuseToType}, whose sentences and these come off
+ * the same {@link ComposerState}, so the two registers cannot come to describe
+ * different situations.
  *
  * `shift+tab` is the one thing this does not describe: `applyPermission` writes
  * a chord rather than characters, which was measured not to disturb a draft, so
- * a permission control may act while `canType` is false for the reason
- * `typing`. Nothing in the chrome offers permission today; a caller that adds
- * one must read {@link refuseToType}'s own gate rather than this flag.
+ * the permission cycle can act in states this flag refuses. It reads
+ * {@link refuseToType}'s own gate rather than this flag, and always has.
  */
 export interface ControlGate {
-  /** True when the composer is empty and unowned, so a command may be typed. */
+  /** True when a command could be typed, a draft being carried if there is one. */
   canType: boolean
-  /** {@link refuseToType}'s own sentence, or null when nothing is in the way. */
+  /** {@link readCarry}'s one short line, or null when nothing is in the way. */
   reason: string | null
 }
 
@@ -1580,20 +1609,28 @@ export async function readControls(
   const agent: AgentPresence = saw === null ? NO_AGENT : { running: true, evidence: 'screen', saw }
 
   /*
-   * Whether a command could be typed at this session this instant.
+   * Whether a control could be applied at this session this instant.
    *
-   * The same two functions `typeCommand` consults before it writes a byte, run
-   * here so the answer reaches the renderer *before* the click rather than as
-   * an apology after it — see {@link ControlGate}. A session with no screen at
-   * all is not "busy", it is gone, and `live` already says so; the sentence
+   * Read here so the answer reaches the renderer *before* the click rather than
+   * as an apology after it — see {@link ControlGate}. A session with no screen
+   * at all is not "busy", it is gone, and `live` already says so; the sentence
    * here matches the one `applyControl` opens with so the two cannot disagree.
+   *
+   * {@link readCarry} rather than {@link refuseToType}, and the difference is
+   * the whole of T9: a draft at the prompt no longer closes this gate, because
+   * {@link carryDraft} lifts it, runs the command and types it back unsent. What
+   * is left closing the gate is only what the app cannot clear for him, and each
+   * of those reasons is one short line, because the sheet draws it beside the
+   * option rows instead of in place of them.
    */
   const gate: ControlGate =
     screen === null
       ? { canType: false, reason: 'That session is no longer running.' }
       : ((): ControlGate => {
-          const refusal = refuseToType(readComposer(screen))
-          return { canType: refusal === null, reason: refusal }
+          const carry = readCarry(screen)
+          return carry.kind === 'refuse'
+            ? { canType: false, reason: carry.reason }
+            : { canType: true, reason: null }
         })()
 
   /*
@@ -1753,14 +1790,40 @@ async function waitForScreen<T>(
  * Both were driven against the real binary. `\x15` (ctrl+u) empties the
  * composer and the CLI itself then offers `Ctrl+Y to paste deleted text` in the
  * hint row above it, so the kill is recoverable *by the person at the
- * keyboard*. That is why the rollback below is allowed to use it, and also why
- * it is only ever used to take back this app's **own** keystrokes: relying on a
- * kill ring to restore somebody else's sentence would be betting their work on
- * an undocumented buffer surviving a command submission in between.
+ * keyboard*. That is why {@link typeCommand}'s rollback is allowed to use it.
+ *
+ * It used to say this was only ever pointed at this app's **own** keystrokes,
+ * on the grounds that leaning on a kill ring to restore somebody else's
+ * sentence would be betting their work on an undocumented buffer surviving a
+ * command submission in between. That reasoning still holds and is exactly why
+ * {@link carryDraft} does **not** lean on the kill ring: when it points ctrl+u
+ * at a line somebody else typed, it has already read that line off the screen
+ * and it types the line back itself afterwards. Ctrl+Y is the CLI's own second
+ * chance, not this app's plan.
  */
 const CLEAR_COMPOSER = '\x15'
 
-/** Why a command must not be typed into this session right now, or null. */
+/**
+ * Why a command must not be typed into this session right now, or null — the
+ * long form, for after a press.
+ *
+ * Two registers exist for these four states and this is the explanatory one. It
+ * is what a caller shows *once somebody has pressed something*: an apply that
+ * refused, a brief that could not be delivered (`deck-control/brief.ts`), a
+ * command whose echo never arrived. There is room for a sentence there, and the
+ * quoted draft or the quoted question is the most useful thing in it.
+ *
+ * {@link readCarry} is the other register, the one read *before* a press, and
+ * its lines are short because they are drawn beside a still-usable control. Both
+ * take the same {@link ComposerState}, so they can differ in length and cannot
+ * differ in what they are about.
+ *
+ * The `typing` sentence still says to clear the prompt, and that is still true
+ * wherever this is now reachable from the controls: {@link carryDraft} has
+ * already lifted every draft it could read whole, so a draft that gets this far
+ * is one that spans more rows than the screen gives back — which only the person
+ * at the keyboard can resolve.
+ */
 export function refuseToType(state: ComposerState): string | null {
   if (state.kind === 'ready') return null
   if (state.kind === 'working') {
@@ -1773,6 +1836,278 @@ export function refuseToType(state: ComposerState): string | null {
     return `There is unsent text at this session’s prompt (“${state.text}”). A command typed now would run into the middle of it, so nothing was sent — clear the prompt and pick again.`
   }
   return 'This session’s prompt is not on screen, so there is nowhere to type that could be checked first.'
+}
+
+/* ------------------------------------------------- carrying a draft over -- */
+
+/**
+ * What this app may do with the session's command line this instant.
+ *
+ * The question {@link refuseToType} asks is "is the composer empty and
+ * unowned". This asks the larger one that the Controls sheet actually needs:
+ * *can this app take the keyboard, use it, and give it back exactly as it
+ * found it.*
+ *
+ *  - `clear`  — nothing is on the line. Type straight into it.
+ *  - `carry`  — somebody's draft is on the line, and the whole of it can be
+ *               read back off the screen. {@link carryDraft} lifts it, runs the
+ *               command, and types it back unsent.
+ *  - `refuse` — the keyboard belongs to something else, or the draft cannot be
+ *               read whole. `reason` is **one short line**, because it is drawn
+ *               beside a live control rather than in place of one.
+ */
+export type ComposerCarry =
+  | { kind: 'clear' }
+  | { kind: 'carry'; draft: string }
+  | { kind: 'refuse'; reason: string }
+
+/**
+ * Whether the draft on the command line is all of the draft.
+ *
+ * {@link readComposer} reads exactly one row — the one carrying the pointer —
+ * and a draft is not always one row. A line longer than the terminal is wide
+ * wraps onto rows that carry no pointer, and shift+enter puts a second line in
+ * deliberately. In both cases the pointer row is a *prefix* of what the person
+ * typed, and lifting a prefix means ctrl+u destroys text this app never saw and
+ * cannot type back. That is the one outcome the whole draft-carrying path
+ * exists to make impossible.
+ *
+ * So the rows under the composer are looked at rather than assumed about. The
+ * CLI draws its command line between two box-drawing rules — the capture in
+ * `cli-screens.capture.json` shows the shape — so the row immediately after the
+ * pointer row is the closing rule when, and only when, the draft ended on the
+ * pointer row. Anything else sitting there is either the rest of his sentence
+ * or a popup drawn over the composer, and both mean "do not touch this".
+ *
+ * `lines()` has already dropped blank rows, so an empty gap cannot be mistaken
+ * for a continuation.
+ *
+ * It fails closed, like everything else here: an unfamiliar screen shape reads
+ * as "not whole", which costs a short line beside rows that stay on screen. The
+ * other direction costs somebody their sentence.
+ */
+function draftIsWhole(all: readonly string[], composerAt: number): boolean {
+  const under = all[composerAt + 1]
+  return under === undefined || STATUS_RULE.test(under)
+}
+
+/** Which row of the screen the command line is on, or -1. Read from the bottom,
+ * for the reason {@link readComposer} reads from the bottom: every message
+ * already sent is echoed behind the same pointer higher up. */
+function composerRow(all: readonly string[]): number {
+  for (let i = all.length - 1; i >= 0; i--) {
+    if (COMPOSER_LINE.test(all[i])) return i
+  }
+  return -1
+}
+
+/**
+ * The short lines, one per state, and the reason they are short.
+ *
+ * Asad, on the phone's Controls sheet opening onto {@link refuseToType}'s
+ * paragraph instead of onto the list of models:
+ *
+ *   > *"they are also not control they are just descriptions which i dont want
+ *   > always"*
+ *
+ * A sheet called Controls whose rows open onto prose is not a control panel. So
+ * where a block genuinely cannot be cleared by the app, what travels is a line
+ * that fits above the rows — and the rows stay. Nothing here instructs; each one
+ * states the fact, because the fact is the only thing the reader can act on.
+ */
+const SHORT_REFUSAL: Record<'working' | 'choosing' | 'typing' | 'unknown', string> = {
+  working: 'This session is mid-turn.',
+  choosing: 'This session is waiting on an answer on screen.',
+  typing: 'A multi-line draft is sitting at this prompt.',
+  unknown: 'This session’s prompt is not on screen.',
+}
+
+/** What this app may do with the command line, read off one screen. */
+export function readCarry(screen: string): ComposerCarry {
+  const state = readComposer(screen)
+  if (state.kind === 'ready') return { kind: 'clear' }
+  if (state.kind === 'working') return { kind: 'refuse', reason: SHORT_REFUSAL.working }
+  if (state.kind === 'choosing') return { kind: 'refuse', reason: SHORT_REFUSAL.choosing }
+  if (state.kind === 'unknown') return { kind: 'refuse', reason: SHORT_REFUSAL.unknown }
+  const all = lines(screen)
+  const at = composerRow(all)
+  if (at === -1 || !draftIsWhole(all, at)) return { kind: 'refuse', reason: SHORT_REFUSAL.typing }
+  return { kind: 'carry', draft: state.text }
+}
+
+/**
+ * Whether a line typed at this session right now would land on an empty command
+ * line and nowhere else.
+ *
+ * Narrower on purpose than {@link readCarry}, because it answers a different
+ * question. `readCarry` is asked before a command is *submitted*, so it has to
+ * care whether the CLI is in the middle of a turn — a return arriving then
+ * answers whatever the turn asks next. This is asked before a carried draft is
+ * typed *back*, and no return is coming: the two things that could go wrong are
+ * appending to a line somebody has started in the meantime, and typing at a
+ * dialog, which swallows the keystrokes and can filter its own list with them.
+ * Both are checked; the working marker deliberately is not.
+ *
+ * That omission is a trade rather than an oversight. The composer is the thing
+ * being written to and it is empty either way — the mid-turn capture in
+ * `agent-controls.live.test.ts` still draws the `❯` row with nothing on it —
+ * and refusing here would strand his sentence inside a message instead of at
+ * the prompt, which is the loss this whole path exists to prevent.
+ */
+function promptIsFree(screen: string): boolean {
+  const all = lines(screen)
+  for (const line of all) {
+    if (CHOICE_LINE.test(line)) return false
+  }
+  const at = composerRow(all)
+  if (at === -1) return false
+  const match = COMPOSER_LINE.exec(all[at])
+  return match !== null && match[1].trim() === ''
+}
+
+/**
+ * Put a carried draft back at the prompt, and say what became of it.
+ *
+ * ## Never with a return, and that is not a limitation
+ *
+ * `switch-later.ts` spends a whole extra state — its `Composing.exact` — on
+ * one question: is this copy of the line certain enough to press Enter on. It
+ * gets to ask that because it composed the line from the keystrokes as they
+ * were typed. This one did not: it read the line off a *screen*, which is a
+ * picture of the line rather than the line. A terminal screen cannot even
+ * record trailing spaces, so a round trip through it is inexact by
+ * construction.
+ *
+ * Which settles it rather than complicating it. In switch-later's own terms
+ * this copy is never `exact`, so it is never submitted — the draft goes back
+ * into the prompt and sits there for him to read and send, exactly as an
+ * inexact line does there. {@link replayWrites} is called with `submit` false
+ * for the same reason it exists: no Enter is coming, so the trailing space it
+ * adds to a line containing an `@` must not be added either. What lands in his
+ * prompt is what he typed.
+ *
+ * The answer is always a sentence, to be appended to whatever the CLI said —
+ * `carryDraft` is what supplies the empty string on the paths where there was
+ * no draft to carry. Never silence: a draft that could not be put back is quoted
+ * in full, because the one outcome that is not allowed here is his sentence
+ * disappearing without anybody being told where it went.
+ */
+async function putBackDraft(
+  access: SessionAccess,
+  sessionId: string,
+  draft: string,
+  timings: ApplyTimings,
+): Promise<string> {
+  const free = await waitForScreen(access, sessionId, timings.command, timings.poll, (later) =>
+    promptIsFree(later) ? true : null,
+  )
+  if (free === null) {
+    return `Your draft could not be put back at the prompt — it read “${draft}”.`
+  }
+  access.write(sessionId, replayWrites(draft, false)[0])
+  return 'Your draft is back at the prompt, unsent.'
+}
+
+/** A carried run's answer: what it ran, or why it never got to run. */
+type Carried<T> = { kind: 'ran'; value: T; note: string } | { kind: 'refused'; message: string }
+
+/** Join a control's own confirmation to whatever became of the draft. */
+function withNote(message: string, note: string): string {
+  return note === '' ? message : `${message} ${note}`
+}
+
+/**
+ * Run something that types at the session, lifting any draft out of the way
+ * first and putting it back afterwards.
+ *
+ * ## What this replaces
+ *
+ * A refusal. Every typed control used to stop dead at a draft and hand back
+ * {@link refuseToType}'s paragraph, which the phone then drew where the list of
+ * models should have been. Asad:
+ *
+ *   > *"they are also not control they are just descriptions which i dont want
+ *   > always"*
+ *
+ * So the obstacle is cleared by the app that can see it, rather than described
+ * to the person who cannot act on it from that sheet.
+ *
+ * ## The four steps, and why the second one is the safety
+ *
+ *  1. Read the screen and ask {@link readCarry}. Only a `carry` — a draft that
+ *     can be read whole — is touched. `clear` and `refuse` fall straight through
+ *     to `run`, which does its own reading and writes its own words, so there is
+ *     still exactly one place those refusals are worded.
+ *  2. Write ctrl+u, and **wait until the command line reads back empty.** This
+ *     is not hygiene, it is the check that separates a draft from a picture of
+ *     one. If what `readComposer` reported as `typing` was in fact something the
+ *     CLI drew itself — placeholder text, a hint, a completion popup's echo —
+ *     ctrl+u does not remove it, the line never reads empty, and this gives up
+ *     having typed one harmless kill at an empty line. Without that check the
+ *     step after it would type the CLI's own hint text into his prompt as
+ *     though he had written it.
+ *  3. Run the command.
+ *  4. Put the line back, unsent. See {@link putBackDraft}.
+ *
+ * ## When the clear does not confirm
+ *
+ * Three outcomes, and each is reported as what it is rather than folded into
+ * one apology, because they differ in the only way that matters — where his
+ * sentence is. Still on the line: nothing was lost. Line empty after all, the
+ * screen having simply been late: it is typed straight back. Anything else has
+ * taken the keyboard in between, so the draft is quoted in the message and the
+ * CLI's own `Ctrl+Y to paste deleted text` is named — the one place in this file
+ * that mentions the kill ring, and it is offered to the person at the keyboard
+ * rather than relied on by the app.
+ */
+async function carryDraft<T>(
+  access: SessionAccess,
+  sessionId: string,
+  timings: ApplyTimings,
+  run: () => Promise<T>,
+): Promise<Carried<T>> {
+  const screen = await access.screen(sessionId)
+  // A session with no screen is not this function's refusal to make: `run`
+  // opens with its own reading and says it is gone in the words every other
+  // branch of `applyControl` uses for that.
+  if (screen === null) return { kind: 'ran', value: await run(), note: '' }
+
+  const carry = readCarry(screen)
+  if (carry.kind !== 'carry') return { kind: 'ran', value: await run(), note: '' }
+  const draft = carry.draft
+
+  access.write(sessionId, CLEAR_COMPOSER)
+  const emptied = await waitForScreen(access, sessionId, timings.echo, timings.poll, (later) =>
+    promptIsFree(later) ? true : null,
+  )
+  if (emptied === null) {
+    const now = await access.screen(sessionId)
+    if (now === null) {
+      // The session ended between the two reads. Its own words for that, so
+      // this does not become a fourth way of saying "gone".
+      return { kind: 'refused', message: 'That session is no longer running.' }
+    }
+    const composer = readComposer(now)
+    if (composer.kind === 'typing' && composer.text === draft) {
+      return {
+        kind: 'refused',
+        message: `This session’s prompt would not clear — it still reads “${draft}”, so nothing was typed and nothing was changed.`,
+      }
+    }
+    if (promptIsFree(now)) {
+      // The clear did take; the screen was only late. The precondition `run`
+      // needs is now true, so there is nothing to apologise for.
+      const value = await run()
+      return { kind: 'ran', value, note: await putBackDraft(access, sessionId, draft, timings) }
+    }
+    return {
+      kind: 'refused',
+      message: `Cleared this session’s prompt to make room for the command and something else took the keyboard before it could be typed, so nothing was changed. Your draft read “${draft}” — the CLI’s own Ctrl+Y pastes it back.`,
+    }
+  }
+
+  const value = await run()
+  return { kind: 'ran', value, note: await putBackDraft(access, sessionId, draft, timings) }
 }
 
 /**
@@ -1788,6 +2123,11 @@ export function refuseToType(state: ComposerState): string | null {
  *     `remind me to buy milk` sitting unsent in the composer, `/model sonnet\r`
  *     submits `remind me to buy milk/model sonnet` — the user's sentence, sent
  *     to the agent, mangled, by a button they pressed somewhere else entirely.
+ *     A draft reaching this function is now the exception rather than the rule
+ *     — {@link carryDraft} has lifted every one it could read whole before this
+ *     is called — but the check stays where the write is, because this function
+ *     is what guarantees the composer holds the command and nothing else, and a
+ *     guarantee that depends on its caller having tidied up first is not one.
  *  2. **It could not see a dialog.** A `\r` arriving while a numbered dialog is
  *     up answers the dialog. Established the hard way here: a `/model default\r`
  *     sent at a session showing `Switch model?` never ran `/model default` at
@@ -1932,14 +2272,21 @@ async function cycleOnce(
  *
  * ## Why this one gate is looser than the others
  *
- * Everything that types text refuses outright when there is a draft in the
- * composer. shift+tab does not, and the difference is a measured one rather
- * than a convenience: driven at the real CLI with `a draft the user is still
- * writing` sitting unsent in the composer, one shift+tab moved the footer from
- * bypass to auto and left the draft on screen character for character. A chord
- * is not a character; it does not go into the line editor at all. Refusing here
- * would withdraw a working control for a hazard that was checked and does not
- * exist.
+ * shift+tab does not care about a draft, and the difference is a measured one
+ * rather than a convenience: driven at the real CLI with `a draft the user is
+ * still writing` sitting unsent in the composer, one shift+tab moved the footer
+ * from bypass to auto and left the draft on screen character for character. A
+ * chord is not a character; it does not go into the line editor at all.
+ * Refusing here would withdraw a working control for a hazard that was checked
+ * and does not exist.
+ *
+ * What has changed around it is the other half of that sentence. It used to
+ * read "everything that types text refuses outright when there is a draft in
+ * the composer", and that is no longer what those paths do: {@link carryDraft}
+ * lifts a draft it can read whole, runs the command and types the draft back
+ * unsent. So the cycle is no longer the one control that survives a draft — it
+ * is simply the one that never had to move it. `/plan` below is a typed command
+ * and is carried like the rest.
  *
  * A dialog and a turn in flight are a different matter — those own the keyboard
  * — so both are still refused, through the same {@link refuseToType} the typed
@@ -1973,18 +2320,38 @@ async function applyPermission(
   // it started, so plan stays reachable even when the footer cannot be read.
   //
   // It is the one branch here that types, so unlike the cycle below it goes
-  // through `typeCommand` and inherits its refusals — including the one for a
-  // draft in the composer, which shift+tab is exempt from and a typed `/plan`
-  // is not.
+  // through `typeCommand` and inherits its refusals.
+  //
+  // That list used to include a draft in the composer, "which shift+tab is
+  // exempt from and a typed `/plan` is not". It no longer does: `/plan` is
+  // wrapped in `carryDraft` like every other typed command, so the draft is
+  // lifted, the command runs, and the draft goes back unsent. The two paths now
+  // agree — the cycle never had to move the line, and this one moves it and
+  // puts it back — instead of Plan being the one row of the permission sheet
+  // that refused over a draft while its four neighbours worked.
   if (wanted.id === 'plan') {
-    const typed = await typeCommand(access, sessionId, '/plan', timings)
-    if (!typed.ok) return { ok: false, message: typed.message, mode: null }
-    const landed = await waitForScreen(access, sessionId, timings.command, timings.poll, (later) => {
-      const mode = readPermissionMode(later)
-      return mode === 'plan' ? mode : null
+    // Discriminated on `ok` for the reason the fast branch is.
+    type PlanRun = { ok: false; message: string } | { ok: true; landed: PermissionModeId | null }
+    const carried = await carryDraft<PlanRun>(access, sessionId, timings, async () => {
+      const typed = await typeCommand(access, sessionId, '/plan', timings)
+      if (!typed.ok) return { ok: false, message: typed.message }
+      return {
+        ok: true,
+        landed: await waitForScreen(access, sessionId, timings.command, timings.poll, (later) => {
+          const mode = readPermissionMode(later)
+          return mode === 'plan' ? mode : null
+        }),
+      }
     })
-    if (landed) return { ok: true, message: 'Enabled plan mode.', mode: landed }
-    return { ok: false, message: 'Typed /plan but the footer did not change.', mode: readPermissionMode((await access.screen(sessionId)) ?? '') }
+    if (carried.kind === 'refused') return { ok: false, message: carried.message, mode: null }
+    if (!carried.value.ok) return { ok: false, message: withNote(carried.value.message, carried.note), mode: null }
+    const landed = carried.value.landed
+    if (landed) return { ok: true, message: withNote('Enabled plan mode.', carried.note), mode: landed }
+    return {
+      ok: false,
+      message: withNote('Typed /plan but the footer did not change.', carried.note),
+      mode: readPermissionMode((await access.screen(sessionId)) ?? ''),
+    }
   }
 
   if (startedAt === null) {
@@ -2109,17 +2476,33 @@ export async function applyControl(
     // failure that belongs to a command nobody just pressed.
     const errorsBefore = countCommandErrors(opening)
 
-    const outcome = await runCommand(access, sessionId, `/model ${value}`, 'model', timings, (screen) => {
-      const failure = countCommandErrors(screen) > errorsBefore ? readCommandError(screen) : null
-      if (failure) return { ok: false as const, text: failure, scope: null as ConfirmationScope | null }
-      if (countModelConfirmations(screen) <= before) return null
-      const now = readModelConfirmation(screen)
-      return now ? { ok: true as const, text: now.name, scope: now.scope } : null
-    })
+    /*
+     * Wrapped, so that a draft at the prompt is lifted rather than reported at.
+     * The command itself is unchanged inside — `carryDraft` hands `runCommand` a
+     * command line in exactly the state it has always required, and takes no
+     * part in what the CLI is then asked or what it answers.
+     */
+    const carried = await carryDraft(access, sessionId, timings, () =>
+      runCommand(access, sessionId, `/model ${value}`, 'model', timings, (screen) => {
+        const failure = countCommandErrors(screen) > errorsBefore ? readCommandError(screen) : null
+        if (failure) return { ok: false as const, text: failure, scope: null as ConfirmationScope | null }
+        if (countModelConfirmations(screen) <= before) return null
+        const now = readModelConfirmation(screen)
+        return now ? { ok: true as const, text: now.name, scope: now.scope } : null
+      }),
+    )
+    if (carried.kind === 'refused') {
+      return {
+        ok: false,
+        message: carried.message,
+        reading: await currentModel(access, sessionId, onThisMachine ? cwd : undefined, store),
+      }
+    }
+    const outcome = carried.value
     if (!outcome.ok) {
       return {
         ok: false,
-        message: outcome.message,
+        message: withNote(outcome.message, carried.note),
         reading: await currentModel(access, sessionId, onThisMachine ? cwd : undefined, store),
       }
     }
@@ -2127,7 +2510,7 @@ export async function applyControl(
     if (!answer.ok) {
       return {
         ok: false,
-        message: answer.text,
+        message: withNote(answer.text, carried.note),
         reading: await currentModel(access, sessionId, onThisMachine ? cwd : undefined, store),
       }
     }
@@ -2135,8 +2518,12 @@ export async function applyControl(
       ok: true,
       // The scope is quoted from the CLI, not asserted: it decides per call
       // between "saved as your default for new sessions" and "for this session
-      // only", and saying the wrong one is a lie about the user's config.
-      message: `Model is now ${answer.text}${answer.scope ? ` — ${SCOPE_TEXT[answer.scope]}.` : '.'}`,
+      // only", and saying the wrong one is a lie about the user's config. The
+      // note after it is the app's own and is kept separate for that reason.
+      message: withNote(
+        `Model is now ${answer.text}${answer.scope ? ` — ${SCOPE_TEXT[answer.scope]}.` : '.'}`,
+        carried.note,
+      ),
       reading: { value: answer.text, label: answer.text, source: 'screen' },
     }
   }
@@ -2156,23 +2543,34 @@ export async function applyControl(
     // `countCommandErrors`.
     const errorsBefore = countCommandErrors(opening)
 
-    const outcome = await runCommand(access, sessionId, `/effort ${value}`, 'effort', timings, (screen) => {
-      const failure = countCommandErrors(screen) > errorsBefore ? readCommandError(screen) : null
-      if (failure) return { ok: false as const, text: failure, scope: null as ConfirmationScope | null }
-      if (countEffortConfirmations(screen) <= before) return null
-      const now = readEffortConfirmation(screen)
-      return now && now.level === value ? { ok: true as const, text: now.level, scope: now.scope } : null
-    })
+    // Wrapped for the reason the model branch above is: he opened Effort to pick
+    // an effort, and a draft at the prompt is this app's obstacle to move.
+    const carried = await carryDraft(access, sessionId, timings, () =>
+      runCommand(access, sessionId, `/effort ${value}`, 'effort', timings, (screen) => {
+        const failure = countCommandErrors(screen) > errorsBefore ? readCommandError(screen) : null
+        if (failure) return { ok: false as const, text: failure, scope: null as ConfirmationScope | null }
+        if (countEffortConfirmations(screen) <= before) return null
+        const now = readEffortConfirmation(screen)
+        return now && now.level === value ? { ok: true as const, text: now.level, scope: now.scope } : null
+      }),
+    )
+    if (carried.kind === 'refused') {
+      return { ok: false, message: carried.message, reading: effortFromSettings(onThisMachine ? await readClaudeSettings(store) : {}) }
+    }
+    const outcome = carried.value
     if (!outcome.ok) {
-      return { ok: false, message: outcome.message, reading: effortFromSettings(onThisMachine ? await readClaudeSettings(store) : {}) }
+      return { ok: false, message: withNote(outcome.message, carried.note), reading: effortFromSettings(onThisMachine ? await readClaudeSettings(store) : {}) }
     }
     const answer = outcome.answer
-    if (!answer.ok) return { ok: false, message: answer.text, reading: effortFromSettings(onThisMachine ? await readClaudeSettings(store) : {}) }
+    if (!answer.ok) return { ok: false, message: withNote(answer.text, carried.note), reading: effortFromSettings(onThisMachine ? await readClaudeSettings(store) : {}) }
     return {
       ok: true,
       // Not "and saved as your default" — the CLI prints one of two scopes and
       // ultracode is always the session-only one. Quote it or say nothing.
-      message: `Effort is now ${known ? known.label : value}${answer.scope ? ` — ${SCOPE_TEXT[answer.scope]}.` : '.'}`,
+      message: withNote(
+        `Effort is now ${known ? known.label : value}${answer.scope ? ` — ${SCOPE_TEXT[answer.scope]}.` : '.'}`,
+        carried.note,
+      ),
       reading: { value, label: known ? known.label : value, source: 'screen' },
     }
   }
@@ -2183,35 +2581,55 @@ export async function applyControl(
     }
     const before = countFastAnnouncements(opening)
 
-    const typed = await typeCommand(access, sessionId, `/fast ${value}`, timings)
-    if (!typed.ok) {
-      return { ok: false, message: typed.message, reading: fastFromSettings(onThisMachine ? await readClaudeSettings(store) : {}) }
-    }
+    // Fast mode lives at the end of the model sheet, so it is reached from the
+    // same tap and carries a draft over the same way the model does.
+    //
+    // Discriminated on `ok` rather than on which key is present, because a union
+    // of two object literals gives the absent key an `undefined` type on both
+    // members and `in` then narrows nothing.
+    type FastRun = { ok: false; message: string } | { ok: true; answer: ControlReading | null }
+    const carried = await carryDraft<FastRun>(access, sessionId, timings, async () => {
+      const typed = await typeCommand(access, sessionId, `/fast ${value}`, timings)
+      if (!typed.ok) return { ok: false, message: typed.message }
 
-    /*
-     * Two ways to be finished, because the CLI has two ways of being finished.
-     *
-     * A *change* prints `↯ Fast mode ON · $10/$50 per Mtok` or `Fast mode OFF`,
-     * which the announcement count catches. A *no-op* — `/fast on` at a session
-     * that is already on — prints nothing at all, and the old code sat there
-     * until its six-second timeout and then apologised for a state that was
-     * already exactly what had been asked for. The `↯` in the status rule
-     * settles that case without waiting: it is on screen the whole time fast
-     * mode is on, so agreeing with the request *is* the confirmation.
-     */
-    const answer = await waitForScreen(access, sessionId, timings.command, timings.poll, (screen) => {
-      if (countFastAnnouncements(screen) > before) return readFast(screen)
-      return readFastIndicator(screen) === value ? readFast(screen) : null
+      /*
+       * Two ways to be finished, because the CLI has two ways of being finished.
+       *
+       * A *change* prints `↯ Fast mode ON · $10/$50 per Mtok` or `Fast mode OFF`,
+       * which the announcement count catches. A *no-op* — `/fast on` at a session
+       * that is already on — prints nothing at all, and the old code sat there
+       * until its six-second timeout and then apologised for a state that was
+       * already exactly what had been asked for. The `↯` in the status rule
+       * settles that case without waiting: it is on screen the whole time fast
+       * mode is on, so agreeing with the request *is* the confirmation.
+       */
+      return {
+        ok: true,
+        answer: await waitForScreen(access, sessionId, timings.command, timings.poll, (screen) => {
+          if (countFastAnnouncements(screen) > before) return readFast(screen)
+          return readFastIndicator(screen) === value ? readFast(screen) : null
+        }),
+      }
     })
+    if (carried.kind === 'refused') {
+      return { ok: false, message: carried.message, reading: fastFromSettings(onThisMachine ? await readClaudeSettings(store) : {}) }
+    }
+    if (!carried.value.ok) {
+      return { ok: false, message: withNote(carried.value.message, carried.note), reading: fastFromSettings(onThisMachine ? await readClaudeSettings(store) : {}) }
+    }
+    const answer = carried.value.answer
     if (!answer) {
       return {
         ok: false,
-        message: `Typed /fast ${value} but the session has not shown it taking effect — it is most likely mid-turn, so the command is sitting in its input queue.`,
+        message: withNote(
+          `Typed /fast ${value} but the session has not shown it taking effect — it is most likely mid-turn, so the command is sitting in its input queue.`,
+          carried.note,
+        ),
         reading: fastFromSettings(onThisMachine ? await readClaudeSettings(store) : {}),
       }
     }
-    if (answer.unavailableReason) return { ok: false, message: answer.unavailableReason, reading: answer }
-    return { ok: answer.value === value, message: `Fast mode ${answer.label}.`, reading: answer }
+    if (answer.unavailableReason) return { ok: false, message: withNote(answer.unavailableReason, carried.note), reading: answer }
+    return { ok: answer.value === value, message: withNote(`Fast mode ${answer.label}.`, carried.note), reading: answer }
   }
 
   return { ok: false, message: `Unknown control ${String(control)}.`, reading: UNKNOWN }

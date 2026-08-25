@@ -127,7 +127,26 @@ final class AppearanceTests: XCTestCase {
                 guard trimmed.hasPrefix(".preferredColorScheme(") else { continue }
                 if url.lastPathComponent == "RootView.swift" {
                     rootStatesIt = true
-                    XCTAssertTrue(trimmed.contains("appearance.colorScheme"),
+                    /*
+                     * The **whole statement**, not the one line it starts on.
+                     *
+                     * It stopped being a one-liner when the root had to account
+                     * for a pinned terminal scheme: the status bar's glyphs come
+                     * from the window's interface style, which nothing on a
+                     * pushed screen can state, so a light scheme under an app
+                     * forced Dark left the clock invisible on the terminal's own
+                     * paper. Reading only the first line saw
+                     * `.preferredColorScheme(` and no setting, and failed a rule
+                     * the root was still keeping.
+                     *
+                     * What the rule is really about is unchanged and is asserted
+                     * below: the root states the **setting**, never a constant.
+                     * It may now prefer something over it — that is the point —
+                     * but the setting has to be in there as what it falls back
+                     * to, or the app has quietly stopped following its own
+                     * Appearance control.
+                     */
+                    XCTAssertTrue(statement(from: text, at: line).contains("appearance.colorScheme"),
                                   "the root must state the *setting*, not a constant: \(trimmed)")
                 } else {
                     offenders.append("\(url.lastPathComponent): \(trimmed)")
@@ -522,5 +541,27 @@ final class AppearanceTests: XCTestCase {
         }
         let degrees = sextant * 60
         return degrees < 0 ? degrees + 360 : degrees
+    }
+
+    /**
+     * One modifier call as written, however many lines it takes.
+     *
+     * Brace matching would be the precise answer and is not worth the machinery
+     * for a call that is always balanced and always short: this reads from the
+     * opening line until parentheses close, which is exactly the statement and
+     * cannot run on into the next modifier.
+     */
+    private func statement(from text: String, at start: Substring) -> String {
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        guard let first = lines.firstIndex(of: start) else { return String(start) }
+        var whole = ""
+        var depth = 0
+        for line in lines[first...] {
+            whole += line
+            depth += line.filter { $0 == "(" }.count
+            depth -= line.filter { $0 == ")" }.count
+            if depth <= 0 { break }
+        }
+        return whole
     }
 }

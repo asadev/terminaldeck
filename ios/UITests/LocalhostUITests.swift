@@ -490,7 +490,7 @@ final class LocalhostUITests: XCTestCase {
      *
      * The last assertion matters as much as the first. Popping by gesture has to
      * take the tunnel down exactly as Done does — see the `onChange` in
-     * `LocalhostPortsView` — because a page left half-closed leaves the machine
+     * `MachineBrowserView` — because a page left half-closed leaves the machine
      * serving a port to a phone that stopped looking.
      */
     func testTheLeftEdgeSwipePopsTheScreen() throws {

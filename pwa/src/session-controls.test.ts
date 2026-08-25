@@ -13,6 +13,19 @@
  * — so what the assertions see is what a phone would see after the shared
  * parser has had its say, not a shape this file invented and then agreed with.
  * Outbound frames are `encode`d and parsed back for the same reason.
+ *
+ * ## What the sheet does with a block, which is the reason `sheetPlan` exists
+ *
+ * Asad tapped **Model** on the phone's Controls sheet and got a paragraph about
+ * unsent text where the list of models should have been:
+ *
+ *   > *"they are also not control they are just descriptions which i dont want
+ *   > always"*
+ *
+ * The rows are now always drawn and a block spends itself on one line above
+ * them and on refusing the press. That used to be a branch inside `render()`,
+ * where nothing could ask a question of it; it is `sheetPlan` and `fastPlan`
+ * now, and the last group of tests below is what holds it there.
  */
 
 import { describe, expect, it } from 'vitest'
@@ -26,8 +39,10 @@ import {
   chosen,
   clusterShown,
   fastFlip,
+  fastPlan,
   NO_ANSWER,
   rowsFor,
+  sheetPlan,
 } from './session-controls'
 import { FAST_OPTIONS } from '../../src/renderer/chat/controls/catalog'
 
@@ -180,6 +195,113 @@ describe('what a controls.reading draws', () => {
     const byScreen = { value: 'Opus 5 (1M context)', label: 'Opus 5 (1M context)', source: 'screen' }
     const ticked = rows.filter((option) => chosen(byScreen, option))
     expect(ticked.map((option) => option.label)).toEqual(['Opus 5 with 1M context'])
+  })
+})
+
+/* --------------------------------------------------------------- blocked -- */
+
+describe('a blocked control opens onto its rows, not onto prose', () => {
+  /** A gate the far end says is shut, with the one short line it now sends. */
+  function midTurn(): ControlsReadingWire {
+    return reading({ gate: { canType: false, reason: 'This session is mid-turn.' } })
+  }
+
+  it('draws the whole list whether or not the control can be changed', () => {
+    // The heart of T9. He opened Model to see models; a moment in which he
+    // cannot pick one is not a reason to stop showing him which one is on.
+    const free = sheetPlan('model', reading())
+    const gated = sheetPlan('model', midTurn())
+    expect(gated.rows).toEqual(free.rows)
+    expect(gated.rows.length).toBeGreaterThan(0)
+    expect(gated.reason).toBe('This session is mid-turn.')
+  })
+
+  it('spends the block on the press rather than on the drawing', () => {
+    // `usable` false is what disables the row buttons — drawn, and refusing the
+    // press, because a press answered only by a refusal is the dead click.
+    expect(sheetPlan('effort', reading()).usable).toBe(true)
+    expect(sheetPlan('permission', midTurn()).usable).toBe(false)
+    for (const control of ['model', 'effort', 'permission'] as const) {
+      const plan = sheetPlan(control, midTurn())
+      expect(plan.rows).toEqual(rowsFor(control))
+      expect(plan.usable).toBe(false)
+    }
+  })
+
+  it('draws the rows even when an un-updated desktop sends its old paragraph', () => {
+    /*
+     * Word for word the paragraph in his screenshot, from a desktop still
+     * running the build that refused a draft instead of carrying it. It is
+     * drawn — above the rows, which is the whole of what changed here. The
+     * length is that machine's to fix; the list is this one's.
+     */
+    const old =
+      'There is unsent text at this session’s prompt ("switch it to english"). A command typed now would run ' +
+      'into the middle of it, so nothing was sent — clear the prompt and pick again.'
+    const plan = sheetPlan('model', reading({ gate: { canType: false, reason: old } }))
+    expect(plan.reason).toBe(old)
+    expect(plan.rows.length).toBeGreaterThan(0)
+    expect(plan.usable).toBe(false)
+  })
+
+  it('is not blocked at all by a draft the far end can carry', () => {
+    /*
+     * `readControls` in `src/main/agent-controls.ts` asks `readCarry` rather
+     * than `refuseToType`: a single-row draft it can read whole answers `carry`,
+     * the gate stays open, and `carryDraft` lifts the line, runs the command and
+     * types it back unsent. So the reading that used to arrive carrying that
+     * paragraph — the commonest block this sheet ever drew — now arrives open,
+     * and every control on it is pickable.
+     */
+    const open = reading({ gate: { canType: true, reason: null } })
+    for (const control of CONTROL_IDS) expect(blockedFor(control, open)).toBeNull()
+    expect(sheetPlan('model', open).reason).toBeNull()
+    expect(sheetPlan('model', open).usable).toBe(true)
+  })
+
+  it('says a shut gate once in one sheet, never twice a few rows apart', () => {
+    // The gate closes all four controls at once, so the model sheet and the
+    // fast-mode section under it would otherwise print the same sentence about
+    // the same session twice. Once is information; twice reads as the app
+    // repeating itself at somebody who came to pick a model.
+    const gated = midTurn()
+    const model = sheetPlan('model', gated)
+    const fast = fastPlan(gated, model.reason)
+    expect(model.reason).toBe('This session is mid-turn.')
+    expect(fast.reason).toBeNull()
+    // The line is all that is suppressed. The switch is still not pressable.
+    expect(fast.usable).toBe(false)
+  })
+
+  it('keeps fast mode’s own refusal, which is never the model’s sentence', () => {
+    const barred = reading({
+      fast: {
+        value: 'off',
+        label: 'Off',
+        source: 'screen',
+        unavailableReason: 'Fast mode requires usage credits',
+      },
+    })
+    const model = sheetPlan('model', barred)
+    const fast = fastPlan(barred, model.reason)
+    // An account barred from fast mode can still pick a model.
+    expect(model.reason).toBeNull()
+    expect(model.usable).toBe(true)
+    // And its sentence is worth reading beside a switch that says Off.
+    expect(fast.reason).toBe('Fast mode requires usage credits')
+    expect(fast.shape).toBe('switch')
+    expect(fast.on).toBe(false)
+    expect(fast.usable).toBe(false)
+  })
+
+  it('draws the switch only at a position the far end established', () => {
+    expect(fastPlan(reading(), null).shape).toBe('switch')
+    expect(fastPlan(reading({ fast: { value: 'on', label: 'On', source: 'screen' } }), null).on).toBe(true)
+    // Nothing has said which way it is, so the two rows go in instead — never a
+    // switch drawn at a position nobody established.
+    const unread = reading({ fast: { value: null, label: null, source: null } })
+    expect(fastPlan(unread, null).shape).toBe('rows')
+    expect(fastPlan(unread, null).usable).toBe(true)
   })
 })
 

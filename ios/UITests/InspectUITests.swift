@@ -363,7 +363,7 @@ final class InspectUITests: XCTestCase {
             if app.buttons["sessions.more"].exists && !app.otherElements["terminal.view"].exists { return }
             let bar = app.navigationBars.firstMatch
             let back = bar.buttons.matching(
-                NSPredicate(format: "identifier != 'terminal.actions' AND identifier != 'terminal.keyboard'")).firstMatch
+                NSPredicate(format: "identifier != 'terminal.actions' AND identifier != 'terminal.mode'")).firstMatch
             if back.exists { back.tap() } else { app.swipeRight() }
             _ = app.buttons["sessions.more"].waitForExistence(timeout: 8)
         }

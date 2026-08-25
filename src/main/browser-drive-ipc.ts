@@ -254,6 +254,26 @@ export interface BrowserDriveDeps {
     machineId: string
     newWindow?: boolean
   }): Promise<{ route: 'tab' | 'system'; line: string }>
+  /**
+   * The drive's state moved — a page claimed, handed to a person, resumed,
+   * released.
+   *
+   * **Absent is the switch**, as everywhere here: a build with no remote layer
+   * passes none and nothing is announced. `index.ts` passes the one thing this
+   * has to reach, which is `RemoteServer.handoverChanged`.
+   *
+   * It exists for one transition and it is worth naming which. `browser.handover`
+   * is a conversation between an agent and the driver; a phone watching that page
+   * is no part of it, so the only thing that reached the phone was a lock card
+   * with no way to answer it. This is the event that turns the card into a
+   * question — see `tellHandover` in `remote/server.ts`.
+   *
+   * The status is handed over for a caller that wants it, and today's one does
+   * not: the endpoint re-reads the state per window at send time, because the
+   * status names whichever slot the single banner is about and the wire is keyed
+   * on window names this module has never heard of.
+   */
+  driveStatusChanged?(status: DriveStatus): void
 }
 
 
@@ -505,7 +525,10 @@ export function registerBrowserDriveIpc(ipcMain: IpcMain, deps: BrowserDriveDeps
      */
     pageHeld: (viewId) => pageHeldByDrive(viewId),
     pageFreed: (viewId) => pageFreedByDrive(viewId),
-    publish: (status: DriveStatus) => deps.send(DRIVE_STATE_CHANNEL, status),
+    publish: (status: DriveStatus) => {
+      deps.send(DRIVE_STATE_CHANNEL, status)
+      deps.driveStatusChanged?.(status)
+    },
     now: () => Date.now(),
     ...(deps.openForSession
       ? {

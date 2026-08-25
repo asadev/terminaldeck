@@ -18,8 +18,15 @@
  * session's screen, and a model menu over `/bin/zsh` is the defect the desktop's
  * own cluster withdraws itself for.
  *
- * A control the far end says is barred keeps its chip, and the chip opens onto
- * the far end's own sentence instead of onto rows — never a dead menu.
+ * A control the far end says is barred keeps its chip, and the chip still opens
+ * onto its rows: the reason rides above them as one short line rather than
+ * replacing them. That is the opposite of the rule this file used to state, and
+ * `SessionControlsView.swift` carries the whole account of why it turned round —
+ * *"they are also not control they are just descriptions which i dont want
+ * always"*. Most of what used to arrive here as a block no longer arrives at
+ * all: a draft at the far prompt is now lifted, held across the command and
+ * typed back unsent by `agent-controls.ts`, so picking a model over an unsent
+ * message simply works.
  *
  * ## Honest in-flight and failed states
  *
@@ -250,10 +257,30 @@ enum SessionControls {
     }
 
     /**
-     * Why nothing can be changed at this instant, for one control, or nil. The
-     * control's own `unavailableReason` first — every sentence is the far end's;
-     * then the typing gate. The one fallback claims only what is known: nothing
-     * was sent.
+     * Why nothing can be changed at this instant, for one control, or nil.
+     *
+     * The control's own `unavailableReason` first — every sentence is the far
+     * end's; then the session's typing gate. The one fallback claims only what
+     * is known: nothing was sent.
+     *
+     * ## What this answer is now used for, which is not what it was
+     *
+     * It used to select between two whole drawings: rows, or this sentence in
+     * their place. It no longer does. The rows are always drawn, and this is one
+     * short line above them plus the decision not to accept a press — see
+     * `SessionControlsView.swift` for why, in his words. The function is
+     * unchanged because the question it answers was never the wrong one; only
+     * what the view did with the answer was.
+     *
+     * The two sources are also no longer the same *kind* of thing, and it is
+     * worth naming which is which because the far end now clears one of them by
+     * itself. `unavailableReason` is the far end saying it will never accept
+     * this — a shell with no agent in it, a CLI whose model command has not been
+     * established, an account without the credits for fast mode. The gate is a
+     * state that flips on the session's next flush of output: mid-turn, a dialog
+     * on screen, a prompt that cannot be read, a draft too big to lift. A draft
+     * that *can* be lifted is no longer either: the desktop takes it, runs the
+     * command and types it back unsent, and this answers nil throughout.
      */
     static func blocked(_ control: ControlName, _ reading: ControlsReadingWire) -> String? {
         let barred = reading.reading(control).unavailableReason

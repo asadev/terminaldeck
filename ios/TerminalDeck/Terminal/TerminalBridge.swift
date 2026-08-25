@@ -617,9 +617,11 @@ final class TerminalBridge: NSObject, @preconcurrency TerminalViewDelegate, Term
     func focus() -> Bool { view.becomeFirstResponder() }
 
     /// Putting the keyboard away takes the grid with it, whichever control asked
-    /// — the bar's dismiss button and the toolbar's keyboard toggle are the same
-    /// intent, and one of them leaving a grid behind would be a surface with
-    /// nothing underneath it.
+    /// — the bar's dismiss button and `enterChat` are the same intent, and one
+    /// of them leaving a grid behind would be a surface with nothing underneath
+    /// it. The toolbar's keyboard toggle was a third caller until it was
+    /// removed: *"we don't need keyboard button also… because when we click
+    /// inside the chat keyboard comes anyway."*
     @discardableResult
     func blur() -> Bool {
         closeGrid()
@@ -719,6 +721,38 @@ final class TerminalBridge: NSObject, @preconcurrency TerminalViewDelegate, Term
         onInput?(String(decoding: data, as: UTF8.self))
     }
 
+    /**
+     * The emulator measured itself, and the number goes out untouched.
+     *
+     * Untouched is the whole of it. `newCols` is SwiftTerm's own
+     * `Int(bounds.width / cellWidth)` out of `processSizeChange`, taken from the
+     * very bounds it then paints into, and nothing between here and `pty.resize`
+     * on the machine adjusts it — `HostLink.sendResize` only declines a size the
+     * protocol would refuse. The columns on the wire are therefore the columns on
+     * the glass, and there is no state in which this app draws wider than it
+     * admits to.
+     *
+     * ## Which was checked rather than assumed
+     *
+     * *"the text under the field of typing should be completely shown, either if
+     * we have to move this typing box a little bit up, whatever, but it should be
+     * completely shown here, not like missed some of that text."*
+     *
+     * The line he was reading was `control this session from your phone ·
+     * /remote-co…`, and measured off his own frame: the terminal drew **54**
+     * columns, its first column started on the screen's left edge, and its last
+     * ended six tenths of a cell short of the right one — the remainder of an
+     * integer division, not an inset. The whole width was already being spent.
+     *
+     * The line itself is `control this session from your phone · /remote-control`,
+     * 54 characters, and it is not this app's: it is Claude Code's own
+     * remote-control notice, drawn in a footer with a two-column gutter at each
+     * side, so it wants 58 columns. A 393-point phone at twelve point holds cells
+     * 7.2 points wide, which is 54. **The far end cut its own line to a width this
+     * app had reported honestly**, and no layout change on this side can buy the
+     * four missing columns — only a smaller face can, which is what `TextSize`
+     * exists for: at eleven point the same phone carries 59.
+     */
     func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
         size = TerminalSize(cols: newCols, rows: newRows)
         onResize?(newCols, newRows)

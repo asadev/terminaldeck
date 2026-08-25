@@ -250,7 +250,6 @@ struct CopilotView: View {
          * leaves that whole section off for a phone that may not watch, rather
          * than offering two taps that can only open an empty sheet.
          */
-        .copilotControlsButton(model: model, hostID: hostID, when: !showsServerFallback)
         .safeAreaInset(edge: .top, spacing: 0) { banners }
         .safeAreaInset(edge: .bottom, spacing: 0) { footer }
         .sheet(item: $prompt) { showing in

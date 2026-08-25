@@ -31,6 +31,31 @@
  * edited. Both are reachable, one chip apart, and `made` is the default because
  * it is what the word means.
  *
+ * ## What is not on this page
+ *
+ * > *"an artifact is still showing the MD files, which is — multiple times I
+ * > have discussed about it. Artifact should not show the MD files. It should
+ * > be only for purely the prototypes."*
+ *
+ * A row is therefore a **prototype, a picture or a recording** — `page`,
+ * `image`, `media` — and nothing else is sent. Markdown, prose, source and
+ * every unrecognised extension the `text` catch-all swallowed are dropped by
+ * {@link isArtifact}, and so is `other`: a `.zip` this page can only name and
+ * measure is a file-browser row. A markdown file is still readable on this
+ * phone — **Files** is where, because Files is the file browser and this is
+ * not. Nothing here touches anything on disk.
+ *
+ * The filter runs **at the scan**, in {@link onlyArtifacts}, before a single
+ * count is taken. That seam is the requirement: the note's totals, the
+ * made/changed split, the session chips and the empty state are all read off
+ * the narrowed list, so there is nowhere for *"3 made here"* to stand above an
+ * empty list.
+ *
+ * And it runs on the **desktop**, not on the phone. One side decides what an
+ * artifact is — the same side that already decides what `kind` a row wears —
+ * so a client cannot come to disagree with it, and a phone he has not updated
+ * cannot go back to showing him `PLAN.md`.
+ *
  * ## The scope encoding
  *
  * `PanelRequest.scope` is a single string and the desktop has three independent
@@ -179,7 +204,14 @@ export const MAX_ROWS = 200
  *
  * Three times the row cap on purpose. The kind chip alone routinely hides most
  * of a list — a project's record is mostly edits — so a scan bounded at the row
- * cap would hand back two hundred files and draw twenty.
+ * cap would hand back two hundred files and draw twenty, and {@link isArtifact}
+ * now takes a far bigger bite than the chip does: a project's record is mostly
+ * source and markdown, none of which is a row here any more.
+ *
+ * Not raised past 600 for all that, because `MAX_DISK_CHECKS` in
+ * `src/main/artifacts.ts` is 600 as well: an artifact past it is never stat'd,
+ * comes back `onDisk: null`, and would be drawn as `gone` while sitting on the
+ * disk. A longer scan would buy rows that lie.
  */
 export const SCAN_ARTIFACTS = 600
 
@@ -365,6 +397,13 @@ export function wasMade(artifact: Artifact): boolean {
  *  - `text`   read through `files.read` and shown in the terminal's own colours.
  *  - `other`  known not to be any of those. Named and measured, never previewed.
  *  - `gone`   an agent wrote it and it is not on disk any more.
+ *
+ * The first three are the ones this panel lists. `text` and `other` are still
+ * the words for a file, and a viewer still knows them, but no row of this page
+ * carries either any more — see {@link isArtifact}, and the header for why. The
+ * pair stays in the vocabulary because a `page` showing its own source is doing
+ * exactly what `text` does, and because the phone's `ArtifactKind` is a port of
+ * this type rather than of this panel's filter.
  */
 export type ArtifactKindName = 'page' | 'image' | 'media' | 'text' | 'other' | 'gone'
 
@@ -407,16 +446,90 @@ function extensionOf(relPath: string): string {
   return dot <= 0 ? '' : name.slice(dot + 1).toLowerCase()
 }
 
-export function kindOf(artifact: Artifact): ArtifactKindName {
-  // Asked first, because a file that is not there has no kind worth acting on:
-  // every other answer here is a promise that something can be opened.
-  if (artifact.onDisk === null) return 'gone'
-  const extension = extensionOf(artifact.relPath)
+/**
+ * What the *path* says a file is, with the disk left out of it.
+ *
+ * Split from {@link kindOf} because the two questions want different answers
+ * about a file that is not there any more. A row has to say `gone`, and the
+ * filter has to know **what went**: a prototype an agent wrote and deleted is a
+ * row on this page and a deleted `PLAN.md` is not, and both arrive with the
+ * same `onDisk === null`.
+ */
+function pathKind(relPath: string): Exclude<ArtifactKindName, 'gone'> {
+  const extension = extensionOf(relPath)
   if (PAGE_EXTENSIONS.has(extension)) return 'page'
   if (IMAGE_EXTENSIONS.has(extension)) return 'image'
   if (MEDIA_EXTENSIONS.has(extension)) return 'media'
   if (OPAQUE_EXTENSIONS.has(extension)) return 'other'
   return 'text'
+}
+
+export function kindOf(artifact: Artifact): ArtifactKindName {
+  // Asked first, because a file that is not there has no kind worth acting on:
+  // every other answer here is a promise that something can be opened.
+  if (artifact.onDisk === null) return 'gone'
+  return pathKind(artifact.relPath)
+}
+
+/**
+ * Whether this belongs on the page at all.
+ *
+ * > *"an artifact is still showing the MD files, which is — multiple times I
+ * > have discussed about it. Artifact should not show the MD files. It should
+ * > be only for purely the prototypes."*
+ *
+ * A prototype, a picture or a recording. Not markdown, not prose, not source,
+ * not the unrecognised extensions `text` catches and not the `other` a page can
+ * do nothing with but name — those are files, and Files is the file browser.
+ *
+ * Decided from the **path**, so that the deleted half of the list obeys the
+ * same rule as the live half: `kindOf` folds every missing file into `gone`,
+ * and a filter reading that word would keep a `PLAN.md` an agent threw away
+ * while dropping the prototype beside it.
+ */
+export function isArtifact(artifact: Artifact): boolean {
+  const kind = pathKind(artifact.relPath)
+  return kind === 'page' || kind === 'image' || kind === 'media'
+}
+
+/**
+ * The scan, less everything that is not an artifact.
+ *
+ * One place, ahead of every count this panel takes — that is the whole reason
+ * it is a function of the list rather than a `.filter()` next to the rows. The
+ * note's totals, the made/changed split and the *"no artifacts"* sentence all
+ * read the list this returns, so *"3 made here"* cannot end up above an empty
+ * list.
+ *
+ * A session's `files` is **recounted** off what survived, and a session whose
+ * whole contribution was prose leaves the chip row with it. A chip reading
+ * *"Rewrite the hero · 4 files"* that opens an empty list is the
+ * control-that-cannot-act this panel had its row buttons taken off for.
+ *
+ * `hidden` is how many rows the rule took, and it is used in exactly one place:
+ * the empty state, where a zero has to carry its own evidence. It is
+ * deliberately **not** in the footnote of a list that has rows — *"12 made here
+ * · 200 files hidden"* would put the file browser back on the page in words,
+ * which is the thing being removed.
+ */
+export function onlyArtifacts(list: ArtifactList): { list: ArtifactList; hidden: number } {
+  const artifacts = list.artifacts.filter(isArtifact)
+  if (artifacts.length === list.artifacts.length) return { list, hidden: 0 }
+
+  const files = new Map<string, number>()
+  for (const artifact of artifacts) {
+    for (const sessionId of artifact.sessionIds) {
+      files.set(sessionId, (files.get(sessionId) ?? 0) + 1)
+    }
+  }
+  const sessions = list.sessions
+    .filter((entry) => files.has(entry.sessionId))
+    .map((entry) => ({ ...entry, files: files.get(entry.sessionId) ?? 0 }))
+
+  return {
+    list: { ...list, artifacts, sessions },
+    hidden: list.artifacts.length - artifacts.length,
+  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -574,8 +687,18 @@ function noteFor(
   ofKind: number,
   filtered: boolean,
   cut: number,
+  hidden: number,
 ): string {
   if (list.artifacts.length === 0) {
+    /*
+     * A folder an agent has worked in all week, and no artifacts in it, is the
+     * zero a person cannot check — *"No artifacts are still. I don't know."*
+     * The rule that emptied the page has to say so, or the page reads as
+     * broken rather than as strict.
+     */
+    if (hidden > 0) {
+      return `No prototypes in ${list.root} — ${plural(hidden, 'file')} of prose or source, which is what Files is for.`
+    }
     const widen =
       scope.breadth === 'project'
         ? ' Only the sessions started in this folder were read — Every session also reads agents launched from a parent folder.'
@@ -588,9 +711,12 @@ function noteFor(
     // that matched nothing, and a kind that has nothing in it, are different
     // facts and only one of them is worth clearing a filter for.
     if (filtered) return 'Nothing matches that filter.'
+    // "a whole file" was the wording while every file was a row. Prose is not
+    // a row any more, so the sentence has to be about an artifact or it claims
+    // the agent wrote nothing when it wrote ten pages of markdown.
     return scope.kind === 'made'
-      ? 'No agent has written a whole file here yet. What it edited is under Changed.'
-      : 'Every file here was made by an agent rather than edited into.'
+      ? 'No agent has made an artifact here yet. What it edited is under Changed.'
+      : 'Every artifact here was made by an agent rather than edited into.'
   }
 
   const parts = [
@@ -765,12 +891,18 @@ export function artifactsPanel(deps: ArtifactsPanelDeps = {}): Panel {
     const names = await namesFor()
 
     let list: ArtifactList
+    let hidden: number
     try {
-      list = await scan(request.path, {
+      // Narrowed the moment it arrives, so that nothing below this line can
+      // count a file this page does not list — see {@link onlyArtifacts}.
+      const found = await scan(request.path, {
         maxArtifacts: SCAN_ARTIFACTS,
         ...deps.scan,
         scope: scope.breadth,
       })
+      const page = onlyArtifacts(found)
+      list = page.list
+      hidden = page.hidden
     } catch (error) {
       /*
        * A scan that failed is still a panel. The rows are gone and the reason
@@ -821,6 +953,7 @@ export function artifactsPanel(deps: ArtifactsPanelDeps = {}): Panel {
           ofKind.length,
           needle !== '' || scope.session !== null,
           matched.length - kept.length,
+          hidden,
         ),
         scopes: scopesFor(scope, list, names, now),
         /*

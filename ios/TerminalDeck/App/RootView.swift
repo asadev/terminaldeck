@@ -59,6 +59,17 @@ struct RootView: View {
     @Bindable var model: DeckModel
 
     /**
+     * The terminal's colour schemes, read here for one reason only.
+     *
+     * A pinned scheme has to reach the **window's** interface style while a
+     * session is on screen, because that is what the system draws the status
+     * bar's glyphs from and nothing on a pushed screen can state it. See the
+     * `.preferredColorScheme` below. Everything else about a scheme is
+     * `TerminalChrome`'s and stays there.
+     */
+    var themes: TerminalThemeStore = .shared
+
+    /**
      * The one place in this app that decides what colour scheme anything is.
      *
      * `@AppStorage` rather than a `@State` mirror of a store, and the difference
@@ -132,7 +143,32 @@ struct RootView: View {
          * setting the moment that pin came out. Verified by looking: every
          * screen and every sheet was rendered in both schemes.
          */
-        .preferredColorScheme(appearance.colorScheme)
+        /*
+         * **And a pinned terminal scheme wins, while a session is on screen.**
+         *
+         * The one thing `TerminalChrome` cannot reach: the status bar's glyphs
+         * are drawn by the system from the **window's** interface style, and a
+         * `.preferredColorScheme` on a pushed screen is overruled by this one —
+         * measured, along with a `UIViewControllerRepresentable` reaching for
+         * the window and being handed `nil` from inside
+         * `updateUIViewController`.
+         *
+         * Three of the four quadrants were already right. The fourth was a light
+         * scheme pinned while the app is forced Dark, where the clock stayed
+         * white on Solarized Light's `#fdf6e3` at 1.05:1 — invisible, on the one
+         * band of a page he asked to be entirely one colour.
+         *
+         * `model.showingSession` is deliberately a fact about *which screen is
+         * up* rather than about the scheme, so this statement moves exactly
+         * twice per session — on the push and on the pop — instead of on every
+         * redraw. `follow-app` pins nothing, so a session under it keeps
+         * `appearance.colorScheme` and the emulator three points below carries
+         * on tracking the phone.
+         */
+        .preferredColorScheme(
+            (model.showingSession ? TerminalChrome.pinnedStyle(themes.selected) : nil)
+                ?? appearance.colorScheme
+        )
         /*
          * Pairing, from wherever it was asked for — the line at the foot of the
          * login screen, or the machines list.

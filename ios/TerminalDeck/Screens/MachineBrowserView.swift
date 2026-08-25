@@ -25,14 +25,10 @@
  *
  * ## Where the rest of it went, and why each of them went there
  *
- *  - **Localhost** — the ports, the dev servers, the tunnel address bar and the
- *    tab strip — is `LocalhostPortsView`, one row down the `…`. Behind the menu
- *    rather than as a row at the foot of this list, and that is the whole of his
- *    sentence: *"things should not be mixed in the list of browsing windows."*
- *    A row at the bottom of a list of windows that is not a window is precisely
- *    the mixing he was pointing at; a menu is somewhere else, which is what he
- *    asked for.
- *  - **Opening a window** is the `+`, which raises `OpenWindowSheet`. The
+ *  - **Localhost** — the ports and the dev servers — is inside the `+`, as the
+ *    addresses this machine is already serving. See below: it was a screen of
+ *    its own for exactly one round and that was the second complaint.
+ *  - **Opening a window** is the `+`, which raises `NewWindowSheet`. The
  *    address field and the Shared/Isolated picker were a card sitting at the top
  *    of this list, on screen at all times whether or not anybody was opening
  *    anything — *"isolated and other things that you added in the browser
@@ -44,11 +40,41 @@
  *    — is inside the window: *"settings of per window, how to connect to it, how
  *    to make it shared or isolated, all of these things should be inside of the
  *    window."* See `MachineWindowView` and `MachineWindowSettingsView`.
- *  - **This phone's own browser chrome** — history, site data, saved logins —
- *    went with localhost, because all three are about pages loaded through a
- *    tunnel in this phone's web view and none of them is about a window on the
- *    machine. **Browser profiles** stayed here: a profile is the machine's
- *    Chromium partition, which is what these windows run in.
+ *  - **This phone's own browser chrome** — history, site data, saved logins — is
+ *    on the `…`. All three are about pages loaded through a tunnel in this
+ *    phone's web view; none of them is a page and none is a window, and a `…` is
+ *    where a screen keeps the things that are neither. **Browser profiles** is
+ *    beside them and is the machine's side of the same split: a profile is the
+ *    Chromium partition the machine's windows run in.
+ *
+ * ## And then it was two pages, which was the next thing wrong with it
+ *
+ * The round after the one above put localhost behind the `…` as a screen of its
+ * own — and that screen had an address bar, a strip of open tabs and a list of
+ * ports, so the Browser tab became two browsers with a menu between them. He
+ * read it:
+ *
+ * > *"now here you still kept localhost as a separate page inside the page, and
+ * > the browser as a separate page in the page. So I wanted it to be like ONE
+ * > page where I can start a new window."*
+ *
+ * So there is one page, and the question that settles what goes on it is *what
+ * kind of thing is this*:
+ *
+ *  - **A port is an address.** `localhost:3000` is something you type into an
+ *    address bar, so the ports are inside the `+`, under the field, as
+ *    suggestions for it — `PortSuggestions`, whose header carries the argument
+ *    and everything the old screen had that came with it.
+ *  - **A page open on this phone is a window.** It used to live in a strip of
+ *    tabs on that second screen, so somebody who had opened one had two places to
+ *    look depending on which machine had drawn the pixels. It is a row on this
+ *    list now, marked *On this phone*, and tapping it goes back to it.
+ *  - **Everything else was a setting**, and settings are what a `…` is for.
+ *
+ * The `+` is the one place a window is started and it can start all three kinds:
+ * a window on the machine, an isolated one, or a page here over a tunnel. The
+ * destination is one control on that sheet, because *where does this open* is one
+ * question.
  *
  * ## What is left on a row, and it is only what you do to a window from outside
  *
@@ -63,6 +89,38 @@
  * names a session, and a swipe action is a button with no room to ask — so the
  * gesture carries Detach, which is the half of the binding that needs no choice,
  * and the picker stays in the menu.
+ *
+ * ## Every row has that `…`, and on some of them most of it is greyed
+ *
+ * > *"Okay, this one is attached to this session. Maybe this is the difference,
+ * > and this one is not attached to anyone. But **there is no way to attach this
+ * > one too**. So it should be the same case, or all the options should be
+ * > available at least."*
+ *
+ * Only a window row used to have a menu, because only a window row has an id and
+ * every verb in the `browser.window.*` family is addressed by one — the codec
+ * refuses an empty `id` on all five of them. That is still true and it is no
+ * longer a reason to draw nothing: a row with no `…` beside a row with one says
+ * *this page is second class* and does not say why. So the menu is on all three
+ * kinds, the items that cannot be sent are drawn dead under one line naming the
+ * reason, and the one verb in that set that is real — closing a page this phone
+ * is holding, which is this phone's own socket — is live. Nothing new goes on the
+ * wire. See `rowMenu`.
+ *
+ * ## And there is no icon on any of them
+ *
+ * > *"why they have two different icons also sometimes, like in the left… **This
+ * > should be just one browser icon only, browser one, or there should be no icon
+ * > at all actually. It's not required. Everybody knows this is browser window,
+ * > these are browsers.**"*
+ *
+ * Each row kind had a glyph and two of them changed under him: the surface row's
+ * swapped between `macwindow` and a green broadcast while the page was being
+ * cast, and the window row's went red while a recording was running. A glyph that
+ * changes is making a claim, and every claim those were making is already made in
+ * words by the marks under the title — `Live`, `Recording`, `On this phone`.
+ * There is no icon column at all now, and no constant one either, because he gave
+ * the reason as well as the instruction.
  *
  * ## The two capabilities are negotiated separately, so this list survives either
  *
@@ -79,11 +137,12 @@
  *    wave: the frames had been on the wire since wave 3 and neither shell passed
  *    a `screencast` engine. The rows are the windows, they open onto the
  *    window's controls, and nothing on this screen mentions a cast.
- *  - **watch, no control** — the rows are the surfaces, each going straight to
- *    the cast. The `+` is **absent**, not disabled: `browser.window.open` is a
- *    `browser.control` verb and a field that could only ever be refused is a
- *    control this app does not draw. So is the archive, and `WindowShelf`'s
- *    header says why.
+ *  - **watch, no control** — the rows are the surfaces, and they open the same
+ *    window screen every other row opens, with everything that cannot be sent
+ *    greyed and a reason on it. The `+` is **absent**, not disabled:
+ *    `browser.window.open` is a `browser.control` verb and a field that could
+ *    only ever be refused is not a control, it is a promise. So is the archive,
+ *    and `WindowShelf`'s header says why.
  *  - **neither** — one line. This is a tab, so it cannot be hidden the way a row
  *    could; what it must not do is draw controls that would be refused.
  *
@@ -135,7 +194,7 @@ struct MachineBrowserView: View {
     let model: DeckModel
 
     /// The windows this phone keeps off the list. Injected rather than reached
-    /// for, the same shape `LocalhostPortsView` takes its `PortBook` and
+    /// for, the same shape `PortSuggestions` takes its `PortBook` and
     /// `SessionListView` its `SessionShelf`, so a test can hand in a store of
     /// its own.
     var shelf: WindowShelf = .shared
@@ -153,8 +212,32 @@ struct MachineBrowserView: View {
      */
     @State private var pushing: MachineBrowserDestination?
 
-    /// Whether the sheet that opens a window is up. See `OpenWindowSheet`.
+    /// Whether the sheet that opens a window is up. See `NewWindowSheet`.
     @State private var opening = false
+
+    /**
+     * The tunnel this phone is showing, and the page inside it.
+     *
+     * These three were the deleted localhost screen's and came here with the rest of
+     * localhost, because a page loaded in this phone's own web view is one of
+     * the windows this list is about — see the header. `browsing` holds the live
+     * `PortTunnel`, and holding it in this view's state is what keeps the socket
+     * alive for exactly as long as the page is up.
+     *
+     * `browsingPath` is beside it rather than on `PortTunnel`, because a tunnel
+     * is a port and knows nothing about pages: the same tunnel serves every path
+     * on that origin, and a second open at a different path on a port already
+     * tunnelled would be one socket and two claims about what it was for.
+     */
+    @State private var browsing: PortTunnel?
+    @State private var browsingPath = "/"
+    /// Which tab the page on top belongs to, or nil while the list is showing.
+    /// Held beside `browsing` rather than derived from it: a tunnel is shared by
+    /// every tab on that port, so it cannot say which of them is open.
+    @State private var currentTabID: String?
+
+    /// Whether this phone's own browsing history is up. See `BrowserHistoryView`.
+    @State private var showingHistory = false
 
     /**
      * What was just asked for, while the answer is on its way.
@@ -216,6 +299,11 @@ struct MachineBrowserView: View {
         shelf.archivedCount(state?.windows ?? [], host: hostId)
     }
 
+    /// The pages this phone is holding open in its own web view, over a tunnel
+    /// to one of the machine's ports. Windows too — see the header — and the
+    /// only ones on this list whose pixels are being drawn by this phone.
+    private var phonePages: [BrowserTab] { model.browserTabs.tabs(on: model) }
+
     /**
      * The one list.
      *
@@ -224,13 +312,18 @@ struct MachineBrowserView: View {
      * when there is one, preceded by any surface **no window claims**: on a
      * server that is the drive's own tab, which is in no window list at all. A
      * window on both lists appears once, because both are keyed on the same id.
+     *
+     * The phone's own pages come last, because they are the ones that are not on
+     * the machine, and last is where a list puts the thing that is a little to
+     * one side of its subject.
      */
     private var rows: [MachineBrowserRow] {
-        guard canDrive else { return surfaces.map { .surface($0) } }
+        let mine = phonePages.map { MachineBrowserRow.page($0) }
+        guard canDrive else { return surfaces.map { .surface($0) } + mine }
         let open = windows
         let claimed = Set(open.map(\.id))
         let unclaimed = surfaces.filter { !claimed.contains($0.window) }
-        return unclaimed.map { .surface($0) } + open.map { .window($0, cast: surface(for: $0)) }
+        return unclaimed.map { .surface($0) } + open.map { .window($0, cast: surface(for: $0)) } + mine
     }
 
     var body: some View {
@@ -292,28 +385,85 @@ struct MachineBrowserView: View {
          * follows for its rename alert.
          */
         .sheet(isPresented: $opening, onDismiss: read) {
-            OpenWindowSheet(machine: model.current?.label ?? model.theMachine, open: openWindow)
+            NewWindowSheet(model: model,
+                           machine: model.current?.label ?? model.theMachine,
+                           openThere: openWindow,
+                           openHere: openHere)
         }
-        .navigationDestination(item: $pushing) { destination in
-            switch destination {
-            case let .window(id):
-                MachineWindowView(model: model, windowID: id)
-            case let .surface(name):
-                /*
-                 * A page the machine will cast and no window claims — a server's
-                 * own front tab, or every row on a machine that casts without
-                 * offering control. Straight to the pixels, because watching it
-                 * is the only verb it has.
-                 *
-                 * Resolved from the live surface list rather than from a row
-                 * captured at push time: a window that closed between the tap
-                 * and the push has no surface, and a viewer pointed at a name
-                 * the host no longer knows waits forever for a frame.
-                 */
-                if let watch = host?.watch, let row = surfaces.first(where: { $0.window == name }) {
-                    WatchViewerScreen(watch: watch, surface: row, chrome: model)
-                }
+        /*
+         * This phone's own browsing history. A sheet rather than a push, the way
+         * it was on the localhost screen, and presented from here rather than
+         * from inside the `.toolbar` builder for the same reason the one above
+         * is: that view is rebuilt whenever the machine pushes anything.
+         */
+        .sheet(isPresented: $showingHistory) {
+            BrowserHistoryView(host: hostId, machine: model.theMachine) { port, path in
+                openHere(port, path)
             }
+        }
+        /*
+         * A page on this phone, over a tunnel — a push, not a cover.
+         *
+         * *"it should not come like this up. It should just move like this when
+         * we click on localhost page. It comes like this, which is a bit
+         * different, feels like a browser opens inside. So give it a native
+         * feel, not like this."* A `fullScreenCover` rises from the bottom edge
+         * because that is what iOS does for a modal — something interrupting
+         * you. A page on your own machine is where the tap was going.
+         *
+         * `item:` rather than a value on a path: the thing navigated to is a
+         * live `PortTunnel` with a socket under it, and holding it in this
+         * view's state is what keeps it alive for exactly as long as the screen
+         * is up. Its `Hashable` conformance is identity — see `DeckChrome.swift`
+         * — so the page is not torn down and rebuilt when the tunnel goes from
+         * `opening` to `live`.
+         */
+        .navigationDestination(item: $browsing) { tunnel in
+            LocalhostBrowser(model: model, tunnel: tunnel, path: browsingPath, tabID: currentTabID) {
+                browsing = nil
+                currentTabID = nil
+            }
+        }
+        .onChange(of: browsing == nil) { _, dismissed in
+            // Covers the back swipe and the back button as well as Done:
+            // whichever way the page goes away, the port stops being reachable.
+            // A gesture that left the tunnel open would leave the machine
+            // serving to a phone that is no longer looking.
+            if dismissed { model.closeLocalhost() }
+            // And whichever way it goes, the tab bar comes back. The bar belongs
+            // to the `TabView` rather than to this screen — see
+            // `DeckModel.localhostPageIsOpen` for why that is a flag and not a
+            // modifier on the page itself.
+            model.localhostPageIsOpen = !dismissed
+        }
+        /*
+         * **One destination, because he counted the kinds and there were two.**
+         *
+         * > *"this one is the one with the full view. But with the full view, at
+         * > least it should have all the options… In iMatch, one of them has
+         * > different menu options here in the bottom, the tab menu, and this one
+         * > has different only reload, nothing else. So why they are two different
+         * > type… it should be the same case, or all the options should be
+         * > available at least."*
+         *
+         * A `.window` row pushed `MachineWindowView` — address, Back, Forward,
+         * Reload, a `…` — and a `.surface` row pushed `WatchViewerScreen`, which
+         * had a picture and one Reload. Both are pages in the same browser on the
+         * same machine; what separated them was whether the host had minted a
+         * shell tab id for the slot, which is not a thing anybody holding a phone
+         * can see or should have to.
+         *
+         * So both push the same screen, and it holds the difference one control
+         * at a time — the front tab's Back is greyed with the reason on it rather
+         * than missing. `MachineWindowView` takes the surface's own name as its
+         * id, `""` and all: that is what `browser.surfaces` calls the machine's
+         * front tab, and the screen resolves both lists off it live.
+         *
+         * `WatchViewerScreen` is still the canvas mount for the Settings route,
+         * which has a `WatchLink` and no model. Nothing here reaches it.
+         */
+        .navigationDestination(item: $pushing) { destination in
+            MachineWindowView(model: model, windowID: destination.page)
         }
     }
 
@@ -346,32 +496,34 @@ struct MachineBrowserView: View {
      * > also. But it will be actually browsing on the server side; here it will
      * > be presenting that."*
      *
-     * Two verbs can put a page in the machine's browser and they are not
-     * interchangeable. The difference was **measured in the host's own source**,
-     * not guessed:
+     * ## Always `browser.window.open` — and why the old split is gone
      *
-     *  - `browser.window.open` mints a window through
-     *    `openForSession(NO_SESSION)` and detaches it in the same breath, so on
-     *    a **server** it holds no binding row and `castWindows` in
-     *    `src/headless/host.ts` cannot see it. That file says so itself: *"the
-     *    honest state is that they are listed by `browser.window.rows` and not
-     *    by `browser.surfaces`."* Drivable, and not watchable.
-     *  - `web.open` is backed by `openUrl`, which calls
-     *    `browserDrive.open({ url, isolate: false })` and hands the page to the
-     *    drive's own front slot — and that slot **is** a `browser.surfaces` row.
-     *    So the page can be watched and driven, which is the half of his
-     *    sentence the other door cannot do.
+     * > *"there is no way to attach this one too. So it should be the same case,
+     * > or all the options should be available at least. Now maybe I can
+     * > directly connect from the session side. Let's try. But there is also no
+     * > way to connect a browser window to this specific session."*
      *
-     * `openUrl` was wired on the headless host *for this exact complaint*; its
-     * comment quotes him. So a shared window goes through it, which is also
-     * semantically exact: `isolate: false` **is** shared, the same profile and
-     * the same cookies. An isolated one has no choice — only
-     * `browser.window.open` can make a partition — and on a server that window is
-     * honest about not being castable, in one line on its own screen.
+     * This used to send a **shared** window through `web.open` instead, and the
+     * reason written here was that a `browser.window.open` window was *"drivable,
+     * and not watchable"* — `castWindows` in `src/headless/host.ts` could not see
+     * it. **That stopped being true.** `castWindows` now folds
+     * `machineBrowser.castable()` into the strip (`src/headless/host.ts`), and
+     * `castable()` is derived from `list()` itself (`src/headless/machine-browser.ts`),
+     * so every window this door mints is in `browser.surfaces` as well. Both
+     * halves of his sentence are served by one verb now.
      *
-     * A machine that drives its browser but never advertised `web` falls back to
-     * `browser.window.open`, because a control that refuses is worse than one
-     * that does slightly less than it could.
+     * What the old door cost him is the whole of the complaint above. `web.open`
+     * lands the page in the drive's **own front slot**, which reports
+     * `window: ""` — and an empty window id is refused by `browser.window.bind`,
+     * `.act`, `.shot` and `.steps` in `src/main/remote/protocol.ts`. So a page
+     * opened from `+` could be watched and driven and **nothing else**: it could
+     * not be attached to a session, detached, closed or archived. That is exactly
+     * the row he filmed beside one that could do all four, and asked why they
+     * were two different things.
+     *
+     * So there is no split any more. Shared or isolated, a window opened here is
+     * an ordinary window with an id, and everything that can be done to one of
+     * them can be done to it.
      *
      * ## And why the list is re-read afterwards
      *
@@ -386,12 +538,56 @@ struct MachineBrowserView: View {
      * rather than a fourth read here.
      */
     private func openWindow(_ url: String?, isolated: Bool) {
-        guard let url, !isolated, model.canOpenPages else {
-            host?.openMachineWindow(url: url, isolated: isolated)
-            return
-        }
-        model.openPageOnMachine(url)
+        host?.openMachineWindow(url: url, isolated: isolated)
+        guard let url else { return }
         say("Opening \(shortened(url)) on \(model.current?.label ?? model.theMachine)")
+    }
+
+    /**
+     * Open one of the machine's ports **here** — in this phone's own web view,
+     * over a tunnel.
+     *
+     * The third destination the new-window sheet offers, and the one that is not
+     * a window on the machine at all. It is worth keeping and it was never worth
+     * a screen of its own: the page loads on a real loopback origin, so it gets
+     * cookies, a service worker and the WebSocket a dev server's hot reload runs
+     * on — none of which a picture of somebody else's browser can give you.
+     *
+     * The tap *is* the consent: no sheet asking whether to allow it, because
+     * nothing was reachable until now and closing the page makes it unreachable
+     * again.
+     *
+     * Through the store rather than straight at `openLocalhost`, so the page
+     * lands in a tab that this list can then draw. The store is what refuses a
+     * thirteenth tab and what hands back the *existing* tab when this address is
+     * already open — five taps on the port 3000 row are one page, not five.
+     */
+    private func openHere(_ port: Int, _ path: String) {
+        guard let tab = model.browserTabs.open(port: port, path: path, machine: model) else { return }
+        browsingPath = tab.path
+        currentTabID = tab.id
+        browsing = model.browserTabs.tunnel(for: tab)
+    }
+
+    /// Go back to a page this phone already has open. `resume` may have to
+    /// re-open a tunnel the machine dropped while the page was parked, which is
+    /// why it is not a plain `tunnel(for:)`.
+    private func resume(_ tab: BrowserTab) {
+        guard let live = model.browserTabs.resume(tab, machine: model) else { return }
+        browsingPath = live.path
+        currentTabID = live.id
+        browsing = model.browserTabs.tunnel(for: live)
+    }
+
+    /// Close one. If it was the page on top, come back to the list — a pushed
+    /// view over a tunnel that has just been torn down draws a dead page.
+    private func closeTab(_ tab: BrowserTab) {
+        let wasOpen = tab.id == currentTabID
+        model.browserTabs.close(tab, machine: model)
+        if wasOpen {
+            currentTabID = nil
+            browsing = nil
+        }
     }
 
     /**
@@ -428,24 +624,34 @@ struct MachineBrowserView: View {
     // MARK: - The bar at the top
 
     /**
-     * Two controls, on opposite edges, and the sides are his.
+     * Two controls in one pill on the trailing edge, `+` then `…` inside it.
      *
-     * > *"On the sessions page the plus button is on one side and the three dots
-     * > is on the other side, and on the browser page the three dots is on one
-     * > side and the plus button is on another side. In both, the plus button
-     * > should be left and three dots should be on the right side."*
+     * > *"This plus button and three dots thing — which I said it will stay on
+     * > left and three dot will be on right — what I meant is they should stay
+     * > together like before, but like both will be on right side, one pill. But
+     * > inside the pill, three dot will be on right side and plus button will be
+     * > on left side. For inside the terminal page, and browser thing when we
+     * > browse that, like in the page before we open."*
      *
-     * So the `+` is `.topBarLeading` and the `…` is `.topBarTrailing`, and the
-     * session list is being moved to match in the same build. Two tabs that
-     * disagree about which corner makes something is worse than either choice,
-     * because the cost is paid by a thumb that has already committed.
+     * The round before this read his earlier *"the plus button should be left
+     * and three dots should be on the right side"* as the two **edges** of the
+     * navigation bar and put the `+` on `.topBarLeading`. Left and right meant
+     * left and right of each other, inside the capsule the pair had shared all
+     * along, and the sentence above is him saying so. So both are back in one
+     * `ToolbarItemGroup` at the trailing edge: a group is what iOS 26 draws as a
+     * single piece of glass, and the split is what turned it into two.
      *
-     * They are two controls rather than one menu because they are not two of a
-     * kind. `LocalhostPortsView` argues against two glyphs eleven points apart
-     * in one corner and is right about the pair it has — History and a site-data
-     * screen are both *somewhere else to go*. A `+` and a `…` at opposite ends
-     * are the pair every list app on this phone ships: one is the screen's
+     * They stay two controls rather than folding the `+` into the menu because
+     * they are not two of a kind. `PortSuggestions`' own history argues against two glyphs
+     * eleven points apart in one corner and is right about the pair it has —
+     * History and a site-data screen are both *somewhere else to go*. A `+` and a
+     * `…` are the pair every list app on this phone ships: one is the screen's
      * single primary verb, the other is everything else.
+     *
+     * `SessionListView`'s toolbar is the same shape in the same order, and has
+     * to be: he named the two screens in one breath both times he complained
+     * about them, and the cost of the tabs disagreeing is paid by a thumb that
+     * has already committed.
      */
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
@@ -462,12 +668,19 @@ struct MachineBrowserView: View {
         }
 
         /*
+         * The `+` is conditional and the group around it is not, which is the
+         * way round it has to be: a group whose body resolves to nothing still
+         * occupies the bar as an empty capsule, and the `…` below is drawn on
+         * every machine, so the group always has something in it.
+         *
          * Absent — not disabled — on a machine that offers only the cast:
          * `browser.window.open` is a `browser.control` verb, and a control that
-         * could only ever be refused is one this app does not draw.
+         * could only ever be refused is one this app does not draw. A machine
+         * that can only be watched therefore gets a pill with the `…` alone in
+         * it, which is what the Sessions tab does with the same rule.
          */
-        if canDrive {
-            ToolbarItem(placement: .topBarLeading) {
+        ToolbarItemGroup(placement: .topBarTrailing) {
+            if canDrive {
                 Button {
                     opening = true
                 } label: {
@@ -476,31 +689,58 @@ struct MachineBrowserView: View {
                 .accessibilityLabel("Open a window")
                 .accessibilityIdentifier("browser.new")
             }
-        }
 
-        ToolbarItem(placement: .topBarTrailing) {
             Menu {
                 /*
-                 * **Localhost, folded away.**
+                 * **This phone's own browser**, which is what these three are
+                 * and all they are.
                  *
-                 * *"Even the localhost thing should be folded somewhere else —
-                 * whatever the available whole localhost addresses are, in three
-                 * dots maybe, or somewhere else."* Here rather than as a row at
-                 * the foot of the list, because a row that is not a window, in a
-                 * list of windows, is the mixing the whole change exists to
-                 * undo.
+                 * There was a *Localhost* row here that pushed a whole second
+                 * browser — its own address bar, its own tab strip, its own
+                 * port list — and it is gone: *"you still kept localhost as a
+                 * separate page inside the page… I wanted it to be like ONE page
+                 * where I can start a new window."* The ports went into the
+                 * new-window sheet, where an address is chosen; the pages this
+                 * phone has open went into the list; and these three came back up
+                 * here, which is where they were before that screen existed.
                  *
-                 * Drawn whether or not this machine will serve a port: the
-                 * screen behind it says which of the four reasons it has nothing
-                 * to show, and a menu item that appears and disappears with a
-                 * capability is one nobody can learn the position of.
+                 * All three are about pages this phone loaded **in its own web
+                 * view over a tunnel**: its history of them, its web view's site
+                 * data, its Keychain. None of them is a page and none of them is
+                 * a window, so none of them is on the list — a `…` is where a
+                 * screen keeps the things that are neither. The machine's own
+                 * Chromium profiles are further down this same menu, and the
+                 * split is deliberate: that is the partition the machine's
+                 * windows run in, and these are this phone's.
+                 */
+                Button {
+                    showingHistory = true
+                } label: {
+                    Label("History", systemImage: "clock.arrow.circlepath")
+                }
+                .accessibilityIdentifier("browser.history")
+
+                NavigationLink {
+                    BrowserDataView()
+                } label: {
+                    Label("Site data and zoom", systemImage: "slider.horizontal.3")
+                }
+                .accessibilityIdentifier("browser.data")
+
+                /*
+                 * One half of the split Asad drew: *"whatever cannot be linked,
+                 * it can be only here also — like password saving — that can be
+                 * native only for this application, for that server only
+                 * specific."* A password this phone's own web view captured
+                 * cannot be pushed into the machine's browser and should not be,
+                 * so it lives in this phone's Keychain, keyed per machine.
                  */
                 NavigationLink {
-                    LocalhostPortsView(model: model)
+                    SavedLoginsView(host: hostId, machine: model.theMachine)
                 } label: {
-                    Label("Localhost", systemImage: "network")
+                    Label("Saved logins", systemImage: "key")
                 }
-                .accessibilityIdentifier("browser.localhost")
+                .accessibilityIdentifier("browser.logins")
 
                 /*
                  * Where an archived window comes back from, and it is drawn even
@@ -542,12 +782,16 @@ struct MachineBrowserView: View {
                     .accessibilityIdentifier("browser.profiles")
                 }
             } label: {
-                Image(systemName: "ellipsis.circle")
+                // Bare, for the reason `SessionListView` gives at the same
+                // control: the capsule around the pair is the affordance on iOS
+                // 26, the `+` sharing it is a bare glyph, and a ringed `…` beside
+                // it reads as a badge stuck to the end of the pill rather than as
+                // the second of two controls.
+                Image(systemName: "ellipsis")
             }
             .accessibilityLabel("More")
             .accessibilityIdentifier("browser.more")
         }
-
     }
 
     // MARK: - What is on the screen
@@ -707,6 +951,8 @@ struct MachineBrowserView: View {
                 windowRow(window, cast: cast, sessions: state?.sessions ?? [])
             case let .surface(surface):
                 surfaceRow(surface)
+            case let .page(tab):
+                pageRow(tab)
             }
         }
         .plainRow()
@@ -742,6 +988,24 @@ struct MachineBrowserView: View {
      * `contentShape` and all, so the row stays a row rather than a name-sized
      * target.
      *
+     * ## There is no icon on it, and that is his sentence rather than a trim
+     *
+     * > *"why they have two different icons also sometimes, like in the left. If
+     * > I go to Google, I come back, it shows different one. It will show the
+     * > other one again. If I go to this one, now both are same. So they keep
+     * > changing. **This should be just one browser icon only, browser one, or
+     * > there should be no icon at all actually. It's not required. Everybody
+     * > knows this is browser window, these are browsers.**"*
+     *
+     * There was a `macwindow` glyph here that went red while a recording was
+     * running, and one on the surface row that swapped to a green broadcast glyph
+     * while the page was being cast. He read the swap as the app being unable to
+     * make up its mind about what the row *was* — which is fair, because a glyph
+     * that changes is a glyph making a claim, and the claim it was making is one
+     * the marks below the title already make in words. So the column is gone from
+     * every row on this list, not replaced with a constant globe: a list of
+     * browser windows does not need each line to say *browser window*.
+     *
      * ## What a row says out loud
      *
      * Four facts, because each is a thing somebody can be wrong about while
@@ -749,7 +1013,9 @@ struct MachineBrowserView: View {
      * session's tools call it by), whether it is isolated, whether **somebody is
      * watching it right now**, and **whether it is recording**. Two of those are
      * states a page can be left in without anybody meaning to, so they are marks
-     * on the row rather than things you learn by opening it.
+     * on the row rather than things you learn by opening it — and with the glyph
+     * gone they are the only place either is said, which is what they were
+     * already for.
      *
      * *Being watched* is `BrowserSurfaceRow.live` and never *there is a surface
      * for it*: on a desktop every pane is castable, so a mark drawn from
@@ -762,10 +1028,6 @@ struct MachineBrowserView: View {
                 pushing = .window(window.id)
             } label: {
                 HStack(spacing: 12) {
-                    Image(systemName: "macwindow")
-                        .font(.system(size: 19, weight: .light))
-                        .foregroundStyle(window.recording ? Theme.critical : Theme.secondary)
-                        .frame(width: 24)
                     VStack(alignment: .leading, spacing: 3) {
                         Text(window.label)
                             .font(.system(size: 16))
@@ -807,7 +1069,7 @@ struct MachineBrowserView: View {
              */
             .accessibilityIdentifier("browser.machine.row.\(window.id)")
 
-            rowMenu(window, sessions: sessions)
+            rowMenu(.window(window, cast: cast), sessions: sessions)
                 // Four, so the `…` does not sit against the card's rounded
                 // corner. The same inset the port rows give their trailing slot.
                 .padding(.trailing, 4)
@@ -816,7 +1078,7 @@ struct MachineBrowserView: View {
     }
 
     /**
-     * A page that can be watched and cannot be driven.
+     * A page in the machine's browser that its window list does not name.
      *
      * Two of them exist. On a machine offering no `browser.control` at all,
      * every row is one. On a server, `''` is one even beside a full window list:
@@ -824,55 +1086,156 @@ struct MachineBrowserView: View {
      * bar lands — and `openTab` mints it no shell id, so no `browser.window.rows`
      * entry names it.
      *
-     * No `…` and no swipe either way: every verb behind that menu is a
-     * `browser.control` verb addressed by window id, and this row has no window
-     * id to address. A glyph opening a menu with nothing in it is worse than no
-     * glyph. The row is the one thing that can be done with this page — watch it
-     * — so the row does it, and the chevron says the tap goes somewhere.
+     * ## It is the same row as a window's now, and that is the whole point
+     *
+     * > *"In iMatch, one of them has different menu options here in the bottom,
+     * > the tab menu, and this one has different only reload, nothing else. So why
+     * > they are two different type… it should be the same case, or all the
+     * > options should be available at least."*
+     *
+     * It had no `…`, on the argument that every verb behind that menu is
+     * addressed by a window id and this row has none — *"a glyph opening a menu
+     * with nothing in it is worse than no glyph."* The premise is still true and
+     * the conclusion was wrong: what somebody reads off a row with no menu beside
+     * a row with one is that the app can do less for this page than for that one
+     * and will not say why. So the menu is here, with the same four items, and
+     * the ones that cannot be sent are greyed under a line naming the reason. See
+     * `rowMenu`.
+     *
+     * The glyph is gone with every other row's — *"there should be no icon at all
+     * actually"* — and it is this row's glyph he was watching change: it was a
+     * green broadcast when the page was being cast and a `macwindow` when it was
+     * not. That fact is not lost with it. `Live` is a mark under the title, which
+     * is where the window rows have always said it, and it is drawn from
+     * `surface.live` exactly as the glyph was.
+     *
+     * The chevron goes for the reason the window rows never had one: a `…` and a
+     * chevron eleven points apart read as two controls, and only one of them is.
      */
     private func surfaceRow(_ surface: BrowserSurfaceRow) -> some View {
-        Button {
-            pushing = .surface(surface.window)
-        } label: {
-            HStack(spacing: 12) {
-                Image(systemName: surface.live ? "dot.radiowaves.left.and.right" : "macwindow")
-                    .font(.system(size: 19, weight: .light))
-                    .foregroundStyle(surface.live ? Theme.positive : Theme.secondary)
-                    .frame(width: 24)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(MachineBrowserText.surfaceLabel(surface))
-                        .font(.system(size: 16))
-                        .foregroundStyle(Theme.primary)
-                        .lineLimit(1)
-                    if !surface.url.isEmpty {
-                        Text(surface.url)
+        HStack(spacing: 0) {
+            Button {
+                pushing = .window(surface.window)
+            } label: {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(MachineBrowserText.surfaceLabel(surface))
+                            .font(.system(size: 16))
+                            .foregroundStyle(Theme.primary)
+                            .lineLimit(1)
+                        if !surface.url.isEmpty {
+                            Text(surface.url)
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundStyle(Theme.faint)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        if surface.live {
+                            HStack(spacing: 6) {
+                                MachineWindowMark(text: "Live", tone: Theme.positive)
+                                Spacer(minLength: 0)
+                            }
+                            .padding(.top, 1)
+                        }
+                    }
+                    Spacer(minLength: 8)
+                }
+                .padding(.leading, 16)
+                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(MachineRowButtonStyle())
+            .accessibilityLabel(surface.live
+                                ? "\(MachineBrowserText.surfaceLabel(surface)), being watched"
+                                : MachineBrowserText.surfaceLabel(surface))
+            .accessibilityHint("Opens this window")
+            // `front` rather than the empty name it actually wears: an identifier
+            // ending in a bare dot is one nobody reading a failure can tell from a
+            // truncated string, and the front tab is the one surface whose name is
+            // documented as empty rather than missing.
+            .accessibilityIdentifier(surface.window.isEmpty
+                                     ? "browser.machine.surface.front"
+                                     : "browser.machine.surface.\(surface.window)")
+
+            /*
+             * No session list handed in, and that is the honest shape rather
+             * than a saving. The rows would draw and the verb behind them would
+             * be refused before it left this phone — see `rowMenu` — so a picker
+             * here would be a choice that ends in nothing. One greyed line
+             * saying the page has no id to bind is the whole truth.
+             */
+            rowMenu(.surface(surface), sessions: [])
+                .padding(.trailing, 4)
+        }
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+
+    /**
+     * A page **this phone** has open, over a tunnel to one of the machine's
+     * ports.
+     *
+     * It is a window and it belongs on the list of windows, which is the whole of
+     * *"ONE page where I can start a new window"*: a page opened on this phone
+     * used to live in a strip of tabs on a second screen, so a person who had
+     * opened one had two places to look for it depending on which machine had
+     * drawn the pixels. Whose renderer it is is a *fact about* the window and it
+     * is on the row — the mark says **On this phone** — rather than being a
+     * reason to keep a second list.
+     *
+     * It has the same `…` as every other row and most of it is greyed: attach,
+     * archive and close-over-there are `browser.control` verbs about a window on
+     * the machine, and this page is on neither. Closing it is real and is in the
+     * menu as well as on the swipe. The menu is here rather than left off because
+     * a row with no menu beside rows with one reads as a row the app has given up
+     * on — see `rowMenu`, which is one function for exactly that reason.
+     *
+     * The `iphone` glyph went with every other row's icon: *"there should be no
+     * icon at all actually. It's not required."* Whose renderer draws this page is
+     * still on the row, as the **On this phone** mark, which is where it was
+     * already said in words.
+     */
+    private func pageRow(_ tab: BrowserTab) -> some View {
+        HStack(spacing: 0) {
+            Button {
+                resume(tab)
+            } label: {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        // `label`, never `title`: a document has no title until
+                        // it has loaded, and a row that said nothing for the
+                        // first two seconds of every page would look broken.
+                        Text(tab.label)
+                            .font(.system(size: 16))
+                            .foregroundStyle(Theme.primary)
+                            .lineLimit(1)
+                        Text("localhost:\(String(tab.port))\(tab.path == "/" ? "" : tab.path)")
                             .font(.system(size: 12, design: .monospaced))
                             .foregroundStyle(Theme.faint)
                             .lineLimit(1)
                             .truncationMode(.middle)
+                        HStack(spacing: 6) {
+                            MachineWindowMark(text: "On this phone", tone: Theme.secondary)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.top, 1)
                     }
+                    Spacer(minLength: 8)
                 }
-                Spacer(minLength: 8)
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Theme.faint)
+                .padding(.leading, 16)
+                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
+            .buttonStyle(MachineRowButtonStyle())
+            .accessibilityLabel("\(tab.label), on this phone")
+            .accessibilityHint("Opens this page again")
+            .accessibilityIdentifier("browser.machine.page.\(tab.id)")
+
+            rowMenu(.page(tab), sessions: [])
+                .padding(.trailing, 4)
         }
-        .buttonStyle(MachineRowButtonStyle())
         .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .accessibilityLabel(MachineBrowserText.surfaceLabel(surface))
-        .accessibilityHint("Watches this window and sends your taps to it")
-        // `front` rather than the empty name it actually wears: an identifier
-        // ending in a bare dot is one nobody reading a failure can tell from a
-        // truncated string, and the front tab is the one surface whose name is
-        // documented as empty rather than missing.
-        .accessibilityIdentifier(surface.window.isEmpty
-                                 ? "browser.machine.surface.front"
-                                 : "browser.machine.surface.\(surface.window)")
     }
 
     /**
@@ -911,8 +1274,8 @@ struct MachineBrowserView: View {
     }
 
     /**
-     * The three verbs you do to a window **without opening it**, and nothing
-     * else.
+     * The three verbs you do to a window **without opening it**, on every row of
+     * this list, and nothing else.
      *
      * > *"from the outside we can just make it archive, close, or connect to any
      * > session."*
@@ -923,6 +1286,32 @@ struct MachineBrowserView: View {
      * swipe carries — minus attaching, which needs a *choice* of session and a
      * swipe action is a button with nowhere to ask.
      *
+     * ## One function, because two rows on the same list with different menus is
+     * what he read as two products
+     *
+     * > *"Okay, this one is attached to this session. Maybe this is the
+     * > difference, and this one is not attached to anyone. But **there is no way
+     * > to attach this one too**. So it should be the same case, or all the
+     * > options should be available at least."*
+     *
+     * Only a `.window` row had a menu. The other two carry no window id — the
+     * machine's own front tab is minted none, and a page this phone is holding
+     * over a tunnel is not in that browser at all — and every verb here is
+     * addressed by one: `src/main/remote/protocol.ts` refuses an empty `id` on
+     * `browser.window.bind`, `.act`, `.go`, `.shot` and `.steps` alike, and
+     * `WindowShelf.setArchived` refuses one too. So the old rule was *no id, no
+     * menu*.
+     *
+     * The rule now is that the menu is the same on every row and an item that
+     * cannot be sent is **greyed under a line saying why**. Nothing new goes on
+     * the wire; what changes is that the answer to *why can I do this to that one
+     * and not to this one* is on the screen instead of being something you work
+     * out by comparing two rows.
+     *
+     * Closing a page this phone holds is the one verb in the dead set that is
+     * real — it is this phone's own socket — so it is drawn live, outside that
+     * section, where the destructive item goes.
+     *
      * The session rows carry how many windows that session already holds,
      * because that is what decides whether the new binding is called `B1` or
      * `B4`.
@@ -932,42 +1321,60 @@ struct MachineBrowserView: View {
      * reads down the list, so the two agree about which verb is furthest from an
      * accident.
      */
-    private func rowMenu(_ window: MachineWindow, sessions: [WindowSession]) -> some View {
+    @ViewBuilder
+    private func rowMenu(_ row: MachineBrowserRow, sessions: [WindowSession]) -> some View {
         Menu {
-            // Absent, not empty, when the machine has no sessions: a heading
-            // over nothing is a section that exists to look furnished, and every
-            // row under it would be a control that cannot act.
-            if !sessions.isEmpty {
-                Section("Attach to a session") {
-                    ForEach(sessions) { session in
-                        Button {
-                            host?.bindMachineWindow(window.id, to: session.id)
-                        } label: {
-                            Label(MachineBrowserText.sessionRow(session),
-                                  systemImage: session.id == window.session ? "checkmark" : "terminal")
+            if let window = row.machineWindow {
+                // Absent, not empty, when the machine has no sessions: a heading
+                // over nothing is a section that exists to look furnished, and
+                // every row under it would be a control that cannot act.
+                if !sessions.isEmpty {
+                    Section("Attach to a session") {
+                        ForEach(sessions) { session in
+                            Button {
+                                host?.bindMachineWindow(window.id, to: session.id)
+                            } label: {
+                                Label(MachineBrowserText.sessionRow(session),
+                                      systemImage: session.id == window.session
+                                          ? "checkmark" : "terminal")
+                            }
                         }
                     }
                 }
-            }
 
-            if window.isBound {
-                Button {
-                    host?.bindMachineWindow(window.id, to: nil)
-                } label: {
-                    Label("Detach", systemImage: "minus.circle")
+                if window.isBound {
+                    Button {
+                        host?.bindMachineWindow(window.id, to: nil)
+                    } label: {
+                        Label("Detach", systemImage: "minus.circle")
+                    }
                 }
-            }
 
-            Button {
-                shelf.setArchived(true, host: hostId, window: window.id)
-            } label: {
-                Label("Archive", systemImage: "archivebox")
-            }
+                Button {
+                    shelf.setArchived(true, host: hostId, window: window.id)
+                } label: {
+                    Label("Archive", systemImage: "archivebox")
+                }
 
-            Button(role: .destructive) {
-                host?.actOnMachineWindow(window.id, .close)
-            } label: {
-                Label("Close window", systemImage: "xmark")
+                Button(role: .destructive) {
+                    host?.actOnMachineWindow(window.id, .close)
+                } label: {
+                    Label("Close window", systemImage: "xmark")
+                }
+            } else {
+                Section(whyNoWindowVerbs(row)) {
+                    deadItem("Attach to a session", "terminal")
+                    deadItem("Archive", "archivebox")
+                    if case .surface = row { deadItem("Close window", "xmark") }
+                }
+
+                if case let .page(tab) = row {
+                    Button(role: .destructive) {
+                        closeTab(tab)
+                    } label: {
+                        Label("Close window", systemImage: "xmark")
+                    }
+                }
             }
         } label: {
             Image(systemName: "ellipsis")
@@ -976,8 +1383,70 @@ struct MachineBrowserView: View {
                 .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
         }
-        .accessibilityLabel("Actions for \(window.label)")
-        .accessibilityIdentifier("browser.machine.more.\(window.id)")
+        .accessibilityLabel("Actions for \(rowName(row))")
+        .accessibilityIdentifier("browser.machine.more.\(menuName(row))")
+    }
+
+    /**
+     * An item in its place, greyed, with the reason above it in the section's own
+     * header.
+     *
+     * The reason is on the section rather than on each item because it is one
+     * fact about the row — *this page is not a window on the machine* — and three
+     * copies of it would be three places for it to drift, as well as three lines
+     * of grey text in a menu meant to be read at a glance.
+     */
+    private func deadItem(_ title: String, _ icon: String) -> some View {
+        Button {} label: {
+            Label(title, systemImage: icon)
+        }
+        .disabled(true)
+    }
+
+    /**
+     * Why this row's `…` cannot carry the machine's window verbs, in one line.
+     *
+     * Three answers and each is a different fact, so none of them is a general
+     * apology: the machine's own tab was never given an id, a cast the window
+     * list does not name cannot be joined to a window, and a page this phone is
+     * holding is not in that browser at all.
+     */
+    private func whyNoWindowVerbs(_ row: MachineBrowserRow) -> String {
+        switch row {
+        case .window:
+            return ""
+        case let .surface(surface):
+            // The second is worded off **this list** rather than off the
+            // machine's, because a window archived on this phone is one the
+            // machine still lists and this screen deliberately does not. Either
+            // way the join a window verb needs is not here.
+            return surface.window.isEmpty
+                ? "The machine's own tab — it has no window id to address"
+                : "No window row for this page on this list"
+        case .page:
+            return "Open on this phone, not in the machine's browser"
+        }
+    }
+
+    /// What the `…` is *for*, spoken. The row's own name, which is the only thing
+    /// that tells two of these apart when they are read one after another.
+    private func rowName(_ row: MachineBrowserRow) -> String {
+        switch row {
+        case let .window(window, _): return window.label
+        case let .surface(surface): return MachineBrowserText.surfaceLabel(surface)
+        case let .page(tab): return tab.label
+        }
+    }
+
+    /// The identifier's tail. `front` for the machine's own tab, for the reason
+    /// its row gives: an identifier ending in a bare dot is one nobody reading a
+    /// failure can tell from a truncated string.
+    private func menuName(_ row: MachineBrowserRow) -> String {
+        switch row {
+        case let .window(window, _): return window.id
+        case let .surface(surface): return surface.window.isEmpty ? "front" : surface.window
+        case let .page(tab): return "page.\(tab.id)"
+        }
     }
 
     // MARK: - The swipe
@@ -1036,6 +1505,29 @@ struct MachineBrowserView: View {
                 .accessibilityIdentifier("browser.machine.swipe.detach.\(window.id)")
             }
         }
+
+        /*
+         * A page this phone is holding. Close is the only verb it has and it is
+         * in the same slot, with the same tint, as Close on a machine's window —
+         * the gesture is learned once and used on every row of this list, and the
+         * two mean the same thing from where a thumb is standing even though one
+         * ends a window on a computer in another room and the other closes a
+         * socket this phone opened.
+         *
+         * No Archive: the archive is this phone's own list of the *machine's*
+         * windows, and closing a page it opened itself is free and reversible in
+         * one tap from the sheet.
+         */
+        if case let .page(tab) = row {
+            Button(role: .destructive) {
+                closeTab(tab)
+            } label: {
+                Label("Close", systemImage: "xmark.circle.fill")
+            }
+            .tint(Theme.critical)
+            .accessibilityLabel("Close \(tab.label)")
+            .accessibilityIdentifier("browser.machine.swipe.closePage.\(tab.id)")
+        }
     }
 }
 
@@ -1044,30 +1536,56 @@ struct MachineBrowserView: View {
 /* -------------------------------------------------------------------------- */
 
 /**
- * Open a window on the machine: where it should go, and whose cookies it gets.
+ * Start a window: where it should go, whose renderer draws it, and whose cookies
+ * it gets.
  *
- * ## Why this is a sheet and not a card on the list
+ * ## This is the one page, and that is what he asked for
  *
- * It was a card on the list — an address field and a Shared/Isolated segmented
- * control, permanently at the top of the windows, argued for on the grounds that
- * *"a machine with nothing open needs a control, not an apology."* He read the
- * result and named it: *"it should not be like isolated and other things that
- * you added in the browser page — things should not be mixed in the list of
- * browsing windows."*
+ * > *"now here you still kept localhost as a separate page inside the page, and
+ * > the browser as a separate page in the page. So I wanted it to be like ONE
+ * > page where I can start a new window."*
  *
- * The card's argument survives; only its place was wrong. The way in is the `+`
- * in the bar, which is on screen at all times and does not take a fifth of the
- * list to say so, and the empty state's own button raises this same sheet — so a
- * machine with nothing open still opens onto a control.
+ * The Browser tab was two browsers. The home listed the machine's windows and
+ * had a `+`; one row down the `…` was a second screen with its own address bar,
+ * its own strip of open tabs and a long list of the machine's ports. Two address
+ * bars, two lists, two ideas of what a window is — and a menu between them.
  *
- * ## And why isolation belongs *here* rather than on a window
+ * There is one now. The home is the windows — the machine's, and the ones this
+ * phone is holding over a tunnel — and **this** is where a new one is started.
+ * The ports are in it, as what they are: the addresses this machine is already
+ * serving. `PortSuggestions` carries them and its header carries the argument.
  *
- * It is a property of the window at the moment it is made. A login typed into a
- * window that turned out to be shared is already in the machine's cookie jar by
- * the time anybody thinks to convert it, so the choice has to be available
- * before the window exists. It is still convertible in both directions
- * afterwards — that control is on the window's own settings, where every other
- * per-window setting is.
+ * ## Three destinations, one control, because it is one question
+ *
+ * *Where does this window open* has three real answers on a machine that offers
+ * everything, and they were previously spread across two screens and a swipe
+ * action:
+ *
+ *  - **Machine** — the machine's own browser, in its own profile, with its
+ *    cookies and whatever it is signed into. Watchable and drivable from the
+ *    phone.
+ *  - **Isolated** — the machine's browser with a partition of its own, thrown
+ *    away when the window closes. A login typed into a window that turned out to
+ *    be shared is already in the machine's cookie jar by the time anybody thinks
+ *    to convert it, so the choice has to exist before the window does. It is
+ *    still convertible afterwards, on the window's own settings.
+ *  - **This phone** — a tunnel, and the page loads in this phone's own web view
+ *    on a real loopback origin, so it gets cookies, a service worker and the
+ *    WebSocket a dev server's hot reload runs on. Only the machine's own ports
+ *    can be reached this way, which is a fact about what a tunnel is rather than
+ *    a restriction chosen here.
+ *
+ * A segment is **absent**, not disabled, where the machine withholds the
+ * capability it rides: no `ports` frame means no tunnel, and no `web` means the
+ * machine cannot be sent a page at all. A control that could only ever be
+ * refused is one this app does not draw.
+ *
+ * ## Which door a machine window goes through, and it is not a detail
+ *
+ * Two verbs can put a page in the machine's browser and the difference was
+ * measured in the host's own source. `MachineBrowserView.openWindow` holds that
+ * argument; what matters here is that this sheet hands it a URL and an isolation
+ * flag and lets it choose.
  *
  * ## The profile is deliberately not offered
  *
@@ -1087,37 +1605,71 @@ struct MachineBrowserView: View {
  * `google.com`, `https://news.ycombinator.com`, `localhost:3000/admin` and
  * `what is my ip` are four different things and none of them needs a mode
  * chosen. `LocalhostAddress.classify` decides which, once, as a tested pure
- * function — the same one the localhost address bar calls, so the two fields
- * cannot come to different conclusions about what `google.com` means.
+ * function — the same one the two address bars under a live page call, so no
+ * field in this app can come to a different conclusion about what `google.com`
+ * means.
  *
- * The one thing that is decided **here** rather than there is what a *port*
- * means from this sheet. On the localhost screen a port is a tunnel, viewed on
- * the phone; on a sheet titled *Open a window* it is a page for the machine's
- * own browser, at `http://localhost:<port>`. Both are what their control says
- * it does, which is why neither is a mode.
- *
- * A line this app will not open — a `file:` URL, a port out of range — is a
- * sentence **under the field**, and the sheet stays up. Dismissing on a refusal
- * would throw away what was typed to punish a typo, and dismissing silently
- * would be a press that reported success for nothing.
+ * A line this app will not open — a `file:` URL, a port out of range, a site
+ * asked for on a phone that can only tunnel — is a sentence **under the field**,
+ * and the sheet stays up. Dismissing on a refusal would throw away what was
+ * typed to punish a typo, and dismissing silently would be a press that reported
+ * success for nothing.
  */
-private struct OpenWindowSheet: View {
-    /// What to call the machine in the one sentence on this sheet. A name rather
+private struct NewWindowSheet: View {
+    let model: DeckModel
+    /// What to call the machine in the sentences on this sheet. A name rather
     /// than "the machine", because somebody with two paired needs to know which
     /// one is about to grow a window.
     let machine: String
-    /// The resolved URL and the isolation choice. Nil is a real choice — a blank
-    /// window on the machine — which is why Open is never disabled.
-    let open: (String?, Bool) -> Void
+    /// Open it over there: the resolved URL and the isolation choice. Nil is a
+    /// real choice — a blank window on the machine — which is why Open is never
+    /// disabled.
+    let openThere: (String?, Bool) -> Void
+    /// Open it here, in this phone's own web view: a port on the machine and the
+    /// path to ask it for.
+    let openHere: (Int, String) -> Void
+
+    /// Where a window opens. See the header.
+    private enum Place: Hashable { case machine, isolated, phone }
 
     @State private var address = ""
-    @State private var isolated = false
+    @State private var place: Place = .machine
     /// Why the last press did not open anything, or nil. Drawn under the field,
     /// which is the only place it is shown.
     @State private var notice: String?
+    /// A copy happened, and copying is silent by nature.
+    @State private var toast: String?
+    /**
+     * The rename alert, as two plain properties rather than one optional.
+     *
+     * The same shape — and the same reason — as `DeckModel.renamingHost`. A
+     * computed `Binding(get: { target != nil }, set: …)` is dismissed within a
+     * second of appearing, because every paired machine holds a socket and the
+     * model publishes constantly: each rebuild runs that setter and nils the
+     * value out from under the presentation. A real `@State` Bool has nothing to
+     * run.
+     *
+     * It is presented from the **sheet** rather than from a row inside the
+     * suggestion list, for the same reason: an alert attached inside a `ForEach`
+     * that redraws on every `ports` frame is an alert that closes itself.
+     */
+    @State private var renaming = false
+    @State private var renamePort: Int?
+    @State private var renameText = ""
+
     @FocusState private var typing: Bool
 
     @Environment(\.dismiss) private var dismiss
+
+    private var book: PortBook { .shared }
+    private var hostId: String { model.current?.id ?? "" }
+
+    /// Whether this phone can be handed one of the machine's ports at all.
+    private var canTunnel: Bool { model.canBrowseLocalhost }
+    /// Whether the machine will take a page. Both doors need it in one direction
+    /// or another: `web.open` is gated on it, and `browser.window.open` on
+    /// `browser.control`, which the tab already checked before drawing the `+`.
+    private var canOpenThere: Bool { model.canOpenPages || model.current?.canDriveBrowser == true }
 
     var body: some View {
         NavigationStack {
@@ -1125,112 +1677,28 @@ private struct OpenWindowSheet: View {
                 Theme.background.ignoresSafeArea()
 
                 VStack(alignment: .leading, spacing: 0) {
-                    SchemeSectionCaption(
-                        "Address",
-                        about: "opening a window",
-                        info: "A web address opens on the machine; anything that is not an address "
-                            + "is searched for. A port opens that port on the machine. Leave it "
-                            + "empty for a blank window.\n\nA shared window uses the machine's own "
-                            + "profile — its cookies and whatever it is signed into. An isolated "
-                            + "one gets a partition of its own, and that partition is thrown away "
-                            + "when the window closes.")
-
-                    SchemeGroup {
-                        HStack(spacing: 12) {
-                            Image(systemName: isolated ? "eye.slash" : "globe")
-                                .font(.system(size: 19, weight: .light))
-                                .foregroundStyle(Theme.faint)
-                                .frame(width: 24, height: 28)
-                            // Every one of these is load-bearing, and each was
-                            // learned on the localhost address bar: a URL
-                            // keyboard puts the slash and the dot under a thumb,
-                            // autocapitalisation would send "Localhost",
-                            // autocorrect "local host", and the `.URL` content
-                            // type stops iOS offering a contact's name.
-                            // Two words, because the field is monospaced at 15
-                            // point and anything longer is an ellipsis on the
-                            // narrowest phone. What it leaves out — that an
-                            // empty field is a blank window — is on the ⓘ above,
-                            // which is where a rule that is not a hint belongs.
-                            TextField("Address or search", text: $address)
-                                .textFieldStyle(.plain)
-                                .keyboardType(.URL)
-                                .textContentType(.URL)
-                                .textInputAutocapitalization(.never)
-                                .autocorrectionDisabled()
-                                .submitLabel(.go)
-                                .onSubmit(go)
-                                .focused($typing)
-                                .font(.system(size: 15, design: .monospaced))
-                                .foregroundStyle(Theme.primary)
-                                .accessibilityIdentifier("browser.open.address")
-                            if !address.isEmpty {
-                                Button {
-                                    address = ""
-                                    notice = nil
-                                } label: {
-                                    // The glyph stays small and the target does
-                                    // not. 28 is the biggest box that leaves the
-                                    // row the same height as one with no clear
-                                    // button in it.
-                                    Image(systemName: "xmark.circle.fill")
-                                        .font(.system(size: 15))
-                                        .foregroundStyle(Theme.faint)
-                                        .frame(width: 28, height: 28)
-                                        .contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel("Clear")
-                                .accessibilityIdentifier("browser.open.address.clear")
-                            }
-                        }
-                        .padding(.leading, 16)
-                        .padding(.trailing, 10)
-                        .padding(.vertical, 10)
-
-                        Rectangle()
-                            .fill(Theme.hairline)
-                            .frame(height: 0.5)
-                            .padding(.leading, 16)
-
-                        HStack(spacing: 12) {
-                            Picker("Window", selection: $isolated) {
-                                Text("Shared").tag(false)
-                                Text("Isolated").tag(true)
-                            }
-                            .pickerStyle(.segmented)
-                            .labelsHidden()
-                            .accessibilityIdentifier("browser.open.isolation")
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
-                    }
-
-                    if let notice {
-                        Text(notice)
-                            .font(.system(size: 12))
-                            .foregroundStyle(Theme.warning)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .padding(.top, 10)
-                            .padding(.horizontal, 4)
-                            .accessibilityIdentifier("browser.open.notice")
-                    } else {
-                        // The one sentence on this sheet, because a window
-                        // appearing on a screen in another room is the kind of
-                        // press that otherwise looks like it did nothing.
-                        Text("Opens in \(machine)'s own browser.")
-                            .font(.system(size: 12))
-                            .foregroundStyle(Theme.faint)
-                            .padding(.top, 10)
-                            .padding(.horizontal, 4)
-                    }
-
-                    Spacer(minLength: 0)
+                    header
+                    suggestions
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 4)
+
+                if let toast {
+                    VStack {
+                        Spacer()
+                        Text(toast)
+                            .font(.system(size: 13))
+                            .foregroundStyle(Theme.primary)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(.ultraThinMaterial, in: Capsule())
+                            .padding(.bottom, 28)
+                            .accessibilityIdentifier("browser.open.toast")
+                            .accessibilityAddTraits(.updatesFrequently)
+                    }
+                    .transition(.opacity)
+                    .allowsHitTesting(false)
+                }
             }
-            .navigationTitle("Open a window")
+            .navigationTitle("New window")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -1246,48 +1714,284 @@ private struct OpenWindowSheet: View {
             // The keyboard, without a tap. This sheet exists to be typed into
             // and it is raised by a press that already said so.
             .onAppear { typing = true }
+            .alert("Name this port", isPresented: $renaming) {
+                TextField("Name", text: $renameText)
+                    .accessibilityIdentifier("port.rename.field")
+                Button("Save") { commitRename() }
+                    .accessibilityIdentifier("port.rename.save")
+                Button("Cancel", role: .cancel) { renamePort = nil }
+            } message: {
+                Text(renameMessage)
+            }
         }
     }
+
+    // MARK: - The field and the choice
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SchemeSectionCaption(
+                "Address",
+                about: "opening a window",
+                info: "A web address opens on the machine; anything that is not an address is "
+                    + "searched for. A port opens that port. Leave it empty for a blank window."
+                    + "\n\nA window on the machine uses its own profile — its cookies and whatever "
+                    + "it is signed into. An isolated one gets a partition of its own, and that "
+                    + "partition is thrown away when the window closes. A window on this phone is "
+                    + "a tunnel: the page loads here, in this app's own web view, on a real "
+                    + "loopback origin — so it keeps cookies and a dev server's hot reload works. "
+                    + "Only \(machine)'s own ports can be reached that way.")
+
+            SchemeGroup {
+                HStack(spacing: 12) {
+                    Image(systemName: place == .isolated ? "eye.slash" : (place == .phone ? "iphone" : "globe"))
+                        .font(.system(size: 19, weight: .light))
+                        .foregroundStyle(Theme.faint)
+                        .frame(width: 24, height: 28)
+                    // Every one of these is load-bearing, and each was learned on
+                    // the localhost address bar: a URL keyboard puts the slash
+                    // and the dot under a thumb, autocapitalisation would send
+                    // "Localhost", autocorrect "local host", and the `.URL`
+                    // content type stops iOS offering a contact's name.
+                    TextField("Address or search", text: $address)
+                        .textFieldStyle(.plain)
+                        .keyboardType(.URL)
+                        .textContentType(.URL)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .submitLabel(.go)
+                        .onSubmit(go)
+                        .focused($typing)
+                        .font(.system(size: 15, design: .monospaced))
+                        .foregroundStyle(Theme.primary)
+                        // `browser.address`, which is what this app's one address
+                        // field has been called since there was one. It moved
+                        // here when the second browser was deleted; the name did
+                        // not change, because it is still the same field.
+                        .accessibilityIdentifier("browser.address")
+                    if !address.isEmpty {
+                        Button {
+                            address = ""
+                            notice = nil
+                        } label: {
+                            // The glyph stays small and the target does not. 28
+                            // is the biggest box that leaves the row the same
+                            // height as one with no clear button in it.
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 15))
+                                .foregroundStyle(Theme.faint)
+                                .frame(width: 28, height: 28)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Clear")
+                        .accessibilityIdentifier("browser.open.address.clear")
+                    }
+                }
+                .padding(.leading, 16)
+                .padding(.trailing, 10)
+                .padding(.vertical, 10)
+
+                if places.count > 1 {
+                    Rectangle()
+                        .fill(Theme.hairline)
+                        .frame(height: 0.5)
+                        .padding(.leading, 16)
+
+                    Picker("Open in", selection: $place) {
+                        ForEach(places, id: \.self) { option in
+                            Text(name(of: option)).tag(option)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .accessibilityIdentifier("browser.open.isolation")
+                }
+            }
+
+            if let notice {
+                Text(notice)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 10)
+                    .padding(.horizontal, 4)
+                    .accessibilityIdentifier("browser.open.notice")
+            } else {
+                // The one sentence on this sheet, because a window appearing on
+                // a screen in another room is the kind of press that otherwise
+                // looks like it did nothing.
+                Text(place == .phone
+                     ? "Opens here, over a tunnel to \(machine)."
+                     : "Opens in \(machine)'s own browser.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.faint)
+                    .padding(.top, 10)
+                    .padding(.horizontal, 4)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 4)
+    }
+
+    /// The destinations this machine actually offers, in the order they are
+    /// drawn. Never fewer than one — the tab draws no `+` at all on a machine
+    /// that offers neither door.
+    private var places: [Place] {
+        var out: [Place] = []
+        if canOpenThere { out.append(.machine); out.append(.isolated) }
+        if canTunnel { out.append(.phone) }
+        return out.isEmpty ? [.machine] : out
+    }
+
+    private func name(of place: Place) -> String {
+        switch place {
+        case .machine: return "Machine"
+        case .isolated: return "Isolated"
+        case .phone: return "This phone"
+        }
+    }
+
+    // MARK: - The suggestions
+
+    /**
+     * The ports, under the field, as the addresses this machine is serving.
+     *
+     * Tapping one is the same act as typing it — the row and the field go to the
+     * same destination, which is the test that says this is where a port belongs
+     * rather than on a screen of its own.
+     */
+    private var suggestions: some View {
+        PortSuggestions(
+            model: model,
+            book: book,
+            choose: { port, path in open(port: port, path: path) },
+            otherWay: otherWay,
+            rename: beginRename,
+            said: show)
+    }
+
+    /**
+     * The row menu's alternative destination — the *other* place a port can go,
+     * for the one page that wants to go there without changing the control above.
+     *
+     * Nil when there is only one place to put it, which is the honest answer on
+     * a machine that will not tunnel or will not take a page.
+     */
+    private var otherWay: (label: String, act: (Int) -> Void)? {
+        if place == .phone {
+            guard canOpenThere else { return nil }
+            return (model.openThereVerb, { port in
+                openThere("http://localhost:\(String(port))/", false)
+                dismiss()
+            })
+        }
+        guard canTunnel else { return nil }
+        return ("Open on this phone", { port in
+            openHere(port, "/")
+            dismiss()
+        })
+    }
+
+    // MARK: - Actions
 
     /**
      * Work out what was typed, and open it — or say why not, and stay.
      *
      * The classification is `LocalhostAddress.classify` and nothing about it is
-     * decided here; what is decided here is that a **port** typed into this
-     * sheet is a page on the machine rather than a tunnel, which is what the
-     * title of the sheet says it does.
-     *
-     * Beyond that nothing is validated: the machine checks every address through
-     * the same gate an untrusted link goes through — *a client is not something
-     * a machine gets to trust about what it opens* — so a URL that parses here
-     * is still one the far side may refuse, and it says so in the notice the
-     * window list carries.
+     * decided here; what is decided here is what a **port** means, which is
+     * whatever the control above says. Beyond that nothing is validated: the
+     * machine checks every address through the same gate an untrusted link goes
+     * through — *a client is not something a machine gets to trust about what it
+     * opens* — so a URL that parses here is still one the far side may refuse,
+     * and it says so in the notice the window list carries.
      */
     private func go() {
         let typed = address.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !typed.isEmpty else {
-            // A blank window is a real thing to ask for, and it is the one case
-            // with no address to resolve.
-            open(nil, isolated)
+            guard place != .phone else {
+                // A blank tunnel is not a thing to ask for: a tunnel is a port,
+                // and there is no port here to open.
+                notice = "A window on this phone needs one of \(machine)'s ports."
+                return
+            }
+            // A blank window on the machine is a real thing to ask for, and it
+            // is the one case with no address to resolve.
+            openThere(nil, place == .isolated)
             dismiss()
             return
         }
 
         switch LocalhostAddress.classify(typed) {
         case let .tunnel(port, path):
-            open("http://localhost:\(String(port))\(path)", isolated)
+            open(port: port, path: path)
         case let .page(url):
-            open(url, isolated)
+            openOnMachine(url)
         case let .search(_, url):
-            open(url, isolated)
+            openOnMachine(url)
         case let .refused(why):
             notice = why
-            return
+        }
+    }
+
+    /// A port, wherever the control says ports go.
+    private func open(port: Int, path: String) {
+        if place == .phone {
+            openHere(port, path)
+        } else {
+            openThere("http://localhost:\(String(port))\(path)", place == .isolated)
         }
         dismiss()
     }
-}
 
+    /// A site on the internet, which only the machine can reach for this app: a
+    /// tunnel dials the machine's *own* loopback, so there is nowhere on this
+    /// phone for a public address to go.
+    private func openOnMachine(_ url: String) {
+        guard place != .phone else {
+            notice = "This phone can only open \(machine)'s own ports. Choose Machine to open a "
+                + "site on the internet."
+            return
+        }
+        openThere(url, place == .isolated)
+        dismiss()
+    }
+
+    private func beginRename(_ port: Int) {
+        renamePort = port
+        renameText = book.name(host: hostId, port: port) ?? ""
+        // Deferred by one turn of the run loop, the same as the Machines tab's
+        // rename: raising an alert from inside a swipe action's handler while
+        // the row is still animating back leaves the alert with no presenter.
+        DispatchQueue.main.async { renaming = true }
+    }
+
+    private func commitRename() {
+        guard let port = renamePort else { return }
+        book.setName(renameText, host: hostId, port: port)
+        renamePort = nil
+    }
+
+    private var renameMessage: String {
+        guard let port = renamePort else { return "" }
+        // `String(port)`, never string interpolation of the Int: a port
+        // interpolated into a `Text` is formatted with the locale's grouping
+        // separator and comes out as "localhost:3,000".
+        return "localhost:\(String(port)) on \(machine)"
+    }
+
+    /// Two and a half seconds, the same as every other line this app holds on
+    /// screen for something that leaves nothing behind.
+    private func show(_ message: String) {
+        withAnimation { toast = message }
+        Task {
+            try? await Task.sleep(for: .seconds(2.5))
+            withAnimation { toast = nil }
+        }
+    }
+}
 /* -------------------------------------------------------------------------- */
 /* Rows and words                                                              */
 /* -------------------------------------------------------------------------- */
@@ -1314,33 +2018,55 @@ private enum MachineBrowserRow: Identifiable {
      * — *"no quantity spam, no free emphasis."*
      */
     case window(MachineWindow, cast: BrowserSurfaceRow?)
-    /// A page the phone can only watch — see `surfaceRow`.
+    /// A page in the machine's browser that its window list does not name — see
+    /// `surfaceRow`.
     case surface(BrowserSurfaceRow)
+    /// A page **this phone** is holding open over a tunnel — see `pageRow`.
+    case page(BrowserTab)
+
+    /// The window on the machine this row is, when the machine listed one. Nil
+    /// for the other two, which is exactly the set of rows whose `…` can carry no
+    /// `browser.window.*` verb — see `rowMenu`.
+    var machineWindow: MachineWindow? {
+        if case let .window(window, _) = self { return window }
+        return nil
+    }
 
     var id: String {
         switch self {
         case let .window(window, _): return "window:\(window.id)"
         case let .surface(surface): return "surface:\(surface.window)"
+        case let .page(tab): return "page:\(tab.id)"
         }
     }
 }
 
-/// What a row pushes. A value rather than a `NavigationLink`, so a row whose
-/// trailing corner is a second control can still navigate from a plain closure —
-/// see `pushing`.
+/**
+ * What a row pushes. A value rather than a `NavigationLink`, so a row whose
+ * trailing corner is a second control can still navigate from a plain closure —
+ * see `pushing`.
+ *
+ * One case, and it used to be two. There was a `.surface` beside this that went
+ * to a different screen with fewer controls on it, which is the thing he read as
+ * two kinds of browser window. Every page on the machine goes to
+ * `MachineWindowView` now; what it is named by — a shell tab id, or the empty
+ * string the front tab wears — is a fact that screen resolves, not a fork here.
+ */
 private enum MachineBrowserDestination: Hashable, Identifiable {
-    /// A window's own screen: the live picture when the machine casts it, the
-    /// address, the page verbs, and the `…` that carries everything else.
+    /// A page on the machine, by the name both lists call it: the live picture
+    /// where there is one, the address, the page verbs, and the `…` that carries
+    /// everything else.
     case window(String)
-    /// Straight to the cast, for a page no window claims.
-    case surface(String)
 
-    var id: String {
+    /// The name to address it by. `""` is the machine's own front tab and is a
+    /// name rather than a missing one — see `MachineWindowView`.
+    var page: String {
         switch self {
-        case let .window(id): return "window:\(id)"
-        case let .surface(name): return "surface:\(name)"
+        case let .window(id): return id
         }
     }
+
+    var id: String { "window:\(page)" }
 }
 
 /// The card's press state, without the card. `RowButtonStyle` draws its own
@@ -1430,6 +2156,26 @@ enum MachineBrowserText {
      * `MachineWindow.label` prefers it: *Untitled* tells nobody which of their
      * windows they are looking at.
      */
+    /**
+     * The site a page is on — its host, and nothing else.
+     *
+     * Named rather than shown in full, and the desktop's `DriveBanner` gives the
+     * reason this is worth a function: this line is what somebody reads before
+     * deciding whether to type a password into a page an agent brought them, and
+     * *"a full URL with a hundred characters of query string pushes the host off
+     * the end of a single-line strip, which is precisely where somebody would
+     * look to check they are not being phished by their own assistant."*
+     *
+     * Nil for anything that is not a URL with a host in it — a `file:` path, an
+     * empty string, a window whose row has not landed. The callers draw nothing
+     * for nil rather than a placeholder, because a placeholder in the line that
+     * says *where you are* reads as a fact.
+     */
+    static func site(_ url: String) -> String? {
+        guard let parsed = URL(string: url), let host = parsed.host(), !host.isEmpty else { return nil }
+        return host
+    }
+
     static func surfaceLabel(_ surface: BrowserSurfaceRow) -> String {
         if !surface.title.isEmpty { return surface.title }
         if !surface.url.isEmpty { return surface.url }

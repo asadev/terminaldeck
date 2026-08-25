@@ -134,6 +134,8 @@ const CLIENT_TYPES: Record<ClientMessage['t'], true> = {
   'browser.unwatch': true,
   'browser.frame.ack': true,
   'browser.input': true,
+  'browser.handover.take': true,
+  'browser.handover.done': true,
   'browser.surfaces': true,
   /*
    * The reads a phone makes of the machine itself, and the verbs that drive its
@@ -219,6 +221,7 @@ const SERVER_TYPES: Record<ServerMessage['t'], true> = {
   'window.result': true,
   'browser.frame': true,
   'browser.surfaces.rows': true,
+  'browser.handover.state': true,
   // The answers to the family above, absent for the same reason and found the
   // same way — by running the typecheck that actually reads these files.
   'folders.entries': true,
@@ -421,6 +424,11 @@ const VALID_CLIENT: ClientMessage[] = [
   { t: 'browser.input', window: 'B2', seq: 42, touch: { type: 'move', points: [{ x: 1, y: 2 }, { x: 3, y: 4 }] } },
   { t: 'browser.input', window: 'B2', seq: 42, paste: 'hello world' },
   { t: 'browser.surfaces', rid: 'srf-1' },
+  // The phone answering a handover it is watching, and both ways of ending one.
+  // `carryOn` is required rather than defaulted, so both spellings are here.
+  { t: 'browser.handover.take', rid: 'ho-1', window: 'B2' },
+  { t: 'browser.handover.done', rid: 'ho-2', window: 'B2', carryOn: true },
+  { t: 'browser.handover.done', rid: 'ho-3', window: '', carryOn: false },
 
   /*
    * **Reading the machine, and driving its browser.**
@@ -621,6 +629,43 @@ const VALID_SERVER: ServerMessage[] = [
     ],
   },
   { t: 'browser.surfaces.rows', surfaces: [] },
+  /*
+   * Who holds the handover: an answer carrying an `rid`, and the unsolicited push
+   * that carries none. `mine` differs between two recipients of the *same* state,
+   * which is the one per-connection field on the frame — and `taken` is the fact
+   * `mine` alone could not carry, so all three readings a phone has to tell apart
+   * are here:
+   *
+   *  1. `mine` — I hold it, the keyboard is live.
+   *  2. `taken` without `mine` — somebody else is typing the password; wait.
+   *  3. neither, with `asking` — nobody has answered; the button is yours.
+   */
+  {
+    t: 'browser.handover.state',
+    rid: 'ho-1',
+    window: 'B2',
+    asking: true,
+    prompt: 'Sign in and then press Done.',
+    mine: true,
+    taken: true,
+  },
+  {
+    t: 'browser.handover.state',
+    window: 'B2',
+    asking: true,
+    prompt: 'Sign in and then press Done.',
+    mine: false,
+    taken: true,
+  },
+  {
+    t: 'browser.handover.state',
+    window: 'B2',
+    asking: true,
+    prompt: 'Sign in and then press Done.',
+    mine: false,
+    taken: false,
+  },
+  { t: 'browser.handover.state', window: '', asking: false, prompt: '', mine: false, taken: false },
   { t: 'pong' },
   { t: 'created', session: SESSION },
   { t: 'closed', id: SESSION_ID },
@@ -3012,6 +3057,88 @@ describe('the watch frames a viewer sends', () => {
     expect(accepted({ t: 'browser.unwatch', window: '' })).toEqual({ t: 'browser.unwatch', window: '' })
     expect(accepted({ t: 'browser.unwatch', window: 'B2' })).toEqual({ t: 'browser.unwatch', window: 'B2' })
     expect(parseClientMessage({ t: 'browser.unwatch', window: 'a b' }).ok).toBe(false)
+  })
+
+  /**
+   * **The watch family admits the empty string; the window family refuses it.**
+   *
+   * Not an inconsistency anybody should reconcile, and pinned here because it
+   * looks like one. The two name different things: `browser.watch` and its
+   * neighbours name a **surface being cast**, and the drive's own front tab is
+   * a real surface with no shell id to wear, so refusing `''` there would leave
+   * the page a person just opened with `+` on a server as the one page nobody
+   * could look at. `browser.window.go` / `.act` / `.bind` / `.shot` / `.steps`
+   * name a **window in the machine's window list**, where no id is empty on
+   * either host.
+   *
+   * Asad wants the second set to work on the front tab —
+   *
+   * > *"there is no way to attach this one too. So it should be the same case,
+   * > or all the options should be available at least."*
+   *
+   * — and loosening these five is not how it arrives. `machineBrowser`'s
+   * `find(id)` resolves against `MachineBrowserDeps.list()`, and on a server the
+   * drive's own slot is in neither authority that list is built from, so every
+   * one of them would answer *"That window is not open any more"*. Worse, this
+   * is a **parse** refusal: `onMessage` in `server.ts` answers a failed
+   * `parseClientMessage` with `refuse(…, CLOSE.protocolError)`, so what looks
+   * like a harmless widening is the difference between a client that is
+   * disconnected and one that is answered. The fix belongs where the window is
+   * opened — see `frontTab` in `src/main/screencast-host.ts`.
+   */
+  it('refuses an empty window id on the five verbs that address a window', () => {
+    expect(parseClientMessage({ t: 'browser.window.go', id: '', url: 'https://example.test/' }).ok).toBe(false)
+    expect(parseClientMessage({ t: 'browser.window.act', id: '', action: 'close' }).ok).toBe(false)
+    expect(parseClientMessage({ t: 'browser.window.bind', id: '', session: SESSION_ID }).ok).toBe(false)
+    expect(parseClientMessage({ t: 'browser.window.shot', id: '' }).ok).toBe(false)
+    expect(parseClientMessage({ t: 'browser.window.steps', id: '' }).ok).toBe(false)
+    // And the same five take the shell id both machines really mint.
+    const id = 'browser:1787657125454:0a858ec8'
+    expect(accepted({ t: 'browser.window.act', id, action: 'back' }))
+      .toEqual({ t: 'browser.window.act', id, action: 'back' })
+    expect(accepted({ t: 'browser.window.bind', id })).toEqual({ t: 'browser.window.bind', id })
+  })
+
+  /**
+   * **A shell id is a window name, and it has colons in it.**
+   *
+   * The two places that mint one write `browser:${Date.now()}:${seq}` —
+   * `renderer/App.tsx` and `browser-headless-host.ts` — and this reader held the
+   * field to `ID_RE`, which allows no colon. So no real window could be named on
+   * this wire in either direction: the strip dropped every row host→client, and
+   * a `browser.watch` or `browser.handover.take` was refused `bad-message`
+   * client→host, which `server.ts` answers by closing the socket.
+   *
+   * Measured against a real headless host on 2026-08-25 before the fix: naming
+   * `browser:1787657125454:0a858ec8` came back *"browser.watch without a usable
+   * window"* and the connection closed. Pinned here in the shape the product
+   * actually mints, so a narrowing of this rule cannot silently take the live
+   * view and the handover away again.
+   */
+  it('takes the shell id both machines really mint, colons and all', () => {
+    const window = 'browser:1787657125454:0a858ec8'
+    expect(accepted({ t: 'browser.watch', window, maxWidth: 600, quality: 40 }))
+      .toEqual({ t: 'browser.watch', window, maxWidth: 600, quality: 40 })
+    expect(accepted({ t: 'browser.unwatch', window })).toEqual({ t: 'browser.unwatch', window })
+    expect(accepted({ t: 'browser.frame.ack', window, seq: 3 }))
+      .toEqual({ t: 'browser.frame.ack', window, seq: 3 })
+    expect(accepted({ t: 'browser.handover.take', rid: 'r1', window }))
+      .toEqual({ t: 'browser.handover.take', rid: 'r1', window })
+    expect(accepted({ t: 'browser.handover.done', rid: 'r2', window, carryOn: true }))
+      .toEqual({ t: 'browser.handover.done', rid: 'r2', window, carryOn: true })
+    // And the same name survives the other way, on the frame that answers it.
+    const state = parseServerMessage(
+      JSON.stringify({ t: 'browser.handover.state', window, asking: true, prompt: 'sign in', mine: true, taken: true }),
+    )
+    expect(state.ok && state.message.t === 'browser.handover.state' && state.message.window).toBe(window)
+    const rows = parseServerMessage(
+      JSON.stringify({ t: 'browser.surfaces.rows', surfaces: [{ window, url: 'http://127.0.0.1:8879/login', title: '', live: false }] }),
+    )
+    expect(rows.ok && rows.message.t === 'browser.surfaces.rows' && rows.message.surfaces).toHaveLength(1)
+    // Still narrow: a slash, a space or a control byte is not a window name.
+    expect(parseClientMessage({ t: 'browser.unwatch', window: 'browser:1/2' }).ok).toBe(false)
+    expect(parseClientMessage({ t: 'browser.unwatch', window: 'browser 1' }).ok).toBe(false)
+    expect(parseClientMessage({ t: 'browser.unwatch', window: ':leading' }).ok).toBe(false)
   })
 
   it('refuses an ack or a surfaces ask that is missing its number or id', () => {

@@ -9,11 +9,15 @@ import {
   diffLines,
   directoryOf,
   fileUrl,
+  isArtifact,
   kindOf,
+  nothingButFiles,
   nothingFound,
+  onlyArtifacts,
   openLabel,
   previewKindOf,
   wasMade,
+  ARTIFACT_EXTENSIONS,
   MAX_DIFF_LINES,
   SCAN_FRESH_MS,
   scanOutcome,
@@ -180,7 +184,7 @@ describe('summarize', () => {
 
   it('counts what is shown against what was found', () => {
     const found = list({
-      artifacts: [artifact({ relPath: 'a.ts' }), artifact({ relPath: 'b.ts' })],
+      artifacts: [artifact({ relPath: 'a.html' }), artifact({ relPath: 'b.html' })],
       sessions: [{ sessionId: 's', at: NOW, files: 2 }],
     })
     expect(summarize(found, 2, 'made')).toBe('2 made here · 1 session')
@@ -189,11 +193,36 @@ describe('summarize', () => {
 
   it('admits when a cap stopped the scan', () => {
     const found = list({
-      artifacts: [artifact({ relPath: 'a.ts' })],
+      artifacts: [artifact({ relPath: 'a.html' })],
       sessions: [{ sessionId: 's', at: NOW, files: 1 }],
       truncated: true,
     })
     expect(summarize(found, 1, 'made')).toContain('older work not read')
+  })
+
+  it('tells an empty folder apart from a folder that only holds prose', () => {
+    /*
+     * The list this sentence heads is the narrowed one, so an empty one has two
+     * causes and they are not the same fact. *"Nothing written or edited in /p"*
+     * over a folder an agent filled with markdown is a page claiming it did
+     * nothing, which is the shrug the empty state was rebuilt to stop.
+     */
+    expect(summarize(list(), 0, 'made', 7)).toBe(
+      'No prototypes in /p — 7 files of prose or source, which is what Files is for.',
+    )
+    expect(summarize(list(), 0, 'made', 7)).not.toContain('Nothing written or edited')
+    expect(summarize(list(), 0, 'made')).toBe(nothingFound(list()))
+  })
+})
+
+describe('nothingButFiles', () => {
+  it('counts in the reader’s own grammar', () => {
+    expect(nothingButFiles(list(), 1)).toContain('1 file of prose')
+    expect(nothingButFiles(list(), 2)).toContain('2 files of prose')
+  })
+
+  it('names the folder, so the zero can be checked', () => {
+    expect(nothingButFiles(list({ root: '/work/deck' }), 3)).toContain('/work/deck')
   })
 })
 
@@ -218,30 +247,32 @@ describe('directoryOf', () => {
 
 describe('ArtifactRow', () => {
   it('leads with what the thing is, not with where it lives', () => {
+    // A prototype rather than the `plans/launch.md` this fixture used to be:
+    // markdown is not a row on this page any more. See `isArtifact`.
     const html = renderToStaticMarkup(
       <ArtifactRow
-        artifact={artifact({ relPath: 'plans/launch.md', writes: 1, edits: 4 })}
+        artifact={artifact({ relPath: 'plans/launch.html', writes: 1, edits: 4 })}
         now={NOW}
         selected={false}
         onSelect={() => undefined}
       />,
     )
-    expect(html).toContain('launch.md')
+    expect(html).toContain('launch.html')
     // The kind, in a word, is the second thing on the row — it is what stops a
     // list of artifacts reading as a list of paths.
-    expect(html).toContain('Document')
+    expect(html).toContain('Web page')
     expect(html).toContain('1.0 KB')
     expect(html).toContain('10m ago')
     // The folder is still there, and still last: it is how two files of the
     // same name are told apart and nothing more.
     expect(html).toContain('plans')
-    expect(html.indexOf('Document')).toBeLessThan(html.indexOf('>plans<'))
+    expect(html.indexOf('Web page')).toBeLessThan(html.indexOf('>plans<'))
   })
 
   it('says when a file the agent made is no longer there', () => {
     const html = renderToStaticMarkup(
       <ArtifactRow
-        artifact={artifact({ relPath: 'scratch.tmp', onDisk: null })}
+        artifact={artifact({ relPath: 'scratch/mock.html', onDisk: null })}
         now={NOW}
         selected={false}
         onSelect={() => undefined}
@@ -371,8 +402,11 @@ describe('ArtifactsPanel', () => {
  * to do on purpose and explain.
  */
 describe('an artifact is something the agent made', () => {
-  const made = artifact({ relPath: 'plans/launch.md', writes: 2, edits: 1 })
-  const edited = artifact({ relPath: 'src/app.ts', writes: 0, edits: 6 })
+  // Both fixtures are artifacts by the *other* rule on this page — see
+  // `isArtifact` — so that what these assertions pin is the made/changed split
+  // and not the prototypes-only one beside it.
+  const made = artifact({ relPath: 'demo/index.html', writes: 2, edits: 1 })
+  const edited = artifact({ relPath: 'demo/hero.png', writes: 0, edits: 6 })
 
   it('counts a whole-file write as making it, and an edit alone as not', () => {
     expect(wasMade(made)).toBe(true)
@@ -380,7 +414,7 @@ describe('an artifact is something the agent made', () => {
     // One write is enough. An agent that wrote a file and then refined it four
     // times still made that file; demoting it for improving it would move an
     // artifact off this page the moment it got better.
-    expect(wasMade(artifact({ relPath: 'a.md', writes: 1, edits: 40 }))).toBe(true)
+    expect(wasMade(artifact({ relPath: 'a.html', writes: 1, edits: 40 }))).toBe(true)
   })
 
   it('shows only what was made, by default', () => {
@@ -441,12 +475,24 @@ describe('an artifact is something the agent made', () => {
 
 describe('what kind of thing an artifact is', () => {
   it('answers in one word somebody already knows', () => {
+    // Still the right *word* for a markdown file, and no longer a row on this
+    // page: the vocabulary and the filter are two questions, and `isArtifact`
+    // is the one that decides what is listed.
     expect(kindOf('memory/2026-08-15.md')).toBe('Document')
     expect(kindOf('index.html')).toBe('Web page')
     expect(kindOf('logo.svg')).toBe('Image')
     expect(kindOf('data/leads.csv')).toBe('Data')
     expect(kindOf('src/app.tsx')).toBe('Code')
     expect(kindOf('notes.ipynb')).toBe('Notebook')
+  })
+
+  it('has a word for a recording, which is a thing an agent makes', () => {
+    // "File, 8.2 MB" is true and useless about a screen recording, and a
+    // recording is a row on this page now.
+    expect(kindOf('walkthrough.mov')).toBe('Video')
+    expect(kindOf('demo.mp4')).toBe('Video')
+    expect(kindOf('voiceover.mp3')).toBe('Sound')
+    expect(kindOf('shots/hero.heic')).toBe('Image')
   })
 
   it('does not call a dotfile a Document because of its name', () => {
@@ -464,7 +510,12 @@ describe('what kind of thing an artifact is', () => {
     // would be worse than saying what it is.
     expect(previewKindOf('report.pdf')).toBe('text')
     expect(previewKindOf('logo.png')).toBe('image')
+    expect(previewKindOf('shots/hero.heic')).toBe('image')
     expect(previewKindOf('build.bin')).toBe('none')
+    // Nothing in the pane plays a video, and reading one as text spends a
+    // megabyte to arrive at a note saying it is not text.
+    expect(previewKindOf('walkthrough.mov')).toBe('none')
+    expect(previewKindOf('voiceover.mp3')).toBe('none')
   })
 
   it('calls a prototype a page, which is the thing he asked about by name', () => {
@@ -472,6 +523,137 @@ describe('what kind of thing an artifact is', () => {
     // screen: the markup is worth reading and is not the thing.
     expect(previewKindOf('demo/index.html')).toBe('page')
     expect(previewKindOf('mock.htm')).toBe('page')
+  })
+})
+
+/* ------------------------------------------------ artifacts are not files -- */
+
+/**
+ * The third report of the same page, pinned so there cannot be a fourth.
+ *
+ *   > *"an artifact is still showing the MD files, which is — multiple times I
+ *   > have discussed about it. Artifact should not show the MD files. It should
+ *   > be only for purely the prototypes."*
+ *
+ * There are two of this rule, deliberately: `isArtifact` in
+ * `src/main/remote/panels/artifacts.ts` filters the phone at the scan, and this
+ * one filters the window at the seam. They are copies because the renderer
+ * cannot import `src/main` — `tsconfig.web.json` does not include it and both
+ * projects are `composite` — and the header comment says so. These assertions
+ * are what makes a copy that has drifted noticeable.
+ */
+describe('an artifact is a prototype, not a file', () => {
+  it('keeps a prototype, a picture and a recording', () => {
+    expect(isArtifact('demo/index.html')).toBe(true)
+    expect(isArtifact('mock.htm')).toBe(true)
+    expect(isArtifact('shots/hero.png')).toBe(true)
+    expect(isArtifact('logo.svg')).toBe(true)
+    expect(isArtifact('walkthrough.mov')).toBe(true)
+    expect(isArtifact('deck.pdf')).toBe(true)
+  })
+
+  it('drops the markdown he has now reported three times', () => {
+    expect(isArtifact('memory/2026-08-15.md')).toBe(false)
+    expect(isArtifact('README.md')).toBe(false)
+    expect(isArtifact('PLAN.markdown')).toBe(false)
+    expect(isArtifact('notes.txt')).toBe(false)
+  })
+
+  it('drops source, data and everything else Files is the page for', () => {
+    expect(isArtifact('src/app.tsx')).toBe(false)
+    expect(isArtifact('data/leads.csv')).toBe(false)
+    expect(isArtifact('styles/app.css')).toBe(false)
+    expect(isArtifact('.gitignore')).toBe(false)
+    expect(isArtifact('Makefile')).toBe(false)
+    expect(isArtifact('build/app.zip')).toBe(false)
+  })
+
+  it('has a word for everything it lists', () => {
+    // A row this page draws and then has no name for is "File, 8.2 MB", which
+    // is the vaguest thing that can be said about a screen recording.
+    for (const extension of ARTIFACT_EXTENSIONS) {
+      expect(kindOf(`a.${extension}`)).not.toBe('File')
+    }
+  })
+})
+
+describe('onlyArtifacts', () => {
+  const prototype = artifact({ relPath: 'demo/index.html', sessionIds: ['s1'] })
+  const note = artifact({ relPath: 'memory/2026-08-15.md', sessionIds: ['s1', 's2'] })
+  const plan = artifact({ relPath: 'PLAN.md', sessionIds: ['s2'] })
+  const scanned = list({
+    artifacts: [prototype, note, plan],
+    sessions: [
+      { sessionId: 's1', at: NOW, files: 2 },
+      { sessionId: 's2', at: NOW, files: 2 },
+    ],
+  })
+
+  it('narrows the scan to what the page will draw', () => {
+    const { list: kept, hidden } = onlyArtifacts(scanned)
+    expect(kept.artifacts.map((found) => found.relPath)).toEqual(['demo/index.html'])
+    expect(hidden).toBe(2)
+  })
+
+  it('recounts the session chips off what survived', () => {
+    // A chip reading "Rewrite the hero · 2 files" that opens an empty list is a
+    // control that cannot act. `s2` wrote nothing but prose, so it is not a
+    // chip at all any more.
+    const { list: kept } = onlyArtifacts(scanned)
+    expect(kept.sessions).toEqual([{ sessionId: 's1', at: NOW, files: 1 }])
+  })
+
+  it('hands the same list straight back when nothing was dropped', () => {
+    const clean = list({ artifacts: [prototype] })
+    expect(onlyArtifacts(clean).list).toBe(clean)
+    expect(onlyArtifacts(clean).hidden).toBe(0)
+  })
+
+  it('judges the deleted half by the same rule as the live half', () => {
+    // Both arrive with `onDisk: null`. A prototype an agent made and threw away
+    // is still something it made and still wears its "not on disk" tag; a
+    // PLAN.md it threw away is still prose.
+    const { list: kept } = onlyArtifacts(
+      list({
+        artifacts: [
+          artifact({ relPath: 'demo/index.html', onDisk: null }),
+          artifact({ relPath: 'PLAN.md', onDisk: null }),
+        ],
+      }),
+    )
+    expect(kept.artifacts.map((found) => found.relPath)).toEqual(['demo/index.html'])
+  })
+
+  it('draws the prototype and not the markdown beside it', () => {
+    /*
+     * The rows themselves, which is the report — *"an artifact is still showing
+     * the MD files."* This project's tests have no DOM and run no effects, so a
+     * rendered `ArtifactsPanel` is its loading state and has no rows in it at
+     * all; the seam is where the rows are decided, so the rows are drawn from
+     * what the seam kept.
+     */
+    const { list: kept } = onlyArtifacts(scanned)
+    const html = kept.artifacts
+      .map((found) =>
+        renderToStaticMarkup(
+          <ArtifactRow artifact={found} now={NOW} selected={false} onSelect={() => undefined} />,
+        ),
+      )
+      .join('')
+    expect(html).toContain('index.html')
+    expect(html).toContain('Web page')
+    expect(html).not.toContain('2026-08-15.md')
+    expect(html).not.toContain('PLAN.md')
+  })
+
+  it('never lets a count stand above a list it does not have', () => {
+    // "3 made here" over an empty list is the seam failure this rule had to
+    // avoid: the sentence and the rows read the same narrowed list.
+    const { list: kept, hidden } = onlyArtifacts(list({ artifacts: [note, plan] }))
+    expect(kept.artifacts).toHaveLength(0)
+    expect(summarize(kept, kept.artifacts.length, 'made', hidden)).toBe(
+      'No prototypes in /p — 2 files of prose or source, which is what Files is for.',
+    )
   })
 })
 

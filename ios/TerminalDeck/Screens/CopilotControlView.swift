@@ -273,6 +273,8 @@ struct CopilotControlView: View {
                     line
                 }
                 startOnOpenRow
+                line
+                opensInRow
                 if reading.setUp {
                     line
                     forgetRow
@@ -346,6 +348,59 @@ struct CopilotControlView: View {
      * money on this machine when I open this tab*, and the decision is written
      * down so it survives the next visit.
      */
+    /**
+     * Which of the two the tab opens in.
+     *
+     * > *"It should directly land in terminal or chat mode, and user can set its
+     * > default from settings."*
+     *
+     * A segmented control rather than a switch, because neither of the two is
+     * *off*: a terminal is not the absence of a chat. Two positions read at a
+     * glance and the words are the two things the toggle on the conversation
+     * itself already says, so nobody has to learn a second vocabulary for the
+     * same pair.
+     *
+     * It sets the **default**, not the current mode. Somebody who switches to
+     * the terminal inside a conversation has changed that conversation and not
+     * this — which is why the toggle up there does not write here, and why this
+     * row says *opens in* rather than *is*.
+     *
+     * Drawn on every machine. A desktop's copilot lands in a session too, and
+     * the preference is about how a conversation opens rather than about what
+     * kind of machine is holding it.
+     */
+    private var opensInRow: some View {
+        let chat = book.opensInChat(host: hostID)
+        return HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Opens in")
+                    .font(.system(size: 16))
+                    .foregroundStyle(Theme.primary)
+                Text("The conversation still switches either way")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.faint)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Picker("Opens in", selection: Binding(
+                get: { chat },
+                set: { wanted in
+                    book.setOpensInChat(wanted, host: hostID)
+                    notice = nil
+                },
+            )) {
+                Text("Chat").tag(true)
+                Text("Terminal").tag(false)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(width: 168)
+            .accessibilityIdentifier("copilot.controls.opensIn")
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+    }
+
     private var startOnOpenRow: some View {
         let on = book.isArmed(host: hostID)
         let what = reading.kind == .headless ? "a session" : "a run"
@@ -974,17 +1029,16 @@ struct CopilotControlView: View {
  *
  * It is wrong in meaning: this opens *"all the control about copilot, all the
  * settings of the copilot… whatever, three dots, maybe your settings button"*,
- * and an ⓘ is this app's mark for **an explanation lives behind this** — on every
- * `InfoDot` and on the terminal's chat note. A person who has met one of those
- * has been taught something this button no longer does.
+ * and an ⓘ is this app's mark for **an explanation lives behind this** — every
+ * `InfoDot` in the app. A person who has met one of those has been taught
+ * something this button no longer does.
  *
- * And it is wrong in the place it matters most. The landed session is the perch
- * where least is on screen naming what you are talking to, and `TerminalScreen`
- * **already draws an `info.circle`** in the same trailing group whenever chat
- * mode is up — `chat.note`, which explains why an agent's tool calls are not in
- * the transcript. The landed state *is* chat mode, so an ⓘ here would put two
- * identical glyphs side by side on the screen somebody arrives at, which reads as
- * a rendering fault rather than as two controls. Measured by reading that
+ * It was also, for a day, a collision: `TerminalScreen` drew its own
+ * `info.circle` in the same trailing group whenever chat mode was up, and the
+ * landed state *is* chat mode, so two identical glyphs sat side by side on the
+ * screen somebody arrives at. That one is gone — *"why do we have this i button,
+ * it is completely extra"* — so the collision is not the argument any more. The
+ * meaning is, and it was always the stronger half. Measured by reading that
  * toolbar, not by guessing.
  *
  * A gear collides with nothing in this app and says what it does.
@@ -1090,43 +1144,27 @@ enum CopilotControl {
      * like a screen nobody thought about, and adding a fourth without deciding
      * is how the button comes to be missing from the newest thing.
      */
-    enum Perch: String, CaseIterable {
-        /// `CopilotOnServerView` — the tab's root on a server that has not been
-        /// set up, or one whose copilot cannot be reached right now.
-        case fallback
-        /// `TerminalScreen`, pushed onto `copilotRoute` by the landing. The
-        /// state somebody most often arrives in, and the one where least is on
-        /// screen naming what they are talking to.
-        case landedSession
-        /// `CopilotView` on a desktop: the copilot conversation itself.
-        case conversation
-    }
-
     /**
-     * The file that applies `copilotControlsButton` for each perch.
+     * Where the copilot's controls are reached from.
      *
-     * Not decoration. Two of these three screens are outside the file the button
-     * is written in, and naming their owners here is what turns *"the button is
-     * missing from the landed state"* from something a person notices on a phone
-     * into something a reader of this enum can see.
+     * One place, and it is not the copilot's own screen any more:
+     *
+     * > *"Let's move settings option for copilot to main settings page instead
+     * > of inside the copilot page, so we can have three dots in left along with
+     * > chat vs terminal switch."*
+     *
+     * It used to be a gear applied at three perches — the fallback screen, the
+     * landed conversation, and a desktop's copilot — each of which had to draw
+     * it or lose it exactly where it was needed. That is gone. `Menu → Copilot`
+     * pushes `SettingsRoute.copilot`, which is a row on a page that is already a
+     * list of settings about this machine, and the conversation's toolbar is
+     * left carrying only what somebody uses while talking.
+     *
+     * The enum stays as one word for the identifier, so the row and any test
+     * that presses it cannot drift apart.
      */
-    static func owner(of perch: Perch) -> String {
-        switch perch {
-        case .fallback: return "Screens/CopilotOnServerView.swift"
-        // The stack's `navigationDestination` rather than `TerminalScreen`
-        // itself, and that is the whole point of naming the owner: the same
-        // terminal is pushed from the Sessions tab, where it is not a copilot
-        // screen and must not carry a button about one. The file that knows
-        // *which stack this terminal is on* is the file that applies it.
-        case .landedSession: return "Screens/DeckTabs.swift"
-        // Applied there with `when:` — see `copilotControlsButton`. That screen
-        // renders `CopilotOnServerView` inside itself, so an unguarded
-        // application would draw the button twice on every server.
-        case .conversation: return "Screens/CopilotView.swift"
-        }
-    }
+    static let settingsRow = "settings.copilot"
 
-    /// The sections, in the order they are drawn.
     enum Panel: String, CaseIterable, Identifiable {
         case whenYouOpen
         case agent

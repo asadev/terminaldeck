@@ -367,12 +367,15 @@ final class ReleaseShotsUITests: XCTestCase {
     /// QuickPath tutorial the system keyboard shows on a fresh Simulator sits
     /// over the key bar, so it is dismissed the way a person would.
     private func type(_ text: String) throws {
-        let keyboard = app.buttons["terminal.keyboard"]
-        XCTAssertTrue(keyboard.waitForExistence(timeout: 30), "the terminal toolbar should be up")
+        // Tapping the terminal, which is the only way in since the toolbar's
+        // keyboard button was deleted — *"we don't need keyboard button also,
+        // even in terminal pages, even on copilot pages."*
+        let terminal = app.descendants(matching: .any).matching(identifier: "terminal.view").firstMatch
+        XCTAssertTrue(terminal.waitForExistence(timeout: 30), "the terminal screen should be up")
         if !app.keyboards.firstMatch.exists {
-            keyboard.tap()
+            terminal.tap()
             XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 20),
-                          "the keyboard toggle should raise a keyboard")
+                          "tapping the terminal should raise a keyboard")
         }
         if app.buttons["Continue"].exists { app.buttons["Continue"].tap() }
         app.typeText(text)

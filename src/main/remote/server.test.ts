@@ -44,6 +44,7 @@ import {
   type RemoteAuthenticator,
   type RemoteConnection,
   type RemoteEndpoint,
+  type ScreencastHost,
   type SessionAccess,
   type SessionHandle,
 } from './server'
@@ -555,6 +556,9 @@ describe('a paired device', () => {
         unwatch: (): void => undefined,
         ack: (): void => undefined,
         input: async (): Promise<{ ok: boolean; reason?: string }> => ({ ok: true }),
+        handover: () => ({ asking: false, prompt: '', taker: null }),
+        take: async (): Promise<{ ok: boolean; reason?: string }> => ({ ok: true }),
+        handBack: async (): Promise<{ ok: boolean; reason?: string }> => ({ ok: true }),
         surfaces: () => surfaces,
         dropWatcher: (): void => undefined,
       },
@@ -581,6 +585,324 @@ describe('a paired device', () => {
     client.send(HELLO)
     await client.until((m) => m.t === 'welcome', 'the welcome')
     expect(harness.endpoint.surfacesChanged()).toBe(0)
+  })
+
+  /**
+   * The handover, answered from the one screen it was for.
+   *
+   * `browser.handover` is the copilot saying it needs a person. On a desktop that
+   * person is already at the keyboard, so the driver curtains the cast and waits
+   * for a banner. Against a server watched from a phone, the person being asked
+   * *is* the watcher — and what the curtain handed them was the agent's sentence
+   * with the pixels removed and the keyboard refused. These three frames are how
+   * that phone says *that person is me*, and how a second phone finds out.
+   */
+  function handoverEngine(prompt = 'Sign in and then press Done.'): {
+    host: ScreencastHost
+    taker: () => string | null
+    asking: () => boolean
+  } {
+    let taker: string | null = null
+    let asking = true
+    const watching = new Set<string>()
+    const host: ScreencastHost = {
+      watch: async (input): Promise<{ ok: boolean; reason?: string }> => {
+        watching.add(input.watcherId)
+        return { ok: true }
+      },
+      unwatch: (input): void => {
+        watching.delete(input.watcherId)
+      },
+      ack: (): void => undefined,
+      input: async (): Promise<{ ok: boolean; reason?: string }> => ({ ok: true }),
+      handover: () => ({ asking, prompt: asking ? prompt : '', taker }),
+      // The machine-side rules, in the same order `BrowserDrive` applies them.
+      take: async (input): Promise<{ ok: boolean; reason?: string }> => {
+        if (!asking) return { ok: false, reason: 'nobody is being asked' }
+        if (!watching.has(input.watcherId)) return { ok: false, reason: 'not being watched here' }
+        if (taker !== null && taker !== input.watcherId) return { ok: false, reason: 'somebody else has it' }
+        taker = input.watcherId
+        return { ok: true }
+      },
+      handBack: async (input): Promise<{ ok: boolean; reason?: string }> => {
+        if (taker === null || taker !== input.watcherId) return { ok: false, reason: 'not yours to hand back' }
+        taker = null
+        asking = false
+        return { ok: true }
+      },
+      surfaces: () => [{ window: 'B1', url: 'https://example.com/', title: 'Example', live: true }],
+      dropWatcher: (watcherId): void => {
+        watching.delete(watcherId)
+        if (taker === watcherId) taker = null
+      },
+    }
+    return { host, taker: () => taker, asking: () => asking }
+  }
+
+  /** Every handover state one client has been sent, newest last. */
+  function statesOn(client: { received: ServerMessage[] }): Extract<ServerMessage, { t: 'browser.handover.state' }>[] {
+    const states: Extract<ServerMessage, { t: 'browser.handover.state' }>[] = []
+    for (const message of client.received) {
+      if (message.t === 'browser.handover.state') states.push(message)
+    }
+    return states
+  }
+
+  /** Wait until one more handover state has landed than `seen`. */
+  async function nextStateOn(
+    client: { received: ServerMessage[] },
+    seen: number,
+    label: string,
+  ): Promise<Extract<ServerMessage, { t: 'browser.handover.state' }>> {
+    /*
+     * Counted rather than matched with `until`, which searches what has already
+     * arrived. Two of these frames can carry identical fields — the question is
+     * re-offered after a taker drops in exactly the state it was first pushed in
+     * — so *which* frame a predicate found is not the same question as *whether a
+     * new one came*.
+     */
+    const deadline = Date.now() + 2000
+    while (statesOn(client).length <= seen && Date.now() < deadline) {
+      await new Promise((settle) => setTimeout(settle, 5))
+    }
+    const states = statesOn(client)
+    if (states.length <= seen) throw new Error(`timed out waiting for ${label}`)
+    return states[states.length - 1]
+  }
+
+  /** A connection that has said hello and is watching `B1`. */
+  async function watcherOn(port: number): Promise<Awaited<ReturnType<typeof connect>>> {
+    const client = await connect(port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+    client.send({ t: 'browser.watch', window: 'B1', maxWidth: 800, quality: 50 })
+    return client
+  }
+
+  it('tells a viewer the question the moment it starts watching a page that has one', async () => {
+    /*
+     * Nothing else replays it. Every other `browser.handover.state` fires on a
+     * *change*, so a connection that arrives after the copilot asked was shown a
+     * curtained page, the agent's sentence inside a lock card, and no indication
+     * that the question was one it was allowed to answer — and it would find out
+     * at the next state move, which on a question waiting for this very device is
+     * never.
+     *
+     * Two ordinary cases: a phone that backgrounded and came back with a new
+     * connection id and an empty watch set, and a viewer renegotiating, because a
+     * rotation is a second `browser.watch`.
+     */
+    const engine = handoverEngine()
+    const harness = await serve({ screencast: engine.host })
+    const client = await watcherOn(harness.port)
+
+    const replayed = await nextStateOn(client, 0, 'the question, on watch')
+    expect(replayed).toMatchObject({ window: 'B1', asking: true, mine: false, taken: false })
+    expect(replayed.prompt).toContain('Sign in')
+    // A replay is not an answer to anything, so it carries no `rid`.
+    expect(replayed.rid).toBeUndefined()
+    // Nobody had to move for it: the machine's state is exactly as it was.
+    expect(engine.taker()).toBeNull()
+    expect(engine.asking()).toBe(true)
+  })
+
+  it('tells a viewer that arrives late that somebody else is already filling it in', async () => {
+    /*
+     * The same replay, in the state that used to be unsayable. `asking && !mine`
+     * covered both *the button is yours* and *another phone is typing the password
+     * right now*, and a viewer arriving in the middle of the second one has no
+     * traffic to infer it from — it was not there for the push that would have
+     * carried the guess.
+     */
+    const engine = handoverEngine()
+    const harness = await serve({ screencast: engine.host })
+    const phone = await watcherOn(harness.port)
+    await nextStateOn(phone, 0, 'the question')
+    phone.send({ t: 'browser.handover.take', rid: 'ho-1', window: 'B1' })
+    await phone.until((m) => m.t === 'browser.handover.state' && m.rid === 'ho-1', 'the answer')
+
+    const laptop = await watcherOn(harness.port)
+    const replayed = await nextStateOn(laptop, 0, 'the question, already owned')
+    expect(replayed).toMatchObject({ window: 'B1', asking: true, mine: false, taken: true })
+  })
+
+  it('tells everybody watching a page that the copilot is asking for a person', async () => {
+    /*
+     * The push that has to exist, because this endpoint is no part of the
+     * conversation that creates the state. An agent calls `browser.handover`, the
+     * driver curtains, and the phone gets a lock card — with, until this fired,
+     * nothing to say there was a question under it that it was allowed to answer.
+     */
+    const engine = handoverEngine()
+    const harness = await serve({ screencast: engine.host })
+    const phone = await watcherOn(harness.port)
+    const laptop = await watcherOn(harness.port)
+    const seen = [await nextStateOn(phone, 0, 'the replay'), await nextStateOn(laptop, 0, 'the replay')]
+    expect(seen).toHaveLength(2)
+
+    expect(harness.endpoint.handoverChanged()).toBe(2)
+    for (const client of [phone, laptop]) {
+      const state = await nextStateOn(client, 1, 'the push')
+      expect(state.window).toBe('B1')
+      expect(state.asking).toBe(true)
+      expect(state.prompt).toContain('Sign in')
+      // Nobody has answered yet, so it is nobody's — and an unsolicited push
+      // carries no `rid`, because it is answering nothing.
+      expect(state.mine).toBe(false)
+      expect(state.taken).toBe(false)
+      expect(state.rid).toBeUndefined()
+    }
+  })
+
+  it('gives the taker `mine`, and tells the other phone the question has an owner', async () => {
+    const engine = handoverEngine()
+    const harness = await serve({ screencast: engine.host })
+    const phone = await watcherOn(harness.port)
+    const laptop = await watcherOn(harness.port)
+    // Both replays first, so the count below cannot mistake a viewer's own
+    // arrival frame for the push that follows somebody taking the question.
+    await nextStateOn(phone, 0, 'the replay')
+    await nextStateOn(laptop, 0, 'the replay')
+    const theirsBefore = statesOn(laptop).length
+
+    phone.send({ t: 'browser.handover.take', rid: 'ho-1', window: 'B1' })
+
+    // The answer to the question that was asked, named by its `rid`.
+    const mine = await phone.until(
+      (m) => m.t === 'browser.handover.state' && m.rid === 'ho-1',
+      'the answer',
+    )
+    if (mine.t !== 'browser.handover.state') throw new Error('unreachable')
+    expect(mine).toMatchObject({ window: 'B1', asking: true, mine: true, taken: true })
+    expect(engine.taker()).not.toBeNull()
+
+    /*
+     * And the same state, pushed, to the device that did not ask. `mine` is the
+     * one per-connection field on the frame and `taken` is the one that is the
+     * same for everybody: one machine state, two different answers to *may I
+     * type* and one shared answer to *has anybody*. Together they are what stops
+     * the second phone offering a button the tap would be refused from — and
+     * stop it concluding, from a `mine: false` alone, that nobody is on it.
+     */
+    const theirs = await nextStateOn(laptop, theirsBefore, 'the push')
+    expect(theirs).toMatchObject({ window: 'B1', asking: true, mine: false, taken: true })
+    expect(theirs.rid).toBeUndefined()
+  })
+
+  it('refuses a hand-back from a phone that is not the one holding it', async () => {
+    /*
+     * The quiet, wrong one. Two phones on one page: without this the second could
+     * press Done on behalf of the person halfway through typing a password into
+     * it, and the agent would resume driving a half-filled form.
+     */
+    const engine = handoverEngine()
+    const harness = await serve({ screencast: engine.host })
+    const phone = await watcherOn(harness.port)
+    const laptop = await watcherOn(harness.port)
+    await nextStateOn(phone, 0, 'the replay')
+    await nextStateOn(laptop, 0, 'the replay')
+
+    phone.send({ t: 'browser.handover.take', rid: 'ho-1', window: 'B1' })
+    await phone.until((m) => m.t === 'browser.handover.state' && m.rid === 'ho-1', 'the answer')
+    const held = engine.taker()
+
+    laptop.send({ t: 'browser.handover.done', rid: 'ho-2', window: 'B1', carryOn: true })
+    const answer = await laptop.until(
+      (m) => m.t === 'browser.handover.state' && m.rid === 'ho-2',
+      'the refusal',
+    )
+    if (answer.t !== 'browser.handover.state') throw new Error('unreachable')
+    // Refused rather than obeyed: still outstanding, still *somebody's*, and
+    // still not this connection's to end.
+    expect(answer).toMatchObject({ asking: true, mine: false, taken: true })
+    expect(engine.asking()).toBe(true)
+    expect(engine.taker()).toBe(held)
+
+    // And the one that does hold it ends it, for everybody.
+    const theirsBefore = statesOn(laptop).length
+    phone.send({ t: 'browser.handover.done', rid: 'ho-3', window: 'B1', carryOn: true })
+    const done = await phone.until(
+      (m) => m.t === 'browser.handover.state' && m.rid === 'ho-3',
+      'the hand-back',
+    )
+    if (done.t !== 'browser.handover.state') throw new Error('unreachable')
+    expect(done).toMatchObject({ asking: false, mine: false, taken: false, prompt: '' })
+    const cleared = await nextStateOn(laptop, theirsBefore, 'the all-clear')
+    expect(cleared).toMatchObject({ asking: false, mine: false, taken: false })
+    expect(engine.asking()).toBe(false)
+  })
+
+  it('will not let a device take a window it is not watching', async () => {
+    /*
+     * The same axis `browser.watch` rides, and one more the input path already
+     * takes. Taking a page you cannot see is not a thing to allow — and the
+     * pixels the taker is about to be shown are the ones already flowing down
+     * this connection.
+     */
+    const engine = handoverEngine()
+    const harness = await serve({ screencast: engine.host })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'browser.handover.take', rid: 'ho-9', window: 'B1' })
+    // Dropped in silence, the way an unwatchable `browser.watch` is: nothing
+    // comes back and nothing on the machine moved.
+    client.send({ t: 'ping' })
+    await client.until((m) => m.t === 'pong', 'the pong')
+    expect(engine.taker()).toBeNull()
+    expect(statesOn(client)).toEqual([])
+  })
+
+  it('says nothing about a handover to a device whose window grant is off', async () => {
+    // The gate is read at send time, exactly as `tellSurfaces` reads it: a device
+    // that may not watch the page hears nothing about a question on it — not the
+    // push, and not the replay its own `browser.watch` would otherwise have
+    // earned.
+    const engine = handoverEngine()
+    const harness = await serve({ screencast: engine.host, drivesWindows: () => false })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+    client.send({ t: 'browser.watch', window: 'B1', maxWidth: 800, quality: 50 })
+    await new Promise((settle) => setTimeout(settle, 20))
+
+    expect(harness.endpoint.handoverChanged()).toBe(0)
+    expect(statesOn(client)).toEqual([])
+  })
+
+  it('tells the watchers left behind when the taker’s socket drops', async () => {
+    /*
+     * A phone that went into a tunnel mid-password. `PageCast.untake` puts the
+     * curtain back on the machine side; this is the other half — the frame that
+     * takes *somebody else has this* off the second phone's screen and offers it
+     * the button instead. `taken` is the field that difference lives in: every
+     * other value on the two frames is identical.
+     */
+    const engine = handoverEngine()
+    const harness = await serve({ screencast: engine.host })
+    const phone = await watcherOn(harness.port)
+    const laptop = await watcherOn(harness.port)
+    await nextStateOn(phone, 0, 'the replay')
+
+    phone.send({ t: 'browser.handover.take', rid: 'ho-1', window: 'B1' })
+    await phone.until((m) => m.t === 'browser.handover.state' && m.rid === 'ho-1', 'the answer')
+    const owned = await laptop.until(
+      (m) => m.t === 'browser.handover.state' && m.taken === true,
+      'the owner push',
+    )
+    expect(owned.t === 'browser.handover.state' && owned.mine).toBe(false)
+    expect(engine.taker()).not.toBeNull()
+    const seen = statesOn(laptop).length
+
+    phone.socket.destroy()
+    const after = await nextStateOn(laptop, seen, 're-offer')
+    // Still being asked, and nobody's again — the button comes back on the phone
+    // that is still here, and it can tell that from `taken` alone.
+    expect(after).toMatchObject({ window: 'B1', asking: true, mine: false, taken: false })
+    expect(after.prompt).toContain('Sign in')
+    expect(engine.taker()).toBeNull()
+    expect(engine.asking()).toBe(true)
   })
 
   it('is told what this desktop can do beyond protocol v1', async () => {

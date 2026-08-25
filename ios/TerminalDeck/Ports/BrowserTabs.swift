@@ -7,7 +7,7 @@
  * and, naming this one: *"it should have all those options — to start a new
  * windows thing should be there."*
  *
- * The phone opens exactly one page. `LocalhostPortsView` holds a single
+ * The phone opens exactly one page. `MachineBrowserView` holds a single
  * `browsing: PortTunnel?`, a tap replaces whatever was there, and going back
  * throws the page away — so reading a dashboard on `:3000` and glancing at the
  * API on `:8080` costs you the dashboard. This is the object that holds several
@@ -164,7 +164,7 @@ struct BrowserTab: Identifiable {
  * Identity, and only identity.
  *
  * The same trade `PortTunnel` makes for the same reason (see `DeckChrome`): this
- * value is what `LocalhostPortsView` hands to `navigationDestination(item:)`, and
+ * value is what `MachineBrowserView` hands to `navigationDestination(item:)`, and
  * a synthesised `==` over every field would make the pushed page tear itself
  * down and rebuild the moment a title arrived from the document — which is a
  * second or so after every navigation.

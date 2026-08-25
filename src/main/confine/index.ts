@@ -666,6 +666,17 @@ export async function proveConfinement(
  *  3. The canaries are removed. Through the runner rather than through `fs`,
  *     because on the WSL path they are not on this filesystem.
  *
+ * And one question that is not about a fence at all: **can the session write
+ * where it has to write.** Every check above asks whether something is shut,
+ * and a plan can be perfectly shut and still unusable — Asad's headless WSL
+ * server answered every session with
+ * `EROFS … mkdir '<device home>/tmp/claude-0'` while the boundary held exactly
+ * as designed. `linuxKeeps` has the sequence and the fix; this is the check
+ * that would have turned it into a refusal at session start with a sentence
+ * about the device's home, instead of the agent's own error in red on a phone.
+ * Measured on both sides for the same reason the canaries are: unwritable
+ * everywhere would be a check that cannot fail.
+ *
  * Run per session rather than cached, for the reason the Seatbelt half gives:
  * caching would answer a question about *this* plan with a measurement of a
  * different one. On this side it also matters that the machine can change its
@@ -684,8 +695,12 @@ async function proveNamespace(
 
   const homeCanary = posix.join(plan.accountHome, `.terminaldeck-confine-probe-${stamp}`)
   const tmpCanary = `/tmp/.terminaldeck-confine-probe-${stamp}`
+  // The same expression `confinedEnv` uses for `TMPDIR` and `CLAUDE_CODE_TMPDIR`,
+  // so the proof asks about the directory that actually failed rather than about
+  // a plausible neighbour of it.
+  const deviceTmp = posix.join(plan.home, 'tmp')
   const args = (mode: 'plant' | 'read' | 'clean'): string[] =>
-    linuxProofArgs({ mode, token, homeCanary, tmpCanary, homeSecret, tmpSecret })
+    linuxProofArgs({ mode, token, homeCanary, tmpCanary, homeSecret, tmpSecret, deviceTmp })
 
   const withinPlan = (path: string): boolean =>
     [...plan.writable, ...plan.readable].some((root) => within(path, root, 'linux'))
@@ -739,6 +754,12 @@ async function proveNamespace(
           'the file used to test the boundary could not be read from outside it either, so the test could not fail',
       }
     }
+    if (before.write !== 'ok') {
+      return {
+        ok: false,
+        detail: `this device's own scratch directory (${deviceTmp}) is not writable outside the boundary either, so the test could not fail`,
+      }
+    }
 
     const launch = linuxCommand(plan, LINUX_SHELL, args('read'), machine, stagePath(stamp))
     const inside = await capture(runner, launch.command, launch.args)
@@ -762,6 +783,12 @@ async function proveNamespace(
     }
     if (after.runwsl !== '') {
       return { ok: false, detail: 'the WSL interop sockets under /run/WSL were still reachable' }
+    }
+    if (after.write !== 'ok') {
+      return {
+        ok: false,
+        detail: `the session could not write to its own scratch directory (${deviceTmp}) inside the boundary, so the agent would not be able to start`,
+      }
     }
     return { ok: true, detail: '' }
   } catch (error) {

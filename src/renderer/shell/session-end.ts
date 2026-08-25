@@ -145,7 +145,8 @@ export function endedNotice(end: SessionEnd): EndedNotice {
          */
         detail:
           `The shell on ${end.server} closed. That is either the shell itself ending or ${end.server} ` +
-          'dropping the connection, and this app cannot tell which from here. Opening another terminal on it will say.',
+          'dropping the connection, and this app cannot tell which from here. If the machine is gone, ' +
+          'opening another terminal on it will fail too — if it opens, the shell was the thing that ended.',
         action: { id: 'reopen', label: `Open another terminal on ${end.server}` },
         alive: false,
         retryAt: null,

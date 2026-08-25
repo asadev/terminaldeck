@@ -1,6 +1,21 @@
 /**
  * The open pages, in a row, with the one you are on marked.
  *
+ * ## Nothing draws this any more, and that is the honest state rather than an
+ * oversight
+ *
+ * It was the strip under the localhost screen's address bar, and that screen is
+ * gone: *"you still kept localhost as a separate page inside the page… I wanted
+ * it to be like ONE page where I can start a new window."* The pages this phone
+ * holds over a tunnel are **rows on the Browser tab's own list** now, beside the
+ * machine's windows and marked *On this phone* — see `MachineBrowserView`. A
+ * strip of them somewhere else would be the second place to look that the whole
+ * change exists to remove.
+ *
+ * The file is kept because `PanelView` cites the pill decision below and because
+ * nothing about it is wrong; it is a component with no caller. Anyone reaching
+ * for it should check first whether what they want is a row on that list.
+ *
  * Asad: *"it should have all those options — to start a new windows thing should
  * be there."* `BrowserTabs` is the half that decides what a tab is and which
  * tunnels stay bound; this is the half you touch. Four things and nothing else:
@@ -12,7 +27,7 @@
  * field at the top of the Browser screen. A `+` that raised a sheet with a
  * second field in it would be the control this screen already deleted once: the
  * old `+` in the toolbar put up a modal to show somebody a control they were
- * already looking at (see `LocalhostPortsView.addressBar`). So it clears that
+ * already looking at (see `NewWindowSheet`). So it clears that
  * field and puts the keyboard in it, which is what a new tab is on a phone.
  *
  * ## No glyph on the pills
@@ -25,7 +40,7 @@
  *
  * ## Two buttons in one pill, not a button inside a button
  *
- * The same shape `LocalhostPortsView.SplitRow` uses on the port rows and for the
+ * The same shape `PortSuggestions`' `SplitRow` uses on the port rows and for the
  * same reason: SwiftUI does not nest tap targets, so a close glyph inside the
  * selecting button is a close glyph that selects. They sit side by side over one
  * shared background, which is what makes them read as one object and behave as
@@ -71,7 +86,7 @@ struct BrowserTabStrip: View {
     let tabs: [BrowserTab]
     /// The tab whose page is open, or nil while the list is on screen and none
     /// of them is. Passed in rather than asked of `BrowserTabs`, because which
-    /// page is *pushed* is the screen's business — see `LocalhostPortsView`.
+    /// page is *pushed* is the screen's business — see `MachineBrowserView`.
     let current: BrowserTab?
     let select: (BrowserTab) -> Void
     let close: (BrowserTab) -> Void

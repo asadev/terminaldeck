@@ -1768,6 +1768,13 @@ final class HostLink: Identifiable {
                 browseError = text.isEmpty ? code.rawValue : text
                 browsed = nil
             }
+            // And the same for a handover answer in flight. `WatchLink` is the
+            // one that knows whether there was one, and it does nothing at all
+            // when there was not — so this is not a third guess piled on the two
+            // above, it is the same guess made only in the window where it is
+            // the likeliest reading: a claim on a page the agent is blocked on,
+            // and an error arriving in the same breath.
+            watch.wireErrored(text)
 
         case let .ports(list):
             ports = list
@@ -1876,7 +1883,7 @@ final class HostLink: Identifiable {
         case .devicesRows, .devicesRevoked, .devicesChanged:
             devices.receive(message)
 
-        case .browserFrame, .browserSurfaces:
+        case .browserFrame, .browserSurfaces, .browserHandover:
             watch.receive(message)
 
         case .enrolled:

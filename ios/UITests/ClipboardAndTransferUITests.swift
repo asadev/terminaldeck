@@ -69,7 +69,7 @@ final class ClipboardAndTransferUITests: XCTestCase {
         // Dismiss without choosing.
         app.buttons["terminal.copyScreen"].tap()
 
-        app.buttons["terminal.keyboard"].tap()
+        raiseTheKeyboard()
         try openTheKeyGrid()
         XCTAssertTrue(app.buttons["copy"].waitForExistence(timeout: 5),
                       "Copy must also be in the key grid, which is inside the terminal")
@@ -96,7 +96,7 @@ final class ClipboardAndTransferUITests: XCTestCase {
         try openSession()
 
         // Give the shell something worth selecting, and let it print.
-        app.buttons["terminal.keyboard"].tap()
+        raiseTheKeyboard()
         app.typeText("echo SELECT-ME-9F2C\n")
         sleep(2)
 
@@ -191,7 +191,7 @@ final class ClipboardAndTransferUITests: XCTestCase {
         // left at the prompt is submitted by the *next* case that types a
         // newline, and that case then fails for a reason that has nothing to do
         // with it. Ctrl-C is the discard, and the key grid is where it lives.
-        app.buttons["terminal.keyboard"].tap()
+        raiseTheKeyboard()
         try openTheKeyGrid()
         if app.buttons["^C"].waitForExistence(timeout: 5) { app.buttons["^C"].tap() }
         sleep(1)
@@ -380,6 +380,32 @@ final class ClipboardAndTransferUITests: XCTestCase {
             usleep(500_000)
         }
         return false
+    }
+
+    /**
+     * Raise the keyboard by tapping the terminal.
+     *
+     * The navigation bar's keyboard button was deleted at his word — *"we don't
+     * need keyboard button also, even in terminal pages, even on copilot pages,
+     * because when we click inside the chat keyboard comes anyway"* — and the
+     * tap it duplicated is what is left. It is SwiftTerm's own tap that makes the
+     * view first responder; `TerminalGestures` installs its recogniser alongside
+     * that one, with `cancelsTouchesInView` false, precisely so this keeps
+     * working.
+     *
+     * Tapping the terminal is also *closer* to what these cases are about than
+     * the button was: every one of them is about the surface the selection and
+     * the key grid belong to, and this is the same touch a person makes.
+     */
+    private func raiseTheKeyboard() {
+        let terminal = app.descendants(matching: .any).matching(identifier: "terminal.view").firstMatch
+        XCTAssertTrue(terminal.waitForExistence(timeout: 15), "the terminal screen should be up")
+        if !app.buttons["keys.dismiss"].exists { terminal.tap() }
+        // The QuickPath tutorial the system keyboard puts up the first time it
+        // appears on a fresh simulator sits over the bar. Nothing to do with this
+        // app; dismissed the way a person would.
+        let continueButton = app.buttons["Continue"]
+        if continueButton.waitForExistence(timeout: 3) { continueButton.tap() }
     }
 
     /**

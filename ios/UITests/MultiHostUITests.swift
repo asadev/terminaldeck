@@ -93,24 +93,29 @@ final class MultiHostUITests: XCTestCase {
      * Put text into the terminal that is on screen, and wait for the far end to
      * echo it back.
      *
-     * **The keyboard is raised through the app's own button, not by tapping the
-     * terminal.** A tap on a `TerminalView` does not make it first responder in
-     * the Simulator, so `typeText` had nowhere to go: the characters were never
+     * **The keyboard is raised by tapping the terminal, and that only works
+     * because the app now raises it itself.** This walk is where the trap was
+     * measured: a tap on a `TerminalView` did not make it first responder in the
+     * Simulator, so `typeText` had nowhere to go — the characters were never
      * typed, nothing was sent, and the failure arrived twenty seconds later as
-     * "the machine on the other end did not echo what was typed" — which
-     * describes a broken transport and was nothing of the kind. The toolbar's
-     * keyboard toggle is the control a person would use for the same reason.
+     * "the machine on the other end did not echo what was typed", which
+     * describes a broken transport and was nothing of the kind. The answer then
+     * was the toolbar's keyboard button. That button is gone at his word — *"we
+     * don't need keyboard button also, even in terminal pages, even on copilot
+     * pages"* — so `TerminalScreen.onAppear` wires the tap to `focus()` through
+     * `TerminalGestures`' own recogniser, which has no failure requirement in
+     * front of it. If this case starts failing on the echo again, that wiring is
+     * the first thing to look at and not the transport.
      *
      * The echo is the round trip. Nothing echoes locally in this app —
      * `TerminalBridge` sends keystrokes out and draws only what comes back
      * through `feed` — so a character on screen came from a shell on the far end.
      */
     private func type(_ text: String, into session: String) throws {
-        let keyboard = app.buttons["terminal.keyboard"]
-        XCTAssertTrue(keyboard.waitForExistence(timeout: 20), "the terminal toolbar should be up")
-        keyboard.tap()
+        XCTAssertTrue(terminalView.waitForExistence(timeout: 20), "the terminal screen should be up")
+        terminalView.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 10),
-                      "the keyboard toggle should raise a keyboard to type into")
+                      "tapping the terminal should raise a keyboard to type into")
         app.typeText(text)
         let marker = text.split(separator: " ").last.map(String.init) ?? text
         XCTAssertTrue(waitForText(containing: marker, timeout: 25),
@@ -485,7 +490,7 @@ final class MultiHostUITests: XCTestCase {
                 // away, so the two trailing items are excluded by name and
                 // whatever is left is the leading one.
                 let back = app.navigationBars.firstMatch.buttons.matching(
-                    NSPredicate(format: "identifier != 'terminal.actions' AND identifier != 'terminal.keyboard'")).firstMatch
+                    NSPredicate(format: "identifier != 'terminal.actions' AND identifier != 'terminal.mode'")).firstMatch
                 if back.exists { back.tap() }
             case 1:
                 // The gesture a person would use. Not first, because a right

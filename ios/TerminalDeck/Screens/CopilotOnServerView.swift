@@ -17,11 +17,11 @@
  * > or it should start a new. But it should be always a chat to land with,
  * > terminal and chat mode too."*
  *
- * So the Copilot tab **lands somebody in a conversation** — `land()` below
- * pushes it onto `copilotRoute`, and `TerminalScreen` brings it up as the chat
- * because it is on this stack. What is written here is everything that is left
- * when that cannot happen. It is a screen people should usually not see, and it
- * still has to be worth seeing.
+ * So the Copilot tab **is a conversation** — `CopilotOnServer.tabSession` names
+ * the session and `CopilotTabScreen` draws it as the tab's own content, in chat
+ * or in the terminal according to this machine's setup. What is written here is
+ * everything that is left when there is not one. It is a screen people should
+ * usually not see, and it still has to be worth seeing.
  *
  * ## It never asks. It starts, and then it writes down where.
  *
@@ -67,6 +67,61 @@
  * (`CopilotOnServer.startNeverLanded`), **nothing sent over a dead socket**, and
  * **the honest empty state** for a machine that cannot start sessions at all.
  *
+ * ## This screen is not on the way to the conversation any more
+ *
+ * > *"This page needs to go. It should directly land in terminal or chat mode,
+ * > and user can set its default from settings."*
+ *
+ * Said while looking at a photograph of this exact screen — the headline, and a
+ * row reading *Open the conversation — Claude Code in asad*. He is right, and
+ * the row he is pointing at is the tell: a tab whose job is to put somebody in a
+ * conversation, offering a button that puts them in the conversation, is a tab
+ * that did not do its job and is asking for a second press to finish it.
+ *
+ * So **the Copilot tab's content is the conversation.** `CopilotOnServer
+ * .tabSession` is the one reading of which session that is, `CopilotTabScreen`
+ * renders it, and this file is what the tab shows **when there is genuinely no
+ * conversation to show** — which is a smaller thing than it was, and every one
+ * of its states is real:
+ *
+ *  - a `create` on the wire and nothing back yet,
+ *  - a start that did not happen, saying so, with the row that tries again,
+ *  - a machine sharing no folder with this phone, and the one press that changes
+ *    that,
+ *  - a machine that cannot start sessions at all, or has not said yet.
+ *
+ * The *Open the conversation* row is gone with the page it was on. It cannot be
+ * drawn any more and it should not be: this screen is only ever rendered when
+ * `tabSession` is nil, and if there were a conversation you would be in it.
+ *
+ * ## What that did to Back, and to the machinery that protected it
+ *
+ * > *"On copilot page we have a bug. As soon as I reach on this copilot page,
+ * > once I open a conversation and I go back, I cannot go back more than that —
+ * > it will automatically take me to inside the chat. I go back, it takes me in
+ * > the chat back. I keep going back and it is keep taking me inside the chat
+ * > box."*
+ *
+ * That was the round before, and its cause was a **push**: the tab wrote a
+ * session onto `copilotRoute`, SwiftUI discarded paths written while the tab was
+ * still transitioning on screen, and the retry that survived that could not tell
+ * a discarded path from a person pressing Back — both leave an empty route. The
+ * fix was a clock: an ask that vanished within six tenths of a second was
+ * discarded, anything later was somebody leaving.
+ *
+ * **All of it is deleted, and not out of tidiness.** There is no path write left
+ * to be discarded. The tab's content is chosen by an `if let` in a view body, and
+ * SwiftUI does not revert a view body. The timing rule, the retry loop, the
+ * settled latch and the `Ask` verdict existed to protect one navigation that no
+ * longer happens, so keeping them would be keeping a guard around an empty room.
+ *
+ * What survives is `visit` — see below — because **one start per visit** is
+ * still a rule about spending money, and a visit is still a thing that begins.
+ * And Back is now one press: the conversation is the tab's root, so it draws the
+ * chevron `CopilotView` has always drawn here and it calls
+ * `DeckModel.leaveCopilot()`. One press, out of the tab, the way every other tab
+ * answers to Back at its root.
+ *
  * ## Three rounds got it here, and the middle ones are worth keeping
  *
  * It began as two rows that changed tab. He looked at that and said:
@@ -102,11 +157,9 @@
  *    nothing cannot start a session anywhere, and *Choose a folder* is the one
  *    press that changes that. A fresh server pairing lands in precisely that
  *    state.
- *  - **Open the agent that is already running here.** `DeckModel.open(session:)`
- *    on the very session `land()` would have opened by itself — one call,
- *    `copilotSession`, so the row and the landing can never name two different
- *    sessions. It is the way back in for somebody who came back out, and it is a
- *    real conversation rather than a signpost to one.
+ *  - **Open the agent that is already running here.** Gone with this round: the
+ *    tab draws that conversation itself, so a screen offering to open it is a
+ *    screen that has already failed. See the note on the card below.
  *
  * A **composer** stood here for one round, between `HostLink.askAgent` arriving
  * and the tab learning to land. It is gone, and its own argument is why: the tab
@@ -269,20 +322,35 @@ struct CopilotOnServerView: View {
     @State private var refusal: String?
 
     /**
-     * Whether this visit has already put somebody in a session.
+     * Which visit this is — the machine whose copilot is on screen, or nil while
+     * this tab is not the one being looked at.
      *
-     * A one-shot latch for the life of this navigation stack, and it is what
-     * stops the landing being a **trap**: without it, popping back out of the
-     * conversation would re-run the push on the next frame and there would be no
-     * way to reach this screen at all. Somebody who came back out meant to come
-     * back out, and what they get is the screen with the rows on it.
+     * A visit begins when this becomes non-nil, and that is the **only** thing
+     * that re-arms `attemptedStart`. It is the one piece of the round that
+     * removed the trap which survives the round that removed the page, and it
+     * survives for a different reason than it was written for: nothing here
+     * navigates any more, so there is nothing to re-arm a *landing*, but **one
+     * start per visit** is a rule about a paid agent on somebody's server and it
+     * still needs a visit to count.
      *
-     * It is deliberately not reset when the connection returns or the tab is
-     * re-selected. Re-selecting the tab does not need it — `copilotRoute` still
-     * holds the session, so the pill lands back in the conversation on its own,
-     * which is the tab-stack behaviour every other tab already has.
+     * The distinction it draws is the one that matters for money. A session list
+     * refreshing, a provider name arriving, a socket reconnecting — all of them
+     * re-run `startIfWanted`, and none of them is a person asking for anything.
+     * Selecting this tab is. So the re-arm keys on arriving, and everything else
+     * is merely a reason to look again.
+     *
+     * It carries the host id rather than a bare `Bool` so that changing machines
+     * in the title switcher, without leaving the tab, is also an arrival — a
+     * different machine's copilot on screen, owed the same start any other would
+     * get.
+     *
+     * Cleared in `onDisappear`, and only when the **tab** has moved. This screen
+     * also disappears the moment a conversation arrives to replace it, which is
+     * the opposite of a visit ending: it is the visit succeeding. Re-arming there
+     * would mean a session that exited under somebody's thumb started another
+     * one behind them.
      */
-    @State private var landed = false
+    @State private var visit: String?
 
     /// A `create` is on the wire and nothing has come back yet. Only ever true
     /// for the automatic start — a press has the row's own dimming to say it was
@@ -293,7 +361,7 @@ struct CopilotOnServerView: View {
     /**
      * This visit has already tried to start one, whatever came of it.
      *
-     * **The latch that stops the loop.** `land()` runs on every change of a key
+     * **The latch that stops the loop.** `startIfWanted()` runs on every change of a key
      * that includes the session list and the connection, so a start that fails —
      * a machine that took the folder back, a `create` that is never answered —
      * would otherwise be re-sent on the next frame, and again, for as long as
@@ -353,30 +421,62 @@ struct CopilotOnServerView: View {
          * sheet, and why the placement lives in a modifier instead of six lines
          * copied into each of the three screens this tab can be showing.
          */
-        .copilotControlsButton(model: model, hostID: hostID)
         // `initial` so the first frame is a measurement rather than an empty
         // screen that fills in. The key is every fact `learn()` reads, joined,
         // because `onChange` compares values and these are four booleans and a
         // string that have to be watched together.
         .onChange(of: heard, initial: true) { learn() }
         /*
-         * **A task rather than an `onChange`, and it waits before it navigates.**
+         * **An `onChange`, because nothing here navigates any more.**
          *
-         * Separate from `learn` and watching a different set of facts, because
-         * this one navigates. What it took three measured runs to learn is that
-         * navigating *early* does not work at all: the append reaches
-         * `DeckModel` — traced, `copilotRoute` went to 1 — and SwiftUI then
-         * reverts it, because a `NavigationStack`'s path written while the tab
-         * is still transitioning onto screen is clobbered by the stack's own
-         * settling. The screen sat on *Open the conversation* with `route=0` and
-         * `landed=1`, and pressing that row — the identical call, a moment later
-         * — pushed correctly every time. The difference was never the call.
+         * This was a `.task` that slept, pushed, watched the route and pushed
+         * again, and every word of that machinery was about one navigation: the
+         * tab wrote a session onto `copilotRoute` and SwiftUI discarded paths
+         * written while the tab was still transitioning on screen. Measured over
+         * four runs — the append reached `DeckModel`, traced, `copilotRoute` went
+         * to 1, and a moment later the screen was the root again with `route=0`.
          *
-         * `.task(id:)` gives the wait a lifetime: it is cancelled when the key
-         * moves and when this screen goes, so a landing that is no longer wanted
-         * never happens, and there is no timer to cancel by hand.
+         * The tab does not write a path any more. `CopilotTabScreen` renders the
+         * conversation *as the tab's content* when there is one, so what used to
+         * be a push is now an `if let` in a view body, and a view body is not a
+         * thing SwiftUI reverts. So this is back to what it should always have
+         * been able to be: watch the facts, and start a session if that is what
+         * is wanted.
+         *
+         * Still separate from `learn`, and now for the plain reason rather than
+         * the navigation one: `learn` is monotonic bookkeeping and this **spends
+         * money**. A key that joined them would put a `create` on the wire every
+         * time a capability flag settled.
+         *
+         * `initial: true` because the first frame is a decision, not a blank.
          */
-        .task(id: reachable) { await landWhenTheStackWillTakeIt() }
+        .onChange(of: reachable, initial: true) { startIfWanted() }
+        /*
+         * **The tab being left, noticed at the moment it happens.**
+         *
+         * The end of a visit cannot be worked out afterwards: by the time this
+         * screen is on show again, *the conversation ended under me* and
+         * *I came back from another tab* are the same two facts — this tab
+         * selected, no conversation. One of them is owed a fresh start and the
+         * other is not, so the difference has to be written down while it is
+         * still visible, which is here.
+         *
+         * `onDisappear` rather than `onChange(of: model.tab)` because it does not
+         * depend on a question nobody should have to answer: whether SwiftUI
+         * re-evaluates the body of a tab that is not the selected one. This fires
+         * whenever this screen leaves, and `model.tab` has already moved by then,
+         * so it says which kind of leaving it was.
+         *
+         * The guard is the whole of it, and it now reads the way it always meant
+         * to. This screen also disappears when a **conversation replaces it**,
+         * which is this tab succeeding rather than a visit ending, and `model.tab`
+         * is still `.copilot` in that moment. Re-arming there would mean a session
+         * that exited under somebody's thumb quietly started another.
+         */
+        .onDisappear {
+            guard model.tab != .copilot else { return }
+            visit = nil
+        }
         /*
          * A start that never lands, said out loud rather than spun on forever.
          *
@@ -514,28 +614,23 @@ struct CopilotOnServerView: View {
     // MARK: - What can be done from here
 
     /**
-     * The card, which is only ever seen when the tab could not do its job.
+     * The card, which is what the tab shows when there is nothing to talk to.
      *
-     * > *"the copilot page will directly land into some session — not to a
-     * > selection and something on the page. It is still not that way… Because
-     * > it should directly start a session on whatever the selected folder for
-     * > it is."*
+     * > *"This page needs to go. It should directly land in terminal or chat
+     * > mode."*
      *
-     * **The two-row chooser is gone.** It was drawn before a folder had ever been
-     * chosen, and it is precisely the *"selection and something on the page"* he
-     * is objecting to — a question standing between somebody and the thing they
-     * tapped the pill for. What replaced it is not a smaller question: the tab
-     * starts in the machine's own folder and writes down where that turned out to
-     * be, so the folder is still a real, visible, changeable setting on
-     * `CopilotControlView` — **discovered by first use rather than demanded up
-     * front.**
+     * **The row he was pointing at is gone.** *Open the conversation* was the
+     * fourth state of this card and it cannot be reached any more: the tab draws
+     * the conversation itself, so a machine with a copilot session running never
+     * renders this file. A button offering to open the thing the tab exists to
+     * open was the page admitting it had not done its job.
      *
-     * So this card has four states and three of them are consequences rather than
-     * choices:
+     * What is left is three states and none of them is a choice between
+     * destinations — each is a consequence, and the third is the only question
+     * on the screen:
      *
-     *  - **Starting.** A line. The conversation replaces this screen when the
-     *    machine answers; there is nothing to press in the meantime.
-     *  - **Somebody came back out.** The way back in, naming the folder.
+     *  - **Starting.** A line. The conversation replaces this whole screen when
+     *    the machine answers; there is nothing to press in the meantime.
      *  - **A start did not happen.** `notice` says why, and this is the row that
      *    tries again — the retry `attemptedStart` deliberately does not do by
      *    itself.
@@ -545,22 +640,22 @@ struct CopilotOnServerView: View {
      *    **present and empty** is a person having shared nothing with this device,
      *    every `create` without a folder is refused, and the only thing that can
      *    work is naming a folder. One row, not two, and it is the one that works.
+     *    A fresh server pairing lands in precisely that state.
      *
      * An empty card under a caption is furniture describing nothing, so a machine
-     * that can do none of the four gets the headline and the wire line and no
+     * that can do none of the three gets the headline and the wire line and no
      * card at all — the first seconds of a first connection, or a phone opened
      * while its server is off.
      */
     @ViewBuilder
     private var acts: some View {
         let folder = book.folder(host: hostID)
-        let running = CopilotOnServer.copilotSession(in: host?.sessions ?? [], folder: folder)
         let plain = CopilotOnServer.start(offer: offer, granted: host?.granted)
         // The one row that is a question, and only where nothing else can work.
-        let mustPick = !plain.now && plain.inAFolder && running == nil && !starting
-        let canRetry = attemptedStart && !starting && running == nil && plain.now
+        let mustPick = !plain.now && plain.inAFolder && !starting
+        let canRetry = attemptedStart && !starting && plain.now
 
-        if starting || running != nil || canRetry || mustPick {
+        if starting || canRetry || mustPick {
             VStack(alignment: .leading, spacing: 0) {
                 caption("The copilot on this \(noun)")
                 card {
@@ -579,12 +674,6 @@ struct CopilotOnServerView: View {
                         .padding(.horizontal, 16)
                         .padding(.vertical, 12)
                         .accessibilityIdentifier("copilot.onServer.starting")
-                    } else if let running {
-                        act(title: "Open the conversation",
-                            detail: "\(ServerSettingsText.providerLabel(running.provider)) in "
-                                + "\(SessionDetails.folderName(running.cwd)).",
-                            icon: "bubble.left.and.bubble.right",
-                            id: "ask") { model.open(session: running.id, on: hostID) }
                     } else if canRetry {
                         act(title: folder.map { "Start it in \(SessionDetails.folderName($0))" }
                                 ?? "Start a session",
@@ -620,134 +709,74 @@ struct CopilotOnServerView: View {
         CopilotOnServer.agentSentence(provider: agent) ?? "A shell on this \(noun), and its agent in it."
     }
 
-    // MARK: - Landing
+    // MARK: - Starting
 
     /**
-     * Put somebody in the conversation — and start one if that is what was asked
-     * for.
+     * Start one, if that is what this machine and this setup ask for.
      *
-     * > *"copilot page should be always landing in a copilot session according
-     * > to the settings of the copilot — either in an existing session if there
-     * > is any, or it should start a new. But it should be always a chat to land
-     * > with, terminal and chat mode too."*
+     * > *"When we go to copilot it should just start the session; if there is
+     * > already an existing session it should start from there where we left,
+     * > and if not then it should create itself and start from the beginning. I
+     * > told the exact same also before."*
      *
-     * > *"if there is no session it will start a new session, and if there is
-     * > already a previous session going on it will just continue from there."*
+     * **Half of that sentence has moved out of this method, and that is the
+     * round.** *"Start from there where we left"* is no longer something this
+     * screen does — it is what the tab *is*: `CopilotTabScreen` shows the
+     * conversation `CopilotOnServer.tabSession` names, so a machine with a
+     * copilot session running never renders this file at all. What is left here
+     * is the other half, *"it should create itself"*, and the three guards that
+     * decide whether it may.
      *
-     * ## The half that used to be refused, and why it is not any more
+     * ## The argument for starting unasked, which has not changed
      *
-     * This method used to do the first clause and deliberately not the second.
-     * The argument was good and is worth keeping written down: a session on a
-     * server runs `agents.defaultProvider` — a real agent, spending real money —
-     * the Copilot pill is drawn **unconditionally** on a headless host so the tab
-     * is one mis-tap away at all times, and nothing here undoes a spawn.
+     * A session on a server runs `agents.defaultProvider` — a real agent,
+     * spending real money — the Copilot pill is drawn **unconditionally** on a
+     * headless host so the tab is one mis-tap away at all times, and nothing here
+     * undoes a spawn. That argument was made twice and overruled twice, exactly:
+     * he chooses the folder once, and after that a tab that asks him the same
+     * question every visit is the defect. What answers it is not a gate but two
+     * properties — **one start per visit**, and a folder **written down rather
+     * than guessed**, which is `copilotFolderFromItsSession` on the conversation
+     * this start produces.
      *
-     * What that argument was missing is that it applies to a tab **that has not
-     * been set up**. Asad has overruled it for one that has, and the overrule is
-     * exact: he chooses the folder, on purpose, once — and after that a tab that
-     * asks him the same question every visit is the defect. So the `.start` case
-     * exists and is reachable **only** through a record somebody's finger made.
-     * `CopilotSetupBook` holds it, `CopilotOnServer.landing` reads it, and a
-     * machine with nothing in it starts nothing however reachable it is.
+     * ## The guards, and what each one is
      *
-     * The three guards that survive unchanged, because they are about whether
-     * this can work rather than about whether it should:
+     *  - **Not connected.** A `create` into a dead socket is refused and would
+     *    spend this visit's one attempt on nothing. It happens by itself when the
+     *    wire comes back, because the connection is in `reachable`.
+     *  - **A copilot session already exists.** Belt and braces: this screen is
+     *    only rendered when there is none, so `landing` can only answer `.open`
+     *    in the single frame between a session arriving and the tab swapping to
+     *    it. Answering *do nothing* there is correct rather than dead — the tab is
+     *    already on its way to showing it.
+     *  - **Already attempted.** One start per visit. `reachable` moves on every
+     *    session-list change, so without it a `create` that produced nothing
+     *    would be re-sent on every redraw for as long as somebody stood here.
+     *  - **The tab has been quietened**, or **no folder is shared**. Both are
+     *    decisions somebody made; see `CopilotOnServer.landing`.
      *
-     *  - **Already landed.** A one-shot per navigation stack. Without it,
-     *    popping back out of the conversation re-pushes it on the next frame and
-     *    this screen becomes unreachable — a trap, not a default.
-     *  - **Not connected.** A pushed terminal cannot attach over a dead socket,
-     *    and `TerminalScreen` will not raise the chat without a live connection
-     *    because its way back to the terminal is hidden there. The landing
-     *    happens by itself when the wire comes back.
-     *  - **Already attempted.** One start per visit, so a refusal is a sentence
-     *    rather than a loop. See `attemptedStart`.
-     *
-     * The push itself is not made here for a started session: `createSession`
-     * sets `openWhenCreated`, and `DeckModel` opens what the machine made on the
-     * `created` frame — the same road the Start row has always taken.
+     * The tab guard is not defensive tidying either. A `TabView` builds every
+     * tab's content, so this view exists — and `onChange(initial: true)` fires —
+     * before `DeckModel.tab` has become `.copilot`. Starting a paid agent because
+     * SwiftUI warmed a tab nobody selected is the one mistake on this screen that
+     * cannot be undone from it. The tab is in `reachable`, so becoming the
+     * copilot's tab is itself a reason to look again.
      */
-    /**
-     * Ask to land, and keep asking until the stack actually takes it.
-     *
-     * ## Why this is a loop and not a call
-     *
-     * A `NavigationStack`'s path written while its tab is still transitioning on
-     * screen is **silently discarded**. Measured over four runs against a real
-     * machine: `DeckModel.open` reached its append every time — traced, with
-     * `copilotRoute` going to 1 — and a moment later the screen was still the
-     * root with `route=0` on it. Pressing *Open the conversation*, which is the
-     * identical call from a finger a few seconds later, pushed correctly every
-     * time. The call was never wrong; only its moment was.
-     *
-     * A single delay was tried first and is the wrong shape: it is a guess about
-     * how long a transition takes on a device nobody has measured, and it fails
-     * silently in the direction that matters — a slow first frame means the tab
-     * asks a question he has already said it must not ask.
-     *
-     * So this asks, looks at whether the route took, and asks again. Bounded, so
-     * a machine that genuinely will not open the session stops rather than
-     * spinning; and `land()` itself decides afresh each time, so a session that
-     * ended underneath, or a device that lost its connection, falls out through
-     * the ordinary rules rather than through this loop.
-     *
-     * `.task(id:)` owns the lifetime: leaving the screen or a change in
-     * `reachable` cancels it, so a landing nobody wants any more never happens.
-     */
-    private func landWhenTheStackWillTakeIt() async {
-        for attempt in 0 ..< CopilotOnServer.landingTries {
-            // The first wait is the long one — it is the transition itself. The
-            // rest are short because by then the only question is whether the
-            // last ask survived.
-            try? await Task.sleep(for: .milliseconds(attempt == 0 ? 300 : 180))
-            guard !Task.isCancelled else { return }
-            land()
-            // The route holding what was asked for is the only proof that the
-            // push took. Anything else — a `.stay`, a start in flight — ends the
-            // loop too, because both are answers rather than a lost push.
-            if !model.copilotRoute.isEmpty || starting || attemptedStart || !landed { return }
-            // The ask was made and thrown away. Let the next turn make it again.
-            landed = false
-        }
-    }
-
-    private func land() {
-        guard let host else { return }
-        /*
-         * **Only while this tab is the one on screen.**
-         *
-         * Measured, and it is the reason this screen sat on a row saying *Open
-         * the conversation* while a session was running: a `TabView` builds
-         * every tab's content, so this view is created — and `onChange(initial:
-         * true)` fires — before `DeckModel.tab` has become `.copilot`.
-         * `DeckModel.open(session:on:)` reads that flag to choose a stack, so
-         * the landing pushed the terminal onto the **Sessions** stack, set the
-         * one-shot latch, and left this screen showing a row for a session it
-         * had already opened somewhere else. On screen: `landed=1 route=0`.
-         *
-         * The tab is in `reachable` too, so becoming the copilot's tab is itself
-         * a reason to re-evaluate — without that this guard would turn one
-         * mis-timed landing into no landing at all.
-         */
-        guard model.tab == .copilot else { return }
+    private func startIfWanted() {
+        beginVisitIfArriving()
+        guard let host, model.tab == .copilot else { return }
         switch CopilotOnServer.landing(in: host.sessions,
                                        connection: host.connection,
                                        setup: book.setup(host: hostID),
-                                       already: landed,
                                        attempted: attemptedStart,
                                        canStart: host.canStartSomewhere,
                                        plainStartTaken: CopilotOnServer
                                            .start(offer: offer, granted: host.granted).now) {
-        case .stay:
-            return
-        case let .open(sessionID):
-            landed = true
-            starting = false
-            // Written down before the push, not after, because the push replaces
-            // this screen and whatever runs after it runs on a view that is on
-            // its way out.
-            adopt(sessionID, on: host)
-            model.open(session: sessionID, on: hostID)
+        case .open, .stay:
+            // Nothing for this screen to do. `.open` names the session the tab
+            // is about to draw as its own content; `.stay` is a machine that
+            // cannot or must not be asked.
+            break
         case let .start(folder):
             // Set before the frame goes, not after: a `create` refused
             // synchronously would otherwise leave the latch open and the next
@@ -760,38 +789,37 @@ struct CopilotOnServerView: View {
     }
 
     /**
-     * **Write down where the copilot actually is.**
+     * Begin a visit, but only for an actual arrival at this tab.
      *
-     * This is the half of the correction that makes the other half safe. The tab
-     * starts without asking, in the machine's own folder, and this runs the
-     * instant it lands in what came back — so the answer to *where does my
-     * copilot work* exists, on a row, with a picker beside it, before anybody
-     * could think to ask. A folder **guessed and silently kept** was the real
-     * objection to starting unasked; a folder discovered and immediately recorded
-     * is not that.
+     * Selecting the pill from another tab is an arrival; so is switching machines
+     * in the title, because it is a different copilot. A session list refreshing
+     * underneath somebody who is standing still is not, and neither is a socket
+     * coming back — both of those make the tab *look again*, which is right, and
+     * neither is a person asking for a second agent, which is what re-arming
+     * would allow.
      *
-     * It writes only when nothing is recorded, and that guard is doing more than
-     * it looks. With a folder set, `copilotSession` matches **only** a session in
-     * it, so a landing can only ever be a session in the recorded folder — the
-     * write would be a no-op. Without one, the landing is the first agent session
-     * on the machine, which is either the one this tab just started or one that
-     * was already running and is now, correctly, what this machine's copilot is.
-     *
-     * The narrow race worth naming rather than defending against: a `create` in
-     * flight and an unrelated agent session appearing from another device in the
-     * same instant. The tab lands in the older of the two and records its folder
-     * — which is still *the folder the copilot is in*, and is one press on the
-     * control screen from being whatever somebody would rather it were.
+     * **An arrival re-arms the start. It does not re-arm one that has already
+     * been tried and answered.** `attemptedStart` survives an arrival in both of
+     * the states where starting again would be wrong: **`starting`** — a `create`
+     * still on the wire — because it is still this tab's doing however many times
+     * somebody has changed tab in the thirty seconds it is given; and
+     * **`refusal`** — a start this screen has already had to explain — because
+     * *"a failed start says why and does not retry itself"* is the property this
+     * screen has carried since starting became automatic, and a tab round trip is
+     * not somebody asking again. The retry row is drawn for exactly that state,
+     * and a press is what asks.
      */
-    private func adopt(_ sessionID: String, on host: HostLink) {
-        guard book.folder(host: hostID) == nil else { return }
-        guard let landed = host.sessions.first(where: { $0.id == sessionID }) else { return }
-        book.setFolder(landed.cwd, host: hostID)
+    private func beginVisitIfArriving() {
+        let here = model.tab == .copilot ? hostID : nil
+        guard visit != here else { return }
+        visit = here
+        guard here != nil else { return }
+        attemptedStart = starting || refusal != nil
     }
 
-    /// The facts `land()` reads, as one value `onChange` can compare. Separate
-    /// from `heard` because this one moves the screen: joining them would re-run
-    /// a navigation every time a capability flag settled.
+    /// The facts `startIfWanted()` reads, as one value `onChange` can compare.
+    /// Separate from `heard` because this one can spend money: joining them
+    /// would put a `create` on the wire every time a capability flag settled.
     ///
     /// Every agent session's id rather than only the first, because the session
     /// this tab starts has to be noticed arriving beside ones that were already
@@ -1126,11 +1154,11 @@ enum CopilotOnServer {
      * the machine listed them.
      *
      * The filter is the rule and `copilotSession` is the one reading of it
-     * anybody uses, so `land()` and the *Open* row cannot come to disagree about
-     * what
-     * counts as a copilot session — the failure a second copy of this predicate
-     * produces is a tab that lands in one conversation while the row underneath
-     * offers another.
+     * anybody uses, so the conversation the tab draws, the rule that decides
+     * whether to start one, and the tab bar's own surface cannot come to
+     * disagree about what counts as a copilot session — the failure a second
+     * copy of this predicate produces is a tab showing one conversation while
+     * the bar behind it is drawn for another screen entirely.
      *
      * The machine's own order rather than a sort. It is the order the session
      * list on the Sessions tab shows, and re-sorting would put the same
@@ -1141,9 +1169,56 @@ enum CopilotOnServer {
         sessions.filter { $0.status != "exited" && !$0.provider.isEmpty && $0.provider != "shell" }
     }
 
+    /**
+     * **What the Copilot tab is showing on this machine, or nil when it is
+     * showing the screen that makes one.**
+     *
+     * > *"This page needs to go. It should directly land in terminal or chat
+     * > mode."*
+     *
+     * The single reading of that sentence, and it has to be single because
+     * **three** places now depend on it and a disagreement between any two of
+     * them is a visible defect:
+     *
+     *  - `CopilotTabScreen` renders the conversation or this file's fallback.
+     *  - `DeckModel.copilotSurface` decides whether the tab bar is drawn, and a
+     *    surface that disagreed with the content would put the floating pill over
+     *    a chat composer — *"pill should not be inside the chat box"* — or take
+     *    the bar off the one screen that needs it.
+     *  - `DeckModel.open(session:on:)` refuses to push the session the tab is
+     *    already showing, which is what stops `openWhenCreated` stacking a second
+     *    copy of the copilot's own terminal on top of it.
+     *
+     * Impure only in that it reaches for a `HostLink` and the book; the rule
+     * underneath is `copilotSession`, which is walked on its own. The two guards
+     * before it are the branch `CopilotTabScreen` takes, written once here rather
+     * than copied there: a **headless** machine, and one that has offered this
+     * phone no copilot of its own. A desktop's Copilot tab is `CopilotView` and
+     * its conversation is the copilot's, not a session's.
+     *
+     * Cheap enough to be read from a view body — a filter over a session list and
+     * a dictionary lookup — which matters, because `copilotSurface` is read on
+     * every render of the tab view.
+     */
+    @MainActor
+    static func tabSession(for host: HostLink?, book: CopilotSetupBook = .shared) -> RemoteSession? {
+        guard let host, host.hostKind == .headless, host.copilotAccess == .notOffered else { return nil }
+        return copilotSession(in: host.sessions, folder: book.folder(host: host.id))
+    }
+
     /// What the Copilot tab should do with somebody who has just opened it.
     enum Landing: Equatable {
-        /// Land in this session, and do it now.
+        /**
+         * This machine's copilot **is** this session.
+         *
+         * It used to be an instruction — *push this onto `copilotRoute`* — and it
+         * is now a statement of fact, because the tab draws the conversation as
+         * its own content rather than navigating to it. `tabSession` is the
+         * reading of it that `CopilotTabScreen` and `DeckModel.copilotSurface`
+         * both use; `CopilotOnServerView` treats it as *nothing to do here*,
+         * which it can only ever see in the one frame between a session arriving
+         * and the tab swapping to it.
+         */
         case open(String)
         /**
          * Start one, and land in what comes back.
@@ -1186,17 +1261,23 @@ enum CopilotOnServer {
      *
      * The guards, in order, and what each one is:
      *
-     *  - **Already landed**, or **not connected**. A one-shot per navigation
-     *    stack, so coming back out of the conversation does not re-push it on the
-     *    next frame and make this screen unreachable; and a pushed terminal
-     *    cannot attach over a dead socket, so a landing over one would be a chat
-     *    with no way back to the terminal. Neither is a refusal — both resolve by
-     *    themselves.
+     *  - **Not connected.** A `create` into a dead socket is refused and would
+     *    spend this visit's one attempt on nothing, and a conversation opened
+     *    over one cannot attach. Not a refusal — it resolves by itself when the
+     *    wire comes back.
+     *
+     *    There used to be an `already` guard here as well, and it is worth
+     *    recording why it went rather than leaving somebody to wonder. It was the
+     *    one-shot that stopped the tab re-pushing the conversation over somebody
+     *    who had pressed Back — *"I keep going back and it is keep taking me
+     *    inside the chat box"* — and the tab does not push at all now. The
+     *    conversation is the tab's content, so there is no navigation to repeat
+     *    and nothing for a latch to hold shut.
      *  - **A copilot session exists** — *"if there is already an existing session
      *    it should start from there where we left."* Which session that is
      *    depends on the folder; see `copilotSession`.
      *  - **This machine can start one, and this visit has not tried.** The second
-     *    is the loop guard: `land()` runs on every change of a key that includes
+     *    is the loop guard: `startIfWanted()` runs on every change of a key that includes
      *    the session list and the connection, so a start that produced nothing
      *    would otherwise be re-sent on every redraw for as long as somebody stood
      *    on the screen.
@@ -1218,11 +1299,10 @@ enum CopilotOnServer {
     static func landing(in sessions: [RemoteSession],
                         connection: ConnectionState,
                         setup: CopilotSetupBook.Setup?,
-                        already: Bool,
                         attempted: Bool,
                         canStart: Bool,
                         plainStartTaken: Bool) -> Landing {
-        guard !already, connection.isLive else { return .stay }
+        guard connection.isLive else { return .stay }
         if let running = copilotSession(in: sessions, folder: setup?.folder) {
             return .open(running.id)
         }
@@ -1245,18 +1325,6 @@ enum CopilotOnServer {
      * and for the same reason.
      */
     static let startSeconds: TimeInterval = 30
-
-    /**
-     * How many times the tab will ask the stack to open the conversation.
-     *
-     * Eight, over about a second and a half. Not a poll and not a timeout: every
-     * attempt after the first exists only because SwiftUI discarded the last
-     * one, which it does while the tab is transitioning on screen and never
-     * after. In practice the second attempt is the one that lands; the rest are
-     * headroom for a cold first frame on a slower phone than the one this was
-     * measured on.
-     */
-    static let landingTries = 8
 
     /// What the screen says while a `create` is in flight. Two sentences because
     /// there are two facts: with a folder recorded it can name where; on a first
@@ -1324,5 +1392,72 @@ enum CopilotOnServer {
         state.isLive
             ? "That \(noun) is not sharing a folder with this phone any more."
             : state.detail
+    }
+}
+
+/**
+ * **Write down where the copilot actually is**, from the conversation the tab is
+ * showing.
+ *
+ * This is the half of the correction that makes the other half safe, and it has
+ * moved rather than changed. The tab starts a session without asking, in the
+ * machine's own folder, and this records the `cwd` that came back — so the answer
+ * to *where does my copilot work* exists, on a row on `CopilotControlView`, with
+ * a picker beside it, before anybody could think to ask. A folder **guessed and
+ * silently kept** was the real objection to starting unasked; a folder discovered
+ * and immediately recorded is not that.
+ *
+ * ## Why it is a modifier on the conversation and not a line in the starter
+ *
+ * It used to be `CopilotOnServerView.adopt()`, called in the same breath as the
+ * push. There is no push now, and the screen that starts the session is
+ * **replaced** by the conversation the moment the session arrives — so the one
+ * place that knew the folder is unmounted before the `cwd` is on this phone. A
+ * write attempted on the way out is a write racing a teardown.
+ *
+ * The conversation, on the other hand, is mounted for as long as somebody is
+ * looking at it and knows exactly which session it is. `.task(id:)` gives the
+ * write a proper site: once per session, on the main actor, not inside a `body`
+ * that SwiftUI may run any number of times. Reading `book.folder` from a body and
+ * writing it back would be a write during an update — an invalidation loop on an
+ * `@Observable` store, which is a hang rather than a wrong pixel.
+ *
+ * ## It writes only when nothing is recorded, and that guard earns its keep
+ *
+ * With a folder set, `copilotSession` matches **only** a session in it, so the
+ * conversation on screen can only ever be in the recorded folder and the write
+ * would be a no-op. Without one, the conversation is the first agent session on
+ * the machine — either the one this tab just started, or one that was already
+ * running and is now, correctly, what this machine's copilot is.
+ *
+ * The narrow race worth naming rather than defending against: a `create` in
+ * flight and an unrelated agent session appearing from another device in the same
+ * instant. The tab shows the older of the two and records its folder — which is
+ * still *the folder the copilot is in*, and is one press on the control screen
+ * from being whatever somebody would rather it were.
+ */
+struct CopilotFolderFromItsSession: ViewModifier {
+    let model: DeckModel
+    let hostID: String
+    let sessionID: String
+    var book: CopilotSetupBook = .shared
+
+    func body(content: Content) -> some View {
+        content.task(id: sessionID) {
+            guard book.folder(host: hostID) == nil else { return }
+            guard let cwd = model.host(hostID)?.sessions.first(where: { $0.id == sessionID })?.cwd
+            else { return }
+            book.setFolder(cwd, host: hostID)
+        }
+    }
+}
+
+extension View {
+    /// Record the folder of the session the Copilot tab is showing, if this
+    /// phone has not been told one. See `CopilotFolderFromItsSession`.
+    func copilotFolderFromItsSession(model: DeckModel,
+                                     hostID: String,
+                                     sessionID: String) -> some View {
+        modifier(CopilotFolderFromItsSession(model: model, hostID: hostID, sessionID: sessionID))
     }
 }

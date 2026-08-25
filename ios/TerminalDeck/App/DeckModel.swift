@@ -206,6 +206,21 @@ final class DeckModel {
         /// crossing to its server settings when it has them. See
         /// `MachineDetailView`; the row used only to select and lead nowhere.
         case machine(String)
+        /**
+         * The copilot's own controls — its folder, what it opens in, its
+         * permissions, and everything else about it that a person operates.
+         *
+         * > *"Let's move settings option for copilot to main settings page
+         * > instead of inside the copilot page, so we can have three dots in
+         * > left along with chat vs terminal switch."*
+         *
+         * It was a gear on the conversation's own toolbar. That put a screenful
+         * of settings behind a control sitting next to the two things somebody
+         * uses while talking — and left the extreme right of that bar carrying
+         * the least urgent thing on it. Settings about a machine belong on the
+         * page that is already a list of settings about that machine.
+         */
+        case copilot
         /// The device roster for the current machine — every device signed in
         /// here, and the one verb that removes one. Pushed only over a host that
         /// advertised `devices`. See `DeviceRosterView`.
@@ -262,12 +277,60 @@ final class DeckModel {
     /// and a tab that hid its own bar could not be left — and must not be drawn
     /// over a terminal, which is the rule `DeckChrome` holds.
     var copilotSurface: DeckSurface {
-        switch copilotRoute.last {
-        case .none: return .copilot
-        case .session: return .session
-        }
+        if case .session? = copilotRoute.last { return .session }
+        /*
+         * **The tab's own content can be a session now**, and the bar has to
+         * agree with it or one of two visible faults follows: the floating pill
+         * drawn over a chat composer — *"pill should not be inside the chat box"*
+         * — or the bar taken off the screen that is a list of rows with nothing
+         * to type into, which the screen walk found once and reported as the one
+         * tab it could not leave sideways.
+         *
+         * `CopilotOnServer.tabSession` is the same reading `CopilotTabScreen`
+         * renders from, deliberately, so the two cannot disagree. Cheap enough
+         * for a body: a filter over the session list and a dictionary lookup.
+         */
+        return CopilotOnServer.tabSession(for: current) == nil ? .copilot : .session
     }
     var localhostSurface: DeckSurface { localhostPageIsOpen ? .localhostPage : .localhost }
+
+    /**
+     * Whether a **session** is the thing on screen right now, on whichever tab.
+     *
+     * One question with one answer, because two things need it and they must not
+     * be able to disagree: the terminal's chrome, which paints the whole page in
+     * the scheme's colours, and `RootView`, which has to account for that scheme
+     * in the one place a modifier on a pushed screen cannot reach — the status
+     * bar, whose glyphs the system draws from the *window's* interface style.
+     *
+     * A light scheme under an app forced Dark left the clock at 1.05:1 on
+     * `#fdf6e3`, which is invisible — measured — and *"everything should be
+     * black"* is a sentence about the whole page including the band the clock
+     * sits in.
+     *
+     * It changes on entering and leaving a session and at no other time, which
+     * is what keeps the window's statement from moving on every redraw.
+     */
+    /**
+     * What the Copilot row on the Menu page says without being opened.
+     *
+     * The mode, because that is the setting he asked for by name — *"user can
+     * set its default from settings"* — and because it is the one a person
+     * changes more than once. The folder is on the screen behind it; naming it
+     * here would make the row as long as the path.
+     */
+    var copilotSettingsValue: String {
+        guard let host = currentHostId else { return "" }
+        return CopilotSetupBook.shared.opensInChat(host: host) ? "Opens in chat" : "Opens in terminal"
+    }
+
+    var showingSession: Bool {
+        switch tab {
+        case .sessions: return sessionsSurface == .session
+        case .copilot: return copilotSurface == .session
+        case .localhost, .settings: return false
+        }
+    }
     /**
      * Which chrome the Menu stack wears, including when a **page** is open on it.
      *
@@ -1368,6 +1431,16 @@ final class DeckModel {
         if host != currentHostId { select(host) }
         let next = Route.session(host: host, id: id)
         if tab == .copilot {
+            /*
+             * **Never push the session the tab is already showing.**
+             *
+             * `createSession` sets `openWhenCreated`, so the machine's `created`
+             * frame arrives here — and the session it names is very often the one
+             * the Copilot tab has just adopted as its own content. Pushing it
+             * would stack a second copy of the same terminal on top of itself:
+             * two attaches, and a Back that lands on an identical screen.
+             */
+            if CopilotOnServer.tabSession(for: self.host(host))?.id == id { return }
             if copilotRoute.last != next { copilotRoute.append(next) }
             return
         }

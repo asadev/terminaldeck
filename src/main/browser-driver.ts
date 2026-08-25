@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import type { BlockWatchDeps } from './browser-block-watch'
 import { maskFrame, type RawFrame } from './browser-png'
 import { userDataDir } from './platform/paths'
-import { screenCommand, type DriveState, type Transport } from './browser-cdp'
+import { screenCommand, screenPersonCommand, type DriveState, type Transport } from './browser-cdp'
 import {
   EMPTY_DRIVE_STATUS,
   HANDOVER_WINDOW_MS,
@@ -634,6 +634,24 @@ class Slot {
   ) {}
 }
 
+/**
+ * Who holds the handover on one window, as the host half knows it.
+ *
+ * The wire's {@link BrowserHandoverStateFrame} minus its one per-recipient
+ * field: `mine` is `taker === the connection being written to`, and only
+ * `remote/server.ts` knows which connection that is. Everything else about a
+ * handover is a fact about the *page* and is the same for everybody looking at
+ * it, which is exactly the split the frame's own doc comment argues for.
+ */
+export interface HandoverHolding {
+  /** Is a handover outstanding on this window at all? */
+  asking: boolean
+  /** The agent's own sentence, already sanitised by {@link BrowserDrive.handover}. */
+  prompt: string
+  /** The watcher id that answered it, or null when nobody has. */
+  taker: string | null
+}
+
 export class BrowserDrive {
   /** The copilot's own tab. Always present; never removed; today's behaviour. */
   private readonly own = new Slot('own', '')
@@ -782,6 +800,26 @@ export class BrowserDrive {
     } catch {
       return null
     }
+  }
+
+  /**
+   * Where a slot's page is right now, and what it calls itself.
+   *
+   * The live pair, read off the `WebContents` every time — the same read
+   * {@link origin} makes and for the same reason: it is a main-process fact that
+   * needs nobody's cooperation and cannot be stale.
+   *
+   * It exists because the phone's tab strip was labelling the drive's own front
+   * tab from what `open` answered when the page was *opened*, kept while the
+   * origin still matched. Following a link inside one site therefore left the
+   * address bar showing the page you started at, and following one to another
+   * site degraded to a bare origin with no path. Both are a browser lying about
+   * where it is.
+   */
+  where(target?: DriveTarget | null): { url: string; title: string } | null {
+    const page = this.contents(this.slotFor(target))
+    if (!page) return null
+    return { url: page.url(), title: page.title() }
   }
 
   /** Has the person already allowed driving on this origin, on this page? */
@@ -1092,6 +1130,17 @@ export class BrowserDrive {
    * this process — the renderer answers `browser:drive-opened` with the *view*
    * id — so a close would tear down the page and leave the strip listing it.
    * The person's ✕ is what closes that one, and it already ends the drive.
+   *
+   * The **second** clause is the server's, and it is a different fact wearing
+   * the same shape. `HeadlessDriveHost.openTab` passes `browserTabId: ''` on
+   * purpose, so nothing is written into `byBrowserTab` and `closeWindow` would
+   * answer `false` for that slot forever; refusing here says so before asking,
+   * rather than reporting a close that never happened. It is also the line to
+   * revisit on the day the own slot becomes window-backed on a server — see
+   * `frontTab` in `screencast-host.ts`, which records why that day has not come
+   * and which file it arrives in. Until then an empty `browserTabId` is not a
+   * closable window on either host, and the two clauses agree by accident of
+   * two different causes rather than by one rule.
    */
   async close(target: DriveTarget): Promise<boolean> {
     if (target.key === OWN_TARGET.key || target.browserTabId === '') {
@@ -1199,6 +1248,36 @@ export class BrowserDrive {
     params: Record<string, unknown> = {},
   ): Promise<Record<string, unknown>> {
     const verdict = screenCommand({ transport: this.host.transport, state: slot.state, method, params })
+    if (!verdict.ok) throw new DriveRefused(verdict.reason)
+    return page.send(method, params)
+  }
+
+  /**
+   * The **other** place the driver hands a command to a page's transport — the
+   * one a person's own hands come through.
+   *
+   * The sibling of {@link send}, and a sibling rather than a parameter on it.
+   * `screenCommand` refuses everything while the person holds the page and that
+   * refusal is a *mechanism*: a flag that softened it would make it a policy,
+   * and its own comment explains why a policy is a sentence a retry loop does
+   * not read. So the agent's screen keeps its unconditional refusal, untouched,
+   * and this door is screened by `screenPersonCommand` — which refuses
+   * everything **unless** the person holds the page, and permits only the four
+   * `Input.*` dispatches and the three screencast commands.
+   *
+   * Two functions, opposite conditions, disjoint use. A caller can only come
+   * through here by naming this method, which is a thing a reviewer can grep for
+   * exactly as they can grep for a raw `page.send`. Its only caller is the
+   * {@link castSeam} below, and its only legitimate origin is the one watcher
+   * `PageCast` is holding as the taker of a live handover.
+   */
+  private async sendAsPerson(
+    page: DrivenPage,
+    slot: Slot,
+    method: string,
+    params: Record<string, unknown> = {},
+  ): Promise<Record<string, unknown>> {
+    const verdict = screenPersonCommand({ state: slot.state, method, params })
     if (!verdict.ok) throw new DriveRefused(verdict.reason)
     return page.send(method, params)
   }
@@ -2401,6 +2480,110 @@ export class BrowserDrive {
     this.release(this.refOf(slot))
   }
 
+  /* --------------------------------------------- the handover, from afar -- */
+
+  /**
+   * Who holds the handover on one window, for the frame that says so.
+   *
+   * The three facts `browser.handover.state` is made of, minus the one that is
+   * per-recipient: `mine` is `taker === this connection`, and only the server
+   * knows which connection it is about to write to. Answered for any slot,
+   * including one nothing is being asked about — `asking: false` is the ordinary
+   * case and is what a phone needs to hear to take its button away again.
+   */
+  handoverHolding(target?: DriveTarget | null): HandoverHolding {
+    const slot = this.slotFor(target)
+    const asking = slot.state === 'human'
+    return {
+      asking,
+      prompt: asking ? slot.prompt : '',
+      taker: asking ? this.casts.get(slot.key)?.takerId ?? null : null,
+    }
+  }
+
+  /**
+   * A watcher says *that person is me*.
+   *
+   * ## What this is for
+   *
+   * `browser.handover` is the copilot saying it needs a person — a login wall, a
+   * two-factor code, a card number. On the desktop that person is already at the
+   * keyboard, so the whole of the answer is a banner with two buttons. Against a
+   * server watched from a phone, the person being asked is the one holding the
+   * phone, and until this method existed the curtain took the pixels away from
+   * them and the baton refused their keyboard. The one surface that could answer
+   * was the only one told it may not.
+   *
+   * ## What it deliberately does not do
+   *
+   * It does not move the baton. The slot stays `human`, so `screenCommand` goes
+   * on refusing the agent every read and every write for as long as this lasts —
+   * that refusal is the mechanism the whole handover rests on and nothing here
+   * touches it. What changes is scoped to one connection: `PageCast` stops
+   * masking that watcher's frames and starts dispatching its taps down
+   * `sendAsPerson`, which is a different door with the opposite condition on it.
+   *
+   * Refused when no handover is outstanding on this slot (there is no question to
+   * answer), when this window is not being cast at all, when the connection is
+   * not one of its watchers, and when somebody else already holds it. The last is
+   * the same argument {@link handover} makes for one outstanding question at a
+   * time, one layer further out: two people typing into one password field is not
+   * a state worth being able to reach.
+   */
+  async takeHandover(
+    target: DriveTarget | null | undefined,
+    watcherId: string,
+  ): Promise<{ ok: boolean; reason?: string }> {
+    const slot = this.slotFor(target)
+    if (slot.state !== 'human') {
+      return { ok: false, reason: 'nobody is being asked to do anything on this page' }
+    }
+    const cast = this.casts.get(slot.key)
+    if (!cast) return { ok: false, reason: 'that window is not being watched' }
+    return cast.take(watcherId)
+  }
+
+  /**
+   * The person on the phone answered: *done, carry on* or *stop, I'll take it
+   * from here*.
+   *
+   * Routed into {@link resume} rather than reimplemented, and that is the whole
+   * design of this method. `resume(true)` returns the baton, puts the network
+   * rules back on, uncurtains the cast for every watcher and resolves the blocked
+   * `browser.handover` call `resumed`; `resume(false)` ends the drive instead,
+   * because *"stop, I'll take it from here"* is a refusal to the agent rather
+   * than a resume. A second copy of that sequence living here is how the two
+   * halves come to disagree about what a hand-back means — and the half that
+   * would be missing a step is always the one nobody is looking at.
+   *
+   * The taker is released first, through {@link PageCast.untake}, so the page is
+   * curtained again for the instant between the hands letting go and the baton
+   * moving. `untake` sends its `Page.stopScreencast` while the slot is still
+   * `human`, which is the only moment the person's door will carry it.
+   *
+   * **A `done` from a connection that is not the taker is refused, not obeyed.**
+   * Otherwise a second phone watching the same page could hand it back on behalf
+   * of the person halfway through typing a password into it — and the agent would
+   * resume driving a form in whatever state it was left.
+   */
+  async handBackHandover(
+    target: DriveTarget | null | undefined,
+    watcherId: string,
+    carryOn: boolean,
+  ): Promise<{ ok: boolean; reason?: string }> {
+    const slot = this.slotFor(target)
+    if (slot.state !== 'human') {
+      return { ok: false, reason: 'nobody is being asked to do anything on this page' }
+    }
+    const cast = this.casts.get(slot.key)
+    if (!cast || !cast.isTaker(watcherId)) {
+      return { ok: false, reason: 'this page was handed to somebody else, so it is not yours to hand back' }
+    }
+    await cast.untake()
+    this.resume(carryOn)
+    return { ok: true }
+  }
+
   /* ---------------------------------------------------------------- watch -- */
 
   /**
@@ -2413,6 +2596,28 @@ export class BrowserDrive {
    * is called by the cast for each frame; the server rebuilds it per watch so the
    * grant is re-read before every frame it writes to a socket. A page that has
    * gone is refused rather than cast into the void.
+   *
+   * ## Why a page the person holds is watched rather than refused
+   *
+   * This used to answer *"the person has this page right now"* whenever the slot
+   * was `human`, and on a desktop that reads as sensible: the pixels are stopped,
+   * so there is nothing to cast. On a phone it was a defect with two faces, and
+   * both of them were found by asking what an ordinary few seconds looks like:
+   *
+   *  - **A rotation.** A viewer that resizes sends `browser.watch` again, which is
+   *    a renegotiation. Refused mid-handover, `server.ts` drops the window from
+   *    that connection's `watching` set — so turning the phone sideways while
+   *    typing a password threw away the handover the person was holding.
+   *  - **A reconnection.** A phone that backgrounds loses its socket and comes
+   *    back with a new connection id and an empty watch set. Refused, it could
+   *    neither see the question nor answer it, on the one screen the question was
+   *    for.
+   *
+   * Nothing is leaked by allowing it. `PageCast.watch` starts no screencast while
+   * the cast is curtained, every frame is masked for every watcher that is not
+   * the taker, and the new watcher is drawn the same lock card and the same
+   * sentence the ones already there received. What it gets is the question — which
+   * is the point.
    */
   async startCast(input: {
     target?: DriveTarget | null
@@ -2432,9 +2637,6 @@ export class BrowserDrive {
             : `${slot.name} is not open any more`,
       }
     }
-    if (slot.state === 'human') {
-      return { ok: false, reason: 'the person has this page right now' }
-    }
     if (slot.state === 'idle') {
       this.watch(page, slot)
       this.move(slot, 'claimed')
@@ -2444,6 +2646,17 @@ export class BrowserDrive {
     if (!cast) {
       cast = new PageCast(this.castSeam(page, slot))
       this.casts.set(slot.key, cast)
+      /*
+       * A cast made while the person already holds the page starts curtained.
+       *
+       * `handover` curtains `this.casts.get(slot.key)`, so a handover asked on a
+       * page nobody was watching curtained nothing — and a cast built afterwards
+       * would not know. It would be masked anyway (`maskFor` reads `isHuman()`),
+       * but masked is not the same as curtained: the lock card that carries the
+       * agent's *sentence* is drawn by `curtain()`, and without this the watcher
+       * would get a blank canvas with no explanation on it.
+       */
+      if (slot.state === 'human') await cast.curtain(slot.prompt)
     }
     await cast.watch(input.watcherId, input.window, input.options, input.emit)
     return { ok: true }
@@ -2494,6 +2707,7 @@ export class BrowserDrive {
   private castSeam(page: DrivenPage, slot: Slot): CastSeam {
     return {
       send: (method, params = {}) => this.send(page, slot, method, params),
+      sendAsPerson: (method, params = {}) => this.sendAsPerson(page, slot, method, params),
       onEvent: (handler) => page.onEvent(handler),
       scanSecrets: () =>
         this.run<SecretScan>(SECRET_RECTS_SCRIPT, {}, slot).catch(() => null),

@@ -34,12 +34,44 @@
  * (`agent.running`), and model chips over `/bin/zsh` are the defect the
  * desktop's own cluster withdraws itself for.
  *
- * A control the far end says is barred — *"Fast mode requires usage credits"*,
- * a foreign CLI, a gate held shut by a half-typed prompt — keeps its chip, and
- * the chip opens onto the far end's own sentence instead of onto rows. Never a
- * dead menu: a menu that looks live and is not was measured on this very bar
- * once (the account sheet, 2026-08-20) and is the failure every blocked state
- * here is written against.
+ * ## A blocked chip opens onto its rows, with the reason above them
+ *
+ * The rule this file used to state, in these very words, was the opposite: a
+ * barred control *"keeps its chip, and the chip opens onto the far end's own
+ * sentence instead of onto rows."* Asad opened the session's Controls on his
+ * phone, tapped **Model**, and got a paragraph about unsent text where the list
+ * of models should have been:
+ *
+ *   > *"they are also not control they are just descriptions which i dont want
+ *   > always"*
+ *
+ * He is right, and the old rule was solving the wrong half of the problem. It
+ * was written against a dead menu — a menu that looks live and is not, measured
+ * on this very bar once (the account sheet, 2026-08-20) — and prose in place of
+ * the menu is not the cure for that. It is a second way of being it. A sheet
+ * called **Controls** whose rows open onto descriptions is not a control panel.
+ *
+ * So the rows are drawn whether or not the control is blocked — he opened Model
+ * to see models, and the ticked row is worth reading even in a moment he cannot
+ * change it — and the reason rides above them as one short line. Blocked rows
+ * are drawn and not pressable: a press that could only be answered with a
+ * refusal is the dead click this app is repeatedly audited for.
+ *
+ * Two things at the far end had to become true for that to be honest rather
+ * than merely tidier, and both now are (`src/main/agent-controls.ts`):
+ *
+ *  - **Most blocks are no longer blocks.** `readControls` asks `readCarry`
+ *    rather than `refuseToType`, so a draft at the far prompt no longer closes
+ *    the gate at all: `carryDraft` lifts the line out of the way, runs the
+ *    command, and types the line back unsent. The commonest reason a chip ever
+ *    greyed out — the exact one in his screenshot — does not arrive any more.
+ *  - **What is left is short.** The four states the app genuinely cannot clear
+ *    for him — a turn in flight, a dialog holding the keyboard, a prompt that
+ *    is not on screen to be read, a draft spanning more rows than can be lifted
+ *    — each travel as one line rather than a paragraph, because they are drawn
+ *    beside a live control instead of in place of one. A desktop that has not
+ *    been updated yet still sends its old paragraph and this draws it: the
+ *    length is the far end's to fix, and the rows are here either way.
  *
  * ## Honest in-flight and failed states
  *
@@ -124,6 +156,25 @@ export function clusterShown(reading: ControlsReadingWire | null): boolean {
  * `readControls` in `src/main/agent-controls.ts`). Every sentence returned here
  * is the far end's own; the one fallback is for a gate that closed without
  * giving a reason, and it claims only what is known: nothing was sent.
+ *
+ * ## What the answer is used for, which is not what it used to be
+ *
+ * It used to pick between two whole drawings: the rows, or this sentence in
+ * their place. It no longer does. The rows are always drawn, and this is one
+ * short line above them plus the decision not to accept a press — see the note
+ * at the top of this file for why that swapped round, in his words. The
+ * function is unchanged because the question it asks was never the wrong one;
+ * only what the drawing did with the answer was.
+ *
+ * The two sources are also no longer the same *kind* of thing, and which is
+ * which now matters, because the far end clears one of them by itself.
+ * `unavailableReason` is that machine saying it will not accept this at all — a
+ * shell with no agent in it, a CLI whose model command was never established,
+ * an account without the credits for fast mode. `gate` is a state that flips on
+ * the session's next flush of output: mid-turn, a dialog on screen, a prompt
+ * that cannot be read, a draft too big to lift. A draft that *can* be lifted is
+ * no longer either of them — `carryDraft` takes it, runs the command and types
+ * it back unsent — and this answers null throughout.
  */
 export function blockedFor(control: ControlName, reading: ControlsReadingWire): string | null {
   const barred = reading[control].unavailableReason
@@ -161,6 +212,30 @@ export function chosen(reading: ControlReadingWire, option: ControlOption): bool
   return isCurrent(asCatalogReading(reading), option)
 }
 
+/** Everything one open sheet is: a line, rows, and whether the rows take a press. */
+export interface SheetPlan {
+  /** The one short line above the rows, or null when nothing is in the way. */
+  reason: string | null
+  /** The rows. Always the whole list — a blocked sheet is not an empty one. */
+  rows: ControlOption[]
+  /** False when a press would only be answered with a refusal, so it is refused here. */
+  usable: boolean
+}
+
+/**
+ * What an open chip's sheet contains — decided here rather than inside
+ * `render()`, so it is a rule something can ask a question of.
+ *
+ * The whole of T9 is that `reason` and `rows` are now two fields instead of two
+ * branches. There is no arrangement of these three values that draws prose where
+ * a list of models belongs: `rows` is `rowsFor(control)` unconditionally, and a
+ * block spends itself on a line above them and on `usable`.
+ */
+export function sheetPlan(control: 'model' | 'effort' | 'permission', reading: ControlsReadingWire): SheetPlan {
+  const reason = blockedFor(control, reading)
+  return { reason, rows: rowsFor(control), usable: reason === null }
+}
+
 /**
  * The value to send when the fast-mode switch is pressed.
  *
@@ -170,6 +245,47 @@ export function chosen(reading: ControlReadingWire, option: ControlOption): bool
  */
 export function fastFlip(reading: ControlReadingWire): 'on' | 'off' {
   return reading.value === 'on' ? 'off' : 'on'
+}
+
+/** Fast mode's corner of the model sheet: a line, a shape, and whether it takes a press. */
+export interface FastPlan {
+  /** The line to print above it, or null — see `alreadySaid` below. */
+  reason: string | null
+  /** A switch once the position has been read; the two rows while nothing has said which. */
+  shape: 'switch' | 'rows'
+  /** Where the switch stands. Only meaningful when `shape` is `switch`. */
+  on: boolean
+  /** False when a press would only be answered with a refusal. */
+  usable: boolean
+}
+
+/**
+ * What fast mode draws at the end of the model sheet.
+ *
+ * Asked against the *nested* control — `blockedFor('fast')`, never the model's
+ * answer — so an account barred from fast mode gets that line while the model
+ * rows above it stay live, and a shut typing gate closes both.
+ *
+ * `alreadySaid` is the model sheet's own reason, and it is passed in for one
+ * case: the session's typing gate blocks all four controls at once, so without
+ * it a mid-turn model sheet would print *"This session is mid-turn."* twice, a
+ * few rows apart, about the same session. Once is information; twice reads as
+ * the app repeating itself at somebody who came to pick a model. The refusal
+ * that belongs to fast mode alone — *"Fast mode requires usage credits"* — is
+ * never the same string as the model's, so it still gets its line. The line is
+ * all that is suppressed: `usable` still answers for fast mode itself, so a
+ * switch under a suppressed line is still not pressable.
+ */
+export function fastPlan(reading: ControlsReadingWire, alreadySaid: string | null): FastPlan {
+  const barred = blockedFor('fast', reading)
+  const value = reading.fast.value
+  const read = value === 'on' || value === 'off'
+  return {
+    reason: barred !== null && barred !== alreadySaid ? barred : null,
+    shape: read ? 'switch' : 'rows',
+    on: value === 'on',
+    usable: barred === null,
+  }
 }
 
 /**
@@ -425,9 +541,16 @@ export class SessionControls {
 
   /**
    * One chip: the value and a caret, the control's name in the accessible
-   * label only. A blocked chip is announced disabled and *still opens* — onto
-   * the far end's sentence, which is the desktop's rule ("a blocked chip …
-   * still opens — onto the reason") and the whole of "never a dead menu".
+   * label only.
+   *
+   * A blocked chip opens like any other — onto its rows, with the reason as a
+   * line above them. What the block costs the chip is its colour and its
+   * announcement, so the state is known before the tap and again after it; what
+   * it does not cost is the list, which is what he came for.
+   *
+   * The one state where the chip itself refuses to open is another control
+   * mid-change: that is a queue rather than a block, there is nothing to read
+   * about it, and two commands must never race into one pty.
    */
   private chip(control: 'model' | 'effort' | 'permission', reading: ControlsReadingWire): HTMLElement {
     const button = document.createElement('button')
@@ -438,8 +561,13 @@ export class SessionControls {
     const working = this.busy === control || (control === 'model' && this.busy === 'fast')
     const text = working ? 'Working…' : chipText(control, reading)
     const blocked = blockedFor(control, reading)
-    button.title = blocked ?? `${name}: ${text}`
-    button.setAttribute('aria-label', blocked ?? `${name}: ${text}`)
+    // The value first and the reason after it, because the value is what the
+    // chip is for: a reader who wants only the state should not have to sit
+    // through a sentence to reach it. The reason no longer *replaces* the value
+    // here for the same reason it no longer replaces the rows below.
+    const spoken = blocked === null ? `${name}: ${text}` : `${name}: ${text}. ${blocked}`
+    button.title = spoken
+    button.setAttribute('aria-label', spoken)
     button.setAttribute('aria-haspopup', 'menu')
     button.setAttribute('aria-expanded', this.open === control ? 'true' : 'false')
     if (blocked !== null) {
@@ -449,7 +577,8 @@ export class SessionControls {
     if (working) button.dataset.busy = 'yes'
     // While one control is mid-change the others wait their turn — two
     // commands must never race into one pty — and unlike a blocked chip this
-    // really is disabled: there is no sentence to open onto, just a queue.
+    // really is disabled: there is nothing to read about a queue, and the rows
+    // a blocked chip opens onto are worth reading.
     if (this.busy !== null && !working) button.disabled = true
     const value = document.createElement('span')
     value.textContent = text
@@ -462,37 +591,43 @@ export class SessionControls {
   }
 
   /**
-   * An open chip's sheet: the far end's sentence when the control is blocked,
-   * the rows otherwise — and, at the end of the model sheet, fast mode, which
-   * is where the desktop keeps it (*"move fast mode toggle inside the models
+   * An open chip's sheet: the reason as a line when there is one, and the rows
+   * — always the rows — and, at the end of the model sheet, fast mode, which is
+   * where the desktop keeps it (*"move fast mode toggle inside the models
    * dropdown at the end"*) because the CLI couples them: switching model turns
    * fast mode off.
+   *
+   * The sheet's own reason is handed on to fast mode so the session's typing
+   * gate cannot print one sentence twice in one sheet. See `fastPlan`.
    */
   private sheet(control: 'model' | 'effort' | 'permission', reading: ControlsReadingWire): HTMLElement {
     const list = document.createElement('div')
     list.className = 'sctl__sheet'
     list.setAttribute('role', 'menu')
     list.setAttribute('aria-label', controlName(control))
-    const blocked = blockedFor(control, reading)
-    if (blocked !== null) {
-      list.append(note(blocked))
-    } else {
-      for (const option of rowsFor(control)) {
-        if (option.group !== undefined) list.append(caption(option.group))
-        list.append(this.row(control, option, chosen(reading[control], option)))
-      }
+    const plan = sheetPlan(control, reading)
+    if (plan.reason !== null) list.append(reasonLine(plan.reason))
+    for (const option of plan.rows) {
+      if (option.group !== undefined) list.append(caption(option.group))
+      list.append(this.row(control, option, chosen(reading[control], option), plan.usable))
     }
-    if (control === 'model') this.fastSection(list, reading)
+    if (control === 'model') this.fastSection(list, reading, plan.reason)
     return list
   }
 
-  private row(control: ControlName, option: ControlOption, current: boolean): HTMLElement {
+  /**
+   * One option row. `usable` false draws it and refuses the press: the row is
+   * still worth reading — it is where the tick is — and a press answered only
+   * by a refusal is the dead click this app keeps being audited for.
+   */
+  private row(control: ControlName, option: ControlOption, current: boolean, usable: boolean): HTMLElement {
     const button = document.createElement('button')
     button.className = 'sctl__row'
     button.type = 'button'
     button.setAttribute('role', 'menuitemradio')
     button.setAttribute('aria-checked', current ? 'true' : 'false')
     if (current) button.dataset.chosen = 'yes'
+    if (!usable) markBlocked(button)
     const tick = document.createElement('i')
     tick.className = 'sctl__tick'
     tick.setAttribute('aria-hidden', 'true')
@@ -518,34 +653,37 @@ export class SessionControls {
   }
 
   /**
-   * Fast mode, at the end of the model sheet, in the desktop's three states:
-   * the far end's sentence when barred, a switch when the state has been read,
-   * and the two rows under a caption when nothing has said which it is — never
-   * a switch drawn at a position nobody established.
+   * Fast mode, at the end of the model sheet: a switch once its position has
+   * been read, and the two rows under a caption while nothing has said which it
+   * is — never a switch drawn at a position nobody established.
+   *
+   * A block used to replace all of that with the far end's sentence, which is
+   * the same fault the chips above had and is fixed the same way: the reason
+   * goes above the control, the control stays on screen showing what is in
+   * force, and it does not take a press. *"Fast mode requires usage credits"* is
+   * worth reading beside a switch that says Off; it is not worth reading instead
+   * of one.
    */
-  private fastSection(list: HTMLElement, reading: ControlsReadingWire): void {
+  private fastSection(list: HTMLElement, reading: ControlsReadingWire, alreadySaid: string | null): void {
     const fast = reading.fast
-    // The same gate every chip answers to, asked against the *nested* control —
-    // `blockedFor('fast')`, not the model's answer — so an account barred from
-    // fast mode gets that sentence while the model rows above stay live, and a
-    // shut typing gate closes the switch along with everything else.
-    const barred = blockedFor('fast', reading)
+    const plan = fastPlan(reading, alreadySaid)
     list.append(caption(controlName('fast')))
-    if (barred !== null) {
-      list.append(note(barred))
+    if (plan.reason !== null) list.append(reasonLine(plan.reason))
+    if (plan.shape === 'rows') {
+      for (const option of FAST_OPTIONS) list.append(this.row('fast', option, false, plan.usable))
       return
     }
-    const read = fast.value === 'on' || fast.value === 'off'
-    if (!read) {
-      for (const option of FAST_OPTIONS) list.append(this.row('fast', option, false))
-      return
-    }
-    const on = fast.value === 'on'
+    const on = plan.on
     const button = document.createElement('button')
     button.className = 'sctl__row sctl__switch'
     button.type = 'button'
     button.setAttribute('role', 'menuitemcheckbox')
     button.setAttribute('aria-checked', on ? 'true' : 'false')
+    // Drawn at the position the session is at, and refusing the press: what is
+    // in force is the thing worth seeing while it cannot be changed. The second
+    // arm is the queue rather than a block — another control is mid-change, and
+    // a switch that quietly did nothing would be the dead click again.
+    if (!plan.usable || (this.busy !== null && this.busy !== 'fast')) markBlocked(button)
     const text = document.createElement('span')
     text.className = 'sctl__text'
     const label = document.createElement('span')
@@ -603,7 +741,7 @@ export class SessionControls {
   }
 }
 
-/* The two fragments every sheet shares. Module-level because they hold no state. */
+/* The fragments every sheet shares. Module-level because they hold no state. */
 
 function caption(text: string): HTMLElement {
   const head = document.createElement('p')
@@ -613,11 +751,35 @@ function caption(text: string): HTMLElement {
   return head
 }
 
-function note(text: string): HTMLElement {
+/**
+ * The one short line a block gets, above the rows it does not replace.
+ *
+ * Deliberately quieter than the rows and deliberately not styled as an error:
+ * nothing has failed, and every state that reaches here — a turn in flight, a
+ * dialog on screen, an account without the credits for fast mode — is a fact
+ * about right now rather than about this control.
+ */
+function reasonLine(text: string): HTMLElement {
   const p = document.createElement('p')
   p.className = 'sctl__blocked'
   p.textContent = text
   return p
+}
+
+/**
+ * Draw a row back and stop it taking a press.
+ *
+ * Both halves, always together, which is the point of it being one function: a
+ * row that refuses a press while still looking pressable is the dead click, and
+ * a row that looks unavailable while still firing is worse. `disabled` is what
+ * announces it and what swallows the press; the dim is the same picture the chip
+ * above it wears for the same fact.
+ */
+function markBlocked(button: HTMLButtonElement): void {
+  button.disabled = true
+  button.dataset.blocked = 'yes'
+  button.style.opacity = '0.45'
+  button.style.cursor = 'default'
 }
 
 function caret(): HTMLElement {

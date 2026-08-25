@@ -18,9 +18,11 @@
 import { describe, expect, it } from 'vitest'
 import {
   LINUX_CONFINE_SCRIPT,
+  LINUX_PROOF_SCRIPT,
   linuxCommand,
   linuxCovers,
   linuxKeeps,
+  linuxProofArgs,
   linuxShellLine,
   linuxSpec,
   readProofReport,
@@ -207,6 +209,79 @@ describe('what has to survive being covered', () => {
   it('says nothing about resolv.conf on a distribution that keeps it in /etc', () => {
     expect(resolvKeep(machine())).toBeNull()
   })
+
+  /*
+   * The shape of Asad's headless WSL server, which is the shape this file did
+   * not have a case for: his box has no projects, so `device-reach.ts` offers
+   * `[host.home()]` and the granted folder *is* the account home. `collapse` in
+   * `sessionPlan` then swallows the device home into `/home/asad`, `toolRoots`
+   * stops seeing a writable root inside `~/.local` and keeps it as a read root,
+   * and the read-only bind laid over `~/.local` takes the write away from
+   * `~/.local/share/terminaldeck/remote/device-home/…`, which is where the
+   * session's `TMPDIR` lives.
+   *
+   * Every session on that machine answered
+   * `EROFS … mkdir '<device home>/tmp/claude-0'` and exited 1.
+   */
+  describe("the granted folder is the account home, which is Asad's headless server", () => {
+    const home = '/home/asad'
+    const deviceHome = '/home/asad/.local/share/terminaldeck/remote/device-home/f798e4220378b4bc'
+    const local = '/home/asad/.local'
+    const nested = planOf({
+      folder: home,
+      accountHome: home,
+      home: deviceHome,
+      // What `sessionPlan` really produces for those inputs: `collapse` merges
+      // the device home into the granted folder, and `~/.local/bin` on the PATH
+      // survives `toolRoots` as `~/.local` because the guard can no longer see a
+      // writable root inside it.
+      writable: [home],
+      readable: ['/usr', '/bin', local],
+    })
+    const m = machine({ has: [...has, home, local, deviceHome] })
+
+    it('does not lay a read-only mount over the granted folder', () => {
+      const keeps = linuxKeeps(nested, linuxCovers(nested, m), m)
+      expect(keeps).toContainEqual({ path: home, mode: 'rw' })
+      expect(keeps.filter((keep) => keep.mode !== 'rw').map((keep) => keep.path)).not.toContain(local)
+    })
+
+    it('leaves nothing in the spec that would seal a path inside the grant', () => {
+      // Read from the spec rather than from the keeps, because the spec is what
+      // the shell actually runs: `R:` is the tag that ends in
+      // `mount -o remount,bind,ro`.
+      const spec = linuxSpec(nested, m, stagePath('deadbeef'))
+      expect(spec).toContain(`W:${home}`)
+      for (const word of spec) {
+        if (word.startsWith('R:') || word.startsWith('F:')) {
+          expect(word.slice(2).startsWith(`${home}/`)).toBe(false)
+        }
+      }
+    })
+
+    it('still keeps a read root that is outside the granted folder', () => {
+      // The rule is about overlap, not about read roots. An nvm prefix in
+      // another account's tree is still hidden by the `/home` cover and still
+      // has to be bound back, read-only.
+      const nvm = '/home/shared/.nvm/versions/node/v22'
+      const plan = planOf({ ...nested, readable: ['/usr', local, nvm] })
+      const withNvm = machine({ has: [...has, home, local, deviceHome, nvm] })
+      const keeps = linuxKeeps(plan, linuxCovers(plan, withNvm), withNvm)
+      expect(keeps).toContainEqual({ path: nvm, mode: 'ro' })
+    })
+
+    it('does not truncate a file grant that landed inside the granted folder', () => {
+      // Step 3 of the script does `: > "$td_path"` on the target before binding
+      // over it. Inside the granted folder that target is a real file on the
+      // account's disk, so emitting the rule at all is destructive rather than
+      // merely redundant.
+      const doc = '/home/asad/.local/share/terminaldeck/context/AGENTS.md'
+      const plan = planOf({ ...nested, readableFiles: [doc] })
+      const withDoc = machine({ has: [...has, home, local, deviceHome, doc] })
+      const keeps = linuxKeeps(plan, linuxCovers(plan, withDoc), withDoc)
+      expect(keeps.map((keep) => keep.path)).not.toContain(doc)
+    })
+  })
 })
 
 describe('the words the script reads', () => {
@@ -326,9 +401,35 @@ describe('the script itself', () => {
 describe('the proof report', () => {
   it('reads back what the probe printed', () => {
     const report = readProofReport(
-      ['td-token abc', 'td-home ', 'td-tmp ', 'td-interop none', 'td-runwsl ', 'td-uid 0'].join('\n'),
+      ['td-token abc', 'td-home ', 'td-tmp ', 'td-interop none', 'td-runwsl ', 'td-uid 0', 'td-write ok'].join(
+        '\n',
+      ),
     )
-    expect(report).toEqual({ token: 'abc', home: '', tmp: '', interop: 'none', runwsl: '', uid: '0' })
+    expect(report).toEqual({
+      token: 'abc',
+      home: '',
+      tmp: '',
+      interop: 'none',
+      runwsl: '',
+      uid: '0',
+      write: 'ok',
+    })
+  })
+
+  it('asks whether the device home was writable, in the directory that failed', () => {
+    // `$7` is `<device home>/tmp`, which is what `confinedEnv` hands the session
+    // as TMPDIR and CLAUDE_CODE_TMPDIR — the exact path Asad's server refused.
+    expect(LINUX_PROOF_SCRIPT).toContain('mkdir "$7/.terminaldeck-writable-$2"')
+    expect(LINUX_PROOF_SCRIPT).toContain("printf 'td-write %s")
+    expect(linuxProofArgs({
+      mode: 'read',
+      token: 'abc',
+      homeCanary: '/home/asad/.probe',
+      tmpCanary: '/tmp/.probe',
+      homeSecret: 'h',
+      tmpSecret: 't',
+      deviceTmp: '/app-storage/device-home/abc/tmp',
+    })).toContain('/app-storage/device-home/abc/tmp')
   })
 
   it('answers empty for a line that never arrived, rather than undefined', () => {
@@ -337,5 +438,45 @@ describe('the proof report', () => {
     // answer that means the boundary held.
     expect(readProofReport('').home).toBe('')
     expect(readProofReport('nonsense').token).toBe('')
+  })
+})
+
+describe('telling the agent it is in a sandbox', () => {
+  /*
+   * Found on Asad's WSL box, and it had been killing every session there.
+   *
+   * `--map-root-user` makes the session uid 0 inside its namespace, and Claude
+   * Code refuses `bypassPermissions` as root. His `~/.claude/settings.json` sets
+   * that mode — ordinary for unattended work — so the agent aborted on its first
+   * line with a sentence naming neither this app nor the namespace, and the
+   * session wore `exit 1`. Measured on that machine: the same command under
+   * `unshare --user --map-root-user` fails, and succeeds with `IS_SANDBOX=1`.
+   */
+  it('exports IS_SANDBOX, because the boundary above it is real', () => {
+    expect(LINUX_CONFINE_SCRIPT).toContain('IS_SANDBOX=1')
+    expect(LINUX_CONFINE_SCRIPT).toContain('export IS_SANDBOX')
+  })
+
+  it('sets it only after the sandbox exists, never before', () => {
+    const set = LINUX_CONFINE_SCRIPT.indexOf('IS_SANDBOX=1')
+    const exec = LINUX_CONFINE_SCRIPT.indexOf('exec setpriv')
+    const mounts = LINUX_CONFINE_SCRIPT.indexOf('td_fail')
+
+    expect(set).toBeGreaterThan(mounts)
+    expect(set).toBeLessThan(exec)
+  })
+
+  it('rides the same script the WSL path runs, so both agree', () => {
+    // `linuxShellLine` is built from `linuxCommand`, which embeds this script —
+    // the WSL boundary and the direct one are the same text or they are two
+    // different boundaries. Asad's failing sessions came through WSL.
+    const line = linuxShellLine(
+      planOf({ folder: '/home/asad', writable: ['/home/asad'] }),
+      '/usr/bin/claude',
+      [],
+      machine({ has: ['/home', '/tmp', '/home/asad'] }),
+      stagePath('t0ken'),
+    )
+    expect(line).toContain('IS_SANDBOX')
   })
 })

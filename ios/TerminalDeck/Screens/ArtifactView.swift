@@ -34,6 +34,24 @@
  *    `.sqlite`; `gone` is a file an agent wrote and deleted two turns later.
  *    Neither gets a frame that cannot load.
  *
+ * ## What stopped arriving here
+ *
+ * > *"an artifact is still showing the MD files, which is — multiple times I
+ * > have discussed about it. Artifact should not show the MD files. It should
+ * > be only for purely the prototypes."*
+ *
+ * The panel now sends `page`, `image` and `media` and nothing else. That rule
+ * lives on the **desktop**, in `src/main/remote/panels/artifacts.ts`, so that
+ * one side decides what an artifact is and this screen cannot drift from it;
+ * markdown is read in **Files**, which is the file browser and this is not.
+ *
+ * The `text` and `other` branches below are kept all the same, and they are not
+ * dead code. A `page` showing its own source runs the whole `text` reader — the
+ * *Read more* bar, *Read again*, *Copy what is shown* — and this phone pairs
+ * with whatever host it is pointed at, including one built before that rule.
+ * The one thing now unreachable from a current host is the markdown/prose
+ * toggle, and it stays for the second of those two reasons.
+ *
  * ## How a prototype actually runs, and where
  *
  * **On the machine.** Pressing *Run it* asks the panel for a `preview`; the host

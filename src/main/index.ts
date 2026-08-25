@@ -595,7 +595,27 @@ let updates: ReturnType<typeof registerUpdateIpc> | null = null
  * the wire does, and pushing a list to nobody is the correct answer rather than
  * a race to work around.
  */
-let remoteLayer: { server: { sessionsChanged(): number; surfacesChanged(): number } } | null = null
+let remoteLayer: {
+  server: { sessionsChanged(): number; surfacesChanged(): number; handoverChanged(window?: string): number }
+} | null = null
+
+/**
+ * The last handover this process announced down the wire, as a key.
+ *
+ * The drive publishes its status on **every** move it makes, `setStep` included
+ * — which is once per click, once per keystroke run, once per navigation. Only a
+ * tiny slice of that is news to a phone: whether somebody is being asked to do
+ * something, and what they are being asked. Announcing unconditionally would put
+ * a frame on every watching phone's socket for each step of an agent's drive,
+ * which is the shape `subscribeToBindings` in this same file argues against for
+ * the window set.
+ *
+ * Everything else that moves a handover — a phone taking it, a phone handing it
+ * back, a taker's socket closing — is seen by `remote/server.ts` itself and
+ * pushed from there, so this only has to carry the transition the endpoint
+ * cannot see.
+ */
+let announcedHandover = ''
 
 /**
  * The per-device copilot runs, once the remote layer is assembled.
@@ -1967,6 +1987,24 @@ function machineScreencastHere(): ScreencastHost {
     },
     castInput: async (target, watcherId, frame) =>
       browserDrive()?.castInput(target, watcherId, frame) ?? { ok: false, reason: NO_DRIVE_TO_CAST },
+    /*
+     * The handover, answered from a phone rather than from the banner.
+     *
+     * On this host the banner is right there, so a person standing at the Mac
+     * answers `browser.handover` the way they always did. These three are for the
+     * other person: somebody watching one of this machine's windows from a phone,
+     * who — until they existed — was handed the agent's sentence with the pixels
+     * removed and the keyboard refused. `browser-driver.ts` carries the argument;
+     * what belongs here is that a build with the browser switched off answers a
+     * sentence rather than throwing on the socket's data path, exactly like its
+     * five neighbours.
+     */
+    handoverHolding: (target) =>
+      browserDrive()?.handoverHolding(target) ?? { asking: false, prompt: '', taker: null },
+    takeHandover: async (target, watcherId) =>
+      browserDrive()?.takeHandover(target, watcherId) ?? { ok: false, reason: NO_DRIVE_TO_CAST },
+    handBackHandover: async (target, watcherId, carryOn) =>
+      browserDrive()?.handBackHandover(target, watcherId, carryOn) ?? { ok: false, reason: NO_DRIVE_TO_CAST },
     dropWatcher: async (watcherId) => {
       await browserDrive()?.dropWatcher(watcherId)
     },
@@ -3698,6 +3736,30 @@ function registerIpc(): void {
       open: (url) => openBarePane(bindingDeps.send, url),
       free: (tabId) => paneIsFree(tabId),
       view: (tabId, timeoutMs) => paneView(tabId, timeoutMs),
+    },
+    /*
+     * **And the phone watching one of these windows, when the baton moves.**
+     *
+     * `browser.handover` — the copilot asking for a person — curtains the cast of
+     * the page it was called on, so every watcher gets a lock card. On this
+     * machine that is right: the person is at the keyboard and the banner is on
+     * screen in front of them. On a phone watching this Mac's browser it was the
+     * whole of what arrived, and the question under the card was invisible.
+     *
+     * The drive already publishes on every one of these moves, for the renderer's
+     * banner. This is the same event, told to the other end as well:
+     * `handoverChanged` reads the state per window at send time and pushes
+     * `browser.handover.state` to whoever may watch it. Null until the remote
+     * layer is assembled, and pushing to nobody is the correct answer then rather
+     * than a race to work around — the same argument `remoteLayer` makes for the
+     * two session hooks it was made for.
+     */
+    driveStatusChanged: (status) => {
+      // Only when the *question* moved. See `announcedHandover`.
+      const key = `${status.state === 'human' ? 'asking' : 'no'}\u0000${status.prompt}`
+      if (key === announcedHandover) return
+      announcedHandover = key
+      remoteLayer?.server.handoverChanged()
     },
   })
   registerChromeImportIpc(ipcMain)

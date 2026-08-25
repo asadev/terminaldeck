@@ -31,6 +31,28 @@
  * anything, and a sentence about a cast there is an apology for a feature that
  * was never on the table.
  *
+ * ## And the third shape: a page the machine has no window row for
+ *
+ * `MachineWindowView` is the one browser-window screen now — the machine's own
+ * front tab opens it too — so the `…` on its bar reaches this screen for a page
+ * that is in `browser.surfaces` and in no window list at all. Every control here
+ * is a `browser.window.*` verb addressed by a window id, and
+ * `src/main/remote/protocol.ts` refuses an empty one on every member of that
+ * family, so for that page not one of them can be put on the wire.
+ *
+ * It gets the two controls he named, drawn **dead with the reason**, rather than
+ * a screen with nothing on it:
+ *
+ * > *"there is no way to attach this one too. So it should be the same case, or
+ * > all the options should be available at least."*
+ *
+ * Isolation, the screenshot and the click flow are named in that reason and are
+ * not drawn, and that is not the rule being bent twice: each of those cards is
+ * built out of a **fact** — shared or isolated, which profile, whether a
+ * recording is running — that the machine has never reported for a page with no
+ * window row. A dead button is honest; a card labelled *Shared* about a page
+ * nobody said that of is invented data.
+ *
  * ## What is deliberately not here
  *
  * The address and the four page verbs. They are on `MachineWindowView`'s bar,
@@ -96,6 +118,13 @@ struct MachineWindowSettingsView: View {
     private var host: HostLink? { model.current }
     private var state: MachineBrowserState? { host?.machineBrowser }
     private var window: MachineWindow? { state?.windows.first { $0.id == windowID } }
+    /// The cast of this page, when the machine is offering one. The only thing
+    /// that exists for the machine's own front tab, which is in no window list —
+    /// resolved here the same way `MachineWindowView` resolves it, off the live
+    /// list rather than passed in, because the strip is pushed when it moves.
+    private var surface: BrowserSurfaceRow? {
+        host?.watch.surfaces.first { $0.window == windowID }
+    }
     private var sessions: [WindowSession] { state?.sessions ?? [] }
     private var steps: [RecordedStep] { host?.machineSteps[windowID] ?? [] }
 
@@ -198,6 +227,8 @@ struct MachineWindowSettingsView: View {
             screenshotCard
             recordingCard(window)
             closeCard(window)
+        } else if surface != nil {
+            noWindowCards
         } else {
             ProgressView()
                 .controlSize(.regular)
@@ -205,6 +236,111 @@ struct MachineWindowSettingsView: View {
                 .padding(.top, 40)
                 .accessibilityIdentifier("browser.machine.window.settingsLoading")
         }
+    }
+
+    /* ---- a page the machine has no window row for -------------------------- */
+
+    /**
+     * The same two controls he named, and they cannot act.
+     *
+     * > *"there is no way to attach this one too. So it should be the same case,
+     * > or all the options should be available at least."*
+     *
+     * The reason is drawn once, at the top, and both controls under it are dead.
+     * That is the shape rather than a hint on each: *why is this page different*
+     * is one fact about the page, and repeating it under two buttons is two
+     * places for it to drift.
+     *
+     * The session picker is drawn as a dead row **even where the machine has
+     * sessions** — the picker itself would work and the verb behind it would be
+     * refused before it left this phone, so offering the choice would be a menu
+     * that ends in nothing.
+     */
+    @ViewBuilder
+    private var noWindowCards: some View {
+        SchemeSectionCaption(
+            "This page",
+            about: "a page with no window row",
+            info: "The machine names each of its windows with an id, and every window verb — "
+                + "attaching to a session, closing, isolating, the screenshot, the click flow — is "
+                + "addressed by that id. This page is one the machine's window list does not name, "
+                + "so none of those can be sent for it.\n\nIt can still be watched.")
+
+        SchemeGroup {
+            plainNote(whyNoWindow, id: "browser.machine.window.noWindowRow")
+        }
+
+        SchemeSectionCaption(
+            "Session",
+            about: "window binding",
+            info: "A bound window gets a slot name — B1, B2 — and the session's tools address it by "
+                + "that name. The machine addresses the binding by the window's id, which this page "
+                + "does not have.")
+
+        SchemeGroup {
+            deadRow("Attach to a session", icon: "link",
+                    id: "browser.machine.window.attach",
+                    why: "This page has no window id for the machine to bind.")
+        }
+
+        SchemeSectionCaption("Window")
+
+        SchemeGroup {
+            deadRow("Close this window", icon: "xmark.circle",
+                    id: "browser.machine.window.close",
+                    why: "This page has no window id for the machine to close.")
+        }
+    }
+
+    /**
+     * Which of the two pages with no window row this is, said out loud.
+     *
+     * The empty id is the machine's **own tab** — the slot `openTab` mints no
+     * shell id for, where a page opened from the phone's address bar lands — and
+     * it is by far the common one. A non-empty id that no window row names is the
+     * other: a cast this list cannot join to a window, which is what a machine
+     * offering `watch` without `browser.control` produces. Naming the right one
+     * matters because the two have different fixes and only one of them is
+     * ordinary.
+     */
+    private var whyNoWindow: String {
+        let name = model.current?.label ?? model.theMachine
+        if windowID.isEmpty {
+            return "This is \(name)'s own tab rather than one of its windows, so it cannot be "
+                + "attached to a session, closed, isolated, photographed or recorded from here. "
+                + "Watching it and typing an address are the two things it does take."
+        }
+        return "\(name) is casting this page and its window list does not name it, so it cannot be "
+            + "attached to a session, closed, isolated, photographed or recorded from here. "
+            + "Watching it is what it takes."
+    }
+
+    /**
+     * A control in its place, greyed, with the reason on the hint.
+     *
+     * `.disabled(true)` rather than a button that answers with a sentence: a
+     * control that replies instead of acting is still a control that did not do
+     * what it says. The line above the card is where the reason is read; this is
+     * what keeps the screen the same screen.
+     */
+    private func deadRow(_ title: String, icon: String, id: String, why: String) -> some View {
+        Button {} label: {
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .font(.system(size: 17, weight: .light))
+                    .frame(width: 24)
+                Text(title)
+                    .font(.system(size: 16))
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(Theme.faint)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 13)
+        }
+        .buttonStyle(.plain)
+        .disabled(true)
+        .accessibilityHint(why)
+        .accessibilityIdentifier(id)
     }
 
     /* ---- why there is no picture, when there is a reason ------------------- */

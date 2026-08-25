@@ -411,6 +411,9 @@ describe('a host whose browser is not there', () => {
     stopCast: async () => undefined,
     ackCast: () => undefined,
     castInput: async () => ({ ok: false, reason: 'this app has no browser running' }),
+    handoverHolding: () => ({ asking: false, prompt: '', taker: null }),
+    takeHandover: async () => ({ ok: false, reason: 'this app has no browser running' }),
+    handBackHandover: async () => ({ ok: false, reason: 'this app has no browser running' }),
     dropWatcher: async () => undefined,
   }
 
@@ -459,8 +462,8 @@ describe("the drive's own tab, which has no window id to wear", () => {
     expect(front.row()).toBeNull()
   })
 
-  it('labels the row with the page it was opened at', () => {
-    const front = frontTab(() => 'https://www.google.com')
+  it('labels the row with the page the tab is on', () => {
+    const front = frontTab(() => ({ url: 'https://www.google.com/', title: 'Google' }))
     front.opened({ url: 'https://www.google.com/', title: 'Google' })
     expect(front.row()).toEqual({
       window: '',
@@ -470,28 +473,167 @@ describe("the drive's own tab, which has no window id to wear", () => {
     })
   })
 
-  it('lets the label go the moment the tab is on another site', () => {
-    let origin = 'https://www.google.com'
-    const front = frontTab(() => origin)
-    front.opened({ url: 'https://www.google.com/', title: 'Google' })
+  /**
+   * The defect this read exists to close, in both of its shapes.
+   *
+   * The row used to be labelled from what `open` answered, kept while the
+   * *origin* still matched. So a link followed **inside** one site left the
+   * address showing the page you started at — the first assertion — and a link
+   * to **another** site degraded to a bare origin with no path — the second.
+   * Asad found it from the other end: *"I cannot touch the URL."* An address bar
+   * that can be edited and shows the wrong address is worse than one that
+   * cannot.
+   */
+  it('follows the page inside a site and across to another one', () => {
+    let page = { url: 'https://www.google.com/', title: 'Google' }
+    const front = frontTab(() => page)
+    front.opened(page)
 
-    // A link click, or a redirect. The liveness is read off the slot every time
-    // and the label is only ever used while it still describes what is there —
-    // naming a site is honest, going on claiming a title is not.
-    origin = 'https://news.example.com'
-    expect(front.row()).toEqual({
-      window: '',
-      target: null,
-      url: 'https://news.example.com',
-      title: '',
-    })
+    page = { url: 'https://www.google.com/search?q=deck', title: 'deck - Google Search' }
+    expect(front.row()?.url).toBe('https://www.google.com/search?q=deck')
+    expect(front.row()?.title).toBe('deck - Google Search')
+
+    page = { url: 'https://news.example.com/story/1', title: 'A story' }
+    expect(front.row()?.url).toBe('https://news.example.com/story/1')
+    expect(front.row()?.title).toBe('A story')
   })
 
   it('says nothing about a blank tab rather than printing an opaque origin', () => {
     // `new URL('about:blank').origin` is the *string* `null`, which is a word a
     // person would be shown if it were passed through as an address.
-    const front = frontTab(() => 'null')
+    const front = frontTab(() => ({ url: 'about:blank', title: '' }))
     expect(front.row()).toEqual({ window: '', target: null, url: '', title: '' })
+  })
+})
+
+/* ------------------------------------------- a named row on the own slot -- */
+
+/**
+ * A surface with a **real name** whose frames come out of the drive's own slot.
+ *
+ * This is not a hypothetical: it is what the desktop ships. `machineScreencastHere`
+ * in `src/main/index.ts` walks `knownWindows()` and gives every row its pane's
+ * shell id, then hands `target: null` to the one pane whose view matches
+ * `BrowserDrive.ownView()` — because casting the copilot's own page through
+ * `bound:<paneId>` would build a second slot on one document, with two batons and
+ * two `grantedOrigin`s, and `handover` would curtain one of them while the other
+ * kept streaming a password. Every other test in this file pairs a non-empty name
+ * with a bound target or an empty name with a null one, so the combination the
+ * desktop actually sends had nothing on it.
+ *
+ * What it pins is the property the fix for Asad's *"there is no way to attach
+ * this one too"* rides on: **the name a surface wears and the slot its frames
+ * come from are two independent facts**, and nothing in this module or in
+ * `BrowserDrive` reads the name to decide where to route. So the day a server's
+ * front tab is opened as an ordinary window — see `frontTab` in
+ * `screencast-host.ts` for which file that lands in — the strip, the acks, the
+ * taps and the handover all keep working with no change here.
+ */
+describe("a window row whose frames come from the drive's own slot", () => {
+  const OWN_PANE = 'browser:1755:9'
+
+  async function deskLikeMachine() {
+    const fp = fakePage()
+    const drive = new BrowserDrive({
+      // The desktop's renderer answers with a view id; the pane's own shell id
+      // never reaches this process, which is exactly why the row below carries
+      // one and the target does not.
+      openTab: async () => 'view-own',
+      contentsFor: () => fp.page as never,
+      publish: () => undefined,
+      now: () => 1_000,
+    })
+    // There is nothing to cast until the copilot's tab holds a page.
+    await drive.open({ url: 'https://example.com/', isolate: false })
+    const host = screencastOver({
+      drive,
+      windows: (): CastWindow[] => [
+        { window: OWN_PANE, target: null, url: 'https://example.com/', title: 'Example' },
+      ],
+    })
+    return { fp, drive, host }
+  }
+
+  it('streams, acks and takes a tap under the name the window list gave it', async () => {
+    const { fp, host } = await deskLikeMachine()
+    const watcher = sink()
+
+    const result = await host.watch({
+      watcherId: 'conn-1',
+      window: OWN_PANE,
+      maxWidth: 800,
+      quality: 50,
+      emit: watcher.emit,
+    })
+    expect(result.ok).toBe(true)
+    expect(fp.has('Page.startScreencast')).toBe(true)
+
+    fp.fire('Page.screencastFrame', screencastFrame())
+    expect(watcher.frames).toHaveLength(1)
+    // The frame comes back wearing the row's name and not the slot's, which is
+    // the whole of what the viewer keys its canvas on.
+    expect(watcher.frames[0].window).toBe(OWN_PANE)
+
+    // And the strip agrees with the routing, rather than listing a second name
+    // for the same page.
+    expect(await host.surfaces()).toEqual([
+      { window: OWN_PANE, url: 'https://example.com/', title: 'Example', live: true },
+    ])
+
+    host.ack({ watcherId: 'conn-1', window: OWN_PANE, seq: watcher.frames[0].seq })
+    fp.fire('Page.screencastFrame', screencastFrame(120))
+    expect(watcher.frames).toHaveLength(2)
+
+    const tap = await host.input({
+      watcherId: 'conn-1',
+      window: OWN_PANE,
+      frame: {
+        t: 'browser.input',
+        window: OWN_PANE,
+        seq: watcher.frames[1].seq,
+        mouse: { type: 'down', x: 80, y: 40, clicks: 1 },
+      },
+    })
+    expect(tap.ok).toBe(true)
+    expect(fp.last('Input.dispatchMouseEvent')?.params).toMatchObject({
+      type: 'mousePressed',
+      button: 'left',
+    })
+  })
+
+  it('carries the copilot’s question, and a take, to the own slot under that name', async () => {
+    const { drive, host } = await deskLikeMachine()
+    const watcher = sink()
+    await host.watch({
+      watcherId: 'conn-1',
+      window: OWN_PANE,
+      maxWidth: 800,
+      quality: 50,
+      emit: watcher.emit,
+    })
+
+    // Asked on the own slot — `handover` with no target — and read back under the
+    // pane's name. This is the half that matters most: `handover` curtains the
+    // cast of the slot it was called on, so a row that could not answer it would
+    // put a lock card on a phone with no way to lift it. The window is spelled
+    // out for the same reason its neighbours spell it out: a default that
+    // outlives the test is a timer holding the runner open.
+    const asked = drive.handover('Sign in and then press Done.', 60_000)
+    await new Promise((settle) => setTimeout(settle, 0))
+
+    const question = await host.handover(OWN_PANE)
+    expect(question.asking).toBe(true)
+    expect(question.prompt).toContain('Sign in')
+    expect(question.taker).toBeNull()
+
+    expect(await host.take({ watcherId: 'conn-1', window: OWN_PANE })).toEqual({ ok: true })
+    expect((await host.handover(OWN_PANE)).taker).toBe('conn-1')
+
+    expect(await host.handBack({ watcherId: 'conn-1', window: OWN_PANE, carryOn: true })).toEqual({
+      ok: true,
+    })
+    expect((await asked).outcome).toBe('resumed')
+    expect(await host.handover(OWN_PANE)).toEqual({ asking: false, prompt: '', taker: null })
   })
 })
 
@@ -551,5 +693,88 @@ describe('both shells pass a screencast, and the endpoint carries it', () => {
     expect(source('src/main/remote/server.ts')).toContain(
       'options.screencast?.dropWatcher(connection.id)',
     )
+  })
+})
+
+/* -------------------------------------------------------- the handover -- */
+
+/**
+ * The handover, routed by window name.
+ *
+ * The same rule the input path states, one frame further along: a name is
+ * resolved to a slot once, at watch time, and every later call for that watcher
+ * goes to *that* slot. A take that resolved the name again could hand somebody a
+ * different page from the one they are looking at, which on a login form is the
+ * whole of the danger.
+ */
+describe('answering the copilot’s question from a watched window', () => {
+  it('reports nothing about a window this machine is not casting', async () => {
+    /*
+     * Not the same claim as *no handover is outstanding*, and answered the same
+     * way on purpose: the only thing this frame leads to is a take, and a take
+     * requires being a watcher. Saying `asking: true` about a page this side is
+     * not casting would put a button on a screen the tap would be refused from.
+     */
+    const { host } = machine()
+    expect(await host.handover(PANE)).toEqual({ asking: false, prompt: '', taker: null })
+    expect(await host.take({ watcherId: 'conn-1', window: PANE })).toMatchObject({ ok: false })
+    expect(await host.handBack({ watcherId: 'conn-1', window: PANE, carryOn: true })).toMatchObject({ ok: false })
+  })
+
+  it('carries a take and a hand-back to the slot the watcher is being shown', async () => {
+    const { fp, drive, host } = machine()
+    const watcher = sink()
+    await host.watch({ watcherId: 'conn-1', window: PANE, maxWidth: 800, quality: 50, emit: watcher.emit })
+
+    const asked = drive.handover('Sign in and then press Done.', 60_000, TARGET)
+    await new Promise((settle) => setTimeout(settle, 0))
+
+    const question = await host.handover(PANE)
+    expect(question.asking).toBe(true)
+    expect(question.prompt).toContain('Sign in')
+    expect(question.taker).toBeNull()
+
+    expect(await host.take({ watcherId: 'conn-1', window: PANE })).toEqual({ ok: true })
+    expect((await host.handover(PANE)).taker).toBe('conn-1')
+
+    // The page is live for the taker again, and its typing reaches the page. The
+    // lock card it is holding has to be acked first — the backpressure is one
+    // un-acked frame per watcher, and a curtain card is a frame.
+    host.ack({ watcherId: 'conn-1', window: PANE, seq: watcher.frames[watcher.frames.length - 1].seq })
+    fp.fire('Page.screencastFrame', screencastFrame())
+    const last = watcher.frames[watcher.frames.length - 1]
+    expect(last.masked).toBeUndefined()
+    const typed = await host.input({
+      watcherId: 'conn-1',
+      window: PANE,
+      frame: { t: 'browser.input', window: PANE, seq: last.seq, paste: 'hunter2' },
+    })
+    expect(typed.ok).toBe(true)
+    expect(fp.has('Input.insertText')).toBe(true)
+
+    expect(await host.handBack({ watcherId: 'conn-1', window: PANE, carryOn: true })).toEqual({ ok: true })
+    expect((await asked).outcome).toBe('resumed')
+    expect(await host.handover(PANE)).toEqual({ asking: false, prompt: '', taker: null })
+  })
+
+  it('refuses a take from a connection this side is not casting to', async () => {
+    // The two-set rule: `server.ts` refuses a window a connection never asked to
+    // watch, and this refuses one this side never started. The gap between them
+    // is a watch that was refused, and a take in that gap would be a take of a
+    // page whose pixels are going nowhere.
+    const { drive, host } = machine()
+    const watcher = sink()
+    await host.watch({ watcherId: 'conn-1', window: PANE, maxWidth: 800, quality: 50, emit: watcher.emit })
+    const asked = drive.handover('Sign in and then press Done.', 60_000, TARGET)
+    await new Promise((settle) => setTimeout(settle, 0))
+
+    const stranger = await host.take({ watcherId: 'conn-2', window: PANE })
+    expect(stranger.ok).toBe(false)
+    expect(stranger.reason).toContain('not being watched on this connection')
+    expect((await host.handover(PANE)).taker).toBeNull()
+
+    await host.take({ watcherId: 'conn-1', window: PANE })
+    await host.handBack({ watcherId: 'conn-1', window: PANE, carryOn: false })
+    expect((await asked).outcome).toBe('stopped')
   })
 })

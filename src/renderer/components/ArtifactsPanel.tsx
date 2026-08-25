@@ -42,6 +42,39 @@ import './ArtifactsPanel.css'
  * away, under the word that describes them — nothing is hidden, and the split
  * is between two honest words rather than between shown and dropped.
  *
+ * ## What is not on this page
+ *
+ *   > *"an artifact is still showing the MD files, which is — multiple times I
+ *   > have discussed about it. Artifact should not show the MD files. It should
+ *   > be only for purely the prototypes."*
+ *
+ * The made/changed split above answers *which half of the record*; this answers
+ * *what kind of thing*, and it is the half the code never held. A row is a
+ * **prototype, a picture or a recording** — a page, an image, a PDF or a
+ * recording — and nothing else is drawn. Markdown, prose, source, stylesheets,
+ * data and every extension this window has no word for are dropped by
+ * {@link isArtifact}. A markdown file is still readable in this app — **Files**
+ * is where, because Files is the file browser and this is not. Nothing here
+ * touches anything on disk.
+ *
+ * The rule runs **once, at the seam**: {@link onlyArtifacts}, on the answer the
+ * moment it arrives, before a single count is taken. The two chip counts, the
+ * session chips, the status line and the empty state are all read off the
+ * narrowed list, so there is nowhere for *"12 made here"* to stand above an
+ * empty one.
+ *
+ * ### The same rule as the phone's, and why it is written twice
+ *
+ * The one true definition is `isArtifact` in
+ * **`src/main/remote/panels/artifacts.ts`**, which filters the phone's Artifacts
+ * panel at the scan and whose header carries the argument at length. This is a
+ * copy of its three extension sets, kept in step by hand, for the reason the
+ * type mirrors below give: `tsconfig.web.json` includes `src/renderer` and
+ * `src/shared` and nothing of `src/main`, and both projects are `composite`, so
+ * an import across that line is a typecheck error rather than a bundling one.
+ * **Change one and change the other** — two surfaces disagreeing about what an
+ * artifact is is how this page came back wrong the last three times.
+ *
  * And the second half of "it looks like Files" was the *presentation*: a
  * path-shaped list beside a pane of raw monospace source. A row is a thing now
  * — its name, what kind of thing it is, when, how big — and the pane shows the
@@ -353,6 +386,16 @@ export function wasMade(artifact: Artifact): boolean {
  *
  * The list is short on purpose. A vocabulary of twenty kinds is a legend
  * somebody has to learn; six is a glance.
+ *
+ * `Video` and `Sound` are here because a recording is an artifact — see
+ * {@link isArtifact} — and *"File, 8.2 MB"* is a true and useless thing to say
+ * about a screen recording an agent produced.
+ *
+ * This is the **vocabulary**, not the filter. It still answers `Code` for a
+ * `.ts` and `Document` for a `.md`, which are the right words for those files;
+ * what stops them being rows is {@link isArtifact}, one question over. Folding
+ * the two together would hide the rule inside a lookup table, which is where
+ * the next reader would find it by accident.
  */
 const KIND_BY_EXTENSION: Record<string, string> = {
   md: 'Document', markdown: 'Document', txt: 'Document', rtf: 'Document', pdf: 'Document',
@@ -360,7 +403,9 @@ const KIND_BY_EXTENSION: Record<string, string> = {
   html: 'Web page', htm: 'Web page', xhtml: 'Web page',
   css: 'Style sheet', scss: 'Style sheet', sass: 'Style sheet', less: 'Style sheet',
   png: 'Image', jpg: 'Image', jpeg: 'Image', gif: 'Image', webp: 'Image', svg: 'Image',
-  avif: 'Image', ico: 'Image', bmp: 'Image',
+  avif: 'Image', ico: 'Image', bmp: 'Image', heic: 'Image', heif: 'Image',
+  mp4: 'Video', m4v: 'Video', mov: 'Video', webm: 'Video',
+  mp3: 'Sound', m4a: 'Sound', wav: 'Sound', aac: 'Sound', flac: 'Sound', ogg: 'Sound',
   csv: 'Data', tsv: 'Data', json: 'Data', jsonl: 'Data', ndjson: 'Data', xml: 'Data',
   yaml: 'Data', yml: 'Data', toml: 'Data', sql: 'Data', geojson: 'Data', parquet: 'Data',
   ts: 'Code', tsx: 'Code', js: 'Code', jsx: 'Code', mjs: 'Code', cjs: 'Code', py: 'Code',
@@ -369,15 +414,128 @@ const KIND_BY_EXTENSION: Record<string, string> = {
   zsh: 'Code', ps1: 'Code', lua: 'Code', vue: 'Code', svelte: 'Code', ipynb: 'Notebook',
 }
 
+/**
+ * The extension of a project-relative path, lower-cased, without its dot.
+ *
+ * Pulled out of {@link kindOf} because {@link isArtifact} asks the same question
+ * of the same string and the two answers have to be the same one: a page that
+ * lists a file it then has no word for is the drift this whole rule exists to
+ * stop.
+ */
+function extensionOf(relPath: string): string {
+  const name = relPath.slice(relPath.lastIndexOf('/') + 1)
+  const dot = name.lastIndexOf('.')
+  // `<= 0` and not `=== -1`: a dotfile with no second dot — `.env`,
+  // `.gitignore` — has a dot at index 0 and no extension at all.
+  return dot <= 0 ? '' : name.slice(dot + 1).toLowerCase()
+}
+
 export function kindOf(relPath: string): string {
   const name = relPath.slice(relPath.lastIndexOf('/') + 1)
   // A dotfile with no second dot — `.gitignore`, `.claudeignore`, `.env` — has
   // no extension at all; its whole name is the type. Calling those "File" would
   // be right and useless, and calling `.gitignore` a "Document" would be wrong.
   if (name.startsWith('.') && !name.slice(1).includes('.')) return 'Setting'
-  const dot = name.lastIndexOf('.')
-  if (dot <= 0) return 'File'
-  return KIND_BY_EXTENSION[name.slice(dot + 1).toLowerCase()] ?? 'File'
+  const extension = extensionOf(relPath)
+  if (extension === '') return 'File'
+  return KIND_BY_EXTENSION[extension] ?? 'File'
+}
+
+/**
+ * The extensions that make a row.
+ *
+ * `PAGE_EXTENSIONS`, `IMAGE_EXTENSIONS` and `MEDIA_EXTENSIONS` in
+ * **`src/main/remote/panels/artifacts.ts`**, in one set — see the header for why
+ * it is copied here rather than imported, and for the rule that the two must be
+ * changed together.
+ */
+export const ARTIFACT_EXTENSIONS: ReadonlySet<string> = new Set([
+  // A prototype. The case he asked about by name.
+  'html', 'htm', 'xhtml',
+  // A picture.
+  'png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp', 'ico', 'heic', 'heif', 'svg',
+  // A recording, or a document that is already laid out. The machine has
+  // something that shows each of these; nothing here has to read them.
+  'pdf', 'mp4', 'm4v', 'mov', 'webm', 'mp3', 'm4a', 'wav', 'aac', 'flac', 'ogg',
+])
+
+/**
+ * Whether this belongs on the page at all.
+ *
+ *   > *"an artifact is still showing the MD files, which is — multiple times I
+ *   > have discussed about it. Artifact should not show the MD files. It should
+ *   > be only for purely the prototypes."*
+ *
+ * A prototype, a picture or a recording. Not markdown, not prose, not source,
+ * not a stylesheet, not data and not an extension nothing here has a word for —
+ * those are files, and Files is the file browser.
+ *
+ * Decided from the **path**, which is what lets the deleted half of the list
+ * obey the same rule as the live half. An `index.html` an agent wrote and threw
+ * away is still a prototype it made and still belongs on this page under its
+ * *not on disk* tag; a `PLAN.md` it threw away is still prose. Both arrive with
+ * `onDisk === null`, so a filter that read anything but the name would keep the
+ * wrong one.
+ */
+export function isArtifact(relPath: string): boolean {
+  return ARTIFACT_EXTENSIONS.has(extensionOf(relPath))
+}
+
+/**
+ * The scan, less everything that is not an artifact.
+ *
+ * One place, ahead of every count this page takes — which is the whole reason
+ * it narrows the *list* rather than the rows. The two chip counts, the session
+ * chips, the status line and the empty state all read what this returns, so
+ * *"12 made here"* cannot end up above a list with nothing in it. The phone's
+ * panel does the same thing in the same shape, at the scan.
+ *
+ * A session's `files` is **recounted** off what survived, and a session whose
+ * whole contribution was prose leaves the chip row with it. A chip reading
+ * *"Rewrite the hero · 4 files"* that opens an empty list is a control that
+ * cannot act.
+ *
+ * The raw answer is left alone — this narrows a copy — because what the main
+ * process is allowed to *find* is not what this page is willing to *draw*, and
+ * the change record behind a row is read from the same scan.
+ *
+ * `hidden` is how many rows the rule took, and it is used in exactly one place:
+ * the empty state, where a zero has to carry its own evidence. Deliberately
+ * **not** in the status line of a list that has rows — *"12 made here · 200
+ * files hidden"* would put the file browser back on the page in words, which is
+ * the thing being removed.
+ */
+export function onlyArtifacts(list: ArtifactList): { list: ArtifactList; hidden: number } {
+  const artifacts = list.artifacts.filter((artifact) => isArtifact(artifact.relPath))
+  if (artifacts.length === list.artifacts.length) return { list, hidden: 0 }
+
+  const files = new Map<string, number>()
+  for (const artifact of artifacts) {
+    for (const sessionId of artifact.sessionIds) {
+      files.set(sessionId, (files.get(sessionId) ?? 0) + 1)
+    }
+  }
+  const sessions = list.sessions
+    .filter((entry) => files.has(entry.sessionId))
+    .map((entry) => ({ ...entry, files: files.get(entry.sessionId) ?? 0 }))
+
+  return {
+    list: { ...list, artifacts, sessions },
+    hidden: list.artifacts.length - artifacts.length,
+  }
+}
+
+/**
+ * What the page says when the rule emptied it.
+ *
+ * A folder an agent has worked in all week, showing nothing, is the zero a
+ * person cannot check — *"No artifacts are still. I don't know."* And
+ * {@link nothingFound} would be a lie here: things *were* written, and every
+ * one of them was prose. The rule that emptied the page has to say so, or the
+ * page reads as broken rather than as strict.
+ */
+export function nothingButFiles(list: ArtifactList, hidden: number): string {
+  return `No prototypes in ${list.root} — ${hidden} file${hidden === 1 ? '' : 's'} of prose or source, which is what Files is for.`
 }
 
 /** Which artifacts a preview can actually render, rather than describe. */
@@ -395,6 +553,12 @@ export type PreviewKind = 'document' | 'text' | 'image' | 'page' | 'none'
  * screen. A prototype's markup is worth reading and is **not** the thing — so
  * the pane still shows it, with a sentence above it saying that opening it is
  * what makes it a page. Calling it `text` said neither.
+ *
+ * `document` is no longer reachable from this page's own list, because
+ * {@link isArtifact} drops markdown before a row is drawn. The arm stays: the
+ * question here is *what would this path look like*, which is about a path and
+ * not about the list, and deleting it would leave the rule decided in two
+ * places with this one guessing.
  */
 export function previewKindOf(relPath: string): PreviewKind {
   const kind = kindOf(relPath)
@@ -407,7 +571,13 @@ export function previewKindOf(relPath: string): PreviewKind {
     return lower.endsWith('.md') || lower.endsWith('.markdown') ? 'document' : 'text'
   }
   if (kind === 'Image') return 'image'
-  if (kind === 'File' || kind === 'Notebook') return 'none'
+  // Nothing in this pane turns a recording, or a file it has no word for, into
+  // anything to look at — and reading one as text spends a megabyte to arrive
+  // at a note saying it is not text. The button beside it hands the file to the
+  // machine, which does have something that plays a video.
+  if (kind === 'File' || kind === 'Notebook' || kind === 'Video' || kind === 'Sound') {
+    return 'none'
+  }
   return 'text'
 }
 
@@ -459,11 +629,25 @@ export function nothingFound(list: ArtifactList): string {
  * The one-line summary under the controls.
  *
  * Exported because it is the sentence that has to stay truthful: it says how
- * many files, from how many sessions, and — when a cap bit — that there are
+ * many artifacts, from how many sessions, and — when a cap bit — that there are
  * more. A list that quietly stops at four hundred is a list that lies.
+ *
+ * The `list` handed to it is the **narrowed** one — see {@link onlyArtifacts} —
+ * so every number in the sentence is a number of rows on the screen. `hidden`
+ * is what the rule took, and it is only ever read to tell the two empty lists
+ * apart: a folder nothing was written in, and a folder whose whole record was
+ * prose. Saying `nothingFound` for the second would claim the agent wrote
+ * nothing when it wrote ten pages of markdown.
  */
-export function summarize(list: ArtifactList, shown: number, kind: ArtifactScopeKind): string {
-  if (list.artifacts.length === 0) return nothingFound(list)
+export function summarize(
+  list: ArtifactList,
+  shown: number,
+  kind: ArtifactScopeKind,
+  hidden = 0,
+): string {
+  if (list.artifacts.length === 0) {
+    return hidden > 0 ? nothingButFiles(list, hidden) : nothingFound(list)
+  }
   // Counted against the half of the list that is on screen, not against every
   // file found — "12 of 33" under a Made chip showing 12 of 12 was the page
   // reporting a filter as if it were a shortfall.
@@ -1139,8 +1323,30 @@ export function ArtifactsPanel({
     })()
   }, [host, projectPath, scope, listAttempt])
 
+  /*
+   * The rule, applied once, before anything counts anything.
+   *
+   *   > *"an artifact is still showing the MD files… It should be only for
+   *   > purely the prototypes."*
+   *
+   * Everything below this line reads `found` and never `list.list`: the two chip
+   * counts, the session chips, the status line, the empty state and the rows.
+   * That is the seam — see {@link onlyArtifacts} — and it is what stops a chip
+   * saying *"12 made here"* over a list with nothing in it.
+   *
+   * The raw answer stays in state and in the cache. What the main process is
+   * allowed to find is not what this page is willing to draw, and the History
+   * pane behind a row reads the same scan.
+   */
+  const narrowed = useMemo(
+    () => (list.list === null ? null : onlyArtifacts(list.list)),
+    [list.list],
+  )
+  const found = narrowed?.list ?? null
+  const hidden = narrowed?.hidden ?? 0
+
   const visible = useMemo(() => {
-    const artifacts = list.list?.artifacts ?? []
+    const artifacts = found?.artifacts ?? []
     const needle = filter.trim().toLowerCase()
     return artifacts.filter((artifact) => {
       // The split that makes this page Artifacts and not Files.
@@ -1149,16 +1355,22 @@ export function ArtifactsPanel({
       if (needle === '') return true
       return artifact.relPath.toLowerCase().includes(needle)
     })
-  }, [list.list, filter, session, made])
+  }, [found, filter, session, made])
 
-  /** How many are on the other chip, so it can say so rather than hide them. */
+  /**
+   * How many are on the other chip, so it can say so rather than hide them.
+   *
+   * Counted off the narrowed list, so the number on a chip is the number of
+   * rows pressing it draws. Counting the raw answer would put the markdown
+   * back on the page as a number.
+   */
   const changedCount = useMemo(
-    () => (list.list?.artifacts ?? []).filter((artifact) => !wasMade(artifact)).length,
-    [list.list],
+    () => (found?.artifacts ?? []).filter((artifact) => !wasMade(artifact)).length,
+    [found],
   )
   const madeCount = useMemo(
-    () => (list.list?.artifacts ?? []).filter(wasMade).length,
-    [list.list],
+    () => (found?.artifacts ?? []).filter(wasMade).length,
+    [found],
   )
 
   /*
@@ -1268,7 +1480,24 @@ export function ArtifactsPanel({
    * nothing on a project with two sessions and keeps every one of them
    * reachable on a project with forty.
    */
-  const sessions = list.list?.sessions ?? []
+  const sessions = useMemo(() => found?.sessions ?? [], [found])
+
+  /*
+   * A session filter is kept only while the chip that clears it is on screen.
+   *
+   * The chips are drawn from the narrowed list — a session whose whole
+   * contribution was prose is not one of them any more — and the row itself only
+   * appears when there is a choice to make. Either of those can take the chosen
+   * chip away underneath a filter that is still applied: switch scope with a
+   * held scan behind it and the session row is a different row. What is left
+   * then is a list narrowed by something with no lit chip and no way back out,
+   * which is a page a person cannot explain.
+   */
+  useEffect(() => {
+    if (session === null) return
+    const drawn = sessions.length > 1 && sessions.some((entry) => entry.sessionId === session)
+    if (!drawn) setSession(null)
+  }, [sessions, session])
 
   return (
     <section className="artifacts" aria-label="Artifacts">
@@ -1366,8 +1595,8 @@ export function ArtifactsPanel({
           ? 'Reading this project’s history…'
           : list.status === 'error'
             ? ''
-            : list.list
-              ? summarize(list.list, visible.length, made)
+            : found
+              ? summarize(found, visible.length, made, hidden)
               : ''}
       </p>
 
@@ -1385,10 +1614,13 @@ export function ArtifactsPanel({
         >
           {list.message}
         </PageEmpty>
-      ) : list.status === 'ready' && list.list && list.list.artifacts.length === 0 ? (
+      ) : list.status === 'ready' && found && found.artifacts.length === 0 ? (
         <PageEmpty
           icon={ARTIFACTS_ICON}
-          title="Nothing produced here yet"
+          /* Two different empty pages. A folder nothing was written in, and a
+             folder written in all week whose every file was prose — and the
+             second must say which rule emptied it or it reads as broken. */
+          title={hidden > 0 ? 'No prototypes here yet' : 'Nothing produced here yet'}
           action={
             scope === 'project'
               ? { label: 'Read every session', onClick: () => setScope('all') }
@@ -1402,16 +1634,21 @@ export function ArtifactsPanel({
               the two cannot come to say different things. The `i` still holds
               what a scope *is*, which is the part that is a definition rather
               than a finding. */}
-          {nothingFound(list.list)}{' '}
-          <HoverNote label="What was read">
-            {scope === 'project'
-              ? 'Only the sessions started in this folder were read. Read every session to include agents launched from a parent folder.'
-              : 'No session on this machine has written or edited a file inside this folder.'}
+          {hidden > 0 ? nothingButFiles(found, hidden) : nothingFound(found)}{' '}
+          <HoverNote label={hidden > 0 ? 'What counts as an artifact' : 'What was read'}>
+            {hidden > 0
+              ? 'A prototype, a picture or a recording — the things an agent makes to be looked at. Its notes, plans and source are files, and Files is the page that reads them.'
+              : scope === 'project'
+                ? 'Only the sessions started in this folder were read. Read every session to include agents launched from a parent folder.'
+                : 'No session on this machine has written or edited a file inside this folder.'}
           </HoverNote>
         </PageEmpty>
       ) : (
         <div className="artifacts-body">
-          <ul className="artifacts-list" aria-label={made === 'made' ? 'Things this project’s agents made' : 'Files this project’s agents changed'}>
+          {/* "Files … changed" was true while every touched file was a row.
+              Both halves are artifacts now — see `isArtifact` — so the accessible
+              name of the changed half has to say so too. */}
+          <ul className="artifacts-list" aria-label={made === 'made' ? 'Things this project’s agents made' : 'Artifacts this project’s agents changed'}>
             {visible.map((artifact) => (
               <ArtifactRow
                 key={artifact.relPath}
@@ -1429,11 +1666,15 @@ export function ArtifactsPanel({
                   false — nothing was filtered, there is nothing of that kind.
                 */}
                 <PageNote>
+                  {/* "written a whole file" was the wording while every file was
+                      a row. Prose is not a row any more, so the sentence has to
+                      be about an artifact — otherwise it claims the agent wrote
+                      nothing when it wrote ten pages of markdown. */}
                   {filter.trim() !== '' || session !== null
                     ? 'Nothing matches that filter.'
                     : made === 'made'
-                      ? 'No agent has written a whole file here yet. What it edited is under Changed.'
-                      : 'Every file here was made by an agent rather than edited into.'}
+                      ? 'No agent has made an artifact here yet. What it edited is under Changed.'
+                      : 'Every artifact here was made by an agent rather than edited into.'}
                 </PageNote>
               </li>
             )}

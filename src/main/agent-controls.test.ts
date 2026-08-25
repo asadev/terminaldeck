@@ -15,6 +15,7 @@ import {
   labelModelId,
   PERMISSION_MODES,
   countCommandErrors,
+  readCarry,
   readCommandError,
   readComposer,
   readControls,
@@ -673,15 +674,33 @@ describe('the Switch model? dialog', () => {
 /* --------------------------------------------------------- typing safely -- */
 
 describe('nothing is typed into a session that is not ready for it', () => {
-  it('will not type over a draft the user has not sent', async () => {
+  /*
+   * **This used to assert that nothing was typed, and that is no longer the
+   * rule.** A draft at the prompt was a refusal: the sheet opened onto a
+   * paragraph saying *"clear the prompt and pick again"* instead of onto the
+   * models. He rejected that:
+   *
+   * > *"they are also not control they are just descriptions which i dont want
+   * > always"*
+   *
+   * So the draft is now lifted, the command is sent, and the draft is put back
+   * — see `carryDraft`. What has not changed, and is the reason this test is
+   * here at all, is the second assertion: **his sentence is exactly as he left
+   * it**. It goes back unsent, never with a return, because a line read off a
+   * screen can never be known to be byte-exact — `switch-later.ts` spends a
+   * whole state on that same distinction.
+   */
+  it('lifts a draft out of the way, sends the command, and puts it back', async () => {
     const session = fakeClaude()
     session.composer = 'remind me to buy milk'
     const result = await applyControl(session, { ...CLAUDE, sessionId: 's', control: 'model', value: 'sonnet' }, QUICK)
-    expect(result.ok).toBe(false)
     // The point of the whole exercise: their sentence is exactly as they left it.
     expect(session.composer).toBe('remind me to buy milk')
-    expect(session.typed).toEqual([])
-    expect(result.message).toContain('remind me to buy milk')
+    // Kill the line, the command, the return, the line back — in that order.
+    expect(session.typed).toEqual(['\x15', '/model sonnet', '\r', 'remind me to buy milk'])
+    // And whatever became of the command, the message says what became of the
+    // draft — the one thing he would otherwise have to go and look for.
+    expect(result.message).toContain('Your draft is back at the prompt, unsent.')
   })
 
   it('will not press return at a session that is asking a question', async () => {
@@ -778,45 +797,276 @@ describe('a session this build cannot drive is not given controls that pretend',
   })
 })
 
+/* ------------------------------------------------ carrying a draft over -- */
+
+/**
+ * A draft that wrapped onto a second row.
+ *
+ * The CLI draws its command line between two rules, so a sentence longer than
+ * the terminal is wide leaves a row underneath the pointer that carries no
+ * pointer of its own — and `readComposer`, which reads exactly one row, would
+ * report the first half of it as though it were the whole. Lifting that half
+ * means ctrl+u destroying a half nobody read, which is the one outcome the
+ * carrying path exists to make impossible. Hence `readCarry` looks under the
+ * composer before it touches anything.
+ */
+const WRAPPED_DRAFT = [
+  '─────────────────────────────────────────────────────────── ultracode ─',
+  '❯ a sentence long enough that the terminal ran out of room and put the',
+  'rest of it on the row underneath',
+  '───────────────────────────────────────────────────────────────────────',
+  '  ⏵⏵ bypass permissions on (shift+tab to cycle)',
+].join('\n')
+
+/**
+ * The composer with something in it that the *CLI* drew, not the person.
+ *
+ * There is no reading that tells these apart on sight — a hint, a placeholder,
+ * the echo under a completion popup all look exactly like a draft to a screen
+ * reader. What tells them apart is ctrl+u: a real draft goes, and this does not.
+ * That is why `carryDraft` waits for the line to read back empty before it types
+ * anything, and why this fixture is worth its own test.
+ */
+const CLI_DREW_IT = [
+  '─────────────────────────────────────────────────────────── ultracode ─',
+  '❯ Try "edit <filepath>"',
+  '───────────────────────────────────────────────────────────────────────',
+  '  ⏵⏵ bypass permissions on (shift+tab to cycle)',
+].join('\n')
+
+describe('what this app may do with the far session’s command line', () => {
+  it('is free to type when the prompt is empty', async () => {
+    expect(readCarry((await fakeClaude().screen('s')) ?? '')).toEqual({ kind: 'clear' })
+  })
+
+  it('carries a draft it can read whole', async () => {
+    const session = fakeClaude()
+    session.composer = 'switch it to english'
+    const screen = (await session.screen('s')) ?? ''
+    expect(readCarry(screen)).toEqual({ kind: 'carry', draft: 'switch it to english' })
+  })
+
+  it('refuses a draft that runs past the row the pointer is on', () => {
+    expect(readCarry(WRAPPED_DRAFT)).toEqual({
+      kind: 'refuse',
+      reason: 'A multi-line draft is sitting at this prompt.',
+    })
+  })
+
+  it('refuses the three states where the keyboard belongs to something else', async () => {
+    const busy = fakeClaude({ history: ['✶ Dilly-dallying… (5s · ↓ 90 tokens)'] })
+    expect(readCarry((await busy.screen('s')) ?? '')).toEqual({
+      kind: 'refuse',
+      reason: 'This session is mid-turn.',
+    })
+    const asking = fakeClaude({ history: ['❯ 1. Yes, switch to Sonnet 5', '  2. No, go back'] })
+    expect(readCarry((await asking.screen('s')) ?? '')).toEqual({
+      kind: 'refuse',
+      reason: 'This session is waiting on an answer on screen.',
+    })
+    expect(readCarry('nothing here looks like a command line')).toEqual({
+      kind: 'refuse',
+      reason: 'This session’s prompt is not on screen.',
+    })
+  })
+})
+
+/**
+ * The whole of T9, driven end to end.
+ *
+ * His words, on tapping **Model** and getting a paragraph about unsent text
+ * where the list of models should have been:
+ *
+ *   > *"they are also not control they are just descriptions which i dont want
+ *   > always"*
+ *
+ * So the draft is the app's obstacle to move, not his. Each test below pins one
+ * half of "move it and give it back": the command really ran, and the sentence
+ * he typed is at the prompt afterwards, unsent, character for character.
+ */
+describe('a draft at the prompt is carried across the change', () => {
+  it('lifts it, runs the command, and types it back unsent', async () => {
+    const session = fakeClaude({
+      respond: (line, cli) => {
+        if (line === '/model sonnet') cli.print('  ⎿  Set model to Sonnet 5 for this session only')
+      },
+    })
+    session.composer = 'switch it to english'
+
+    const result = await applyControl(session, { ...CLAUDE, sessionId: 's', control: 'model', value: 'sonnet' }, QUICK)
+
+    expect(result.ok).toBe(true)
+    expect(result.reading.label).toBe('Sonnet 5')
+    // The command ran, and it ran alone: the draft was never part of the line.
+    expect(session.submitted).toEqual(['/model sonnet'])
+    // And it is back where he left it.
+    expect(session.composer).toBe('switch it to english')
+    expect(result.message).toContain('Your draft is back at the prompt, unsent.')
+    // ctrl+u, the command, the return that commits it, the draft. No second
+    // return: this copy of the line came off a screen, so it is never submitted.
+    expect(session.typed).toEqual(['\x15', '/model sonnet', '\r', 'switch it to english'])
+  })
+
+  it('never presses return on the line it put back, even on a used session with a dialog', async () => {
+    const session = fakeClaude({
+      history: USED,
+      respond: (line, cli) => {
+        if (line !== '/model sonnet') return
+        cli.ask(switchModelDialog('Sonnet 5'), () => cli.print('  ⎿  Set model to Sonnet 5 for this session only'))
+      },
+    })
+    session.composer = 'switch it to english'
+
+    const result = await applyControl(session, { ...CLAUDE, sessionId: 's', control: 'model', value: 'sonnet' }, QUICK)
+
+    expect(result.ok).toBe(true)
+    expect(session.typed).toEqual(['\x15', '/model sonnet', '\r', '\r', 'switch it to english'])
+    expect(session.submitted).toEqual(['/model sonnet'])
+    expect(session.composer).toBe('switch it to english')
+  })
+
+  it('adds nothing of its own to the line — not even the space a submitted replay needs', async () => {
+    /*
+     * `replayWrites` puts a trailing space on a line containing an `@` so the
+     * CLI's file-completion popup cannot eat the Enter. No Enter is coming here,
+     * so that space would be a character he did not type sitting on the end of a
+     * line he is being asked to check. Called with `submit` false for exactly
+     * that reason, and this is the assertion that keeps it false.
+     */
+    const session = fakeClaude({
+      respond: (line, cli) => {
+        if (line === '/effort low') cli.print('  ⎿  Set effort level to low (this session only): Quick')
+      },
+    })
+    session.composer = 'look at @src/main/agent-controls.ts'
+
+    await applyControl(session, { ...CLAUDE, sessionId: 's', control: 'effort', value: 'low' }, QUICK)
+
+    expect(session.composer).toBe('look at @src/main/agent-controls.ts')
+    expect(session.typed[session.typed.length - 1]).toBe('look at @src/main/agent-controls.ts')
+  })
+
+  it('carries one over the fast switch too, which is reached from the same sheet', async () => {
+    /*
+     * Off rather than on, and the reason is the fake rather than the feature:
+     * `readFast` settles from the `↯` in the status rule above the composer, and
+     * this fake draws that rule without one — so it can be driven to a truthful
+     * "off" and never to a truthful "on". The draft is what this test is about
+     * and it travels the same either way.
+     */
+    const session = fakeClaude({
+      respond: (line, cli) => {
+        if (line === '/fast off') cli.print('  ⎿  Fast mode OFF')
+      },
+    })
+    session.composer = 'switch it to english'
+
+    const result = await applyControl(session, { ...CLAUDE, sessionId: 's', control: 'fast', value: 'off' }, QUICK)
+
+    expect(result.ok).toBe(true)
+    expect(session.submitted).toEqual(['/fast off'])
+    expect(session.composer).toBe('switch it to english')
+    expect(result.message).toContain('Your draft is back at the prompt, unsent.')
+  })
+
+  it('types nothing at all when the line will not clear, because it was never his', async () => {
+    /*
+     * The hazard the clear-confirmation exists for. A hint the CLI drew itself
+     * reads as a draft to every screen reader in this file; ctrl+u does not
+     * remove it; and without the wait, the next step would type the CLI's own
+     * placeholder into his prompt as though he had written it.
+     */
+    const typed: string[] = []
+    const stuck: SessionAccess = { write: (_id, data) => typed.push(data), screen: async () => CLI_DREW_IT }
+
+    const result = await applyControl(stuck, { ...CLAUDE, sessionId: 's', control: 'model', value: 'sonnet' }, QUICK)
+
+    expect(result.ok).toBe(false)
+    expect(result.message).toContain('would not clear')
+    // One harmless kill at a line that was already empty, and nothing else.
+    expect(typed).toEqual(['\x15'])
+  })
+
+  it('still refuses a draft it cannot read whole, in the long words, having typed nothing', async () => {
+    const typed: string[] = []
+    const wrapped: SessionAccess = { write: (_id, data) => typed.push(data), screen: async () => WRAPPED_DRAFT }
+
+    const result = await applyControl(wrapped, { ...CLAUDE, sessionId: 's', control: 'model', value: 'sonnet' }, QUICK)
+
+    expect(result.ok).toBe(false)
+    // `refuseToType`'s register, not `readCarry`'s: this is after a press, so
+    // there is room to quote the draft and say what to do about it.
+    expect(result.message).toContain('unsent text')
+    expect(typed).toEqual([])
+  })
+})
+
 /* ------------------------------------------- the gate, before the click -- */
 
 /**
- * `readControls` says whether a command *could* be typed, and why not.
+ * `readControls` says whether a control *could* be applied, and why not.
  *
  * The reason this is worth its own block: the same refusals were already
  * correct at write time, and the controls that consume them have moved into the
- * window's own chrome, where a picker that looks live and then apologises is
- * exactly the dead control this repository is audited for. Every sentence
- * checked below is `refuseToType`'s, quoted rather than re-worded, which is the
- * property that stops the pre-click reason and the post-click refusal becoming
- * two different explanations of one situation.
+ * window's own chrome and onto a phone, where a picker that looks live and then
+ * apologises is exactly the dead control this repository is audited for.
+ *
+ * Two properties are pinned here rather than one, and the second is new. The
+ * gate must **open** on a draft, because `carryDraft` lifts it — that is T9, and
+ * the test below is the one that fails if anybody puts the refusal back. And
+ * every reason that does close it has to be one short line, because the sheet
+ * draws it above a live control instead of in place of one; the long-form
+ * wording still exists and is still `refuseToType`'s, but it is shown after a
+ * press rather than before one.
  */
-describe('whether a command could be typed at this session right now', () => {
+describe('whether a control could be applied at this session right now', () => {
   it('opens the gate on an empty prompt', async () => {
     const reading = await readControls(fakeClaude(), 's', undefined, 'claude')
     expect(reading.gate).toEqual({ canType: true, reason: null })
   })
 
-  it('closes it on a draft, and quotes the draft back', async () => {
+  it('opens it on a draft too, because the draft gets carried', async () => {
     const session = fakeClaude()
-    session.composer = 'remind me to buy milk'
+    session.composer = 'switch it to english'
     const reading = await readControls(session, 's', undefined, 'claude')
-    expect(reading.gate.canType).toBe(false)
-    expect(reading.gate.reason).toContain('remind me to buy milk')
+    expect(reading.gate).toEqual({ canType: true, reason: null })
   })
 
   it('closes it mid-turn', async () => {
     const session = fakeClaude({ history: ['✶ Dilly-dallying… (5s · ↓ 90 tokens)'] })
     const reading = await readControls(session, 's', undefined, 'claude')
     expect(reading.gate.canType).toBe(false)
-    expect(reading.gate.reason).toMatch(/mid-turn/i)
+    expect(reading.gate.reason).toBe('This session is mid-turn.')
   })
 
   it('closes it while a numbered dialog owns the keyboard', async () => {
     const session = fakeClaude({ history: ['❯ 1. Yes, switch to Sonnet 5', '  2. No, go back'] })
     const reading = await readControls(session, 's', undefined, 'claude')
     expect(reading.gate.canType).toBe(false)
-    expect(reading.gate.reason).toMatch(/waiting on a choice/i)
+    expect(reading.gate.reason).toBe('This session is waiting on an answer on screen.')
+  })
+
+  it('closes it on a draft that runs past the row the pointer is on', async () => {
+    const wrapped: SessionAccess = { write: () => {}, screen: async () => WRAPPED_DRAFT }
+    const reading = await readControls(wrapped, 's', undefined, 'claude')
+    expect(reading.gate.canType).toBe(false)
+    expect(reading.gate.reason).toBe('A multi-line draft is sitting at this prompt.')
+  })
+
+  it('keeps every reason to one line, because the sheet draws it beside the rows', async () => {
+    const screens: SessionAccess[] = [
+      { write: () => {}, screen: async () => WRAPPED_DRAFT },
+      fakeClaude({ history: ['✶ Dilly-dallying… (5s · ↓ 90 tokens)'] }),
+      fakeClaude({ history: ['❯ 1. Yes, switch to Sonnet 5', '  2. No, go back'] }),
+      { write: () => {}, screen: async () => 'nothing that looks like a prompt' },
+    ]
+    for (const access of screens) {
+      const reason = (await readControls(access, 's', undefined, 'claude')).gate.reason
+      expect(reason).not.toBeNull()
+      // One sentence, no quoted draft, no instruction to go and do it by hand.
+      expect((reason ?? '').length).toBeLessThanOrEqual(64)
+      expect(reason).not.toContain('\n')
+    }
   })
 
   it('says the session is gone rather than that it is busy, when there is no screen', async () => {
@@ -1128,20 +1378,35 @@ describe('changing the permission mode', () => {
      * `a draft the user is still writing` unsent in the composer, one shift+tab
      * moved the footer from bypass to auto and left the draft character for
      * character. A chord never reaches the line editor, so refusing here would
-     * withdraw a working control for a hazard that does not exist — while
-     * `/plan`, which types, is refused in the same state.
+     * withdraw a working control for a hazard that does not exist.
+     *
+     * The second half of this used to read "while `/plan`, which types, is
+     * refused in the same state", and that is no longer true: `/plan` carries
+     * the draft the way every other typed command now does. The two paths reach
+     * the same place by different routes — the cycle never has to move the line,
+     * and `/plan` lifts it and puts it back — so this asserts the outcome they
+     * share, which is that his sentence is still at the prompt afterwards.
      */
     const session = fakeClaude({ mode: 'bypass' })
     session.composer = 'a draft the user is still writing'
     const result = await applyControl(session, { ...CLAUDE, sessionId: 's', control: 'permission', value: 'auto' }, QUICK)
     expect(result.ok).toBe(true)
     expect(session.composer).toBe('a draft the user is still writing')
+    // Chords only: nothing was lifted because nothing was typed.
+    expect(session.typed).not.toContain('\x15')
 
-    const typedPlan = fakeClaude({ mode: 'bypass' })
+    const typedPlan = fakeClaude({
+      mode: 'bypass',
+      respond: (line, cli) => {
+        if (line === '/plan') cli.mode = 'plan'
+      },
+    })
     typedPlan.composer = 'a draft the user is still writing'
-    const refused = await applyControl(typedPlan, { ...CLAUDE, sessionId: 's', control: 'permission', value: 'plan' }, QUICK)
-    expect(refused.ok).toBe(false)
+    const planned = await applyControl(typedPlan, { ...CLAUDE, sessionId: 's', control: 'permission', value: 'plan' }, QUICK)
+    expect(planned.ok).toBe(true)
+    expect(typedPlan.submitted).toEqual(['/plan'])
     expect(typedPlan.composer).toBe('a draft the user is still writing')
+    expect(planned.message).toContain('Your draft is back at the prompt, unsent.')
   })
 
   it('will not cycle while a dialog owns the keyboard', async () => {

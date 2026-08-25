@@ -410,9 +410,10 @@ final class AppearanceShotsUITests: XCTestCase {
         capture("\(scheme.rawValue)-08-terminal")
 
         // The key grid, which is the one UIKit surface in this app that draws its
-        // own fills rather than taking a system material.
-        if app.buttons["terminal.keyboard"].exists {
-            app.buttons["terminal.keyboard"].tap()
+        // own fills rather than taking a system material. Raised by tapping the
+        // terminal now that the toolbar's keyboard button is gone.
+        if terminal.exists {
+            terminal.tap()
             if app.buttons["Continue"].exists { app.buttons["Continue"].tap() }
             if app.buttons["keys.more"].waitForExistence(timeout: 10) {
                 app.buttons["keys.more"].tap()
@@ -606,12 +607,15 @@ final class AppearanceShotsUITests: XCTestCase {
     }
 
     private func type(_ text: String) throws {
-        let keyboard = app.buttons["terminal.keyboard"]
-        XCTAssertTrue(keyboard.waitForExistence(timeout: 30), "the terminal toolbar should be up")
+        // Tapping the terminal, which is the only way in since the toolbar's
+        // keyboard button was deleted — *"we don't need keyboard button also,
+        // even in terminal pages, even on copilot pages."*
+        let terminal = app.descendants(matching: .any).matching(identifier: "terminal.view").firstMatch
+        XCTAssertTrue(terminal.waitForExistence(timeout: 30), "the terminal screen should be up")
         if !app.keyboards.firstMatch.exists {
-            keyboard.tap()
+            terminal.tap()
             XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 20),
-                          "the keyboard toggle should raise a keyboard")
+                          "tapping the terminal should raise a keyboard")
         }
         if app.buttons["Continue"].exists { app.buttons["Continue"].tap() }
         app.typeText(text)

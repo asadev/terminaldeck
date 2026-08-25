@@ -12,7 +12,7 @@
  * one place. Somebody whose dev server will not sign them out is standing on the
  * Browser tab when they realise it; making them leave, find Settings, and come
  * back is the two-taps-and-a-modal problem the address bar on
- * `LocalhostPortsView` was moved onto the screen to fix.
+ * `NewWindowSheet` was moved onto the screen to fix.
  *
  * ## Why the zoom is on the same screen as the cookies
  *

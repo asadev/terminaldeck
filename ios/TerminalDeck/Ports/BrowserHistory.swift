@@ -45,7 +45,7 @@
  *
  * So a visit holds the **port on the machine** and the **path**, which is the
  * pair that identifies the page and — not by coincidence — the pair
- * `LocalhostPortsView.open(port:path:)` needs to open it again. The address a row
+ * `MachineBrowserView.openHere(_:_:)` needs to open it again. The address a row
  * draws is derived from them: `localhost:3000/admin`, which is what somebody
  * would have typed into the address bar to get there. The tunnel binds the
  * machine's own port number on this phone's loopback, so the number in the URL
@@ -162,7 +162,7 @@ final class BrowserHistory {
      *
      * `port` and `path` are the identity and the answer both: they are what
      * makes two spellings of a loopback address one row, and they are exactly
-     * what `LocalhostPortsView.open(port:path:)` takes.
+     * what `MachineBrowserView.openHere(_:_:)` takes.
      */
     struct Visit: Identifiable, Equatable, Codable {
         /// The port **on the machine**. The tunnel binds the same number on this

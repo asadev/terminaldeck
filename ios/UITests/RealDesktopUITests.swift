@@ -338,14 +338,16 @@ final class RealDesktopUITests: XCTestCase {
         if plain.waitForExistence(timeout: 4) { plain.tap() }
     }
 
-    /// Type a command and press Return.
+    /// Type a command and press Return. The keyboard comes up by tapping the
+    /// terminal, which is the only way in since the toolbar's keyboard button was
+    /// deleted — *"we don't need keyboard button also, even in terminal pages,
+    /// even on copilot pages."*
     private func run(_ command: String) throws {
-        let keyboard = app.buttons["terminal.keyboard"]
-        XCTAssertTrue(keyboard.waitForExistence(timeout: 30), "the terminal toolbar should be up")
+        XCTAssertTrue(terminalView.waitForExistence(timeout: 30), "the terminal screen should be up")
         if !app.keyboards.firstMatch.exists {
-            keyboard.tap()
+            terminalView.tap()
             XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 15),
-                          "the keyboard toggle should raise a keyboard to type into")
+                          "tapping the terminal should raise a keyboard to type into")
         }
         // The QuickPath tutorial — *"Speed up your typing by sliding your
         // finger"* — is put up by the system keyboard the first time it appears
@@ -360,7 +362,7 @@ final class RealDesktopUITests: XCTestCase {
     /// and never scrolls away, and then the key. The signals moved off the bar
     /// so that `esc`, `tab`, `ctrl` and the two arrows could stop scrolling.
     private func ctrlC() throws {
-        if !app.keyboards.firstMatch.exists { app.buttons["terminal.keyboard"].tap() }
+        if !app.keyboards.firstMatch.exists { terminalView.tap() }
         let interrupt = app.buttons["^C"]
         if !interrupt.exists {
             let more = app.buttons["keys.more"]

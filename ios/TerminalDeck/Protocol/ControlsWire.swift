@@ -127,9 +127,18 @@ extension WireCodec {
             permission: controlReading(row["permission"]),
             live: row["live"] as? Bool == true,
             agentRunning: (agent?["running"] as? Bool) == true,
-            // Absent gate is read as "cannot type" — the safe reading, which
-            // greys the chips rather than offering a press that would be refused.
-            canType: (gate?["canType"] as? Bool) == true,
+            /*
+             * Absent gate is read as "cannot type" — the safe reading, which
+             * greys the chips rather than offering a press that would be
+             * refused. `literalTrue` for the same reason one step further in:
+             * this is the flag that decides whether this phone draws a composer
+             * that can type into somebody's running session, and `as? Bool`
+             * succeeds for `NSNumber(1)` through the ObjC bridge, so the lenient
+             * spelling would open the composer on `{"canType":1}`. `live` and
+             * `agentRunning` beside it stay lenient: they colour a chip and name
+             * what is on screen, and a `1` there costs a badge at worst.
+             */
+            canType: literalTrue(gate?["canType"]),
             gateReason: displayLine(gate?["reason"]))
     }
 }

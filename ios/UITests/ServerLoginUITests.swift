@@ -632,7 +632,11 @@ final class ServerLoginUITests: XCTestCase {
                 if menuItem.waitForExistence(timeout: 3) { menuItem.tap() }
             }
         }
-        return app.buttons["terminal.keyboard"].waitForExistence(timeout: 60)
+        // `terminal.view` is what says a session opened. It used to be the
+        // toolbar's keyboard button, which was deleted from that bar at his word;
+        // the emulator itself was always the better sentinel, because it is the
+        // thing this step is waiting for rather than a control beside it.
+        return app.descendants(matching: .any)["terminal.view"].waitForExistence(timeout: 60)
     }
 
     /**
@@ -704,7 +708,11 @@ final class ServerLoginUITests: XCTestCase {
      */
     private func typeSomethingOnlyThatMachineCanAnswer(_ prefix: String) {
         shoot("\(prefix)-terminal")
-        app.buttons["terminal.keyboard"].tap()
+        // A tap on the terminal raises the keyboard. The button that used to do
+        // it is gone — *"we don't need keyboard button also, even in terminal
+        // pages, even on copilot pages, because when we click inside the chat
+        // keyboard comes anyway."*
+        app.descendants(matching: .any).matching(identifier: "terminal.view").firstMatch.tap()
         app.typeText("hostname; uname -sr; uptime\n")
         sleep(4)
         shoot("\(prefix)-shell-prompt")

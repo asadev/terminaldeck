@@ -1211,6 +1211,141 @@ export function screenCommand(input: {
   return { ok: true }
 }
 
+/* ------------------------------------------------- the other narrow door -- */
+
+/**
+ * The commands the **person** may send while they hold the page.
+ *
+ * Deliberately not a subset of {@link ALLOWED_METHODS} that a flag unlocks. It
+ * is a second list, read by a second function, under the *opposite* condition —
+ * see {@link screenPersonCommand} for why that shape rather than a bypass.
+ *
+ * Two groups, and both of them are here because a person filling in a login form
+ * on a phone needs exactly two things: to see the page, and to type into it.
+ *
+ *  - **The four `Input.*` dispatches** `PageCast` already sends. They are the
+ *    typing: a tap, a swipe, a keystroke, a paste. Nothing else in the `Input.`
+ *    domain is here — not `Input.setIgnoreInputEvents`, not the drag or
+ *    synthesise verbs — because a person's hands are a pointer and a keyboard
+ *    and nothing about a real finger needs any of the rest.
+ *  - **The three `Page.*screencast*` commands**, which are the seeing, and which
+ *    the brief for this door did not ask for. They had to come with it and the
+ *    reason is worth writing down rather than discovering again. `curtain()`
+ *    stops the screencast at the source *before* the baton flips, so by the time
+ *    a person can take the page there is no stream at all; and CDP's screencast
+ *    is ack-driven, so even a stream that somehow survived would produce exactly
+ *    **one** frame and then wait forever for a `Page.screencastFrameAck` that
+ *    the agent's door refuses. A door that let the person type into a page they
+ *    cannot see would be a worse thing than no door.
+ *
+ * What is *not* here is the whole of the point. No navigation, no evaluation, no
+ * `Network.*`, no `Fetch.*`, no cookie read, no `Page.captureScreenshot`. The
+ * person on the phone is being lent a pointer and a keyboard over a page they
+ * are already being shown — never the agent's reach, and never a way to make
+ * this door into a second copy of the first one.
+ */
+export const PERSON_METHODS: readonly string[] = [
+  'Input.dispatchMouseEvent',
+  'Input.dispatchKeyEvent',
+  'Input.dispatchTouchEvent',
+  'Input.insertText',
+  'Page.startScreencast',
+  'Page.stopScreencast',
+  'Page.screencastFrameAck',
+]
+
+const PERSON = new Set(PERSON_METHODS)
+
+/**
+ * May the **person holding this page** send this command right now?
+ *
+ * The sibling of {@link screenCommand}, and the inverse of it in every clause
+ * that matters. That function refuses everything while `state === 'human'`; this
+ * one refuses everything **unless** `state === 'human'`. Agent-send refuses while
+ * a person has the page; person-send refuses unless a person has it. Two narrow
+ * doors, opposite conditions, and neither is a hole in the other.
+ *
+ * ## Why a second function and not a flag on the first
+ *
+ * The baton refusal in {@link screenCommand} is a *mechanism* — its own comment
+ * argues at length that a policy is a sentence a retry loop does not read, while
+ * a channel that returns an error is hit by every retry. A `person: true` flag
+ * threaded into that function would turn the mechanism back into a policy: the
+ * refusal would then be conditional on an argument, every caller of `send` would
+ * be one edit away from passing it, and the grep that today proves the agent
+ * cannot reach a page during a handover would stop proving anything.
+ *
+ * So the agent's screen keeps its unconditional refusal, untouched, and this is
+ * a separate door with its own tiny list. A caller can only come through it by
+ * calling a differently-named function, which is a thing a reviewer can grep for
+ * exactly as they can grep for a raw `page.send`.
+ *
+ * ## Who is allowed to reach it
+ *
+ * This function answers *what may be sent*, never *who may send it*. Whether
+ * this particular watcher is the person the handover was asked of is decided
+ * one layer up, in `PageCast`, which holds the taker; and whether that
+ * connection may see the window at all is decided one layer above *that*, in
+ * `remote/server.ts`, against the same window-grants axis `browser.watch` rides.
+ * Three questions, three layers, and this one is the smallest.
+ *
+ * `transport` is not a parameter, unlike its sibling. Every method on this list
+ * is present in **both** {@link ALLOWED_METHODS} and
+ * {@link CDP_ALLOWED_METHODS} — `browser-cdp.test.ts` asserts that — so the list
+ * is already a strict subset of what either transport would permit an agent, and
+ * a per-transport reading of it could only ever be narrower than the one table
+ * that is here.
+ */
+export function screenPersonCommand(input: {
+  state: DriveState
+  method: unknown
+  params?: unknown
+}): Screening {
+  const { state, method } = input
+
+  if (typeof method !== 'string' || method.length === 0) {
+    return { ok: false, reason: 'a debugger command needs a method name' }
+  }
+
+  /*
+   * Nobody has been handed this page.
+   *
+   * First, for the same reason the baton is first in `screenCommand`: it is the
+   * only check about a *person* rather than about the call, and a person-send
+   * arriving outside a handover is not a bad argument, it is a caller with no
+   * standing. It also closes the one race worth naming — a taker whose hand-back
+   * has already returned the baton, whose last queued keystroke is still on the
+   * wire. That keystroke is refused here rather than typed into a page the agent
+   * has resumed driving.
+   */
+  if (state !== 'human') {
+    return {
+      ok: false,
+      reason:
+        'nobody has been handed this page, so there is no person to send this from. Only somebody ' +
+        'answering a browser.handover may type into a page this way.',
+    }
+  }
+
+  if (!PERSON.has(method)) {
+    return {
+      ok: false,
+      reason: `${method} is not one of the commands a person answering a handover may send to a page`,
+    }
+  }
+
+  const params = (typeof input.params === 'object' && input.params !== null
+    ? (input.params as Record<string, unknown>)
+    : {})
+
+  // The two on the list that carry a capability in their arguments, screened by
+  // the same two functions the agent's door uses. One spelling of each rule.
+  if (method === 'Page.startScreencast') return screenScreencast(params)
+  if (method === 'Input.dispatchTouchEvent') return screenTouch(params)
+
+  return { ok: true }
+}
+
 /**
  * Is this a URL the drive may be pointed at?
  *

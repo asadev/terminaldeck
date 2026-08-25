@@ -8,18 +8,36 @@
  * The keyboard is not raised automatically. A terminal that grabs the keyboard
  * on entry covers half of the thing the person came to look at, and the usual
  * reason to open this screen from a phone is to read what an agent has been
- * doing, not to type at it. Tapping the terminal, or the keyboard button in the
- * toolbar, raises it — and the key bar comes with it.
+ * doing, not to type at it. **Tapping the terminal raises it** — and the key bar
+ * comes with it.
+ *
+ * That tap is the only way in now. There was a keyboard button in this toolbar
+ * and he took it off both of this screen's readings at once: *"we don't need
+ * keyboard button also, even in terminal pages, even on copilot pages, because
+ * when we click inside the chat keyboard comes anyway. So we don't need on top
+ * of the page inside the pill separately sitting there."* In chat mode that is
+ * simply true — the composer is a text field and raises the keyboard the way
+ * every text field on the phone does. In the terminal the button was a second
+ * control for a gesture the surface underneath it already answers, and `onAppear`
+ * below now makes that answer this app's own rather than the library's: the tap
+ * is wired to `focus()` there, because SwiftTerm's own tap-to-focus sits behind
+ * a `require(toFail:)` and has been measured not to fire under the Simulator.
+ * Read that comment before touching either half.
  *
  * ## What happens when the connection drops here
  *
  * The banner appears, `send` starts refusing rather than buffering, and the
  * terminal keeps showing what it already had — which is honest, because that
  * output really did arrive. What it must not do is accept keystrokes into a
- * socket that is gone, so the toolbar's keyboard button goes away with the
- * connection and the key bar's keys refuse through the same path as typing.
- * When the socket comes back the model re-attaches by itself; the button here is
- * for the case where the user wants to force a fresh replay.
+ * socket that is gone, and that refusal is in `send` itself: the key bar's keys
+ * go through the same path as typing and are refused with it. The keyboard still
+ * comes up over a dead session, and that is not a regression from the button
+ * being disabled while the socket was down — a tap on the terminal always raised
+ * it regardless, so the disabled button was only ever the *second* way in being
+ * closed while the first stayed open. Refusing at `send` is the honest place:
+ * the keys are drawn, they are pressed, and nothing is invented.
+ * When the socket comes back the model re-attaches by itself; Re-attach in the
+ * menu is for the case where the user wants to force a fresh replay.
  */
 
 import SwiftUI
@@ -39,6 +57,31 @@ struct TerminalScreen: View {
     let hostID: String
     let sessionID: String
 
+    /**
+     * How to leave, when there is nothing to leave *to*.
+     *
+     * Non-nil means this screen is the **root of a tab** rather than a screen
+     * pushed onto one — which is what the Copilot tab became when its
+     * intermediate page was deleted: *"This page needs to go. It should directly
+     * land in terminal or chat mode."* A stack root has no chevron of its own and
+     * no pop gesture, so without this the one tab in the app you land in would be
+     * the one you could not get out of.
+     *
+     * It carries the *action* rather than a `Bool`, because where "back" goes is
+     * not this screen's to know: `DeckModel.leaveCopilot` returns to whichever
+     * tab the copilot was entered from, and somebody who tapped the pill while
+     * reading their ports means Localhost by *home*.
+     *
+     * It decides **whether this screen draws a chevron at all**, and nothing
+     * else about the bar. It used to decide which side the mode toggle and the
+     * terminal's `…` sat on as well; it does not any more, because those two now
+     * sit in one pill on the trailing edge whichever stack this screen is built
+     * from — *"this go-back pill should be separate and the other two should be
+     * on right side exactly like this page. This terminal homepage."* The
+     * `.toolbar` below carries the whole of that.
+     */
+    var leaveTab: (() -> Void)?
+
     /// The phone's colour scheme, held so the letterbox around the emulator is
     /// painted in the same ground the emulator is and repaints with it. A stored
     /// property rather than a reach for `.shared` inside `body`, because
@@ -46,6 +89,11 @@ struct TerminalScreen: View {
     var themes: TerminalThemeStore = .shared
 
     @State private var title: String?
+    /// How wide the screen this session is drawn on is, measured by the ground
+    /// in `body`. Held because the one element on this screen that cannot ask a
+    /// layout for its own room is the navigation bar's title, and it is the one
+    /// element that has to know. See `titleWidth`.
+    @State private var screenWidth: CGFloat = 0
     @State private var toast: String?
     /// Bumped by every message so an earlier one's dismissal cannot take a later
     /// one off the screen. Without it a pinch — which changes the text size
@@ -83,6 +131,23 @@ struct TerminalScreen: View {
     @State private var chatMode = false
 
     /**
+     * How much of this screen the session's browser window has, when it holds
+     * one.
+     *
+     * Owned here rather than inside `SessionPageView`, because the terminal below
+     * has to be laid out against the same answer — *"give the page the screen"*
+     * is the terminal not being drawn, and a pane that knew that on its own could
+     * not tell anybody. Everything else about the page is over there, including
+     * what opens it and what folding means.
+     *
+     * `.split` as the starting value rather than `.minimised`: the pane draws
+     * nothing at all until a window is bound to this session, so this is only
+     * ever read after something has decided there is a page — and the first thing
+     * a page should do is be visible.
+     */
+    @State private var pagePane: SessionPagePane = .split
+
+    /**
      * A file chosen on the phone in chat mode, waiting for a press.
      *
      * The terminal's own menu items send the moment the picker closes, which is
@@ -97,9 +162,6 @@ struct TerminalScreen: View {
     @State private var staged: PickedFile?
     /// One of the machine's files, opened from a path in the conversation.
     @State private var reading: FileReading?
-    /// Whether the note about what a transcript can and cannot show is up. See
-    /// `SessionChatView`'s header for the whole of it.
-    @State private var showingChatNote = false
 
     /// The two ways in. Both run out of process; see `FilePickers.swift`.
     private enum Picking: String, Identifiable {
@@ -141,7 +203,22 @@ struct TerminalScreen: View {
         ZStack {
             // The chosen scheme's ground, not the app's — see
             // `TerminalPalette.dynamicBackground`.
-            Color(TerminalPalette.dynamicBackground(themes.selected)).ignoresSafeArea()
+            //
+            // It reports the screen's width out as well. This is the one view on
+            // the screen that is the screen — it ignores the safe area and fills
+            // whatever is left — so it is the honest place to read the number the
+            // title's cap is derived from. See `titleWidth`.
+            Color(TerminalPalette.dynamicBackground(themes.selected))
+                .ignoresSafeArea()
+                .background(
+                    GeometryReader { frame in
+                        Color.clear
+                            .onAppear { screenWidth = frame.size.width }
+                            .onChange(of: frame.size.width) { _, width in
+                                screenWidth = width
+                            }
+                    }
+                )
 
             /*
              * Two things want the bottom sixty points of this screen and only
@@ -170,35 +247,81 @@ struct TerminalScreen: View {
              * above the keyboard, and it is also what makes the inset below
              * disappear while somebody is typing.
              */
-            if chatMode, let bar = host?.bar {
-                SessionChatView(bar: bar,
-                                // The session this screen is drawing, handed in
-                                // rather than read off the bar. The bar follows
-                                // one session per machine and two of these
-                                // screens can be alive at once, so "the bar's
-                                // session" and "this screen's session" are two
-                                // different facts and the chat view is only
-                                // allowed to draw the conversation when they
-                                // agree. See `SessionBarLink.release`.
+            /*
+             * **The `i` that used to sit beside the mode toggle is gone, and so
+             * is the note behind it.**
+             *
+             * > *"why do we have this i button, it is completely extra, the
+             * > information button, remove this."*
+             *
+             * It was three lines saying what a transcript can and cannot show,
+             * and the middle one was the only one that carried something the
+             * screen could not: an agent's tool calls are not withheld by this
+             * phone, they are removed by the desktop before the frame is built —
+             * `src/main/chat-transcript.ts`, *"This module throws all of that
+             * away and keeps the prose, because the chat view exists precisely
+             * to hide it."*
+             *
+             * That fact is now written down and nowhere drawn. It belongs in the
+             * code rather than on the screen: it is a fact about the wire, it is
+             * true of every session on every machine, it never changes, and a
+             * person reads it once and never needs it again — which is the exact
+             * shape of the thing he has now twice told this app to stop putting
+             * in front of him. `SessionChatView`'s own header carries the whole
+             * argument for whoever wonders why a fold does not open.
+             *
+             * The other two lines are visible in the view itself: code and
+             * patches are drawn as code and patches, and a path is a chip that
+             * opens the machine's reader. Nothing was lost by deleting a caption
+             * that described what was already on screen.
+             */
+            /*
+             * **The browser window this session is holding, above whichever way
+             * the session is being read.**
+             *
+             * > *"Generally, whenever we are talking to terminal, terminal will
+             * > directly open it up in there inside the session — I mean it will
+             * > show it… and the person can just minimize it from some button and
+             * > it will go back."*
+             *
+             * `SessionPageView` is the whole of it and its header carries the
+             * argument, including the two things this screen has to supply and
+             * cannot decide for itself: `frontmost`, because a canvas left alive
+             * on a tab nobody is looking at is the two-canvas defect
+             * `WatchStage` exists to prevent, and the pane, because the terminal
+             * below has to be laid out against the same number.
+             *
+             * Above **both** modes. A conversation is where the copilot tab
+             * lands, and *"Claude is working on this page"* is exactly as true of
+             * a chat as of a terminal — more so, because a conversation is where
+             * an agent says it needs something.
+             *
+             * It draws nothing and takes no height when this session holds no
+             * window, which is almost always.
+             */
+            VStack(spacing: 0) {
+                SessionPageView(model: model,
+                                hostID: hostID,
                                 sessionID: sessionID,
-                                // The folder the agent's relative paths are
-                                // relative to. The machine's own answer, never
-                                // this app's guess — absent until it has sent
-                                // one, and then a relative path gets no chip.
-                                cwd: session?.cwd,
-                                reload: { reclaimBar() },
-                                // Absent for a guest device: `files` is
-                                // owner-only, so a path chip on one of those
-                                // could open nothing but a refusal.
-                                openFile: host?.canReadFiles == true ? { reading = FileReading(path: $0) } : nil,
-                                attach: host?.canSendFiles == true ? { pick($0) } : nil,
-                                attachment: attachment,
-                                send: connection.isLive ? { message in
-                                    host?.sendChatMessage(message, into: sessionID)
-                                } : nil)
-            } else {
-                TerminalHostView(bridge: bridge)
-                    .ignoresSafeArea(.container, edges: .bottom)
+                                frontmost: frontmost,
+                                pane: $pagePane)
+
+                /*
+                 * The terminal is **not drawn** while the page has the screen,
+                 * and that is a real removal rather than a zero height.
+                 *
+                 * Two flexible children in one stack do not split the way either
+                 * of them means: a greedy page and a greedy terminal share the
+                 * space, so *"give the page the screen"* would give it half of
+                 * one. Removing it is safe here in a way it is not for the canvas
+                 * — `TerminalHostView.makeUIView` hands back `bridge.container`,
+                 * a view the bridge owns, so taking it out of the hierarchy and
+                 * putting it back keeps the emulator and its scrollback. The
+                 * session stays attached and stays scrolling the whole time.
+                 */
+                if pagePane != .full {
+                    sessionBody
+                }
             }
 
             // Over the terminal rather than above it. See `FindBar`: inserting
@@ -241,238 +364,84 @@ struct TerminalScreen: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) { header }
-            ToolbarItemGroup(placement: .topBarTrailing) {
+            /*
+             * **Back on its own at the leading edge; the other two in one pill at
+             * the trailing edge. Both stacks.**
+             *
+             * > *"On this chat mode, switch this button and these three dots — I
+             * > ask you to keep these two in the right side, on top right corner,
+             * > not in one pill with the go back. So this go-back pill should be
+             * > separate and the other two should be on right side exactly like
+             * > this page. This terminal homepage."*
+             *
+             * > *"But also in the terminal page, if we go inside a session, they
+             * > are in left side. These two should be three dot and messaging
+             * > button should be on right side here too."*
+             *
+             * Two readings, one arrangement. He said it of the copilot's
+             * conversation and then, unprompted, of the same screen reached from
+             * the session list — so there is no branch here on which stack built
+             * this screen, and there had better never be one again.
+             *
+             * ## They were on the left, and this is why they came back
+             *
+             * A round ago the whole cluster sat in the leading group, on *"move
+             * three dots and switch on left now"*, and that instruction was
+             * itself settling something worse: the copilot's conversation drew
+             * its chevron, the mode toggle and the `…` in one pill on the left
+             * while the same screen reached from the Sessions tab drew the last
+             * two on the right. One screen, two arrangements, decided by which
+             * tab somebody came from.
+             *
+             * That half of it survives — the two stacks still draw the same bar.
+             * What has changed is which edge they agree on, and both of his
+             * reasons are visible on the screen it replaced: the Terminal home
+             * page's `[+ ⋯]` is the corner a thumb has already learned, and a
+             * chevron sharing a capsule with two more controls made a leading
+             * cluster wide enough to shove the title off centre and truncate it
+             * — *"Open Google in brow…"*, photographed. See `titleWidth`.
+             *
+             * So the styling is `SessionListView`'s rather than this screen's
+             * own: one `ToolbarItemGroup`, because a group is what iOS 26 draws
+             * as a single piece of glass and two groups is what draws two, and
+             * bare glyphs inside it rather than ringed ones.
+             *
+             * The `…` keeps the rule it was given a round ago rather than being
+             * given a new one: it is drawn only in terminal mode, because every
+             * item under it acts on the emulator. Moving it right does not make
+             * Find, Copy Screen or Paste mean anything on a conversation.
+             */
+            if let leaveTab {
                 /*
-                 * The glyph is the **destination**, not the current mode.
+                 * A `ToolbarItem` and not a group, which is the whole of *"this
+                 * go-back pill should be separate"*: one item is one control and
+                 * has nothing to share a capsule with.
                  *
-                 * His correction rather than a preference, and it reverses what
-                 * was built the first time: *"chat icon should be when I am on
-                 * the terminal mode. And when I am on the chat mode, then it
-                 * should show the terminal icon."* So the icon always names
-                 * where the press goes.
-                 *
-                 * Absent — not disabled — when this machine cannot read a
-                 * transcript at all, and absent again when it has looked and
-                 * found none for this folder. Both are real states (a session
-                 * running a shell, a desktop older than the capability) and the
-                 * alternative is a button that opens an empty screen with
-                 * nothing on it to say why.
+                 * Drawn only on a tab root, because there is nothing above a root
+                 * to pop. A pushed session already has the stack's own chevron in
+                 * exactly this spot, which is why the leading edge reads the same
+                 * on both stacks without this file arranging it.
                  */
-                if showsModeButton {
-                    Button {
-                        toggleMode()
-                    } label: {
-                        Image(systemName: chatMode ? "terminal" : "bubble.left.and.bubble.right")
+                ToolbarItem(placement: .topBarLeading) {
+                    Button(action: leaveTab) {
+                        Image(systemName: "chevron.backward")
+                            .font(.system(size: 17, weight: .semibold))
                     }
-                    .accessibilityLabel(chatMode ? "Back to the terminal"
-                                                 : "Read this session as a conversation")
-                    .accessibilityIdentifier("terminal.mode")
+                    .accessibilityLabel("Back")
+                    .accessibilityIdentifier("copilot.back")
                 }
-
-                /*
-                 * The one `i` on this screen, and only while the conversation is
-                 * the thing on it.
-                 *
-                 * *"remove this full shit — I don't want long descriptions
-                 * anywhere. Just if somewhere it's very required, give the i
-                 * icon."* It is required here for one reason: a chat view that
-                 * shows an agent's prose and none of its tool calls looks like a
-                 * chat view that has lost half the conversation, and the honest
-                 * answer — the desktop's parser removed them before the frame
-                 * was built — cannot be inferred from anything on screen. Three
-                 * lines, behind a glyph, read once.
-                 */
-                if chatMode {
-                    Button {
-                        showingChatNote = true
-                    } label: {
-                        Image(systemName: "info.circle")
-                    }
-                    .accessibilityLabel("What this view shows")
-                    .accessibilityIdentifier("chat.note")
-                    .popover(isPresented: $showingChatNote) {
-                        chatNote
-                            .presentationCompactAdaptation(.popover)
-                    }
-                }
-
-                Menu {
-                    /*
-                     * Find, at the top, because on a phone it is the thing this
-                     * menu is opened for most.
-                     *
-                     * Deferred by one turn of the run loop for the same reason
-                     * Rename is on the session list: raised in the frame the
-                     * menu is dismissing in, the focus request that raises the
-                     * keyboard arrives while a presentation is in flight and is
-                     * dropped — the bar appears with no keyboard under it and
-                     * reads as a field that will not accept typing.
-                     */
-                    Button {
-                        DispatchQueue.main.async { openFind() }
-                    } label: {
-                        Label("Find in output", systemImage: "magnifyingglass")
-                    }
-                    .accessibilityIdentifier("terminal.find")
-
-                    /*
-                     * Where this session runs, what it runs as, and on which
-                     * machine — the desktop's folder and account chips, which
-                     * have no room to be chips on a phone.
-                     *
-                     * Named in the menu as well as reachable by a long press on
-                     * the list row, because a gesture nobody is told about is a
-                     * feature nobody has. Deferred by a turn of the run loop for
-                     * the same reason Find above it is: a presentation asked for
-                     * in the frame a menu is dismissing in is dropped.
-                     */
-                    Button {
-                        DispatchQueue.main.async { showingDetails = true }
-                    } label: {
-                        Label("Session details", systemImage: "info.circle")
-                    }
-                    .accessibilityIdentifier("terminal.details")
-
-                    /*
-                     * Model, effort, fast mode, permission — the desktop's
-                     * control cluster, which has no room to be inline chips on a
-                     * phone. Shown only when an agent is drawing this session
-                     * (`clusterShown`): a model menu over a plain shell is the
-                     * defect the desktop's own cluster withdraws itself for, and
-                     * over an older desktop that never advertised `controls` the
-                     * reading never arrives so this stays hidden.
-                     */
-                    if showsControlsButton {
-                        Button {
-                            DispatchQueue.main.async { showingControls = true }
-                        } label: {
-                            Label("Model & effort", systemImage: "slider.horizontal.3")
-                        }
-                        .accessibilityIdentifier("terminal.controls")
-                    }
-
-                    Divider()
-
-                    /*
-                     * Copy Screen, and deliberately *only* Copy Screen.
-                     *
-                     * There was a "Copy Selection" item here and it had to go,
-                     * because it could never do what it said. SwiftTerm clears
-                     * its selection on a touch outside the terminal, so reaching
-                     * this menu at all destroys the selection on the way — the
-                     * item opened, correctly reported that nothing was selected,
-                     * and left the pasteboard untouched. Measured on a live
-                     * session: the whole screen was selected in one screenshot
-                     * and the pasteboard's change count did not move.
-                     *
-                     * Copying a *selection* therefore lives in the two places a
-                     * selection survives, and both of them are *inside* the
-                     * terminal: the system callout that a long press puts over
-                     * the selection itself, and the `copy` key in the key grid,
-                     * which is the terminal's own `inputView`. Both are
-                     * exercised in `ClipboardAndTransferUITests`.
-                     */
-                    Button {
-                        show(host?.copyScreen(from: sessionID) ?? "Nothing to copy.")
-                    } label: {
-                        Label("Copy Screen", systemImage: "doc.on.doc")
-                    }
-                    .accessibilityIdentifier("terminal.copyScreen")
-                    Button {
-                        host?.paste(into: sessionID)
-                    } label: {
-                        Label("Paste", systemImage: "doc.on.clipboard")
-                    }
-                    .disabled(!connection.isLive)
-                    .accessibilityIdentifier("terminal.paste")
-
-                    /*
-                     * Share, which is the other half of Copy rather than a
-                     * second one: Copy takes the screen, this takes the whole
-                     * scrollback as a file. See `ShareOutput` for why a file and
-                     * not a string.
-                     */
-                    Button {
-                        DispatchQueue.main.async { shareOutput() }
-                    } label: {
-                        Label("Share output", systemImage: "square.and.arrow.up")
-                    }
-                    .accessibilityIdentifier("terminal.share")
-
-                    Divider()
-
-                    /*
-                     * Text size: two ordinary items with the size in their
-                     * labels, rather than a submenu or a section.
-                     *
-                     * The tidier shapes were tried — "Text size ▸" with two
-                     * steps inside it, and a `Section` whose header carried the
-                     * size — and both cost a tap for nothing: a step is a thing
-                     * people do two or three times in a row while deciding, and
-                     * a submenu doubles every one of them. The size reads fine
-                     * in the label, which is where the eye already is.
-                     */
-                    Button {
-                        step(TextSize.larger(bridge.textSize))
-                    } label: {
-                        Label("Bigger text — \(TextSize.label(bridge.textSize))",
-                              systemImage: "textformat.size.larger")
-                    }
-                    .disabled(!TextSize.canGoLarger(bridge.textSize))
-                    .accessibilityIdentifier("terminal.textLarger")
-
-                    Button {
-                        step(TextSize.smaller(bridge.textSize))
-                    } label: {
-                        Label("Smaller text — \(TextSize.label(bridge.textSize))",
-                              systemImage: "textformat.size.smaller")
-                    }
-                    .disabled(!TextSize.canGoSmaller(bridge.textSize))
-                    .accessibilityIdentifier("terminal.textSmaller")
-
-                    // Absent rather than disabled when the Mac cannot receive
-                    // one: a control that can only produce a refusal is not a
-                    // control. See `DeckModel.canSendFiles`.
-                    if host?.canSendFiles == true {
-                        Divider()
-                        Button {
-                            picking = .photos
-                        } label: {
-                            Label("Send Photo or Video", systemImage: "photo")
-                        }
-                        .accessibilityIdentifier("terminal.sendPhoto")
-                        Button {
-                            picking = .files
-                        } label: {
-                            Label("Send File", systemImage: "doc")
-                        }
-                        .accessibilityIdentifier("terminal.sendFile")
-                    }
-
-                    Divider()
-                    Button {
-                        host?.reattach(sessionID)
-                        show("Re-attaching…")
-                    } label: {
-                        Label("Re-attach", systemImage: "arrow.clockwise")
-                    }
-                    .disabled(!connection.isLive)
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                }
-                .accessibilityLabel("Session actions")
-                .accessibilityIdentifier("terminal.actions")
-
-                Button {
-                    // Toggle rather than raise: the same button has to put it
-                    // away again.
-                    if bridge.isFocused { bridge.blur() } else { bridge.focus() }
-                } label: {
-                    Image(systemName: "keyboard")
-                }
-                .disabled(!connection.isLive)
-                .accessibilityLabel("Toggle keyboard")
-                .accessibilityIdentifier("terminal.keyboard")
+            }
+            /*
+             * The group is conditional where the home page's is not, and that is
+             * the same fact read the other way rather than a difference of taste:
+             * there the `…` is always drawn, so the group always has something in
+             * it. Here neither control is unconditional — the toggle is absent on
+             * a machine that cannot serve a transcript, the `…` is absent in chat
+             * mode — and a group whose body resolves to nothing still occupies the
+             * bar as an empty capsule with nothing inside it.
+             */
+            if showsModeButton || !chatMode {
+                ToolbarItemGroup(placement: .topBarTrailing) { sessionControls }
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
@@ -518,6 +487,33 @@ struct TerminalScreen: View {
                 if let bar = host?.bar { SessionBarView(bar: bar) }
             }
         }
+        /*
+         * The whole page is the terminal's, not the app's — the bar over it
+         * included.
+         *
+         * *"My header should be also dark black. Other than the buttons, that top
+         * header should be also dark black, everything should be black, not just
+         * base colour."* The ground was already the scheme's — the `Color` at the
+         * top of this `ZStack` — and the band above it was the system's own bar
+         * over `Theme.surface`, which on the default scheme photographed as
+         * `#ffffff` sitting on `#e8e8e8` with a hard edge across the screen at 148
+         * points.
+         *
+         * **Here, and not four modifiers up where it was first written.** An
+         * appearance stated for a subtree reaches what is already inside it and
+         * nothing added afterwards, so above the `.safeAreaInset` it left the row
+         * over the terminal resolving `Theme` against the *phone* while the
+         * terminal under it took the scheme — photographed as a dark chip row on
+         * cream paper. Below the sheets it would follow a detail sheet or a file
+         * reader out of the session, and those are the app's own screens.
+         *
+         * On the screen and not in `DeckTabs` because it belongs to the screen
+         * rather than to a stack: the same screen is pushed from Sessions and from
+         * Copilot, and stating it once is what stops those two bars diverging. See
+         * `TerminalChrome` for which colour comes from where, and for the one
+         * surface it cannot reach.
+         */
+        .terminalChrome(themes.selected)
         // Out-of-process pickers. Nothing in this app reads the photo library, so
         // neither of these prompts for anything — see `FilePickers.swift`.
         .sheet(item: $picking) { which in
@@ -580,11 +576,39 @@ struct TerminalScreen: View {
             bridge.onTitle = { title = $0 }
             bridge.onCopy = { show(host?.copy(from: sessionID) ?? "Nothing to copy.") }
             bridge.onPaste = { host?.paste(into: sessionID) }
-            // A tap into the terminal destroys the selection SwiftTerm is using
-            // as the match highlight, so a find bar left standing would be
-            // counting matches that are no longer on screen. Tapping in means
-            // "I want to type here", and that is the end of the search.
-            bridge.onTapped = { closeFind() }
+            /*
+             * A tap into the terminal means *I want to type here*, and with the
+             * toolbar's keyboard button deleted it is the only thing that says
+             * so. Two consequences, in the order they happen.
+             *
+             * **It raises the keyboard, from here rather than from the
+             * library.** SwiftTerm's own `singleTap` already does this — its
+             * last branch is `becomeFirstResponder()` when the view has not got
+             * focus — but that recogniser is behind `require(toFail:)` on the
+             * double tap, and `MultiHostUITests` has a measured note saying the
+             * tap did not focus the view under the Simulator at all: *"the
+             * characters were never typed, nothing was sent, and the failure
+             * arrived twenty seconds later as 'the machine on the other end did
+             * not echo what was typed'."* That was survivable while a button
+             * stood next to it and it is not now, so the app states it itself,
+             * through the recogniser `TerminalGestures` installs with
+             * `cancelsTouchesInView` false and no failure requirement.
+             *
+             * **Only when the view has not already got focus**, which is
+             * SwiftTerm's own rule copied deliberately. A program that has
+             * turned mouse reporting on is being *clicked* rather than typed at,
+             * and a keyboard that came up over the bottom half of vim on every
+             * tap would be this app breaking a session it is meant to be
+             * carrying. The first tap raises it; the rest are the program's.
+             *
+             * **It ends the search.** A tap destroys the selection SwiftTerm is
+             * using as the match highlight, so a find bar left standing would be
+             * counting matches that are no longer on screen.
+             */
+            bridge.onTapped = {
+                if !bridge.isFocused { _ = bridge.focus() }
+                closeFind()
+            }
             // The size can change from a gesture as well as from the menu, and
             // a pinch has no other confirmation than the number.
             bridge.onTextSizeChanged = { show(TextSize.label($0)) }
@@ -670,6 +694,63 @@ struct TerminalScreen: View {
         // what owns the floating bar; `DeckChrome` holds the rule.
     }
 
+    // MARK: - The session itself
+
+    /**
+     * The session, read whichever way it is being read.
+     *
+     * Lifted out of `body` when the page pane went in above it, because the two
+     * are siblings in a stack now rather than one thing in a `ZStack` — and
+     * because *"give the page the screen"* is expressed by not drawing this at
+     * all, which needs it to be one nameable thing.
+     *
+     * Nothing inside has changed. The two readings are the same session and the
+     * same socket, so switching costs nothing on the far machine and a message
+     * typed in one appears in the other.
+     */
+    @ViewBuilder
+    private var sessionBody: some View {
+        if chatMode, let bar = host?.bar {
+            SessionChatView(bar: bar,
+                            // The session this screen is drawing, handed in
+                            // rather than read off the bar. The bar follows
+                            // one session per machine and two of these
+                            // screens can be alive at once, so "the bar's
+                            // session" and "this screen's session" are two
+                            // different facts and the chat view is only
+                            // allowed to draw the conversation when they
+                            // agree. See `SessionBarLink.release`.
+                            sessionID: sessionID,
+                            // The folder the agent's relative paths are
+                            // relative to. The machine's own answer, never
+                            // this app's guess — absent until it has sent
+                            // one, and then a relative path gets no chip.
+                            cwd: session?.cwd,
+                            // The same live state the header pill draws. A
+                            // conversation and a terminal are two views of one
+                            // pty, so what the pty is doing decides whether a
+                            // typed sentence lands — and until this was handed
+                            // over, chat mode was the one view that could not
+                            // say so. *"in chat mode I don't know anything.
+                            // First of all, this is the biggest problem."*
+                            // See `SessionChatView.Unready`.
+                            status: session?.status,
+                            reload: { reclaimBar() },
+                            // Absent for a guest device: `files` is
+                            // owner-only, so a path chip on one of those
+                            // could open nothing but a refusal.
+                            openFile: host?.canReadFiles == true ? { reading = FileReading(path: $0) } : nil,
+                            attach: host?.canSendFiles == true ? { pick($0) } : nil,
+                            attachment: attachment,
+                            send: connection.isLive ? { message in
+                                host?.sendChatMessage(message, into: sessionID)
+                            } : nil)
+        } else {
+            TerminalHostView(bridge: bridge)
+                .ignoresSafeArea(.container, edges: .bottom)
+        }
+    }
+
     // MARK: - Mode
 
     /**
@@ -685,6 +766,248 @@ struct TerminalScreen: View {
         guard connection.isLive, host?.bar.canReadChat == true else { return false }
         if chatMode { return true }
         return host?.bar.transcript != false
+    }
+
+    /// The two controls this screen owns — the mode toggle and then the
+    /// terminal's `…`, which is the order `SessionListView` puts `+` and `…` in
+    /// and the order he read them out in. Kept out of the toolbar body above so
+    /// that block is about placement and this one is about contents.
+    @ViewBuilder
+    private var sessionControls: some View {
+                /*
+                 * The glyph is the **destination**, not the current mode.
+                 *
+                 * His correction rather than a preference, and it reverses what
+                 * was built the first time: *"chat icon should be when I am on
+                 * the terminal mode. And when I am on the chat mode, then it
+                 * should show the terminal icon."* So the icon always names
+                 * where the press goes.
+                 *
+                 * Absent — not disabled — when this machine cannot read a
+                 * transcript at all, and absent again when it has looked and
+                 * found none for this folder. Both are real states (a session
+                 * running a shell, a desktop older than the capability) and the
+                 * alternative is a button that opens an empty screen with
+                 * nothing on it to say why.
+                 */
+                if showsModeButton {
+                    Button {
+                        toggleMode()
+                    } label: {
+                        Image(systemName: chatMode ? "terminal" : "bubble.left.and.bubble.right")
+                    }
+                    .accessibilityLabel(chatMode ? "Back to the terminal"
+                                                 : "Read this session as a conversation")
+                    .accessibilityIdentifier("terminal.mode")
+                }
+
+                /*
+                 * **The `…` is the terminal's menu, so it is drawn where the
+                 * terminal is.**
+                 *
+                 * Every item under it acts on the emulator: Find searches its
+                 * buffer, Copy Screen copies its grid, Paste types into it, the
+                 * text-size steps change its font, Share writes out its
+                 * scrollback. In chat mode the emulator is not on screen — it is
+                 * still alive, still attached, still scrolling behind the
+                 * conversation — so each of those either acts invisibly or, in
+                 * Find's case, opens a bar counting matches nobody can see. A
+                 * control that cannot be seen to act is the same defect as one
+                 * that cannot act.
+                 *
+                 * It is also what he asked for, on the screen he was looking at
+                 * when he asked. The copilot tab lands in a conversation, and of
+                 * that bar: *"Keep only three dot settings and chat switching
+                 * button in the copilot."* With this gated on the mode, a landed
+                 * copilot chat carries the chevron on its own at the left and the
+                 * toggle alone in the pill at the right — and the `…` joins it in
+                 * that pill the moment somebody switches into the terminal.
+                 *
+                 * Gated on the **mode** rather than on `model.tab == .copilot`,
+                 * which was the other candidate. Keying it to the tab would take
+                 * Paste, Re-attach and the text size off a copilot terminal that
+                 * a person had deliberately switched *into* — a screen with a
+                 * real emulator on it and nothing to drive it with — and would
+                 * leave the same dead menu on the Sessions tab's chat. The mode
+                 * is the fact that decides whether these items have anything
+                 * visible to act on.
+                 */
+                if !chatMode {
+                    Menu {
+                        /*
+                         * Find, at the top, because on a phone it is the thing this
+                         * menu is opened for most.
+                         *
+                         * Deferred by one turn of the run loop for the same reason
+                         * Rename is on the session list: raised in the frame the
+                         * menu is dismissing in, the focus request that raises the
+                         * keyboard arrives while a presentation is in flight and is
+                         * dropped — the bar appears with no keyboard under it and
+                         * reads as a field that will not accept typing.
+                         */
+                        Button {
+                            DispatchQueue.main.async { openFind() }
+                        } label: {
+                            Label("Find in output", systemImage: "magnifyingglass")
+                        }
+                        .accessibilityIdentifier("terminal.find")
+
+                        /*
+                         * Where this session runs, what it runs as, and on which
+                         * machine — the desktop's folder and account chips, which
+                         * have no room to be chips on a phone.
+                         *
+                         * Named in the menu as well as reachable by a long press on
+                         * the list row, because a gesture nobody is told about is a
+                         * feature nobody has. Deferred by a turn of the run loop for
+                         * the same reason Find above it is: a presentation asked for
+                         * in the frame a menu is dismissing in is dropped.
+                         */
+                        Button {
+                            DispatchQueue.main.async { showingDetails = true }
+                        } label: {
+                            Label("Session details", systemImage: "info.circle")
+                        }
+                        .accessibilityIdentifier("terminal.details")
+
+                        /*
+                         * Model, effort, fast mode, permission — the desktop's
+                         * control cluster, which has no room to be inline chips on a
+                         * phone. Shown only when an agent is drawing this session
+                         * (`clusterShown`): a model menu over a plain shell is the
+                         * defect the desktop's own cluster withdraws itself for, and
+                         * over an older desktop that never advertised `controls` the
+                         * reading never arrives so this stays hidden.
+                         */
+                        if showsControlsButton {
+                            Button {
+                                DispatchQueue.main.async { showingControls = true }
+                            } label: {
+                                Label("Model & effort", systemImage: "slider.horizontal.3")
+                            }
+                            .accessibilityIdentifier("terminal.controls")
+                        }
+
+                        Divider()
+
+                        /*
+                         * Copy Screen, and deliberately *only* Copy Screen.
+                         *
+                         * There was a "Copy Selection" item here and it had to go,
+                         * because it could never do what it said. SwiftTerm clears
+                         * its selection on a touch outside the terminal, so reaching
+                         * this menu at all destroys the selection on the way — the
+                         * item opened, correctly reported that nothing was selected,
+                         * and left the pasteboard untouched. Measured on a live
+                         * session: the whole screen was selected in one screenshot
+                         * and the pasteboard's change count did not move.
+                         *
+                         * Copying a *selection* therefore lives in the two places a
+                         * selection survives, and both of them are *inside* the
+                         * terminal: the system callout that a long press puts over
+                         * the selection itself, and the `copy` key in the key grid,
+                         * which is the terminal's own `inputView`. Both are
+                         * exercised in `ClipboardAndTransferUITests`.
+                         */
+                        Button {
+                            show(host?.copyScreen(from: sessionID) ?? "Nothing to copy.")
+                        } label: {
+                            Label("Copy Screen", systemImage: "doc.on.doc")
+                        }
+                        .accessibilityIdentifier("terminal.copyScreen")
+                        Button {
+                            host?.paste(into: sessionID)
+                        } label: {
+                            Label("Paste", systemImage: "doc.on.clipboard")
+                        }
+                        .disabled(!connection.isLive)
+                        .accessibilityIdentifier("terminal.paste")
+
+                        /*
+                         * Share, which is the other half of Copy rather than a
+                         * second one: Copy takes the screen, this takes the whole
+                         * scrollback as a file. See `ShareOutput` for why a file and
+                         * not a string.
+                         */
+                        Button {
+                            DispatchQueue.main.async { shareOutput() }
+                        } label: {
+                            Label("Share output", systemImage: "square.and.arrow.up")
+                        }
+                        .accessibilityIdentifier("terminal.share")
+
+                        Divider()
+
+                        /*
+                         * Text size: two ordinary items with the size in their
+                         * labels, rather than a submenu or a section.
+                         *
+                         * The tidier shapes were tried — "Text size ▸" with two
+                         * steps inside it, and a `Section` whose header carried the
+                         * size — and both cost a tap for nothing: a step is a thing
+                         * people do two or three times in a row while deciding, and
+                         * a submenu doubles every one of them. The size reads fine
+                         * in the label, which is where the eye already is.
+                         */
+                        Button {
+                            step(TextSize.larger(bridge.textSize))
+                        } label: {
+                            Label("Bigger text — \(TextSize.label(bridge.textSize))",
+                                  systemImage: "textformat.size.larger")
+                        }
+                        .disabled(!TextSize.canGoLarger(bridge.textSize))
+                        .accessibilityIdentifier("terminal.textLarger")
+
+                        Button {
+                            step(TextSize.smaller(bridge.textSize))
+                        } label: {
+                            Label("Smaller text — \(TextSize.label(bridge.textSize))",
+                                  systemImage: "textformat.size.smaller")
+                        }
+                        .disabled(!TextSize.canGoSmaller(bridge.textSize))
+                        .accessibilityIdentifier("terminal.textSmaller")
+
+                        // Absent rather than disabled when the Mac cannot receive
+                        // one: a control that can only produce a refusal is not a
+                        // control. See `DeckModel.canSendFiles`.
+                        if host?.canSendFiles == true {
+                            Divider()
+                            Button {
+                                picking = .photos
+                            } label: {
+                                Label("Send Photo or Video", systemImage: "photo")
+                            }
+                            .accessibilityIdentifier("terminal.sendPhoto")
+                            Button {
+                                picking = .files
+                            } label: {
+                                Label("Send File", systemImage: "doc")
+                            }
+                            .accessibilityIdentifier("terminal.sendFile")
+                        }
+
+                        Divider()
+                        Button {
+                            host?.reattach(sessionID)
+                            show("Re-attaching…")
+                        } label: {
+                            Label("Re-attach", systemImage: "arrow.clockwise")
+                        }
+                        .disabled(!connection.isLive)
+                    } label: {
+                        // `ellipsis` and not `ellipsis.circle`, which is what it
+                        // wore while it stood in the leading group. *"Exactly
+                        // like this page. This terminal homepage"* — and there
+                        // the capsule is the affordance and the glyphs inside it
+                        // are bare, so a ringed `…` reads as a badge stuck to the
+                        // right-hand end of the pill rather than as the second of
+                        // two controls. `SessionListView` carries the same note
+                        // over `sessions.more`.
+                        Image(systemName: "ellipsis")
+                    }
+                    .accessibilityLabel("Session actions")
+                    .accessibilityIdentifier("terminal.actions")
+                }
     }
 
     /**
@@ -716,6 +1039,24 @@ struct TerminalScreen: View {
      * stacks below are the whole of it.
      */
     private var frontmost: Bool {
+        /*
+         * **A tab's root is frontmost when nothing is pushed over it.**
+         *
+         * The rule below reads the top of the selected tab's *stack*, which is
+         * exactly right for a screen that was pushed and silently wrong for one
+         * that is the tab's own content: `copilotRoute` is empty then, so the top
+         * is `nil`, so this answered false for the screen a person was looking
+         * at. `reclaimBar()` guards on it, so `askChat` was never sent and the
+         * Copilot tab opened on a **conversation with no messages in it** — the
+         * bar following the right session, `chatting` on, a live socket, no
+         * error, and `transcript` never answered because no frame ever left.
+         *
+         * Measured rather than reasoned: the same session was photographed on
+         * both builds a minute apart with `bar=… msgs=… tr=… err=…` drawn on
+         * screen. Pushed: `msgs=2 tr=y`. As the tab's root: `msgs=0 tr=?`.
+         * Nothing else differed.
+         */
+        if leaveTab != nil { return model.tab == .copilot && model.copilotRoute.isEmpty }
         let top = model.tab == .copilot ? model.copilotRoute.last : model.route.last
         return top == .session(host: hostID, id: sessionID)
     }
@@ -827,6 +1168,29 @@ struct TerminalScreen: View {
     private func landChatFirstOnTheCopilotStack() {
         guard model.tab == .copilot else { return }
         guard connection.isLive, host?.bar.canReadChat == true else { return }
+        /*
+         * **His setting, asked last on purpose.**
+         *
+         * > *"It should directly land in terminal or chat mode, and user can set
+         * > its default from settings."*
+         *
+         * After the two guards above rather than before them, and the order is
+         * the argument: those two refuse the chat over a dead socket or a machine
+         * that cannot serve a transcript, where the conversation would be empty
+         * and the toggle back to the terminal is not drawn — a mode with no way
+         * out of it. A stored preference is a preference about which of two
+         * working screens to open in, not a licence to open a broken one.
+         *
+         * Read from the book directly, the way this screen reads
+         * `TerminalThemeStore.shared`: it is a property of this phone, and the
+         * screen is built from two stacks — threading it through the one that
+         * knows about copilots would leave the other silently opting out.
+         *
+         * An absent record means chat, which is what the tab already did and what
+         * he asked for the round before: *"it should be always a chat to land
+         * with."*
+         */
+        guard CopilotSetupBook.shared.opensInChat(host: hostID) else { return }
         enterChat()
     }
 
@@ -872,27 +1236,65 @@ struct TerminalScreen: View {
         TextSize.save(bridge.textSize)
     }
 
+    /**
+     * The session's name, and what it is doing under it.
+     *
+     * > *"Maybe the name of the session can come a little bit down so it can be
+     * > readable… it will be folded with three dots, but it should stay
+     * > centralized. It should not move according to the buttons top of it."*
+     *
+     * Three things in one sentence and each one is a line below. It is **folded
+     * with three dots** rather than shrunk or wrapped, because a name that has
+     * run out of room is still a name and the front of it is the part that says
+     * which session this is. It **stays centralized** — the cap is what does
+     * that and `titleWidth` is the argument for it. And it gets a little more
+     * room between the two lines than it had, which is the readable part: at two
+     * points of spacing the status sat against the underside of the name and the
+     * pair read as one squashed block rather than as a title with a state under
+     * it. Four, plus a couple of points top and bottom, is as much as an inline
+     * bar has to give — it is forty-four points tall and it clips rather than
+     * grows.
+     */
     private var header: some View {
-        VStack(spacing: 2) {
+        VStack(spacing: 4) {
             Text(title ?? session?.title ?? "Session")
                 .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(Theme.primary)
+                /*
+                 * The scheme's ink, not the app's.
+                 *
+                 * `Theme.primary` is measured against the app's own paper, and
+                 * this bar is not on the app's paper any more. On Pure Black with
+                 * the phone in light it is `#1a1a1a` on `#000000` — a title that
+                 * is there and cannot be read. The scheme's `foreground` is what
+                 * the emulator draws ordinary output in three points below, on
+                 * exactly this colour, so it is the one value that is guaranteed
+                 * to be the pairing whoever wrote the scheme intended. See
+                 * `TerminalChrome`.
+                 */
+                .foregroundStyle(TerminalChrome.ink(themes.selected))
                 .lineLimit(1)
+                .truncationMode(.tail)
             HStack(spacing: 5) {
                 if let session {
                     StatusDot(status: session.status)
                     // Mono, because a status is a word the desktop chose from a
                     // fixed vocabulary rather than a sentence this app wrote.
+                    // The dot keeps `Theme.statusColor`: working, waiting and
+                    // exited are meanings rather than decoration, and a scheme
+                    // that repainted them would be a scheme that changed what
+                    // the screen says.
                     Text(session.status)
                         .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(Theme.faint)
+                        .foregroundStyle(TerminalChrome.dimInk(themes.selected))
                 } else {
                     Text(connection.label)
                         .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(Theme.faint)
+                        .foregroundStyle(TerminalChrome.dimInk(themes.selected))
                 }
             }
         }
+        .frame(maxWidth: titleWidth)
+        .padding(.vertical, 2)
         /*
          * The one element that says *a session is on screen*, on every machine.
          *
@@ -902,6 +1304,40 @@ struct TerminalScreen: View {
          * exactly the case `CopilotLandingUITests` walks.
          */
         .accessibilityIdentifier("session.header")
+    }
+
+    /**
+     * How wide the title is allowed to be — which is what keeps it centred.
+     *
+     * > *"It should not move according to the buttons top of it."*
+     *
+     * A navigation bar centres its title on the **bar**, and then slides it out
+     * of the way of whichever button group it would otherwise run into. So an
+     * uncapped title grows until it meets the trailing pill and is pushed left
+     * by it, and the drift he photographed is exactly that much: a name reading
+     * *"Open Google in brow…"* sitting nearer the chevron than the middle of the
+     * screen, moved there by two controls that have nothing to do with it.
+     *
+     * Capping it at twice the distance from the middle of the screen to the
+     * inside edge of that pill is what makes the two facts agree. At that width
+     * the title clears **both** groups, so the bar has no reason to move it and
+     * it stays where it was centred — and it stays there when the pill loses a
+     * control, which is the other half of *"it should not move according to the
+     * buttons"*: the toggle comes and goes with the machine's answer about
+     * transcripts, and a title that re-centred each time would twitch.
+     *
+     * It folds sooner than it strictly has to on a wide phone. That is the trade
+     * he named rather than a cost this works around: *"it will be folded with
+     * three dots, but it should stay centralized."*
+     *
+     * `pill` is the trailing group's own width from the edge of the screen —
+     * sixteen points of bar margin, two controls at the forty-four point touch
+     * target, and the capsule's padding around them. The floor covers the frame
+     * before the first measurement lands, when `screenWidth` is still zero.
+     */
+    private var titleWidth: CGFloat {
+        let pill: CGFloat = 116
+        return max(132, screenWidth - pill * 2)
     }
 
     /// Copy and paste are silent by nature; without this the buttons feel
@@ -974,28 +1410,6 @@ struct TerminalScreen: View {
         staged = nil
     }
 
-    /**
-     * What a transcript view can and cannot show, in three lines behind the `i`.
-     *
-     * Each line is a fact about the wire rather than about this app. The middle
-     * one is the one people need: the tool calls are not withheld by the phone,
-     * they are removed by `src/main/chat-transcript.ts` before the frame is
-     * built — *"This module throws all of that away and keeps the prose, because
-     * the chat view exists precisely to hide it."* The terminal, one press away,
-     * has all of it.
-     */
-    private var chatNote: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Code, patches and file paths are drawn from the text.")
-            Text("Tool calls are not in the transcript this machine sends. The terminal has them.")
-            Text("A path opens as text. Images cannot be fetched from the machine.")
-        }
-        .font(.system(size: 13))
-        .foregroundStyle(Theme.primary)
-        .padding(16)
-        .frame(maxWidth: 320, alignment: .leading)
-        .accessibilityIdentifier("chat.note.body")
-    }
 }
 
 /**

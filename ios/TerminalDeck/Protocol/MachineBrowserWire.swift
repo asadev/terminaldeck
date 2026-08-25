@@ -252,7 +252,22 @@ extension WireCodec {
                                      sessionTitle: string(e["sessionTitle"]),
                                      profile: string(e["profile"]),
                                      isolated: e["isolated"] as? Bool ?? false,
-                                     recording: e["recording"] as? Bool ?? false,
+                                     // `recording` is the red dot on the row and
+                                     // the one flag here that is a safety state
+                                     // rather than a description, so it is read
+                                     // the way `masked` is: on unless the host
+                                     // said, in a real boolean, that it is off.
+                                     // Absent stays off — most windows are not
+                                     // being recorded and a host without the
+                                     // feature says nothing — but anything
+                                     // present that is not literally `false`
+                                     // shows the dot. Saying "not recording"
+                                     // over a window that is, is the one mistake
+                                     // on this row that costs somebody
+                                     // something. `isolated` and `loading`
+                                     // describe a window and stay lenient.
+                                     recording: e["recording"] != nil
+                                         && !literalFalse(e["recording"]),
                                      loading: e["loading"] as? Bool ?? false)
             }
         let sessions = (object["sessions"] as? [Any] ?? []).compactMap { raw -> WindowSession? in

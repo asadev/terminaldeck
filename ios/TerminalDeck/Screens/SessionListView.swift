@@ -227,36 +227,35 @@ struct SessionListView: View {
             // none, because it looks like it is telling you something.
             ToolbarItem(placement: .principal) { HostSwitcher(model: model) }
             /*
-             * **The `+` on the left, the `…` on the right.**
+             * **One pill on the trailing edge, `+` then `…` inside it.**
              *
-             * > *"On the sessions page the plus button is on one side and the
-             * > three dots is on the other side, and on the browser page the
-             * > three dots is on one side and the plus button is on another
-             * > side. In both, the plus button should be left and three dots
-             * > should be on the right side."*
+             * > *"This plus button and three dots thing — which I said it will
+             * > stay on left and three dot will be on right — what I meant is
+             * > they should stay together like before, but like both will be on
+             * > right side, one pill. But inside the pill, three dot will be on
+             * > right side and plus button will be on left side."*
              *
-             * Two complaints in one sentence and the second is the sharper: the
-             * two screens disagreed with **each other**, so a thumb that had
-             * learned where New Session lives on one tab found the overflow menu
-             * there on the next. The Browser tab is being moved to match in the
-             * same round.
+             * The round before this read *"the plus button should be left and
+             * three dots should be on the right side"* as two edges of the
+             * navigation bar and split them into a leading group and a trailing
+             * group. Wrong reading, and he corrected it in the sentence above:
+             * left and right meant left and right **of each other**, inside the
+             * one capsule they had always shared. So this is a single
+             * `ToolbarItemGroup` again — a group is what iOS 26 draws as one
+             * piece of glass, and two groups is what drew two.
              *
-             * They were one `ToolbarItemGroup` before this, which is what put
-             * them in a single glass capsule at the trailing edge. Split, each
-             * side is its own group — so each keeps the capsule rather than
-             * turning into a bare glyph on the bar, which is what a plain
-             * `ToolbarItem` would have given and what would have made this look
-             * like a stock iOS screen instead of this app.
+             * The `+` is conditional and the group is not, which is the way
+             * round it has to be here: a group whose body resolves to nothing
+             * still occupies the bar as an empty capsule, and the `…` is always
+             * drawn, so the group always has something in it.
              *
-             * The item is conditional rather than its *content* being
-             * conditional: an item whose body resolves to nothing still occupies
-             * the bar, and on iOS 26 that is an empty capsule sitting where a
-             * button is not.
+             * `MachineBrowserView`'s toolbar is the same two controls in the
+             * same order for the same reason — he named both screens in one
+             * breath, and a thumb that has learned the corner on one tab must
+             * find it in the same corner on the next.
              */
-            if model.canStartSomewhere {
-                ToolbarItemGroup(placement: .topBarLeading) { newSession }
-            }
             ToolbarItemGroup(placement: .topBarTrailing) {
+                if model.canStartSomewhere { newSession }
                 /*
                  * One item, and it used to be nine.
                  *
@@ -317,13 +316,13 @@ struct SessionListView: View {
                     }
                     .accessibilityIdentifier("sessions.archived")
                 } label: {
-                    // `ellipsis` and not `ellipsis.circle`, since the split.
-                    // Sharing one wide capsule with the `+`, the circled glyph
-                    // read as a badge inside it; alone in a capsule of its own it
-                    // is a ring drawn just inside another ring, which was plain
-                    // in the first frame the simulator took. The capsule is the
-                    // affordance on iOS 26 — the same reason the `…` on a machine
-                    // row is bare.
+                    // `ellipsis` and not `ellipsis.circle`. The capsule is the
+                    // affordance on iOS 26 and the `+` beside it is a bare glyph
+                    // inside it, so a ringed `…` reads as a badge stuck to the
+                    // right-hand end of the pill rather than as the second of two
+                    // controls — which is what the split round recorded seeing
+                    // when the two last shared a capsule. Same reason the `…` on a
+                    // machine row is bare, and `MachineBrowserView` matches.
                     Image(systemName: "ellipsis")
                 }
                 .accessibilityLabel("More")

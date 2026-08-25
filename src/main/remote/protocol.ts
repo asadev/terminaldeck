@@ -1386,6 +1386,15 @@ export type WindowResultFrame = { t: 'window.result'; id: string; ok: boolean; b
  * client which had never heard of `browser.frame` would be filling a socket
  * nobody was reading, and a client that sent `browser.input` to a host that
  * never advertised `watch` would sit inside a gesture that goes nowhere.
+ *
+ * Three frames in the family carry neither pixels nor gestures, and they are the
+ * exception that the rest of it needed. `browser.handover.take`, `.done` and
+ * `.state` are how the person a `browser.handover` is asking for says *that is
+ * me* from the phone that is watching — because on a phone the watcher **is**
+ * that person, and the curtain that stops the pixels was written for a desktop
+ * where they are already at the keyboard. They ride this capability rather than a
+ * new one for the reason the family is one capability at all: a device that
+ * cannot be shown the page has nothing to answer with.
  */
 
 /**
@@ -1531,7 +1540,14 @@ export const MAX_FRAME_MESSAGE_BYTES = MAX_FRAME_DATA_CHARS + 2 * 1024
  *
  * `window` names the surface the way {@link WindowCallFrame} does not need to —
  * the empty string is the front/own tab (the `OWN_TARGET` convention the driver
- * keeps), and a non-empty value is a slot name like `B2`. `maxWidth` and
+ * keeps), and a non-empty value is the **window's shell id**, the same string
+ * `browser.window.go`, `.act`, `.bind` and `.shot` address. It said *"a slot
+ * name like `B2`"* here for a while and that was never true of anything sent:
+ * `B2` is a slot inside **one session**, so two sessions each holding two
+ * windows both have one, and `screencast-host.ts` rejected it by name for
+ * exactly that reason — *"two rows answering to `B1` are two viewers fighting
+ * over one canvas"*. One window is one string across both browser families, and
+ * it is this one. `maxWidth` and
  * `quality` are the viewer's request for this link and are *clamped*, not
  * refused, into the MIN/MAX ranges above: they come from a viewer sizing its own
  * canvas, not from an attacker, so the useful answer is the nearest width and
@@ -1669,6 +1685,107 @@ export type BrowserSurfacesRowsFrame = {
   t: 'browser.surfaces.rows'
   rid?: string
   surfaces: Array<{ window: string; url: string; title: string; live: boolean }>
+}
+
+/**
+ * **Take the page the agent is asking about.** Client→host.
+ *
+ * ## The hole this closes
+ *
+ * `browser.handover` is the copilot saying *I need a person for this one* —
+ * a login wall, a two-factor code, a card number. On the desktop the person is
+ * already holding the mouse, so the driver flips the baton to `human`, curtains
+ * the cast so no watcher can read what is typed, and waits for the banner's
+ * button.
+ *
+ * On a phone every one of those steps was aimed at somebody who was not there.
+ * The watcher **is** the person being asked, and what the curtain did was hand
+ * them the agent's sentence with the pixels removed and the keyboard refused:
+ * *"the person has this page right now"* — said to the person. The one surface
+ * that could answer was the only one told it may not.
+ *
+ * So this frame is the phone saying *that person is me*. It does not weaken the
+ * curtain and it does not move the baton: the slot stays `human`, every agent
+ * command stays refused at the mechanism, and every **other** watcher stays
+ * curtained. What changes is scoped to the one connection that sent it — its own
+ * frames come through unmasked and its own taps are dispatched — because it is
+ * now the hands the handover was waiting for.
+ *
+ * ## Why it is not `browser.input` with a flag
+ *
+ * A flag on an input frame would be a claim made once per tap, by the frame that
+ * wants the permission, and the host would have to re-decide the question on
+ * every keystroke. This is asked once, answered once, and visible to everyone
+ * watching that window through {@link BrowserHandoverStateFrame} — so a second
+ * device sees that the question already has an owner instead of two people
+ * typing into one password field.
+ *
+ * Refused when no handover is outstanding on that window, and when the
+ * connection may not already watch it: taking a page you cannot see is not a
+ * thing to allow, and the grant that decides it is the one `browser.watch`
+ * already rides.
+ */
+export type BrowserHandoverTakeFrame = { t: 'browser.handover.take'; rid: string; window: string }
+
+/**
+ * **Hand it back.** Client→host, the mirror of {@link BrowserHandoverTakeFrame}.
+ *
+ * `carryOn` is the same two-way answer the desktop banner gives, and it is two
+ * different sentences rather than one boolean's worth of politeness:
+ *
+ * - `true` — *done, keep going.* The baton returns to the agent, the network
+ *   rules go back on, the cast uncurtains for everybody, and the blocked
+ *   `browser.handover` call resolves `resumed`.
+ * - `false` — *stop, I'll take it from here.* The drive **ends**. This is a
+ *   refusal to the agent rather than a resume, which is why it releases the slot
+ *   instead of returning it.
+ *
+ * Sent by the device that took it. A `done` from anyone else is refused rather
+ * than obeyed — otherwise a second watcher could hand back a page mid-password
+ * on behalf of the person typing into it.
+ */
+export type BrowserHandoverDoneFrame = {
+  t: 'browser.handover.done'
+  rid: string
+  window: string
+  carryOn: boolean
+}
+
+/**
+ * Who holds the handover on one window. Host→client.
+ *
+ * An answer to either handover frame, and **pushed unsolicited** to every
+ * connection watching that window whenever the state moves — the same shape of
+ * push `browser.surfaces.rows` gives, and for the same reason: two phones can be
+ * looking at one page, and the second one must see that the first has answered
+ * rather than offering a button that will be refused.
+ *
+ * `asking` is whether a handover is outstanding at all. `prompt` is the agent's
+ * own sentence, already sanitised by the driver — the thing the person needs to
+ * read to know what to type. `mine` is the only per-connection field on it: the
+ * same state is true for one recipient and false for the others, which is the
+ * honest shape, because *whether I may type* is not a property of the page.
+ *
+ * `taken` is whether **anybody** holds it, and it exists because the first draft
+ * of this frame did not have it. Without it, `asking && !mine` is two different
+ * situations wearing one face — *nobody has answered yet, the button is yours to
+ * press* and *another phone is typing the password right now* — and a client can
+ * only tell them apart by inferring ownership from the shape of the traffic (a
+ * second unsolicited push while the question stays open). That inference is a
+ * guess, it was written and it worked, and it was still the wrong thing to ship:
+ * the cost of reading it backwards is either a button that deadlocks a waiting
+ * agent when everyone believes someone else has it, or two people typing into one
+ * password field. One boolean the host already knows deletes the whole
+ * derivation, so the host says it.
+ */
+export type BrowserHandoverStateFrame = {
+  t: 'browser.handover.state'
+  rid?: string
+  window: string
+  asking: boolean
+  prompt: string
+  mine: boolean
+  taken: boolean
 }
 
 /** Largest `input` payload. A paste, not a file upload. */
@@ -3228,6 +3345,8 @@ export type ClientMessage =
   | BrowserUnwatchFrame
   | BrowserFrameAckFrame
   | BrowserInputFrame
+  | BrowserHandoverTakeFrame
+  | BrowserHandoverDoneFrame
   | BrowserSurfacesFrame
   /* ---- capability `copilot`. Refused per-tier, per device. ---------------- */
   /**
@@ -4075,6 +4194,7 @@ export type ServerMessage =
    */
   | BrowserFrameFrame
   | BrowserSurfacesRowsFrame
+  | BrowserHandoverStateFrame
   /* ---- capability `copilot` ---------------------------------------------- */
   /** Answer to `copilot.state`, and pushed whenever any of it changes. */
   | { t: 'copilot.state'; state: CopilotStateReport }
@@ -5009,14 +5129,80 @@ function finiteNumber(value: unknown): number | null {
  *
  * The front/own tab is `''` — the `OWN_TARGET` convention the driver keeps — and
  * that is the one place a `''` means a surface rather than a missing field, so it
- * cannot go through `id`, which refuses the empty string. Anything else is a slot
- * name held to the same `ID_RE` a session id is: the value selects a
- * `WebContentsView` on the machine, and one with a slash or a control byte in it
- * has no legitimate sender.
+ * cannot go through `id`, which refuses the empty string.
+ *
+ * ## Why this is not `id`, which is what it was
+ *
+ * Because a window's name on this wire is a **shell id**, and both machines that
+ * mint one write it with colons in it: `browser:${Date.now()}:${seq}` in
+ * `renderer/App.tsx` and `browser:${now}:${uuid8}` in
+ * `browser-headless-host.ts`. {@link ID_RE} allows letters, digits, `_` and `-`
+ * and nothing else, so **every real window failed this check** — and it failed
+ * in both directions at once:
+ *
+ *  - host→client, `browser.surfaces.rows` dropped every session's window as a
+ *    malformed row, so the strip came back empty on a machine holding an open
+ *    page;
+ *  - client→host, a `browser.watch` or a `browser.handover.take` naming one was
+ *    refused `bad-message` — and `server.ts` answers a parse failure by
+ *    **closing the socket**, so a phone that opened the page pane on a session
+ *    window was disconnected.
+ *
+ * Measured on 2026-08-25 against a real headless host with a real Chromium in
+ * it: `browser.watch` naming `browser:1787657125454:0a858ec8` came back
+ * *"browser.watch without a usable window"* and the connection closed. The
+ * handover could not be reached at all, because the frames that carry it are
+ * addressed by the name that could not be sent.
+ *
+ * The colon is added rather than the ids changed because the ids are minted on
+ * two machines by two processes and travel through `browser-binding`, a
+ * renderer's tab list and a host's target map before they reach this file; a
+ * validator that refuses the only shape the product produces is the thing that
+ * is wrong. It stays as narrow as it can otherwise be: the same leading
+ * alphanumeric, the same length, and no character that is not already in a
+ * shell id — the value selects a `WebContentsView` on the machine, and one with
+ * a slash or a control byte in it still has no legitimate sender.
+ *
+ * ## Why the `browser.window.*` family refuses the empty string and this admits it
+ *
+ * Five parsers below — `browser.window.go`, `.act`, `.bind`, `.shot`, `.steps` —
+ * refuse `rawId === ''`, and that asymmetry is deliberate rather than an
+ * oversight anybody should tidy up. The two families address different things.
+ * This one names a **surface being cast**, and the drive's own front tab is one
+ * of those: `frontTab` in `screencast-host.ts` puts it on the strip with an
+ * empty name, and on a server that row is the page a person just opened with
+ * `+`. A validator that refused `''` here would leave that one page as the only
+ * page on the machine nobody could look at.
+ *
+ * The other family names a **window in the machine's window list**, and no
+ * window on either host has an empty id — the desktop mints
+ * `browser:<epoch>:<seq>` in `renderer/App.tsx` and a server mints
+ * `browser:<epoch>:<uuid>` in `browser-headless-host.ts`.
+ *
+ * Asad asked for those five to work on the front tab too — *"there is no way to
+ * attach this one too… all the options should be available at least"* — and
+ * lifting the refusal here is not how that arrives, in both directions:
+ *
+ *  - It would answer nothing. `machineBrowser`'s `find(id)` resolves against
+ *    `MachineBrowserDeps.list()`, the front tab is in no such list on a server
+ *    (`src/headless/machine-browser.ts` builds it from the binding store and its
+ *    own `held` map, and the drive's own slot is in neither), so every one of the
+ *    five would come back *"That window is not open any more"*.
+ *  - It would cost a connection. A parse failure is not a sentence on a screen:
+ *    `onMessage` in `server.ts` answers `parseClientMessage` with
+ *    `refuse(connection, …, CLOSE.protocolError)`, so today a client that sends
+ *    one of these with an empty id is **disconnected**. That is the honest
+ *    reading of the refusal and the reason it stays: an id this build cannot
+ *    address is a broken client, not a person pressing something.
+ *
+ * The fix is upstream of every line in this file — see `frontTab` in
+ * `screencast-host.ts`, which records it.
  */
+const WATCH_WINDOW_RE = /^[A-Za-z0-9][A-Za-z0-9_:-]{0,63}$/
+
 function watchWindow(value: unknown): string | null {
   if (value === '') return ''
-  return id(value)
+  return typeof value === 'string' && WATCH_WINDOW_RE.test(value) ? value : null
 }
 
 /**
@@ -5226,6 +5412,52 @@ function readSurfaces(parsed: Record<string, unknown>): WindowRead<BrowserSurfac
   const requestId = id(parsed.rid)
   if (requestId === null) return { ok: false, reason: 'browser.surfaces without a request id' }
   return { ok: true, message: { t: 'browser.surfaces', rid: requestId } }
+}
+
+function readHandoverTake(parsed: Record<string, unknown>): WindowRead<BrowserHandoverTakeFrame> {
+  const window = watchWindow(parsed.window)
+  if (window === null) return { ok: false, reason: 'browser.handover.take without a usable window' }
+  const requestId = id(parsed.rid)
+  if (requestId === null) return { ok: false, reason: 'browser.handover.take without a request id' }
+  return { ok: true, message: { t: 'browser.handover.take', rid: requestId, window } }
+}
+
+function readHandoverDone(parsed: Record<string, unknown>): WindowRead<BrowserHandoverDoneFrame> {
+  const window = watchWindow(parsed.window)
+  if (window === null) return { ok: false, reason: 'browser.handover.done without a usable window' }
+  const requestId = id(parsed.rid)
+  if (requestId === null) return { ok: false, reason: 'browser.handover.done without a request id' }
+  /*
+   * Required rather than defaulted. The two answers end in different places —
+   * one returns the baton and one ends the drive — so a frame that forgot to say
+   * which is a frame whose meaning we would be inventing, and the invented one
+   * would be the destructive reading half the time.
+   */
+  if (typeof parsed.carryOn !== 'boolean') {
+    return { ok: false, reason: 'browser.handover.done without carryOn' }
+  }
+  return { ok: true, message: { t: 'browser.handover.done', rid: requestId, window, carryOn: parsed.carryOn } }
+}
+
+function readHandoverState(parsed: Record<string, unknown>): WindowRead<BrowserHandoverStateFrame> {
+  const window = watchWindow(parsed.window)
+  if (window === null) return { ok: false, reason: 'browser.handover.state without a usable window' }
+  const message: BrowserHandoverStateFrame = {
+    t: 'browser.handover.state',
+    window,
+    asking: parsed.asking === true,
+    taken: parsed.taken === true,
+    // The same ceiling the curtain prompt on a `browser.frame` crosses under —
+    // it is the same sentence, arriving by the other road.
+    prompt: typeof parsed.prompt === 'string' ? parsed.prompt.slice(0, MAX_WATCH_PROMPT_LENGTH) : '',
+    mine: parsed.mine === true,
+  }
+  if (parsed.rid !== undefined) {
+    const requestId = id(parsed.rid)
+    if (requestId === null) return { ok: false, reason: 'browser.handover.state with an unusable request id' }
+    message.rid = requestId
+  }
+  return { ok: true, message }
 }
 
 /**
@@ -6340,6 +6572,10 @@ export function parseClientMessage(raw: unknown): ParseResult {
       return fromWindowRead(readFrameAck(parsed))
     case 'browser.input':
       return fromWindowRead(readInput(parsed))
+    case 'browser.handover.take':
+      return fromWindowRead(readHandoverTake(parsed))
+    case 'browser.handover.done':
+      return fromWindowRead(readHandoverDone(parsed))
     case 'browser.surfaces':
       return fromWindowRead(readSurfaces(parsed))
     case 'credential.deny': {
@@ -8106,6 +8342,10 @@ export function parseServerFrame(parsed: unknown): ServerParse {
     }
     case 'browser.surfaces.rows': {
       const read = readSurfaceRows(parsed)
+      return read.ok ? { ok: true, message: read.message } : { ok: false, reason: read.reason }
+    }
+    case 'browser.handover.state': {
+      const read = readHandoverState(parsed)
       return read.ok ? { ok: true, message: read.message } : { ok: false, reason: read.reason }
     }
     case 'pong':

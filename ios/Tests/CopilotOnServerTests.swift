@@ -543,25 +543,40 @@ final class CopilotOnServerTests: XCTestCase {
     }
 
     /**
-     * **Coming back out of the conversation is not undone on the next frame.**
+     * **A conversation that is already running is never started over.**
      *
-     * Without the latch the landing is a trap rather than a default: the push
-     * runs again the instant the root is on screen, and this screen — the setup
-     * rows, the folder picker, the reason there is no copilot here — becomes
-     * unreachable on any machine that has one agent session running.
+     * This case has outlived two of its own explanations, and the current one is
+     * the shortest. It began as *the landing is a one-shot, or popping back out
+     * re-pushes it*. Then it was *Back must not be undone*, which was a real
+     * defect he recorded — *"I keep going back and it is keep taking me inside
+     * the chat box"* — fixed with a clock that told a path SwiftUI had discarded
+     * from a person leaving a screen.
      *
-     * Somebody who pressed Back meant to press Back. The second assertion is the
-     * sharper half now that starting is automatic: without it, pressing Back on
-     * a set-up machine whose session had just exited would spawn another one.
+     * Both are gone with the navigation they were about. **The tab draws the
+     * conversation as its own content**, so there is nothing to push, nothing to
+     * re-push, no latch to hold shut and no moment to time. Four cases pinning
+     * that clock were deleted here rather than left passing, because a test that
+     * still passes over a rule nothing consults is a claim that the rule is
+     * load-bearing.
+     *
+     * What survives is the half that was always about the machine rather than
+     * about the stack, and it is the expensive half: a copilot session that is
+     * running must never produce a second one. `.open` is now a statement —
+     * *this is the copilot* — which `tabSession` turns into the screen somebody
+     * is looking at.
+     *
+     * The second assertion is the sharper one, and it is what `attempted` still
+     * guards: a machine whose copilot session has just **exited** falls back to
+     * the screen that starts one, and without that latch every redraw would put
+     * another `create` on the wire.
      */
-    func testComingBackOutOfTheConversationIsRespected() {
+    func testARunningConversationIsNamedRatherThanStartedOver() {
         let sessions = [Self.session(provider: "claude", status: "working")]
 
-        XCTAssertEqual(Self.landing(sessions), .open(Self.first))
-        XCTAssertEqual(Self.landing(sessions, already: true), .stay,
-                       "re-pushing here would make the screen behind it unreachable")
-        XCTAssertEqual(Self.landing([], setup: Self.setUp, already: true), .stay,
-                       "and Back on a set-up machine must not start one behind the person")
+        XCTAssertEqual(Self.landing(sessions), .open(Self.first),
+                       "a running copilot session is what the tab shows, not a reason to start one")
+        XCTAssertEqual(Self.landing([], setup: Self.setUp, attempted: true), .stay,
+                       "and one start per visit, so a session that exited is not started twice")
     }
 
     /**
@@ -625,14 +640,12 @@ final class CopilotOnServerTests: XCTestCase {
     private static func landing(_ sessions: [RemoteSession],
                                 connection: ConnectionState = live,
                                 setup: CopilotSetupBook.Setup? = nil,
-                                already: Bool = false,
                                 attempted: Bool = false,
                                 canStart: Bool = true,
                                 plainStartTaken: Bool = true) -> CopilotOnServer.Landing {
         CopilotOnServer.landing(in: sessions,
                                 connection: connection,
                                 setup: setup,
-                                already: already,
                                 attempted: attempted,
                                 canStart: canStart,
                                 plainStartTaken: plainStartTaken)
@@ -641,61 +654,20 @@ final class CopilotOnServerTests: XCTestCase {
     // MARK: - About the copilot
 
     /**
-     * **The button is on every screen the Copilot tab can be showing.**
+     * The controls are reached from **one** place, and it is not this tab.
      *
-     * > *"here on the right top corner you can give a button for all about
-     * > copilot."*
+     * > *"Let's move settings option for copilot to main settings page instead
+     * > of inside the copilot page, so we can have three dots in left along with
+     * > chat vs terminal switch."*
      *
-     * The tab is three screens, not one: the fallback, the session it lands in —
-     * which is where somebody usually arrives, and which has the *least* on it
-     * naming what they are talking to — and, on a desktop, the copilot
-     * conversation itself. A button on two of the three goes missing exactly at
-     * the moment it is wanted, and it goes missing invisibly: the rule is a
-     * modifier applied on each screen, checkable otherwise only by launching the
-     * app onto a real machine of each kind and looking at sixty points of
-     * navigation bar.
-     *
-     * So this walks **every** case rather than the one this lane wrote, which is
-     * the shape `DeckChromeTests` already uses for the tab bar and for the same
-     * reason. Adding a fourth screen to this tab without deciding about it fails
-     * to compile inside `CopilotControl.owner`; adding one and forgetting to
-     * apply the modifier fails here, by name, with the file that has to change.
+     * Two cases used to live here, walking every screen the tab can show and
+     * asserting each applied the gear. They are gone with the gear: there are no
+     * perches to walk, and a modifier applied nowhere cannot drift between
+     * files. What replaces them is the smaller claim that still matters — the
+     * row on the Menu page and anything pressing it name the same string.
      */
-    func testTheControlsButtonIsCarriedByEveryScreenTheCopilotTabCanShow() {
-        for perch in CopilotControl.Perch.allCases {
-            let owner = CopilotControl.owner(of: perch)
-            XCTAssertTrue(owner.hasSuffix(".swift"),
-                          "\(perch.rawValue) must name the file that applies the button")
-        }
-
-        XCTAssertEqual(Set(CopilotControl.Perch.allCases.map(CopilotControl.owner(of:))).count,
-                       CopilotControl.Perch.allCases.count,
-                       "three different screens, in three different files")
-        XCTAssertEqual(CopilotControl.owner(of: .fallback), "Screens/CopilotOnServerView.swift")
-    }
-
-    /**
-     * **One identifier, so a missing button and a renamed one are not the same
-     * failure.**
-     *
-     * `copilotControlsButton` is applied in three files. If each spelled its own
-     * identifier, a UI test that could not find it on the landed screen would be
-     * reporting *either* that the button is absent *or* that it is present under
-     * another name, and those need opposite fixes. It is one constant for that
-     * reason and not for tidiness.
-     *
-     * It is `copilot.controls` and no longer `copilot.about`, because the screen
-     * behind it stopped being a reading page:
-     *
-     * > *"it doesn't mean like information about copilot. I meant all the control
-     * > about copilot, all the settings of the copilot."*
-     *
-     * An identifier is read by people writing walk-throughs as well as by
-     * `XCUIElement`, and one describing the old screen would have gone on
-     * describing it long after the screen changed.
-     */
-    func testTheButtonHasOneIdentifierAtEveryPerch() {
-        XCTAssertEqual(CopilotControl.buttonIdentifier, "copilot.controls")
+    func testTheControlsAreOneRowOnTheSettingsPage() {
+        XCTAssertEqual(CopilotControl.settingsRow, "settings.copilot")
     }
 
     // MARK: - The controls, per machine
@@ -1132,6 +1104,79 @@ final class CopilotOnServerTests: XCTestCase {
         // And it survives a fresh reader over the same store, which is the only
         // thing "written down" actually means to somebody re-opening the app.
         XCTAssertFalse(CopilotSetupBook(defaults: store).isArmed(host: "h"))
+    }
+
+    /**
+     * **Which mode the tab opens in, and an absent record means chat.**
+     *
+     * > *"It should directly land in terminal or chat mode, and user can set its
+     * > default from settings."*
+     *
+     * The default is the assertion that matters. A machine nobody has opened the
+     * Copilot tab on has no record, and reading that as *terminal* would make the
+     * tab behave one way on a machine he had touched and another on a machine he
+     * had not — for a setting whose whole point is that he decides it once. Chat
+     * is what the tab does today and what he asked for the round before: *"it
+     * should be always a chat to land with."*
+     *
+     * Both directions are written, for `setStartOnOpen`'s reason: chat being the
+     * default makes *terminal* the departure, and a departure that was not
+     * written would be undone by the next visit — a setting that springs back.
+     *
+     * The last assertion is the one that would be missed. Choosing a mode on a
+     * machine with no record must not quietly answer the *other* question: an
+     * absent record already means armed, so writing `startOnOpen: false` here
+     * would switch the tab off for somebody who had only said which view they
+     * wanted.
+     */
+    func testTheTabOpensInChatUnlessSomebodyHasSaidOtherwise() {
+        let store = scratchSuite()
+        let book = CopilotSetupBook(defaults: store)
+        XCTAssertTrue(book.opensInChat(host: "h"), "an absent record means chat")
+
+        book.setOpensInChat(false, host: "h")
+        XCTAssertFalse(book.opensInChat(host: "h"))
+        XCTAssertTrue(CopilotSetupBook(defaults: store).opensInChat(host: "h") == false,
+                      "the decision has to survive being made")
+
+        book.setOpensInChat(true, host: "h")
+        XCTAssertTrue(book.opensInChat(host: "h"))
+        XCTAssertTrue(book.isArmed(host: "second"), "an untouched machine is untouched")
+
+        // Its own suite: `scratchSuite` keys on `#function`, so a second call
+        // with no name would wipe the store the assertions above ran against.
+        let fresh = CopilotSetupBook(defaults: scratchSuite("modeWithoutArming"))
+        fresh.setOpensInChat(false, host: "h")
+        XCTAssertTrue(fresh.isArmed(host: "h"),
+                      "choosing a mode must not answer the question about starting")
+    }
+
+    /**
+     * **A book written by the build before this one still opens.**
+     *
+     * The failure this is written against is silent and total. `load()` decodes
+     * the whole book in a single `try?`, so one record that will not decode is
+     * not one machine lost — it is every machine's folder and switch gone at
+     * once, on the launch after an update, with no error anywhere. Swift's
+     * synthesised `Decodable` calls `decode` rather than `decodeIfPresent` for a
+     * non-optional property and does **not** consult its default value, so adding
+     * `opensInChat` without a hand-written initialiser would have done exactly
+     * that.
+     *
+     * The literal below is the shape actually on disk in the simulator this lane
+     * tests against, copied rather than invented.
+     */
+    func testARecordWrittenBeforeTheModeSettingExistedStillLoads() throws {
+        let store = scratchSuite()
+        let old = #"{"KZ2J9AWGK8BWGQUEZDYKW5RS22":{"folder":"\/home\/asad","startOnOpen":true}}"#
+        store.set(Data(old.utf8), forKey: "terminaldeck.copilotSetup.v1")
+
+        let book = CopilotSetupBook(defaults: store)
+        XCTAssertEqual(book.folder(host: "KZ2J9AWGK8BWGQUEZDYKW5RS22"), "/home/asad",
+                       "the folder somebody chose must survive the update that added a field")
+        XCTAssertTrue(book.isArmed(host: "KZ2J9AWGK8BWGQUEZDYKW5RS22"))
+        XCTAssertTrue(book.opensInChat(host: "KZ2J9AWGK8BWGQUEZDYKW5RS22"),
+                      "a record with nothing to say about the mode means chat")
     }
 
     /**

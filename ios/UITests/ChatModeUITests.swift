@@ -135,29 +135,42 @@ final class ChatModeUITests: XCTestCase {
     }
 
     /**
-     * The `i`, and what is behind it.
+     * What the conversation's navigation bar carries, which is now two things.
      *
-     * Not decoration: a transcript view that shows an agent's prose and none of
-     * its tool calls looks like one that has lost half the conversation, and the
-     * reason — the desktop's parser removes them before the frame is built —
-     * exists nowhere else on screen. This asserts it is reachable and that it
-     * says something, which is the whole of what a test can claim about a
-     * sentence.
+     * > *"why do we have this i button, it is completely extra, the information
+     * > button, remove this. And we don't need keyboard button also… Keep only
+     * > three dot settings and chat switching button in the copilot."*
+     *
+     * This replaces a case that pressed the `i` and read the note behind it. The
+     * note is gone with the button and the fact it carried — an agent's tool
+     * calls are stripped by `src/main/chat-transcript.ts` before the frame is
+     * built — is written down in `SessionChatView`'s header rather than drawn.
+     *
+     * Asserted as absences because that is what he asked for, and because an
+     * absence is exactly the kind of thing that comes back: the `i` was drawn
+     * from `chatMode`, and anything that puts a control back in that bar on a
+     * conversation will fail here rather than on his phone.
+     *
+     * The `…` goes with them, and for a reason of its own rather than his:
+     * every item under it acts on the emulator, which is not on screen in this
+     * mode. `TerminalScreen`'s toolbar carries the argument.
      */
-    func testTheNoteAboutWhatThisViewShowsIsReachable() throws {
+    func testTheConversationsBarCarriesTheToggleAndNothingElse() throws {
         try openTheFirstSession()
         let toggle = app.buttons["terminal.mode"]
         try XCTSkipUnless(toggle.waitForExistence(timeout: 15),
-                          "no transcript on this session, so no chat mode to explain")
+                          "no transcript on this session, so no chat mode to look at")
         toggle.tap()
         XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "session.chat")
             .firstMatch.waitForExistence(timeout: 10))
 
-        let note = app.buttons["chat.note"]
-        XCTAssertTrue(note.waitForExistence(timeout: 5), "the i is next to the mode toggle")
-        note.tap()
-        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "chat.note.body")
-            .firstMatch.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["chat.note"].exists,
+                       "the i was removed from this bar: \"it is completely extra\"")
+        XCTAssertFalse(app.buttons["terminal.keyboard"].exists,
+                       "the keyboard button was removed from every reading of this screen")
+        XCTAssertFalse(app.buttons["terminal.actions"].exists,
+                       "the session menu acts on the terminal, which this mode is not showing")
+        XCTAssertTrue(toggle.exists, "the way back to the terminal has to survive all of that")
     }
 
     // MARK: - Steps

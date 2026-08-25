@@ -155,8 +155,19 @@ final class MachineBrowserUITests: XCTestCase {
     func testTheHomeAlwaysSettlesOnSomething() throws {
         let empty = app.descendants(matching: .any)
             .matching(identifier: "browser.windows.empty").firstMatch
+        /*
+         * **Three kinds of row, not one.** This asked only for
+         * `browser.machine.row.` — a window the phone can drive — and went red
+         * against a real machine whose only open page was the drive's own front
+         * tab, which is a `surface` row and is exactly what `web.open` produces.
+         * A phone holding a page of its own over a tunnel is the third kind. All
+         * three are the list having settled on something; asking for one of them
+         * made this case a test of what happened to be open.
+         */
         let anyRow = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "identifier BEGINSWITH 'browser.machine.row.'")).firstMatch
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'browser.machine.row.'"
+                                  + " OR identifier BEGINSWITH 'browser.machine.surface.'"
+                                  + " OR identifier BEGINSWITH 'browser.machine.page.'")).firstMatch
         let noBrowser = app.descendants(matching: .any)
             .matching(identifier: "browser.windows.unavailable").firstMatch
 
@@ -170,51 +181,80 @@ final class MachineBrowserUITests: XCTestCase {
     }
 
     /**
-     * The `+` is on the left and the `…` is on the right, on this tab and on the
-     * sessions list, because he asked for it in those words.
+     * **One pill on the right, with the `+` left of the `…` inside it.**
      *
-     * > *"On the sessions page the plus button is on one side and the three dots
-     * > is on the other side, and on the browser page the three dots is on one
-     * > side and the plus button is on another side. In both, the plus button
-     * > should be left and three dots should be on the right side."*
+     * > *"This plus button and three dots thing — which I said it will stay on
+     * > left and three dot will be on right — what I meant is they should stay
+     * > together like before, but like both will be on right side, one pill. But
+     * > inside the pill, three dot will be on right side and plus button will be
+     * > on left side. For inside the terminal page, and browser thing when we
+     * > browse that, like in the page before we open."*
      *
-     * Measured on the frames rather than asserted from the placement constant,
-     * which is the only way to catch it: `.topBarLeading` and `.topBarTrailing`
-     * both compile and both draw, and a swap reads as correct in every diff.
+     * Two assertions, because the round before this one satisfied the first
+     * while breaking what he meant. His earlier sentence — *"the plus button
+     * should be left and three dots should be on the right side"* — was read as
+     * the two **edges** of the navigation bar, the `+` went to `.topBarLeading`,
+     * and the ordering check below still passed: a `+` in the far-left corner is
+     * indeed left of a `…` in the far-right one. So the ordering is kept and the
+     * side is added, and it is the side that carries his correction.
+     *
+     * Measured on the frames rather than read off the placement constant, which
+     * is the only way to catch either of them: `.topBarLeading` and
+     * `.topBarTrailing` both compile and both draw, and a swap reads as correct
+     * in every diff.
      */
-    func testThePlusIsLeftOfTheDots() throws {
+    func testThePlusAndTheDotsShareOnePillOnTheRight() throws {
         let plus = app.buttons["browser.new"]
         try XCTSkipUnless(plus.waitForExistence(timeout: 20), Self.notDrivable)
         let more = app.buttons["browser.more"]
         XCTAssertTrue(more.exists, "the home should keep its menu")
         XCTAssertLessThan(plus.frame.minX, more.frame.minX,
-                          "the plus goes on the leading edge and the dots on the trailing one")
+                          "inside the pill the plus is on the left and the dots on the right")
+
+        let bar = app.navigationBars.firstMatch
+        XCTAssertTrue(bar.exists, "there should be a navigation bar to measure against")
+        XCTAssertGreaterThan(plus.frame.minX, bar.frame.midX,
+                             "both controls belong in one pill on the trailing edge — a plus in the "
+                             + "leading corner is the split he asked to have undone")
     }
 
     // MARK: - Where localhost went
 
     /**
-     * **Localhost is folded away, and it is still reachable.**
+     * **There is no second page, and the ports are in the one that is left.**
      *
-     * > *"Even the localhost thing should be folded somewhere else — whatever
-     * > the available whole localhost addresses are, in three dots maybe, or
-     * > somewhere else."*
+     * > *"now here you still kept localhost as a separate page inside the page,
+     * > and the browser as a separate page in the page. So I wanted it to be
+     * > like ONE page where I can start a new window."*
      *
-     * Both halves in one case, because either on its own is a half-truth: a
-     * missing address bar could mean it was deleted, and a reachable one could
-     * mean it never moved.
+     * Three assertions in one case, because each on its own is a half-truth. No
+     * address bar on the home; **no row in the `…` that leads to a second
+     * browser**; and the ports reachable inside the `+`, which is the one place a
+     * window is started. A rearrangement fails silently by building the new place
+     * and leaving the old one standing, so the absence is asserted as hard as the
+     * presence.
      */
-    func testLocalhostIsBehindTheMenuAndStillReachable() throws {
+    func testThereIsNoSecondBrowserAndThePortsAreInTheOpener() throws {
         XCTAssertFalse(app.textFields["browser.address"].exists,
                        "the address bar should not be on the home")
 
-        XCTAssertTrue(app.openLocalhostList(),
-                      "the localhost list should be one row down the home's menu")
-        capture("30-localhost-folded-away")
-        XCTAssertTrue(app.textFields["browser.address"].exists,
-                      "and it should still carry the address bar it used to have on the tab")
+        let more = app.buttons["browser.more"]
+        try XCTSkipUnless(more.waitForExistence(timeout: 20), Self.noMachine)
+        more.tap()
+        XCTAssertFalse(app.buttons["Localhost"].waitForExistence(timeout: 3),
+                       "the menu should no longer lead to a browser of its own")
+        capture("30-no-second-browser")
+        app.dismissAnyMenu()
 
-        XCTAssertTrue(app.openBrowserTab(), "and Back should return to the windows")
+        XCTAssertTrue(app.openLocalhostList(),
+                      "the ports belong to the act of opening a window")
+        capture("31-ports-in-the-opener")
+        XCTAssertTrue(app.textFields["browser.address"].exists,
+                      "and the one address field in the app is the one on that sheet")
+
+        app.closeLocalhostList()
+        XCTAssertTrue(app.buttons["browser.more"].waitForExistence(timeout: 8),
+                      "Cancel should come back to the home without opening anything")
     }
 
     // MARK: - Opening one
@@ -235,7 +275,7 @@ final class MachineBrowserUITests: XCTestCase {
         try XCTSkipUnless(plus.waitForExistence(timeout: 20), Self.notDrivable)
         plus.tap()
 
-        XCTAssertTrue(app.textFields["browser.open.address"].waitForExistence(timeout: 8),
+        XCTAssertTrue(app.textFields["browser.address"].waitForExistence(timeout: 8),
                       "the sheet should open on the field that says where the window goes")
         XCTAssertTrue(app.otherElements["browser.open.isolation"].exists
                         || app.segmentedControls.firstMatch.exists,
@@ -252,53 +292,126 @@ final class MachineBrowserUITests: XCTestCase {
     // MARK: - A row, from the outside
 
     /**
-     * **A row's `…` carries the three outside verbs and no others.**
+     * **Every row's `…` carries the same outside verbs, and the ones a row
+     * cannot be asked for are drawn greyed rather than left out.**
      *
      * > *"from the outside we can just make it archive, close, or connect to any
      * > session, or things from three dots and all the relevant stuff."*
+     *
+     * ## Why this opens more than one of them
+     *
+     * > *"Okay, this one is attached to this session. Maybe this is the
+     * > difference, and this one is not attached to anyone. But **there is no way
+     * > to attach this one too**. So it should be the same case, or all the
+     * > options should be available at least."*
+     *
+     * Only a `.window` row used to have a menu at all. The machine's own front
+     * tab is minted no window id and a page this phone is holding over a tunnel
+     * is not in that browser, every verb behind the `…` is addressed by a window
+     * id, and so those two rows carried a bare `>`. What he read off a row with
+     * no menu beside a row with one is that the app can do less for this page
+     * than for that one and will not say why.
+     *
+     * So `MachineBrowserView.rowMenu` builds all three kinds from one function
+     * now, and an item that cannot be sent is drawn **disabled** under a section
+     * header naming the reason. That is a claim about the **list** rather than
+     * about one row, and it fails in exactly one way — one kind of row quietly
+     * keeping a menu of its own — so this walks every `…` it can reach instead of
+     * the first. On a server the first row is the drive's own front tab, which is
+     * the row that used to have nothing on it.
      *
      * Screenshot and Watch were on this menu until this build and both moved
      * inside the window, because both act on the page rather than on the window.
      * Their absence is asserted, because the failure mode of a move is that the
      * old copy survives it.
      *
-     * `Close window` is what proves the menu came up at all — it is the one row
-     * that is always there. The session rows cannot be asserted by name: each
-     * carries a session's own title and a count, both minted on the machine, and
-     * a machine running nothing has no such rows to draw, which is the product
+     * `Close window` and `Archive` are what prove both halves: that the menu came
+     * up, and that it is the same menu on every row. Where the row cannot be
+     * asked for them they are still there and greyed, which is the requirement
+     * and not a weakening of it — so the reason is asserted alongside, by its
+     * words, the way every presented menu label in this target is reached.
+     *
+     * The session rows cannot be asserted by name: each carries a session's own
+     * title and a count, both minted on the machine, and a `.window` row on a
+     * machine running nothing draws no such section at all — which is the product
      * refusing to draw a control that could only refuse.
      *
      * Nothing is pressed.
      */
-    func testARowsMenuCarriesOnlyTheOutsideVerbs() throws {
-        let more = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "identifier BEGINSWITH 'browser.machine.more.'")).firstMatch
-        try XCTSkipUnless(more.waitForExistence(timeout: 20), Self.noWindows)
+    func testEveryRowsMenuCarriesTheSameOutsideVerbs() throws {
+        let menus = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'browser.machine.more.'"))
+        try XCTSkipUnless(menus.firstMatch.waitForExistence(timeout: 20), Self.noWindows)
 
-        more.tap()
-        XCTAssertTrue(app.buttons["Close window"].waitForExistence(timeout: 5),
-                      "a window's row menu should come up and be able to close it")
-        capture("32-window-row-menu")
+        /*
+         * Four at most, and only the ones a thumb could reach without scrolling.
+         * Each menu is a presentation to raise and dismiss against somebody's
+         * live machine, and the claim is about the *shapes* of row on this list —
+         * a machine's window, its own front tab, a page this phone holds — of
+         * which there are three.
+         */
+        let walk = min(menus.count, 4)
+        for index in 0 ..< walk {
+            let dots = menus.element(boundBy: index)
+            guard dots.exists, dots.isHittable else { continue }
+            let row = dots.identifier
+            dots.tap()
 
-        XCTAssertTrue(app.buttons["Archive"].exists,
-                      "archive is one of the three verbs he named for a row")
-        XCTAssertFalse(app.buttons["Screenshot"].exists,
-                       "photographing a window acts on its page — it belongs inside the window")
-        XCTAssertFalse(app.buttons["Watch and drive"].exists,
-                       "watching a window is what opening the row does now")
+            let close = app.buttons["Close window"]
+            XCTAssertTrue(close.waitForExistence(timeout: 5),
+                          "every row's menu should come up and carry Close window — \(row)")
+            let archive = app.buttons["Archive"]
+            XCTAssertTrue(archive.exists,
+                          "and Archive beside it, which is the second of the three verbs he named "
+                          + "for a row from the outside — \(row)")
 
-        // `Attach to a session` is a `Section` header rather than a row, so it
-        // is not a button — reached the way any presented label is.
-        let attach = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "label BEGINSWITH 'Attach to'")).firstMatch
-        if !attach.exists {
-            // Said out loud rather than left as a silent pass, because "the
-            // binding control is missing" and "this machine has no sessions"
-            // look identical from here.
-            XCTContext.runActivity(named: "no sessions on this machine to attach to") { _ in }
+            XCTAssertFalse(app.buttons["Screenshot"].exists,
+                           "photographing a window acts on its page — it belongs inside the window")
+            XCTAssertFalse(app.buttons["Watch and drive"].exists,
+                           "watching a window is what opening the row does now")
+
+            /*
+             * A greyed item owes the line above it.
+             *
+             * `rowMenu` puts the items a row cannot be asked for inside a
+             * `Section` whose header is `whyNoWindowVerbs` — one sentence per
+             * kind of row, and a different fact in each rather than a general
+             * apology. A disabled item with no reason on screen is the dead
+             * control this menu was rebuilt to stop being.
+             */
+            if !archive.isEnabled {
+                let why = app.descendants(matching: .any).matching(
+                    NSPredicate(format: "label CONTAINS %@ OR label CONTAINS %@ OR label CONTAINS %@",
+                                "no window id to address",
+                                "No window row for this page",
+                                "not in the machine's browser")).firstMatch
+                XCTAssertTrue(why.waitForExistence(timeout: 5),
+                              "a greyed item with nothing saying why is worse than no item — "
+                              + "\(row) should carry the sentence its section header holds")
+            }
+
+            if index == 0 { capture("32-window-row-menu") }
+
+            /*
+             * `Attach to a session` is a `Section` header on a `.window` row and
+             * a greyed **row** on the other two, so it is asked for by its words
+             * either way. Absent altogether on a machine running no sessions,
+             * which is why this is said out loud rather than left as a silent
+             * pass: "the binding control is missing" and "this machine has no
+             * sessions" look identical from here.
+             */
+            let attach = app.descendants(matching: .any)
+                .matching(NSPredicate(format: "label BEGINSWITH 'Attach to'")).firstMatch
+            if !attach.exists {
+                XCTContext.runActivity(named: "no sessions to attach to, from \(row)") { _ in }
+            }
+
+            app.dismissAnyMenu()
+            // Gone before the next one is opened. Two menus up at once is a tap
+            // that lands on the dismiss layer and a case that reports the first
+            // menu's contents twice.
+            _ = close.waitForNonExistence(timeout: 5)
         }
-
-        app.dismissAnyMenu()
     }
 
     /**

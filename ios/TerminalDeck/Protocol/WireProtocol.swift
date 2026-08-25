@@ -1304,6 +1304,35 @@ enum ClientMessage: Equatable {
     /// Ask which surfaces are watchable — the browser's tab strip. Answered with
     /// `browser.surfaces.rows`, also pushed when the strip changes.
     case browserSurfaces(rid: String)
+
+    /**
+     * **Take the page the agent is asking about.**
+     *
+     * The phone saying *that person is me*. It does not weaken the curtain and
+     * it does not move the baton away from `human`: every agent command stays
+     * refused and every **other** watcher stays curtained. What changes is
+     * scoped to this one connection — its frames come through unmasked and its
+     * taps are dispatched — because it is now the hands the handover was waiting
+     * for.
+     *
+     * Answered with `browser.handover.state` carrying this `rid`, and refused
+     * when no handover is outstanding on that window or when this connection may
+     * not already watch it.
+     */
+    case browserHandoverTake(rid: String, window: String)
+
+    /**
+     * **Hand it back**, and say which of the two things that means.
+     *
+     * `carryOn` is not a boolean's worth of politeness, it is two different
+     * sentences ending in two different places: `true` is *done, keep going* —
+     * the baton returns to the agent, the cast uncurtains for everybody, and the
+     * blocked `browser.handover` call resolves. `false` is *stop, I'll take it
+     * from here* — a refusal to the agent, which ends the drive rather than
+     * resuming it. Both are drawn as buttons that say those words; neither is a
+     * cancel.
+     */
+    case browserHandoverDone(rid: String, window: String, carryOn: Bool)
 }
 
 /// How a sign-in offers its secret. A password, or a private-key PEM — the host
@@ -1725,6 +1754,10 @@ enum ServerMessage: Equatable {
     /// The watchable surfaces — an answer to `browser.surfaces` (with `rid`) and
     /// an unsolicited push when the strip changes (without).
     case browserSurfaces(rid: String?, surfaces: [BrowserSurfaceRow])
+    /// Who holds the handover on one window: an answer to a `take` or a `done`
+    /// of ours, and an unsolicited push to every watcher when the state moves.
+    /// See `BrowserHandoverState`.
+    case browserHandover(BrowserHandoverState)
 }
 
 enum ProtocolErrorCode: String, CaseIterable, Equatable {

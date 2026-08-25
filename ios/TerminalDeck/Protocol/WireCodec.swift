@@ -149,14 +149,28 @@ enum WireCodec {
                       let name = string(entry["name"]),
                       let full = string(entry["path"])
                 else { return nil }
-                // Both flags default the safe way for a client older than the
-                // host: an unsaid `readable` draws a row somebody may try, and an
-                // unsaid `granted` draws one they may add. The machine refuses
-                // either honestly, which is the layer that matters.
+                /*
+                 * Both flags default the safe way for a client older than the
+                 * host: an unsaid `readable` draws a row somebody may try, and an
+                 * unsaid `granted` draws one they may add. The machine refuses
+                 * either honestly, which is the layer that matters.
+                 *
+                 * `granted` is read **strictly** on top of that, and `readable`
+                 * is not, because only one of them is a permission. `granted`
+                 * says this folder is already shared with an agent, and
+                 * `NSNumber(1)` bridges to `Bool` through the ObjC bridge — so
+                 * the lenient spelling reads `{"granted":1}` as *already shared*
+                 * and draws the row as `Shared`. That is the same read
+                 * `copilotFolder` already gives the same concept one frame over;
+                 * the two spellings were simply inconsistent. `readable` decides
+                 * nothing but whether a tap is worth trying, and its `?? true`
+                 * default is deliberate — `literalTrue` would collapse absent to
+                 * false and grey out every row a host does not annotate.
+                 */
                 return FolderEntry(name: name,
                                    path: full,
                                    readable: entry["readable"] as? Bool ?? true,
-                                   granted: entry["granted"] as? Bool ?? false)
+                                   granted: literalTrue(entry["granted"]))
             }
             return .ok(.folderEntries(path: path,
                                       parent: string(object["parent"]),
@@ -425,10 +439,19 @@ enum WireCodec {
             let repo = string(object["repo"]).flatMap { name in
                 name.isEmpty || name.count > Wire.maxCredentialRepoLength ? nil : name
             }
-            // `prompt` is an instruction to interrupt a person, so it is acted on
-            // only when the desktop said it in so many words. Anything else —
-            // absent, a string, a number — reads as false, which answers silently.
-            let prompt = (object["prompt"] as? Bool) == true
+            /*
+             * `prompt` is an instruction to interrupt a person and ask them for
+             * a secret, so it is acted on only when the desktop said it in so
+             * many words. Anything else — absent, a string, a number — reads as
+             * false, which answers silently.
+             *
+             * That sentence was already here and the code underneath it did not
+             * keep it. `as? Bool` **succeeds** for `NSNumber(1)` through the ObjC
+             * bridge, so `{"prompt":1}` raised the credential sheet: a number
+             * read as the desktop saying it in so many words. `literalTrue` is
+             * what the comment always described.
+             */
+            let prompt = literalTrue(object["prompt"])
             return .ok(.credentialRequest(id: id, host: host, repo: repo,
                                           operation: operation, prompt: prompt),
                        activity: [:])
@@ -680,6 +703,15 @@ enum WireCodec {
             return .ok(.browserSurfaces(rid: string(object["rid"]),
                                         surfaces: browserSurfaces(object["surfaces"])),
                        activity: [:])
+
+        case "browser.handover.state":
+            // The window is the only thing that must be there. A state frame
+            // naming no surface cannot be applied to one, and applying it to
+            // the wrong surface is a claim button under somebody else's page.
+            guard let state = browserHandover(object) else {
+                return .failed(reason: "browser.handover.state without a window")
+            }
+            return .ok(.browserHandover(state), activity: [:])
 
         default:
             return .failed(reason: "unknown message type")
@@ -1110,6 +1142,14 @@ enum WireCodec {
             object = encodeBrowserInput(window: window, seq: seq, input: input)
         case let .browserSurfaces(rid):
             object = ["t": "browser.surfaces", "rid": rid]
+        case let .browserHandoverTake(rid, window):
+            object = ["t": "browser.handover.take", "rid": rid, "window": window]
+        case let .browserHandoverDone(rid, window, carryOn):
+            // `carryOn` is written always and never defaulted away, because the
+            // host refuses a `done` that does not carry it — the two answers end
+            // in different places and a frame that forgot to say which is one
+            // whose meaning the far side would be inventing.
+            object = ["t": "browser.handover.done", "rid": rid, "window": window, "carryOn": carryOn]
         }
         guard let data = try? JSONSerialization.data(withJSONObject: object, options: []),
               let text = String(data: data, encoding: .utf8) else {

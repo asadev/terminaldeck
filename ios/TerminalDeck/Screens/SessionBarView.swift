@@ -28,6 +28,16 @@ import SwiftUI
 struct SessionBarView: View {
     let bar: SessionBarLink
 
+    /**
+     * The chosen terminal scheme, for this row's ground.
+     *
+     * Held as a property rather than reached for inside `body`, the way
+     * `TerminalScreen` holds it, because `@Observable` only re-runs a body that
+     * read the object — a row that took `.shared` inline would keep the colour it
+     * was built with while the terminal three points below it changed.
+     */
+    var themes: TerminalThemeStore = .shared
+
     /// The sheet of logins, when the chip has been pressed.
     @State private var picking = false
 
@@ -45,10 +55,34 @@ struct SessionBarView: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 7)
-            .background(Theme.surface)
-            .overlay(alignment: .bottom) {
-                Rectangle().fill(Theme.hairline).frame(height: 0.5)
-            }
+            /*
+             * The terminal's ground, not the app's card.
+             *
+             * Asad, about the session screen: *"everything should be black, not
+             * just base colour… background, full page should be black."* This row
+             * is the one strip between the navigation bar and the emulator, and
+             * with `Theme.surface` it was the last white band on a black page —
+             * `#ffffff` across `#000000`, photographed, and the first thing the eye
+             * lands on.
+             *
+             * It reads as chrome rather than as a card: full width, hard edges,
+             * and the same ground the chrome above and the terminal below take.
+             * The chips inside it keep their own fills — *"only buttons can stay
+             * as they are."* Which half of `Theme` those fills resolve to is
+             * decided for the whole screen by `TerminalChrome`, from the scheme
+             * rather than from the phone, so a black ground here never carries
+             * the light theme's near-black ink.
+             *
+             * **And no hairline under it.** There was one, drawn when this row
+             * sat on `Theme.surface` and genuinely was a different surface from
+             * the terminal beneath it. Once both take the scheme's paper the
+             * line is drawing a boundary that no longer exists:
+             *
+             * > *"Remove this separator between header and terminal."*
+             *
+             * One page, one colour, and nothing ruled across it.
+             */
+            .background(TerminalChrome.paper(themes.selected))
             .accessibilityIdentifier("session.bar")
             .sheet(isPresented: $picking) {
                 AccountSheet(bar: bar) { picking = false }

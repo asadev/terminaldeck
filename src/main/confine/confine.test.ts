@@ -219,9 +219,16 @@ function linuxMachine(options: {
   interop?: string
   runwsl?: string
   modes?: string[]
+  /**
+   * Where the device's own scratch directory refuses a `mkdir`. `inside` is
+   * Asad's headless WSL server — the boundary held, and every session died at
+   * `EROFS … mkdir '<device home>/tmp/claude-0'`. `both` is the shape that
+   * would make the check worthless, and has to be told apart from it.
+   */
+  unwritable?: 'inside' | 'both'
 }): ProofRunner {
   return async (command, args) => {
-    const [mode, token, , , homeSecret, tmpSecret] = args.slice(-6)
+    const [mode, token, , , homeSecret, tmpSecret] = args.slice(-7)
     options.modes?.push(mode ?? '')
     if (mode === 'clean') return { stdout: '', stderr: '' }
 
@@ -230,6 +237,8 @@ function linuxMachine(options: {
       return { stdout: '', stderr: 'unshare: Operation not permitted' }
     }
     const readable = confined ? options.leaks === true : options.plantable !== false
+    const writable =
+      options.unwritable === 'both' ? false : options.unwritable === 'inside' ? !confined : true
     return {
       stdout: [
         `td-token ${token ?? ''}`,
@@ -238,6 +247,7 @@ function linuxMachine(options: {
         `td-interop ${confined ? (options.interop ?? 'none') : '/run/WSL/7_interop'}`,
         `td-runwsl ${confined ? (options.runwsl ?? '') : '7_interop'}`,
         'td-uid 0',
+        `td-write ${writable ? 'ok' : 'no'}`,
       ].join('\n'),
       stderr: '',
     }
@@ -283,6 +293,25 @@ describe('the Linux proof', () => {
     // side names a file the Linux session could never have read, and every
     // check would have "passed".
     const proof = await proveConfinement(linuxPlan, 'linux', linuxMachine({ plantable: false }))
+    expect(proof.ok).toBe(false)
+    expect(proof.detail).toMatch(/could not fail/)
+  })
+
+  it("fails when the session cannot write to its own scratch directory", async () => {
+    // The defect on Asad's headless WSL server. The fence was perfect and the
+    // floor was read-only, and nothing in this proof asked about the floor — so
+    // the first thing that noticed was the agent CLI, in red, on his phone.
+    const proof = await proveConfinement(linuxPlan, 'linux', linuxMachine({ unwritable: 'inside' }))
+    expect(proof.ok).toBe(false)
+    expect(proof.detail).toMatch(/could not write to its own scratch directory/)
+    expect(proof.detail).toContain('/app-storage/device-home/abc/tmp')
+  })
+
+  it('fails differently when that directory is unwritable outside the boundary too', async () => {
+    // Same reason the canaries are read from outside first: a directory that
+    // refuses everybody makes this a check that cannot fail, and saying so is a
+    // different sentence from saying the boundary took the write away.
+    const proof = await proveConfinement(linuxPlan, 'linux', linuxMachine({ unwritable: 'both' }))
     expect(proof.ok).toBe(false)
     expect(proof.detail).toMatch(/could not fail/)
   })

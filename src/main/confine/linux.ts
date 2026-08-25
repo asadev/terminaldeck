@@ -369,6 +369,51 @@ export interface LinuxKeep {
  * answering `000` and `git ls-remote` refusing to connect. It is resolved
  * rather than hard-coded, so a distribution that keeps it somewhere else gets
  * the same treatment and one that keeps it in `/etc` gets no rule.
+ *
+ * ## A read rule inside a write rule is additive on macOS and subtractive here
+ *
+ * This is the one place where translating the plan straight through is wrong,
+ * and it reached Asad as a red line on his phone before it was found. A
+ * Seatbelt profile is a list of *allows*: `file-write*` on the granted folder
+ * and `file-read*` on something inside it grant a superset, and the second rule
+ * changes nothing. A bind mount is not an allow, it is an overmount — a
+ * read-only bind laid over a directory that already had a writable bind
+ * underneath **revokes** the write for that whole subtree, and the plan never
+ * said that.
+ *
+ * Measured on his headless WSL server, 2026-08-25, with the words this function
+ * used to emit for his own account and his own device home.
+ * `/proc/self/mountinfo`, read from inside the namespace:
+ *
+ *     573 569 8:48 /home/asad        /home/asad        rw,relatime - ext4 /dev/sdd
+ *     575 573 8:48 /home/asad/.local /home/asad/.local ro,relatime - ext4 /dev/sdd
+ *
+ * The write is granted on line 573 and taken away again on line 575, and the
+ * session then answered his error verbatim: `mkdir: cannot create directory
+ * '/home/asad/.local/share/terminaldeck/remote/device-home/f798e4220378b4bc/tmp/claude-0':
+ * Read-only file system`. It is that path and not another because `confinedEnv`
+ * points `TMPDIR` and `CLAUDE_CODE_TMPDIR` at `<device home>/tmp`, and the
+ * device home lives under `~/.local/share`. With the rule below, the same
+ * command on the same machine emits no `ro` line under `/home/asad` at all, the
+ * `mkdir` succeeds, and `/home` still lists one account out of the three that
+ * are on that box.
+ *
+ * How a read root ended up inside the granted folder at all is worth writing
+ * down, because the guard meant to stop it is still there and still correct.
+ * `toolRoots` refuses a `PATH` prefix that *contains* any writable root, which
+ * is what normally drops `~/.local` when `~/.local/bin` is on the `PATH`: the
+ * device home is a writable root inside it. On his box the granted folder **is**
+ * the account home — his WSL has no projects, so `device-reach.ts` offers
+ * `[host.home()]` — so `collapse` in `sessionPlan` swallowed the device home
+ * into `/home/asad` and the writable list stopped naming it. `~/.local` then
+ * contained nothing the guard could see, and became a read root.
+ *
+ * So the rule here is stated in terms of what a mount actually does rather than
+ * in terms of where the plan came from: anything that would be restored
+ * read-only, and lies inside a directory this session may write, is dropped.
+ * Dropping it grants nothing new — the writable root already covers the whole
+ * subtree, read and write — and it is the difference between a boundary and a
+ * session that cannot create its own scratch directory.
  */
 export function linuxKeeps(
   plan: ConfinementPlan,
@@ -376,10 +421,19 @@ export function linuxKeeps(
   machine: LinuxMachine,
 ): LinuxKeep[] {
   const hidden = (path: string): boolean => covers.some((root) => within(path, root, 'linux'))
+  // Asked of the plan rather than of the keeps collected so far, so that the
+  // answer does not depend on the order the three loops below happen to run in.
+  const granted = (path: string): boolean =>
+    plan.writable.some((root) => within(path, root, 'linux'))
   const keeps: LinuxKeep[] = []
   const seen = new Set<string>()
   const add = (path: string, mode: LinuxKeep['mode']): void => {
     if (!hidden(path) || seen.has(path) || !machine.exists(path)) return
+    // See the header above: a read-only bind inside a writable one takes the
+    // write away rather than adding a read. The `file` case is the worse of the
+    // two — step 3 of the script does `: > "$td_path"` on the target, which
+    // truncates a real file inside the granted folder before binding over it.
+    if (mode !== 'rw' && granted(path)) return
     seen.add(path)
     keeps.push({ path, mode })
   }
@@ -593,6 +647,35 @@ exec 3<&- 4<&- 5<&- 6<&- 7<&- 8<&- 9<&-
 shift "$td_plan"
 shift
 command -v setpriv >/dev/null 2>&1 || td_fail "setpriv is not installed"
+
+# 8. say that this is a sandbox, because it is
+#
+# "--map-root-user" makes the session uid 0 **inside its own namespace** — see
+# the table at the top of this file for why "--map-current-user" cannot be used
+# instead. Claude Code refuses "bypassPermissions" (and
+# "--dangerously-skip-permissions") when it finds itself running as root, which
+# is the right default: as ordinary root those flags mean an agent with no
+# brakes on the whole machine.
+#
+# Here it is neither ordinary nor root. Everything above this line is the
+# sandbox — the mounts, the dropped bounding set, the closed descriptors — and
+# the confinement is the *reason* those flags are safe to hold. Without this the
+# agent aborts on its first line with
+#
+#   --dangerously-skip-permissions cannot be used with root/sudo privileges
+#
+# a sentence that names neither this app nor the namespace, so the session dies
+# instantly and the person is told nothing that could lead them here. That is
+# how it reached Asad, and saba, and it would reach anybody on Linux or WSL
+# whose agent is configured for unattended work.
+#
+# "IS_SANDBOX" is the agent's own documented way of being told this, and this
+# script is the only code in the product entitled to set it: it is set *after*
+# the boundary is built and only on the path that built it. An unconfined
+# session never comes through here, and there the refusal is correct and stands.
+IS_SANDBOX=1
+export IS_SANDBOX
+
 exec setpriv --no-new-privs --bounding-set=-all --inh-caps=-all -- "$@"
 `
 
@@ -761,6 +844,25 @@ export function linuxShellLine(
  * therefore visible in `ps` to this account — they are random, worth nothing,
  * and thrown away a moment later, the same trade the Seatbelt profile makes by
  * travelling as an argument.
+ *
+ * ## `$7`, and why a proof of the fence needed a question about the floor
+ *
+ * Every check above this one asks whether something is **shut**. Asad opened
+ * the Copilot tab on his headless WSL server and every session died at once
+ * with `EROFS … mkdir '<device home>/tmp/claude-0'`: the fence held perfectly
+ * and the floor was read-only, because a read-only bind had landed on top of
+ * the writable grant. See {@link linuxKeeps} for the sequence. Nothing here
+ * noticed, so the first thing that noticed was the agent, in red, on a phone in
+ * another room — a boundary that reports success while the session cannot start
+ * is precisely the shape this whole subsystem exists to stop.
+ *
+ * `$7` is `<device home>/tmp`, which is what `confinedEnv` hands the session as
+ * `TMPDIR` and `CLAUDE_CODE_TMPDIR`, so it is the exact directory that failed
+ * rather than a stand-in for it. The probe is a `mkdir`/`rmdir` pair rather than
+ * a file so that nothing is left behind if the process is killed between the
+ * two, and it is reported from the **unconfined** run as well for the same
+ * reason the canaries are read from outside first: a directory that is
+ * unwritable everywhere would make this a check that cannot fail.
  */
 export const LINUX_PROOF_SCRIPT = `
 if [ "$1" = plant ]; then
@@ -771,12 +873,25 @@ if [ "$1" = clean ]; then
   rm -f "$3" "$4" 2>/dev/null
   exit 0
 fi
+td_write=no
+if [ -n "$7" ]; then
+  # \`mkdir -p\` first because the answer wanted is "can this session write
+  # here", and a missing directory would otherwise be reported as a read-only
+  # one. On a healthy machine it exists already: \`prepareDeviceHome\` makes it
+  # at 0700 before the session is spawned.
+  mkdir -p "$7" 2>/dev/null
+  if mkdir "$7/.terminaldeck-writable-$2" 2>/dev/null; then
+    rmdir "$7/.terminaldeck-writable-$2" 2>/dev/null
+    td_write=ok
+  fi
+fi
 printf 'td-token %s\\n' "$2"
 printf 'td-home %s\\n' "$(cat "$3" 2>/dev/null)"
 printf 'td-tmp %s\\n' "$(cat "$4" 2>/dev/null)"
 printf 'td-interop %s\\n' "\${WSL_INTEROP:-none}"
 printf 'td-runwsl %s\\n' "$(ls -A /run/WSL 2>/dev/null | head -n 1)"
 printf 'td-uid %s\\n' "$(id -u)"
+printf 'td-write %s\\n' "$td_write"
 `
 
 /** What the proof asks about, wherever it is asked from. */
@@ -791,6 +906,12 @@ export interface LinuxProofReport {
   /** The first entry in `/run/WSL`, or empty when it is gone or empty. */
   runwsl: string
   uid: string
+  /**
+   * `ok` when a directory could be made and removed inside the device's own
+   * scratch directory. Anything else — `no`, or empty from a report written
+   * before this field existed — is a session that cannot start.
+   */
+  write: string
 }
 
 /** Read the report back. Absent lines are empty strings, never undefined. */
@@ -809,6 +930,7 @@ export function readProofReport(text: string): LinuxProofReport {
     interop: field('interop'),
     runwsl: field('runwsl'),
     uid: field('uid'),
+    write: field('write'),
   }
 }
 
@@ -820,6 +942,8 @@ export function linuxProofArgs(input: {
   tmpCanary: string
   homeSecret: string
   tmpSecret: string
+  /** `<device home>/tmp` — the directory the session is handed as `TMPDIR`. */
+  deviceTmp: string
 }): string[] {
   return [
     '-c',
@@ -831,6 +955,7 @@ export function linuxProofArgs(input: {
     input.tmpCanary,
     input.homeSecret,
     input.tmpSecret,
+    input.deviceTmp,
   ]
 }
 

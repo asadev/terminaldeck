@@ -150,10 +150,60 @@ final class CopilotSetupBook {
         var folder: String?
         /// Whether the Copilot tab may start one when there is none running.
         var startOnOpen: Bool
+        /**
+         * Whether the tab opens the conversation as a **chat** or as a terminal.
+         *
+         * > *"It should directly land in terminal or chat mode, and user can set
+         * > its default from settings."*
+         *
+         * A setting rather than a memory of the last toggle, and that is his
+         * sentence read literally: *a default* is a thing you choose once and
+         * arrive in, and a remembered last position is a thing that drifts. The
+         * toggle on the conversation still works and still costs nothing — the
+         * two are the same session and the same socket — and it deliberately does
+         * **not** write here, so switching to the terminal to read some output
+         * does not quietly change what the tab opens in tomorrow.
+         *
+         * True is the default because it is what the tab does today and what he
+         * asked for the round before: *"it should be always a chat to land with,
+         * terminal and chat mode too."* An absent record therefore means chat,
+         * and `opensInChat(host:)` reads it that way — the same shape `isArmed`
+         * has, and for the same reason: a machine nobody has set up must behave
+         * like the one he described rather than waiting to be told.
+         *
+         * Not honoured blindly. `TerminalScreen.landChatFirstOnTheCopilotStack`
+         * already refuses to raise the chat over a dead socket or a machine that
+         * cannot serve a transcript, because a chat with no way back to the
+         * terminal is a mode with no way out of it. This setting is asked
+         * *after* those, so a shell session on a server still opens as a
+         * terminal — which is the truth about what is in it.
+         */
+        var opensInChat: Bool
 
-        init(folder: String? = nil, startOnOpen: Bool = false) {
+        init(folder: String? = nil, startOnOpen: Bool = false, opensInChat: Bool = true) {
             self.folder = folder
             self.startOnOpen = startOnOpen
+            self.opensInChat = opensInChat
+        }
+
+        /**
+         * Written by hand for one key, and it is not ceremony.
+         *
+         * `load()` decodes the **whole book** in a single `try?`, so one record
+         * that will not decode is not one machine lost — it is every machine's
+         * folder and switch gone at once, silently, on the launch after an
+         * update. Swift's synthesised decoder calls `decode` rather than
+         * `decodeIfPresent` for a non-optional property and does not consult its
+         * default value, so adding this field without this initialiser would
+         * throw on every record written by an earlier build. Measured on the
+         * simulator this lane tests against, whose stored book is
+         * `{"…":{"folder":"/home/asad","startOnOpen":true}}`.
+         */
+        init(from decoder: Decoder) throws {
+            let box = try decoder.container(keyedBy: CodingKeys.self)
+            folder = try box.decodeIfPresent(String.self, forKey: .folder)
+            startOnOpen = try box.decodeIfPresent(Bool.self, forKey: .startOnOpen) ?? false
+            opensInChat = try box.decodeIfPresent(Bool.self, forKey: .opensInChat) ?? true
         }
     }
 
@@ -218,6 +268,30 @@ final class CopilotSetupBook {
         records[host]?.folder
     }
 
+    /**
+     * **Whether the Copilot tab opens its conversation as a chat. An absent
+     * record means yes.**
+     *
+     * > *"It should directly land in terminal or chat mode, and user can set its
+     * > default from settings."*
+     *
+     * The same default-shaped answer `isArmed` gives, and for the same reason: a
+     * machine nobody has opened the Copilot tab on has no record, and reading
+     * that as *terminal* would make the tab behave one way on a machine he had
+     * touched and another on a machine he had not. Chat is what the tab does
+     * today and what he asked for last round, so it is what an unset machine
+     * does.
+     *
+     * `TerminalScreen` reads this directly rather than being handed it, for the
+     * reason it reads `TerminalThemeStore.shared` directly: it is a property of
+     * this phone, the screen is built from two different stacks, and threading a
+     * value through the one that happens to know about copilots would leave the
+     * other one silently opting out of the setting.
+     */
+    func opensInChat(host: String) -> Bool {
+        records[host]?.opensInChat ?? true
+    }
+
     // MARK: - Writing
 
     /**
@@ -265,6 +339,28 @@ final class CopilotSetupBook {
             records[host] = existing
         } else {
             records[host] = Setup(folder: nil, startOnOpen: on)
+        }
+        save()
+    }
+
+    /**
+     * Choose what the tab opens the conversation in.
+     *
+     * **Both directions write**, for `setStartOnOpen`'s reason rather than by
+     * imitation of it: chat is the default, so *terminal* is the departure, and
+     * a departure that was not written would be undone by the next visit. A
+     * machine with no record gets one that keeps the arming an absent record
+     * already meant — `isArmed` reads a missing record as armed, so writing
+     * `startOnOpen: false` here would quietly switch the tab off for somebody
+     * who had only said which mode they wanted.
+     */
+    func setOpensInChat(_ on: Bool, host: String) {
+        guard !host.isEmpty else { return }
+        if var existing = records[host] {
+            existing.opensInChat = on
+            records[host] = existing
+        } else {
+            records[host] = Setup(folder: nil, startOnOpen: true, opensInChat: on)
         }
         save()
     }
@@ -352,7 +448,8 @@ final class CopilotSetupBook {
         // clean keeps its switch and loses its path, which reads as a desktop —
         // honest, and one press from being right again.
         records = stored.mapValues { Setup(folder: Self.cleanFolder($0.folder),
-                                           startOnOpen: $0.startOnOpen) }
+                                           startOnOpen: $0.startOnOpen,
+                                           opensInChat: $0.opensInChat) }
     }
 
     private func save() {

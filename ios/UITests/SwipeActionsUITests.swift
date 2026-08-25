@@ -37,13 +37,19 @@
  * purpose, against the disposable stand-in. That is the right place for it and
  * this is not.
  *
- * ## And one case that is not about swiping at all
+ * ## And two cases that are not about swiping at all
  *
  * `testEveryPillIsStillAddressableByItsName`. The tab bar lost its words on the
  * same day these gestures went on — *"only icons are good enough"* — and every
  * case below reaches its list by pressing a pill by name. If that stops working
  * the nine failures underneath it are one failure, said nine times, about the
  * wrong thing. So it is asserted first and separately.
+ *
+ * `testTheSessionListsPlusAndDotsShareOnePillOnTheRight`, for the same reason
+ * with the geometry one level up: every case below stands on the session list,
+ * and its navigation bar is a frame claim of exactly the kind this suite is
+ * built to make with a finger rather than to read off a placement constant. Its
+ * own comment carries what went wrong the round before it was written.
  *
  * ## It skips rather than fails with nothing paired
  *
@@ -158,6 +164,59 @@ final class SwipeActionsUITests: XCTestCase {
                           "a fourth pill has to be the copilot, by name")
         }
         capture("00-the-pill")
+    }
+
+    /**
+     * **The session list's `+` and `…` are one pill on the right, `+` first.**
+     *
+     * > *"This plus button and three dots thing — which I said it will stay on
+     * > left and three dot will be on right — what I meant is they should stay
+     * > together like before, but like both will be on right side, one pill. But
+     * > inside the pill, three dot will be on right side and plus button will be
+     * > on left side."*
+     *
+     * The second of the two cases in this suite that are not about swiping, and
+     * it is here for the same reason the first one is: every case below reaches
+     * a row through this screen, so the suite is already standing on it, and a
+     * navigation bar is a geometry claim of exactly the kind these cases are
+     * built to make with a finger.
+     *
+     * **Two assertions, and the second is the one that would have caught the
+     * mistake.** The round before this read his earlier sentence — *"the plus
+     * button should be left and three dots should be on the right side"* — as
+     * the two edges of the navigation bar and split the pair into a leading
+     * group and a trailing one. An ordering check alone passes against that: a
+     * `+` in the far-left corner really is left of a `…` in the far-right one.
+     * So the side is asserted as well, against the bar's own midpoint.
+     *
+     * `MachineBrowserUITests.testThePlusAndTheDotsShareOnePillOnTheRight` is the
+     * same pair of claims about the Browser tab, which he named in the same
+     * breath. The two screens have to agree, and two cases that can disagree
+     * about it are how they came to.
+     */
+    func testTheSessionListsPlusAndDotsShareOnePillOnTheRight() throws {
+        try openTheSessionList()
+        let more = app.buttons["sessions.more"]
+        XCTAssertTrue(more.waitForExistence(timeout: 20),
+                      "the list always draws its overflow, whatever the machine offers")
+
+        let bar = app.navigationBars.firstMatch
+        XCTAssertTrue(bar.exists, "there should be a navigation bar to measure against")
+
+        // Absent on a machine that has granted this device no folder, which is a
+        // real state and not a failure — `DeckModel.canStartSomewhere`. The
+        // overflow above is the part that is always there.
+        let plus = app.buttons["sessions.new"]
+        guard plus.exists else {
+            XCTAssertGreaterThan(more.frame.minX, bar.frame.midX,
+                                 "the overflow belongs on the trailing edge on its own too")
+            return
+        }
+        XCTAssertLessThan(plus.frame.minX, more.frame.minX,
+                          "inside the pill the plus is on the left and the dots on the right")
+        XCTAssertGreaterThan(plus.frame.minX, bar.frame.midX,
+                             "both controls belong in one pill on the trailing edge — a plus in the "
+                             + "leading corner is the split he asked to have undone")
     }
 
     // MARK: - The sessions

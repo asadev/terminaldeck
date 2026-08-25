@@ -56,6 +56,7 @@ import {
 import { noVerbsLine } from '../main/session-verbs'
 import { HeadlessDriveHost } from '../main/browser-headless-host'
 import { boundKey, BrowserDrive, OWN_TARGET } from '../main/browser-driver'
+import type { DriveStatus } from '../main/browser-drive'
 import { frontTab, screencastOver, type CastWindow } from '../main/screencast-host'
 import { createHeadlessBrowserControl } from '../main/browser-headless-control'
 import { startDeckControlServer, stopDeckControlServer } from '../main/deck-control/server'
@@ -281,6 +282,52 @@ export interface HeadlessHost {
 }
 
 /* --------------------------------------------------------------- assembly -- */
+
+/**
+ * What one `DriveStatus` is worth telling a phone about.
+ *
+ * Pulled out of the callback it used to live inside, because that callback is a
+ * closure over a running host and there was no way to ask it a question without
+ * standing one up — which is exactly how it came to drop a signal it was being
+ * handed. Extracted, the whole rule is four lines and a test can state them.
+ *
+ * Two independent questions off one status, and they are not the same question:
+ *
+ * - **the handover**, keyed on whether somebody is being asked and what they are
+ *   being asked. This is what the callback was written for.
+ * - **the address**, which used to be dropped. Measured on the handover harness:
+ *   the agent navigated `/login` → `/welcome`, the frames rendered the new page,
+ *   and the strip above them read `/login` for the rest of the run.
+ *
+ * Everything downstream of the address was already right — a
+ * `browser.surfaces.rows` push makes the phone re-read the list, and the
+ * headless `list()` answers from `page.url()`, which is live. Nothing sent the
+ * push. On a desktop a navigation reaches the strip through `windowMoved`, whose
+ * only navigation caller is Electron renderer IPC (`browser-binding-ipc.ts`) and
+ * so does not exist on a server. The signal was not missing on this host; it was
+ * arriving here and being discarded by a return that only cared about handovers.
+ *
+ * Both are guarded on actually having moved, for the same reason: this is called
+ * once per click as well as once per navigation, and a click that navigates
+ * nowhere is not news.
+ */
+export interface DriveAnnouncement {
+  handover: string
+  url: string
+}
+
+export function driveAnnouncements(
+  was: DriveAnnouncement,
+  status: Pick<DriveStatus, 'state' | 'prompt' | 'url'>,
+): { now: DriveAnnouncement; handoverMoved: boolean; addressMoved: boolean } {
+  const handover = `${status.state === 'human' ? 'asking' : 'no'}\u0000${status.prompt}`
+  const url = typeof status.url === 'string' ? status.url : ''
+  return {
+    now: { handover, url },
+    handoverMoved: handover !== was.handover,
+    addressMoved: url !== was.url,
+  }
+}
 
 export async function createHeadlessHost(
   options: HeadlessHostOptions = {},
@@ -603,7 +650,26 @@ export async function createHeadlessHost(
    * moved to the store half. So the endpoint is started below and the
    * `cannotDrive` sentence stops being said about a session that can.
    */
-  const browserHost = new HeadlessDriveHost({ userData: stateDir })
+  /**
+   * The one thing a drive-state change on this host has to reach.
+   *
+   * `HeadlessDriveHost`'s publisher is the desktop's IPC push to a renderer, and
+   * there is no renderer here — so it defaulted to a no-op and **every** state
+   * change this server's browser made went nowhere. That is the line that made
+   * the handover a desktop-only feature in effect: `browser.handover` on a server
+   * curtains the cast, the phone watching it gets a lock card, and nothing ever
+   * told the phone there was a question under it that it was allowed to answer.
+   *
+   * A `let` assigned after the endpoint exists, because the browser is built
+   * before the wire is — the same shape `index.ts` uses for `remoteLayer`, and
+   * for the same reason: a page can be driven before anything is listening, and
+   * pushing to nobody is the correct answer rather than a race to work around.
+   */
+  let announceDriveState: (status: DriveStatus) => void = () => {}
+  const browserHost = new HeadlessDriveHost({
+    userData: stateDir,
+    publish: (status) => announceDriveState(status),
+  })
   const browserDrive = new BrowserDrive(browserHost)
   const browserControl = createHeadlessBrowserControl({
     drive: browserDrive,
@@ -654,7 +720,7 @@ export async function createHeadlessHost(
    * liveness question `machine-browser.ts` asks, through the same call, so the
    * strip and the window list cannot disagree about which pages still exist.
    */
-  const front = frontTab(() => browserDrive.origin(OWN_TARGET))
+  const front = frontTab(() => browserDrive.where(OWN_TARGET))
   const castWindows = async (): Promise<CastWindow[]> => {
     const rows: CastWindow[] = []
     const seen = new Set<string>()
@@ -1250,6 +1316,35 @@ export async function createHeadlessHost(
     remote.server.surfacesChanged()
   })
 
+  /*
+   * **And who holds the handover, whenever the baton moves.**
+   *
+   * The half of *"it should browser and stream here to interact"* that stopped at
+   * the login wall. `browser.handover` is the copilot on this server saying it
+   * needs a person; the person is whoever is holding the phone that is watching
+   * the page, and what the curtain handed them was the agent's sentence with the
+   * pixels removed and the keyboard refused. `browser.handover.state` is what
+   * turns that lock card into a question with a button under it, and this is the
+   * event that sends it.
+   *
+   * Wired to the drive's own publisher rather than to a second subscription,
+   * because `BrowserDrive.move` already fires on exactly the four transitions
+   * this cares about — claimed, handed over, resumed, released. `handoverChanged`
+   * re-reads the state per window at send time and says nothing at all when no
+   * connected device may watch, so this costs a server with no phone on it
+   * nothing.
+   *
+   * Assigned rather than passed because the browser is built long before this
+   * endpoint is; see where `announceDriveState` is declared.
+   */
+  let announced: DriveAnnouncement = { handover: '', url: '' }
+  announceDriveState = (status) => {
+    const next = driveAnnouncements(announced, status)
+    announced = next.now
+    if (next.handoverMoved) remote.server.handoverChanged()
+    if (next.addressMoved) remote.server.surfacesChanged()
+  }
+
   const machines = registerMachinesIpc(desk, {
     storageDir: remoteStorageDir,
     // The same desk the host half uses. There is one pairing code on screen at a
@@ -1601,6 +1696,11 @@ export async function createHeadlessHost(
     // `host.test.ts` does — would leave the previous host's `surfacesChanged`
     // wired to a wire that has gone.
     stopWatchingBindings()
+    // And the drive's publisher, for the same reason one line up: the browser
+    // host outlives this call by however long its Chromium takes to die, and a
+    // late state change announcing down a wire that has gone would be the same
+    // leak wearing the other feature's name.
+    announceDriveState = () => {}
     // Deadlines first. A twenty-minute cap that fired during teardown would call
     // `end` on a host that is already ending, and on the demo box `end` is
     // `process.exit`.

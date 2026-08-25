@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { PageCast, type CastFrame, type CastSeam, type SecretScan } from './browser-watch'
+import { PERSON_METHODS } from './browser-cdp'
 import { MAX_FRAME_DATA_CHARS } from './remote/protocol'
 
 /**
@@ -25,7 +26,12 @@ function jpeg(width: number, height: number): string {
 interface Sent {
   method: string
   params: Record<string, unknown>
+  /** Which of the two doors carried it — the agent's screened send, or the person's. */
+  door: 'agent' | 'person'
 }
+
+/** The real allow-list the person's door screens against, not a copy of it. */
+const PERSON = new Set(PERSON_METHODS)
 
 class FakeSeam implements CastSeam {
   readonly sent: Sent[] = []
@@ -34,8 +40,21 @@ class FakeSeam implements CastSeam {
   private handler: ((method: string, params: Record<string, unknown>) => void) | null = null
 
   async send(method: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
-    this.sent.push({ method, params })
+    this.sent.push({ method, params, door: 'agent' })
     if (this.human) throw new Error('the person has the page')
+    return {}
+  }
+
+  /*
+   * The other door, modelled the way `screenPersonCommand` actually screens it —
+   * against the real exported list, and under the *inverse* condition. A fake
+   * that let anything through here would let a test pass that the shipped screen
+   * would refuse, which is the one thing this fake must not do.
+   */
+  async sendAsPerson(method: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
+    this.sent.push({ method, params, door: 'person' })
+    if (!this.human) throw new Error('nobody has been handed this page')
+    if (!PERSON.has(method)) throw new Error(`${method} is not one a person may send`)
     return {}
   }
   onEvent(handler: (method: string, params: Record<string, unknown>) => void): () => void {
@@ -259,6 +278,48 @@ describe('input maps image pixels to the frame it named', () => {
     expect(wheel[0].params).toMatchObject({ type: 'mouseWheel', deltaY: -40 })
   })
 
+  /**
+   * The half of a keyboard that was missing, and why it looked like it worked.
+   *
+   * `dispatchKey` sent `key`, `code`, `text` and `modifiers` and no virtual key
+   * code. Chromium hands such an event to the **page's JavaScript** — so a
+   * site's own Return handler fires and a search submits, which is exactly what
+   * made this look fine — but performs none of its **own** default handling: no
+   * character deletion, no caret movement, no focus traversal, no scroll.
+   *
+   * Measured on a real page over the relay before the fix: `hello` typed into a
+   * search box stayed `hello` after Backspace, and six ArrowDowns scrolled
+   * nothing.
+   */
+  it('gives an editing key the code Chromium acts on, not only the one the page hears', async () => {
+    const seam = new FakeSeam()
+    const cast = new PageCast(seam)
+    const sink = collector()
+    await cast.watch('c1', '', { maxWidth: 800, quality: 50 }, sink.emit)
+    seam.emitFrame({ width: 800, height: 600, dw: 800, dh: 600 })
+
+    for (const [key, code] of [['Backspace', 8], ['Tab', 9], ['ArrowDown', 40], ['Escape', 27]] as const) {
+      await cast.input('c1', { t: 'browser.input', window: '', seq: 1, key: { type: 'down', key } })
+      const sent = seam.sentMethods('Input.dispatchKeyEvent').at(-1)
+      expect(sent?.params, key).toMatchObject({ windowsVirtualKeyCode: code, nativeVirtualKeyCode: code })
+    }
+  })
+
+  it('sends a key it has no code for anyway, rather than swallowing it', async () => {
+    // A media key, a function key, anything not on the small table. The page can
+    // still have bound it; silence would be a keystroke that reached nothing.
+    const seam = new FakeSeam()
+    const cast = new PageCast(seam)
+    const sink = collector()
+    await cast.watch('c1', '', { maxWidth: 800, quality: 50 }, sink.emit)
+    seam.emitFrame({ width: 800, height: 600, dw: 800, dh: 600 })
+
+    await cast.input('c1', { t: 'browser.input', window: '', seq: 1, key: { type: 'down', key: 'F13' } })
+    const sent = seam.sentMethods('Input.dispatchKeyEvent').at(-1)
+    expect(sent?.params).toMatchObject({ key: 'F13' })
+    expect(sent?.params).not.toHaveProperty('windowsVirtualKeyCode')
+  })
+
   it('refuses input for a window this connection is not watching', async () => {
     const seam = new FakeSeam()
     const cast = new PageCast(seam)
@@ -299,5 +360,235 @@ describe('a frame over the field cap is dropped, never chunked', () => {
     const source = require('node:fs').readFileSync(require('node:path').join(__dirname, 'browser-watch.ts'), 'utf8')
     expect(source).not.toContain('writeFile')
     expect(source).not.toContain('mkdir')
+  })
+})
+
+/* ------------------------------------------------- the person on the phone -- */
+
+/**
+ * The taker: one watcher stepping through the curtain to answer a handover.
+ *
+ * The curtain above was written for a desktop, where the person the copilot is
+ * asking for is already holding the mouse. On a phone the watcher **is** that
+ * person, and what the curtain used to hand them was the agent's sentence with
+ * the pixels removed and the keyboard refused. These pin the hole that was cut
+ * in it, and — just as much — how narrow the hole is: one watcher, one page, and
+ * an agent that stays refused throughout.
+ */
+describe('one watcher answers the handover and the rest stay curtained', () => {
+  /** Two watchers on one page, both live, both drawn a curtain by the handover. */
+  async function handedOver(prompt = 'Sign in and then press Done.') {
+    const seam = new FakeSeam()
+    const cast = new PageCast(seam)
+    const first = collector()
+    const second = collector()
+    await cast.watch('phone', '', { maxWidth: 800, quality: 50 }, first.emit)
+    await cast.watch('laptop', '', { maxWidth: 800, quality: 50 }, second.emit)
+
+    // The driver's own ordering: curtain while this side may still send, then
+    // flip the baton.
+    await cast.curtain(prompt)
+    seam.human = true
+    return { seam, cast, first, second }
+  }
+
+  it('shows the taker the page while a second watcher keeps its lock card', async () => {
+    const { seam, cast, first, second } = await handedOver()
+    // Both were curtained by the handover, before anybody took it.
+    expect(first.frames[0].masked).toBe(true)
+    expect(second.frames[0].masked).toBe(true)
+
+    expect(await cast.take('phone')).toEqual({ ok: true })
+    // Taking restarts the screencast the curtain stopped — through the person's
+    // door, because the agent's is refused for as long as the baton is theirs.
+    const restart = seam.sent.filter((s) => s.method === 'Page.startScreencast')
+    expect(restart[restart.length - 1].door).toBe('person')
+
+    // Both watchers ack their lock card so a live frame can reach them.
+    cast.ack('phone', first.frames[0].seq)
+    cast.ack('laptop', second.frames[0].seq)
+    seam.emitFrame({ width: 800, height: 600 })
+
+    const toTaker = first.frames[first.frames.length - 1]
+    const toOther = second.frames[second.frames.length - 1]
+    // One CDP frame, two different answers — which is the whole of `mine`.
+    expect(toTaker.masked).toBeUndefined()
+    expect(toTaker.data.length).toBeGreaterThan(0)
+    expect(toOther.masked).toBe(true)
+    expect(toOther.data).toBe('')
+    expect(toOther.prompt).toContain('Sign in')
+  })
+
+  it('shows the taker the secret field it was handed the page to fill in', async () => {
+    const { seam, cast, first, second } = await handedOver()
+    // A password box at document y 100..130, in view.
+    seam.secrets = { rects: [{ x: 10, y: 100, width: 200, height: 30 }], viewport: { width: 800, height: 600 } }
+    await cast.refreshSecrets()
+
+    await cast.take('phone')
+    cast.ack('phone', first.frames[0].seq)
+    cast.ack('laptop', second.frames[0].seq)
+    seam.emitFrame({ width: 800, height: 600 })
+
+    // The secret-rect brake is skipped for the taker and only for the taker.
+    // Masking the field they were asked to fill in would hide the entire task.
+    expect(first.frames[first.frames.length - 1].masked).toBeUndefined()
+    expect(second.frames[second.frames.length - 1].masked).toBe(true)
+  })
+
+  it('types for the taker down the person’s door and refuses everybody else', async () => {
+    const { seam, cast, first } = await handedOver()
+    await cast.take('phone')
+    cast.ack('phone', first.frames[0].seq)
+    seam.emitFrame({ width: 800, height: 600 })
+    const seq = first.frames[first.frames.length - 1].seq
+
+    const typed = await cast.input('phone', { t: 'browser.input', window: '', seq, paste: 'hunter2' })
+    expect(typed.ok).toBe(true)
+    const insert = seam.sent.filter((s) => s.method === 'Input.insertText')
+    expect(insert).toHaveLength(1)
+    expect(insert[0].door).toBe('person')
+
+    // The other watcher of the same page is still the wrong person, and gets the
+    // sentence it always got. Nothing reaches the page.
+    const refused = await cast.input('laptop', { t: 'browser.input', window: '', seq: 1, mouse: { type: 'down', x: 10, y: 10 } })
+    expect(refused.ok).toBe(false)
+    expect(refused.reason).toContain('the person has this page right now')
+    expect(seam.sent.filter((s) => s.method === 'Input.dispatchMouseEvent')).toHaveLength(0)
+  })
+
+  it('leaves the agent refused for the whole of it, reads and writes alike', async () => {
+    /*
+     * The rule that must not bend, from the cast's side. `FakeSeam.send` throws
+     * whenever the baton is `human`, which is what `screenCommand` does, so every
+     * command the cast tries down the *agent's* door while a person holds the page
+     * fails — before, during and after somebody has taken it. The taker changed
+     * who may type, never who may drive.
+     */
+    const { seam, cast, first } = await handedOver()
+    await expect(seam.send('Page.captureScreenshot', {})).rejects.toThrow()
+    await cast.take('phone')
+    await expect(seam.send('Page.captureScreenshot', {})).rejects.toThrow()
+    await expect(seam.send('Runtime.evaluate', {})).rejects.toThrow()
+
+    // And nothing the cast itself did on the person's behalf went that way. From
+    // the moment the baton flipped, every command it sent — the restart, the
+    // acks, the keystrokes — rode the person's door; the agent's carried nothing.
+    const flip = seam.sent.length
+    cast.ack('phone', first.frames[0].seq)
+    seam.emitFrame({ width: 800, height: 600 })
+    await cast.input('phone', {
+      t: 'browser.input',
+      window: '',
+      seq: first.frames[first.frames.length - 1].seq,
+      paste: 'hunter2',
+    })
+    const since = seam.sent.slice(flip)
+    expect(since.length).toBeGreaterThan(0)
+    expect(since.filter((sent) => sent.door === 'agent')).toEqual([])
+  })
+
+  it('refuses a take from a connection that is not watching, and a second taker', async () => {
+    const { cast } = await handedOver()
+    const stranger = await cast.take('nobody')
+    expect(stranger.ok).toBe(false)
+    expect(stranger.reason).toContain('not being watched')
+
+    expect(await cast.take('phone')).toEqual({ ok: true })
+    const second = await cast.take('laptop')
+    expect(second.ok).toBe(false)
+    expect(second.reason).toContain('somebody else')
+    // The first one still holds it: a refused second take changes nothing.
+    expect(cast.isTaker('phone')).toBe(true)
+    // And the holder tapping its own button again is not an error.
+    expect(await cast.take('phone')).toEqual({ ok: true })
+  })
+
+  it('re-curtains when the taker’s socket drops, and does not leave the page open', async () => {
+    /*
+     * The failure this closes: a phone that went into a tunnel mid-password. The
+     * taker is gone, the baton is still `human`, and without this the cast would
+     * be left unmasked for whoever watches next.
+     */
+    const { seam, cast, first, second } = await handedOver()
+    await cast.take('phone')
+    cast.ack('laptop', second.frames[0].seq)
+    const before = second.frames.length
+
+    await cast.unwatch('phone')
+    expect(cast.takerId).toBeNull()
+    // The stream is stopped again, through the door that is open while the baton
+    // is still the person's.
+    const stops = seam.sent.filter((s) => s.method === 'Page.stopScreencast')
+    expect(stops[stops.length - 1].door).toBe('person')
+    // And the watcher left behind is drawn its lock card again rather than being
+    // handed the next live frame.
+    expect(second.frames.length).toBeGreaterThan(before)
+    expect(second.frames[second.frames.length - 1].masked).toBe(true)
+
+    cast.ack('laptop', second.frames[second.frames.length - 1].seq)
+    seam.emitFrame({ width: 800, height: 600 })
+    for (const frame of second.frames) expect(frame.data).toBe('')
+    // The frames the taker was sent stopped with it.
+    expect(first.frames[first.frames.length - 1].data).toBe('')
+  })
+
+  it('draws the question for a watcher that arrives after the curtain fell', async () => {
+    /*
+     * A phone that reconnected, or one that rotated — a renegotiation is a second
+     * `browser.watch`. Without this it would sit on a blank canvas: `curtain()`
+     * drew its lock cards to the watchers that existed then, and no screencast is
+     * running to produce another.
+     */
+    const { cast } = await handedOver('Type the code from your phone.')
+    const late = collector()
+    await cast.watch('newcomer', '', { maxWidth: 800, quality: 50 }, late.emit)
+    expect(late.frames).toHaveLength(1)
+    expect(late.frames[0].masked).toBe(true)
+    expect(late.frames[0].prompt).toContain('Type the code')
+  })
+
+  it('does not draw a lock card over the taker when it renegotiates', async () => {
+    // The same path, for the one watcher that must not be curtained by it:
+    // turning the phone sideways must not take the password field away mid-word.
+    const { cast, first } = await handedOver()
+    await cast.take('phone')
+    const before = first.frames.length
+    const rotated = collector()
+    await cast.watch('phone', '', { maxWidth: 390, quality: 50 }, rotated.emit)
+    expect(rotated.frames).toHaveLength(0)
+    expect(first.frames).toHaveLength(before)
+    expect(cast.isTaker('phone')).toBe(true)
+  })
+
+  it('clears the taker when the page is handed back', async () => {
+    const { seam, cast, first } = await handedOver()
+    await cast.take('phone')
+    // The driver's order: release the hands, then move the baton, then uncurtain.
+    await cast.untake()
+    expect(cast.takerId).toBeNull()
+    seam.human = false
+    await cast.uncurtain()
+    expect(cast.takerId).toBeNull()
+
+    // Back to the ordinary agent-side cast: the restart goes down the agent's
+    // door, because with no taker that is the door the view rides.
+    const restart = seam.sent.filter((s) => s.method === 'Page.startScreencast')
+    expect(restart[restart.length - 1].door).toBe('agent')
+    cast.ack('phone', first.frames[first.frames.length - 1].seq)
+    seam.emitFrame({ width: 800, height: 600 })
+    expect(first.frames[first.frames.length - 1].masked).toBeUndefined()
+
+    // And the ex-taker's keystrokes are ordinary watcher input again — the
+    // agent's door, which is the one that is open now.
+    const typed = await cast.input('phone', {
+      t: 'browser.input',
+      window: '',
+      seq: first.frames[first.frames.length - 1].seq,
+      paste: 'ordinary',
+    })
+    expect(typed.ok).toBe(true)
+    const insert = seam.sent.filter((s) => s.method === 'Input.insertText')
+    expect(insert[insert.length - 1].door).toBe('agent')
   })
 })

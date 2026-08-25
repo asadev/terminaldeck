@@ -22,6 +22,16 @@ import {
  * the driver sends. A test drives a fake seam and a scripted `Page.screencastFrame`
  * event; there is no real Chromium and no debugger anywhere near it.
  *
+ * There is a **second** screened seam beside that one, and it is the inverse of
+ * it rather than a way around it: {@link CastSeam.sendAsPerson}, screened by
+ * `screenPersonCommand`, which refuses everything *unless* `state === 'human'`
+ * and permits only the four `Input.*` dispatches and the three screencast
+ * commands. It carries exactly two things — the taps of the one watcher holding a
+ * handover ({@link PageCast.take}), and this cast's own view commands while that
+ * watcher holds it. The agent's refusal is untouched by its existence; see
+ * `browser-cdp.ts` for why a flag on the first door would have been the wrong
+ * shape.
+ *
  * ## The three guarantees, source-side
  *
  *  1. **Backpressure is one un-acked frame per watcher.** The host forwards a
@@ -33,7 +43,9 @@ import {
  *     current frames, never a queue.
  *  2. **A secret never crosses.** Two brakes stack, both here at the source. A
  *     handover (the person taking the baton to type a password) stops the cast
- *     before the baton flips and curtains every watcher of that page. A secret
+ *     before the baton flips and curtains every watcher of that page — every
+ *     watcher **except the one who said the person is me**, which is the taker
+ *     and is the whole of {@link PageCast.take}. A secret
  *     field merely *visible* — an autofilled dots box, a "show password" toggle,
  *     an OTP on screen — is caught by cheap arithmetic over the frame's own
  *     scroll metadata against the cached secret rectangles, and that frame's data
@@ -57,6 +69,24 @@ export interface CastSeam {
    * if the person holds the page. A cast never reaches a raw transport.
    */
   send(method: string, params: Record<string, unknown>): Promise<Record<string, unknown>>
+  /**
+   * Send one command **as the person holding the page**, screened by the other
+   * door.
+   *
+   * The sibling of {@link send} and the inverse of it: `send` is screened by
+   * `screenCommand`, which refuses everything while `state === 'human'`;
+   * this is screened by `screenPersonCommand`, which refuses everything *unless*
+   * `state === 'human'` and permits only the four `Input.*` dispatches and the
+   * three screencast commands. Neither is a flag on the other — see
+   * `browser-cdp.ts` for why a bypass flag would have turned the baton refusal
+   * from a mechanism back into a policy.
+   *
+   * Used for exactly two things: the taps and keystrokes of the one watcher
+   * holding a handover, and the cast's own screencast commands while that
+   * watcher holds it (`curtain()` stopped the stream, and a person who cannot
+   * see the page cannot fill in the form on it).
+   */
+  sendAsPerson(method: string, params: Record<string, unknown>): Promise<Record<string, unknown>>
   /** Subscribe to the page's CDP events; the returned function unsubscribes. */
   onEvent(handler: (method: string, params: Record<string, unknown>) => void): () => void
   /**
@@ -90,6 +120,17 @@ export type CastFrame = Omit<BrowserFrameFrame, 't'>
 
 /** How a page's frame is emitted to one watcher. */
 type EmitFrame = (frame: CastFrame) => void
+
+/**
+ * The door one input event goes out through.
+ *
+ * Passed down to each dispatch rather than read off the seam inside them,
+ * because which door an event uses is decided once, at the top of
+ * {@link PageCast.input}, from a fact about *who sent it* — and a dispatch that
+ * reached for a door itself would be a fifth place that has to get that
+ * question right.
+ */
+type Dispatch = (method: string, params: Record<string, unknown>) => Promise<Record<string, unknown>>
 
 /** The geometry a watcher needs to remember so it can map a later gesture. */
 interface FrameGeometry {
@@ -199,6 +240,35 @@ export class PageCast {
   /** The person has the page: the whole cast is curtained. */
   private curtained = false
   private curtainPrompt = ''
+  /**
+   * The one watcher who answered the handover, or null.
+   *
+   * ## Why a curtain needs a hole in it, and why the hole is one watcher wide
+   *
+   * The curtain above was written for a desktop, where the person the copilot is
+   * asking for is already holding the mouse: the pixels stop, every watcher sees
+   * a lock card, and the person types on the real screen. On a phone that is the
+   * wrong shape end to end — the watcher **is** the person being asked, and what
+   * the curtain hands them is the agent's sentence with the pixels removed and
+   * the keyboard refused. *"The person has this page right now"*, said to the
+   * person.
+   *
+   * So one watcher may step through: the one that sent `browser.handover.take`.
+   * For that watcher and no other, {@link maskFor} returns null — including over
+   * a secret rectangle, because filling in the password field is the entire
+   * reason they were asked — and {@link input} dispatches down the person's door
+   * rather than the agent's.
+   *
+   * What it deliberately does **not** do is move the baton. The slot stays
+   * `human` for as long as this is set, so `screenCommand` goes on refusing the
+   * agent every read and every write exactly as it does today. The taker is a
+   * second, narrower door beside that refusal, never a weakening of it.
+   *
+   * Null again the moment the page is handed back or the taker's socket drops —
+   * see {@link untake}. A taker left behind by a phone that went into a tunnel
+   * would be an unmasked cast waiting for whoever reconnects onto that id.
+   */
+  private taker: string | null = null
   private disposed = false
 
   constructor(private readonly seam: CastSeam) {}
@@ -230,17 +300,46 @@ export class PageCast {
     }
     this.options = options
     await this.ensureStarted(options)
+    /*
+     * A viewer that arrived while the person holds the page.
+     *
+     * Two ways to get here and both are ordinary on a phone: a socket that
+     * dropped and came back mid-handover, and a viewer *renegotiating* — a phone
+     * that rotated, which is a second `browser.watch` on the same window. Without
+     * this they would sit on a blank canvas with no sentence on it, because
+     * `curtain()` drew its lock cards once, to the watchers that existed then,
+     * and `startScreencast` above returned early rather than producing a frame.
+     *
+     * The taker is skipped: they are being shown the real page, and drawing a
+     * lock card over it because they turned their phone sideways would take the
+     * password field away mid-word.
+     */
+    if (this.curtained && watcherId !== this.taker) {
+      const watcher = this.watchers.get(watcherId)
+      if (watcher) this.drawCurtain(watcher)
+    }
   }
 
-  /** Drop one watcher; stop the screencast when the last one leaves. */
+  /**
+   * Drop one watcher; stop the screencast when the last one leaves.
+   *
+   * A taker that leaves this way — the socket closed, the app went into a tunnel
+   * — hands the page back to nobody: {@link untake} puts the curtain over the
+   * whole cast again before the watcher is forgotten, so the next connection to
+   * watch this window finds a curtained page rather than a live view of a
+   * half-filled login form.
+   */
   async unwatch(watcherId: string): Promise<void> {
-    if (!this.watchers.delete(watcherId)) return
+    if (!this.watchers.has(watcherId)) return
+    if (watcherId === this.taker) await this.untake()
+    this.watchers.delete(watcherId)
     if (this.watchers.size === 0) await this.stop()
   }
 
   /** Drop every watcher and stop — a page going away, or the cast being torn down. */
   async dispose(): Promise<void> {
     this.disposed = true
+    this.taker = null
     this.watchers.clear()
     await this.stop()
   }
@@ -257,8 +356,31 @@ export class PageCast {
     void this.refreshSecrets()
   }
 
+  /**
+   * The door this cast's own screencast commands ride.
+   *
+   * `Page.startScreencast`, `Page.stopScreencast` and `Page.screencastFrameAck`
+   * are not the agent's and they are not the person's — they are the *view*, and
+   * which door the view goes through is a fact about who is holding the page.
+   * With no taker the cast is running on the agent's behalf and rides the agent's
+   * screened send, refused during a handover exactly as it is today. With a
+   * taker it is running on the person's behalf and rides the person's door,
+   * which permits those three and refuses them the moment the baton comes back.
+   *
+   * Not a bypass: neither door is widened by the other's existence, and a
+   * command outside both lists is refused by whichever one it was handed to.
+   */
+  private castSend(method: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.taker === null
+      ? this.seam.send(method, params)
+      : this.seam.sendAsPerson(method, params)
+  }
+
   private async startScreencast(options: CastOptions): Promise<void> {
-    if (this.curtained) return
+    // Curtained and nobody has taken it: there is nothing to stream and the
+    // agent's door would refuse the start anyway. A taker is the exception the
+    // whole handover path exists for — the pixels have to reach the hands.
+    if (this.curtained && this.taker === null) return
     const params: Record<string, unknown> = {
       format: 'jpeg',
       quality: options.quality,
@@ -266,7 +388,7 @@ export class PageCast {
     }
     if (options.everyNth !== undefined) params.everyNthFrame = options.everyNth
     try {
-      await this.seam.send('Page.startScreencast', params)
+      await this.castSend('Page.startScreencast', params)
       this.started = true
     } catch {
       // Refused (the person may have just taken the page) or the page is gone.
@@ -283,7 +405,7 @@ export class PageCast {
     this.pending = null
     if (this.started) {
       this.started = false
-      await this.seam.send('Page.stopScreencast', {}).catch(() => undefined)
+      await this.castSend('Page.stopScreencast', {}).catch(() => undefined)
     }
   }
 
@@ -302,9 +424,15 @@ export class PageCast {
     this.pending = null
     if (this.started) {
       this.started = false
-      await this.seam.send('Page.stopScreencast', {}).catch(() => undefined)
+      await this.castSend('Page.stopScreencast', {}).catch(() => undefined)
     }
-    for (const watcher of this.watchers.values()) this.drawCurtain(watcher)
+    // Every watcher except the one who is answering the question. A taker is
+    // being shown the page on purpose; drawing a lock card over it would be the
+    // curtain closing on the person it was raised for.
+    for (const watcher of this.watchers.values()) {
+      if (watcher.id === this.taker) continue
+      this.drawCurtain(watcher)
+    }
   }
 
   /** The person handed the page back: restart the screencast and re-scan secrets. */
@@ -312,10 +440,97 @@ export class PageCast {
     if (!this.curtained) return
     this.curtained = false
     this.curtainPrompt = ''
+    // Cleared with the curtain, always. Uncurtaining means the baton has gone
+    // back to the agent, and a taker left set past that point would be a watcher
+    // still holding the person's door open onto a page the agent is driving.
+    this.taker = null
     this.secretDocRects = null
     if (this.options && this.watchers.size > 0) {
       await this.startScreencast(this.options)
       void this.refreshSecrets()
+    }
+  }
+
+  /* -------------------------------------------------------- the handover -- */
+
+  /** The watcher holding this page's handover, or null. */
+  get takerId(): string | null {
+    return this.taker
+  }
+
+  /** Is this watcher the one holding it? */
+  isTaker(watcherId: string): boolean {
+    return this.taker !== null && this.taker === watcherId
+  }
+
+  /**
+   * *That person is you? That person is me.*
+   *
+   * One watcher steps through the curtain: its frames stop being masked and its
+   * taps start being dispatched down the person's door. Everything else about
+   * the handover is untouched — the slot stays `human`, the agent stays refused
+   * at the mechanism for reads and writes both, and every other watcher stays
+   * curtained.
+   *
+   * Refused for a connection this cast does not know (you cannot take a page you
+   * are not being shown) and for a second connection when one already holds it:
+   * two people typing into one password field is not a state worth having, which
+   * is the same argument `browser-driver.ts` makes for allowing one outstanding
+   * handover at a time.
+   *
+   * Restarting the screencast is the load-bearing half. `curtain()` stopped it at
+   * the source before the baton flipped, so at this moment there is no stream at
+   * all; without the restart the taker would hold a live keyboard over a frozen
+   * lock card. It goes out through the person's door, which is the only one open
+   * while the slot is `human` — see {@link castSend}.
+   *
+   * Idempotent for the watcher that already holds it: a second tap on the same
+   * button re-asserts the same state rather than being an error, and re-tries the
+   * screencast start if the first one did not take.
+   */
+  async take(watcherId: string): Promise<{ ok: boolean; reason?: string }> {
+    if (this.disposed) return { ok: false, reason: 'that page is not being watched any more' }
+    if (!this.watchers.has(watcherId)) {
+      return { ok: false, reason: 'that window is not being watched on this connection' }
+    }
+    if (this.taker !== null && this.taker !== watcherId) {
+      return { ok: false, reason: 'somebody else is already filling this in' }
+    }
+    this.taker = watcherId
+    if (this.options && !this.started) await this.startScreencast(this.options)
+    return { ok: true }
+  }
+
+  /**
+   * The taker let go — handed the page back, or its socket dropped.
+   *
+   * Puts the curtain back over the whole cast: the stream stops and every
+   * watcher, the ex-taker included while it is still here, gets a lock card
+   * again. That is the right end state for **both** ways of arriving:
+   *
+   *  - A **disconnect** leaves the page in the person's hands with nobody in
+   *    them, and the next watcher of this window must find it masked. A taker
+   *    left behind by a phone that went into a tunnel would be a live view of a
+   *    half-filled login form waiting for whoever reconnects.
+   *  - A **hand-back** is followed immediately by the driver's `resume`, which
+   *    either lifts the curtain for everybody ({@link uncurtain}) or ends the
+   *    drive. Re-curtaining first costs one frame and means there is no instant
+   *    in between where the page is unmasked and unowned.
+   *
+   * The stop is sent **before** the taker is cleared, so it still goes through
+   * the person's door — the baton is `human` until the driver moves it, and the
+   * agent's door would refuse a `Page.stopScreencast` at this moment.
+   */
+  async untake(): Promise<void> {
+    if (this.taker === null) return
+    if (this.started) {
+      this.started = false
+      await this.castSend('Page.stopScreencast', {}).catch(() => undefined)
+    }
+    this.taker = null
+    this.pending = null
+    if (this.curtained) {
+      for (const watcher of this.watchers.values()) this.drawCurtain(watcher)
     }
   }
 
@@ -347,20 +562,35 @@ export class PageCast {
    * what you cannot see), or when the page could not be measured. The dispatch
    * itself rides the driver's screened send, so the baton refuses it during a
    * handover as it refuses every other command.
+   *
+   * ## The one watcher that is not refused during a handover
+   *
+   * The taker. It is not an exception to the rule above so much as the other
+   * side of it: the sentence *"the person has this page right now"* is true, and
+   * the taker **is** that person. Its events go out through
+   * {@link CastSeam.sendAsPerson} — a different function, a different allow-list,
+   * and a condition that is the exact inverse of the agent's — so nothing about
+   * this widens what the agent may send. If the baton has meanwhile gone back,
+   * that door refuses on its own, which is what catches the last keystroke still
+   * in flight when somebody presses Done.
    */
   async input(watcherId: string, frame: BrowserInputFrame): Promise<{ ok: boolean; reason?: string }> {
     const watcher = this.watchers.get(watcherId)
     if (!watcher) return { ok: false, reason: 'that window is not being watched on this connection' }
-    if (this.curtained || this.seam.isHuman()) {
+    const mine = this.isTaker(watcherId)
+    if (!mine && (this.curtained || this.seam.isHuman())) {
       return { ok: false, reason: 'the person has this page right now' }
     }
+    const send: Dispatch = mine
+      ? (method, params) => this.seam.sendAsPerson(method, params)
+      : (method, params) => this.seam.send(method, params)
     // The frame the coordinates were measured against, by its seq — never the
     // viewer's own idea of the scale.
     const geom = watcher.geometry.find((g) => g.seq === frame.seq) ?? watcher.geometry[watcher.geometry.length - 1]
-    if (frame.mouse) return this.dispatchMouse(geom, frame.mouse)
-    if (frame.touch) return this.dispatchTouch(geom, frame.touch)
-    if (frame.key) return this.dispatchKey(frame.key)
-    if (frame.paste !== undefined) return this.dispatchPaste(frame.paste)
+    if (frame.mouse) return this.dispatchMouse(send, geom, frame.mouse)
+    if (frame.touch) return this.dispatchTouch(send, geom, frame.touch)
+    if (frame.key) return this.dispatchKey(send, frame.key)
+    if (frame.paste !== undefined) return this.dispatchPaste(send, frame.paste)
     return { ok: false, reason: 'an input names no mouse, key, touch or paste' }
   }
 
@@ -454,7 +684,7 @@ export class PageCast {
       return
     }
     const seq = (watcher.seq += 1)
-    const masked = this.maskFor(frame)
+    const masked = this.maskFor(frame, watcher)
     const out: CastFrame = masked
       ? {
           ...frame,
@@ -498,13 +728,30 @@ export class PageCast {
   }
 
   /**
-   * Should this frame be masked, and under what sentence?
+   * Should this frame be masked **for this watcher**, and under what sentence?
    *
    * Returns null when the frame may cross with its pixels, or an object naming
    * the curtain sentence when it may not. The handover curtain wins first; a
    * secret field visible in the frame's own viewport wins second.
+   *
+   * ## Why the answer is per watcher and not per frame
+   *
+   * It used to be per frame, which was right while a masked page was masked for
+   * everybody. It is not any more: the taker is one connection among several
+   * looking at one page, and *whether I may see this* is a fact about who is
+   * asking. One frame therefore leaves here twice — with pixels to the person
+   * filling in the form, empty to everyone else — which is exactly the shape
+   * `BrowserHandoverStateFrame.mine` describes on the wire for the same reason.
+   *
+   * The taker skips the **secret-rect** brake as well as the curtain, and that
+   * is deliberate rather than an oversight in the ordering. They were handed this
+   * page to type a password into it; a lock card over the password field would
+   * hide the one thing they are here to do. Nobody else's frames change, and
+   * outside a handover there is no taker at all, so the secret mask is exactly
+   * what it was for every ordinary watcher.
    */
-  private maskFor(frame: CastFrame): { prompt?: string } | null {
+  private maskFor(frame: CastFrame, watcher: Watcher): { prompt?: string } | null {
+    if (this.isTaker(watcher.id)) return null
     if (this.curtained || this.seam.isHuman()) return { prompt: this.curtainPrompt || SECRET_PROMPT }
     if (this.secretVisible(frame)) return { prompt: SECRET_PROMPT }
     return null
@@ -569,8 +816,14 @@ export class PageCast {
     if (!this.curtained && this.watchers.size > 0) await this.startScreencast(this.options)
   }
 
+  /*
+   * Through {@link castSend}, because this is the backpressure and the
+   * backpressure is what makes a stream a stream. CDP produces the next frame
+   * only after this ack, so an ack refused during a handover would leave the
+   * taker looking at exactly one frame of the page they were asked to fill in.
+   */
   private ackCdp(sessionId: number): void {
-    void this.seam.send('Page.screencastFrameAck', { sessionId }).catch(() => undefined)
+    void this.castSend('Page.screencastFrameAck', { sessionId }).catch(() => undefined)
   }
 
   private readMetadata(value: unknown): ScreencastMetadata | null {
@@ -604,6 +857,7 @@ export class PageCast {
   }
 
   private async dispatchMouse(
+    send: Dispatch,
     geom: FrameGeometry | undefined,
     mouse: NonNullable<BrowserInputFrame['mouse']>,
   ): Promise<{ ok: boolean; reason?: string }> {
@@ -612,7 +866,7 @@ export class PageCast {
     }
     const { x, y } = this.mapPoint(geom, mouse.x, mouse.y)
     if (mouse.type === 'wheel') {
-      await this.seam.send('Input.dispatchMouseEvent', {
+      await send('Input.dispatchMouseEvent', {
         type: 'mouseWheel',
         x,
         y,
@@ -629,11 +883,12 @@ export class PageCast {
     } else if (mouse.button && mouse.button !== 'none') {
       params.button = mouse.button
     }
-    await this.seam.send('Input.dispatchMouseEvent', params)
+    await send('Input.dispatchMouseEvent', params)
     return { ok: true }
   }
 
   private async dispatchTouch(
+    send: Dispatch,
     geom: FrameGeometry | undefined,
     touch: NonNullable<BrowserInputFrame['touch']>,
   ): Promise<{ ok: boolean; reason?: string }> {
@@ -652,11 +907,62 @@ export class PageCast {
     if (touchPoints.some((point) => !Number.isFinite(point.x) || !Number.isFinite(point.y))) {
       return { ok: false, reason: 'a touch coordinate must be a real number' }
     }
-    await this.seam.send('Input.dispatchTouchEvent', { type, touchPoints })
+    await send('Input.dispatchTouchEvent', { type, touchPoints })
     return { ok: true }
   }
 
+  /**
+   * One key, as Chromium's input pipeline needs it rather than as the wire
+   * spells it.
+   *
+   * ## Why a virtual key code has to be here
+   *
+   * This used to send `key`, `code`, `text` and `modifiers` and nothing else,
+   * and the result was a keyboard that could type and could not edit. Measured
+   * on a real page over the relay: `hello` typed into a search box stayed
+   * `hello` after Backspace, and six ArrowDowns scrolled nothing.
+   *
+   * The reason is not obvious and is worth writing down. Chromium hands a key
+   * event with no `windowsVirtualKeyCode` to the **page's JavaScript** — which is
+   * why a site's own Return handler fires and a search submits — but performs
+   * none of its **own** default handling: no character deletion, no caret
+   * movement, no focus traversal, no scroll. Those are the browser's behaviours
+   * and it looks them up by virtual key code. So a key with no code is a key the
+   * page can hear and the browser will not act on, which is exactly the half
+   * that was missing.
+   *
+   * ## The table is small on purpose
+   *
+   * Only the keys that have no character of their own, because every key that
+   * *does* already works: `text` reaches the page as a `char` event and inserts
+   * itself. Adding the printable range would be forty entries that change
+   * nothing and one more place for `A` and `a` to disagree.
+   *
+   * A key this table does not know is still sent, without a code — the same
+   * event as before, which the page can still hear. Silence would be worse: a
+   * media key or a function key nobody listed would stop reaching a page that
+   * had bound it.
+   */
+  private static readonly VIRTUAL_KEYS: Readonly<Record<string, number>> = {
+    Backspace: 8,
+    Tab: 9,
+    Enter: 13,
+    Escape: 27,
+    ' ': 32,
+    PageUp: 33,
+    PageDown: 34,
+    End: 35,
+    Home: 36,
+    ArrowLeft: 37,
+    ArrowUp: 38,
+    ArrowRight: 39,
+    ArrowDown: 40,
+    Insert: 45,
+    Delete: 46,
+  }
+
   private async dispatchKey(
+    send: Dispatch,
     key: NonNullable<BrowserInputFrame['key']>,
   ): Promise<{ ok: boolean; reason?: string }> {
     const type = key.type === 'down' ? 'rawKeyDown' : key.type === 'up' ? 'keyUp' : 'char'
@@ -665,12 +971,28 @@ export class PageCast {
     if (key.code !== undefined) params.code = key.code
     if (key.text !== undefined) params.text = key.text
     if (key.mods !== undefined) params.modifiers = key.mods
-    await this.seam.send('Input.dispatchKeyEvent', params)
+    /*
+     * By `key` first and `code` second, because they answer different questions
+     * and only the first is the one being asked. `key` is what the keystroke
+     * *means* — `Backspace`, `ArrowDown` — and `code` is which physical key was
+     * pressed. A client that sent only a `code` still gets the right behaviour
+     * for the keys in the table, since for these two the spellings coincide.
+     */
+    const virtual =
+      PageCast.VIRTUAL_KEYS[key.key ?? ''] ?? PageCast.VIRTUAL_KEYS[key.code ?? '']
+    if (virtual !== undefined) {
+      params.windowsVirtualKeyCode = virtual
+      // The two Chromium reads on other platforms, set together so a build that
+      // is not Windows behaves the same. `nativeVirtualKeyCode` is the one macOS
+      // and Linux consult.
+      params.nativeVirtualKeyCode = virtual
+    }
+    await send('Input.dispatchKeyEvent', params)
     return { ok: true }
   }
 
-  private async dispatchPaste(text: string): Promise<{ ok: boolean; reason?: string }> {
-    await this.seam.send('Input.insertText', { text })
+  private async dispatchPaste(send: Dispatch, text: string): Promise<{ ok: boolean; reason?: string }> {
+    await send('Input.insertText', { text })
     return { ok: true }
   }
 }

@@ -200,10 +200,26 @@ final class KeyBarUITests: XCTestCase {
 
     // MARK: - Helpers
 
+    /**
+     * Raise the keyboard the only way there is now: by tapping the terminal.
+     *
+     * There was a keyboard button in the navigation bar and it was deleted at his
+     * word — *"we don't need keyboard button also, even in terminal pages, even
+     * on copilot pages, because when we click inside the chat keyboard comes
+     * anyway."* The tap was always the primary way in and the button was the
+     * second one: SwiftTerm's own tap recogniser is what makes the view first
+     * responder, and `TerminalGestures` installs its own alongside that one
+     * rather than in place of it, which is why this still works with the button
+     * gone.
+     *
+     * A tap is not a toggle, which makes this simpler than it was: the guard is
+     * about not raising a keyboard that is already up, not about not putting one
+     * back down.
+     */
     private func raiseTheKeyboard() {
-        let keyboard = app.buttons["terminal.keyboard"]
-        XCTAssertTrue(keyboard.waitForExistence(timeout: 20), "the terminal toolbar should be up")
-        if !app.buttons["keys.dismiss"].exists { keyboard.tap() }
+        let terminal = app.descendants(matching: .any).matching(identifier: "terminal.view").firstMatch
+        XCTAssertTrue(terminal.waitForExistence(timeout: 20), "the terminal screen should be up")
+        if !app.buttons["keys.dismiss"].exists { terminal.tap() }
         // The QuickPath tutorial is put up by the system keyboard the first time
         // it appears on a fresh simulator, and it sits over the bar. Nothing to
         // do with this app; dismissed the way a person would.

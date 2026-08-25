@@ -171,50 +171,42 @@ final class ScreenWalkUITests: XCTestCase {
 
         let more = app.buttons["browser.more"]
 
-        // 6. Localhost, folded off the home, and the two of this phone's own
-        //    browser screens that came down here with it.
-        if app.openLocalhostList() {
-            capture("07-localhost")
-            let localhostMore = app.buttons["localhost.more"]
-            if localhostMore.waitForExistence(timeout: 5) {
-                localhostMore.tap()
-                let history = app.descendants(matching: .any)
-                    .matching(identifier: "browser.history").firstMatch
-                if history.waitForExistence(timeout: 5) {
-                    history.tap()
-                    capture("08-history")
-                    if app.buttons.matching(identifier: "history.done").firstMatch.exists {
-                        app.buttons.matching(identifier: "history.done").firstMatch.tap()
-                    } else {
-                        app.swipeDown()
-                    }
-                } else {
-                    app.dismissAnyMenu()
-                }
-                if localhostMore.waitForExistence(timeout: 5) {
-                    localhostMore.tap()
-                    let data = app.descendants(matching: .any)
-                        .matching(identifier: "browser.data").firstMatch
-                    if data.waitForExistence(timeout: 5) {
-                        data.tap()
-                        capture("09-site-data")
-                        app.navigationBars.buttons.firstMatch.tap()
-                    } else {
-                        app.dismissAnyMenu()
-                    }
-                }
-                if localhostMore.waitForExistence(timeout: 5) {
-                    localhostMore.tap()
-                    let logins = app.descendants(matching: .any)
-                        .matching(identifier: "browser.logins").firstMatch
-                    if logins.waitForExistence(timeout: 4) {
-                        logins.tap()
-                        capture("10-saved-logins")
-                        app.navigationBars.buttons.firstMatch.tap()
-                    } else {
-                        app.dismissAnyMenu()
-                    }
-                }
+        /*
+         * 6. The New Window sheet, which is where the ports went.
+         *
+         * > *"I wanted it to be like one page where I can start a new window…
+         * > even the localhost thing should be folded somewhere else."*
+         *
+         * There is no `localhost.more` any more and no second screen to walk to:
+         * an address, a destination, and the machine's own ports as suggestions
+         * under it, all inside the act of opening a window. Photographed and
+         * cancelled — opening one would put a real window on his real server.
+         */
+        if app.buttons["browser.new"].waitForExistence(timeout: 8) {
+            app.buttons["browser.new"].tap()
+            _ = app.buttons["browser.open.cancel"].waitForExistence(timeout: 6)
+            capture("07-new-window-and-the-ports")
+            let cancel = app.buttons["browser.open.cancel"].firstMatch
+            if cancel.exists && cancel.isHittable { cancel.tap() } else { app.dismissAnyMenu() }
+        }
+
+        // 7. This phone's own browser screens, on the home's menu where they
+        //    have always been.
+        for (id, name) in [("browser.history", "08-history"),
+                           ("browser.data", "09-site-data"),
+                           ("browser.logins", "10-saved-logins")] {
+            guard more.waitForExistence(timeout: 5) else { break }
+            more.tap()
+            let row = app.descendants(matching: .any).matching(identifier: id).firstMatch
+            guard row.waitForExistence(timeout: 4) else { app.dismissAnyMenu(); continue }
+            row.tap()
+            _ = app.navigationBars.firstMatch.waitForExistence(timeout: 6)
+            capture(name)
+            let done = app.buttons.matching(identifier: "history.done").firstMatch
+            if done.exists && done.isHittable {
+                done.tap()
+            } else {
+                app.navigationBars.buttons.firstMatch.tap()
             }
         }
 

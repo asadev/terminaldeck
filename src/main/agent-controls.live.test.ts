@@ -134,7 +134,7 @@ describe('turning fast mode on', () => {
      * been asked for.
      */
     const already = capture.shots.bootFastOn
-    const access = scripted([already, already, echoOf('/fast on'), already])
+    const access = scripted([already, already, already, echoOf('/fast on'), already])
     const answer = await applyControl(
       access,
       { sessionId: 's', control: 'fast', value: 'on', provider: 'claude' },
@@ -146,7 +146,7 @@ describe('turning fast mode on', () => {
 
   it('still sends the command through the echo-then-return protocol', async () => {
     const already = capture.shots.bootFastOn
-    const access = scripted([already, already, echoOf('/fast on'), already])
+    const access = scripted([already, already, already, echoOf('/fast on'), already])
     await applyControl(access, { sessionId: 's', control: 'fast', value: 'on', provider: 'claude' }, FAST_TIMINGS)
     // The command, then the return, in that order and never glued together —
     // the separation is what stops a stray `\r` answering somebody's dialog.

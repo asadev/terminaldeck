@@ -249,6 +249,104 @@ final class ParityWireTests: XCTestCase {
         XCTAssertEqual(frame.prompt, "typing a password")
     }
 
+    /**
+     * The curtain is read the opposite way round from a grant, and this is the
+     * case that says why.
+     *
+     * Every other hardened boolean on this wire uses `literalTrue`, because
+     * there the dangerous mistake is believing a permission nobody gave. `masked`
+     * is a protection: `true` is the protection being **on**, so the dangerous
+     * mistake is failing to believe it. `literalTrue` here would read
+     * `{"masked":1}` as *not curtained* — and a frame that is not curtained is
+     * one `WatchSurfaceUIView` dispatches taps and keystrokes against, because
+     * every gesture guard is written `!frame.masked`. So: curtained unless the
+     * host said, in a real boolean, that it is not.
+     */
+    func testTheCurtainIsOnUnlessTheHostSaidOtherwiseInARealBoolean() {
+        func frame(_ maskedField: String, data: String = #""""#) -> BrowserFrame? {
+            let json = """
+            {"t":"browser.frame","window":"","seq":4,"w":8,"h":6,"dw":4,"dh":3,
+             "scale":2,"offsetTop":0,"pageScale":1,"scrollX":0,"scrollY":0,
+             \(maskedField)"data":\(data)}
+            """
+            guard case let .browserFrame(f) = decoded(json) else { return nil }
+            return f
+        }
+
+        // A numeric 1 is not a boolean, and the safe reading of a curtain flag
+        // that is not a boolean is that the curtain is up.
+        XCTAssertEqual(frame(#""masked":1,"#)?.masked, true)
+        // So is a string, and so is a null.
+        XCTAssertEqual(frame(#""masked":"yes","#)?.masked, true)
+        XCTAssertEqual(frame(#""masked":null,"#)?.masked, true)
+        // Only a real `false` — or the field not being there at all, which is
+        // every ordinary frame — takes it down.
+        XCTAssertEqual(frame(#""masked":false,"#, data: #""aGk=""#)?.masked, false)
+        XCTAssertEqual(frame("", data: #""aGk=""#)?.masked, false)
+    }
+
+    /**
+     * No pixels is a curtain, whatever the flag says.
+     *
+     * The far end enforces the pairing from its side — a masked frame carrying
+     * data is refused outright, because *"a masked frame with pixels in it is a
+     * redaction that leaked."* This is the same invariant read from this end: an
+     * empty frame that claims to be ordinary used to arrive as `masked: false`
+     * with nothing to draw, and every gesture guard keys on `masked` rather than
+     * on the bytes — so touches went to a page nobody could see.
+     */
+    func testAFrameWithNoPixelsIsACurtainEvenIfItSaysItIsNot() {
+        let json = """
+        {"t":"browser.frame","window":"","seq":4,"w":8,"h":6,"dw":4,"dh":3,
+         "scale":2,"offsetTop":0,"pageScale":1,"scrollX":0,"scrollY":0,
+         "masked":false,"data":""}
+        """
+        guard case let .browserFrame(frame) = decoded(json) else { return XCTFail() }
+        XCTAssertTrue(frame.masked)
+        XCTAssertTrue(frame.data.isEmpty)
+    }
+
+    /**
+     * The other half of the sweep: the flags that decide a permission are read
+     * strictly, and the ones that describe something are not.
+     *
+     * `granted` says a folder is already shared with an agent and `canType` says
+     * this phone may draw a composer that types into somebody's running session.
+     * Both would have read `1` as yes. `live`, beside `canType` in the same
+     * object, colours a chip — it stays lenient, and this pins that the line was
+     * drawn deliberately rather than missed.
+     */
+    func testOnlyThePermissionFlagsAreReadStrictly() {
+        let folders = decoded(#"{"t":"folders.entries","path":"/a","entries":[{"name":"n","path":"/a/n","granted":1,"readable":1}]}"#)
+        guard case let .folderEntries(_, _, entries) = folders else { return XCTFail() }
+        XCTAssertEqual(entries.first?.granted, false, "a numeric 1 is not a grant")
+        // `readable` keeps its `?? true` default and its lenient read: it decides
+        // nothing but whether a tap is worth trying, and a strict read would grey
+        // out every row a host does not annotate.
+        XCTAssertEqual(entries.first?.readable, true)
+
+        /*
+         * Through `JSONSerialization`, not a Swift dictionary literal — and that
+         * is not a detail, it is the whole trap. A native Swift `Int` in an
+         * `[String: Any]` does **not** cast to `Bool`, so a hand-built fixture
+         * quietly proves nothing: this assertion passed against the lenient code
+         * on its first run for exactly that reason. Only an `NSNumber`, which is
+         * what a decoded frame actually carries, goes through the ObjC bridge.
+         */
+        let gateJSON = #"{"live":1,"gate":{"canType":1}}"#
+        let object = try! JSONSerialization.jsonObject(with: gateJSON.data(using: .utf8)!)
+        let reading = WireCodec.controlsReading(object)
+        XCTAssertFalse(reading.canType, "a numeric 1 does not open the composer")
+        XCTAssertTrue(reading.live, "the descriptive flag beside it is deliberately lenient")
+
+        // And the credential sheet, where the comment in the codec had promised
+        // this behaviour for longer than the code delivered it: `prompt` is an
+        // instruction to interrupt somebody and ask them for a secret.
+        let ask = decoded(#"{"t":"credential.request","id":"c1","host":"github.com","operation":"read","prompt":1}"#)
+        guard case let .credentialRequest(_, _, _, _, prompt) = ask else { return XCTFail() }
+        XCTAssertFalse(prompt, "a numeric 1 does not raise a credential prompt")
+    }
+
     func testACorruptFrameBodyIsRefusedNotHalfDecoded() {
         // A non-masked frame whose data is not valid base64 is refused here
         // rather than handed half-decoded to the image decoder — the `net.data`
@@ -269,5 +367,98 @@ final class ParityWireTests: XCTestCase {
         let push = decoded(#"{"t":"browser.surfaces.rows","surfaces":[]}"#)
         guard case let .browserSurfaces(pushRid, _) = push else { return XCTFail() }
         XCTAssertNil(pushRid)
+    }
+
+    // MARK: - browser handover
+
+    /**
+     * The two client→host frames of the handover, which are the answer to the
+     * half of his sentence the cast could not give.
+     *
+     * `carryOn` is written and never defaulted: the far end refuses a `done`
+     * without it, because *done, keep going* and *stop, I'll take it from here*
+     * end in two different places and a frame that forgot to say which is one
+     * whose meaning would be invented — and the invented reading is the
+     * destructive one half the time.
+     */
+    func testTheHandoverVerbsEncode() {
+        let take = WireCodec.encode(.browserHandoverTake(rid: "h1", window: "B2"))
+        let t = try! JSONSerialization.jsonObject(with: take.data(using: .utf8)!) as! [String: Any]
+        XCTAssertEqual(t["t"] as? String, "browser.handover.take")
+        XCTAssertEqual(t["window"] as? String, "B2")
+        XCTAssertEqual(t["rid"] as? String, "h1")
+
+        for answer in [true, false] {
+            let done = WireCodec.encode(.browserHandoverDone(rid: "h2", window: "B2", carryOn: answer))
+            let d = try! JSONSerialization.jsonObject(with: done.data(using: .utf8)!) as! [String: Any]
+            XCTAssertEqual(d["t"] as? String, "browser.handover.done")
+            XCTAssertEqual(d["carryOn"] as? Bool, answer)
+        }
+    }
+
+    /// The state frame: an answer when it carries a `rid`, an unsolicited push
+    /// when it does not. Both shapes decode, and `mine` and `taken` come across
+    /// as the two separate facts they are — *do I hold it* and *does anybody*.
+    func testHandoverStateDecodesAsBothAnAnswerAndAPush() {
+        let answer = decoded(#"{"t":"browser.handover.state","rid":"h1","window":"B2","asking":true,"prompt":"Sign in","mine":true,"taken":true}"#)
+        guard case let .browserHandover(state) = answer else { return XCTFail() }
+        XCTAssertEqual(state.rid, "h1")
+        XCTAssertEqual(state.window, "B2")
+        XCTAssertTrue(state.asking)
+        XCTAssertTrue(state.mine)
+        XCTAssertTrue(state.taken)
+        XCTAssertEqual(state.prompt, "Sign in")
+
+        // The third state, which used to have to be inferred: outstanding, not
+        // mine, and held by somebody.
+        let other = decoded(#"{"t":"browser.handover.state","window":"B2","asking":true,"prompt":"Sign in","mine":false,"taken":true}"#)
+        guard case let .browserHandover(elsewhere) = other else { return XCTFail() }
+        XCTAssertFalse(elsewhere.mine)
+        XCTAssertTrue(elsewhere.taken)
+
+        let push = decoded(#"{"t":"browser.handover.state","window":"","asking":true,"prompt":"Sign in","mine":false,"taken":false}"#)
+        guard case let .browserHandover(pushed) = push else { return XCTFail() }
+        XCTAssertNil(pushed.rid)
+        XCTAssertFalse(pushed.taken)
+        // The empty window is the front tab, which is the surface most pages a
+        // phone opens on a server actually land on — never a malformed frame.
+        XCTAssertEqual(pushed.window, "")
+        XCTAssertFalse(pushed.mine)
+    }
+
+    /**
+     * Read the safe way round, and refused when it names no surface.
+     *
+     * A missing `asking` reads as *nothing is being asked* and a missing `mine`
+     * as *not mine*: both of those errors leave a person looking at a page they
+     * are told they may not type into, where the errors the other way round put
+     * a claim button under a question nobody asked. The prompt crosses the same
+     * ceiling the curtain sentence crosses under — it is the same sentence
+     * arriving by the other road.
+     */
+    func testHandoverStateIsNarrowedDefensively() {
+        let vague = decoded(#"{"t":"browser.handover.state","window":"B2","asking":"yes","mine":1,"taken":1,"prompt":7}"#)
+        guard case let .browserHandover(state) = vague else { return XCTFail() }
+        XCTAssertFalse(state.asking)
+        XCTAssertFalse(state.taken)
+        /*
+         * `"mine": 1` is the one that is not obvious, and it is why every field
+         * of this frame goes through `WireCodec.literalTrue`.
+         * `JSONSerialization` hands back an `NSNumber` for every JSON number and
+         * Foundation bridges `NSNumber(1)` to `Bool` through the ObjC bridge, so
+         * the ordinary `as? Bool == true` spelling reads a numeric 1 as **true**
+         * — which on this field is a phone believing it may type into somebody's
+         * login. This test failed on its first run for exactly that reason.
+         */
+        XCTAssertFalse(state.mine)
+        XCTAssertEqual(state.prompt, "")
+
+        XCTAssertNil(decoded(#"{"t":"browser.handover.state","asking":true,"mine":true}"#),
+                     "a state naming no surface cannot be applied to one")
+
+        let long = String(repeating: "x", count: Wire.maxWatchPromptLength + 40)
+        let capped = decoded("{\"t\":\"browser.handover.state\",\"window\":\"B2\",\"asking\":true,\"mine\":false,\"taken\":false,\"prompt\":\"\(long)\"}")
+        guard case let .browserHandover(bounded) = capped else { return XCTFail() }
+        XCTAssertEqual(bounded.prompt.count, Wire.maxWatchPromptLength)
     }
 }

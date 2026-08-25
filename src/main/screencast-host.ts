@@ -1,6 +1,6 @@
 import { MAX_SURFACES_REPORTED } from './remote/protocol'
 import type { BrowserFrameFrame, BrowserInputFrame } from './remote/protocol'
-import type { ScreencastHost, ScreencastSurface } from './remote/server'
+import type { HandoverState, ScreencastHost, ScreencastSurface } from './remote/server'
 import type { DriveTarget } from './browser-driver'
 
 /**
@@ -75,6 +75,11 @@ import type { DriveTarget } from './browser-driver'
  * The empty string keeps its documented meaning — the drive's own tab, the
  * `OWN_TARGET` convention — because that slot has no shell tab id to wear on a
  * host where `openTab` mints none.
+ *
+ * What that costs, and the one file that closes it, is written down at
+ * {@link frontTab}. It is worth reading before anybody tries to give this row a
+ * real id: the empty string is the *symptom* and not the cause, and changing it
+ * here alone makes the phone worse rather than better.
  */
 
 /**
@@ -101,6 +106,26 @@ export interface CastDrive {
     target: DriveTarget | null | undefined,
     watcherId: string,
     frame: BrowserInputFrame,
+  ): Promise<{ ok: boolean; reason?: string }>
+  /**
+   * Who holds the handover on this slot, and what the agent asked for.
+   *
+   * Read rather than subscribed, and cheap enough to read per push: it is three
+   * fields off a slot the driver already holds. See `BrowserDrive.handoverHolding`.
+   */
+  handoverHolding(target?: DriveTarget | null): {
+    asking: boolean
+    prompt: string
+    taker: string | null
+  }
+  takeHandover(
+    target: DriveTarget | null | undefined,
+    watcherId: string,
+  ): Promise<{ ok: boolean; reason?: string }>
+  handBackHandover(
+    target: DriveTarget | null | undefined,
+    watcherId: string,
+    carryOn: boolean,
   ): Promise<{ ok: boolean; reason?: string }>
   dropWatcher(watcherId: string): Promise<void>
 }
@@ -246,6 +271,45 @@ export function screencastOver(deps: ScreencastDeps): ScreencastHost {
       return deps.drive.castInput(cast.target, input.watcherId, input.frame)
     },
 
+    handover(window): HandoverState {
+      const cast = casts.get(window)
+      /*
+       * A window nobody on this machine is casting has no handover to report.
+       *
+       * Not the same as *"no handover is outstanding"* in principle — the drive
+       * could be holding a question about a page no phone is watching — but it is
+       * the same answer, because the only thing that can be done with this frame
+       * is take a handover, and taking one requires being a watcher. Answering
+       * `asking: true` about a page this side is not casting would put a button on
+       * a screen that the tap would then be refused from.
+       */
+      if (!cast) return { asking: false, prompt: '', taker: null }
+      return deps.drive.handoverHolding(cast.target)
+    },
+
+    async take(input) {
+      const cast = casts.get(input.window)
+      /*
+       * The same two-set rule `input` above states, and for the same reason: the
+       * server's `watching` set is what a device *asked* for, this one is what
+       * the machine actually started, and the gap between them is a watch that
+       * was refused. Taking a page in that gap would be taking a page whose
+       * pixels are going nowhere.
+       */
+      if (!cast || !cast.watchers.has(input.watcherId)) {
+        return { ok: false, reason: 'that window is not being watched on this connection' }
+      }
+      return deps.drive.takeHandover(cast.target, input.watcherId)
+    },
+
+    async handBack(input) {
+      const cast = casts.get(input.window)
+      if (!cast || !cast.watchers.has(input.watcherId)) {
+        return { ok: false, reason: 'that window is not being watched on this connection' }
+      }
+      return deps.drive.handBackHandover(cast.target, input.watcherId, input.carryOn)
+    },
+
     async surfaces() {
       const windows = await listWindows()
       return windows.slice(0, MAX_SURFACES_REPORTED).map(
@@ -310,33 +374,117 @@ export function screencastOver(deps: ScreencastDeps): ScreencastHost {
  * claiming the title of a page it left.
  */
 export interface FrontTab {
-  /** The front tab was opened at a page. `BrowserDrive.open` answers this. */
+  /**
+   * The front tab was opened at a page.
+   *
+   * Kept for the one thing a live read cannot answer: a slot that has been
+   * *asked* for a page and has not finished loading it yet. Nothing depends on
+   * it any more for the address — see {@link frontTab}.
+   */
   opened(page: { url: string; title: string }): void
   /** Its row, or null when the front tab holds no page. */
   row(): CastWindow | null
 }
 
-export function frontTab(origin: () => string | null): FrontTab {
-  let last: { origin: string; url: string; title: string } | null = null
+/**
+ * The drive's own front tab as a row, read **live**.
+ *
+ * `where` is `BrowserDrive.where(OWN_TARGET)` — the page's URL and title off the
+ * `WebContents`, every time.
+ *
+ * It used to be `origin(OWN_TARGET)` plus what `open` answered when the page was
+ * opened, kept while the origin still matched. That is a browser lying about
+ * where it is: following a link *inside* a site left the address showing the
+ * page you started at, and following one to another site degraded to a bare
+ * origin with no path. Asad found it from the other end — *"I cannot touch the
+ * URL"* — and an address bar that can be edited but shows the wrong address is
+ * worse than one that cannot.
+ *
+ * A live read makes the remembered pair unnecessary rather than merely stale,
+ * which is why it is gone from the row entirely.
+ *
+ * ## Why this row has no menu on the phone, and where the fix actually lives
+ *
+ * Asad, filming the Browser tab of a **server** with two rows on it —
+ * `google.com`, which is this row, and `iMatch`, which is an ordinary window:
+ *
+ * > *"this one is attached to this session. Maybe this is the difference, and
+ * > this one is not attached to anyone. But there is no way to attach this one
+ * > too. So it should be the same case, or all the options should be available
+ * > at least."*
+ *
+ * He is right, and the empty `window` below is the symptom rather than the
+ * cause. Everything a person can do to a browser window from a phone —
+ * attach, detach, close, archive, back, forward, screenshot, isolate — is a
+ * `browser.window.*` frame, and every one of those verbs is resolved by
+ * `machineBrowser`'s `find(id)` against `MachineBrowserDeps.list()`. On a server
+ * that list is `src/headless/machine-browser.ts`, and it is built from exactly
+ * two authorities: the `browser-binding.ts` store, and the `held` map that
+ * module writes when **it** opens a window. The drive's own slot is in neither,
+ * so the front tab is not merely un-addressable — *it is not in the window list
+ * at all*, and there is no id that would put it there.
+ *
+ * So minting a shell id for this row closes nothing. It would clear the five
+ * `rawId === ''` refusals in `remote/protocol.ts`, the frames would parse, and
+ * `find` would then miss anyway and answer *"That window is not open any more"*
+ * — a control that looks like it works and does not, which is worse than the
+ * disabled row with a reason on it that the phone draws today. It also takes
+ * something away: `WatchViewerScreen.canNavigate` is `surface.window.isEmpty`,
+ * because `web.open` navigates *this exact slot*, so a real id here silently
+ * removes the address bar from the one screen that has one.
+ *
+ * ## The desktop does not have this bug, and that is the shape of the answer
+ *
+ * There, `web.open` is `openAppLink(mainWindow)` — an ordinary pane with an
+ * ordinary shell tab id, in `knownWindows()`, therefore in `browser.window.rows`
+ * and bindable like any other. `machineScreencastHere` in `src/main/index.ts`
+ * still routes its cast through `OWN_TARGET`, but it does that by matching the
+ * **view id** against `BrowserDrive.ownView()` while the row keeps its real
+ * `window: tabId`. That is the whole trick: *the name a surface wears and the
+ * slot its frames come from are two different facts*, and only the second one
+ * has to be the drive's own.
+ *
+ * A server can have the same property, and it is not this file's line to write:
+ * `openUrl` in `src/headless/host.ts` calls `browserDrive.open({ url,
+ * isolate: false })`, which is the agent's private tab. Routed through
+ * `machineBrowser.open` instead — the same door **New Window** already uses —
+ * the page arrives as a real window: `HeadlessDriveHost.openWindow` mints
+ * `browser:<epoch>:<uuid>`, registers it in `byBrowserTab` so it can be closed
+ * and re-partitioned, files it in `held` so `list()` and `castable()` both carry
+ * it, and `castWindows` folds `castable()` into this strip. Listed, bindable,
+ * closable **and** watchable, which is all of what he asked for, with nothing
+ * new invented anywhere.
+ *
+ * What is left for this function afterwards is the honest remainder: the tab an
+ * **agent** opened with `browser.open` and no target. That one genuinely is not
+ * a window on a server — `HeadlessDriveHost.openTab` passes `browserTabId: ''`
+ * on purpose — and a row that says so is the truth rather than a gap.
+ */
+export function frontTab(where: () => { url: string; title: string } | null): FrontTab {
   return {
-    opened(page) {
-      const at = originOf(page.url)
-      last = at === null ? null : { origin: at, url: page.url, title: page.title }
+    opened() {
+      // Nothing to remember: the row reads the page itself. Kept as a method so
+      // callers that announce an open do not have to know that.
     },
     row() {
-      const live = origin()
+      const live = where()
       if (live === null) return null
-      const label = last !== null && last.origin === live ? last : null
+      const site = originOf(live.url)
       return {
+        // Not a name this side chose to withhold: on a server the drive's own
+        // slot has no shell tab id to wear, and no id would put it in the
+        // window list the `browser.window.*` verbs resolve against. See the
+        // header above before changing this — the fix is a routing line in
+        // `src/headless/host.ts`, not a string here.
         window: '',
         target: null,
-        // An opaque origin is a page with no site to name — a blank tab, which
+        // A page with no site to name — `about:blank`, a `data:` document, which
         // is what a freshly-made front tab is. The row still belongs on the
-        // strip (there is a page, and it can be watched), so it goes out with
-        // an empty address and both clients label it as untitled rather than
-        // printing the word `null` at somebody.
-        url: label?.url ?? (live === OPAQUE_ORIGIN ? '' : live),
-        title: label?.title ?? '',
+        // strip (there is a page, and it can be watched), so it goes out with an
+        // empty address and both clients label it untitled rather than printing
+        // the word `null` at somebody.
+        url: site === OPAQUE_ORIGIN || site === null ? '' : live.url,
+        title: live.title,
       }
     },
   }

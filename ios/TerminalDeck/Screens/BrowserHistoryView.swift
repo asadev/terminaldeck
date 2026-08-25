@@ -12,14 +12,14 @@
  *
  * Opening a page needs a tunnel — `tunnel.open` on the wire, a listener bound on
  * this phone's loopback, a `PortTunnel` held alive for exactly as long as the
- * page is up — and every one of those things belongs to `LocalhostPortsView`,
+ * page is up — and every one of those things belongs to `MachineBrowserView`,
  * which owns `browsing` and closes it again when the page is popped. A history
  * screen that dialled its own tunnel would be a second owner of the same socket
  * and the two would disagree about when to close it.
  *
  * So this hands back a choice and dismisses, the way `FolderPickerView` hands
  * back a folder and lets the caller decide what starting one means. The pair it
- * returns is exactly the pair `LocalhostPortsView.open(port:path:)` takes.
+ * returns is exactly the pair `MachineBrowserView.openHere(_:_:)` takes.
  *
  * ## One machine's history, said out loud
  *
@@ -31,7 +31,7 @@
  *
  * ## Search is the platform's, even though the address bar next door is not
  *
- * `LocalhostPortsView` draws its own address bar, and the reasoning there is
+ * `NewWindowSheet` draws the app's one address bar, and the reasoning there is
  * sound — it is an *address* bar, it needs a URL keyboard with autocorrect off,
  * and it is content sitting above a list rather than chrome. None of that is
  * true here. A field that filters the list under it is precisely what

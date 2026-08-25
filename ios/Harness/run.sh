@@ -13,6 +13,7 @@
 #   ios/Harness/run.sh vectors     regenerate Tests/Fixtures/sealed-vectors.json
 #   ios/Harness/run.sh host        run a relay + a stand-in desktop on it
 #   ios/Harness/run.sh live        drive a REAL host over the LIVE relay
+#   ios/Harness/run.sh handover    the handover proof's Mac side — see live-handover.ts
 #
 # `host` and `live` are not two flavours of the same thing and the difference is
 # the point. `host` is a stand-in: a second implementation of the desktop, good
@@ -43,8 +44,9 @@ case "$command" in
     vectors) entry=sealed-vectors ;;
     host)    entry=host-standin ;;
     live)    entry=live-desktop ;;
+    handover) entry=live-handover ;;
     *)
-        echo "usage: run.sh {vectors|host|live} [args…]" >&2
+        echo "usage: run.sh {vectors|host|live|handover} [args…]" >&2
         exit 2
         ;;
 esac

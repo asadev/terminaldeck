@@ -32,7 +32,7 @@
  * should not come like this up. It should just move like this when we click on
  * localhost page. It comes like this, which is a bit different, feels like a
  * browser opens inside. So give it a native feel, not like this."* It is a
- * `navigationDestination` now — see `LocalhostPortsView` — so it slides in from
+ * `navigationDestination` now — see `MachineBrowserView` — so it slides in from
  * the trailing edge.
  *
  * That was not enough, and he said so again: *"localhost browsing is still not
@@ -108,7 +108,7 @@ struct LocalhostBrowser: View {
      */
     var path: String = "/"
     /// The phone's own browsing history. Injected rather than reached for, the
-    /// same way `LocalhostPortsView` takes its `PortBook`.
+    /// same way `PortSuggestions` takes its `PortBook`.
     var history: BrowserHistory = .shared
     /**
      * The tab this page is in, if it is in one.
@@ -331,7 +331,7 @@ struct LocalhostBrowser: View {
                  * while Done is the sentence this screen wants to end with —
                  * *I have finished with this page* — and closing it is what
                  * takes the Mac's socket down. Both go through the same path:
-                 * whichever way this screen goes away, `LocalhostPortsView`
+                 * whichever way this screen goes away, `MachineBrowserView`
                  * notices the destination is gone and closes the tunnel.
                  *
                  * He asked for it to stay where it is. *"Last button I think is

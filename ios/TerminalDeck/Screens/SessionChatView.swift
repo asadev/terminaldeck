@@ -11,8 +11,9 @@
  *   > will be good enough. And give the copy button wherever it's possible."*
  *
  * Right, left, time, copy, no names. Nothing else is on this screen: no role
- * label, no "thinking", no date separator, no empty-state paragraph. An empty
- * conversation is drawn as an empty screen.
+ * label, no "thinking", no date separator. An empty conversation used to be
+ * drawn as an empty screen and is not any more — see *"Nothing to read, and
+ * why"* below, which is the one thing this screen says that nobody said.
  *
  * ## What a bubble is made of
  *
@@ -42,9 +43,14 @@
  * with **no bytes at all** for anything that is not UTF-8 text (`server.ts`,
  * `readFileFor`). A picture of a file this app cannot fetch would be a drawing
  * of a file, so instead a path is a chip that opens the machine's real reader,
- * which says what the file is and how big it is when it is not text. The `i`
- * next to the mode button in the toolbar is where that is stated on screen;
- * everything else on this view is the conversation.
+ * which says what the file is and how big it is when it is not text. That chip
+ * is where the fact is stated on screen; everything else on this view is the
+ * conversation.
+ *
+ * There used to be an `i` beside the mode button saying the same thing in words.
+ * It is gone — *"why do we have this i button, it is completely extra, the
+ * information button, remove this"* — and the chip is the better statement
+ * anyway: it is on the file it is about rather than on the whole screen.
  *
  * ## The composer, which the browser client still does not have
  *
@@ -61,6 +67,79 @@
  * 57 bytes in one write submits, 64 does not. So the return travels as its own
  * write after a gap — `HostLink.sendChatMessage`, which is the one place that
  * sequence exists on this client.
+ *
+ * ## When the far side is not ready for prose
+ *
+ * > *"here it is showing previous replies. But if I turn it to terminal mode,
+ * > it will show the actual state because I need to log in. But it should
+ * > actually show the same situation here or some message like that… now if I
+ * > send it, nothing will happen because the terminal is not ready for it. So
+ * > it should be clearly stating something or saying something here to log in
+ * > or stuff… in chat mode I don't know anything. First of all, this is the
+ * > biggest problem."*
+ *
+ * Because a message goes into the session's own pty, what the pty is doing
+ * decides whether it lands. At a login menu it does not: the keys are being read
+ * one at a time by whatever dialog is on screen, the field clears, and the
+ * conversation carries on showing an afternoon-old transcript. The terminal half
+ * of this same screen was showing the login the whole time.
+ *
+ * So this view reads the one fact that half already draws — `RemoteSession.status`,
+ * classified on the machine by `session-activity.ts` — and where it says a
+ * sentence would go nowhere, says so where the newest thing is and greys the
+ * arrow. `Unready` is the whole of the rule, including which of the six words
+ * count and why the other four are left alone. Nothing is added to a session
+ * that has a conversation and a working prompt: no badge, no banner, no empty
+ * row.
+ *
+ * **The way through is named rather than repeated.** Switching modes is
+ * `chatMode`, which belongs to `TerminalScreen`, and its toggle — `terminal.mode`
+ * — is in this screen's own navigation bar for as long as the conversation is on
+ * it. A button in the notice would be a second control for a press that is
+ * already one tap away and already on screen, so the sentence names that toggle
+ * instead of growing another one.
+ *
+ * ## Nothing to read, and why
+ *
+ * > *"if we have this chat box, and now I'm turning it to terminal mode. So
+ * > what about this thing? Because you said all of that is fixed, but this one
+ * > is still there. So if I turn it to chat, it feels normal. When I turn it to
+ * > this, it delivers the actual message. **So reality should be on both side,
+ * > one thing.**"*
+ *
+ * The round above keyed that notice on `input` and `exited` and argued its way
+ * out of `idle` on the grounds that the classifier's fall-through is not a
+ * state worth a sentence. He then filmed a session whose status was `idle`,
+ * whose terminal was full of a live agent conversation, and whose chat was
+ * **completely empty with a live composer**. The argument was right about what
+ * `idle` means and wrong about what this screen owed him: the lie was never the
+ * missing word for `idle`, it was the blank page under it.
+ *
+ * So there are two notices, answering two different questions. `Unready` answers
+ * *would a sentence typed here land* — status, unchanged, and it is what greys
+ * the arrow. `Silence` answers *why is there no conversation on this screen*,
+ * and it is drawn whenever there is none, whatever the status. `idle` with
+ * nothing to read is spoken for by the second rather than by a guess bolted
+ * onto the first.
+ *
+ * **Five reasons, and they are not interchangeable.** An empty conversation
+ * means exactly one of: this machine never serves one, so nothing was ever
+ * asked (`chat` absent from the welcome — `SessionBarLink.askChat` returns at
+ * its guard); the bar is following another session, so what is held is not this
+ * one's; the machine has not answered yet; it answered and found no transcript
+ * for the folder at all (`chat-serve.ts`, `pathFor` → `null` → `found: false`);
+ * or it found one and there is no prose in it, which is a real outcome because
+ * `chat-transcript.ts` keeps `type: 'text'` and drops every tool call, so a
+ * busy transcript can collapse to nothing. The screen said the same nothing for
+ * all five. Each says which it is now, and the three that are not about to
+ * resolve on their own name the terminal, because that is the half holding the
+ * truth — *"reality should be on both side, one thing."*
+ *
+ * **What none of them says is what the terminal is showing.** This view cannot
+ * see the emulator, and `idle` is the machine saying it could not recognise the
+ * screen either, so a notice claiming a login, a prompt or a running command
+ * would be this app inventing the fact it is here to stop inventing. The
+ * sentence stops at *there is nothing here, the terminal has it*.
  *
  * ## The conversation is only drawn when the bar is pointed at this session
  *
@@ -101,6 +180,17 @@ struct SessionChatView: View {
     /// are relative to. Nil until the machine has described the session, and
     /// then a relative path simply gets no chip.
     let cwd: String?
+    /**
+     * What the far session's terminal is doing, in the machine's own word for it
+     * — the same string `TerminalScreen`'s header draws beside the status dot,
+     * and the same one the session list colours a row by.
+     *
+     * A fact about `sessionID` rather than about the bar, so it is read whether
+     * or not the bar is pointed here; see `Unready`, which is the only thing that
+     * reads it. Nil while nothing has been said about this session yet, and an
+     * unknown state draws nothing rather than a guess about somebody's terminal.
+     */
+    var status: String?
     /// Point the machine's bar back at this session and ask for the conversation
     /// again. Called on appear, and whenever the bar is found following somebody
     /// else.
@@ -129,6 +219,161 @@ struct SessionChatView: View {
     /// Whether the bar is pointed at the session this view is drawing.
     private var mine: Bool { bar.sessionID == sessionID }
 
+    /// Why a message typed here would go nowhere, or nil when it would land.
+    private var unready: Unready? { Unready(status: status) }
+
+    /**
+     * Why there is no conversation on screen, or nil when there is one.
+     *
+     * The order is the argument. A machine that never serves a conversation is
+     * asked first because nothing else below it can ever become true on that
+     * machine — `askChat` returns at its capability guard, so no frame leaves
+     * and `transcript` stays nil for ever, and "the machine has not answered
+     * yet" would be a sentence about a question nobody asked. A bar pointed
+     * somewhere else comes next, because `transcript` and `chat` then belong to
+     * a different session and neither is evidence about this one. Only under
+     * both of those do the machine's own two answers mean what they say.
+     */
+    private var silence: Silence? {
+        if mine, !bar.chat.isEmpty { return nil }
+        if !bar.canReadChat { return .notServed }
+        if !mine { return .elsewhere }
+        guard let transcript = bar.transcript else { return .asking }
+        return transcript ? .nothingSaid : .noTranscript
+    }
+
+    /**
+     * Why a plain message typed into this session would not do anything.
+     *
+     * The vocabulary belongs to the desktop — `session-activity.ts` is what
+     * produces it — so this reads the words rather than owning them, and only
+     * the two it can be sure about:
+     *
+     * - `input`  — the agent asked something and is blocked on the answer: a
+     *              login menu, a `(y/N)`, a numbered list. Whatever is drawing
+     *              that dialog is reading single keys, so a sentence and its
+     *              return are not an answer to it. This is the state he was
+     *              sitting in.
+     * - `exited` — the process is gone. There is nothing left to type into.
+     *
+     * The other four are left alone deliberately. `waiting` is an empty prompt
+     * and, despite the name, *"the resting state of every healthy session"*;
+     * `working` accepts a message and queues it behind the turn; `completed` has
+     * its prompt back. `idle` is the classifier's fall-through, which its own
+     * author describes as *"nothing recognisable on screen"*, and it stays out
+     * of here for the reason it always did: a sentence about a login built on
+     * top of *we could not tell* is this view guessing about somebody's
+     * terminal, which is the failure it exists to fix rather than a second
+     * helping of it. What changed when he filmed an `idle` session with an
+     * empty chat is that the guess stopped being the only alternative to
+     * silence — `Silence` speaks for that screen without claiming anything
+     * about the far terminal. A word this build has never seen falls through
+     * the same way, so a newer desktop cannot make this screen say anything.
+     */
+    enum Unready {
+        case answering
+        case ended
+
+        init?(status: String?) {
+            switch status {
+            case "input": self = .answering
+            case "exited": self = .ended
+            default: return nil
+            }
+        }
+
+        /// What is happening, and what to do about it. Two short sentences,
+        /// because the complaint is that this screen said nothing at all — and
+        /// the second one names `terminal.mode`, which is on screen already.
+        var sentence: String {
+            switch self {
+            case .answering:
+                return "This session is waiting for an answer in the terminal — a login, a prompt, "
+                    + "a confirmation. Switch to terminal mode to answer it."
+            case .ended:
+                return "This session has ended. Nothing typed here reaches it."
+            }
+        }
+    }
+
+    /**
+     * Why there is no conversation to draw.
+     *
+     * Five states that were one blank page. Each is a fact this client already
+     * holds and none of them is a guess about the far terminal — see the
+     * header, *"Nothing to read, and why"*, for his sentence and for what the
+     * phone may and may not claim.
+     *
+     * - `notServed`   — the welcome did not carry `chat`, so `askChat` never
+     *                   sent a frame and never will on this machine.
+     * - `elsewhere`   — the bar is following another session, or none at all.
+     *                   One bar per machine, two `TerminalScreen`s; `reload` is
+     *                   already on its way to close the gap, and until it lands
+     *                   what is held belongs to somebody else. Both halves are
+     *                   in the sentence, because a bar left with no session by
+     *                   a `forget` is the same blank page as a bar taken by the
+     *                   other tab.
+     * - `asking`      — asked, nothing back. A file read on the far side, which
+     *                   is milliseconds, or a socket that dropped in between.
+     * - `noTranscript`— the machine looked and there is no transcript for this
+     *                   session's folder in any store it writes to. A session
+     *                   running a shell, or an agent that files nothing.
+     * - `nothingSaid` — a transcript, with no prose in it. `chat-transcript.ts`
+     *                   keeps `type: 'text'` and drops every tool call, so this
+     *                   is what a session that has only run tools looks like.
+     */
+    enum Silence {
+        case notServed
+        case elsewhere
+        case asking
+        case noTranscript
+        case nothingSaid
+
+        /**
+         * One short sentence, and the terminal named in three of the five.
+         *
+         * Named rather than offered, for the reason the header gives about
+         * `Unready`: `terminal.mode` is already in this screen's navigation bar
+         * and a button in the notice would be a second control for the same
+         * press. `elsewhere` and `asking` do not name it because both are about
+         * to resolve on their own, and sending somebody to the other mode for a
+         * frame's wait would be worse advice than saying nothing.
+         */
+        var sentence: String {
+            switch self {
+            case .notServed:
+                return "This machine cannot read a session as a conversation. "
+                    + "Switch to terminal mode to see this one."
+            case .elsewhere:
+                return "This machine's conversation is not pointed at this session yet. "
+                    + "Asking for it."
+            case .asking:
+                return "Nothing has come back for this session yet."
+            case .noTranscript:
+                return "The machine found no transcript for this session. "
+                    + "Switch to terminal mode to see what it is doing."
+            case .nothingSaid:
+                return "There is nothing in this session's transcript. "
+                    + "Switch to terminal mode to see what it is doing."
+            }
+        }
+
+        /// One identifier per reason, in `chat.notready`'s shape, because which
+        /// of the five is on screen is the whole of what this change is for — a
+        /// test that only knew *some* notice was drawn could not tell the fix
+        /// from the defect. Anything asserting "any of them" matches on the
+        /// `chat.empty.` prefix, the way the browser rows are matched.
+        var identifier: String {
+            switch self {
+            case .notServed: return "chat.empty.notserved"
+            case .elsewhere: return "chat.empty.elsewhere"
+            case .asking: return "chat.empty.asking"
+            case .noTranscript: return "chat.empty.notranscript"
+            case .nothingSaid: return "chat.empty.nothingsaid"
+            }
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             ScrollViewReader { scroll in
@@ -140,6 +385,17 @@ struct SessionChatView: View {
                                 bubble(message).id(message.id)
                             }
                         }
+                        // In the place the conversation would be, because the
+                        // absence of the conversation is what it explains. Above
+                        // the notice below it and never instead of it: the two
+                        // answer different questions and an exited session with
+                        // no transcript is honestly both.
+                        if let silence { nothing(silence) }
+                        // Under the last turn, because what the far side is
+                        // doing now is the newest thing on this screen — and
+                        // above the anchor, so every scroll to the bottom ends
+                        // on it rather than past it.
+                        if let unready { stalled(unready) }
                         // An anchor rather than scrolling to the last row: a row
                         // is as tall as its text and scrolling *to* it puts its
                         // top at the bottom of the screen, which cuts a long
@@ -168,7 +424,20 @@ struct SessionChatView: View {
 
             if let send { composer(send) }
         }
-        .background(Theme.background)
+        /*
+         * The terminal's ground, not the app's — because this is the same session
+         * seen a different way, not a different screen.
+         *
+         * Asad, about the session screen: *"whatever the theme colour we decide to
+         * keep… background, full page should be black."* Chat mode and terminal
+         * mode are one screen with one navigation bar, and that bar takes the
+         * scheme (see `TerminalChrome`); a conversation that kept `Theme.background`
+         * underneath it put `#ffffff` directly below a `#000000` header on the one
+         * scheme he named. The code blocks in here were already on this paper —
+         * `codePaper` is the same call — so this is the page catching up with the
+         * blocks rather than a new idea.
+         */
+        .background(TerminalChrome.paper(themes.selected))
         /*
          * Ask on appear, and ask again if the bar is found following somebody
          * else.
@@ -194,6 +463,70 @@ struct SessionChatView: View {
             .foregroundStyle(Theme.faint)
             .frame(maxWidth: .infinity)
             .accessibilityIdentifier("chat.cap")
+    }
+
+    /**
+     * The far side's own state, said in the conversation.
+     *
+     * Full width and squared off against the bubbles rather than drawn as one of
+     * them: this is not a turn, nobody said it, and giving it a side would put it
+     * in the transcript as something the agent or he had written. The ground and
+     * the corner are the agent bubble's, so it reads as part of the conversation
+     * and not as a system alert dropped on top of it, and the one warning-tinted
+     * glyph is the whole of the emphasis — *"the biggest problem"* was silence,
+     * not a lack of colour.
+     */
+    private func stalled(_ unready: Unready) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.warning)
+            Text(unready.sentence)
+                .font(.system(size: 13))
+                .foregroundStyle(Theme.primary)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 13)
+        .padding(.vertical, 10)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("chat.notready")
+    }
+
+    /**
+     * Why the page is blank, drawn where the conversation would be.
+     *
+     * `stalled`'s row, deliberately, down to the corner and the ground: these
+     * are two sentences about one session and drawing them as two different
+     * kinds of object would suggest they come from two different places. The
+     * one difference is the glyph's colour. `Unready` is warning-tinted because
+     * it is about a press that will not work; this is faint because nothing is
+     * wrong — a session with no transcript is an ordinary session, and the only
+     * fault was never saying so.
+     *
+     * Not `cap`'s treatment, which is 11-point and centred: that is a footnote
+     * about where the transcript was clipped, said above a conversation that is
+     * there. This is the only thing on the screen.
+     */
+    private func nothing(_ silence: Silence) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: "bubble.left")
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.faint)
+            Text(silence.sentence)
+                .font(.system(size: 13))
+                .foregroundStyle(Theme.primary)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 13)
+        .padding(.vertical, 10)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier(silence.identifier)
     }
 
     // MARK: - Bubbles
@@ -621,7 +954,10 @@ struct SessionChatView: View {
             .padding(.top, 8)
             .padding(.bottom, 8)
         }
-        .background(Theme.background)
+        // The composer sits on the same paper as the conversation above it; a
+        // strip of the app's grey across the bottom of a black page is the seam
+        // this change exists to remove.
+        .background(TerminalChrome.paper(themes.selected))
     }
 
     private func paperclip(_ attach: @escaping (ChatAttachSource) -> Void) -> some View {
@@ -733,7 +1069,31 @@ struct SessionChatView: View {
         }
     }
 
+    /**
+     * Whether the arrow does anything, which is now two facts rather than one.
+     *
+     * Something typed, and a far side that will take it. The second is the half
+     * this screen was lying about: *"now if I send it, nothing will happen
+     * because the terminal is not ready for it."* A grey arrow that refuses the
+     * press is the composer saying the same thing the notice above it says, at
+     * the moment the finger is on it.
+     *
+     * The field itself stays live on purpose. A sentence can be written while the
+     * machine is being unblocked in the other mode, and clearing somebody's draft
+     * because their session hit a prompt would lose the thing they came here to
+     * send — see `agent-controls.ts`, which refuses to type at all rather than
+     * over a draft, for the same rule at the other end of the wire.
+     *
+     * **An empty conversation does not grey it, and that is not an oversight.**
+     * `Silence` and this are about opposite directions of the same wire: the
+     * transcript is what you *read* and the pty is what you *write*, and a
+     * session with no transcript takes a first message perfectly well — that is
+     * how the transcript comes to exist. Greying the arrow because there is
+     * nothing to read would refuse the one press this composer is for, on the
+     * exact session that most needs it. The notice says the screen is empty; it
+     * does not claim the far end is deaf.
+     */
     private var sendable: Bool {
-        !typed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        unready == nil && !typed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 }

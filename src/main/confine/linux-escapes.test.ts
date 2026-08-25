@@ -123,6 +123,13 @@ function battery(): string {
     `printf 'alive\\talive\\n'`,
     say('own-read', 'cat mine.txt'),
     say('own-write', 'echo written > new.txt && cat new.txt'),
+    // The operation that failed on Asad's headless server, spelled the way the
+    // agent CLI spells it: `confinedEnv` points `CLAUDE_CODE_TMPDIR` at
+    // `<device home>/tmp`, and the CLI makes `claude-<uid>` inside it before it
+    // generates a token. Read the answer, not the exit code — the failure it
+    // caught was `EROFS`, and a boundary that holds while the session cannot
+    // start is still a session that will not start.
+    say('device-tmp-write', `mkdir ${JSON.stringify(join(deviceHome, 'tmp', 'claude-0'))} && echo MADE`),
     say('uid', 'id -u'),
     say('cwd', 'pwd'),
     // The escape that would have shipped: a relative path, from the working
@@ -263,6 +270,10 @@ describe.skipIf(!onLinux)('a confined Linux session, run for real', () => {
   it('can read and write inside its own folder', () => {
     expect(answer('own-read')).toBe('mine')
     expect(answer('own-write')).toBe('written')
+  })
+
+  it("can make the agent's scratch directory inside its own home", () => {
+    expect(answer('device-tmp-write')).toBe('MADE')
   })
 
   it('starts in the granted folder, re-entered after the mounts', () => {
@@ -473,4 +484,120 @@ describe.skipIf(!onLinux)('a confined session in a real terminal', () => {
     // Ctrl-C reached the job rather than being swallowed by the namespace.
     expect(plain).toContain('MARK-INT')
   }, 40_000)
+})
+
+/**
+ * The shape Asad's headless WSL server has and no test here had: the granted
+ * folder **is** the account home.
+ *
+ * That box runs with `projects: []`, so `device-reach.ts` offers `[host.home()]`
+ * and the session is granted `/home/asad`. The device home lives inside it, at
+ * `~/.local/share/terminaldeck/remote/device-home/<key>`, so `collapse` in
+ * `sessionPlan` merges the two into one writable root — and the writable list
+ * stops naming the device home. `toolRoots` refuses a `PATH` prefix that
+ * *contains* a writable root, which is what normally drops `~/.local` when
+ * `~/.local/bin` is on the `PATH`; with nothing left inside it for that guard to
+ * see, `~/.local` became a read root, `linuxKeeps` emitted `R:~/.local`, and the
+ * script's `mount -o remount,bind,ro` laid a read-only bind straight over the
+ * device home. Measured inside the namespace on his machine, 2026-08-25:
+ *
+ *     …/home/asad         rw,relatime - ext4 /dev/sdd
+ *     …/home/asad/.local  ro,relatime - ext4 /dev/sdd
+ *
+ * Every Copilot session on that server showed
+ * `EROFS: read-only file system, mkdir '<device home>/tmp/claude-0'` and exited
+ * 1 before generating a token.
+ *
+ * Everything here is under a temporary directory rather than under the real
+ * account home, because the point is the *shape* — a grant whose folder equals
+ * the account home it was told about — and `planFor` takes `accountHome` as an
+ * argument, so the shape can be built without covering the machine's real
+ * `/home` or binding somebody's actual home into a namespace.
+ */
+describe.skipIf(!onLinux)("a grant on the account home, which is Asad's headless server", () => {
+  let nestedRoot = ''
+  let nestedHome = ''
+  let nestedDeviceHome = ''
+  let nestedOut = ''
+  let nestedProofDetail = ''
+  let nestedProofOk = false
+
+  beforeAll(async () => {
+    if (!onLinux) return
+    nestedRoot = realpathSync(mkdtempSync(join(homedir(), '.terminaldeck-granthome-')))
+    nestedHome = join(nestedRoot, 'home', 'asad')
+    const store = join(nestedHome, '.local', 'share', 'terminaldeck')
+    nestedDeviceHome = join(store, 'remote', 'device-home', 'f798e4220378b4bc')
+    const guestGit = join(store, 'guest-git', 'f798e4220378b4bc')
+    // `~/.local/bin` is what turns `~/.local` into a read root, so it has to be
+    // a directory that really exists: `toolRoots` drops a `PATH` entry that is
+    // not there, and a test whose PATH entry did not exist would pass without
+    // ever building the mount that caused this.
+    const localBin = join(nestedHome, '.local', 'bin')
+    for (const dir of [localBin, join(nestedDeviceHome, 'tmp'), guestGit]) {
+      mkdirSync(dir, { recursive: true })
+    }
+    writeFileSync(join(nestedHome, 'mine.txt'), 'mine')
+
+    const nestedPlan = planFor({
+      folder: nestedHome,
+      device: { home: nestedDeviceHome, writable: [guestGit], files: [] },
+      accountHome: nestedHome,
+      path: `${localBin}:${process.env.PATH ?? '/usr/bin:/bin'}`,
+      platform: 'linux',
+      resolver: realResolver,
+    })
+    const proof = await proveConfinement(nestedPlan, 'linux')
+    nestedProofOk = proof.ok
+    nestedProofDetail = proof.detail
+    if (!nestedProofOk) return
+
+    const script = [
+      `printf 'mounts\\t%s\\n' "$(grep -F ${JSON.stringify(nestedHome)} /proc/self/mountinfo | tr '\\n' ' ')"`,
+      `printf 'agent-tmp\\t%s\\n' "$(mkdir ${JSON.stringify(join(nestedDeviceHome, 'tmp', 'claude-0'))} 2>&1 && echo MADE)"`,
+      `printf 'guest-git\\t%s\\n' "$(touch ${JSON.stringify(join(guestGit, 'config'))} 2>&1 && echo WROTE)"`,
+      `printf 'folder\\t%s\\n' "$(cat mine.txt 2>&1)"`,
+    ].join('\n')
+    const launch = await confineSpawn(nestedPlan, '/bin/sh', ['-c', script], 'linux')
+    const ran = await run(launch.command, launch.args, nestedHome)
+    nestedOut = ran.out
+  }, 120_000)
+
+  afterAll(() => {
+    if (nestedRoot !== '') rmSync(nestedRoot, { recursive: true, force: true })
+  })
+
+  /** One line of the nested session's report. */
+  function nested(key: string): string {
+    for (const line of nestedOut.split('\n')) {
+      const [name, ...rest] = line.split('\t')
+      if (name === key) return rest.join('\t').trim()
+    }
+    expect.fail(`the session never answered "${key}" — output was:\n${nestedOut}`)
+  }
+
+  it('is a session this machine agrees to start', () => {
+    expect(nestedProofOk, `the proof refused this shape: ${nestedProofDetail}`).toBe(true)
+  })
+
+  it("can make the agent's scratch directory, which is what EROFS refused", () => {
+    expect(nested('agent-tmp')).toBe('MADE')
+  })
+
+  it('mounts nothing read-only inside the granted folder', () => {
+    // The measurement, not a restatement of the one above: `mountinfo` names the
+    // per-mount flags, and `ro` on a line under the granted folder is the defect
+    // whatever a single `mkdir` happens to answer.
+    for (const entry of nested('mounts').split(/\s(?=\d+\s\d+\s)/)) {
+      if (entry.trim() === '') continue
+      expect(entry, `a read-only mount inside the granted folder: ${entry}`).not.toMatch(
+        /\sro[,\s]/,
+      )
+    }
+  })
+
+  it('can still write its own git identity and read its own folder', () => {
+    expect(nested('guest-git')).toBe('WROTE')
+    expect(nested('folder')).toBe('mine')
+  })
 })

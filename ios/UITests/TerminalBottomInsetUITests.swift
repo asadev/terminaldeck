@@ -225,20 +225,26 @@ final class TerminalBottomInsetUITests: XCTestCase {
     /**
      * Raise the keyboard, and try twice.
      *
-     * The toolbar button is a *toggle* — `TerminalScreen` blurs on it when the
-     * terminal already has focus — so a tap that arrives while the screen is
-     * still settling can be swallowed, and a second tap on the same button would
-     * then be the one that puts it back down. Waiting for the key bar between the
-     * two attempts is what keeps this from oscillating: the second tap only
-     * happens if the first produced nothing at all. Measured on this simulator,
-     * one run in three needed it.
+     * The tap goes to the terminal itself. The toolbar's keyboard button was
+     * deleted at his word — *"we don't need keyboard button also, even in
+     * terminal pages, even on copilot pages, because when we click inside the
+     * chat keyboard comes anyway"* — and SwiftTerm's own tap, which is what made
+     * the button redundant, is what raises it here.
+     *
+     * The second attempt is kept and the reason it was needed is unchanged: a
+     * tap that arrives while the screen is still settling can be swallowed, and
+     * measured on this simulator one run in three needed the retry. What is no
+     * longer a hazard is the retry itself — the button was a *toggle*, so a
+     * second press could put the keyboard back down, while a second tap on a
+     * terminal that already has focus does nothing. The key-bar check between
+     * attempts stays because it is what makes the retry conditional at all.
      */
     private func raiseTheKeyboard() {
-        let keyboard = app.buttons["terminal.keyboard"]
-        XCTAssertTrue(keyboard.waitForExistence(timeout: 20), "the terminal toolbar should be up")
+        let terminal = app.descendants(matching: .any).matching(identifier: "terminal.view").firstMatch
+        XCTAssertTrue(terminal.waitForExistence(timeout: 20), "the terminal screen should be up")
         for attempt in 1 ... 2 {
             if app.buttons["keys.dismiss"].exists { break }
-            keyboard.tap()
+            terminal.tap()
             // The QuickPath tutorial is put up by the system keyboard the first
             // time it appears on a fresh simulator and it sits over the bar.
             // Nothing to do with this app; dismissed the way a person would.

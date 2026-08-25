@@ -33,7 +33,7 @@ import { store } from '../main/store'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { currentEndpoint } from '../main/deck-control/server'
-import { createHeadlessHost, type HeadlessHost } from './host'
+import { driveAnnouncements, createHeadlessHost, type HeadlessHost } from './host'
 import { serverMachineBrowser } from './machine-browser'
 
 /**
@@ -959,4 +959,56 @@ describe('the machine’s own browser, and the panels a phone reaches on this ho
     expect(JSON.stringify(rows.rows)).toContain('Prices')
     expect(JSON.stringify(rows.rows)).toContain('install')
   }, 20_000)
+})
+
+describe('what a drive status is worth telling a phone', () => {
+  /*
+   * The regression these exist for was found by looking, not by failing: the
+   * agent navigated and the address above the picture never moved. Everything
+   * downstream was correct; the push was simply never sent, because the callback
+   * returned early on anything that was not a handover.
+   */
+  const idle = { state: 'agent' as const, prompt: '', url: 'http://127.0.0.1:8879/login' }
+
+  it('sends the strip when the page navigates, even with no handover in sight', () => {
+    const first = driveAnnouncements({ handover: '', url: '' }, idle)
+    const second = driveAnnouncements(first.now, { ...idle, url: 'http://127.0.0.1:8879/welcome' })
+
+    expect(second.addressMoved).toBe(true)
+    // The point of the case: the handover did not move, and that used to be
+    // enough to discard the navigation with it.
+    expect(second.handoverMoved).toBe(false)
+  })
+
+  it('says nothing at all for a click that navigates nowhere', () => {
+    const first = driveAnnouncements({ handover: '', url: '' }, idle)
+    const again = driveAnnouncements(first.now, idle)
+
+    expect(again.addressMoved).toBe(false)
+    expect(again.handoverMoved).toBe(false)
+  })
+
+  it('still sends the handover when the question moves without the page', () => {
+    const first = driveAnnouncements({ handover: '', url: '' }, idle)
+    const asked = driveAnnouncements(first.now, {
+      ...idle,
+      state: 'human',
+      prompt: 'Sign in with the account this workspace is billed to.',
+    })
+
+    expect(asked.handoverMoved).toBe(true)
+    expect(asked.addressMoved).toBe(false)
+  })
+
+  it('separates two questions that happen to arrive together', () => {
+    const first = driveAnnouncements({ handover: '', url: '' }, idle)
+    const both = driveAnnouncements(first.now, {
+      state: 'human',
+      prompt: 'Type the code we just sent you.',
+      url: 'http://127.0.0.1:8879/two-factor',
+    })
+
+    expect(both.handoverMoved).toBe(true)
+    expect(both.addressMoved).toBe(true)
+  })
 })

@@ -161,47 +161,61 @@ extension XCUIApplication {
     }
 
     /**
-     * The **localhost** list — the ports, the dev servers and the address bar —
-     * which is one row down the Browser tab's `…`.
+     * The **ports and the dev servers**, which are inside the sheet that opens a
+     * window.
      *
-     * It was the Browser tab itself until 2026-08-25. Every suite that wants a
-     * port row, a dev server or the address field went through `openBrowserTab`,
-     * and every one of them now goes through here instead: the tab's home is the
-     * machine's browser windows, and localhost was *"folded somewhere else"*.
+     * They were the Browser tab itself, then for one round they were a pushed
+     * screen behind its `…`, and now they are neither:
      *
-     * ## The menu row is pressed by its words, with the identifier as a fallback
+     * > *"now here you still kept localhost as a separate page inside the page,
+     * > and the browser as a separate page in the page. So I wanted it to be
+     * > like ONE page where I can start a new window."*
      *
-     * A `Button` inside a SwiftUI `Menu` is not reachable by
-     * `accessibilityIdentifier` — measured twice in this target, which is why
-     * `ScreenWalkUITests` presses `Choose a folder…` by its label. A
-     * `NavigationLink` inside the same menu has behaved differently on different
-     * releases, so both are tried: the label first, because that is the one that
-     * has always worked.
+     * A port is an address, so the ports live where an address is chosen. Every
+     * suite that wants a port row, a dev server or the address field comes
+     * through here, and what changed for them is only the way in — the rows,
+     * their identifiers, their swipes and their menus are the same ones.
+     *
+     * The name is kept because four suites call it and what it means has not
+     * changed: *get me to the ports*.
      */
     @discardableResult
     func openLocalhostList() -> Bool {
-        // Already there — including the case where a previous test left it
-        // pushed, which is cheaper to keep than to walk back to and re-enter.
+        // Already there — including the case where a previous test left the
+        // sheet up, which is cheaper to keep than to dismiss and re-raise.
         if textFields["browser.address"].exists { return true }
         guard openBrowserTab() else { return false }
 
-        let more = buttons["browser.more"]
-        guard more.waitForExistence(timeout: 10) else { return false }
-        more.tap()
+        let plus = buttons["browser.new"]
+        guard plus.waitForExistence(timeout: 10) else { return false }
+        plus.tap()
+        guard textFields["browser.address"].waitForExistence(timeout: 15) else { return false }
 
-        var row = buttons["Localhost"]
-        if !row.waitForExistence(timeout: 5) {
-            row = descendants(matching: .any).matching(identifier: "browser.localhost").firstMatch
-        }
-        guard row.exists else {
-            // Never leave a presented menu standing: everything behind it is
-            // still in the accessibility tree, so the next query is satisfied by
-            // an element under the dimming layer and every later tap is eaten.
-            dismissAnyMenu()
-            return false
-        }
-        row.tap()
-        return textFields["browser.address"].waitForExistence(timeout: 15)
+        /*
+         * And put the sheet on **This phone**, because that is what a port meant
+         * on the screen these suites were written against.
+         *
+         * The sheet opens on *Machine* — the common case is a window in the
+         * machine's own browser — and a port tapped there opens over there, which
+         * is a page a `localhost.done` query will never find. Every suite that
+         * comes through this helper and then taps a port row is a suite about
+         * this phone's own tunnel browsing; the one that does not tap a row at
+         * all (the swipe suite) is unaffected by which segment is lit.
+         *
+         * Absent on a machine that will not serve a port to a phone, which is a
+         * real state and not a failure: the segment is simply not drawn, and the
+         * suites that need a tunnel skip on the row that is missing.
+         */
+        let phone = buttons["This phone"]
+        if phone.waitForExistence(timeout: 3) { phone.tap() }
+        return true
+    }
+
+    /// Put the new-window sheet away, for a case that opened it only to read the
+    /// ports. Never presses Open — that would put a window on a real machine.
+    func closeLocalhostList() {
+        let cancel = buttons["browser.open.cancel"]
+        if cancel.exists { cancel.tap() }
     }
 
     /**

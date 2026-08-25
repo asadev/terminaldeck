@@ -66,6 +66,18 @@
  * while the bottom row still sat on the indicator. Shrinking the frame tells the
  * emulator the truth — one `resize` on the wire, two fewer rows, everything the
  * far end draws lands inside what can be read.
+ *
+ * ## Measured again on 2026-08-25, and nothing here moved
+ *
+ * *"either if we have to move this typing box a little bit up, whatever, but it
+ * should be completely shown here."* He was reading a line cut at the **right**
+ * edge and offering the bottom as the cure, so this strip was measured against
+ * that same frame before anything was touched: the last row the far end drew was
+ * whole, with less than one row's height of slack under it — the terminal's own
+ * height-into-rows remainder — and the key bar below that. Nothing was under the
+ * home indicator, the key bar or the composer. The cut is horizontal and it is
+ * the far end's own; `TerminalBridge.sizeChanged` carries that measurement and
+ * the arithmetic behind it. Neither lever above wants changing for it.
  */
 
 import SwiftTerm

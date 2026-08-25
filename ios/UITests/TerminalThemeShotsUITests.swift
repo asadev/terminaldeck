@@ -204,7 +204,11 @@ final class TerminalThemeShotsUITests: XCTestCase {
         // pill"* — so `openSettingsTab()` has no bar to tap and its own fallback
         // taps the navigation back button, which lands on Sessions rather than
         // Settings and then fails ten seconds later about the wrong thing.
-        if app.buttons["terminal.keyboard"].exists {
+        // `terminal.view` is the sentinel for "a session is open" now that the
+        // keyboard button that used to stand for it has been deleted from the
+        // navigation bar. It is a better one anyway: it is the session itself
+        // rather than a control that happened to be drawn beside it.
+        if app.descendants(matching: .any)["terminal.view"].exists {
             let back = app.navigationBars.buttons.element(boundBy: 0)
             if back.exists { back.tap() }
             _ = app.tabBars.firstMatch.waitForExistence(timeout: 10)
@@ -236,9 +240,12 @@ final class TerminalThemeShotsUITests: XCTestCase {
     private func openASessionWithOutput() throws {
         app.openSessionsTab()
         try sessionRows().first!.tap()
-        let keyboard = app.buttons["terminal.keyboard"]
-        XCTAssertTrue(keyboard.waitForExistence(timeout: 15), "the terminal screen should appear")
-        keyboard.tap()
+        // Tapping the terminal is what raises the keyboard since the toolbar's
+        // keyboard button was deleted — *"we don't need keyboard button also,
+        // even in terminal pages, even on copilot pages."*
+        let terminal = app.descendants(matching: .any).matching(identifier: "terminal.view").firstMatch
+        XCTAssertTrue(terminal.waitForExistence(timeout: 15), "the terminal screen should appear")
+        terminal.tap()
         // `ls` for the ordinary case and a colour test for the sixteen: a scheme
         // is judged on what an agent's output looks like, and an agent's output
         // is mostly ANSI-coloured status lines.

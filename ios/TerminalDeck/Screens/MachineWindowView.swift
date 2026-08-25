@@ -1,6 +1,36 @@
 /**
  * One window of the machine's browser — **the window itself**, with a browser's
- * bar under it and everything else behind its `…`.
+ * bar under it and everything else behind its `…`. Every row on the Browser tab
+ * that is a page on the machine opens this, and there is no second kind.
+ *
+ * ## There used to be two kinds of browser window, and he counted them
+ *
+ * > *"this one is the one with the full view. But with the full view, at least it
+ * > should have all the options. If I am even opening this one here, look, now
+ * > here it is different. Now we have two windows. In iMatch, one of them has
+ * > different menu options here in the bottom, the tab menu, and this one has
+ * > different only reload, nothing else. So why they are two different type…
+ * > **it should be the same case, or all the options should be available at
+ * > least.**"*
+ *
+ * The two he was holding were a `.window` row — this screen, with an address,
+ * Back, Forward, Reload and a `…` — and a `.surface` row, which opened
+ * `WatchViewerScreen`: a picture, an address only where `web` was offered, and a
+ * single Reload. Both are pages in the same browser on the same machine, and the
+ * thing that made them different is invisible from a phone: one of them is named
+ * by a shell tab id and the other is the drive's own front slot, which
+ * `openTab` mints no id for.
+ *
+ * So the Browser tab pushes this screen for both, and this screen holds the
+ * difference instead of the list doing it. `windowID` is `""` for the machine's
+ * own front tab, which is a name and not a missing value — the same empty string
+ * `browser.surfaces` calls it by. What that page can and cannot be asked for is
+ * on `bar` and on `whyLimited`, and the answer to *cannot* is a greyed control
+ * with a sentence behind it rather than a control that is not there.
+ *
+ * `WatchViewerScreen` still exists and is still the one canvas mount for a
+ * surface reached from **Settings**, where there is no model behind it and no
+ * window list to join against. Nothing on the Browser tab reaches it.
  *
  * ## What this screen used to be, and why it is the page now
  *
@@ -18,6 +48,23 @@
  * Tapping a window gives you the window. Its settings are behind a `…` **on this
  * screen**, which is the sentence's second half — *inside of the window* — and
  * they are `MachineWindowSettingsView`.
+ *
+ * ## One way: a session opens a window, a window never opens a session
+ *
+ * Under the page there was a row naming the session this window belongs to,
+ * with a chevron into that session's terminal — and the way back out of the
+ * terminal was another button onto this same page. He walked the loop and
+ * called it *"too complicated"*: *"this page should be purely for only browser,
+ * not for terminal too. Terminal is only here, and only terminal is giving the
+ * browser window too. But browser side, it should not give the terminal window
+ * too."* The full quote, and what else stood in that space, are on `stage`.
+ *
+ * So nothing on the Browser tab reaches a session any more — not this screen,
+ * not the list behind it. The reverse direction is untouched and is the half he
+ * wants: a session opens the browser window it is bound to, in `SessionPageView`.
+ * Which session owns a window is still on the window — it is a window setting
+ * behind the `…`, in `MachineWindowSettingsView`, where attaching and detaching
+ * already live.
  *
  * ## Two shapes, because the two capabilities come apart
  *
@@ -42,6 +89,29 @@
  * and detached in the same breath, so it holds no binding row and `castWindows`
  * cannot see it. `src/headless/host.ts` records that as the honest state — *"a
  * row that refuses when it is tapped"* being the thing it is avoiding.
+ *
+ * ## What the machine's own front tab can and cannot be asked, measured
+ *
+ * Every verb in the `browser.window.*` family is addressed by a window id, and
+ * `src/main/remote/protocol.ts` refuses an **empty** one on every single member
+ * of it — `go`, `act`, `bind`, `shot`, `steps` each open with
+ * `rawId === '' → bad(…)`. So for the front tab, Back, Forward, Reload, attaching
+ * to a session, detaching, the screenshot, the recorder and Close are not
+ * *withheld* by this app: they cannot be put on the wire at all.
+ *
+ * What it **can** be asked is `web.open`, and only because of where that verb
+ * lands. On a headless host `openUrl` is `browserDrive.open({ url, isolate:
+ * false })`, which is the drive's own slot — the same page this screen is
+ * showing — so typing an address moves this page rather than opening a second
+ * one. That is the address bar, and Reload is the same call with the address the
+ * surface reports.
+ *
+ * It is deliberately **not** offered for a surface with a real id that no window
+ * row claims. `web.open` on the desktop is `openAppLink(mainWindow…)`, a new tab
+ * in the app's own browser, and on a server it is the front slot: either way it
+ * would move a *different* page than the one on screen. A control that acts on
+ * something else is worse than one that is greyed out, so that case draws the
+ * address read-only and says why.
  *
  * ## Whether it can be watched is an exact id match, never a guess
  *
@@ -75,6 +145,22 @@
  * everything that is *about the window* rather than about the page it happens to
  * be showing: the jar its cookies land in, the session that owns it, the picture
  * and the recorder.
+ *
+ * ## And why the bar itself is not written here any more
+ *
+ * `WatchViewerScreen` — the screen a page with **no window id** used to land on,
+ * which on a server is where most of what the phone opens actually goes — had a
+ * keyboard glyph and nothing else on it. Two screens showing a live page, with
+ * two different amounts of browser on them, and the smaller one is the one he
+ * was looking at when he said a window *"feels like just like a video… I cannot
+ * touch the URL"*. The bar is `BrowserPageBar` and it is written once because
+ * the Settings route still draws it over a surface with no model behind it.
+ *
+ * A verb a given page cannot honestly be asked for is passed as `nil` **with a
+ * reason** now, and the bar draws it greyed in its own place rather than leaving
+ * a gap: *"it should be the same case, or all the options should be available at
+ * least."* A `nil` reason is the old behaviour and is what the Settings route
+ * uses, where there is nothing to explain.
  */
 
 import SwiftUI
@@ -82,7 +168,9 @@ import SwiftUI
 struct MachineWindowView: View {
     let model: DeckModel
 
-    /// Which window. See the header for why this is an id and not the window.
+    /// Which window. See the header for why this is an id and not the window —
+    /// and why `""` is a name rather than a missing one: it is the machine's own
+    /// front tab, which `browser.surfaces` lists under exactly that.
     let windowID: String
 
     @State private var address = ""
@@ -90,27 +178,65 @@ struct MachineWindowView: View {
     /// whose row has not landed yet has no URL to seed with, and seeding from
     /// the empty string would look like an address bar that cleared itself.
     @State private var seeded = false
+    /// Whether somebody is in the address field, so a navigation does not
+    /// rewrite it under a thumb. Owned by `BrowserPageBar` and mirrored here.
+    @State private var editing = false
 
-    /// Whether the bar is in its other mode: typing **into the page** rather
-    /// than into the address. One bar with two jobs rather than two bars, which
-    /// over a full-bleed canvas is the difference between a browser and a
-    /// control panel.
-    @State private var typingIntoPage = false
-    @State private var pageText = ""
+    /// Whether the bar is in its keys mode — which is also whether the canvas is
+    /// holding the system keyboard, because the two are the same act. One bar
+    /// with two jobs rather than two bars, which over a full-bleed canvas is the
+    /// difference between a browser and a control panel.
+    @State private var typing = false
 
     /// Whether the window's settings are pushed. A `Bool` rather than a
     /// destination value because there is exactly one thing this screen pushes.
     @State private var showingSettings = false
 
-    @FocusState private var focus: Field?
+    /// Why the last thing typed was not sent, or nil — a `file:` URL, a port out
+    /// of range. The machine's own refusals arrive on `state?.notice`; this is
+    /// the half this phone decided.
+    @State private var refused: String?
+
+    /// The height the canvas says the picture is being drawn at. Zero until the
+    /// first frame lands. See `stage` for what it is for and
+    /// `WatchSurface.onPageHeight` for why the canvas is the thing that knows.
+    @State private var pageHeight: CGFloat = 0
 
     @Environment(\.dismiss) private var dismiss
 
-    private enum Field: Hashable { case address, page }
-
     private var host: HostLink? { model.current }
     private var state: MachineBrowserState? { host?.machineBrowser }
+    /// The window's own row, when the machine lists one. Nil for the machine's
+    /// own front tab, which is a page in the same browser and in no window list.
     private var window: MachineWindow? { state?.windows.first { $0.id == windowID } }
+
+    /**
+     * Whether this page can be sent a `browser.window.*` verb at all.
+     *
+     * Both halves are load-bearing and neither implies the other. The machine has
+     * to be offering `browser.control`, and this page has to **have a name that
+     * family can carry**: every verb in it is addressed by a window id and
+     * `src/main/remote/protocol.ts` refuses an empty one on all five, so the
+     * machine's own front tab is undrivable however generous the machine is
+     * being.
+     *
+     * Deliberately **not** *is there a row for this id in the window list*. A
+     * window whose row has not landed yet is still a window this phone can name,
+     * and gating on the row would draw a bar of dead controls for the first frame
+     * of every push. A window that has genuinely gone answers with the list and a
+     * notice, and `closed` takes the screen off the stack — which is the same way
+     * this family reports every other refusal.
+     */
+    private var drivable: Bool { !windowID.isEmpty && host?.canDriveBrowser == true }
+
+    /**
+     * Whether `web.open` lands on **this** page.
+     *
+     * Only the machine's own front tab, and only where the machine advertised
+     * `web`. Anywhere else that verb moves a different page — see the header —
+     * and a control that acts on something else is not an address bar.
+     */
+    private var openable: Bool { windowID.isEmpty && liveSurface != nil && model.canOpenPages }
 
     /// Whether this machine will cast a window back at all. Asked of the
     /// connection as well as of the welcome, the way `HostLink.canDriveBrowser`
@@ -127,10 +253,22 @@ struct MachineWindowView: View {
         return host?.watch.surfaces.first { $0.window == windowID }
     }
 
-    /// The window is gone from a list that **has** landed — closed here, closed
-    /// at the machine, or closed by the session that owned it. Nil state is *not
-    /// asked yet* and is not the same fact.
-    private var closed: Bool { state != nil && window == nil }
+    /**
+     * The page is gone from a machine that is **still answering** — closed here,
+     * closed at the machine, or closed by the session that owned it.
+     *
+     * Three separate absences and only their conjunction is a closed page. Nil
+     * state is *not asked yet*. No window row is the ordinary state of the front
+     * tab, so it can only mean *closed* when the machine has stopped casting a
+     * surface for it either. And a connection that has dropped is not a page that
+     * closed: the lists this reads go stale the moment the socket does, and a
+     * screen that popped itself on a blip would take somebody off a page that is
+     * still open on their machine.
+     */
+    private var closed: Bool {
+        guard state != nil, model.connection.isLive else { return false }
+        return window == nil && liveSurface == nil
+    }
 
     var body: some View {
         ZStack {
@@ -139,8 +277,13 @@ struct MachineWindowView: View {
             VStack(spacing: 0) {
                 // The one outcome no redraw can show: a picture that went to a
                 // session rather than to this phone, or an address the machine
-                // refused. See `HostLink.shotMachineWindow`.
-                if let notice = state?.notice, !notice.isEmpty {
+                // refused. See `HostLink.shotMachineWindow`. This phone's own
+                // refusal wins the space when there is one, because it is the
+                // answer to the thing that was just typed.
+                if let refused {
+                    Banner(text: refused, tone: .warning)
+                        .accessibilityIdentifier("browser.machine.window.refused")
+                } else if let notice = state?.notice, !notice.isEmpty {
                     Banner(text: notice, tone: .neutral)
                         .accessibilityIdentifier("browser.machine.window.notice")
                 }
@@ -148,7 +291,12 @@ struct MachineWindowView: View {
                 stage
             }
         }
-        .navigationTitle(window?.label ?? "Window")
+        // The window's own name, the surface's where there is no window row —
+        // both are the page's title with its address behind it — and the noun
+        // only while neither list has landed.
+        .navigationTitle(window?.label
+                         ?? liveSurface.map(MachineBrowserText.surfaceLabel)
+                         ?? "Window")
         .navigationBarTitleDisplayMode(.inline)
         .safeAreaInset(edge: .bottom) { bar }
         /*
@@ -174,8 +322,18 @@ struct MachineWindowView: View {
             // castable since. See `WatchLink.read`.
             host?.watch.read()
         }
-        .onDisappear { model.localhostPageIsOpen = false }
+        .onDisappear {
+            model.localhostPageIsOpen = false
+            // The keyboard goes with the screen. A canvas left as first
+            // responder behind a dismissed view is a keyboard nobody can put
+            // away, and the canvas is torn down a moment later anyway.
+            if typing, let surface = liveSurface { WatchStage.post(.endTyping, to: surface.window) }
+        }
         .onChange(of: window?.url) { _, _ in seed() }
+        // And the same for a page with no window row: its address moves on the
+        // surface list rather than on the window list, and the field has to
+        // follow whichever of the two this page is on.
+        .onChange(of: liveSurface?.url) { _, _ in seed() }
         /*
          * Leave when the window does.
          *
@@ -201,25 +359,90 @@ struct MachineWindowView: View {
 
     @ViewBuilder
     private var stage: some View {
-        if host?.canDriveBrowser != true {
+        /*
+         * **The picture first, and that order is the requirement.**
+         *
+         * It used to ask `canDriveBrowser` before anything else, which was right
+         * while this screen was only ever pushed for a window the phone could
+         * drive. It is pushed for the machine's own front tab now, and for a
+         * surface on a machine that casts without offering control — and on both
+         * of those the first question would have answered *this machine is not
+         * offering its browser* over a live picture of that machine's browser.
+         *
+         * A page that is being cast is a page, whatever else is or is not on
+         * offer. What cannot be sent to it is the bar's business, one control at
+         * a time, with a reason.
+         */
+        if let watch = host?.watch, let surface = liveSurface {
+            /*
+             * **The page, and nothing under it.**
+             *
+             * This space used to carry the session that owns the window, its
+             * live status, and the one tap that opened it — *"Let's give
+             * terminal here in black area available down here, to watch what the
+             * session is doing."* That tap was a route out of the Browser tab
+             * and into the terminal, and it is what he walked into:
+             *
+             * > *"if we go to browser and if we go back, it is giving like this
+             * > now. See, inside, it is taking me to directly terminal. So this
+             * > page should be purely for only browser, not for terminal too.
+             * > Terminal is only here, and only terminal is giving the browser
+             * > window too. But browser side, it should not give the terminal
+             * > window too… If I click here, there is again another button to
+             * > take me to the same browser back. Then I go back again into the
+             * > terminal page, which is too complicated. It should be just when I
+             * > come to this browser page, here I should be able to see all the
+             * > browsing windows. That's all, very simple."*
+             *
+             * So the rule is **one-way**, and it is a rule about the tab rather
+             * than about this control: a session opens a browser window
+             * (`SessionPageView`, which is untouched and is the half he wants),
+             * a browser window never opens a session. Nothing on the Browser tab
+             * calls `DeckModel.open(session:)` any more.
+             *
+             * Which session owns this window, and attaching it to another one,
+             * are not lost with the row — they are window settings and they are
+             * behind the `…` on the bar, where the whole binding card already
+             * lives: *"settings of per window, how to connect to it, how to make
+             * it shared or isolated, all of these things should be inside of the
+             * window."* What went is the route, not the fact.
+             *
+             * The picture is still sized to what the canvas says it is drawing
+             * (`WatchSurface.onPageHeight`) rather than stretched over the whole
+             * stage, because the canvas's own ground is black and a 1280×800
+             * page fitted to a 393-point phone is about 246 points tall. The page
+             * ends where it ends and the app's own paper carries down to the bar.
+             * Before the first frame the stage takes everything, which is what
+             * makes the fit land on the width rather than on a guess; it settles
+             * on the next pass.
+             */
+            GeometryReader { geometry in
+                VStack(spacing: 0) {
+                    WatchStage(watch: watch,
+                               window: surface.window,
+                               mounted: model.tab == .localhost,
+                               onPageHeight: { pageHeight = $0 })
+                        .frame(height: pageHeight > 0
+                               ? min(pageHeight, geometry.size.height)
+                               : geometry.size.height)
+                        .accessibilityIdentifier("browser.machine.window.stage")
+                    Spacer(minLength: 0)
+                }
+                .frame(width: geometry.size.width, height: geometry.size.height)
+            }
+        } else if host?.canDriveBrowser != true {
             /*
              * Reachable, and not a dead end drawn on purpose. The Browser tab
-             * pushes this screen only for a machine that advertised
-             * `browser.control`; what does happen is a machine dropping off — or
-             * coming back as a guest — while the screen is already up.
+             * pushes this screen for a machine that advertised `browser.control`
+             * or one that is casting a page; what does happen is a machine
+             * dropping off — or coming back as a guest — while the screen is
+             * already up, and the cast going with it.
              */
             note("This machine is not offering its browser.",
                  id: "browser.machine.window.unavailable")
                 .padding(.horizontal, 16)
                 .padding(.top, 20)
             Spacer(minLength: 0)
-        } else if let watch = host?.watch, let surface = liveSurface {
-            // The page, at the only size a desktop page is a thing a fingertip
-            // can hit. Exactly one canvas exists in this app — `WatchStage`'s
-            // header argues why it cannot be two — and this is one of its two
-            // mounts.
-            WatchStage(watch: watch, window: surface.window)
-                .accessibilityIdentifier("browser.machine.window.stage")
         } else if window != nil {
             MachineWindowSettingsView(model: model, windowID: windowID, pushed: false)
         } else {
@@ -231,8 +454,7 @@ struct MachineWindowView: View {
     }
 
     /**
-     * The bar a browser has: where the page is, and the four things you do to
-     * it.
+     * The bar a browser has: where the page is, and the things you do to it.
      *
      * Under the page rather than over it, because that is where every browser on
      * this phone puts it and because the top of a cast page is the page's own
@@ -240,217 +462,169 @@ struct MachineWindowView: View {
      * page verbs are about the window, and the window exists whether or not the
      * machine will cast it.
      *
-     * Absent entirely on a machine that has stopped offering its browser: every
-     * control on it is a `browser.control` verb, and a bar of four buttons that
-     * would all be refused is the definition of a control that cannot act.
+     * `BrowserPageBar` is the bar itself. It was written out of this file when
+     * the screen a page with no window id used to land on turned out to be the
+     * one he was looking at when he said a window *"feels like just like a
+     * video"*: it had no address on it at all. Two screens showing a live page
+     * and two different amounts of browser on them is how one of them ends up
+     * being the video — and the answer to that, a round later, was to stop having
+     * two screens.
+     *
+     * ## The same four controls on every page, and the reason where one is dead
+     *
+     * > *"it should be the same case, or all the options should be available at
+     * > least."*
+     *
+     * So the row is the same row under every page this screen shows, and which of
+     * them can act is decided **per verb from what the wire will carry**, never
+     * by leaving a gap:
+     *
+     *  - **A window this phone can drive** — all four are `browser.window.*` and
+     *    all four are live.
+     *  - **The machine's own front tab** — the address and Reload are `web.open`,
+     *    which lands in that same slot. Back and Forward are drawn dead: the
+     *    codec refuses an empty window id on `browser.window.act`, so there is no
+     *    frame this app could send. `whyLimited` is the sentence on the ⓘ.
+     *  - **Anything else being cast** — a machine that casts without offering
+     *    control, a page no window row claims. Nothing can be sent, the address is
+     *    read-only at the machine's last word on it, and all three verbs are dead
+     *    with the reason.
+     *
+     * The `…` is drawn only where the settings are somewhere else — on a window
+     * with no cast they **are** the body of this screen, and a control that leads
+     * to where you are standing is worse than no control.
+     *
+     * Absent entirely only where there is neither a window to drive nor a picture
+     * to be under: a bar with nothing above it is not a browser's bar.
      */
     @ViewBuilder
     private var bar: some View {
-        if host?.canDriveBrowser == true {
-            VStack(spacing: 0) {
-                Rectangle()
-                    .fill(Theme.hairline)
-                    .frame(height: 0.5)
-
-                if typingIntoPage {
-                    pageTypingRow
-                } else {
-                    addressRow
-                }
-
-                Rectangle()
-                    .fill(Theme.hairline)
-                    .frame(height: 0.5)
-                    .padding(.leading, 16)
-
-                buttonRow
-            }
-            .background(Theme.background)
+        if drivable || liveSurface != nil {
+            BrowserPageBar(
+                id: "browser.machine.window",
+                address: $address,
+                editing: $editing,
+                typing: $typing,
+                placeholder: "Address or search",
+                go: (drivable || openable) ? go : nil,
+                back: drivable ? { host?.actOnMachineWindow(windowID, .back) } : nil,
+                forward: drivable ? { host?.actOnMachineWindow(windowID, .forward) } : nil,
+                reload: reloadVerb,
+                page: liveSurface?.window,
+                more: liveSurface != nil ? { showingSettings = true } : nil,
+                unavailable: whyLimited)
         }
-    }
-
-    private var addressRow: some View {
-        HStack(spacing: 12) {
-            Image(systemName: window?.isolated == true ? "eye.slash" : "globe")
-                .font(.system(size: 19, weight: .light))
-                .foregroundStyle(Theme.faint)
-                .frame(width: 24, height: 28)
-            TextField("Address", text: $address)
-                .textFieldStyle(.plain)
-                // Each of these is load-bearing: a URL keyboard puts the slash
-                // and the dot under a thumb, autocapitalisation would send
-                // "Localhost", autocorrect "local host", and the `.URL` content
-                // type stops iOS offering a contact's name.
-                .keyboardType(.URL)
-                .textContentType(.URL)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .submitLabel(.go)
-                .onSubmit(go)
-                .focused($focus, equals: .address)
-                .font(.system(size: 15, design: .monospaced))
-                .foregroundStyle(Theme.primary)
-                .accessibilityIdentifier("browser.machine.window.address")
-            Button(action: go) {
-                Text("Go")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(typed.isEmpty ? Theme.faint : Theme.accent)
-                    .padding(.leading, 8)
-                    .padding(.vertical, 6)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            // Genuinely disabled rather than hidden: an empty address is not a
-            // thing to send, and a button that appears the moment somebody types
-            // moves the field's width under their thumb.
-            .disabled(typed.isEmpty)
-            .accessibilityLabel("Go to this address")
-            .accessibilityIdentifier("browser.machine.window.go")
-        }
-        .padding(.leading, 16)
-        .padding(.trailing, 12)
-        .padding(.vertical, 10)
     }
 
     /**
-     * The same row, typing into the **page** instead of into the address.
+     * Reload, by whichever of the two doors this page answers to.
      *
-     * A phone has no hardware keyboard, so a live view you cannot type into is
-     * half a browser. What is typed is pasted into the page as one `insertText`
-     * and followed by an Enter key — which is what a form on a page wants and
-     * what `WatchStage.send` does.
-     *
-     * It replaces the address row rather than sitting beside it. Two fields
-     * eleven points apart, one of which navigates the window and the other of
-     * which types into whatever has focus on the page, is a mistake somebody
-     * makes once with a password in it.
+     * `browser.window.act` for a window, and for the front tab the same
+     * `web.open` its address bar is — sending the address the machine last
+     * reported for it, which re-navigates that slot. Nil where the surface has no
+     * address yet, because *reload nothing* is not a verb; the bar draws it dead
+     * with the rest.
      */
-    private var pageTypingRow: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "keyboard")
-                .font(.system(size: 19, weight: .light))
-                .foregroundStyle(Theme.accent)
-                .frame(width: 24, height: 28)
-            TextField("Type into the page", text: $pageText)
-                .textFieldStyle(.plain)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .submitLabel(.send)
-                .onSubmit(sendIntoPage)
-                .focused($focus, equals: .page)
-                .font(.system(size: 15))
-                .foregroundStyle(Theme.primary)
-                .accessibilityIdentifier("browser.machine.window.type")
-            Button(action: sendIntoPage) {
-                Text("Send")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(pageText.isEmpty ? Theme.faint : Theme.accent)
-                    .padding(.leading, 8)
-                    .padding(.vertical, 6)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .disabled(pageText.isEmpty)
-            .accessibilityLabel("Send this text into the page")
-            .accessibilityIdentifier("browser.machine.window.send")
-        }
-        .padding(.leading, 16)
-        .padding(.trailing, 12)
-        .padding(.vertical, 10)
+    private var reloadVerb: (() -> Void)? {
+        if drivable { return { host?.actOnMachineWindow(windowID, .reload) } }
+        guard openable, let url = liveSurface?.url, !url.isEmpty else { return nil }
+        return { send(url) }
     }
 
     /**
-     * Back, forward, reload — and, when there is a page to type into and a
-     * screen of settings to open, those two as well.
+     * Why the dead controls on the bar are dead, or nil where none of them are.
      *
-     * The three navigation verbs are never conditional, and that is not the
-     * never-dead-click rule being bent. `MachineWindow` carries no `canGoBack`:
-     * the desktop's own history state is not on this wire, so a phone that
-     * disabled Back would be guessing, and the guess that is wrong in the common
-     * direction — a window with history, drawn dead — is the exact defect the
-     * tunnel browser's Back had for months. The verbs are all real, the host
-     * refuses what it cannot do, and the answer is the list coming back.
-     *
-     * The other two **are** conditional, and on exactly the thing they need. The
-     * keyboard types into a cast page, so it is drawn only where there is one.
-     * The `…` opens the settings, which on a window with no cast are already the
-     * body of this screen — and a control that leads to where you are standing
-     * is worse than no control.
+     * One sentence for the whole bar rather than one per glyph: the answer is a
+     * fact about the page, and three copies of it would be three places for it to
+     * drift. Both cases name the machine, because somebody with two paired needs
+     * to know which one is refusing.
      */
-    private var buttonRow: some View {
-        HStack(spacing: 0) {
-            barButton("Back", "chevron.left", id: "browser.machine.window.back") {
-                host?.actOnMachineWindow(windowID, .back)
-            }
-            barButton("Forward", "chevron.right", id: "browser.machine.window.forward") {
-                host?.actOnMachineWindow(windowID, .forward)
-            }
-            barButton("Reload", "arrow.clockwise", id: "browser.machine.window.reload") {
-                host?.actOnMachineWindow(windowID, .reload)
-            }
-            if liveSurface != nil {
-                barButton(typingIntoPage ? "Address" : "Keyboard",
-                          typingIntoPage ? "globe" : "keyboard",
-                          id: "browser.machine.window.keyboard") {
-                    typingIntoPage.toggle()
-                    focus = typingIntoPage ? .page : nil
-                }
-                barButton("More", "ellipsis", id: "browser.machine.window.settings") {
-                    showingSettings = true
-                }
-            }
+    private var whyLimited: String? {
+        guard !drivable else { return nil }
+        let name = model.current?.label ?? model.theMachine
+        if windowID.isEmpty {
+            return "This is \(name)'s own tab rather than one of its windows. The machine names a "
+                + "window with an id and this page has none, so Back, Forward and the window's own "
+                + "settings cannot be addressed to it.\n\nTyping an address still moves this page: "
+                + "that is a different verb, and it lands in this same tab."
         }
-        .padding(.vertical, 10)
-    }
-
-    private func barButton(_ title: String, _ icon: String,
-                           id: String, act: @escaping () -> Void) -> some View {
-        Button(action: act) {
-            VStack(spacing: 5) {
-                Image(systemName: icon)
-                    .font(.system(size: 17, weight: .medium))
-                Text(title)
-                    .font(.system(size: 11))
-            }
-            .foregroundStyle(Theme.accent)
-            .frame(maxWidth: .infinity)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(title)
-        .accessibilityIdentifier(id)
+        return "\(name) is casting this page and is not offering its browser to this phone, so "
+            + "nothing on this bar can be sent to it. The address is what the machine last "
+            + "reported for the page."
     }
 
     // MARK: - Actions
 
-    private var typed: String {
-        address.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private func go() {
-        guard !typed.isEmpty else { return }
-        host?.goMachineWindow(windowID, to: typed)
-        focus = nil
-    }
-
-    private func sendIntoPage() {
-        guard let surface = liveSurface, !pageText.isEmpty else { return }
-        let text = pageText
-        pageText = ""
-        WatchStage.send(text, to: surface.window)
+    /**
+     * Send the typed line to this page, having first worked out what it is.
+     *
+     * The classification is `LocalhostAddress.classify`, the same pure function
+     * the new-window sheet calls, so `google.com`, `https://…`, `3000` and `what
+     * is my ip` mean the same thing in every field in this app. This field used
+     * to hand the machine the raw text and hope: a URL worked, a bare hostname
+     * sometimes worked, and a sentence typed into it went nowhere with nothing on
+     * screen to say why.
+     *
+     * One classification for both doors, deliberately. Which verb carries the
+     * result is `send`'s question and it is asked after this one, so the front tab
+     * and a window can never come to different conclusions about what was typed.
+     *
+     * A port means a page on the machine's own loopback, which is what a field
+     * attached to a window on that machine can only mean.
+     */
+    private func go(_ typed: String) {
+        switch LocalhostAddress.classify(typed) {
+        case let .tunnel(port, path):
+            send("http://localhost:\(String(port))\(path)")
+        case let .page(url):
+            send(url)
+        case let .search(_, url):
+            send(url)
+        case let .refused(why):
+            refused = why
+        }
     }
 
     /**
-     * Fill the field from the window, unless somebody is using it.
+     * Out of the two doors, whichever one reaches this page.
+     *
+     * A window is `browser.window.go`, addressed by its id. The machine's own
+     * front tab has no id and is `web.open`, which on a headless host is
+     * `browserDrive.open` into the drive's own slot — this page, not a second
+     * one. The branch is `drivable` rather than *is the id empty*, because a
+     * machine that has stopped offering `browser.control` between the push and
+     * the press has an id and no door to send it through; `openable` refuses that
+     * case as well, and then the field is not drawn at all.
+     *
+     * Reached only from the field, and the field is drawn only where one of the
+     * two doors is open — so there is no third case here where a press goes
+     * nowhere.
+     */
+    private func send(_ url: String) {
+        refused = nil
+        if drivable {
+            host?.goMachineWindow(windowID, to: url)
+        } else {
+            model.openPageOnMachine(url)
+        }
+    }
+
+    /**
+     * Fill the field from the page, unless somebody is using it.
      *
      * The guard is the whole function. Without it, a page that redirects — or a
      * single-page app that rewrites its own URL, which is most of what anybody
      * points this at — rewrites the field mid-word, and the address that gets
      * sent is half of what was typed with half of where the page went.
+     *
+     * The window's URL where there is a window row, the surface's where there is
+     * not: the front tab's address lives on `browser.surfaces.rows` and nowhere
+     * else, and a field seeded only from the window list would be empty on every
+     * page that arrived through `web.open`.
      */
     private func seed() {
-        guard focus != .address else { return }
-        guard let url = window?.url, !url.isEmpty else { return }
+        guard !editing else { return }
+        guard let url = window?.url ?? liveSurface?.url, !url.isEmpty else { return }
         guard !seeded || url != address else { return }
         address = url
         seeded = true
