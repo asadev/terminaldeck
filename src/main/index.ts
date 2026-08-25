@@ -1830,6 +1830,16 @@ function whereWindowIs(session: { sessionId: string; machineId: string }): Windo
 }
 
 /**
+ * What a pick is answered with on a build whose browser never came up.
+ *
+ * A sentence rather than a shrug, because this one is read out loud on a phone:
+ * `browser-control.ts` wraps it as *"B2 could not be looked at: …"*. Named here
+ * beside its only reader, the way {@link NO_DRIVE_TO_CAST} is named beside its
+ * own, so a sweep for the words a person actually sees finds both.
+ */
+const NO_DRIVE_TO_PICK = 'this app has no browser running'
+
+/**
  * This machine's browser, as a phone reaches it.
  *
  * The presence of the object this returns is what makes the endpoint advertise
@@ -1905,6 +1915,50 @@ function machineBrowserHere(): MachineBrowser {
       const drive = browserDrive()
       if (drive === null) return false
       return drive.close({ key: boundKey(id), viewId, browserTabId: id, name })
+    },
+    /*
+     * Pointing at one thing, through the drive, for the reason the drive exists
+     * at all: on this desktop the only thing that can run a script inside a
+     * browser pane is the drive, and this file is the one place the drive is
+     * reached. `machine-browser-desktop.ts` declares the seam and does the id
+     * work above it — it turns the window id the wire carries into the view
+     * inside it and the name a person says out loud — so all that is left here
+     * is the same target mint a close performs, one line up.
+     *
+     * **The same slot, not a second one.** `boundKey(id)` files this under the
+     * key an agent driving that window is already using, so a tap from a phone
+     * and a tool call from a session are the same page held once: one baton,
+     * one origin grant, one banner. A pick that minted its own key would be a
+     * second slot on one document, which is the failure the drive's own header
+     * measures — and it is also why the drive's refusal, the one a person
+     * reading the page during a handover triggers, comes back here as its own
+     * sentence rather than being invented on this side.
+     *
+     * **Supplied always, resolved per call.** `pick` is optional on the seam,
+     * and the tempting reading is to only supply it when there is a drive. That
+     * would switch the feature off permanently: this function is called from
+     * `registerIpc` while it builds the remote endpoint, and
+     * `registerBrowserDriveIpc` — the thing that publishes the drive — is called
+     * from the *same* function about eight hundred lines further down. So
+     * `browserDrive()` is null at the moment the object below is composed, every
+     * single boot. The live-view sibling under this one already states the rule
+     * in as many words: read the drive on every call, never hold it.
+     *
+     * Which leaves the genuinely driveless build — the browser switched off in
+     * Features — answered by a throw, because a pick has an element to hand back
+     * and no false to return the way a close does. The sentence reaches the
+     * phone as *"B2 could not be looked at: this app has no browser running."*
+     *
+     * Note this is deliberately **not** the sentence the seam's header sketched
+     * for this wiring (*"this window is not being driven"*). That reads as a
+     * fact about one window, and it is not one: `BrowserDrive.slotFor` mints a
+     * slot the first time a window is named, so a window nobody has ever driven
+     * picks perfectly well. Null here is a fact about the whole app.
+     */
+    pick: async ({ id, viewId, name, x, y, up }) => {
+      const drive = browserDrive()
+      if (drive === null) throw new Error(NO_DRIVE_TO_PICK)
+      return drive.pickAt(x, y, up, { key: boundKey(id), viewId, browserTabId: id, name })
     },
     // The desktop's own capture: the same Pictures folder, the same filename
     // rule and the same preview width the window's Screenshot button produces.
