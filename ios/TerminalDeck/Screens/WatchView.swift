@@ -761,6 +761,16 @@ final class WatchSurfaceUIView: UIView, UIKeyInput, UIGestureRecognizerDelegate 
      */
     @objc private func onTap(_ gesture: UITapGestureRecognizer) {
         guard let at = page(at: gesture.location(in: self)) else { return }
+        // Inspect mode: a tap *names* what is under it instead of pressing it.
+        //
+        // `page(at:)` has already refused a touch on the letterbox and returned
+        // the same point a click would have used, so the two roads cannot land
+        // on two different elements — which is the whole reason the conversion
+        // to document coordinates lives in `MachinePick` and not here.
+        // `take` answers false whenever inspect is off, this is not the armed
+        // window, or the frame is curtained, and the ordinary click follows.
+        if let frame = lastFrame,
+           MachinePick.take(window: target, frame: frame, imageX: at.x, imageY: at.y) { return }
         // The pointer arrives before the button goes down. A desktop page's
         // navigation opens on `mouseover` far more often than on click, and a
         // click with no move before it lands on a menu that never opened.
