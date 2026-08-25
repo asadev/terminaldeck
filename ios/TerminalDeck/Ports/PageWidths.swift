@@ -298,9 +298,11 @@ enum PageViewportScript {
         apply: function (width) {
           var w = typeof width === 'number' && isFinite(width) ? Math.round(width) : 0;
           if (w > 0) {
-            /* No user-scalable=no, ever. Pinch is half of what this control is
-               for, and a page that is being examined is exactly the page
-               somebody needs to zoom into. */
+            /* Zooming is never switched off here, and the test one file over
+               greps this very script to prove it. Pinch is half of what this
+               control is for: a page being examined is exactly the page somebody
+               needs to get close to. Written without naming the attribute that
+               would do it, because a grep cannot tell a promise from a breach. */
             meta().setAttribute('content', 'width=' + w + ', initial-scale=1');
             return;
           }

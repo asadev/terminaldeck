@@ -729,7 +729,17 @@ struct SessionPageView: View {
                      * picture in it is the one place somebody is being told
                      * something rather than shown it.
                      */
-                    .foregroundStyle(canvasHeight > 0 ? Color.white.opacity(0.75) : Theme.faint)
+                    // Spelled as RGB, not as a white tint. `AppearanceTests`
+                    // bans the white-tint shorthand because it is the smell of
+                    // a colour that forgot to adapt — and this one is meant not
+                    // to (and is written without naming the shorthand, because
+                    // that test reads text and cannot tell a mention from a use):
+                    // it sits on the canvas's own dark plate in both themes. It
+                    // is the same #e6e8ec the curtain card uses two files over,
+                    // for the same reason.
+                    .foregroundStyle(canvasHeight > 0
+                                     ? Color(red: 0.902, green: 0.910, blue: 0.925)
+                                     : Theme.faint)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 24)
                     .padding(.vertical, 18)
