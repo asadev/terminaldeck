@@ -138,7 +138,7 @@ struct MachineWindowSettingsView: View {
     /// The picture this phone took of its own page, and how that went. See
     /// `PhonePageShot` at the foot of this file for why the phone has to render
     /// the page again rather than photograph the one it was showing.
-    @State private var shot = PhonePageShot()
+    @State private var phoneShot = PhonePageShot()
 
     /// What the last press asked for, held for a moment because the act it
     /// describes leaves nothing on this screen to look at. The same two and a
@@ -569,12 +569,12 @@ struct MachineWindowSettingsView: View {
                         Text("Screenshot")
                             .font(.system(size: 11))
                     }
-                    .foregroundStyle(shot.phase == .working ? Theme.faint : Theme.accent)
+                    .foregroundStyle(phoneShot.phase == .working ? Theme.faint : Theme.accent)
                     .frame(maxWidth: .infinity)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .disabled(shot.phase == .working)
+                .disabled(phoneShot.phase == .working)
                 .accessibilityHint("Takes a picture of this page and shows it here")
                 .accessibilityIdentifier("browser.phone.page.shot")
 
@@ -594,13 +594,13 @@ struct MachineWindowSettingsView: View {
                             Text("Send to a session")
                                 .font(.system(size: 11))
                         }
-                        .foregroundStyle(shot.png == nil ? Theme.faint : Theme.accent)
+                        .foregroundStyle(phoneShot.png == nil ? Theme.faint : Theme.accent)
                         .frame(maxWidth: .infinity)
                         .contentShape(Rectangle())
                     }
-                    .disabled(shot.png == nil)
+                    .disabled(phoneShot.png == nil)
                     .accessibilityLabel("Send a screenshot to a session")
-                    .accessibilityHint(shot.png == nil
+                    .accessibilityHint(phoneShot.png == nil
                                        ? "Take the picture first — there is nothing to send yet"
                                        : "Uploads the picture and types its name into that session")
                     .accessibilityIdentifier("browser.phone.page.shotTo")
@@ -608,7 +608,7 @@ struct MachineWindowSettingsView: View {
             }
             .padding(.vertical, 12)
 
-            switch shot.phase {
+            switch phoneShot.phase {
             case .working:
                 rowDivider(inset: 16)
                 HStack(spacing: 10) {
@@ -628,7 +628,7 @@ struct MachineWindowSettingsView: View {
                 EmptyView()
             }
 
-            if let picture = shot.image {
+            if let picture = phoneShot.image {
                 rowDivider(inset: 16)
                 VStack(alignment: .leading, spacing: 8) {
                     Image(uiImage: picture)
@@ -641,7 +641,7 @@ struct MachineWindowSettingsView: View {
                         .accessibilityLabel("Screenshot of \(tab.label)")
                         .accessibilityIdentifier("browser.phone.page.picture")
 
-                    if let line = SessionDetails.activityLine(shot.takenAt) {
+                    if let line = SessionDetails.activityLine(phoneShot.takenAt) {
                         Text("Taken \(line)")
                             .font(.system(size: 12))
                             .foregroundStyle(Theme.faint)
@@ -784,11 +784,11 @@ struct MachineWindowSettingsView: View {
      */
     private func takePhoneShot(_ tab: BrowserTab) async {
         guard let url = await liveURL(for: tab) else {
-            shot.fail("This phone could not reach \(machineName) on that port, so there was "
+            phoneShot.fail("This phone could not reach \(machineName) on that port, so there was "
                       + "nothing to photograph.")
             return
         }
-        await shot.take(url: url)
+        await phoneShot.take(url: url)
     }
 
     /// Where the page actually lives right now: the tunnel's own origin with the
@@ -826,7 +826,7 @@ struct MachineWindowSettingsView: View {
      * would attach last shot's sentence to the next one.
      */
     private func sendPhoneShot(to session: String, tab: BrowserTab) {
-        guard let png = shot.png, !png.isEmpty else { return }
+        guard let png = phoneShot.png, !png.isEmpty else { return }
         let name = "page-\(String(tab.port))-\(Int(Date().timeIntervalSince1970)).png"
         let file = FileManager.default.temporaryDirectory.appendingPathComponent(name)
         do {
