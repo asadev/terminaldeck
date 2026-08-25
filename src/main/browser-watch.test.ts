@@ -1,5 +1,12 @@
-import { describe, expect, it } from 'vitest'
-import { PageCast, type CastFrame, type CastSeam, type SecretScan } from './browser-watch'
+import { beforeEach, describe, expect, it } from 'vitest'
+import {
+  PageCast,
+  forgetWatcherDevices,
+  noteWatcherDevice,
+  type CastFrame,
+  type CastSeam,
+  type SecretScan,
+} from './browser-watch'
 import { PERSON_METHODS } from './browser-cdp'
 import { MAX_FRAME_DATA_CHARS } from './remote/protocol'
 
@@ -112,6 +119,17 @@ function collector(): { frames: CastFrame[]; emit: (f: CastFrame) => void } {
   return { frames, emit: (f) => frames.push(f) }
 }
 
+/*
+ * Which connections are the owner's own is module state — `server.ts` notes it
+ * beside the watch call rather than through the two routing layers in between —
+ * so it is cleared between tests. A leaked note would make a later test pass for
+ * a reason it never asserted, which on a privacy brake is the worst kind of
+ * green.
+ */
+beforeEach(() => {
+  forgetWatcherDevices()
+})
+
 describe('a page cast forwards frames and acks CDP behind them', () => {
   it('starts a jpeg screencast and forwards the first frame with its geometry', async () => {
     const seam = new FakeSeam()
@@ -183,13 +201,34 @@ describe('a page cast forwards frames and acks CDP behind them', () => {
   })
 })
 
-describe('a secret never crosses the cast', () => {
-  it('masks a frame with empty data when a secret rect is in the viewport', async () => {
+/**
+ * The privacy card: whose page it is drawn over, and whose it is not.
+ *
+ * It used to be drawn for everybody, which meant it was drawn over Asad's own
+ * sign-in page on Asad's own phone, watching Asad's own machine:
+ *
+ * > *"this problem should not be there … we have connected it properly. We have
+ * > access to everything. So why only for this we have this kind of resistance?
+ * > … We can just see and enter."*
+ *
+ * So the rule is per watcher now, and these assert it in both directions off the
+ * same frame: a device of his own sees the field, a guest gets the card, and
+ * neither of them changed what the agent may read.
+ */
+describe('a secret is shown to a device of your own and hidden from a guest', () => {
+  /** A password box at document y 100..130 — in view at scroll 0. */
+  const PASSWORD_BOX: SecretScan = {
+    rects: [{ x: 40, y: 100, width: 200, height: 30 }],
+    viewport: { width: 800, height: 600 },
+  }
+
+  it('masks a frame with empty data when a guest is watching a secret rect', async () => {
     const seam = new FakeSeam()
-    seam.secrets = { rects: [{ x: 40, y: 100, width: 200, height: 30 }], viewport: { width: 800, height: 600 } }
+    seam.secrets = PASSWORD_BOX
     const cast = new PageCast(seam)
     const sink = collector()
-    await cast.watch('c1', '', { maxWidth: 800, quality: 50 }, sink.emit)
+    noteWatcherDevice('borrowed-laptop', false)
+    await cast.watch('borrowed-laptop', '', { maxWidth: 800, quality: 50 }, sink.emit)
     await cast.refreshSecrets()
 
     seam.emitFrame({ dw: 800, dh: 600, scrollY: 0 })
@@ -199,12 +238,66 @@ describe('a secret never crosses the cast', () => {
     expect(sink.frames[0].prompt).toBeTruthy()
   })
 
-  it('lets the frame through once the secret has scrolled out of view', async () => {
+  it('sends the same frame with its pixels to one of the owner’s own devices', async () => {
     const seam = new FakeSeam()
-    seam.secrets = { rects: [{ x: 40, y: 100, width: 200, height: 30 }], viewport: { width: 800, height: 600 } }
+    seam.secrets = PASSWORD_BOX
     const cast = new PageCast(seam)
     const sink = collector()
-    await cast.watch('c1', '', { maxWidth: 800, quality: 50 }, sink.emit)
+    noteWatcherDevice('his-phone', true)
+    await cast.watch('his-phone', '', { maxWidth: 800, quality: 50 }, sink.emit)
+    await cast.refreshSecrets()
+
+    seam.emitFrame({ dw: 800, dh: 600, scrollY: 0 })
+    expect(sink.frames).toHaveLength(1)
+    expect(sink.frames[0].masked).toBeUndefined()
+    expect(sink.frames[0].data.length).toBeGreaterThan(0)
+    expect(sink.frames[0].prompt).toBeUndefined()
+  })
+
+  it('answers one CDP frame two ways when both are watching the same page', async () => {
+    // The shape the per-watcher mask exists for: one login page, one screencast
+    // frame, two different answers decided by whose device is on the other end.
+    const seam = new FakeSeam()
+    seam.secrets = PASSWORD_BOX
+    const cast = new PageCast(seam)
+    const his = collector()
+    const guest = collector()
+    noteWatcherDevice('his-phone', true)
+    noteWatcherDevice('borrowed-laptop', false)
+    await cast.watch('his-phone', '', { maxWidth: 800, quality: 50 }, his.emit)
+    await cast.watch('borrowed-laptop', '', { maxWidth: 800, quality: 50 }, guest.emit)
+    await cast.refreshSecrets()
+
+    seam.emitFrame({ dw: 800, dh: 600, scrollY: 0 })
+    expect(his.frames[0].masked).toBeUndefined()
+    expect(his.frames[0].data.length).toBeGreaterThan(0)
+    expect(guest.frames[0].masked).toBe(true)
+    expect(guest.frames[0].data).toBe('')
+  })
+
+  it('treats a watcher nobody vouched for as a guest', async () => {
+    // Unknown reads as guest, deliberately: the reading that hides a password is
+    // the safe one, and it is what every caller that is not the remote endpoint
+    // gets.
+    const seam = new FakeSeam()
+    seam.secrets = PASSWORD_BOX
+    const cast = new PageCast(seam)
+    const sink = collector()
+    await cast.watch('nobody-said', '', { maxWidth: 800, quality: 50 }, sink.emit)
+    await cast.refreshSecrets()
+
+    seam.emitFrame({ dw: 800, dh: 600, scrollY: 0 })
+    expect(sink.frames[0].masked).toBe(true)
+    expect(sink.frames[0].data).toBe('')
+  })
+
+  it('lets a guest’s frame through once the secret has scrolled out of view', async () => {
+    const seam = new FakeSeam()
+    seam.secrets = PASSWORD_BOX
+    const cast = new PageCast(seam)
+    const sink = collector()
+    noteWatcherDevice('borrowed-laptop', false)
+    await cast.watch('borrowed-laptop', '', { maxWidth: 800, quality: 50 }, sink.emit)
     await cast.refreshSecrets()
 
     // The secret sits at document y 100..130; scroll past it so the viewport is
@@ -214,10 +307,90 @@ describe('a secret never crosses the cast', () => {
     expect(sink.frames[0].data.length).toBeGreaterThan(0)
   })
 
+  it('refuses a guest’s tap on the page it was only shown a lock card of', async () => {
+    // You cannot drive what you cannot see. Without this the card would be a
+    // picture rather than a wall: a guest could type into a login page it is not
+    // being shown.
+    const seam = new FakeSeam()
+    seam.secrets = PASSWORD_BOX
+    const cast = new PageCast(seam)
+    const sink = collector()
+    noteWatcherDevice('borrowed-laptop', false)
+    await cast.watch('borrowed-laptop', '', { maxWidth: 800, quality: 50 }, sink.emit)
+    await cast.refreshSecrets()
+    seam.emitFrame({ dw: 800, dh: 600, scrollY: 0 })
+    expect(sink.frames[0].masked).toBe(true)
+
+    const refused = await cast.input('borrowed-laptop', {
+      t: 'browser.input',
+      window: '',
+      seq: sink.frames[0].seq,
+      mouse: { type: 'down', x: 10, y: 10 },
+    })
+    expect(refused.ok).toBe(false)
+    expect(refused.reason).toContain('hidden')
+    expect(seam.sentMethods('Input.dispatchMouseEvent')).toHaveLength(0)
+  })
+
+  it('lets one of the owner’s own devices type into the login page it can see', async () => {
+    // *"We can just see and enter."* The seeing and the entering are one rule:
+    // the frame was not masked for this watcher, so there is nothing to refuse.
+    const seam = new FakeSeam()
+    seam.secrets = PASSWORD_BOX
+    const cast = new PageCast(seam)
+    const sink = collector()
+    noteWatcherDevice('his-phone', true)
+    await cast.watch('his-phone', '', { maxWidth: 800, quality: 50 }, sink.emit)
+    await cast.refreshSecrets()
+    seam.emitFrame({ width: 800, height: 600, dw: 800, dh: 600, scrollY: 0 })
+
+    const typed = await cast.input('his-phone', {
+      t: 'browser.input',
+      window: '',
+      seq: sink.frames[0].seq,
+      paste: 'hunter2',
+    })
+    expect(typed.ok).toBe(true)
+    expect(seam.sentMethods('Input.insertText')).toHaveLength(1)
+  })
+
+  it('goes on scanning for secrets, because the agent’s screenshots need it', async () => {
+    /*
+     * The dependency this change must not tidy away. `BrowserDrive.maskedPng`
+     * paints these rectangles out of every PNG the **agent** reads and throws if
+     * the scan returns null, so opening the curtain for the owner's own eyes has
+     * to leave the scan itself alone. Asserted from the one side this file can
+     * see it: the rectangles are still being kept, because a guest arriving mid-
+     * cast is still masked by them.
+     */
+    const seam = new FakeSeam()
+    seam.secrets = PASSWORD_BOX
+    const cast = new PageCast(seam)
+    const his = collector()
+    noteWatcherDevice('his-phone', true)
+    await cast.watch('his-phone', '', { maxWidth: 800, quality: 50 }, his.emit)
+    await cast.refreshSecrets()
+    seam.emitFrame({ dw: 800, dh: 600, scrollY: 0 })
+    expect(his.frames[0].masked).toBeUndefined()
+
+    const guest = collector()
+    noteWatcherDevice('borrowed-laptop', false)
+    await cast.watch('borrowed-laptop', '', { maxWidth: 800, quality: 50 }, guest.emit)
+    cast.ack('his-phone', his.frames[0].seq)
+    seam.emitFrame({ dw: 800, dh: 600, scrollY: 0 })
+    expect(guest.frames[guest.frames.length - 1].masked).toBe(true)
+    expect(his.frames[his.frames.length - 1].masked).toBeUndefined()
+  })
+
   it('curtains the whole cast during a handover and refuses input', async () => {
+    // The handover curtain is untouched by any of the above: it is the agent
+    // saying *this page is a person's now*, which is a different claim from *a
+    // password box is on screen*, and it falls on a device of your own exactly
+    // as it always did.
     const seam = new FakeSeam()
     const cast = new PageCast(seam)
     const sink = collector()
+    noteWatcherDevice('c1', true)
     await cast.watch('c1', '', { maxWidth: 800, quality: 50 }, sink.emit)
 
     // The driver curtains before the baton flips: stopScreencast is sent and a
@@ -376,12 +549,24 @@ describe('a frame over the field cap is dropped, never chunked', () => {
  * an agent that stays refused throughout.
  */
 describe('one watcher answers the handover and the rest stay curtained', () => {
-  /** Two watchers on one page, both live, both drawn a curtain by the handover. */
-  async function handedOver(prompt = 'Sign in and then press Done.') {
+  /**
+   * Two watchers on one page, both live, both drawn a curtain by the handover.
+   *
+   * Which kind of device each one is gets named per test rather than fixed,
+   * because whose device is on the other end is now half of what a frame means.
+   * Both are the owner's own by default — the ordinary case, and the one that
+   * proves the handover curtain still falls on his own phone.
+   */
+  async function handedOver(
+    prompt = 'Sign in and then press Done.',
+    kinds: { phone?: boolean; laptop?: boolean } = {},
+  ) {
     const seam = new FakeSeam()
     const cast = new PageCast(seam)
     const first = collector()
     const second = collector()
+    noteWatcherDevice('phone', kinds.phone ?? true)
+    noteWatcherDevice('laptop', kinds.laptop ?? true)
     await cast.watch('phone', '', { maxWidth: 800, quality: 50 }, first.emit)
     await cast.watch('laptop', '', { maxWidth: 800, quality: 50 }, second.emit)
 
@@ -394,7 +579,9 @@ describe('one watcher answers the handover and the rest stay curtained', () => {
 
   it('shows the taker the page while a second watcher keeps its lock card', async () => {
     const { seam, cast, first, second } = await handedOver()
-    // Both were curtained by the handover, before anybody took it.
+    // Both are devices of his own, and both were curtained by the handover
+    // before anybody took it: the curtain is about the question the agent asked,
+    // never about who is holding the phone.
     expect(first.frames[0].masked).toBe(true)
     expect(second.frames[0].masked).toBe(true)
 
@@ -419,8 +606,12 @@ describe('one watcher answers the handover and the rest stay curtained', () => {
     expect(toOther.prompt).toContain('Sign in')
   })
 
-  it('shows the taker the secret field it was handed the page to fill in', async () => {
-    const { seam, cast, first, second } = await handedOver()
+  it('shows the taker the secret field while a guest keeps its card', async () => {
+    // His own phone answers the question; a guest is watching the same page from
+    // somebody else's machine. All three rules at once: the curtain falls on
+    // everybody, the taker steps through it, and the guest is left with the card
+    // the secret-rect brake would have drawn anyway.
+    const { seam, cast, first, second } = await handedOver(undefined, { laptop: false })
     // A password box at document y 100..130, in view.
     seam.secrets = { rects: [{ x: 10, y: 100, width: 200, height: 30 }], viewport: { width: 800, height: 600 } }
     await cast.refreshSecrets()
@@ -430,10 +621,30 @@ describe('one watcher answers the handover and the rest stay curtained', () => {
     cast.ack('laptop', second.frames[0].seq)
     seam.emitFrame({ width: 800, height: 600 })
 
-    // The secret-rect brake is skipped for the taker and only for the taker.
-    // Masking the field they were asked to fill in would hide the entire task.
     expect(first.frames[first.frames.length - 1].masked).toBeUndefined()
+    expect(first.frames[first.frames.length - 1].data.length).toBeGreaterThan(0)
     expect(second.frames[second.frames.length - 1].masked).toBe(true)
+    expect(second.frames[second.frames.length - 1].data).toBe('')
+  })
+
+  it('shows even a guest the field, once the agent has handed it that page', async () => {
+    /*
+     * The taker exception is about the question, not about the device: a guest
+     * that was explicitly asked to fill this page in has been handed it by the
+     * agent, and a lock card over the box would hide the whole of what it was
+     * asked to do. The device kind decides the *uninvited* look at a password
+     * box; being handed the page is an invitation.
+     */
+    const { seam, cast, first } = await handedOver(undefined, { phone: false, laptop: false })
+    seam.secrets = { rects: [{ x: 10, y: 100, width: 200, height: 30 }], viewport: { width: 800, height: 600 } }
+    await cast.refreshSecrets()
+
+    await cast.take('phone')
+    cast.ack('phone', first.frames[0].seq)
+    seam.emitFrame({ width: 800, height: 600 })
+
+    expect(first.frames[first.frames.length - 1].masked).toBeUndefined()
+    expect(first.frames[first.frames.length - 1].data.length).toBeGreaterThan(0)
   })
 
   it('types for the taker down the person’s door and refuses everybody else', async () => {

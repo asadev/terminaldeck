@@ -193,6 +193,11 @@ import { ownPorts } from '../own-ports'
 import { currentPlatform, machineNoun } from '../platform/host'
 import { createRelayClient, relayEnabled, relayUrl, type RelayLink, type RelayState } from './relay-client'
 import { loadHostIdentity } from './host-identity'
+// Which kind of device a watching connection is. `browser-watch.ts` draws the
+// privacy card and only this file can say whose device it is drawing it for —
+// see `noteWatcherDevice` there for why the fact travels beside the watch call
+// rather than through the two routing layers between here and the cast.
+import { noteWatcherDevice } from '../browser-watch'
 // The rendezvous half of a pairing code. It is imported *here*, into the desk
 // that mints codes, because that is what makes "a code this product shows" and
 // "a code another machine can find" the same thing — see `PairingDesk.show`.
@@ -6392,6 +6397,18 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
         const watcherId = connection.id
         const window = message.window
         connection.watching.add(window)
+        /*
+         * Whose eyes these pixels are for, answered live and answered here.
+         *
+         * One of the owner's own paired devices is shown its own sign-in pages;
+         * a guest keeps the privacy card over them. `mayWatchNow` above happens
+         * to admit only own devices today, so this reads `true` every time it
+         * runs — and it is written out in full anyway, because the day that gate
+         * widens (a guest being allowed to watch a window it may already drive)
+         * is exactly the day a hardcoded `true` here would quietly hand somebody
+         * else's password to a stranger's phone.
+         */
+        noteWatcherDevice(watcherId, connection.deviceId !== null && ownDevice(connection.deviceId))
         void cast
           .watch({
             watcherId,

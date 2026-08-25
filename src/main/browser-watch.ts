@@ -41,23 +41,55 @@ import {
  *     8 MB socket buffer. A CDP frame that arrives while a watcher is still
  *     un-acked *replaces* that watcher's pending frame: a slow phone sees fewer,
  *     current frames, never a queue.
- *  2. **A secret never crosses.** Two brakes stack, both here at the source. A
- *     handover (the person taking the baton to type a password) stops the cast
- *     before the baton flips and curtains every watcher of that page — every
- *     watcher **except the one who said the person is me**, which is the taker
- *     and is the whole of {@link PageCast.take}. A secret
- *     field merely *visible* — an autofilled dots box, a "show password" toggle,
- *     an OTP on screen — is caught by cheap arithmetic over the frame's own
- *     scroll metadata against the cached secret rectangles, and that frame's data
- *     is withheld: `masked: true`, empty `data`, the viewer draws its own lock
- *     card. The pixels never enter a wire buffer, because there is no JPEG
- *     encoder in this repo to paint them out with and withholding is the only
- *     absolutely-safe answer.
+ *  2. **A secret crosses to your own devices and to nothing else.** Two brakes
+ *     stack, both here at the source, and they answer two different questions.
+ *
+ *     The **handover curtain** is the agent explicitly handing the page to a
+ *     person: it stops the cast before the baton flips and curtains every
+ *     watcher of that page — every watcher **except the one who said the person
+ *     is me**, which is the taker and is the whole of {@link PageCast.take}.
+ *     Untouched, and `BrowserHandoverState.mine` is built on it stopping the
+ *     cast.
+ *
+ *     The **secret-rect brake** is the cheap one that needs no agent at all: a
+ *     password, OTP or card field merely *visible* — an autofilled dots box, a
+ *     "show password" toggle — caught by arithmetic over the frame's own scroll
+ *     metadata against the cached secret rectangles. For a **guest** device that
+ *     frame's data is withheld: `masked: true`, empty `data`, the viewer draws
+ *     its own lock card. The pixels never enter a wire buffer, because there is
+ *     no JPEG encoder in this repo to paint them out with and withholding is the
+ *     only absolutely-safe answer.
+ *
+ *     For one of the **owner's own paired devices** that second brake is not
+ *     applied, and that is a decision rather than an oversight. Asad, watching
+ *     his own phone draw a lock card over his own sign-in page on his own
+ *     machine:
+ *
+ *     > *"this problem should not be there. So the person is entering something
+ *     > private because this, we have connected it properly. We have access to
+ *     > everything. So why only for this we have this kind of resistance? … We
+ *     > can just see and enter."*
+ *
+ *     His phone is him. A device paired to this machine as the owner's own, and
+ *     granted its windows, is not a bystander reading over a shoulder; blanking
+ *     his own login page on it is the app second-guessing a decision he already
+ *     made, and what it costs him is the ability to sign in to anything at all
+ *     from his phone. A **guest** is a different person on somebody else's
+ *     machine and keeps the card — which is why the answer is per watcher rather
+ *     than per frame; see {@link maskFor} and {@link noteWatcherDevice}.
+ *
+ *     What did **not** change is what the *agent* may read. The scan still runs,
+ *     the rectangles are still cached, and `BrowserDrive.maskedPng` still paints
+ *     them out of every screenshot the agent takes. The owner's own eyes are the
+ *     only thing this opened.
  *  3. **Watching never widens driving.** Input is refused whenever the frame the
  *     watcher would be acting on is masked — you cannot drive what you cannot
  *     see — and the coordinate mapping is re-derived from the host's own record
  *     of the frame the viewer named by `seq`, never from a scale the viewer
- *     computed, so a scroll landing mid-gesture cannot desync it.
+ *     computed, so a scroll landing mid-gesture cannot desync it. Read the other
+ *     way round, that is why the owner's own device may now *type* into his
+ *     login page: the frame it is looking at is not masked, so there is nothing
+ *     to refuse.
  */
 
 /** The little of the driver a cast needs — the screened send and the event stream. */
@@ -140,6 +172,15 @@ interface FrameGeometry {
   dh: number
   scale: number
   pageScale: number
+  /**
+   * Did this frame leave here with its pixels withheld from *this* watcher?
+   *
+   * Recorded per watcher rather than per frame because that is what masking is
+   * now — one CDP frame leaves with pixels for the owner's phone and empty for a
+   * guest — and read back by {@link PageCast.input}, which refuses a gesture
+   * acting on a frame the sender was never shown.
+   */
+  masked: boolean
 }
 
 /** How many past frames' geometry a watcher keeps, to map a gesture by its `seq`. */
@@ -161,6 +202,69 @@ interface ScreencastMetadata {
   scrollOffsetY: number
 }
 
+/**
+ * Which watching connections belong to the machine's owner, by watcher id.
+ *
+ * ## Why one permission fact arrives here beside the call instead of inside it
+ *
+ * {@link PageCast.maskFor} needs a single bit about the connection it is drawing
+ * a frame for: is this one of the owner's own paired devices, or a guest on
+ * somebody else's machine? Only `server.ts` can answer it — it holds the device
+ * id and the `ownDevice` rule — and the watcher id it hands down *is* that
+ * connection's id, unchanged, all the way to {@link PageCast.watch}.
+ *
+ * What sits between the two is `screencast-host.ts` and `browser-driver.ts`, and
+ * neither of them may carry it. `screencast-host.ts` says so in its own header:
+ * *"It decides nothing about permission and touches no socket."* It is routing —
+ * a window name to a drive slot — and putting a permission in that signature
+ * would make a decision out of a lookup, in the one layer written not to have
+ * any. So the fact travels beside the call: the endpoint notes it against the
+ * connection id immediately before asking for the watch, and the cast reads it
+ * once, at watch time, into the watcher record.
+ *
+ * **A watcher nobody noted is a guest.** That is the reading which hides a
+ * password rather than the one which shows it, and it is what every caller that
+ * is not the remote endpoint — a test driving a cast over a fake seam — gets.
+ *
+ * The map is capped and evicts oldest-first, and that is safe rather than merely
+ * bounded: a note and the watch that consumes it are one message apart, so an
+ * entry is always the newest thing in here at the instant it is read. Eviction
+ * can only ever throw away a connection that has already been served.
+ */
+const watcherDevices = new Map<string, boolean>()
+
+/** How many connections' kinds are remembered at once. See {@link noteWatcherDevice}. */
+const WATCHER_DEVICE_MEMORY = 256
+
+/**
+ * Record what kind of device a watching connection is, before it watches.
+ *
+ * Called by `server.ts` at the `browser.watch` call site with the live answer
+ * from its own `ownDevice` rule, never with a remembered one: a device demoted
+ * between two watches must be a guest from the next watch on.
+ */
+export function noteWatcherDevice(watcherId: string, own: boolean): void {
+  // Delete-then-set moves a re-noted id to the newest end of the insertion
+  // order, so a phone that has been watching all day is never the one evicted.
+  watcherDevices.delete(watcherId)
+  watcherDevices.set(watcherId, own)
+  while (watcherDevices.size > WATCHER_DEVICE_MEMORY) {
+    const oldest = watcherDevices.keys().next()
+    if (oldest.done) break
+    watcherDevices.delete(oldest.value)
+  }
+}
+
+/** Forget every noted connection — a host tearing an endpoint down, and tests. */
+export function forgetWatcherDevices(): void {
+  watcherDevices.clear()
+}
+
+/** Is this watcher one of the owner's own devices? An unknown one reads as a guest. */
+function watcherIsOwn(watcherId: string): boolean {
+  return watcherDevices.get(watcherId) === true
+}
+
 /** One connection watching this page. */
 class Watcher {
   seq = 0
@@ -173,6 +277,20 @@ class Watcher {
     readonly id: string,
     readonly window: string,
     readonly emit: EmitFrame,
+    /**
+     * One of the owner's own paired devices, rather than a guest.
+     *
+     * Read once at watch time from {@link noteWatcherDevice} and kept here,
+     * because *may I see this* is a fact about the connection while
+     * {@link PageCast.maskFor} is asked it once per frame. A renegotiation — a
+     * phone that rotated — builds a fresh watcher and re-reads it.
+     *
+     * A stale `true` cannot outlive a device being demoted to a guest: the
+     * endpoint re-reads that question before every single frame it writes, and a
+     * device that stops being the owner's own stops being sent frames at all
+     * rather than being sent masked ones.
+     */
+    readonly own: boolean,
   ) {}
 }
 
@@ -288,15 +406,19 @@ export class PageCast {
    */
   async watch(watcherId: string, window: string, options: CastOptions, emit: EmitFrame): Promise<void> {
     if (this.disposed) return
+    // Whose device this is, read at watch time from what the endpoint noted a
+    // moment ago — and re-read on a renegotiation, so a device demoted between
+    // two watches is a guest from this one on.
+    const own = watcherIsOwn(watcherId)
     const existing = this.watchers.get(watcherId)
     if (existing) {
       // A renegotiation carries a fresh emit closure (the server rebuilds it per
       // call so the grant is re-read), so replace the watcher rather than mutate.
-      const fresh = new Watcher(watcherId, window, emit)
+      const fresh = new Watcher(watcherId, window, emit, own)
       fresh.seq = existing.seq
       this.watchers.set(watcherId, fresh)
     } else {
-      this.watchers.set(watcherId, new Watcher(watcherId, window, emit))
+      this.watchers.set(watcherId, new Watcher(watcherId, window, emit, own))
     }
     this.options = options
     await this.ensureStarted(options)
@@ -563,6 +685,17 @@ export class PageCast {
    * itself rides the driver's screened send, so the baton refuses it during a
    * handover as it refuses every other command.
    *
+   * ## The masked-frame refusal, and who is left holding it
+   *
+   * *You cannot drive what you cannot see* is checked against the host's own
+   * record of the frame the gesture named by `seq` — the same record the
+   * coordinate mapping is re-derived from, so the two can never disagree about
+   * which frame is being talked about. Since {@link maskFor} answers per
+   * watcher, so does this: a guest looking at a lock card over a login page
+   * cannot type into that page blind, and the owner's own device, which is being
+   * shown the page, has nothing to refuse. That is the whole of *"we can just see
+   * and enter"* on the input side — no second rule, just the one frame record.
+   *
    * ## The one watcher that is not refused during a handover
    *
    * The taker. It is not an exception to the rule above so much as the other
@@ -587,6 +720,15 @@ export class PageCast {
     // The frame the coordinates were measured against, by its seq — never the
     // viewer's own idea of the scale.
     const geom = watcher.geometry.find((g) => g.seq === frame.seq) ?? watcher.geometry[watcher.geometry.length - 1]
+    // A gesture on a frame this watcher was sent with its pixels withheld. The
+    // taker is out of it above; what is left is a guest tapping at a lock card
+    // over somebody else's login page, which is exactly the hole withholding the
+    // pixels would otherwise leave open. Falling back to the newest frame when
+    // the named seq has aged out of the history errs the safe way round: a guest
+    // whose latest view is masked is refused.
+    if (!mine && geom?.masked === true) {
+      return { ok: false, reason: 'that page is hidden while something private is on it' }
+    }
     if (frame.mouse) return this.dispatchMouse(send, geom, frame.mouse)
     if (frame.touch) return this.dispatchTouch(send, geom, frame.touch)
     if (frame.key) return this.dispatchKey(send, frame.key)
@@ -697,7 +839,15 @@ export class PageCast {
       : { ...frame, seq, window: watcher.window }
     // Remember this frame's geometry so a gesture naming its seq maps by the
     // scale the host actually sent, never one the viewer computed.
-    watcher.geometry.push({ seq, w: frame.w, dw: frame.dw, dh: frame.dh, scale: frame.scale, pageScale: frame.pageScale })
+    watcher.geometry.push({
+      seq,
+      w: frame.w,
+      dw: frame.dw,
+      dh: frame.dh,
+      scale: frame.scale,
+      pageScale: frame.pageScale,
+      masked: masked !== null,
+    })
     if (watcher.geometry.length > GEOMETRY_HISTORY) watcher.geometry.shift()
     watcher.inFlight = true
     watcher.flightSeq = seq
@@ -732,28 +882,50 @@ export class PageCast {
    *
    * Returns null when the frame may cross with its pixels, or an object naming
    * the curtain sentence when it may not. The handover curtain wins first; a
-   * secret field visible in the frame's own viewport wins second.
+   * secret field visible in the frame's own viewport wins second, and only
+   * against a guest.
    *
    * ## Why the answer is per watcher and not per frame
    *
    * It used to be per frame, which was right while a masked page was masked for
-   * everybody. It is not any more: the taker is one connection among several
-   * looking at one page, and *whether I may see this* is a fact about who is
-   * asking. One frame therefore leaves here twice — with pixels to the person
-   * filling in the form, empty to everyone else — which is exactly the shape
-   * `BrowserHandoverStateFrame.mine` describes on the wire for the same reason.
+   * everybody. It is not any more, for two separate reasons that both land here.
    *
-   * The taker skips the **secret-rect** brake as well as the curtain, and that
-   * is deliberate rather than an oversight in the ordering. They were handed this
-   * page to type a password into it; a lock card over the password field would
-   * hide the one thing they are here to do. Nobody else's frames change, and
-   * outside a handover there is no taker at all, so the secret mask is exactly
-   * what it was for every ordinary watcher.
+   * The taker is one connection among several looking at one page, and *may I
+   * see this* is a fact about who is asking. One frame therefore leaves here
+   * twice — with pixels to the person filling in the form, empty to everyone
+   * else — which is exactly the shape `BrowserHandoverStateFrame.mine` describes
+   * on the wire for the same reason. The taker skips the secret-rect brake as
+   * well as the curtain: they were handed this page to type a password into it,
+   * and a lock card over the password field hides the one thing they are here to
+   * do.
+   *
+   * ## Why the owner's own device skips the secret-rect brake too
+   *
+   * Because it is him. The brake was written as though every watcher were a
+   * stranger looking over a shoulder, and it fired on the wrong person: his own
+   * phone, paired to his own machine and granted its windows, drew a black card
+   * with a padlock over his own sign-in page — so signing in to anything from the
+   * phone became the one thing the feature could not do.
+   *
+   * > *"this problem should not be there … we have connected it properly. We
+   * > have access to everything. So why only for this we have this kind of
+   * > resistance? … We can just see and enter."*
+   *
+   * A **guest** device is the case the brake was actually written for — a
+   * different person, on somebody else's machine, and this ships to strangers —
+   * so it keeps the card and, through the geometry {@link PageCast.forward}
+   * records, keeps the refusal to type into the page as well. `own` is read from
+   * {@link noteWatcherDevice} at watch time and an unknown watcher is a guest.
+   *
+   * The **handover curtain above is untouched for everybody**, own device
+   * included. That one is the agent saying *this page is a person's now*, which
+   * is a different claim from *a password box is on screen*, and one watcher
+   * stepping through it is the whole of {@link PageCast.take}.
    */
   private maskFor(frame: CastFrame, watcher: Watcher): { prompt?: string } | null {
     if (this.isTaker(watcher.id)) return null
     if (this.curtained || this.seam.isHuman()) return { prompt: this.curtainPrompt || SECRET_PROMPT }
-    if (this.secretVisible(frame)) return { prompt: SECRET_PROMPT }
+    if (!watcher.own && this.secretVisible(frame)) return { prompt: SECRET_PROMPT }
     return null
   }
 
@@ -794,6 +966,13 @@ export class PageCast {
    * and watch. A failed scan leaves the previous rectangles in place rather than
    * clearing them — forgetting a password field is the direction that ends with
    * one on screen.
+   *
+   * **Not dead code when every watcher is one of the owner's own.** Two things
+   * still need these rectangles even then, and one of them is not in this file:
+   * a guest watcher is still masked by them here, and `BrowserDrive.maskedPng`
+   * paints them out of every PNG the **agent** reads and throws if the scan
+   * returns null. Opening the curtain for the owner's own eyes opened nothing
+   * for the agent.
    */
   async refreshSecrets(): Promise<void> {
     const scan = await this.seam.scanSecrets().catch(() => null)

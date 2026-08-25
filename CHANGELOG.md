@@ -10,6 +10,11 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+### Changed
+
+- **Your own phone now sees your own sign-in pages.** Watching a machine's browser used to hide any page with a password, one-time code or card field behind a black card with a padlock — on every device, including your own phone paired to your own machine. That meant the one thing you could not do from the phone was sign in to anything. A device you paired as your own now sees those pages and can type into them, which is what watching a browser was for. **A guest device still gets the card** and still cannot type into the page behind it — a guest is someone else on your machine, and this is the case that rule was written for. What the **agent** is allowed to read has not changed: password and code fields are still blacked out of every screenshot an agent takes. When an agent explicitly asks you to sign in to something, the page is still handed to one device at a time, exactly as before.
+  This corrects the 0.10.0 note below, which said the password never crosses the wire. On a device of your own, it does now — to your own eyes, on your own screen.
+
 ## [0.11.0] — 2026-08-25
 
 ### Added
@@ -95,7 +100,7 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 - **The server is the source of truth.** Its sessions, its logins, its agent settings live on the server and are served to every device at once. Delete a session and it leaves both apps. Change the account or the default agent on the server and every attached client sees it. What stays on each device is only that device's own look — theme, size, sounds.
 - **See and remove every device signed in to a server, from any device.** A list with each device's name, when it was last seen and what it can reach, and a Remove that cuts one off without touching your SSH password or the others. Losing a phone no longer means reaching a desktop.
 - **The server runs its own browser.** Scraping, downloads, extensions and page-driving happen on the server, in its own Chromium, over its own disk and logins — not tunnelled from your Mac. Install a tool or an extension and it lands on the server.
-- **Watch and drive that browser from your phone.** A live picture of the server's browser, each device with its own scroll; your taps and typing go in as real input, not a video you cannot touch. What is ours — the terminal, chat, the scraping panel, downloads, the tab strip — is served as data and drawn natively, not as pixels. While you type a password into a page from your phone, the picture is curtained: the password never crosses the wire.
+- **Watch and drive that browser from your phone.** A live picture of the server's browser, each device with its own scroll; your taps and typing go in as real input, not a video you cannot touch. What is ours — the terminal, chat, the scraping panel, downloads, the tab strip — is served as data and drawn natively, not as pixels. While you type a password into a page from your phone, the picture is curtained: the password never crosses the wire. *(Changed after this release — see Unreleased: on a phone you paired as your own, your own sign-in pages are shown to you. A guest device is still curtained.)*
 - **Version awareness.** A connected server says which build it is running and, when your app is ahead, that it can be updated from a desktop.
 - **Everyday browser basics:** find-in-page (Cmd/Ctrl-F), zoom (Cmd/Ctrl -/=/0), and a Saved passwords section in the browser menu.
 - **A tools store that downloads on choose** — famous open-source browser tools fetched and checksummed only when you pick one, with each tool honest about whether it can work here.
