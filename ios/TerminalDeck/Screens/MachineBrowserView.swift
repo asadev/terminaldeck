@@ -157,6 +157,35 @@
  * window sheet's own words, on the row menus here and on the page's settings
  * screen. See `attachSections`.
  *
+ * ## Every row on this screen is a title, and that is all of it
+ *
+ * > *"you are giving too much space to the options to the features so all the
+ * > list and drop downs becoming too bigger because the you are also putting so
+ * > much of a description under the title of that thing under the title of the
+ * > feature instead of just i button or nothing maybe so they have becomes too
+ * > big you should compact all the features or buttons and without losing any of
+ * > them"*
+ *
+ * > *"many of the even buttons. Are so much of confusing I can't understand what
+ * > they mean"*
+ *
+ * Two places on this screen were doing it. The new-window sheet's destination
+ * card drew three names with a paragraph under each — the card was half the
+ * sheet before he had typed anything. And the row menus' attach sections were
+ * headed by two-clause sentences with an em dash and the machine's name in each:
+ * *"Open on DESKTOP-DDGMNCV and attach — signed in the way DESKTOP-DDGMNCV
+ * is"*, over session rows that are themselves two clauses long.
+ *
+ * Both are names now — **Machine**, **Isolated**, **This phone**; **Attach a
+ * window**, **Attach an isolated window** — and every sentence that came off is
+ * on an ⓘ, none of it deleted. The test of a row is whether he can point at it
+ * and know what it does without reading a sentence; a row that cannot be named
+ * in three or four words is a row with the wrong name, not a row that needs a
+ * caption.
+ *
+ * The URL under a row's title stays, and it is not the same thing: an address is
+ * what the row **is**, not an explanation of what pressing it does.
+ *
  * ## And there is no icon on any of them
  *
  * > *"why they have two different icons also sometimes, like in the left… **This
@@ -1638,7 +1667,7 @@ struct MachineBrowserView: View {
             }
         } else {
             Section(whyNoSurfaceAttach(surface)) {
-                deadItem("Attach to a session", "terminal")
+                deadItem("Attach a window", "terminal")
             }
         }
 
@@ -1680,11 +1709,30 @@ struct MachineBrowserView: View {
      * header is for, and it is also the string a test can ask for — an
      * `accessibilityIdentifier` on a `Button` inside a `Menu` does not reach the
      * presented row, so words are all there is either way.
+     *
+     * ## And the headers are names now, because they were sentences
+     *
+     * > *"many of the even buttons. Are so much of confusing I can't understand
+     * > what they mean"*
+     *
+     * They read *"Open on DESKTOP-DDGMNCV and attach — signed in the way
+     * DESKTOP-DDGMNCV is"* and *"Open isolated and attach — signed into nothing,
+     * forgotten when it closes"*: two clauses, an em dash and a machine name
+     * apiece, wrapping to three lines each on his phone, over a list of session
+     * rows that are themselves two clauses long. A menu that has to be *read*
+     * before it can be used is one he stops opening.
+     *
+     * **Attach a window** and **Attach an isolated window** are the same two
+     * things named rather than described, and they are word-for-word the rows on
+     * the window's own settings screen — the two places this act is offered
+     * cannot come to call it different things. What the sentences carried is on
+     * that screen's Session ⓘ, which is the one place in the app that explains
+     * the difference in full.
      */
     @ViewBuilder
     private func attachSections(_ sessions: [WindowSession],
                                 open: @escaping (String, Bool) -> Void) -> some View {
-        Section("Open on \(machineName) and attach — signed in the way \(machineName) is") {
+        Section("Attach a window") {
             ForEach(sessions) { session in
                 Button {
                     open(session.id, false)
@@ -1694,7 +1742,7 @@ struct MachineBrowserView: View {
             }
         }
 
-        Section("Open isolated and attach — signed into nothing, forgotten when it closes") {
+        Section("Attach an isolated window") {
             ForEach(sessions) { session in
                 Button {
                     open(session.id, true)
@@ -1756,14 +1804,30 @@ struct MachineBrowserView: View {
             }
         } else {
             Section(whyNoAttach) {
-                deadItem("Attach to a session", "terminal")
+                deadItem("Attach a window", "terminal")
             }
         }
 
+        /*
+         * **One name, because he counted them and there were two.**
+         *
+         * > *"why do we even have two different than different versions of the
+         * > browser settings and page setting kind of thing window setting
+         * > thing. Why not like one name title should be same everything"*
+         *
+         * This row said *Page settings* and the screen it opens said *Page
+         * settings* at the top, while the same screen reached from a window on
+         * the machine said *Window settings* — one screen, two names, decided by
+         * which machine happened to be drawing the pixels. It is a browser
+         * window either way: this menu's own destructive row calls it one two
+         * lines below. So the row and the title are the same words now, and
+         * `MachineWindowSettingsView` draws the same six cards in the same order
+         * behind both.
+         */
         Button {
             pushing = .phonePage(tab.id)
         } label: {
-            Label("Page settings", systemImage: "slider.horizontal.3")
+            Label("Window settings", systemImage: "slider.horizontal.3")
         }
 
         Section("Archiving is for the machine's own windows") {
@@ -1848,7 +1912,7 @@ struct MachineBrowserView: View {
         // and this screen deliberately does not. Either way the join a window
         // verb needs is not here.
         surface.window.isEmpty
-            ? "The machine's own tab — it has no window id to address"
+            ? "The machine's own tab has no window id to address"
             : "No window row for this page on this list"
     }
 
@@ -2149,7 +2213,13 @@ private struct NewWindowSheet: View {
             }
             // The keyboard, without a tap. This sheet exists to be typed into
             // and it is raised by a press that already said so.
-            .onAppear { typing = true }
+            .onAppear {
+                typing = true
+                settleDestination()
+            }
+            // The paired machine can change under a sheet somebody left up, and
+            // a destination it does not offer is one `go()` would send anyway.
+            .onChange(of: places) { _, _ in settleDestination() }
             .alert("Name this port", isPresented: $renaming) {
                 TextField("Name", text: $renameText)
                     .accessibilityIdentifier("port.rename.field")
@@ -2226,64 +2296,81 @@ private struct NewWindowSheet: View {
      * the same choice it always was, and a renamed identifier is a suite that
      * skips instead of failing.
      *
-     * ## Absent, not disabled — and absent altogether where there is one option
+     * ## Absent, not disabled
      *
      * A destination the machine will not serve is not drawn: no `ports` frame
      * means no tunnel, and no `web` means the machine cannot be sent a page at
-     * all. `places.count > 1` is the gate on the card itself — a control with one
-     * option is not a control, it is a label — and where there is only one, that
-     * destination is stated as the line it would have carried, so the sheet never
-     * goes silent about where the window is going.
+     * all. A control that could only ever be refused is one this app does not
+     * draw.
+     *
+     * Where there is only **one** place a window can go, the card is still the
+     * card: one row, selected. It used to be a sentence in grey text instead —
+     * the destination described in prose where every other state of this sheet
+     * draws it as a row — which is one more screen quietly having two shapes.
+     *
+     * **And that sentence could be a lie.** `place` starts on `.machine` and the
+     * old branch printed `meaning(of: places.first)` without touching it, so on a
+     * machine that offers only the tunnel the sheet read *"Opens here on this
+     * phone, over a tunnel"* while `go()` — which branches on `place` — sent the
+     * address to the machine. `settleDestination` puts `place` on a destination
+     * that is actually offered, which is what makes the row it draws true.
+     *
+     * ## And the rows lost their second line
+     *
+     * > *"you are also putting so much of a description under the title of that
+     * > thing under the title of the feature instead of just i button or nothing
+     * > maybe so they have becomes too big"*
+     *
+     * Each row carried its `meaning` under its name: *"Opens in DESKTOP-DDGMNCV's
+     * own browser, signed in the way DESKTOP-DDGMNCV is."* and two more like it.
+     * Three names and three paragraphs, above an address field, above a list of
+     * ports — the card was half the sheet. The names are the rows now; all three
+     * sentences are on the ⓘ beside the caption, which is the one place on this
+     * sheet that explains anything, and each is still the row's VoiceOver hint.
      */
     @ViewBuilder
     private var destination: some View {
-        if places.count > 1 {
-            SchemeSectionCaption(
-                "Open in",
-                about: "where a window opens",
-                info: "A window on \(machine) uses its own profile — its cookies and whatever it "
-                    + "is signed into. An isolated one gets a partition of its own, and that "
-                    + "partition is thrown away when the window closes. A window on this phone is "
-                    + "a tunnel: the page loads here, in this app's own web view, on a real "
-                    + "loopback origin — so it keeps cookies and a dev server's hot reload works. "
-                    + "Only \(machine)'s own ports can be reached that way.")
+        SchemeSectionCaption(
+            "Open in",
+            about: "where a window opens",
+            info: "Machine — a window in \(machine)'s own browser, in its own profile: its "
+                + "cookies and whatever it is signed into.\n\nIsolated — a window in "
+                + "\(machine)'s browser with a partition of its own, signed into nothing, and "
+                + "that partition is thrown away when the window closes.\n\nThis phone — a "
+                + "tunnel. The page loads here, in this app's own web view, on a real loopback "
+                + "origin, so it keeps cookies and a dev server's hot reload works. Only "
+                + "\(machine)'s own ports can be reached that way.")
 
-            SchemeGroup {
-                ForEach(places, id: \.self) { option in
-                    if option != places.first {
-                        Rectangle()
-                            .fill(Theme.hairline)
-                            .frame(height: 0.5)
-                            .padding(.leading, 52)
-                    }
-                    destinationRow(option)
+        SchemeGroup {
+            ForEach(places, id: \.self) { option in
+                if option != places.first {
+                    Rectangle()
+                        .fill(Theme.hairline)
+                        .frame(height: 0.5)
+                        .padding(.leading, 52)
                 }
+                destinationRow(option)
             }
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("browser.open.isolation")
-        } else if let only = places.first {
-            // One destination is not a choice, and the sentence it would have
-            // carried is still owed: a window appearing on a screen in another
-            // room is the kind of press that otherwise looks like it did nothing.
-            Text(meaning(of: only))
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.faint)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 12)
-                .padding(.horizontal, 4)
-                .accessibilityIdentifier("browser.open.destination")
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("browser.open.isolation")
     }
 
     /**
-     * One destination: its glyph, its name, and what choosing it means.
+     * One destination: its glyph, its name, and a tick.
      *
-     * The label is set explicitly to the destination's own name and nothing
-     * else. Left to SwiftUI, a button holding two `Text`s is read as both of them
-     * joined — *"Isolated, opens in the machine's browser signed into nothing…"* —
-     * and `buttons["Isolated"]` stops matching, which is the silent failure this
-     * whole card is written to avoid. The sentence is the hint instead, which is
-     * where VoiceOver expects the explanation of a control anyway.
+     * **One `Text`, which is what the compacting bought.** It held two — the name
+     * and its `meaning` — and a button holding two `Text`s is read by VoiceOver
+     * as both of them joined, *"Isolated, opens in the machine's browser signed
+     * into nothing…"*, so `buttons["Isolated"]` stopped matching and two suites
+     * that press these rows by name would have skipped in silence. The explicit
+     * `accessibilityLabel` was the guard against that and it **stays**, even
+     * though there is only one `Text` now: it costs nothing, and it means a
+     * second line added here later cannot reopen the hole.
+     *
+     * The sentence is the hint, which is where VoiceOver expects the explanation
+     * of a control, and it is also on the caption's ⓘ, which is where it is read
+     * on screen.
      */
     private func destinationRow(_ option: Place) -> some View {
         let chosen = place == option
@@ -2299,26 +2386,27 @@ private struct NewWindowSheet: View {
                     .font(.system(size: 19, weight: .light))
                     .foregroundStyle(chosen ? Theme.accent : Theme.faint)
                     .frame(width: 24, height: 28)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(name(of: option))
-                        .font(.system(size: 16, weight: chosen ? .semibold : .regular))
-                        .foregroundStyle(Theme.primary)
-                    Text(meaning(of: option))
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.faint)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .multilineTextAlignment(.leading)
-                }
+                Text(name(of: option))
+                    .font(.system(size: 16, weight: chosen ? .semibold : .regular))
+                    .foregroundStyle(Theme.primary)
                 Spacer(minLength: 8)
                 Image(systemName: chosen ? "checkmark.circle.fill" : "circle")
                     .font(.system(size: 17))
                     .foregroundStyle(chosen ? Theme.accent : Theme.faint)
             }
             .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+            .padding(.vertical, 13)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        /*
+         * Live even when it is the only row, rather than disabled. A tap that
+         * re-selects what is already selected costs nothing, and a disabled row
+         * is a control two suites press by name —
+         * `TabNavigation.openLocalhostList` taps *This phone* and then asserts
+         * the selection landed, which is exactly the machine that offers only
+         * the tunnel.
+         */
         .accessibilityLabel(name(of: option))
         .accessibilityHint(meaning(of: option))
         .accessibilityAddTraits(chosen ? [.isSelected] : [])
@@ -2404,6 +2492,20 @@ private struct NewWindowSheet: View {
                     .accessibilityIdentifier("browser.open.notice")
             }
         }
+    }
+
+    /**
+     * Put the choice on something this machine actually offers.
+     *
+     * `place` starts on `.machine` because that is the ordinary answer, and
+     * nothing used to move it: a machine offering only the tunnel drew *This
+     * phone* as the one destination while `go()` still went down the
+     * `openThere` branch. The row and the act have to be the same answer, and
+     * this is the one line that makes them so.
+     */
+    private func settleDestination() {
+        guard !places.contains(place), let only = places.first else { return }
+        place = only
     }
 
     /// The destinations this machine actually offers, in the order they are
@@ -2647,9 +2749,13 @@ private enum MachineBrowserRow: Identifiable {
  * named by — a shell tab id, or the empty string the front tab wears — is a fact
  * that screen resolves, not a fork here.
  *
- * `.phonePage` is not that fork coming back. It is a page **this phone** is
- * drawing, whose window screen is the page itself; what this pushes is its
- * settings, which is the one thing a row on this list could not reach before.
+ * `.phonePage` is not that fork coming back — and after this round it is not
+ * even a second screen. It is a page **this phone** is drawing, whose window
+ * screen is the page itself; what this pushes is its settings, and those are
+ * `MachineWindowSettingsView` under the same title with the same six cards in
+ * the same order as a window on the machine gets. *"Why not like one name title
+ * should be same everything"*: the fork here is which **window** is being
+ * configured, never which screen configures it.
  */
 private enum MachineBrowserDestination: Hashable, Identifiable {
     /// A page on the machine, by the name both lists call it: the live picture
@@ -2658,7 +2764,8 @@ private enum MachineBrowserDestination: Hashable, Identifiable {
     case window(String)
 
     /// The settings of a page this phone is holding over a tunnel, by the tab's
-    /// own id. Not a window on the machine and deliberately not drawn as one.
+    /// own id. Not a window on the machine — which is one mark on that screen's
+    /// first card, and no longer a different screen with a different name.
     case phonePage(String)
 
     var id: String {
