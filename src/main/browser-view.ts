@@ -525,6 +525,97 @@ export function screenshotName(url: string, now: Date): string {
   return `${safe || 'page'}-${stamp(now)}.png`
 }
 
+/* --------------------------------------------------- doors for the phone -- */
+
+/**
+ * A photograph of a page, taken by anything in this process rather than only by
+ * the renderer's own button.
+ *
+ * The three exports below exist because a phone drives this machine's browser
+ * through `remote/machine-browser-desktop.ts`, which is in the main process and
+ * has no bridge to invoke on. Round-tripping through `ipcMain` from inside
+ * `ipcMain` is not available and would be the wrong shape if it were, so the
+ * handlers below now call these and the phone calls them directly: one body,
+ * one screenshots folder, one filename rule, one recorder. The alternative was
+ * a second capture path with its own idea of where Pictures is, which is how
+ * one product ends up writing screenshots into two folders and telling somebody
+ * the wrong one.
+ *
+ * `preview` is **bytes** here and a `data:` URL on {@link ScreenshotResult},
+ * and that split is the reason this does not simply return the latter: the
+ * renderer wants a string it can put in an `<img>`, the wire wants the PNG to
+ * base64 exactly once inside its own frame. `toDataURL()` is that same PNG with
+ * a prefix, so neither side is re-encoding the other's picture.
+ */
+export interface CapturedView {
+  path: string
+  width: number
+  height: number
+  /** Empty when the resize or the encode failed — never a reason to fail a capture. */
+  preview: Buffer
+}
+
+/**
+ * Capture one open view, write the full-resolution PNG, and answer both sizes.
+ *
+ * Throws when the page is not on screen, and that is a real precondition rather
+ * than a transient: verified on Electron 41, `capturePage()` on a view whose
+ * window is hidden fails with *"Current display surface not available for
+ * capture"*, and `stayHidden` does not rescue it.
+ */
+export async function captureBrowserView(tabId: unknown): Promise<CapturedView> {
+  const entry = entryFor(tabId)
+  const image = await entry.wc.capturePage().catch(() => null)
+  const size = image?.getSize()
+  if (!image || !size || size.width === 0 || size.height === 0) {
+    throw new Error('The page has to be on screen to capture it.')
+  }
+
+  const dir = screenshotDir()
+  await mkdir(dir, { recursive: true })
+  const path = join(dir, screenshotName(entry.wc.getURL(), new Date()))
+  await writeFile(path, image.toPNG())
+
+  // The file on disk is always the full-resolution shot. This is a second,
+  // smaller encode purely so something has a picture to draw; failing to make
+  // one must not fail the capture that already succeeded.
+  let preview: Buffer
+  try {
+    const small = size.width > PREVIEW_WIDTH ? image.resize({ width: PREVIEW_WIDTH }) : image
+    preview = small.toPNG()
+  } catch {
+    preview = Buffer.alloc(0)
+  }
+
+  return { path, width: size.width, height: size.height, preview }
+}
+
+/**
+ * What the recorder has collected on one view, without touching it.
+ *
+ * Synchronous because the answer is in memory: the steps arrive from the guest
+ * page as they happen and are already parsed. A caller that has to know whether
+ * a window is recording for a *list* asks this once per row, which is why it
+ * must not be a promise or a probe.
+ */
+export function browserViewRecording(tabId: unknown): RecordingState {
+  return stateOf(entryFor(tabId))
+}
+
+/** Start or stop the recorder on one view. Starting records where the flow begins. */
+export function setBrowserViewRecording(tabId: unknown, on: boolean): RecordingState {
+  const entry = entryFor(tabId)
+  if (on && !entry.recording) {
+    entry.recording = true
+    // A flow that does not say where it starts cannot be replayed.
+    entry.steps = appendStep(entry.steps, navigateStep(entry.wc.getURL(), Date.now()))
+  } else {
+    entry.recording = on
+  }
+  tellGuestRecording(entry)
+  return stateOf(entry)
+}
+
 const ZOOM_MIN = 0.25
 const ZOOM_MAX = 3
 
@@ -748,34 +839,19 @@ export function registerBrowserViewIpc(ipcMain: IpcMain): void {
   })
 
   ipcMain.handle('browser-view:screenshot', async (_event, tabId: unknown) => {
-    const entry = entryFor(tabId)
-    // Verified on Electron 41: capturing a page whose window is hidden fails
-    // with "Current display surface not available for capture", and `stayHidden`
-    // does not rescue it. So this is a real precondition, not a transient error,
-    // and it deserves a sentence rather than a stack trace.
-    const image = await entry.wc.capturePage().catch(() => null)
-    const size = image?.getSize()
-    if (!image || !size || size.width === 0 || size.height === 0) {
-      throw new Error('The page has to be on screen to capture it.')
-    }
-
-    const dir = screenshotDir()
-    await mkdir(dir, { recursive: true })
-    const path = join(dir, screenshotName(entry.wc.getURL(), new Date()))
-    await writeFile(path, image.toPNG())
-
-    // The file on disk is always the full-resolution shot. This is a second,
-    // smaller encode purely so the popup has something to draw; failing to make
-    // one must not fail the capture that already succeeded.
-    let preview = ''
-    try {
-      const small = size.width > PREVIEW_WIDTH ? image.resize({ width: PREVIEW_WIDTH }) : image
-      preview = small.toDataURL()
-    } catch {
-      preview = ''
-    }
-
-    return { path, width: size.width, height: size.height, preview } satisfies ScreenshotResult
+    const shot = await captureBrowserView(tabId)
+    // The renderer has no filesystem to read the file back with, so the picture
+    // travels as a `data:` URL — the same PNG {@link CapturedView.preview}
+    // carries, with the prefix an `<img>` needs. Empty stays empty: the popup
+    // then shows the path and the send box without a picture, which is what
+    // that screen already was before it had one.
+    return {
+      path: shot.path,
+      width: shot.width,
+      height: shot.height,
+      preview:
+        shot.preview.length === 0 ? '' : `data:image/png;base64,${shot.preview.toString('base64')}`,
+    } satisfies ScreenshotResult
   })
 
   /*

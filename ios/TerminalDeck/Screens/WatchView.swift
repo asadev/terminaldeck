@@ -3,8 +3,8 @@
  *
  * The view half of `WatchLink`, and a port of `pwa/src/browser-view.ts` onto
  * UIKit. `WatchSurfacesView` is the tab strip: the surfaces the machine says are
- * watchable, each opening `WatchViewerScreen`, which casts one surface full
- * screen. `WatchSurfaceUIView` is the canvas — it decodes each frame's JPEG onto
+ * watchable, each opening `WatchViewerScreen` (in `WatchViewerScreen.swift`),
+ * which casts one surface full screen. `WatchSurfaceUIView` is the canvas — it decodes each frame's JPEG onto
  * its own layer and turns every tap and swipe into a `browser.input` aimed at
  * the frame it was measured against.
  *
@@ -20,6 +20,13 @@
  *     measured against the frame currently drawn and sent with *that* `seq`.
  *  4. **A masked frame is a curtain, never pixels.** `data` is empty and the
  *     view draws its own lock card; the pixels never crossed the wire.
+ *
+ * ## The viewer moved out of this file
+ *
+ * `WatchViewerScreen` — the full-bleed screen that mounts one surface — is in
+ * `WatchViewerScreen.swift` now, beside `WatchStage`, which is the one place the
+ * *there is exactly one canvas* rule is stated. Two screens mount it and neither
+ * of them is this file's tab strip, so the rule had nowhere to live here.
  */
 
 import SwiftUI
@@ -92,66 +99,6 @@ struct WatchSurfacesView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .contentShape(Rectangle())
-    }
-}
-
-// MARK: - The full-screen viewer
-
-struct WatchViewerScreen: View {
-    let watch: WatchLink
-    let surface: BrowserSurfaceRow
-
-    @State private var typing = ""
-    @FocusState private var typingFocused: Bool
-
-    var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-            WatchSurface(watch: watch, window: surface.window)
-                .ignoresSafeArea(.container, edges: .bottom)
-        }
-        .navigationTitle(surface.title.isEmpty ? "Browser" : surface.title)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    typingFocused = true
-                } label: {
-                    Image(systemName: "keyboard")
-                }
-                .accessibilityLabel("Type into the page")
-            }
-        }
-        .safeAreaInset(edge: .bottom) {
-            // A hidden field made visible only to send text and Return to the
-            // page — a phone has no hardware keyboard, and a live view you cannot
-            // type into is half a browser. What is typed is pasted as one
-            // `insertText`; Return is sent as an Enter key.
-            if typingFocused {
-                HStack(spacing: 8) {
-                    TextField("Type into the page", text: $typing)
-                        .textFieldStyle(.roundedBorder)
-                        .focused($typingFocused)
-                        .submitLabel(.send)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
-                        .onSubmit { sendTyping() }
-                    Button("Send") { sendTyping() }
-                        .disabled(typing.isEmpty)
-                }
-                .padding(10)
-                .background(.ultraThinMaterial)
-            }
-        }
-    }
-
-    private func sendTyping() {
-        WatchSurface.pendingText = typing
-        typing = ""
-        // The surface reads and clears `pendingText` on the next runloop tick,
-        // measuring it against the frame currently drawn. A static hand-off keeps
-        // the SwiftUI value type from having to reach into the UIView.
-        NotificationCenter.default.post(name: WatchSurface.sendTextNote, object: surface.window)
     }
 }
 

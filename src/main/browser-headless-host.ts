@@ -29,6 +29,22 @@
  * target regardless of front/back, so the whole background-input-dropped defect
  * vanishes and a fleet of targets can be driven at once.
  *
+ * ## Two doors that open a window, and one jar per profile
+ *
+ * {@link HeadlessDriveHost.openWindow} mints a shell id and attaches it to
+ * nothing; {@link HeadlessDriveHost.openForSession} mints one and binds it to a
+ * session. For a while only the second existed, so the phone's New Window went
+ * through it with a session id of `''` and undid the attach immediately — a
+ * sentinel `machine-browser.ts` wrote down as a hack rather than leaving it to
+ * become the design. Both take a profile and an isolation flag now, and neither
+ * is a new mechanism: an isolated window is the throwaway
+ * `Target.createBrowserContext` this host has always made, and a *profile* is a
+ * whole second Chromium process against `<userData>/Partitions/<profileId>`,
+ * which is what `browsers` has been a map for since it was written. One process
+ * per persistent jar is not an implementation detail — it is the only
+ * arrangement in which a jar survives a restart, since a browser context does
+ * not and `--profile-directory` cannot be chosen per target over CDP.
+ *
  * ## Electron-free, and checked
  *
  * Nothing here imports Electron, and `src/headless/seam.test.ts` walks the graph
@@ -40,9 +56,20 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { userDataDir } from './platform/paths'
 import { logger } from './app-log'
+import { screenHistoryEntry } from './browser-cdp'
+import { isNavigationAllowed } from './browser-url'
+import {
+  DEFAULT_PROFILE_ID,
+  headlessProfileDir,
+  isProfileId,
+  ownProfileStorage,
+  profilesFile,
+  readStoredProfiles,
+} from './browser-profile-storage'
 import type { CdpEvent } from './browser-cdp-pipe'
 import { cdpDrivenPage, type CdpTransport } from './browser-driven-cdp'
 import { launchChromium } from './browser-chromium-launch'
@@ -83,28 +110,40 @@ import type { DriveStatus } from './browser-drive'
  */
 export const HEADLESS_DRIVE_STATE_CHANNEL = 'browser:drive-state'
 
-/**
- * The id of the profile whose partition predates this feature — `browser-profiles.ts`'s
- * `DEFAULT_PROFILE_ID`, inlined.
- *
- * It is copied as a literal rather than imported for the reason
- * `HEADLESS_DRIVE_STATE_CHANNEL` above is: `browser-profiles.ts` reaches Electron
- * (`app`, `session`) at its first line and drags the whole desktop profile stack
- * with it, so importing one string would break the seam. The value is a fixed id
- * that module's own header calls *"never minted"* — it does not change — and it is
- * what the desktop files a default-profile capture under, so `captureFolder` here
- * writes to the same place.
+/*
+ * The default profile's id used to be inlined here, with a paragraph explaining
+ * that `browser-profiles.ts` reaches Electron at its first line and so could not
+ * be imported. That reason still holds and the copy is gone: the literal — and
+ * the partition string, and the directory both host shapes put a profile in —
+ * now live in `browser-profile-storage.ts`, which has no Electron in it and is
+ * imported above. There was a second copy of the *directory*, in `server.ts`,
+ * and it was wrong; see that module's header for what it cost.
  */
-const DEFAULT_PROFILE_ID = 'default'
 
 /* ------------------------------------------------------------- the launch -- */
 
-/** A launched browser, reduced to the two things this host holds it by. */
+/** A launched browser, reduced to the things this host holds it by. */
 export interface HeadlessBrowserHandle {
   /** The CDP channel, framed. `CdpPipe` is the production one. */
   transport: CdpTransport
   /** Stop the browser process. The pipe closing does not do this — the launcher owns the child. */
   stop(): void
+  /**
+   * The process has ended. `ChromiumHandle.whenGone`, passed straight through.
+   *
+   * Here because {@link HeadlessDriveHost.releaseProfile} has to know that a
+   * browser is *gone* rather than that it was asked to go: emptying a profile
+   * directory out from under a live Chromium is not a clear — on Windows the
+   * unlink fails and on POSIX the running browser can write its in-memory jar
+   * straight back — and a phone that was told the profile was empty in either
+   * case is the defect `browser-profile-storage.ts` exists to end.
+   *
+   * Optional because the launch is a seam and a scripted one has no process to
+   * report the death of. Absent means the stop is taken at its word and the
+   * directory check afterwards is the only proof; `defaultLaunch` always
+   * provides it, so nothing in production rests on that.
+   */
+  whenGone?: Promise<string>
 }
 
 /** Resolve, launch and wrap a Chromium for one profile, or say why it could not. */
@@ -149,7 +188,11 @@ const defaultLaunch: LaunchBrowser = async ({ userDataDir: dir, extensionDirs })
 
   return {
     ok: true,
-    handle: { transport: launched.transport, stop: () => launched.handle.close() },
+    handle: {
+      transport: launched.transport,
+      stop: () => launched.handle.close(),
+      whenGone: launched.handle.whenGone,
+    },
   }
 }
 
@@ -267,6 +310,9 @@ export class HeadlessDriveHost implements DriveHost {
   /** Shell tab id → target id, for the two verbs that take a `browserTabId`. */
   private readonly byBrowserTab = new Map<string, string>()
 
+  /** Stop answering for this process's profile directories. Called by {@link stop}. */
+  private readonly disownStorage: () => void
+
   constructor(deps: HeadlessDriveHostDeps = {}) {
     this.userData = deps.userData ?? userDataDir()
     this.nowFn = deps.now ?? Date.now
@@ -274,6 +320,25 @@ export class HeadlessDriveHost implements DriveHost {
     this.launch = deps.launch ?? defaultLaunch
     this.extensionDirsFor = deps.extensionDirsFor ?? (() => [])
     this.onGuestMessage = deps.onGuestMessage ?? null
+    /*
+     * Say, process-wide, that this host is what holds a profile's files open.
+     *
+     * `browserProfilesFor` in `remote/server.ts` serves the phone's Clear, and
+     * it is four hundred lines away from any browser: on a server it used to
+     * rebuild the directory from the partition string and delete a path that has
+     * never existed, answer with a fresh profile list, and leave every cookie in
+     * place. It now asks the module that owns the directory, and on this host
+     * that module's answer comes from here — the same object that chose the
+     * `--user-data-dir` and is holding the Chromium that has those files open.
+     * Registered in the constructor rather than at the first launch because a
+     * profile that has never been launched still has a directory, and "there is
+     * nothing there" is an answer this host is entitled to give.
+     */
+    this.disownStorage = ownProfileStorage({
+      directoryFor: (profileId) =>
+        isProfileId(profileId) ? headlessProfileDir(this.userData, profileId) : null,
+      release: (profileId) => this.releaseProfile(profileId),
+    })
   }
 
   /* ----------------------------------------------------------- the browser -- */
@@ -286,9 +351,50 @@ export class HeadlessDriveHost implements DriveHost {
    * long-lived `--user-data-dir` process per persistent profile. The default
    * profile keeps its own directory under the same root; its partition name is
    * unchanged, which matters to the desktop and not here.
+   *
+   * The path itself is `browser-profile-storage.ts`'s, not this file's. It was
+   * this file's, and a second statement of it in `server.ts` — reached by a
+   * phone pressing Clear — named a directory that has never existed on any
+   * machine. One place says where a profile's bytes are; everything else asks.
    */
   private profileDir(profileId: string): string {
-    return join(this.userData, 'Partitions', profileId)
+    return headlessProfileDir(this.userData, profileId)
+  }
+
+  /**
+   * Why this host will not open a window in that profile, or null when it will.
+   *
+   * Two refusals, and the first is a security check rather than tidiness. The id
+   * arrives from a phone, and every id becomes the last segment of a
+   * `--user-data-dir`; `isProfileId` is the same shape `partitionFor` insists on
+   * in `browser-profiles.ts` — *"`fromPartition` will happily create a directory
+   * for **any** string — including one with a path separator in it"* — and the
+   * consequence over this wire is a browser launched somewhere else on the disk.
+   * The refused id is never echoed back, because at that point it is somebody
+   * else's text rather than a profile name.
+   *
+   * The second is the roster: a profile this machine does not have would
+   * otherwise be *minted* by opening a window in it — a new empty jar on a
+   * server, created by a tap, listed by nothing.
+   */
+  private profileRefusal(profileId: string): string | null {
+    if (!isProfileId(profileId)) {
+      return 'that is not a profile this machine mints.'
+    }
+    const raw = ((): string | null => {
+      try {
+        return readFileSync(profilesFile(this.userData), 'utf8')
+      } catch {
+        // A machine that has never been asked has one profile and it is the
+        // default. `readStoredProfiles` says so; this only has to not throw.
+        return null
+      }
+    })()
+    const stored = readStoredProfiles(raw)
+    if (!stored.profiles.some((profile) => profile.id === profileId)) {
+      return 'that is not a profile on this machine.'
+    }
+    return null
   }
 
   /** Where a finished download waits under its GUID before the move. */
@@ -487,6 +593,85 @@ export class HeadlessDriveHost implements DriveHost {
     return this.nowFn()
   }
 
+  /**
+   * A shell id for a window this host can find again.
+   *
+   * `browser:<epoch-ms>:<uuid>` — the same shape the renderer mints on the
+   * desktop, and the thing that separates a window from a target: a target id
+   * belongs to Chromium and is re-minted whenever the page is re-opened
+   * somewhere else, while this is the binding key `B2` is drawn from and must
+   * outlive every one of those moves.
+   */
+  private mintTabId(): string {
+    return `browser:${this.nowFn()}:${randomUUID().slice(0, 8)}`
+  }
+
+  /**
+   * Open a window this host holds, attached to nothing.
+   *
+   * ## Why this exists
+   *
+   * `openForSession` below was, for a while, the only door that minted a shell
+   * id — so `machine-browser.ts` called it with a session id of `''` and undid
+   * the attach in the same breath, and wrote down in its own header that the
+   * sentinel was a hack waiting for this method:
+   *
+   * > *"`HeadlessDriveHost` wants an `openWindow` that mints and registers a
+   * > shell id **without** attaching it to anything, at which point the two lines
+   * > below become one and the sentinel goes away. Written down here because a
+   * > hack nobody records is a hack that becomes the design."*
+   *
+   * A window a phone opens belongs to nobody until somebody binds it — *"Nothing
+   * is chosen by default. Not the focused session, not the newest, not the only
+   * one"* — and a door that attaches first is a door that has to be corrected,
+   * over a store where a correction is visible to an agent mid-turn.
+   *
+   * ## And why it takes a profile and an isolation flag
+   *
+   * Because the old door hard-coded both, which is what made *"making a browsing
+   * session into an isolated or shared one"* and *"we don't have profiles like we
+   * have in the Mac desktop application"* untrue on a server rather than merely
+   * unfinished. Both are real here and neither is a new mechanism:
+   *
+   *  - **Isolated** is `Target.createBrowserContext` — an in-memory jar that dies
+   *    with the target, which is what an Electron partition with no `persist:`
+   *    prefix is on the desktop. {@link makeTarget} has always known how.
+   *  - **A named profile** is a *second Chromium process*, launched by
+   *    {@link ensureBrowser} against `<userData>/Partitions/<profileId>`. Not a
+   *    `--profile-directory`, which selects a profile inside one user-data
+   *    directory and cannot be chosen per target — CDP's `Target.createTarget`
+   *    names a browser context, never a profile — and not a browser context,
+   *    which is exactly the thing that does *not* persist. One process per jar is
+   *    what makes a jar survive a restart, and this host has held its browsers in
+   *    a map keyed by profile id since it was written.
+   */
+  async openWindow(input: {
+    url: string
+    isolate: boolean
+    /** Absent means the default profile, the one every build before profiles used. */
+    profileId?: string
+  }): Promise<{ ok: true; browserTabId: string; viewId: string } | { ok: false; why: string }> {
+    const profileId = input.profileId === undefined || input.profileId === '' ? DEFAULT_PROFILE_ID : input.profileId
+    const refusal = this.profileRefusal(profileId)
+    if (refusal !== null) {
+      return { ok: false, why: `This server's browser cannot open a window there: ${refusal}` }
+    }
+    const browserTabId = this.mintTabId()
+    const target = await this.makeTarget({
+      url: input.url,
+      isolate: input.isolate,
+      profileId,
+      browserTabId,
+    })
+    if (target === null) {
+      // The host watched its own Chromium fail and has the real sentence — a
+      // missing library names the packages that fix it. Taken here rather than
+      // left for a later `whyNoTab`, because it answers about *this* open.
+      return { ok: false, why: this.whyNoTab() ?? "the server's browser did not open a window." }
+    }
+    return { ok: true, browserTabId, viewId: target.targetId }
+  }
+
   async openForSession(input: {
     url: string
     sessionId: string
@@ -495,8 +680,10 @@ export class HeadlessDriveHost implements DriveHost {
   }): Promise<{ line: string; attached: boolean }> {
     // A window a session can see and hand back: a target attached to that
     // session in the same `browser-binding` store the desktop mints B1/B2 from,
-    // so a window opened on the server means the same thing to the phone.
-    const browserTabId = `browser:${this.nowFn()}:${randomUUID().slice(0, 8)}`
+    // so a window opened on the server means the same thing to the phone. The
+    // agent's own `browser_open` arrives here; the phone's New Window does not,
+    // and has not since {@link openWindow} existed.
+    const browserTabId = this.mintTabId()
     const target = await this.makeTarget({
       url: input.url,
       isolate: false,
@@ -519,6 +706,125 @@ export class HeadlessDriveHost implements DriveHost {
     return { line: `Opened ${slotName(window.n)} on the server`, attached: true }
   }
 
+  /**
+   * Back or forward, over the one protocol call that moves through history.
+   *
+   * ## What was here instead
+   *
+   * A refusal. `Page.navigateToHistoryEntry` was on the CDP deny-list because it
+   * names an entry id rather than an address, so `isNavigationAllowed` — *"the
+   * only guard there is"* on this transport — had nothing to screen, and
+   * `machine-browser.ts` answered *"this server's browser cannot go back"* while
+   * Reload worked. Two of the three most-used controls on a browser screen.
+   *
+   * ## The check that replaces it, in full
+   *
+   * The entry is not trusted from anywhere; it is **read out of the page's own
+   * history in this process, immediately before it is used**. `Page.getNavigationHistory`
+   * answers the entry list and the index the page is at; the neighbour in the
+   * asked-for direction is the only entry this will ever name, and its address is
+   * put through `isNavigationAllowed` — the same allow-list a typed URL passes —
+   * before the move is sent. So the guard is doing exactly what it does for a
+   * navigation: screening the address the page is about to be at. `screenHistoryEntry`
+   * then screens the call itself, so the frame that goes on the wire cannot
+   * carry a URL alongside the id.
+   *
+   * What it still cannot do is verify an entry id in the abstract: an id is a
+   * slot in one target's history, meaningless to any other target and unknowable
+   * to a pure screen. That is why this method exists at all rather than a wider
+   * allow-list — the id never comes from a caller, and there is no path by which
+   * one could.
+   */
+  async historyMove(
+    viewId: string,
+    move: 'back' | 'forward',
+  ): Promise<{ moved: true } | { moved: false; why: string }> {
+    const target = this.targets.get(viewId)
+    if (target === undefined || target.page.isGone()) {
+      return { moved: false, why: 'this server is no longer holding that window' }
+    }
+    const page = target.page
+    try {
+      // The history read is a page-session command, so the page has to be
+      // attached. Idempotent, and left attached: the drive attaches and detaches
+      // around its own actions and a detach here could land in the middle of one.
+      await page.attach()
+      const history = asRecord(await page.send('Page.getNavigationHistory', {}))
+      const entries = Array.isArray(history.entries) ? history.entries : []
+      const at = typeof history.currentIndex === 'number' ? history.currentIndex : -1
+      const wanted = move === 'back' ? at - 1 : at + 1
+      if (at < 0 || wanted < 0 || wanted >= entries.length) {
+        return { moved: false, why: `that window has nothing to go ${move} to` }
+      }
+      const entry = asRecord(entries[wanted])
+      const entryId = entry.id
+      if (!isNavigationAllowed(entry.url)) {
+        // A page cannot talk Chromium into a `file:` entry from an http
+        // document, so this is a refusal that should never fire — which is
+        // precisely why it is here rather than assumed. The address is screened
+        // on the way out of the history exactly as it would be on the way in.
+        return {
+          moved: false,
+          why: `that window's previous page is not an address this app will open`,
+        }
+      }
+      const verdict = screenHistoryEntry({ entryId })
+      if (!verdict.ok) return { moved: false, why: verdict.reason }
+      await page.send('Page.navigateToHistoryEntry', { entryId })
+      return { moved: true }
+    } catch (error) {
+      const said = error instanceof Error ? error.message : 'it did not say why'
+      return { moved: false, why: `that window could not go ${move}: ${said}` }
+    }
+  }
+
+  /**
+   * Move an open window's page into the other kind of cookie jar, keeping the
+   * window.
+   *
+   * Isolation is fixed when a page is constructed — `browser-isolation.ts` is
+   * emphatic about it, and it is a property of Chromium rather than a choice —
+   * so this is what the desktop's `BrowserWorkspace.toggleIsolation` does: close
+   * the view, open another at the same address. The **window id does not
+   * change**, because it is the binding key `B2` is minted from and *"a
+   * renumbered window makes an agent point confidently at the wrong page, and it
+   * does it within a turn"*.
+   *
+   * The new target is opened *before* the old one is closed, so a repartition
+   * that fails leaves the window exactly as it was rather than closing somebody's
+   * page and reporting a failure.
+   */
+  async repartitionWindow(
+    browserTabId: string,
+    isolate: boolean,
+  ): Promise<{ viewId: string } | null> {
+    const oldId = this.byBrowserTab.get(browserTabId)
+    const old = oldId === undefined ? undefined : this.targets.get(oldId)
+    if (oldId === undefined || old === undefined) return null
+
+    // Where the page is now. A target that has not navigated yet reports its
+    // opening address; anything the guard would refuse becomes a blank page
+    // rather than a refusal, since the person asked to change the jar and not to
+    // stay on the page.
+    const at = old.page.url()
+    const url = isNavigationAllowed(at) ? at : 'about:blank'
+
+    const fresh = await this.makeTarget({
+      url,
+      isolate,
+      profileId: old.profileId,
+      browserTabId: '',
+    })
+    if (fresh === null) return null
+
+    await this.closeTarget(old)
+    this.forget(oldId)
+
+    fresh.browserTabId = browserTabId
+    this.byBrowserTab.set(browserTabId, fresh.targetId)
+    return { viewId: fresh.targetId }
+  }
+
   async closeWindow(browserTabId: string): Promise<boolean> {
     const targetId = this.byBrowserTab.get(browserTabId)
     if (targetId === undefined) {
@@ -527,22 +833,36 @@ export class HeadlessDriveHost implements DriveHost {
       return false
     }
     const target = this.targets.get(targetId)
-    if (target !== undefined) {
-      await this.browserFor(target.profileId)
-        ?.handle.transport.command({ method: 'Target.closeTarget', params: { targetId } })
-        .catch(() => undefined)
-      if (target.browserContextId !== '') {
-        await this.browserFor(target.profileId)
-          ?.handle.transport.command({
-            method: 'Target.disposeBrowserContext',
-            params: { browserContextId: target.browserContextId },
-          })
-          .catch(() => undefined)
-      }
-    }
+    if (target !== undefined) await this.closeTarget(target)
     this.forget(targetId)
     windowClosed(browserTabId)
     return true
+  }
+
+  /**
+   * Close one target in Chromium, and the throwaway context an isolated one
+   * lives in.
+   *
+   * The context goes with the target rather than being left behind: an isolated
+   * jar that outlived its only page would be storage nothing can name and
+   * nothing will ever close, which is the leak `Target.createBrowserContext` is
+   * denied for on the desktop transport. Best-effort — a target that has already
+   * gone is the ordinary case here, not a failure.
+   */
+  private async closeTarget(target: Target): Promise<void> {
+    const transport = this.browserFor(target.profileId)?.handle.transport
+    if (transport === undefined) return
+    await transport
+      .command({ method: 'Target.closeTarget', params: { targetId: target.targetId } })
+      .catch(() => undefined)
+    if (target.browserContextId !== '') {
+      await transport
+        .command({
+          method: 'Target.disposeBrowserContext',
+          params: { browserContextId: target.browserContextId },
+        })
+        .catch(() => undefined)
+    }
   }
 
   /**
@@ -717,12 +1037,96 @@ export class HeadlessDriveHost implements DriveHost {
   /* ------------------------------------------------------------- teardown -- */
 
   /**
+   * How long a stopped Chromium gets to actually be gone.
+   *
+   * `handle.stop()` is `child.kill()`, which is a signal rather than an
+   * ending — the process is gone a tick or two later, and until it is, its
+   * profile directory is a set of open file handles. Generous, because the only
+   * caller is a person emptying a profile from their phone and the alternative
+   * to waiting is telling them their sign-ins are gone while the browser that
+   * holds them is still running.
+   */
+  private static readonly STOP_TIMEOUT_MS = 10_000
+
+  /**
+   * Let go of one profile: close its windows, stop its browser, and say whether
+   * the process is really gone.
+   *
+   * The `release` half of `browser-profile-storage.ts`'s owner contract, and the
+   * reason that contract exists. A phone's *Clear this profile* deletes a
+   * directory, and deleting a directory Chromium has open is not a clear: on
+   * Windows the unlink fails outright, and on macOS and Linux it succeeds while
+   * the running browser keeps the jar it already has in memory and writes it
+   * back. Either way the person is signed in and has been told they are not.
+   *
+   * So the browser is ended first and the ending is **waited for**, not
+   * requested. `released: false` stops the clear before a single file is
+   * removed, which is the honest answer: nothing was emptied, and the profile
+   * has a browser in it.
+   *
+   * The windows go with it, through the same `windowClosed` a close performs, so
+   * no binding row is left pointing at a target that no longer exists — *"an
+   * agent steering a window that is not there"*.
+   */
+  private async releaseProfile(profileId: string): Promise<{ released: boolean; why: string }> {
+    for (const [targetId, target] of [...this.targets]) {
+      if (target.profileId !== profileId) continue
+      const browserTabId = target.browserTabId
+      this.forget(targetId)
+      if (browserTabId !== '') windowClosed(browserTabId)
+    }
+
+    const pending = this.browsers.get(profileId)
+    this.browsers.delete(profileId)
+    this.settledBrowsers.delete(profileId)
+    if (pending === undefined) {
+      return { released: true, why: 'no browser was running for that profile' }
+    }
+
+    let instance: BrowserInstance
+    try {
+      instance = await pending
+    } catch {
+      // The launch that never came up has no process and no open files.
+      return { released: true, why: 'that profile never started a browser' }
+    }
+    instance.downloads?.dispose()
+    instance.handle.stop()
+
+    const whenGone = instance.handle.whenGone
+    if (whenGone === undefined) {
+      // A scripted launch has no child to die. Taken at its word; the directory
+      // check after the removal is what the answer actually rests on, and
+      // `defaultLaunch` always reports.
+      return { released: true, why: '' }
+    }
+    const gone = await Promise.race([
+      whenGone.then(() => true),
+      new Promise<boolean>((resolve) => {
+        const timer = setTimeout(() => resolve(false), HeadlessDriveHost.STOP_TIMEOUT_MS)
+        timer.unref?.()
+      }),
+    ])
+    if (!gone) {
+      return {
+        released: false,
+        why: "the server's browser for that profile was asked to stop and had not stopped",
+      }
+    }
+    return { released: true, why: '' }
+  }
+
+  /**
    * Stop every browser this host launched.
    *
    * The host's own lifecycle owns the child processes — the pipe closing never
    * kills them, so this is the one place they end. Idempotent.
    */
   async stop(): Promise<void> {
+    // Answer for no directories once the browsers are going. A registration
+    // that outlived its host would tell a clear to wait for a process that has
+    // already ended.
+    this.disownStorage()
     const instances = [...this.browsers.values()]
     this.browsers.clear()
     this.settledBrowsers.clear()

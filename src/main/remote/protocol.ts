@@ -645,7 +645,219 @@ export const CAPABILITY = {
    * correct a welcome later — the same reason its four siblings are stripped.
    */
   folderPick: 'folders.pick',
+  /**
+   * Read this machine's files — list a folder, open one file.
+   *
+   * Asad, on the six panels the desktop has and the phone does not: *"what about
+   * files, artifacts, source control, store, ai readiness, mcp servers in ios
+   * app too for server."* The premise behind all six is the one this release is
+   * built on — *"say no MacBook or Windows exists at all"* — and it bites
+   * hardest here: a file tree is redundant on a phone whose owner can walk to
+   * the machine, and it is the **only** way to see a rented Linux box.
+   *
+   * ## Read-only, and that is the whole capability
+   *
+   * There is no write verb and there will not be one on this frame. Editing a
+   * file on a machine you cannot see, on a phone keyboard, is a way to break a
+   * repository slowly — and there is already a better door for it: a session,
+   * with an agent in it, which this app is otherwise entirely about.
+   *
+   * ## Owner devices only
+   *
+   * Withheld from a guest in `capabilitiesFor` on the rule `folders.pick` is
+   * withheld on, and more sharply: this reads *file contents*, so a guest that
+   * held it could read a private key out of a folder it was never lent.
+   */
+  files: 'files',
+  /**
+   * What git says about a folder on this machine — and what one file changed.
+   *
+   * `src/main/git.ts` has answered this for the desktop since there was a
+   * desktop, and it is deliberately Electron-free: `readGitStatus` and
+   * `readFileDiff` are plain async functions over `git` itself. Nothing here
+   * reimplements git; this is the same two calls, over the wire.
+   *
+   * **Read-only, like `files` beside it.** Status and a diff, never a commit: a
+   * commit is a decision with a message and a body, made in a session where the
+   * agent that wrote the change is standing, not tapped out on a phone.
+   *
+   * Owner devices only, on the same rule and for the same reason — a diff is
+   * file contents by another name.
+   */
+  git: 'git',
+  /**
+   * The four read-only panels the desktop has and a phone did not: **artifacts,
+   * store, AI readiness, MCP servers**.
+   *
+   * *"what about files, artifacts, source control, store, ai readiness, mcp
+   * servers in ios app too for server"* — and then, when offered two of them:
+   * *"all what i asked for so many times, i need all no exceptions."*
+   *
+   * ## One capability and one frame for four panels, deliberately
+   *
+   * Four bespoke frame pairs would be the careful shape and it is the wrong
+   * trade here. Every one of these four is *a list of rows a person reads and
+   * does not act on* — a transcript, a feature, a check, a configured server —
+   * and the differences between them are in the words, not in the structure. A
+   * generic `panel.read` / `panel.rows` says that honestly and gets all four
+   * onto a phone in one pass.
+   *
+   * The line this does **not** cross: nothing here writes. The moment one of
+   * these grows a verb — install a feature, add an MCP server, apply a fix — it
+   * earns its own frame with its own refusals, because a write is where the
+   * differences stop being cosmetic.
+   *
+   * Owner devices only, on the rule `files` is withheld on: a transcript is a
+   * session's contents and an MCP config names credentials.
+   */
+  panels: 'panels',
+  /**
+   * The **machine's own browser profiles** — which one it is using, and its
+   * cookies.
+   *
+   * > *"we have a lot of things in the browser on the desktop side — profile,
+   * > password, cookies, everything… it should be all same, because it is just
+   * > linking this to the server side."*
+   *
+   * The word *linking* is the whole design. A profile is a partition of the
+   * machine's Chromium with its own cookies and its own signed-in state; it
+   * cannot be copied to a phone and should not be. So this does not move it —
+   * it names it, switches it, and empties it, and what a person sees when they
+   * watch that browser is whatever the profile they chose is signed in as.
+   *
+   * What is **not** here, deliberately: saved passwords. A password this phone's
+   * own web view captured belongs to this phone — it is native, in the Keychain,
+   * scoped per machine. *"whatever is not possible to do through that, that can
+   * be native only for this application, for that server only specific."*
+   *
+   * Owner devices only. Switching a browser profile decides which account a
+   * watched window is signed in as, which is an act on the machine.
+   */
+  browserProfiles: 'browser.profiles',
+  /**
+   * **Driving the machine's own browser** — its windows, not this phone's.
+   *
+   * > *"there are no options like the MacBook or Windows desktop application to
+   * > have browser features — recording the click flow, creating a screenshot
+   * > and sending it to the session, converting a browsing session to an
+   * > isolated or shared one… and this should be directly synced to the
+   * > headless one. Here we are just controlling all of these things."*
+   *
+   * The distinction that matters and is easy to lose: `localhost` lends this
+   * phone a **port**, and the page then loads in the phone's own `WKWebView`.
+   * This capability is the opposite — the page loads in **the machine's**
+   * Chromium, on the machine's disk, with the machine's cookies, and the phone
+   * sends verbs and receives pictures. That is the only shape in which
+   * recording a click flow, binding a window to a session, or handing a
+   * screenshot to an agent means anything: all three are about a browser the
+   * agent can also see.
+   *
+   * A headless host has had a real Chromium since wave 2 — `browser-headless-
+   * host.ts` launches it and `browser-headless-control.ts` drives it — so this
+   * is the same capability on a server as on a desktop, which is what *directly
+   * synced to the headless one* asks for.
+   *
+   * Owner-only, and not a close call: a bound window can be told to navigate
+   * anywhere and photographed, and the binding store hands its output to a
+   * session that is running commands.
+   */
+  browserControl: 'browser.control',
 } as const
+
+/**
+ * A button a panel offered, and the form behind it if it needs one.
+ *
+ * Declared by the host and drawn by the phone without knowing what it means.
+ * `kind` is the only thing the phone reads for itself: a `destructive` action
+ * is drawn in the warning colour and asks before it fires, because *remove this
+ * MCP server* and *connect it* must not look the same under a thumb.
+ */
+export interface PanelAction {
+  id: string
+  label: string
+  kind?: 'default' | 'destructive'
+  /** Ask for these before sending. Absent means fire on the tap. */
+  fields?: PanelField[]
+  /** One line under the confirmation, for an action that cannot be undone. */
+  confirm?: string
+}
+
+/** One field of an action's form. */
+export interface PanelField {
+  id: string
+  label: string
+  /** Prefilled, which is what makes one action serve both *add* and *edit*. */
+  value?: string
+  placeholder?: string
+  required?: boolean
+  /**
+   * The only answers this field accepts, when it accepts a fixed set.
+   *
+   * Absent means free text. Present, the phone draws a picker rather than a
+   * keyboard — which is the difference between choosing a scope and *spelling*
+   * one. The MCP panel measured the cost of not having this: its scope field
+   * became a text box prefilled with `user` and the three legal words written
+   * into the label, and an SSE server could not be added at all because its
+   * transport is inferred from which box was filled in.
+   *
+   * The host still validates. A picker narrows what a person can send; it is not
+   * a reason to trust what arrived.
+   */
+  choices?: string[]
+}
+
+/** One of a panel's filters. */
+export interface PanelScope {
+  id: string
+  label: string
+  on: boolean
+}
+
+/** One row of a panel, and what can be done to it. */
+export interface PanelRow {
+  title: string
+  detail?: string
+  value?: string
+  status?: string
+  /** Stable across redraws — an action names its row by this. */
+  id?: string
+  actions?: PanelAction[]
+}
+
+/** One window open in the machine's own browser. */
+export interface MachineWindow {
+  id: string
+  title: string
+  url: string
+  /** `B1`, `B2` — the name the binding store gave it, when it has one. */
+  slot?: string
+  /** The session that owns it, when a session does. */
+  session?: string
+  sessionTitle?: string
+  profile?: string
+  /** A partition of its own, thrown away when the window closes. */
+  isolated?: boolean
+  /** Whether the click flow is being recorded right now. */
+  recording?: boolean
+  loading?: boolean
+}
+
+/** A session a window could be bound to. */
+export interface WindowSession {
+  id: string
+  title: string
+  /** How many windows it already holds. */
+  windows: number
+}
+
+/** One step the recorder collected. */
+export interface RecordedStep {
+  at: number
+  kind: string
+  detail?: string
+  selector?: string
+  value?: string
+}
 
 /**
  * Every extension this build knows how to serve.
@@ -678,6 +890,24 @@ export const CAPABILITIES: string[] = [
   CAPABILITY.hostWindows,
   CAPABILITY.watch,
   CAPABILITY.folderPick,
+  CAPABILITY.files,
+  CAPABILITY.git,
+  CAPABILITY.panels,
+  CAPABILITY.browserProfiles,
+  /*
+   * Driving the machine's own browser.
+   *
+   * It arrived with a name, a rule in `serves` that reads whether a host built a
+   * `MachineBrowser`, and a guest narrowing in `capabilitiesFor` — and not with
+   * a line here, which is the only list `advertised` is built by filtering. So
+   * every one of those rules ran against a name that was never a candidate, and
+   * **no host advertised it, whatever it passed**: the phone's whole
+   * machine-browser surface stayed dark on a desktop and on a server alike,
+   * which is what *"I don't see any of them"* was. Found by
+   * `src/headless/host.test.ts`, which asks a real endpoint for its welcome
+   * rather than asking `serves` what it would have said.
+   */
+  CAPABILITY.browserControl,
 ]
 
 /**
@@ -2560,6 +2790,113 @@ export type ClientMessage =
    * and `error` already says both with a code and a sentence.
    */
   | { t: 'folders.browse'; path?: string }
+  /* ---- capability `files`. Refused when it is not advertised. -------------- */
+  /**
+   * What is in this folder — files as well as directories.
+   *
+   * The sibling of `folders.browse`, and deliberately a second verb rather than
+   * a flag on it: that one answers *where could a session start*, which is a
+   * question about directories, and this answers *what is in here*, which is a
+   * question about a folder's contents. One frame with a `withFiles` boolean
+   * would have made the picker and the file tree the same feature, and they are
+   * gated on different capabilities for different reasons.
+   */
+  | { t: 'files.list'; path: string }
+  /**
+   * One file's bytes, as text, capped.
+   *
+   * `at` and `max` exist so a phone can read the *start* of a large file rather
+   * than be refused it: a 40MB log is worth its first screen, and a client that
+   * could only ask for all-or-nothing would get nothing. The host answers with
+   * how much it truncated, so the screen can say so rather than showing a file
+   * that silently stops.
+   */
+  | { t: 'files.read'; path: string; at?: number; max?: number }
+  /* ---- capability `git`. Refused when it is not advertised. ---------------- */
+  /** What git says about this folder. `readGitStatus`, over the wire. */
+  | { t: 'git.status'; path: string }
+  /** One file's diff, staged or not. `readFileDiff`, over the wire. */
+  | { t: 'git.diff'; path: string; file: string; staged?: boolean }
+  /* ---- capability `panels`. Refused when it is not advertised. ------------- */
+  /**
+   * One panel, for a folder where that means something.
+   *
+   * `scope` and `query` are the panel's own filters, passed through rather than
+   * interpreted here: Artifacts has *made* / *changed* and a per-session scope
+   * on the desktop, and a panel that could only ever send its default view is a
+   * panel somebody has to leave to answer an ordinary question.
+   */
+  | { t: 'panel.read'; panel: string; path?: string; scope?: string; query?: string }
+  /**
+   * **Do the thing a panel offered.**
+   *
+   * > *"these pages are not just to view the information — exactly all actions
+   * > that we have in desktop application, they should be inside each option of
+   * > them. All the features and options to edit or add or whatever the actions
+   * > we have in the desktop app should be in mobile app too."*
+   *
+   * One frame for every panel's every action, rather than a family per panel,
+   * and that is a deliberate shape. The host declares what a panel and each of
+   * its rows can do — `panel.rows` carries the buttons — and the phone draws
+   * whatever it was handed and sends the id back. Adding *remove an MCP server*
+   * is then a change to one handler and no change at all to the wire, the codec
+   * or the screen; the alternative was `mcp.add`, `mcp.edit`, `mcp.remove`,
+   * `mcp.connect`, `readiness.fix`, `store.install`, `store.remove` and a codec
+   * case each, all of which would have to be written twice more in Swift.
+   *
+   * `fields` carries a form the host asked for — an MCP server needs a name and
+   * a command — keyed by the field ids the action declared. Every action answers
+   * with a fresh `panel.rows`, so the screen redrawing **is** the confirmation
+   * and there is no outcome for a client to reconcile.
+   */
+  | {
+      t: 'panel.act'
+      panel: string
+      action: string
+      path?: string
+      id?: string
+      fields?: Record<string, string>
+      /**
+       * The filters that were on screen when the button was pressed.
+       *
+       * Carried because an action answers with the panel, and a redraw that
+       * dropped them would move somebody out of the list they were standing in —
+       * a fix applied under *Codex* answering with the *project* view, a search
+       * cleared by pressing Remove.
+       *
+       * Whether to honour them is the panel's own decision and one of them
+       * argues otherwise in its own file: a server you just added is often not
+       * in the filter you were looking at. The wire's job is to make the choice
+       * available, not to make it.
+       */
+      scope?: string
+      query?: string
+    }
+  /* ---- capability `browser.control`. Refused when not advertised. --------- */
+  /** What the machine's browser has open, and which sessions could own one. */
+  | { t: 'browser.windows' }
+  /** Open one there. `isolated` gives it a partition of its own that is thrown
+   *  away when it closes — the desktop's *isolated* session, over the wire. */
+  | { t: 'browser.window.open'; url?: string; profile?: string; isolated?: boolean }
+  /** Send an open window somewhere. */
+  | { t: 'browser.window.go'; id: string; url: string }
+  /** Back, forward, reload, close, and start or stop recording the click flow. */
+  | { t: 'browser.window.act'; id: string; action: string }
+  /** Bind a window to a session, so the agent in it knows which window is its
+   *  own. Sending no session unbinds. */
+  | { t: 'browser.window.bind'; id: string; session?: string }
+  /** Photograph it. With a session, the picture is handed to that session
+   *  instead of coming back here. */
+  | { t: 'browser.window.shot'; id: string; session?: string; note?: string }
+  /** What the recorder has collected on that window so far. */
+  | { t: 'browser.window.steps'; id: string }
+  /* ---- capability `browser.profiles`. Refused when not advertised. -------- */
+  /** Which profiles this machine's browser has, and which one it is using. */
+  | { t: 'browser.profiles' }
+  /** Use that one from now on. The machine's own browser switches partition. */
+  | { t: 'browser.profile.use'; id: string }
+  /** Empty that profile — its cookies, its signed-in state, its storage. */
+  | { t: 'browser.profile.clear'; id: string }
   /* ---- capability `close`. Refused when it is not advertised. ------------- */
   /**
    * End the session named by `id`. The process is killed; it does not come back.
@@ -3469,6 +3806,84 @@ export type ServerMessage =
       parent: string | null
       entries: { name: string; path: string; readable: boolean; granted: boolean }[]
     }
+  /* ---- capability `files` -------------------------------------------------- */
+  /**
+   * A folder's contents, directories first.
+   *
+   * `size` and `at` are absent for a directory rather than zero, because a
+   * directory has no meaningful size and a zero would be drawn as one.
+   * `readable` carries the same fact it does on `folders.entries`, for the same
+   * reason: a row this account cannot open is drawn dimmed rather than hidden.
+   */
+  | {
+      t: 'files.rows'
+      path: string
+      parent: string | null
+      entries: { name: string; path: string; directory: boolean; readable: boolean; size?: number; at?: number }[]
+    }
+  /**
+   * A file, as far as it was read.
+   *
+   * `truncated` is the whole reason this is not just a string: a screen showing
+   * the first 200KB of a log must be able to say that is what it is showing.
+   * `binary` is the host's answer to a file that is not text at all — decided
+   * there rather than guessed at from an extension on the phone.
+   */
+  | { t: 'files.text'; path: string; text: string; at: number; truncated: boolean; binary: boolean }
+  /* ---- capability `git` ---------------------------------------------------- */
+  /**
+   * What git said, as JSON the phone renders.
+   *
+   * `status` is `GitStatusResult` — which is a union of a real status and a
+   * *not a repo* answer with a reason, and both are worth drawing. A folder
+   * that is not a repository is not an error; it is an answer.
+   */
+  | { t: 'git.state'; path: string; status: unknown }
+  /** One file's diff, as git printed it. Empty when there is nothing to show. */
+  | { t: 'git.patch'; path: string; file: string; staged: boolean; patch: string }
+  /* ---- capability `panels` ------------------------------------------------- */
+  /**
+   * A panel's rows, in the one shape all four share.
+   *
+   * `title` is what the row is; `detail` is the sentence under it; `value` is the
+   * thing on the right; `status` tints it — `ok`, `warn`, `bad`, or absent for a
+   * row that is merely information. A panel that has nothing to say sends no
+   * rows and a `note`, which is how *"no MCP servers are configured"* reaches a
+   * screen without being mistaken for a failure to load.
+   */
+  /* ---- capability `browser.profiles` ------------------------------------- */
+  /**
+   * The machine's browser profiles, and which is current.
+   *
+   * `partition` is carried because it is the thing that actually separates two
+   * profiles — cookies, storage and sign-ins all hang off it — and a screen that
+   * showed two profiles with the same partition would be showing one profile
+   * twice under two names.
+   */
+  | {
+      t: 'browser.profile.rows'
+      current: string
+      profiles: { id: string; name: string; avatar: string; partition: string }[]
+    }
+  | {
+      t: 'panel.rows'
+      panel: string
+      path: string
+      note?: string
+      /** What just happened, when an action asked for this redraw. One line. */
+      notice?: string
+      /** The filters this panel offers, and which one is on. */
+      scopes?: PanelScope[]
+      /** What can be done to the panel itself — *add a server*, and its like. */
+      actions?: PanelAction[]
+      rows: PanelRow[]
+    }
+  /* ---- capability `browser.control` -------------------------------------- */
+  | { t: 'browser.window.rows'; windows: MachineWindow[]; sessions: WindowSession[]; notice?: string }
+  /** A photograph of one window, when it was not handed to a session instead. */
+  | { t: 'browser.shot'; id: string; png: string; at: number }
+  /** What the recorder collected. */
+  | { t: 'browser.record.rows'; id: string; steps: RecordedStep[] }
   /* ---- capability `localhost` ------------------------------------------- */
   | { t: 'ports'; ports: LocalPort[] }
   | { t: 'tunnel.opened'; id: string; port: number }
@@ -4003,6 +4418,54 @@ export type ParseResult =
   | { ok: false; code: ProtocolErrorCode; reason: string }
 
 /* ------------------------------------------------------------------ checks -- */
+
+/**
+ * How far into a file a phone may ask to start, and how much it may take.
+ *
+ * The window is 256KB because that is about a hundred screens of source at a
+ * readable size — enough that a person scrolling never meets the edge on
+ * anything they would actually read, and small enough that a phone on a train
+ * does not wait on a 40MB log it asked for by accident. The offset ceiling is
+ * generous rather than principled: it exists so a malformed frame cannot ask
+ * this host to seek to a number that overflows the read.
+ */
+/** The four this build serves. Named here so a typo is a refusal, not an empty screen. */
+export const PANELS = ['artifacts', 'store', 'readiness', 'mcp']
+
+const MAX_FILE_WINDOW = 256 * 1024
+const MAX_FILE_OFFSET = 1024 * 1024 * 1024
+
+/**
+ * The limits on a panel's own vocabulary, and on the browser verbs beside it.
+ *
+ * `MAX_PANEL_WORD` bounds every identifier that crosses this wire and is not
+ * somebody's typing — a panel name, an action id, a row id, a window id, a
+ * session id, a field key. All of them are minted by this codebase, and 128
+ * bytes is far past the longest (`readiness.fix-node`) while being short enough
+ * that a frame full of them cannot be used to make this host allocate.
+ *
+ * `MAX_PANEL_VALUE` is the one that carries a person's typing: an MCP server's
+ * command line, a URL, a note attached to a screenshot. It matches
+ * `MAX_URL_LENGTH` deliberately — a URL is the longest thing anybody types into
+ * one of these forms, so the two ceilings agreeing means no field can hold a
+ * URL the address bar next door would accept.
+ */
+const MAX_PANEL_WORD = 128
+const MAX_PANEL_VALUE = MAX_URL_LENGTH
+const MAX_PANEL_FIELDS = 24
+
+/**
+ * What can be done to a window of the machine's browser without naming a place.
+ *
+ * A closed list rather than a passthrough, because these become calls on the
+ * machine's Chromium: `close` destroys a window somebody may be watching, and
+ * `record.on` starts collecting every click and every field on that page. An
+ * open string here would be a verb this build had never heard of arriving at
+ * the driver, which is exactly the shape `panel.act` is allowed to be and this
+ * is not — a panel's actions are declared by the host in the same breath as its
+ * rows, so the phone can only send back what it was offered.
+ */
+const WINDOW_ACTIONS = ['back', 'forward', 'reload', 'close', 'record.on', 'record.off', 'share', 'isolate']
 
 const bad = (reason: string): ParseResult => ({ ok: false, code: 'bad-message', reason })
 const tooLarge = (reason: string): ParseResult => ({ ok: false, code: 'too-large', reason })
@@ -5036,6 +5499,277 @@ export function parseClientMessage(raw: unknown): ParseResult {
         // hostile path into a *different* legal-looking one.
         if (CONTROL_CHARS.test(rawPath)) return bad('folders.browse with an unusable folder')
         message.path = rawPath
+      }
+      return { ok: true, message }
+    }
+    case 'panel.act': {
+      const rawPanel = parsed.panel
+      if (typeof rawPanel !== 'string' || !PANELS.includes(rawPanel)) {
+        return bad('panel.act for a panel this build does not serve')
+      }
+      const rawAction = parsed.action
+      if (typeof rawAction !== 'string' || rawAction === '' || overBytes(rawAction, MAX_PANEL_WORD)) {
+        return bad('panel.act with an unusable action')
+      }
+      if (CONTROL_CHARS.test(rawAction)) return bad('panel.act with an unusable action')
+      const message: Extract<ClientMessage, { t: 'panel.act' }> = {
+        t: 'panel.act',
+        panel: rawPanel,
+        action: rawAction,
+      }
+      const rawPath = parsed.path
+      if (rawPath !== undefined) {
+        if (typeof rawPath !== 'string' || rawPath === '') return bad('panel.act with an unusable folder')
+        if (overBytes(rawPath, MAX_CWD_BYTES)) return tooLarge('panel.act with a folder over the path limit')
+        if (CONTROL_CHARS.test(rawPath)) return bad('panel.act with an unusable folder')
+        message.path = rawPath
+      }
+      const rawId = parsed.id
+      if (rawId !== undefined) {
+        if (typeof rawId !== 'string' || rawId === '' || overBytes(rawId, MAX_PANEL_WORD)) {
+          return bad('panel.act naming a row this build cannot address')
+        }
+        if (CONTROL_CHARS.test(rawId)) return bad('panel.act naming a row this build cannot address')
+        message.id = rawId
+      }
+      /*
+       * The form, bounded on three axes.
+       *
+       * A field's *value* is the one thing here that carries somebody's typing —
+       * an MCP server's command line, a URL — so it gets the generous limit and
+       * the count of fields gets the strict one. Control characters are refused
+       * in a value as well as in a key, because several of these end up in a
+       * JSON file that a coding agent reads on its next start.
+       */
+      const rawScope = parsed.scope
+      if (rawScope !== undefined) {
+        if (typeof rawScope !== 'string' || overBytes(rawScope, MAX_PANEL_WORD)) {
+          return bad('panel.act with an unusable scope')
+        }
+        message.scope = rawScope
+      }
+      const rawQuery = parsed.query
+      if (rawQuery !== undefined) {
+        if (typeof rawQuery !== 'string' || overBytes(rawQuery, MAX_PANEL_WORD)) {
+          return bad('panel.act with an unusable query')
+        }
+        message.query = rawQuery
+      }
+      const rawFields = parsed.fields
+      if (rawFields !== undefined) {
+        if (typeof rawFields !== 'object' || rawFields === null || Array.isArray(rawFields)) {
+          return bad('panel.act with an unusable form')
+        }
+        const entries = Object.entries(rawFields as Record<string, unknown>)
+        if (entries.length > MAX_PANEL_FIELDS) return tooLarge('panel.act with too many fields')
+        const fields: Record<string, string> = {}
+        for (const [key, value] of entries) {
+          if (overBytes(key, MAX_PANEL_WORD) || CONTROL_CHARS.test(key)) {
+            return bad('panel.act with an unusable field name')
+          }
+          if (typeof value !== 'string') return bad('panel.act with an unusable field')
+          if (overBytes(value, MAX_PANEL_VALUE)) return tooLarge('panel.act with a field over the limit')
+          if (CONTROL_CHARS.test(value)) return bad('panel.act with an unusable field')
+          fields[key] = value
+        }
+        message.fields = fields
+      }
+      return { ok: true, message }
+    }
+    case 'browser.windows':
+      return { ok: true, message: { t: 'browser.windows' } }
+    case 'browser.window.open': {
+      const message: Extract<ClientMessage, { t: 'browser.window.open' }> = { t: 'browser.window.open' }
+      const rawUrl = parsed.url
+      if (rawUrl !== undefined) {
+        if (typeof rawUrl !== 'string' || rawUrl === '') return bad('browser.window.open with an unusable address')
+        if (overBytes(rawUrl, MAX_URL_LENGTH)) return tooLarge('browser.window.open over the address limit')
+        if (CONTROL_CHARS.test(rawUrl)) return bad('browser.window.open with an unusable address')
+        message.url = rawUrl
+      }
+      const rawProfile = parsed.profile
+      if (rawProfile !== undefined) {
+        if (typeof rawProfile !== 'string' || overBytes(rawProfile, MAX_PANEL_WORD)) {
+          return bad('browser.window.open naming a profile this build cannot address')
+        }
+        message.profile = rawProfile
+      }
+      if (parsed.isolated !== undefined) {
+        if (typeof parsed.isolated !== 'boolean') return bad('browser.window.open with an unusable isolation')
+        message.isolated = parsed.isolated
+      }
+      return { ok: true, message }
+    }
+    case 'browser.window.go': {
+      const rawId = parsed.id
+      if (typeof rawId !== 'string' || rawId === '' || overBytes(rawId, MAX_PANEL_WORD)) {
+        return bad('browser.window.go naming a window this build cannot address')
+      }
+      const rawUrl = parsed.url
+      if (typeof rawUrl !== 'string' || rawUrl === '') return bad('browser.window.go with an unusable address')
+      if (overBytes(rawUrl, MAX_URL_LENGTH)) return tooLarge('browser.window.go over the address limit')
+      if (CONTROL_CHARS.test(rawUrl) || CONTROL_CHARS.test(rawId)) return bad('browser.window.go with unusable text')
+      return { ok: true, message: { t: 'browser.window.go', id: rawId, url: rawUrl } }
+    }
+    case 'browser.window.act': {
+      const rawId = parsed.id
+      if (typeof rawId !== 'string' || rawId === '' || overBytes(rawId, MAX_PANEL_WORD)) {
+        return bad('browser.window.act naming a window this build cannot address')
+      }
+      const rawAction = parsed.action
+      if (typeof rawAction !== 'string' || !WINDOW_ACTIONS.includes(rawAction)) {
+        return bad('browser.window.act for something this build does not do')
+      }
+      if (CONTROL_CHARS.test(rawId)) return bad('browser.window.act naming a window this build cannot address')
+      return { ok: true, message: { t: 'browser.window.act', id: rawId, action: rawAction } }
+    }
+    case 'browser.window.bind': {
+      const rawId = parsed.id
+      if (typeof rawId !== 'string' || rawId === '' || overBytes(rawId, MAX_PANEL_WORD)) {
+        return bad('browser.window.bind naming a window this build cannot address')
+      }
+      if (CONTROL_CHARS.test(rawId)) return bad('browser.window.bind naming a window this build cannot address')
+      const message: Extract<ClientMessage, { t: 'browser.window.bind' }> = { t: 'browser.window.bind', id: rawId }
+      const rawSession = parsed.session
+      // Absent is the unbind, so it is a shape rather than an omission — a
+      // client that meant to unbind and one whose field went missing are the
+      // same frame, and unbinding is the harmless half of that pair.
+      if (rawSession !== undefined) {
+        if (typeof rawSession !== 'string' || rawSession === '' || overBytes(rawSession, MAX_PANEL_WORD)) {
+          return bad('browser.window.bind naming a session this build cannot address')
+        }
+        if (CONTROL_CHARS.test(rawSession)) return bad('browser.window.bind naming an unusable session')
+        message.session = rawSession
+      }
+      return { ok: true, message }
+    }
+    case 'browser.window.shot': {
+      const rawId = parsed.id
+      if (typeof rawId !== 'string' || rawId === '' || overBytes(rawId, MAX_PANEL_WORD)) {
+        return bad('browser.window.shot naming a window this build cannot address')
+      }
+      if (CONTROL_CHARS.test(rawId)) return bad('browser.window.shot naming a window this build cannot address')
+      const message: Extract<ClientMessage, { t: 'browser.window.shot' }> = { t: 'browser.window.shot', id: rawId }
+      const rawSession = parsed.session
+      if (rawSession !== undefined) {
+        if (typeof rawSession !== 'string' || rawSession === '' || overBytes(rawSession, MAX_PANEL_WORD)) {
+          return bad('browser.window.shot naming a session this build cannot address')
+        }
+        if (CONTROL_CHARS.test(rawSession)) return bad('browser.window.shot naming an unusable session')
+        message.session = rawSession
+      }
+      const rawNote = parsed.note
+      if (rawNote !== undefined) {
+        if (typeof rawNote !== 'string' || overBytes(rawNote, MAX_PANEL_VALUE)) {
+          return bad('browser.window.shot with an unusable note')
+        }
+        message.note = rawNote
+      }
+      return { ok: true, message }
+    }
+    case 'browser.window.steps': {
+      const rawId = parsed.id
+      if (typeof rawId !== 'string' || rawId === '' || overBytes(rawId, MAX_PANEL_WORD)) {
+        return bad('browser.window.steps naming a window this build cannot address')
+      }
+      if (CONTROL_CHARS.test(rawId)) return bad('browser.window.steps naming a window this build cannot address')
+      return { ok: true, message: { t: 'browser.window.steps', id: rawId } }
+    }
+    case 'browser.profiles':
+      return { ok: true, message: { t: 'browser.profiles' } }
+    case 'browser.profile.use':
+    case 'browser.profile.clear': {
+      const rawId = parsed.id
+      // The id selects a partition and therefore a set of cookies. Anything but
+      // a plain id is refused rather than trimmed, the rule `create.provider`
+      // follows: a trimming rule invents a *different* legal-looking id out of a
+      // hostile one, and this one decides whose session a window is in.
+      if (typeof rawId !== 'string' || rawId === '' || rawId.length > 64) {
+        return bad(`${parsed.t} with an unusable profile`)
+      }
+      if (!/^[A-Za-z0-9._-]+$/.test(rawId)) return bad(`${parsed.t} with an unusable profile`)
+      return parsed.t === 'browser.profile.use'
+        ? { ok: true, message: { t: 'browser.profile.use', id: rawId } }
+        : { ok: true, message: { t: 'browser.profile.clear', id: rawId } }
+    }
+    case 'panel.read': {
+      const rawPanel = parsed.panel
+      if (typeof rawPanel !== 'string' || !PANELS.includes(rawPanel)) {
+        return bad('panel.read for a panel this build does not serve')
+      }
+      const message: Extract<ClientMessage, { t: 'panel.read' }> = { t: 'panel.read', panel: rawPanel }
+      const rawPath = parsed.path
+      if (rawPath !== undefined) {
+        if (typeof rawPath !== 'string' || rawPath === '') return bad('panel.read with an unusable folder')
+        if (overBytes(rawPath, MAX_CWD_BYTES)) return tooLarge('panel.read with a folder over the path limit')
+        if (CONTROL_CHARS.test(rawPath)) return bad('panel.read with an unusable folder')
+        message.path = rawPath
+      }
+      const rawScope = parsed.scope
+      if (rawScope !== undefined) {
+        if (typeof rawScope !== 'string' || overBytes(rawScope, MAX_PANEL_WORD)) {
+          return bad('panel.read with an unusable scope')
+        }
+        message.scope = rawScope
+      }
+      const rawQuery = parsed.query
+      if (rawQuery !== undefined) {
+        if (typeof rawQuery !== 'string' || overBytes(rawQuery, MAX_PANEL_WORD)) {
+          return bad('panel.read with an unusable query')
+        }
+        message.query = rawQuery
+      }
+      return { ok: true, message }
+    }
+    case 'files.list':
+    case 'git.status': {
+      // One shape, two verbs: both are "a folder on that machine, named
+      // absolutely". Refused rather than trimmed for a control byte, the reason
+      // `create.cwd` gives — this value reaches `readdir` and `git`.
+      const rawPath = parsed.path
+      if (typeof rawPath !== 'string' || rawPath === '') return bad(`${parsed.t} with an unusable folder`)
+      if (overBytes(rawPath, MAX_CWD_BYTES)) return tooLarge(`${parsed.t} with a folder over the path limit`)
+      if (CONTROL_CHARS.test(rawPath)) return bad(`${parsed.t} with an unusable folder`)
+      return parsed.t === 'files.list'
+        ? { ok: true, message: { t: 'files.list', path: rawPath } }
+        : { ok: true, message: { t: 'git.status', path: rawPath } }
+    }
+    case 'files.read': {
+      const rawPath = parsed.path
+      if (typeof rawPath !== 'string' || rawPath === '') return bad('files.read with an unusable file')
+      if (overBytes(rawPath, MAX_CWD_BYTES)) return tooLarge('files.read with a path over the limit')
+      if (CONTROL_CHARS.test(rawPath)) return bad('files.read with an unusable file')
+      const message: Extract<ClientMessage, { t: 'files.read' }> = { t: 'files.read', path: rawPath }
+      // Both optional and both bounded here rather than trusted at the far end:
+      // a negative offset or a gigantic window is a read this host should never
+      // attempt, and the honest place to stop it is before it is attempted.
+      const at = whole(parsed.at, 0, MAX_FILE_OFFSET)
+      if (parsed.at !== undefined) {
+        if (at === null) return bad('files.read from an unusable offset')
+        message.at = at
+      }
+      const max = whole(parsed.max, 1, MAX_FILE_WINDOW)
+      if (parsed.max !== undefined) {
+        if (max === null) return bad('files.read with an unusable size')
+        message.max = max
+      }
+      return { ok: true, message }
+    }
+    case 'git.diff': {
+      const rawPath = parsed.path
+      const rawFile = parsed.file
+      if (typeof rawPath !== 'string' || rawPath === '') return bad('git.diff with an unusable folder')
+      if (typeof rawFile !== 'string' || rawFile === '') return bad('git.diff with an unusable file')
+      if (overBytes(rawPath, MAX_CWD_BYTES) || overBytes(rawFile, MAX_CWD_BYTES)) {
+        return tooLarge('git.diff with a path over the limit')
+      }
+      if (CONTROL_CHARS.test(rawPath) || CONTROL_CHARS.test(rawFile)) {
+        return bad('git.diff with an unusable path')
+      }
+      const message: Extract<ClientMessage, { t: 'git.diff' }> = { t: 'git.diff', path: rawPath, file: rawFile }
+      if (parsed.staged !== undefined) {
+        if (typeof parsed.staged !== 'boolean') return bad('git.diff with an unusable staged flag')
+        message.staged = parsed.staged
       }
       return { ok: true, message }
     }

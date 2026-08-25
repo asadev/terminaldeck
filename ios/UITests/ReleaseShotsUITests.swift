@@ -166,7 +166,8 @@ final class ReleaseShotsUITests: XCTestCase {
      * from outside the app at all.
      */
     private func localhostGroupsAndFolds() throws {
-        XCTAssertTrue(app.openBrowserTab(), "the Browser tab should be reachable")
+        XCTAssertTrue(app.openLocalhostList(),
+                      "the localhost list is one row down the Browser tab's menu — see TabNavigation")
 
         let headers = app.buttons.matching(
             NSPredicate(format: "identifier BEGINSWITH 'localhost.section.'"))

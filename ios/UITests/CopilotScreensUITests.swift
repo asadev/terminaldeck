@@ -282,16 +282,27 @@ final class CopilotScreensUITests: XCTestCase {
         capture("alter-06b-timeline")
         try theDeskQuestionHasNoAnswerOnIt()
 
+        /*
+         * Both lists are behind the gear now rather than behind a `…`.
+         *
+         * The overflow menu that used to be in this slot carried a strict subset
+         * of `CopilotControlView` — the two lists, Interrupt and Stop — and a gear
+         * beside a `…` offering less than the gear is two doors to one room with the
+         * smaller one first. So the menu is gone and this walk goes through the
+         * control screen, which is one push rather than a menu and therefore has
+         * a back chevron rather than a Done.
+         */
+        app.buttons["copilot.controls"].tap()
+        XCTAssertTrue(app.buttons["copilot.controls.sessions"].waitForExistence(timeout: 10))
+
         // What it started.
-        app.buttons["copilot.more"].tap()
-        app.buttons["copilot.sessions"].tap()
+        app.buttons["copilot.controls.sessions"].tap()
         XCTAssertTrue(app.navigationBars["Sessions it started"].waitForExistence(timeout: 10))
         capture("alter-09-sessions-it-started")
         app.buttons["Done"].tap()
 
         // Everything it did, including the refusal.
-        app.buttons["copilot.more"].tap()
-        app.buttons["copilot.activity"].tap()
+        app.buttons["copilot.controls.activity"].tap()
         XCTAssertTrue(app.navigationBars["Everything it did"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts
             .containing(NSPredicate(format: "label CONTAINS 'not-granted'"))
@@ -299,6 +310,8 @@ final class CopilotScreensUITests: XCTestCase {
                       "a refused call is the row this screen exists for")
         capture("alter-10-everything-it-did")
         app.buttons["Done"].tap()
+        // Back out of the controls, to the conversation this walk started on.
+        app.navigationBars.buttons.element(boundBy: 0).tap()
     }
 
     /**

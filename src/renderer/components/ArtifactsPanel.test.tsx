@@ -8,8 +8,10 @@ import {
   describeRead,
   diffLines,
   directoryOf,
+  fileUrl,
   kindOf,
   nothingFound,
+  openLabel,
   previewKindOf,
   wasMade,
   MAX_DIFF_LINES,
@@ -463,6 +465,48 @@ describe('what kind of thing an artifact is', () => {
     expect(previewKindOf('report.pdf')).toBe('text')
     expect(previewKindOf('logo.png')).toBe('image')
     expect(previewKindOf('build.bin')).toBe('none')
+  })
+
+  it('calls a prototype a page, which is the thing he asked about by name', () => {
+    // Its own answer rather than `text`, and the difference is one sentence on
+    // screen: the markup is worth reading and is not the thing.
+    expect(previewKindOf('demo/index.html')).toBe('page')
+    expect(previewKindOf('mock.htm')).toBe('page')
+  })
+})
+
+describe('opening an artifact on the machine', () => {
+  it('names the button after what the thing is', () => {
+    // *"Open it"* on a prototype undersells the case he asked about by name;
+    // *"Run it"* on a `.zip` would be a lie.
+    expect(openLabel('page')).toBe('Run it in your browser')
+    expect(openLabel('image')).toBe('Open the picture')
+    expect(openLabel('document')).toBe('Open it on this machine')
+    expect(openLabel('none')).toBe('Open it on this machine')
+  })
+
+  it('builds a file URL a machine will take', () => {
+    expect(fileUrl('/work/deck', 'demo/index.html')).toBe('file:///work/deck/demo/index.html')
+    // A trailing separator would put `//` in the middle of the path, which some
+    // openers follow and others do not.
+    expect(fileUrl('/work/deck/', 'a.md')).toBe('file:///work/deck/a.md')
+  })
+
+  it('escapes what a URL cannot carry, and keeps the separators', () => {
+    // A space, a `#` and a `?` all mean something else in a URL, and all three
+    // are legal in a filename an agent writes.
+    expect(fileUrl('/work/deck', 'design notes/read me.md')).toBe(
+      'file:///work/deck/design%20notes/read%20me.md',
+    )
+    expect(fileUrl('/work/deck', 'a#b?c.md')).toBe('file:///work/deck/a%23b%3Fc.md')
+  })
+
+  it('spells a Windows root the way Windows takes it', () => {
+    // Three slashes, forward separators, and the drive letter kept whole — a
+    // `C%3A` is not a path any opener resolves.
+    expect(fileUrl('C:\\Users\\asad\\deck', 'demo/index.html')).toBe(
+      'file:///C:/Users/asad/deck/demo/index.html',
+    )
   })
 })
 

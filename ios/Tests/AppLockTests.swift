@@ -396,6 +396,8 @@ final class AppLockTests: XCTestCase {
         XCTAssertTrue(availability.canLock)
         let caveat = availability.caveat ?? ""
         XCTAssertTrue(caveat.contains("Face ID is not set up"), caveat)
+        // One clause now — the remedy came off deliberately. See AppLockAvailability.caveat.
+        XCTAssertFalse(caveat.contains("Settings"), "the remedy is not worth a second sentence: \(caveat)")
         XCTAssertTrue(caveat.contains("passcode"), caveat)
         XCTAssertNil(availability.refusal)
     }

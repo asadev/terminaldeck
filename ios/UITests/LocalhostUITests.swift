@@ -147,7 +147,8 @@ final class LocalhostUITests: XCTestCase {
         // The ports are their own tab now rather than a second list under the
         // sessions — *"Sessions separately and local host separately in the pill
         // side"*. Every case below starts here.
-        XCTAssertTrue(app.openBrowserTab(), "the Browser tab should be reachable")
+        XCTAssertTrue(app.openLocalhostList(),
+                      "the localhost list is one row down the Browser tab's menu — see TabNavigation")
     }
 
     /// The skip, and it names both halves of the setup — the host *and* the dev
@@ -211,8 +212,10 @@ final class LocalhostUITests: XCTestCase {
      * of launch on a phone that has nothing stored.
      */
     private func pairIfTheAppIsAsking() throws {
+        // The door first, if the login is in front of the field — see
+        // `XCUIApplication.reachPairingField`.
         let field = app.textFields["pairing.field"]
-        guard field.waitForExistence(timeout: 8) else {
+        guard app.reachPairingField(timeout: 8) else {
             Self.paired = true
             return
         }
@@ -487,7 +490,7 @@ final class LocalhostUITests: XCTestCase {
      *
      * The last assertion matters as much as the first. Popping by gesture has to
      * take the tunnel down exactly as Done does — see the `onChange` in
-     * `LocalhostListView` — because a page left half-closed leaves the machine
+     * `LocalhostPortsView` — because a page left half-closed leaves the machine
      * serving a port to a phone that stopped looking.
      */
     func testTheLeftEdgeSwipePopsTheScreen() throws {

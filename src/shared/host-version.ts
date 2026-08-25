@@ -13,7 +13,25 @@
  * cases the Swift side pins, so the two fail together rather than drifting.
  */
 
-import { BRAND } from './brand'
+/*
+ * **No default for `mine`, and that is a correction rather than a style choice.**
+ *
+ * It used to default to `BRAND.version`, which does not exist — `BRAND` in
+ * `./brand.ts` carries the name, the id, the bundle id and the tagline, and has
+ * never carried a version. The build did not say so because the repository's
+ * root `tsconfig.json` has `include: []`, so a bare `tsc --noEmit` typechecks
+ * nothing at all; the real gate is `npm run typecheck`, which runs
+ * `tsconfig.node.json` and `tsconfig.web.json` and caught this along with a
+ * dozen others the moment it was run.
+ *
+ * There is no honest module-level default to replace it with. This file is
+ * imported by an Electron **main** process (which knows its version through
+ * `app.getVersion()`), by a **renderer** (which is handed it), and by a headless
+ * daemon (whose `hostVersion()` reads the manifest beside its bundle) — three
+ * different answers with no common source, which is the same reason this rule is
+ * written twice in two languages. So the caller passes it, and a caller that
+ * forgets no longer compiles.
+ */
 
 /**
  * Whether the host on that server is **older than this build**, and what to.
@@ -37,7 +55,7 @@ import { BRAND } from './brand'
  */
 export function hostUpdateAvailable(
   host: { command: string; version: string },
-  mine: string = BRAND.version,
+  mine: string,
 ): string | null {
   if (host.command === '') return null
   const there = semver(host.version)
@@ -49,8 +67,19 @@ export function hostUpdateAvailable(
   return null
 }
 
-/** `x.y.z` as three numbers, or null. A leading `v` is tolerated. */
+/**
+ * `x.y.z` as three numbers, or null. A leading `v` is tolerated.
+ *
+ * The type says `string` and the guard is there anyway, because the one caller
+ * is handed a **probe result** — a shape assembled from what a shell command
+ * printed over SSH, on a host running any version this product has ever shipped.
+ * A probe from a build older than the field simply has no `version` in it, and
+ * TypeScript's word for what a remote machine sent is a hope rather than a
+ * check. Measured: it threw here, out of a React render, which takes the whole
+ * server page down over a machine being *old*.
+ */
 function semver(text: string): [number, number, number] | null {
+  if (typeof text !== 'string') return null
   const parts = text.trim().replace(/^v/, '').split('.')
   if (parts.length === 0 || parts.length > 3) return null
   const out: number[] = []

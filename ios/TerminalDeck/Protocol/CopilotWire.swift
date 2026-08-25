@@ -206,6 +206,22 @@ enum Copilot {
     static let maxMessageChars = 8 * 1024
 
     /**
+     * `MAX_CHAT_ROWS`. How many bubbles one `chat.rows` may carry.
+     *
+     * The desktop keeps the **end** of the conversation when it clips, because a
+     * chat view is read from the bottom. That is right and it is also silent:
+     * an answer that arrives at exactly this many rows is either a conversation
+     * of exactly this length or the tail of a much longer one, and nothing on the
+     * frame tells the two apart. So a full read that comes back at the cap is
+     * drawn with a line saying so — `SessionBarLink.atCap` — rather than as a
+     * conversation that appears to begin in the middle of somebody's sentence.
+     *
+     * Together with `maxMessageChars` this is the whole bound on what a phone
+     * holds for one session: 200 bubbles of at most 8 KB each.
+     */
+    static let maxChatRows = 200
+
+    /**
      * How many rows the timeline keeps in memory.
      *
      * Not a protocol constant — the desktop bounds each frame and says nothing

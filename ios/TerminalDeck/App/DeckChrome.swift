@@ -98,18 +98,33 @@ enum DeckSurface: Hashable, CaseIterable {
      * one. So the bar came back and the composer was lifted above it with a
      * bottom `safeAreaInset`.
      *
-     * **Now: hidden again, because he supplied the missing way out himself.**
+     * **Then: hidden again, because he supplied the missing way out himself.**
      * *"Pill should not be inside the chat box — there should be a back button
      * to go back on home."* The whole case for the bar was that nothing else
-     * could leave the screen; a back button leaves it. So the premise is gone
-     * rather than the judgement being reversed, and what is left is the original
-     * complaint, unchanged and now unanswered by anything else: a composer with
-     * a floating pill sitting over it is two things competing for one thumb.
+     * could leave the screen; a back button leaves it. What was left was the
+     * original complaint: a composer with a floating pill sitting over it is two
+     * things competing for one thumb.
      *
-     * `CopilotView` draws that button in `.topBarLeading` and it calls
-     * `DeckModel.leaveCopilot()`, which is what makes this safe — the surface
-     * still has exactly one way home, it is simply not the tab bar any more. Do
-     * not hide the bar here without checking that button is still there.
+     * **Now: shown, because the composer is not here any more.**
+     *
+     * *"When we land on the copilot page there should be directly a new session
+     * started… if there is already an existing session it should start from
+     * there."* The tab lands **in a session** now, and a session is `.session`,
+     * not this — so the chat box that this rule was protecting is on the other
+     * surface, and `.session` still hides the bar for exactly the reason it
+     * always did. What is left here is a short list of rows with nothing to type
+     * into, and the argument for hiding a tab bar over it has gone with the
+     * field it was about.
+     *
+     * Measured, not reasoned: with the bar hidden this screen was the one tab in
+     * the app you could not leave sideways — the walk found it, failing to reach
+     * Menu from here, and a person is in the same position with only a chevron
+     * that goes back rather than across. A four-icon pill that vanishes on one
+     * of its four is a pill that cannot be trusted.
+     *
+     * `CopilotView` still draws its back button in `.topBarLeading` calling
+     * `DeckModel.leaveCopilot()`, and it is still correct — going *back* and
+     * going *across* are different acts and this screen now offers both.
      */
     case copilot
 }
@@ -119,9 +134,9 @@ enum DeckChrome {
     /// Whether the tab bar is drawn over this screen.
     static func showsTabBar(on surface: DeckSurface) -> Bool {
         switch surface {
-        case .sessions, .localhost, .settings, .machines:
+        case .sessions, .localhost, .settings, .machines, .copilot:
             return true
-        case .session, .localhostPage, .copilot:
+        case .session, .localhostPage:
             return false
         }
     }

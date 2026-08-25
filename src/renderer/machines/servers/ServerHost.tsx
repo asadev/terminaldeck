@@ -665,7 +665,7 @@ export function hostControls(offer: HostOffer, busy: boolean): HostControls {
     // Offered whenever there is a host and it is behind — running, stopped,
     // linked or not. It runs the same verb Install does, so a server cannot end
     // up on a version neither control agrees about.
-    update: busy ? null : hostUpdateAvailable(offer.host),
+    update: busy ? null : hostUpdateAvailable(offer.host, offer.mine),
     /*
      * Offered for a host this computer is not linked to — and for one it is
      * linked to and cannot reach, which is the case this used to hide.

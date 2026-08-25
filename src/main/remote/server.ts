@@ -43,10 +43,11 @@
  */
 
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
-import { createReadStream } from 'node:fs'
+import { createReadStream, type Dirent } from 'node:fs'
+import { BRAND } from '../../shared/brand'
 // Plain HTTP on loopback, not HTTPS. Tailscale terminates TLS in front of it;
 // see ./tailscale-serve for why it cannot be done in-process.
-import { access, readdir, stat } from 'node:fs/promises'
+import { access, open, readFile, readdir, stat, writeFile } from 'node:fs/promises'
 import { constants as FS } from 'node:fs'
 import { homedir } from 'node:os'
 import { createServer as createPlainServer, type Server as LocalServer } from 'node:http'
@@ -65,6 +66,24 @@ import { createEnrollAccess, type EnrollAccess } from './enroll'
 // Type-only, deliberately. The store is built by `index.ts` and handed to
 // `registerRemoteIpc`; importing the class here would put a second constructor
 // for the same file in the one module that must not own it.
+import { readFileDiff, readGitStatus } from '../git'
+import type { Panel } from './panels/contract'
+import { artifactsPanel } from './panels/artifacts'
+import { mcpPanel, type McpPanelPool } from './panels/mcp'
+import { readinessPanel, type ReadinessPanelDeps } from './panels/readiness'
+import { storePanel, type StorePanelDeps } from './panels/store'
+import { machineBrowser as _machineBrowser, type MachineBrowser } from './browser-control'
+// Where a profile's bytes are, what a profile id may be, and how one is
+// emptied — for both host shapes, in a module with no Electron in it. This
+// file used to carry its own idea of the first of those and it was wrong; see
+// `browserProfilesFor`. The row shape it also declared here is that module's
+// `StoredProfile` now, so there is one description of a profile rather than two.
+import {
+  clearProfileStorage,
+  profilesFile,
+  readStoredProfiles,
+  type StoredProfiles,
+} from '../browser-profile-storage'
 import type { DeviceFolderGrant, FolderGrants } from './folder-grants'
 // The second grant store, type-only for the reason `FolderGrants` above is:
 // `host-core.ts` owns the one instance, because the session fanout's predicate
@@ -1192,6 +1211,62 @@ export interface RemoteEndpointOptions {
    * is refused.
    */
   offer?: readonly string[]
+
+  /* ---------------------------------------------- what the panels need -- */
+
+  /**
+   * Where this host keeps its own state, for the handful of things that are a
+   * file rather than a folder grant — the browser's profile list, today.
+   *
+   * Absent falls back to the account home, which is what every caller did
+   * implicitly before this was declared. It was being *read* before it was
+   * declared, in fact: `browserProfilesFor` has said `options.stateDir` since
+   * the day it was written, and nothing caught it because the repository's root
+   * `tsconfig.json` has `include: []`, so a bare `tsc --noEmit` typechecks
+   * nothing at all. `npm run typecheck` is the gate.
+   */
+  stateDir?: string
+
+  /**
+   * The MCP pool this host already runs, when it runs one.
+   *
+   * **Absent is the switch**, as everywhere: with no pool the MCP panel offers
+   * no Connect and no Disconnect and reports only what is configured. It is not
+   * defaulted on purpose — `mcp-client.ts` keeps its pool as a module-level
+   * value it does not export, and a pool minted inside the panel would spawn a
+   * *second* copy of every server the phone connected while the desktop window
+   * still said it was not connected.
+   */
+  mcpPool?: McpPanelPool
+
+  /**
+   * What the Store panel can reach. Two catalogues, both optional, because a
+   * host that can list tools and not install them is a real host and should say
+   * so rather than drawing a button that fails.
+   */
+  storePanel?: StorePanelDeps
+
+  /**
+   * The one readiness check that needs a window.
+   *
+   * `browser-signin.ts` imports `shell` from `electron` as a **value**, so it
+   * throws at load on a host with no Electron — which is why this is injected
+   * rather than imported by the panel. Absent, the readiness panel omits the
+   * stale-agent-CLI row and says in its own note which single row a server
+   * cannot answer, instead of quietly dropping it.
+   */
+  staleAgents?: ReadinessPanelDeps['staleAgents']
+
+  /**
+   * Driving this machine's own browser, when it has one.
+   *
+   * **Absent is the switch**, and here it is doing real work rather than being
+   * a convention: `advertised` reads this object's presence to decide whether to
+   * offer `browser.control` at all, so a host with no Chromium never tells a
+   * phone it has windows. A desktop builds it over its `browser:*` IPC; a
+   * headless host over `HeadlessDriveHost` and `BrowserDrive`.
+   */
+  machineBrowser?: MachineBrowser
 }
 
 export interface RemoteEndpoint {
@@ -1242,6 +1317,17 @@ export interface RemoteEndpoint {
    * per-device rule exists.
    */
   sessionsChanged(): number
+  /**
+   * The machine's browser tab strip moved — a window opened, closed or went
+   * somewhere else. Push `browser.surfaces.rows` to every connection that may
+   * watch, and return how many were told.
+   *
+   * Read `tellSurfaces` for why this exists: the frame has documented itself as
+   * *"also pushed unsolicited when the strip changes"* since it was written, and
+   * nothing sent that push, so a window opened from a phone's own address bar
+   * never appeared in the list on that phone.
+   */
+  surfacesChanged(): number
   /**
    * The device roster moved — a device paired, was approved, or was revoked.
    * Push `devices.changed` to every connection that may hear it, and return how
@@ -1350,6 +1436,17 @@ export interface RemoteServer {
    * Push the new list to every connected device. Zero when none are connected.
    */
   sessionsChanged(): number
+  /**
+   * The machine's browser tab strip moved — a window opened, closed or went
+   * somewhere else. Push `browser.surfaces.rows` to every connection that may
+   * watch, and return how many were told.
+   *
+   * Read `tellSurfaces` for why this exists: the frame has documented itself as
+   * *"also pushed unsolicited when the strip changes"* since it was written, and
+   * nothing sent that push, so a window opened from a phone's own address bar
+   * never appeared in the list on that phone.
+   */
+  surfacesChanged(): number
   /**
    * The device roster moved. Push `devices.changed` to every eligible
    * connection; zero when the server is down or none may hear it.
@@ -2024,6 +2121,19 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
    * Computed once: the session layer is injected at construction and does not
    * grow methods afterwards, and a `welcome` is not a place to be doing work.
    */
+  /*
+   * The same sentence `authenticatorFor` builds, on the connection path.
+   *
+   * Two copies because they are in two scopes and neither can see the other's
+   * locals; kept identical on purpose, and both are pinned by `server.test.ts`.
+   * A headless server has no desktop app, so telling somebody holding a phone
+   * to open one is a dead end — the class of defect this release keeps finding.
+   */
+  const pairAgainHere = (): string =>
+    options.hostKind === 'headless'
+      ? `Run "${BRAND.id} pair" on that server and type the code it prints.`
+      : `Pair it again from the app on that ${machineNoun(currentPlatform())}.`
+
   const advertised: string[] = CAPABILITIES.filter((name) => {
     // The ceiling first, so a host that named a shorter list gets it whatever
     // the rules below would have allowed. `localhost` is the reason this test
@@ -2041,6 +2151,30 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     // `server.test.ts`, which cannot create, close or report a plan and was
     // being told it could browse.
     if (name === CAPABILITY.folderPick) return typeof options.sessions.folders === 'function'
+    /*
+     * The three read-only reads need nothing injected — they are `readdir`,
+     * `git` and a handful of modules this process already has. So unlike every
+     * rule around them they are **always** advertised, and the narrowing that
+     * matters happens in `capabilitiesFor`, which withholds all three from a
+     * guest.
+     *
+     * Worth stating rather than leaving as an absence: a host that could not
+     * serve these would be a host with no filesystem, and there is no such host.
+     */
+    if (name === CAPABILITY.files || name === CAPABILITY.git || name === CAPABILITY.panels) return true
+    // Same rule: a profiles file is read and written, and every host has a disk.
+    if (name === CAPABILITY.browserProfiles) return true
+    /*
+     * Driving the machine's browser, which is **not** always available and must
+     * not be advertised as though it were.
+     *
+     * Unlike the reads above, this one needs a browser: a `BrowserDrive` on the
+     * desktop, a launched Chromium on a headless host. A machine that has
+     * neither would advertise a tab of controls that could only refuse, which is
+     * the failure this codebase names in `capabilitiesFor` — *"a tab that
+     * refuses on every press is a worse answer than a client that never knew."*
+     */
+    if (name === CAPABILITY.browserControl) return typeof options.machineBrowser === 'object' && options.machineBrowser !== null
     // Its opposite number, negotiated the same way and separately from it. A
     // host can genuinely start sessions and refuse to end them — the public demo
     // box is exactly that — so the two are two methods and two capabilities
@@ -2384,6 +2518,22 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     // the key to the room it was let into. Stripped rather than only refused
     // because no push frame corrects a welcome later.
     if (!ownDevice(deviceId)) withheld.push(CAPABILITY.folderPick)
+    // Reading files, diffs, transcripts and MCP configs is reading the machine.
+    // A guest that held these could read a key out of a folder it was never lent.
+    if (!ownDevice(deviceId)) withheld.push(CAPABILITY.files)
+    if (!ownDevice(deviceId)) withheld.push(CAPABILITY.git)
+    if (!ownDevice(deviceId)) withheld.push(CAPABILITY.panels)
+    if (!ownDevice(deviceId)) withheld.push(CAPABILITY.browserProfiles)
+    /*
+     * And driving that browser, which is the strongest of the group.
+     *
+     * A window bound to a session can be told to navigate anywhere, photographed,
+     * and have its click flow recorded — and the binding store hands its output
+     * to a session that is running commands. Every one of those is the owner's
+     * machine acting, not a folder being read, which is the line `web` and
+     * `watch` are drawn on and this belongs on the far side of.
+     */
+    if (!ownDevice(deviceId)) withheld.push(CAPABILITY.browserControl)
     const narrowed = withheld.length === 0 ? advertised : advertised.filter((name) => !withheld.includes(name))
     if (copilotEligible(deviceId)) return narrowed
     // `web` goes with it, and for the same reason: opening a page puts a window
@@ -2963,7 +3113,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
       refuse(
         connection,
         'unauthorized',
-        'This device is not allowed in. Pair it again from the desktop app.',
+        `This device is not allowed in. ${pairAgainHere()}`,
         CLOSE.policyViolation,
       )
       return
@@ -3036,7 +3186,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
       refuse(
         connection,
         'unauthorized',
-        'This device is not allowed in. Pair it again from the desktop app.',
+        `This device is not allowed in. ${pairAgainHere()}`,
         CLOSE.policyViolation,
       )
       return
@@ -3176,6 +3326,470 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
   }
 
   /**
+   * Whether this device may read this machine's files.
+   *
+   * The same two-layer shape every owner-only verb here has, and the sharpest
+   * case for it: this reads **file contents**, so a guest that held it could
+   * read a private key out of a folder it was never lent. `capabilitiesFor`
+   * strips it; this refuses it.
+   */
+  function mayReadFiles(connection: LiveConnection, deviceId: string): boolean {
+    if (!ownDevice(deviceId)) {
+      send(connection, {
+        t: 'error',
+        code: 'unauthorized',
+        message: 'Only one of the owner’s own devices may read files on this machine.',
+      })
+      return false
+    }
+    return true
+  }
+
+  /**
+   * A folder's contents — files as well as directories.
+   *
+   * Directories first and then names, case-insensitively, because that is the
+   * order every file browser has used since there were file browsers and a list
+   * that reordered itself between two visits is a list nobody trusts.
+   *
+   * Dot-entries are **kept** here, unlike in the folder picker. The picker is
+   * choosing somewhere to start a session, where `.git` is noise; this is
+   * looking at a machine, where `.env` and `.gitignore` are often exactly what
+   * somebody came for.
+   */
+  async function listFiles(connection: LiveConnection, deviceId: string, asked: string): Promise<void> {
+    if (!mayReadFiles(connection, deviceId)) return
+    const here = resolve(asked)
+    /*
+     * `Dirent[]` by name rather than `Awaited<ReturnType<typeof readdir>>`.
+     *
+     * `readdir` is overloaded, and `ReturnType` resolves to the **last**
+     * overload — the `BufferEncoding: 'buffer'` one — so every `entry.name` was
+     * typed `NonSharedBuffer` and `name.localeCompare`, `name.startsWith` and
+     * the row's `name: string` were all quietly wrong. Nothing said so because
+     * the root `tsconfig.json` has `include: []`, so a bare `tsc --noEmit`
+     * typechecks nothing at all; `npm run typecheck` is the gate.
+     */
+    let listing: Dirent[]
+    try {
+      listing = await readdir(here, { withFileTypes: true })
+    } catch {
+      send(connection, { t: 'error', code: 'unavailable', message: 'That folder could not be read on this machine.' })
+      return
+    }
+    const rows = await Promise.all(
+      listing.map(async (entry) => {
+        const full = join(here, entry.name)
+        const directory = entry.isDirectory()
+        // `stat` per row, and it is worth the cost: a size and a modified time
+        // are most of what a file row is for, and a listing without them is a
+        // list of names somebody has to open one at a time to learn anything.
+        const meta = directory ? null : await stat(full).catch(() => null)
+        return {
+          name: entry.name,
+          path: full,
+          directory,
+          readable: await access(full, FS.R_OK).then(() => true, () => false),
+          ...(meta ? { size: meta.size, at: Math.round(meta.mtimeMs) } : {}),
+        }
+      }),
+    )
+    rows.sort((a, b) =>
+      a.directory === b.directory
+        ? a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+        : a.directory ? -1 : 1,
+    )
+    const up = resolve(here, '..')
+    send(connection, { t: 'files.rows', path: here, parent: up === here ? null : up, entries: rows })
+  }
+
+  /**
+   * One file, as far as it was read.
+   *
+   * **Binary is decided here, from the bytes**, rather than guessed from an
+   * extension on the phone: a NUL in the first block is the test every editor
+   * uses and the only one that is right about a `.log` that is really a core
+   * dump. A binary file answers with no text at all rather than with mojibake.
+   */
+  async function readFileFor(
+    connection: LiveConnection,
+    deviceId: string,
+    asked: string,
+    at: number,
+    max: number,
+  ): Promise<void> {
+    if (!mayReadFiles(connection, deviceId)) return
+    const path = resolve(asked)
+    let handle: Awaited<ReturnType<typeof open>> | null = null
+    try {
+      const meta = await stat(path)
+      if (meta.isDirectory()) {
+        send(connection, { t: 'error', code: 'unavailable', message: 'That is a folder, not a file.' })
+        return
+      }
+      handle = await open(path, 'r')
+      const buffer = Buffer.alloc(Math.min(max, Math.max(0, meta.size - at)))
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, at)
+      const bytes = buffer.subarray(0, bytesRead)
+      const binary = bytes.includes(0)
+      send(connection, {
+        t: 'files.text',
+        path,
+        text: binary ? '' : bytes.toString('utf8'),
+        at,
+        truncated: at + bytesRead < meta.size,
+        binary,
+      })
+    } catch {
+      send(connection, { t: 'error', code: 'unavailable', message: 'That file could not be read on this machine.' })
+    } finally {
+      await handle?.close().catch(() => {})
+    }
+  }
+
+  /**
+   * What git says about a folder, and what one file changed.
+   *
+   * Both are `src/main/git.ts` verbatim — `readGitStatus` and `readFileDiff`,
+   * the same two calls the desktop has made since it had a Source control
+   * panel. Nothing here reimplements git, and *not a repository* is forwarded as
+   * an answer rather than converted into an error: it is a true thing about the
+   * folder and the screen has a shape for it.
+   */
+  async function gitFor(connection: LiveConnection, deviceId: string, message: ClientMessage): Promise<void> {
+    if (!mayReadFiles(connection, deviceId)) return
+    try {
+      if (message.t === 'git.status') {
+        const status = await readGitStatus(resolve(message.path))
+        send(connection, { t: 'git.state', path: resolve(message.path), status })
+        return
+      }
+      if (message.t === 'git.diff') {
+        const staged = message.staged === true
+        const patch = await readFileDiff(resolve(message.path), message.file, { staged })
+        send(connection, {
+          t: 'git.patch',
+          path: resolve(message.path),
+          file: message.file,
+          staged,
+          patch: typeof patch === 'string' ? patch : ((patch as { patch?: string })?.patch ?? ''),
+        })
+      }
+    } catch {
+      send(connection, { t: 'error', code: 'unavailable', message: 'Git could not answer on this machine.' })
+    }
+  }
+
+  /**
+   * The machine's browser profiles, switched and emptied from a phone.
+   *
+   * Read through `browser-profile-storage.ts` from `browser-profiles.json` in
+   * this host's state directory, which is where `readProfileState` reads it and
+   * where the desktop writes it — one file, one shape, and no second idea of what
+   * a profile is.
+   *
+   * ## Clearing, and the two years of it that were a lie
+   *
+   * This function used to empty a profile like this:
+   *
+   *     const partition = row.partition.replace(/^persist:/, '')
+   *     await rm(join(dir, 'browser', partition), { recursive: true, force: true })
+   *
+   * There is no `browser/` directory under any host's state directory and there
+   * never has been. A desktop's partitions are at `<userData>/Partitions/<name>`
+   * — checked on this Mac against the app's own `userData` on 2026-08-25, where
+   * `Partitions/terminaldeck-browser` was sitting and no `browser` existed — and a
+   * server's are at `<userData>/Partitions/<profileId>`, which is what
+   * `browser-headless-host.ts` launches Chromium against. `rm(..., { force: true })`
+   * treats a missing path as a success, so this resolved, answered with a fresh
+   * profile list, and the screen redrew as if it had worked while **every cookie
+   * and every signed-in session was still there**. Somebody who cleared a profile
+   * to sign out was still signed in and had been told otherwise.
+   *
+   * So the path is not rebuilt here any more. {@link clearProfileStorage} owns it
+   * for both host shapes, asks whatever is actually holding those files to let go
+   * first — on a server that is `HeadlessDriveHost`, which stops the profile's
+   * Chromium and waits for the process to be gone, because deleting a directory a
+   * browser has open is not a clear on any operating system — and then looks at
+   * the disk again before answering.
+   *
+   * A desktop's clear is honest about its own half-measure too: the directory
+   * goes, and the Electron `session` that has those cookies in memory cannot be
+   * reached from a module that may not import `electron`, so the answer says
+   * that a page already open in that profile stays signed in until the app
+   * reopens it. Silence there is the same defect one step smaller.
+   *
+   * ## Which is why this can answer with an error and a list at once
+   *
+   * `browser.profile.rows` is the confirmation for both verbs and it carries no
+   * outcome: *"both verbs answer with a fresh `browser.profile.rows` rather than
+   * with an outcome of their own"*, which is right when the outcome is always the
+   * same. It is not always the same here. A clear that emptied nothing, and a
+   * clear that could not empty what it found, are both facts a person acting on
+   * "sign me out" has to be told — so they go back on the error channel, which
+   * `HostLink` shows as this machine's one error line, and the list follows so the
+   * row stops spinning. The list alone, after a clear that did nothing, is the
+   * defect above.
+   */
+  async function browserProfilesFor(
+    connection: LiveConnection,
+    deviceId: string,
+    message: ClientMessage,
+  ): Promise<void> {
+    if (!mayReadFiles(connection, deviceId)) return
+    const dir = options.stateDir ?? homedir()
+    const file = profilesFile(dir)
+
+    const load = async (): Promise<StoredProfiles> =>
+      readStoredProfiles(await readFile(file, 'utf8').catch(() => null))
+
+    try {
+      const state = await load()
+      if (message.t === 'browser.profile.use') {
+        if (!state.profiles.some((row) => row.id === message.id)) {
+          send(connection, { t: 'error', code: 'unauthorized', message: 'That is not a profile on this machine.' })
+          return
+        }
+        /*
+         * The active id changes and every other byte of the file survives.
+         *
+         * Writing this host's *view* of the profiles back would drop the fields
+         * this wire does not carry — `createdAt` above all, which is what orders
+         * the desktop's list by age — so a phone tapping a profile would quietly
+         * flatten the ordering of a screen it cannot even see.
+         */
+        const raw = await readFile(file, 'utf8').catch(() => null)
+        let carried: Record<string, unknown> = {}
+        try {
+          const parsed = raw === null ? null : (JSON.parse(raw) as unknown)
+          if (typeof parsed === 'object' && parsed !== null) carried = parsed as Record<string, unknown>
+        } catch {
+          // A file this host could not parse is a file it must not preserve
+          // half of; `readStoredProfiles` has already fallen back to the one
+          // profile every machine has, and that is what gets written.
+          carried = { version: 1, profiles: state.profiles }
+        }
+        await writeFile(file, JSON.stringify({ ...carried, activeId: message.id }, null, 2), 'utf8')
+        state.activeId = message.id
+      } else if (message.t === 'browser.profile.clear') {
+        const row = state.profiles.find((one) => one.id === message.id)
+        if (!row) {
+          send(connection, { t: 'error', code: 'unauthorized', message: 'That is not a profile on this machine.' })
+          return
+        }
+        const outcome = await clearProfileStorage({
+          userData: dir,
+          profileId: row.id,
+          partition: row.partition,
+        })
+        if (outcome.state === 'cleared' && !outcome.stopped && process.versions.electron !== undefined) {
+          /*
+           * The half of a desktop's clear that this path cannot perform, said
+           * out loud rather than left for somebody to discover by still being
+           * signed in.
+           *
+           * On a server the browser is stopped and waited for before a file is
+           * removed, so the profile really is empty. On a desktop the jar belongs
+           * to an Electron `session`, and reaching it means importing `electron`
+           * — which this module may never do, because `remote/server.ts` is in
+           * the headless bundle's import graph and `src/headless/seam.test.ts`
+           * walks it. So the bytes go and a page already open in that profile
+           * keeps the cookies it has in memory until the app reopens it: the
+           * network service holds the jar it loaded, and an unlinked file does
+           * not take it away. Both halves are true and only one of them is
+           * visible, which is exactly the shape of the defect above.
+           */
+          send(connection, {
+            t: 'error',
+            code: 'unavailable',
+            message: `${row.name} was emptied on disk. Pages already open in it on this machine stay signed in until this app reopens them.`,
+          })
+        } else if (outcome.state === 'empty') {
+          send(connection, {
+            t: 'error',
+            code: 'unavailable',
+            message: `${row.name} had nothing stored on this machine, so nothing was cleared.`,
+          })
+        } else if (outcome.state === 'held') {
+          send(connection, {
+            t: 'error',
+            code: 'unavailable',
+            message: `${row.name} was not cleared: ${outcome.why}`,
+          })
+        }
+      }
+      send(connection, {
+        t: 'browser.profile.rows',
+        current: state.activeId,
+        profiles: state.profiles.map((row) => ({
+          id: row.id,
+          name: row.name,
+          avatar: row.avatar,
+          partition: row.partition,
+        })),
+      })
+    } catch {
+      send(connection, { t: 'error', code: 'unavailable', message: "This machine's browser profiles could not be read." })
+    }
+  }
+
+  /**
+   * The four read-only panels, each answered from the module the desktop uses.
+   *
+   * Fast rather than exhaustive, and said out loud: each of these is the
+   * shortest honest answer the existing module can give, not a port of the
+   * desktop panel's full behaviour. `artifacts` lists what sessions touched;
+   * `store` reads the feature store; `readiness` answers the checks that can be
+   * made without a window; `mcp` lists what is configured. Where a module needs
+   * an Electron main process this says so in a `note` rather than sending an
+   * empty list, because *"nothing to show"* and *"cannot be shown from here"*
+   * are different facts and only one of them is worth a person's time.
+   */
+  /**
+   * The four panels, each answered by the module that owns it.
+   *
+   * ## What this replaced, and why all of it had to go
+   *
+   * This function used to be four inline branches, and its own comment called
+   * them *"the shortest honest answer the existing module can give, not a port
+   * of the desktop panel's full behaviour."* That was a fair thing to ship once.
+   * Asad looked at the result on his own server and it was not fair twice:
+   *
+   * > *"these pages are not just to view the information — exactly all actions
+   * > that we have in desktop application, they should be inside each option of
+   * > them. All the features and options to edit or add or whatever the actions
+   * > we have in the desktop app should be in mobile app too."*
+   *
+   * Three of the four were also wrong rather than merely thin, and the third is
+   * the one he photographed:
+   *
+   *  - **Store** read the desktop's *preferences* — default provider, theme,
+   *    restore-sessions — through `store().read()`, a method `Store` does not
+   *    have. On a headless host that threw, the `catch` below fired, and the
+   *    phone said **"This machine could not answer that panel."** It was also
+   *    the wrong panel: this product's Store is the tool storefront.
+   *  - **MCP** opened `.mcp.json`, `.claude/settings.json` and
+   *    `.claude/settings.local.json` under the folder in view. Only the first of
+   *    those ever holds an `mcpServers` key, and `~/.claude.json` — where both
+   *    user scope and the project-private local scope live — was not on the list
+   *    at all. A phone in a folder with no `.mcp.json` saw nothing while the
+   *    desktop listed a dozen.
+   *  - **AI readiness** ran `command -v` over eight hardcoded tool names, which
+   *    is not what this product means by the word: there is a real scanner with
+   *    a score, a gate, and fifteen fixes behind it.
+   *
+   * Each panel is now a module under `panels/` with the shape `contract.ts`
+   * describes, tested on its own against the desktop's real modules. This
+   * function's whole remaining job is choosing which one and catching what it
+   * could not do — and the catch is now genuinely exceptional rather than the
+   * path a whole panel took.
+   */
+  const PANEL_MODULES: Record<string, Panel> = {
+    artifacts: artifactsPanel(),
+    /*
+     * `staleAgents` is the one dependency that cannot be defaulted: it reads
+     * `browser-signin.ts`, which imports `shell` from `electron` as a **value**
+     * and therefore throws at load on a host with no Electron. Passed on a
+     * desktop, omitted here, and the panel says in its own `note` which single
+     * row a server cannot answer rather than quietly dropping it.
+     */
+    readiness: readinessPanel({ ...(options.staleAgents ? { staleAgents: options.staleAgents } : {}) }),
+    store: storePanel(options.storePanel ?? {}),
+    /*
+     * `pool` decides whether Connect and Disconnect are offered at all, and it
+     * is deliberately not defaulted: `mcp-client.ts` keeps its pool as a
+     * module-level value it does not export, and a pool minted here would spawn
+     * a **second** copy of every server the phone connected while the desktop
+     * window still said it was not connected. A host that wants those two
+     * buttons injects the one it already runs.
+     */
+    mcp: mcpPanel({ ...(options.mcpPool ? { pool: options.mcpPool } : {}) }),
+  }
+
+  async function panelFor(
+    connection: LiveConnection,
+    deviceId: string,
+    message: Extract<ClientMessage, { t: 'panel.read' } | { t: 'panel.act' }>,
+  ): Promise<void> {
+    if (!mayReadFiles(connection, deviceId)) return
+    const here = resolve(
+      message.path && message.path !== ''
+        ? message.path
+        : (options.sessions.folders?.(deviceId)?.[0] ?? homedir()),
+    )
+    const panel = PANEL_MODULES[message.panel]
+    if (panel === undefined) {
+      // Unreachable through the parser, which refuses a panel name outside
+      // `PANELS`. Answered rather than thrown so a build where the two lists
+      // disagree says which one is missing instead of going quiet.
+      send(connection, {
+        t: 'panel.rows',
+        panel: message.panel,
+        path: here,
+        note: 'This machine does not serve that panel.',
+        rows: [],
+      })
+      return
+    }
+
+    try {
+      const answer =
+        message.t === 'panel.act'
+          ? panel.act === undefined
+            ? /*
+               * A panel with nothing to do is a legitimate panel — `contract.ts`
+               * says so — so the frame is answered with the panel as it stands
+               * rather than refused. The notice is what stops a tap reading as a
+               * control that silently did nothing.
+               */
+              {
+                ...(await panel.read({ path: here, scope: message.scope, query: message.query })),
+                notice: 'That panel has nothing to act on.',
+              }
+            : await panel.act({
+                path: here,
+                scope: message.scope,
+                query: message.query,
+                action: message.action,
+                id: message.id,
+                fields: message.fields ?? {},
+              })
+          : await panel.read({ path: here, scope: message.scope, query: message.query })
+      send(connection, {
+        t: 'panel.rows',
+        panel: message.panel,
+        path: answer.path,
+        ...(answer.note ? { note: answer.note } : {}),
+        ...(answer.notice ? { notice: answer.notice } : {}),
+        ...(answer.scopes?.length ? { scopes: answer.scopes } : {}),
+        ...(answer.actions?.length ? { actions: answer.actions } : {}),
+        rows: answer.rows,
+      })
+    } catch (error) {
+      /*
+       * Genuinely exceptional now, and logged rather than swallowed.
+       *
+       * Every panel under `panels/` catches its own dependencies into a `note`,
+       * because *"nothing to show"* and *"cannot be shown from here"* are
+       * different facts and only one is worth a person's time. So reaching here
+       * means a panel module itself threw, which is a defect rather than a
+       * machine's answer — and the sentence somebody reads should not be the
+       * only trace of it. The old version logged nothing at all, which is why
+       * `store().read()` being a method that does not exist survived to a
+       * photograph on his phone.
+       */
+      console.error(`[remote] the ${message.panel} panel threw:`, error)
+      send(connection, {
+        t: 'panel.rows',
+        panel: message.panel,
+        path: here,
+        note: 'This machine could not answer that panel.',
+        rows: [],
+      })
+    }
+  }
+
+  /**
    * The sub-directories of one folder, for a device walking to the one it wants.
    *
    * Directories only, and dot-directories are dropped: `.git`, `.cache` and
@@ -3217,7 +3831,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     const start = options.sessions.folders?.(deviceId)?.[0] ?? homedir()
     const here = resolve(asked && asked !== '' ? asked : start)
 
-    let listing: Awaited<ReturnType<typeof readdir>>
+    let listing: Dirent[]
     try {
       listing = await readdir(here, { withFileTypes: true })
     } catch {
@@ -3229,7 +3843,25 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
       return
     }
 
-    const granted = new Set(options.folders.granted(deviceId) ?? [])
+    /*
+     * The device's **effective** list, read the way every other frame in this
+     * server reads it — `options.sessions.folders`, which is what `foldersFrame`
+     * and the `create` check both go through.
+     *
+     * This was `options.folders.granted(deviceId)`, reaching for the
+     * `FolderGrants` store on `registerRemoteIpc`'s options rather than the
+     * server's. They are two different objects and only one of them is in scope
+     * here, so on a headless host it threw `Cannot read properties of undefined
+     * (reading 'granted')` — and the outer catch turned that into *"That folder
+     * could not be read on this machine"*, a sentence about the filesystem for
+     * a fault that had nothing to do with it. The picker opened straight onto it
+     * and could never list anything.
+     *
+     * Caught by looking at the screen, then reading the host's log — which is
+     * the one place the real reason existed. That the log had it at all is the
+     * same argument `session-create.ts` makes about its own refusal.
+     */
+    const granted = new Set(options.sessions.folders?.(deviceId) ?? [])
     const rows = listing
       .filter((entry) => entry.isDirectory())
       .filter((entry) => !entry.name.startsWith('.') && entry.name !== 'node_modules')
@@ -3775,6 +4407,51 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
       told += 1
     }
     return told
+  }
+
+  /**
+   * Push the browser's tab strip to every connection that may hear it.
+   *
+   * ## The gap this closes
+   *
+   * `browser.surfaces.rows` documents itself as *"also pushed unsolicited when
+   * the strip changes"*, and until now **nothing sent that push**. There was no
+   * fan-out on this endpoint at all, and the iOS client's `WatchLink.ensureRead()`
+   * asks exactly once per connection and then waits. So a window opened from the
+   * phone's own address bar — the thing Asad asked for in *"it should browser and
+   * stream here to interact"* — appeared in the list the next time somebody
+   * happened to make it ask, which on a screen that never re-asks is never.
+   *
+   * The two gates are the same ones the `browser.surfaces` handler reads, and
+   * they are read **at send time** rather than at trigger time: a device demoted
+   * to a guest, or one whose browser-windows grant was cleared between a window
+   * opening and this loop, hears nothing. That is the property `tellDevices`
+   * states about the roster, and it holds here for the same reason.
+   *
+   * Asynchronous and unawaited, like the handler it mirrors: `surfaces()` reads
+   * the machine's live browser and the callers below are on the socket's data
+   * path or inside a driver's event. A strip that could not be read is a push
+   * that does not happen, never a throw into whatever fired it.
+   */
+  function tellSurfaces(): number {
+    const cast = options.screencast
+    if (!cast) return 0
+    const listeners = [...live.values()].filter(
+      (connection) => connection.deviceId !== '' && mayWatchNow(connection),
+    )
+    if (listeners.length === 0) return 0
+    void Promise.resolve(cast.surfaces())
+      .then((surfaces) => {
+        for (const connection of listeners) {
+          // Re-checked here rather than trusted from the filter above: the read
+          // is a round trip to a browser, and a socket can close or a grant can
+          // be cleared inside it.
+          if (!live.has(connection.id) || !mayWatchNow(connection)) continue
+          send(connection, { t: 'browser.surfaces.rows', surfaces })
+        }
+      })
+      .catch(() => undefined)
+    return listeners.length
   }
 
   /**
@@ -5017,6 +5694,110 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
       case 'close':
         closeSession(connection, connection.deviceId, message.id)
         return
+      /*
+       * **These four are reads of the machine, not of its browser.**
+       *
+       * They were stacked above `browser.profiles` for a while and therefore
+       * fell into `browserProfilesFor`, which answers a profile list — so Files
+       * and Source control asked and got either nothing or the wrong frame, on
+       * every host, while every test around them stayed green because each one
+       * covered its handler rather than the dispatch that reaches it. A label
+       * added to the top of an existing stack is the whole failure, and it is
+       * invisible in a diff that only shows the added lines.
+       */
+      /*
+       * **Driving this machine's browser.**
+       *
+       * Every one of these answers with exactly one frame — the window list for
+       * most, a picture or a step list for the two that carry a payload — so the
+       * dispatch is one call and one send. `machineBrowser` never rejects: each
+       * verb catches its own dependencies into a `notice` on the redraw, because
+       * a phone that gets an `error` frame for *this browser cannot record*
+       * shows a dead screen where the honest answer is a list with a sentence
+       * under it. The `catch` here is for a defect, and it says so.
+       */
+      case 'browser.windows':
+      case 'browser.window.open':
+      case 'browser.window.go':
+      case 'browser.window.act':
+      case 'browser.window.bind':
+      case 'browser.window.shot':
+      case 'browser.window.steps': {
+        const browser = options.machineBrowser
+        if (browser === undefined || !ownDevice(connection.deviceId)) {
+          // Unreachable through the ordinary path — the capability is not
+          // advertised without the object, and is stripped from a guest — so a
+          // frame arriving here is a client acting on something it was never
+          // offered. Refused rather than answered with an empty list, which
+          // would read as *this machine has no windows*.
+          send(connection, {
+            t: 'error',
+            code: 'unavailable',
+            message: "This machine does not let this phone drive its browser.",
+          })
+          return
+        }
+        void (message.t === 'browser.windows'
+          ? browser.windows()
+          : message.t === 'browser.window.open'
+            ? browser.open(message)
+            : message.t === 'browser.window.go'
+              ? browser.go(message)
+              : message.t === 'browser.window.act'
+                ? browser.act(message)
+                : message.t === 'browser.window.bind'
+                  ? browser.bind(message)
+                  : message.t === 'browser.window.shot'
+                    ? browser.shot(message)
+                    : browser.steps(message)
+        ).then(
+          (answer) => {
+            if (!live.has(connection.id)) return
+            send(connection, answer)
+          },
+          (error: unknown) => {
+            console.error('[remote] the machine browser threw:', error)
+            if (!live.has(connection.id)) return
+            send(connection, {
+              t: 'error',
+              code: 'unavailable',
+              message: "This machine's browser could not be reached.",
+            })
+          },
+        )
+        return
+      }
+      case 'browser.profiles':
+      case 'browser.profile.use':
+      case 'browser.profile.clear':
+        void browserProfilesFor(connection, connection.deviceId, message).catch((error) => {
+          console.error('[remote] browser profiles failed:', error)
+          if (!live.has(connection.id)) return
+          send(connection, { t: 'error', code: 'unavailable', message: "This machine's browser profiles could not be read." })
+        })
+        return
+      case 'files.list':
+      case 'files.read':
+      case 'git.status':
+      case 'git.diff':
+      case 'panel.read':
+      case 'panel.act':
+        // Not awaited, for the reason `create` is not: every one of these reads
+        // the machine's filesystem or shells out to git, and the message loop is
+        // the socket's data handler.
+        void (message.t === 'files.list'
+          ? listFiles(connection, connection.deviceId, message.path)
+          : message.t === 'files.read'
+            ? readFileFor(connection, connection.deviceId, message.path, message.at ?? 0, message.max ?? 65_536)
+            : message.t === 'panel.read' || message.t === 'panel.act'
+              ? panelFor(connection, connection.deviceId, message)
+              : gitFor(connection, connection.deviceId, message)
+        ).catch((error) => {
+          console.error('[remote] a read failed:', error)
+          if (!live.has(connection.id)) return
+          send(connection, { t: 'error', code: 'unavailable', message: 'That could not be read on this machine.' })
+        })
+        return
       case 'folders.browse':
         // Not awaited, for the reason `create` above is not: this reads the
         // machine's filesystem, and the message loop is the socket's data
@@ -5640,6 +6421,23 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
         connection.helloTimer = null
         const deviceId = connection.deviceId
         detachAll(connection)
+        /*
+         * And every screencast this socket was holding.
+         *
+         * Per connection rather than per device, which is why it is here and not
+         * inside the `deviceId` block below: a watcher id **is** a connection id,
+         * two sockets from one phone are two independent ack chains, and closing
+         * one must not stop the other's cast.
+         *
+         * Without this a phone that went into a tunnel left `Page.startScreencast`
+         * armed on the machine for the life of the process. Nothing was being
+         * *sent* — the backpressure holds after one un-acked frame, so CDP is
+         * never acked again and Chromium stops producing — but the page stayed
+         * claimed by a watcher that no longer existed, and the next connection
+         * asking for the same window found a cast nobody could ack.
+         */
+        connection.watching.clear()
+        void Promise.resolve(options.screencast?.dropWatcher(connection.id)).catch(() => undefined)
         if (deviceId !== null) {
           // After the delete above, so the proxy's own "is it still reachable"
           // check cannot see the socket that has just gone. A git waiting on a
@@ -5844,6 +6642,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     },
     foldersChanged: tellFolders,
     sessionsChanged: tellSessions,
+    surfacesChanged: tellSurfaces,
     rosterChanged: tellRoster,
     windowsHeldChanged: tellWindowsHeld,
     copilotGrantChanged: tellCopilotGrant,
@@ -6147,7 +6946,47 @@ export function authenticatorFor(
    * replaces.
    */
   onPaired?: (device: Device) => void,
+  /**
+   * What kind of box this is, so a refusal names somewhere that exists.
+   *
+   * Optional and defaulted to the desktop answer, because every caller but one
+   * is a test that does not care — and because a wrong noun is a copy defect
+   * while a missing argument would be a compile error in a dozen fixtures.
+   * `registerRemoteIpc` passes the real value.
+   */
+  hostKind?: HostKind,
 ): RemoteAuthenticator {
+  /*
+   * **Where to approve this, on a machine that may have no screen.**
+   *
+   * These sentences said *"the desktop app"*, flatly, and on a headless server
+   * that is a dead end: there is no desktop app, and the person reading it is
+   * holding the only screen involved. Asad found it himself, on a Simulator
+   * sitting on *Waiting for approval* — the same class of defect he has named
+   * repeatedly this release: *"say no MacBook or Windows exists at all."*
+   *
+   * Defined here, inside the function that uses them, which is the correction
+   * to the first attempt: they were written against `options.hostKind` in the
+   * enclosing module scope, where `options` does not exist. Every pairing
+   * refusal then threw a `ReferenceError` and came back as the generic *"Could
+   * not check this device."* — caught by three tests that assert a refusal says
+   * how to approve.
+   *
+   * Worth stating plainly: **this only ever appears for six-digit pairing.** A
+   * device that signed in over SSH is minted pre-approved — `enroll.ts` claims
+   * it as one of the owner's own, on the argument that the login *is* the proof
+   * — so it never reaches these sentences at all.
+   */
+  const approveOn = (): string =>
+    hostKind === 'headless'
+      ? `Run "${BRAND.id} pair" on that server to approve it, then reconnect.`
+      : `Approve it in the app on that ${machineNoun(currentPlatform())}, then reconnect.`
+
+  const pairAgain = (): string =>
+    hostKind === 'headless'
+      ? `Run "${BRAND.id} pair" on that server and type the code it prints.`
+      : `Pair it again from the app on that ${machineNoun(currentPlatform())}.`
+
   return {
     async authenticate(token, device, address, peerPublicKey): Promise<AuthOutcome> {
       if (token.includes('.')) {
@@ -6161,7 +7000,7 @@ export function authenticatorFor(
           // Refused in the same words as everything else here: which of the two
           // did not match is not a remote caller's business.
           if (peerPublicKey && !auth.deviceHoldsKey(verified.device.id, peerPublicKey)) {
-            return { ok: false, message: 'This device is not allowed in. Pair it again from the desktop app.' }
+            return { ok: false, message: `This device is not allowed in. ${pairAgain()}` }
           }
           return { ok: true, deviceId: verified.device.id, deviceName: verified.device.name, credential: null }
         }
@@ -6169,14 +7008,15 @@ export function authenticatorFor(
           ok: false,
           message:
             verified.reason === 'pending'
-              ? 'This device is waiting to be approved. Approve it in the desktop app, then reconnect.'
+              ? `This device is waiting to be approved. ${approveOn()}`
               : verified.reason === 'rate-limited'
                 ? 'Too many failed attempts. Try again later.'
-                : 'This device is not allowed in. Pair it again from the desktop app.',
+                : `This device is not allowed in. ${pairAgain()}`,
         }
       }
 
-      // Checked before redeeming rather than after, so a cancelled code cannot
+    
+  // Checked before redeeming rather than after, so a cancelled code cannot
       // create a device row on its way to being refused — and, far more
       // importantly, so that every wrong answer is counted. `desk.offers` is
       // where the five-guesses-per-code limit lives, and it is the only thing
@@ -6498,6 +7338,7 @@ export function createRemoteServer(options: RemoteServerOptions): RemoteServer {
     // Nothing to tell with the server down: no device is connected, and each
     // one reads the list it missed in its `welcome` the next time it is.
     sessionsChanged: () => endpoint?.sessionsChanged() ?? 0,
+    surfacesChanged: () => endpoint?.surfacesChanged() ?? 0,
     // Same rule, same reason: with the server down there is no socket to push a
     // roster on, and every eligible device reads the current one in its next
     // `welcome`.
@@ -6909,6 +7750,48 @@ export interface RemoteIpcDeps {
   onStartFailure?(reason: string): void
   /** Reads the environment. Injected so a test can set one without setting one. */
   env?: NodeJS.ProcessEnv
+  /* ------------------------------------------ what the panels need, forwarded -- */
+  /**
+   * The five that arrived with the real panels and the machine browser, carried
+   * across unchanged to {@link RemoteEndpointOptions}.
+   *
+   * They are listed here because **every shell reaches the endpoint through this
+   * function** — `src/main/index.ts` and `src/headless/host.ts` both call
+   * `registerRemoteIpc`, and nothing but a test calls `createRemoteEndpoint`
+   * directly. An option the endpoint reads and this interface does not name is
+   * therefore an option no host can ever pass: the panels would fall back to
+   * their defaults on both machines and `browser.control` would never be
+   * advertised anywhere, which is the "every layer green and nobody calling the
+   * top one" failure this file's own comments keep recording.
+   *
+   * Forwarded by spread rather than passed as possibly-undefined, like every
+   * other switch here, so absent stays absent — which is what each of these
+   * means. See their declarations on {@link RemoteEndpointOptions} for what each
+   * absence does.
+   */
+  stateDir?: RemoteEndpointOptions['stateDir']
+  mcpPool?: RemoteEndpointOptions['mcpPool']
+  storePanel?: RemoteEndpointOptions['storePanel']
+  staleAgents?: RemoteEndpointOptions['staleAgents']
+  machineBrowser?: RemoteEndpointOptions['machineBrowser']
+  /**
+   * The live view of this machine's own browser, and the grant it rides on.
+   *
+   * Here for exactly the reason the five above are, and this pair is the case
+   * that block was describing before it happened: `RemoteEndpointOptions` has
+   * carried `screencast` since wave-3 and this interface did not name it, so no
+   * shell could pass one, `capabilitiesFor` never advertised `watch`, and every
+   * layer under it — `PageCast`, the `browser.*` frames, the phone's viewer, the
+   * PWA's canvas — was green and unreachable. See `src/main/screencast-host.ts`,
+   * which is the object both shells now pass.
+   *
+   * `drivesWindows` travels with it rather than after it, because watching and
+   * driving are **one** grant on purpose (see its declaration) and a build that
+   * wired the frames without the axis would let a device the person had unticked
+   * watch a window it is refused permission to click in.
+   */
+  screencast?: RemoteEndpointOptions['screencast']
+  drivesWindows?: RemoteEndpointOptions['drivesWindows']
   /**
    * The same two test seams `createRemoteServerOptions` carries, forwarded.
    *
@@ -7269,6 +8152,23 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
     // not appear as a button on somebody's phone.
     ...(deps.openUrl ? { openUrl: deps.openUrl } : {}),
     ...(deps.offer ? { offer: deps.offer } : {}),
+    /*
+     * The panels' dependencies and the machine's browser, spread on the same
+     * rule as everything above: absent is the switch, so a shell that passes
+     * none leaves each panel exactly as it was and never advertises
+     * `browser.control`. See {@link RemoteIpcDeps} for why they have to be named
+     * here at all.
+     */
+    ...(deps.stateDir === undefined ? {} : { stateDir: deps.stateDir }),
+    ...(deps.mcpPool ? { mcpPool: deps.mcpPool } : {}),
+    ...(deps.storePanel ? { storePanel: deps.storePanel } : {}),
+    ...(deps.staleAgents ? { staleAgents: deps.staleAgents } : {}),
+    ...(deps.machineBrowser ? { machineBrowser: deps.machineBrowser } : {}),
+    // And the live view, on the same rule once more: absent is what stops
+    // `watch` being advertised at all, so a host with no browser to cast draws
+    // no viewer on anybody's phone rather than one that never receives a frame.
+    ...(deps.screencast ? { screencast: deps.screencast } : {}),
+    ...(deps.drivesWindows ? { drivesWindows: deps.drivesWindows } : {}),
     port: deps.port,
     onConnections: (connections) => deps.broadcast(REMOTE_CONNECTIONS_CHANNEL, connections),
     ...(relay ? { relay } : {}),

@@ -632,12 +632,30 @@ struct ServerLoginView: View {
         .padding(.top, 24)
         .accessibilityIdentifier("serverLogin.submit")
 
-        Text("This is an ordinary SSH login, the same one a terminal would make. \(Brand.name) "
-             + "keeps it on this phone, in the Keychain, and sends it to nothing but that server.")
-            .font(.system(size: 12))
-            .foregroundStyle(Theme.faint)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(.top, 18)
+        /*
+         * **Where the login goes, behind the dot rather than under the button.**
+         *
+         * It was two rendered lines here, and every label on this screen already
+         * carries an ⓘ — so the one paragraph nobody could skip was the one
+         * beside the control they had just decided to press. *"I don't want any
+         * kind of long descriptions anywhere. Just if somewhere it's very
+         * required, give the i icon."*
+         *
+         * It stays **available** rather than deleted, because where a password
+         * is kept is a question somebody is entitled to an answer to before they
+         * type one — it is just not a question they should have to read past.
+         */
+        HStack(spacing: 6) {
+            Text("Your login stays on this phone.")
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.faint)
+            InfoDot(about: "where this login is kept",
+                    text: "This is an ordinary SSH login, the same one a terminal would make. "
+                        + "\(Brand.name) keeps it on this phone, in the Keychain, and sends it "
+                        + "to nothing but that server.")
+            Spacer(minLength: 0)
+        }
+        .padding(.top, 18)
 
         pairingDoor
     }
@@ -656,11 +674,22 @@ struct ServerLoginView: View {
                 .font(.system(size: 26, weight: .semibold))
                 .foregroundStyle(Theme.primary)
                 .accessibilityIdentifier("serverLogin.title")
-            Text("Its address, the account you already use on it, and the password or key that "
-                 + "account already accepts. Nothing else has to exist first.")
-                .font(.system(size: 14))
-                .foregroundStyle(Theme.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 6) {
+                // The half that answers *"what will this ask me for"* stays
+                // visible; the half that answers *"do I need anything else"*
+                // goes behind the dot. Somebody who has arrived here already
+                // believes they need a server — the reassurance is worth having
+                // and is not worth three lines of a first screen.
+                Text("Its address, an account on it, and a password or key.")
+                    .font(.system(size: 14))
+                    .foregroundStyle(Theme.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                InfoDot(about: "what you need first",
+                        text: "The account you already use on that server and the password or key "
+                            + "it already accepts. Nothing else has to exist first — no desktop, "
+                            + "no account with us.")
+                Spacer(minLength: 0)
+            }
         }
         .padding(.bottom, 22)
     }

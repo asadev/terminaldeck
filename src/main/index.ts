@@ -65,7 +65,7 @@ import { registerVoiceIpc } from './voice'
 import { registerUpdateIpc } from './updates/updater'
 import { createManualStrategy } from './updates/manual-strategy'
 import { registerTailnetIpc } from './remote/tailnet'
-import { registerRemoteIpc } from './remote/server'
+import { registerRemoteIpc, type ScreencastHost } from './remote/server'
 import { registerConfineIpc } from './confine/ipc'
 import { CopilotAccess } from './remote/copilot-access'
 import { CopilotRuns } from './remote/copilot-runs'
@@ -153,12 +153,19 @@ import {
   registerHookServer,
   stopHookServer,
 } from './hook-server'
-import { registerMcpIpc } from './mcp-client'
+import { mcpPool, mcpStoreInstall, mcpStoreView, registerMcpIpc } from './mcp-client'
 import { registerStageIpc } from './local-stage'
-import { registerBrowserIpc } from './browser-tab'
+import {
+  browserTabContents,
+  browserTabProfile,
+  navigateBrowserTab,
+  registerBrowserIpc,
+  steerBrowserTab,
+} from './browser-tab'
 import { openAppLink, registerLinkIpc } from './link-open'
 import {
   registerBrowserBindingIpc,
+  knownWindows,
   openForSession,
   forgetKnownWindows,
   openBarePane,
@@ -171,9 +178,11 @@ import {
   hookContext,
   hostReset,
   MID_TURN_EVENTS,
+  ownerOf,
   recordRemoteHolds,
   sessionExited,
   sessionRemoved,
+  slotName,
   subscribe as subscribeToBindings,
   takeAnnouncement,
   windowsOf,
@@ -183,6 +192,8 @@ import { currentOpenShim, removeOpenShim, writeOpenShim } from './open-shim'
 import { bootMapFor, composeRemoteContext, writeAppContext } from './app-context'
 import { describeThisMachine } from './remote/machines/guest'
 import { browserDrive, registerBrowserDriveIpc } from './browser-drive-ipc'
+import { boundKey } from './browser-driver'
+import { screencastOver, type CastDrive, type CastWindow } from './screencast-host'
 import { browserNetworkTool } from './deck-control/browser-network-tool'
 import { assetTools } from './deck-control/asset-tools'
 import { probeAsset } from './browser-asset-probe'
@@ -192,6 +203,10 @@ import {
   installedBrowserTools,
   registerBrowserStoreIpc,
 } from './browser-store-ipc'
+import type { StoreResult, StoreView, ToolStore } from './browser-store'
+import { removeMcpServer } from './mcp-add'
+import { desktopMachineBrowser } from './machine-browser-desktop'
+import type { MachineBrowser } from './remote/browser-control'
 import { storeTools } from './deck-control/store-tools'
 import { extensionTools } from './deck-control/extension-tools'
 import {
@@ -232,8 +247,13 @@ import {
 } from './browser-downloads'
 import { registerBrowserPasswordIpc } from './browser-passwords'
 import { flushHistory, registerBrowserHistoryIpc } from './browser-history'
-import { registerBrowserSignInIpc } from './browser-signin'
-import { registerBrowserViewIpc } from './browser-view'
+import { registerBrowserSignInIpc, staleAgentCli } from './browser-signin'
+import {
+  browserViewRecording,
+  captureBrowserView,
+  registerBrowserViewIpc,
+  setBrowserViewRecording,
+} from './browser-view'
 import { registerDiagnosticsIpc } from './diagnostics'
 import { registerNotificationIpc } from './os-notifications'
 import { registerLidAwakeIpc } from './lid-awake'
@@ -575,7 +595,7 @@ let updates: ReturnType<typeof registerUpdateIpc> | null = null
  * the wire does, and pushing a list to nobody is the correct answer rather than
  * a race to work around.
  */
-let remoteLayer: { server: { sessionsChanged(): number } } | null = null
+let remoteLayer: { server: { sessionsChanged(): number; surfacesChanged(): number } } | null = null
 
 /**
  * The per-device copilot runs, once the remote layer is assembled.
@@ -658,6 +678,38 @@ let serverReach: ServerReachIpc | null = null
  * once per browser window, which is the whole story in `browser-reach.ts`.
  */
 let browserReach: ReachLedger | null = null
+
+/**
+ * The browser's tools store, held so a phone can read and write it.
+ *
+ * `installBrowserStore` is called deep inside `registerIpc()` — it needs
+ * `userData` and nothing else — while the remote endpoint is built near the top
+ * of the same function, so the Store panel's dependencies close over this rather
+ * than over the store itself. Null is a real state and every reader treats it as
+ * one: a phone that asks before the store is built is told there is none, which
+ * is true at that moment, rather than being handed a panel that throws.
+ *
+ * The same judgement `browserDriveTools` makes about the drive, and the reason
+ * it is a holder rather than a second `createToolStore` here: two stores over
+ * one folder would each believe their own idea of what is installed.
+ */
+let browserToolStore: ToolStore | null = null
+
+/**
+ * What the Store panel is told when this build has no tool store yet.
+ *
+ * A sentence rather than a throw, and an empty shelf rather than a missing one:
+ * *"nothing to show"* and *"cannot be shown from here"* are different facts, and
+ * the panel draws the second as a note under an empty department. A `catch`
+ * upstream would turn either of them into *"This machine could not answer that
+ * panel"*, which is the screen this whole round of work exists to end.
+ */
+const NO_TOOL_STORE_VIEW: StoreView = { tools: [], folder: '' }
+
+const NO_TOOL_STORE: StoreResult = {
+  ok: false,
+  message: 'The tools store is not available in this build.',
+}
 
 /**
  * Held so the wake lock and the battery watch can be let go of on quit.
@@ -1758,6 +1810,211 @@ function whereWindowIs(session: { sessionId: string; machineId: string }): Windo
 }
 
 /**
+ * This machine's browser, as a phone reaches it.
+ *
+ * The presence of the object this returns is what makes the endpoint advertise
+ * `browser.control` at all, so it is built here and nowhere else: the desktop is
+ * the host that has a Chromium, a screenshots folder and a recorder, and the
+ * headless daemon builds its own over `HeadlessDriveHost`. Everything below is
+ * an adapter — the decisions, the id discipline and every refusal live in
+ * `machine-browser-desktop.ts`, which has no Electron in it and is driven by a
+ * test over three arrays.
+ *
+ * Every line reaches the same function one of this window's own buttons
+ * reaches. That is the property worth protecting: a second window map, a second
+ * screenshots folder or a second recorder here would be the phone and the pane
+ * bar disagreeing about the page an agent is steering, which is the failure
+ * `browser-binding.ts` was written to end.
+ */
+function machineBrowserHere(): MachineBrowser {
+  return desktopMachineBrowser({
+    /*
+     * The shell's own window list, bound or not. `knownWindows` is the map the
+     * attach menus already read; the ids on it are pane ids, which is what
+     * `OpenWindow.id` must be — a view id there would renumber a window an
+     * agent is holding the first time somebody pressed Isolated.
+     */
+    panes: () =>
+      knownWindows().map((window) => ({
+        id: window.tabId,
+        viewId: window.viewId,
+        url: window.url,
+        title: window.title,
+      })),
+    page: (viewId) => {
+      const contents = browserTabContents(viewId)
+      if (contents === null) return null
+      const profileId = browserTabProfile(viewId)
+      return {
+        // The main process's address, never the page's own claim about it.
+        url: contents.getURL(),
+        loading: contents.isLoading(),
+        /*
+         * The empty string survives on purpose: `browserTabProfile` answers it
+         * for a tab opened as Isolated, whose partition is in memory and belongs
+         * to no profile, and that is what the row's `isolated` flag is derived
+         * from. `profileNameFor` answers an unknown id with the id itself, so a
+         * profile deleted under an open window still names something.
+         */
+        profile: profileId ? browserProfileNameFor(profileId) : '',
+        go: (url) => {
+          navigateBrowserTab(viewId, url)
+        },
+        back: () => {
+          steerBrowserTab(viewId, 'back')
+        },
+        forward: () => {
+          steerBrowserTab(viewId, 'forward')
+        },
+        reload: () => {
+          steerBrowserTab(viewId, 'reload')
+        },
+      }
+    },
+    // The route the globe and every link already take, so a window opened from
+    // a phone is a row in this window's sidebar that a person can see, name and
+    // close — rather than a page in no strip anywhere.
+    openPane: (url) => openBarePane((channel, payload) => send(channel, payload), url),
+    /*
+     * Closed through the window that owns it, and through the drive rather than
+     * around it: `BrowserDrive.close` asks the renderer and then releases
+     * whatever the copilot was doing in that window. Tearing the view down here
+     * would leave a row in a strip pointing at nothing.
+     */
+    closePane: async ({ id, viewId, name }) => {
+      const drive = browserDrive()
+      if (drive === null) return false
+      return drive.close({ key: boundKey(id), viewId, browserTabId: id, name })
+    },
+    // The desktop's own capture: the same Pictures folder, the same filename
+    // rule and the same preview width the window's Screenshot button produces.
+    capture: (viewId) => captureBrowserView(viewId),
+    recorder: {
+      state: (viewId) => browserViewRecording(viewId),
+      set: (viewId, on) => {
+        setBrowserViewRecording(viewId, on)
+      },
+    },
+    /*
+     * The sessions a window may be bound to, read per verb rather than cached —
+     * the same list every remote frame is answered from, so a window cannot be
+     * attached to a session this host would not show.
+     */
+    sessions: () =>
+      remoteSessions.list().map((session) => ({
+        id: session.id,
+        title: session.title,
+        // Listed anyway when the pty has gone: a window attached to it is still
+        // on screen, and dropping the row would leave the phone unable to
+        // explain the window it can see.
+        ...(session.exitCode === null ? {} : { ended: true }),
+      })),
+    // Byte for byte the write `session.send` performs. A screenshot handed to an
+    // agent from a phone is that same write with the browser's line in it.
+    write: (sessionId, data) => remoteSessions.write(sessionId, data),
+  })
+}
+
+/** What every live-view verb answers on a build whose browser never came up. */
+const NO_DRIVE_TO_CAST = 'this app has no browser running, so there is nothing to show'
+
+/**
+ * The same browser, watched rather than called — wave-3's live view.
+ *
+ * The sibling of {@link machineBrowserHere} and passed on the same rule: the
+ * presence of this object is what makes the endpoint advertise `watch`, so a
+ * build that could not cast would pass nothing rather than one of these that
+ * refuses. `screencast-host.ts` owns the routing and argues the naming; what
+ * belongs here is which of this window's pages a phone may be shown.
+ *
+ * ## Every pane, and the copilot's own tab told apart from the rest
+ *
+ * `knownWindows()` is the shell's own list — the map the attach menus read —
+ * and the ids on it are pane ids, which is what a surface name must be for the
+ * same reason `OpenWindow.id` is: a view id is re-minted underneath a window
+ * that has not moved, the first time somebody presses Isolated.
+ *
+ * The one pane that is not addressed as a pane is the one the copilot's drive is
+ * holding. Casting that through `bound:<paneId>` would build a **second slot on
+ * one page** — and the half that matters is the curtain, because `handover`
+ * stops the cast of the slot it was called on and would leave the other one
+ * streaming while the person types a password into the same document. See
+ * `BrowserDrive.ownView`, which exists for this `===`. Matched on the view and
+ * not on the pane, because that is the identity the drive holds.
+ *
+ * A pane serving a page from **another** machine is skipped. A reach tunnel
+ * rewrites his PC's address into a `localhost` port on this Mac, so the URL is
+ * exactly the thing that cannot answer whose page it is; `KnownWindow.machineId`
+ * is the window's own report and is the only answer — *"we always need a truth."*
+ *
+ * ## Read live, never captured
+ *
+ * The drive is reached through `browserDrive()` on every call rather than held,
+ * the rule the rest of this file already follows: it is registered during boot
+ * and this function is composed from module scope. Null is a real state — a
+ * build with the browser switched off in Features — and every verb then answers
+ * a sentence instead of throwing on the socket's data path.
+ */
+function machineScreencastHere(): ScreencastHost {
+  const drive: CastDrive = {
+    startCast: async (input) =>
+      browserDrive()?.startCast(input) ?? { ok: false, reason: NO_DRIVE_TO_CAST },
+    stopCast: async (target, watcherId) => {
+      await browserDrive()?.stopCast(target, watcherId)
+    },
+    ackCast: (target, watcherId, seq) => {
+      browserDrive()?.ackCast(target, watcherId, seq)
+    },
+    castInput: async (target, watcherId, frame) =>
+      browserDrive()?.castInput(target, watcherId, frame) ?? { ok: false, reason: NO_DRIVE_TO_CAST },
+    dropWatcher: async (watcherId) => {
+      await browserDrive()?.dropWatcher(watcherId)
+    },
+  }
+
+  return screencastOver({
+    drive,
+    windows: (): CastWindow[] => {
+      const own = browserDrive()?.ownView() ?? null
+      const rows: CastWindow[] = []
+      for (const window of knownWindows()) {
+        if (window.machineId !== '') continue
+        if (window.viewId === null) continue
+        // A pane whose view has died still has a row in the strip; it has no
+        // page to cast, and offering it would be a row that refuses on the tap.
+        if (browserTabContents(window.viewId) === null) continue
+        const viewId = window.viewId
+        rows.push({
+          window: window.tabId,
+          target:
+            viewId === own
+              ? null
+              : {
+                  key: boundKey(window.tabId),
+                  viewId,
+                  browserTabId: window.tabId,
+                  // What a refusal calls it, and the two numbers are never the
+                  // same number wearing two letters — `B2` is a slot inside one
+                  // session, `W5` is the window's own identity. The rule is
+                  // `browser-binding-ipc.ts`'s menu rows, kept in step here.
+                  name: nameOfPane(window.tabId, window.w),
+                },
+          url: window.url,
+          title: window.title,
+        })
+      }
+      return rows
+    },
+  })
+}
+
+/** `B2` when a session holds this pane, `W5` when nobody does. */
+function nameOfPane(tabId: string, w: number): string {
+  const bound = ownerOf(tabId)?.windows.find((window) => window.browserTabId === tabId)
+  return bound ? slotName(bound.n) : `W${w}`
+}
+
+/**
  * The copilot's browser tools, or none of them.
  *
  * Empty when the drive was never registered, which cannot happen through the
@@ -2533,6 +2790,88 @@ function registerIpc(): void {
     // uninstall takes with it. Passing it is also what advertises the capability;
     // see `RemoteEndpointOptions.uploadsDir`.
     uploadsDir: join(app.getPath('downloads'), BRAND.name),
+    /*
+     * Where this host keeps its own state, for the handful of things that are a
+     * file rather than a folder grant.
+     *
+     * `browserProfilesFor` in `remote/server.ts` has read `options.stateDir`
+     * since the day it was written and nothing ever passed one, so the profile
+     * list a phone was shown came from a fallback on the account home rather
+     * than from this app's own directory. It went unnoticed because a bare
+     * `tsc --noEmit` in this repository checks nothing — the root
+     * `tsconfig.json` has `include: []`. `npm run typecheck` is the gate.
+     */
+    stateDir: app.getPath('userData'),
+    /*
+     * The MCP pool this process already runs, so the panel's Connect and
+     * Disconnect act on the servers this window is holding.
+     *
+     * `mcp-client.ts` keeps one pool and hands it out through `mcpPool()`. A
+     * second one built for the phone would spawn a second copy of every server
+     * it connected, and the window three feet away would go on saying *not
+     * connected* about a process that was running.
+     */
+    mcpPool: mcpPool(),
+    /*
+     * Both departments of the Store, because this host can write to both.
+     *
+     * Asad's requirement for every one of these panels was the same sentence:
+     * *"these pages are not just to view the information — exactly all actions
+     * that we have in desktop application, they should be inside each option of
+     * them."* The browser half is this app's own tool store; the MCP half is the
+     * same `mcp:store` read and the same `claude mcp …` writes the window's
+     * Store page performs, reached through the functions behind those channels
+     * rather than through a second copy of them.
+     */
+    storePanel: {
+      tools: {
+        read: async () => browserToolStore?.view() ?? NO_TOOL_STORE_VIEW,
+        install: async (id) => browserToolStore?.install(id) ?? NO_TOOL_STORE,
+        remove: async (id) => browserToolStore?.remove(id) ?? NO_TOOL_STORE,
+      },
+      servers: {
+        read: (projectPath) => mcpStoreView(projectPath),
+        install: (request) => mcpStoreInstall(request),
+        remove: (request) => removeMcpServer(request),
+      },
+    },
+    /*
+     * The one readiness row a server cannot answer.
+     *
+     * `browser-signin.ts` imports `shell` from `electron` as a value, so it
+     * throws at load on a host with no Electron — which is why the panel takes
+     * this injected rather than importing it, and why a headless host passes
+     * nothing and says in its own note which single row is missing instead of
+     * dropping it quietly.
+     */
+    staleAgents: () => staleAgentCli(),
+    /*
+     * And the machine's own browser, driven from the phone.
+     *
+     * Passing this is what advertises `browser.control`; a build that could not
+     * reach a browser would pass nothing rather than an object that refuses
+     * everything, which is the negotiation every other capability here gets.
+     */
+    machineBrowser: machineBrowserHere(),
+    /*
+     * And the same browser, watched and driven from the phone — wave-3's live
+     * view, which had every frame on the wire and no host behind it.
+     *
+     * Passing this is what advertises `watch`: `capabilitiesFor` reads the
+     * object's presence and nothing else, so until this line existed the phone's
+     * viewer was drawn by no client and `browser.surfaces` was dropped in
+     * silence on every machine. See {@link machineScreencastHere}.
+     *
+     * `drivesWindows` is the axis both halves ride and is deliberately the same
+     * store `serveWindowCall` above is gated on rather than a second reading of
+     * it: watching somebody's signed-in browser is an owner act, so a device
+     * whose browser-windows permission was unticked loses the pictures in the
+     * same moment it loses the clicks. `mayWatchNow` re-reads it per frame, so
+     * unticking the box stops a running cast on the very next tick instead of on
+     * the next reconnection.
+     */
+    screencast: machineScreencastHere(),
+    drivesWindows: (deviceId) => core.windowGrants.drives(deviceId),
     broadcast: (channel, payload) => send(channel, payload),
   })
   // Held for the core's session hooks, which are written at module scope and
@@ -2728,6 +3067,9 @@ function registerIpc(): void {
   const serverConnections = new ServerConnections(serverStore, serverCredentials)
   servers = registerServersIpc(ipcMain, {
     storageDir: serversDir,
+    // What this build is, so a server's panel can say whether the host on it is
+    // behind. Only the main process knows it; the renderer has no bridge for it.
+    appVersion: () => app.getVersion(),
     /*
      * Named fields rather than the stored row, so that a field added to the
      * store later has to be *chosen* to cross the bridge instead of arriving
@@ -3270,6 +3612,23 @@ function registerIpc(): void {
    */
   subscribeToBindings((next) => {
     /*
+     * **The phone's tab strip, whenever this map moves at all.**
+     *
+     * Deliberately outside the set-moved gate below, and the difference is the
+     * point: that gate exists because a *machine's* table is a set of session
+     * ids and a URL is not in it. A **phone's** strip is a list of windows with
+     * their addresses and titles on it, so a navigation and a title change are
+     * exactly the changes it wants — and `windowMoved` fires on both.
+     *
+     * `browser.surfaces.rows` has described itself as *"also pushed unsolicited
+     * when the strip changes"* since it was written and nothing sent that push,
+     * so the list on a phone was whatever it was when that phone last asked.
+     * `tellSurfaces` sends nothing at all when no connected device may watch, so
+     * this costs nothing on a machine with no phone attached to it.
+     */
+    remoteLayer?.server.surfacesChanged()
+
+    /*
      * Only when the *set* moved.
      *
      * This map publishes on every change to it, and most of them are not this
@@ -3399,7 +3758,7 @@ function registerIpc(): void {
    * `browser-store.ts`, which takes a root and a catalogue and touches no
    * Electron, so it can be tested without an app.
    */
-  installBrowserStore({ userData: () => app.getPath('userData') })
+  browserToolStore = installBrowserStore({ userData: () => app.getPath('userData') })
   registerBrowserStoreIpc(ipcMain)
 
   /*

@@ -42,8 +42,43 @@
 
 import SwiftUI
 
+/**
+ * What the button at the bottom is about to do, in the caller's terms.
+ *
+ * The screen's own note already says it *"does not know whether it is starting
+ * one or picking a working directory for something else"* — and until the
+ * copilot's setup existed, every caller was starting one, so the button could
+ * say so. `CopilotControlView` is the first caller that is not: it asks which
+ * folder the copilot should work in and stores the answer, and a button reading
+ * *Start in ClaudeAsad* there would promise a session that is not started.
+ *
+ * Two cases rather than a free-form string, so the wording is decided here with
+ * the button rather than at each call site — the failure a `verb: String`
+ * parameter produces is three callers spelling three slightly different verbs
+ * into the one control on the screen.
+ */
+enum FolderPickerAction: Equatable {
+    /// A session begins in the chosen folder as soon as the callback returns.
+    case start
+    /// The path is the answer, and the caller keeps it. Nothing runs.
+    case choose
+
+    /// `name` is the folder's last component, empty at the root of a walk.
+    func label(folder name: String) -> String {
+        switch self {
+        case .start: return name.isEmpty ? "Start here" : "Start in \(name)"
+        case .choose: return name.isEmpty ? "Use this folder" : "Use \(name)"
+        }
+    }
+}
+
 struct FolderPickerView: View {
     @Bindable var model: DeckModel
+
+    /// What pressing the button will do, which decides what it says. Defaulted
+    /// to `.start` because that is what every caller but the copilot's setup
+    /// does, and a default keeps those call sites unchanged.
+    var action: FolderPickerAction = .start
 
     /// Called with the folder somebody chose. The caller starts the session —
     /// this screen does not know whether it is starting one or picking a
@@ -222,7 +257,7 @@ struct FolderPickerView: View {
                     chose(listing.path)
                     dismiss()
                 } label: {
-                    Text(name.isEmpty ? "Start here" : "Start in \(name)")
+                    Text(action.label(folder: name))
                         .font(.system(size: 16, weight: .semibold))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 14)

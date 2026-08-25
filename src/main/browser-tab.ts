@@ -937,6 +937,49 @@ export function browserTabProfile(id: unknown): string | null {
   return tab ? tab.profileId : null
 }
 
+/**
+ * Send one open view to an address — the body behind `browser:navigate`.
+ *
+ * Exported for a caller with no bridge to invoke on: a phone drives this
+ * machine's browser through `machine-browser-desktop.ts`, which lives in this
+ * process. It is this function rather than `contents.loadURL` for a reason worth
+ * naming, because `loadURL` looks like it would do: {@link navigate} normalizes
+ * the address, clears a standing failure and repaints the backdrop before the
+ * document commits, and a caller that skipped it would leave the pane's error
+ * banner over a page that had just loaded.
+ */
+export function navigateBrowserTab(id: unknown, url: unknown): BrowserTabState {
+  return navigate(requireTab(id), url)
+}
+
+/**
+ * Back, forward or reload on one open view — the bodies behind those three
+ * channels, in one call because a caller that has a direction has one of three.
+ *
+ * The asymmetry between them is deliberate and is the desktop's, not this
+ * function's: reload clears a failure unconditionally, because *"try that same
+ * address again"* is the one control whose whole purpose is to make the same URL
+ * succeed, and `did-navigate` refuses to clear on a URL match. Back and forward
+ * clear only when the history actually moves, because clearing on a `canGoBack()`
+ * of false would wipe the message while leaving the error page it describes.
+ */
+export function steerBrowserTab(id: unknown, move: 'back' | 'forward' | 'reload'): BrowserTabState {
+  const tab = requireTab(id)
+  const wc = liveContents(tab)
+  if (move === 'reload') {
+    clearFailure(tab)
+    wc?.reload()
+    return stateOf(tab)
+  }
+  const history = wc?.navigationHistory
+  if (move === 'back' ? history?.canGoBack() : history?.canGoForward()) {
+    clearFailure(tab)
+    if (move === 'back') history?.goBack()
+    else history?.goForward()
+  }
+  return stateOf(tab)
+}
+
 function destroyTabsFor(host: WebContents): void {
   for (const tab of [...tabs.values()]) {
     if (tab.host === host) destroyTab(tab)
@@ -1504,19 +1547,10 @@ export function registerBrowserIpc(ipcMain: IpcMain): void {
   })
 
   ipcMain.handle('browser:navigate', (_event, id: unknown, url: unknown) =>
-    navigate(requireTab(id), url),
+    navigateBrowserTab(id, url),
   )
 
-  ipcMain.handle('browser:reload', (_event, id: unknown) => {
-    const tab = requireTab(id)
-    // Both halves, not just the message. Reload is the one control whose entire
-    // purpose is "try that same address again", so it is also the one place
-    // where the *same* URL succeeding has to be able to clear a failure that
-    // `did-navigate` deliberately refuses to clear on a URL match.
-    clearFailure(tab)
-    liveContents(tab)?.reload()
-    return stateOf(tab)
-  })
+  ipcMain.handle('browser:reload', (_event, id: unknown) => steerBrowserTab(id, 'reload'))
 
   ipcMain.handle('browser:stop', (_event, id: unknown) => {
     const tab = requireTab(id)
@@ -1524,27 +1558,9 @@ export function registerBrowserIpc(ipcMain: IpcMain): void {
     return stateOf(tab)
   })
 
-  ipcMain.handle('browser:back', (_event, id: unknown) => {
-    const tab = requireTab(id)
-    const history = liveContents(tab)?.navigationHistory
-    // Only when it actually moves. Clearing on a `canGoBack()` of false would
-    // wipe the failure message while leaving the error page it describes.
-    if (history?.canGoBack()) {
-      clearFailure(tab)
-      history.goBack()
-    }
-    return stateOf(tab)
-  })
+  ipcMain.handle('browser:back', (_event, id: unknown) => steerBrowserTab(id, 'back'))
 
-  ipcMain.handle('browser:forward', (_event, id: unknown) => {
-    const tab = requireTab(id)
-    const history = liveContents(tab)?.navigationHistory
-    if (history?.canGoForward()) {
-      clearFailure(tab)
-      history.goForward()
-    }
-    return stateOf(tab)
-  })
+  ipcMain.handle('browser:forward', (_event, id: unknown) => steerBrowserTab(id, 'forward'))
 
   ipcMain.handle('browser:inspect', (_event, id: unknown, enabled: unknown) => {
     const tab = requireTab(id)

@@ -26,6 +26,7 @@
     "src/renderer/platform.ts",
     "src/renderer/settings/settings-schema.ts",
     "src/renderer/store/logo-data.ts",
+    "src/renderer/store/storefront.ts",
     "relay/**/*",
     "ios/Harness/**/*",
     "electron.vite.config.ts",

@@ -518,6 +518,38 @@ enum WireCapability {
      */
     static let folderPick = "folders.pick"
 
+    /// Read this machine's files: list a folder, read a file. **No write verb,
+    /// and there will not be one** — editing a file on a machine you cannot see,
+    /// on a phone keyboard, breaks a repository slowly, and a session with an
+    /// agent in it is the better door. Owner devices only, and more sharply than
+    /// `folderPick`: this reads *file contents*, so a guest that held it could
+    /// read a private key out of a folder it was never lent.
+    static let files = "files"
+
+    /// What git says about a folder, and what one file changed — `readGitStatus`
+    /// and `readFileDiff` over the wire, the same two calls the desktop has made
+    /// since it had a Source control panel. Read-only: status and a diff, never a
+    /// commit. Owner devices only; a diff is file contents by another name.
+    static let git = "git"
+
+    /// The four read-only panels the desktop had and the phone did not —
+    /// **artifacts, store, AI readiness, MCP servers**. *"all what i asked for so
+    /// many times, i need all no exceptions."* One capability for four because
+    /// each is a list of rows a person reads and does not act on, and the
+    /// differences are in the words rather than the structure.
+    static let panels = "panels"
+
+    /// The machine's own browser profiles. An alias of
+    /// `MachineProfilesWire.capability`, the way `copilot` aliases
+    /// `Copilot.capability`: the name lives beside the family it names, and every
+    /// capability stays readable off this one type. Owner devices only, and more
+    /// sharply than `files` — a profile *is* somebody's signed-in cookie jar.
+    static let browserProfiles = MachineProfilesWire.capability
+    /// Driving the machine's own browser — its windows, not this phone's. Aliased
+    /// to `MachineBrowserWire.capability` the way `browserProfiles` is aliased
+    /// above, so the string lives beside the model it belongs to.
+    static let browserControl = MachineBrowserWire.capability
+
     /**
      * What this build tells a desktop it can do, in `hello.capabilities`.
      *
@@ -772,6 +804,73 @@ enum ClientMessage: Equatable {
      * the picker on an error.
      */
     case browseFolders(path: String?)
+
+    /* ---- capabilities `files`, `git`, `panels` ----------------------------- */
+
+    /// What is in this folder — files as well as directories. The sibling of
+    /// `browseFolders`: that one answers *where could a session start*, this
+    /// answers *what is in here*.
+    case filesList(path: String)
+    /// One file's bytes, as text, capped. `at`/`max` let a phone read the start
+    /// of a large file rather than be refused it; the next screen is a second
+    /// read from the offset the host returned, never a bigger one.
+    case filesRead(path: String, at: Int?, max: Int?)
+    /// What git says about this folder. Both its answers — a repository, and a
+    /// folder that is not one — are answers.
+    case gitStatus(path: String)
+    /// One file's diff. `file` is a path git itself reported, so it is always
+    /// repository-root-relative.
+    case gitDiff(path: String, file: String, staged: Bool)
+    /// One of the four read-only panels. `path` nil means "somewhere sensible",
+    /// which the host answers as this device's first granted folder.
+    case panelRead(panel: String, path: String?, scope: String?, query: String?)
+    /**
+     * Do the thing a panel offered.
+     *
+     * The `action` is a string this build never interprets — it came off a
+     * `PanelAction` the host itself sent in the last `panel.rows`, and it goes
+     * straight back. That is what makes a panel able to grow a button without a
+     * change here, and it is safe for exactly that reason: the phone can only
+     * send an action it was handed.
+     *
+     * `id` names a row for a row's action and is nil for the panel's own.
+     */
+    case panelAct(panel: String, action: String, path: String?, id: String?, fields: [String: String])
+
+    /* ---- capability `browser.control` -------------------------------------- */
+
+    /// What the machine's browser has open, and which sessions could own one.
+    case machineWindows
+    /// Open one there. `isolated` gives it a partition of its own that is thrown
+    /// away when the window closes.
+    case machineWindowOpen(url: String?, profile: String?, isolated: Bool)
+    /// Send an open window somewhere.
+    case machineWindowGo(id: String, url: String)
+    /// Back, forward, reload, close, record on or off, share or isolate.
+    case machineWindowAct(id: String, action: MachineBrowserWire.Act)
+    /// Bind a window to a session so the agent in it knows which window is its
+    /// own. A nil session unbinds — the same frame, which is deliberate: a
+    /// client that meant to unbind and one whose field went missing are the same
+    /// message, and unbinding is the harmless half of that pair.
+    case machineWindowBind(id: String, session: String?)
+    /// Photograph it. With a session, the picture is handed to that session
+    /// rather than coming back here.
+    case machineWindowShot(id: String, session: String?, note: String?)
+    /// What the recorder has collected on that window so far.
+    case machineWindowSteps(id: String)
+
+    /* ---- capability `browser.profiles` ------------------------------------- */
+
+    /// List the machine's browser profiles and which it is using. No `rid`: all
+    /// three verbs answer with the whole list, which is what lets the screen
+    /// confirm itself rather than print a sentence.
+    case browserProfiles
+    /// Switch the machine's browser to this profile — it decides which jar the
+    /// **next** page opens into.
+    case browserProfileUse(id: String)
+    /// Empty one profile's jar on the machine. Signs that machine's browser out
+    /// of everything in it, and touches nothing this phone holds.
+    case browserProfileClear(id: String)
 
     /* ---- capability `close`. Never sent unless the desktop offered it. ------ */
 
@@ -1302,6 +1401,33 @@ enum ServerMessage: Equatable {
      * would mean a phone that knows where the root is on Windows.
      */
     case folderEntries(path: String, parent: String?, entries: [FolderEntry])
+
+    /* ---- capabilities `files`, `git`, `panels` ----------------------------- */
+
+    /// A folder's contents, directories first.
+    case fileRows(FileListing)
+    /// A file, as far as it was read. `truncated` is why this is not just a
+    /// string; `binary` is the host's answer from the bytes rather than a guess
+    /// from an extension.
+    case fileText(FileText)
+    /// What git said. A folder that is **not a repository** is a true thing
+    /// about that folder, not an error — see `GitState`.
+    case gitState(path: String, status: GitState)
+    /// One file's diff as git printed it. Empty when there was nothing to show.
+    case gitPatch(path: String, file: String, staged: Bool, patch: String)
+    /// One panel's rows. A panel with nothing to say sends a `note` instead of
+    /// an empty list, so "nothing configured" is not read as "failed to load".
+    case panelRows(PanelData)
+    /// What the machine's browser has open — the answer to every verb of the
+    /// `browser.control` family except the two that carry a payload.
+    case machineWindowRows(MachineBrowserState)
+    /// A picture of one window, when it was not handed to a session instead.
+    case machineShot(MachineShot)
+    /// What the recorder collected on one window.
+    case machineRecordRows(id: String, steps: [RecordedStep])
+    /// The machine's profiles and which one its browser is using — the answer to
+    /// all three verbs of the family.
+    case browserProfileRows(MachineProfileList)
     case attached(id: String)
     case detached(id: String)
     /// `replay` marks scrollback that arrived before this client did.

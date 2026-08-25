@@ -492,6 +492,31 @@
   outline-offset: 1px;
 }
 
+/*
+   The one that opens the artifact on the machine.
+
+   Filled where `Open in Files` is a neutral fill, and that is the whole of the
+   difference: this pane has two buttons now and only one of them is what
+   somebody came here to do — *"they can be reviewed and they can be used"*. One
+   accent, on one primary button, is the rule the shell keeps everywhere else.
+
+   No `data-kind` styling. The attribute is there for a test to read and for
+   anybody inspecting the pane to see which word the button chose; giving each
+   kind its own colour would be four accents on a page that is allowed one.
+*/
+.artifacts-run {
+  background: var(--accent);
+  color: var(--text-onaccent);
+}
+
+.artifacts-run:hover {
+  background: var(--accent-dim);
+}
+
+.artifacts-run:active {
+  background: var(--accent-press);
+}
+
 /* --------------------------------------------------------------- changes -- */
 
 .artifacts-changes {

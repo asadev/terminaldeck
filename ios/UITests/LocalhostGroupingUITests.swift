@@ -52,7 +52,7 @@ final class LocalhostGroupingUITests: XCTestCase {
         app = XCUIApplication()
         app.launch()
 
-        if app.textFields["pairing.field"].waitForExistence(timeout: 5) {
+        if app.reachPairingField(timeout: 5) {
             let code = try pairingCode()
             let field = app.textFields["pairing.field"]
             field.tap()
@@ -64,7 +64,8 @@ final class LocalhostGroupingUITests: XCTestCase {
         Self.reachable = connected
         try XCTSkipUnless(connected, Self.notRunning)
 
-        XCTAssertTrue(app.openBrowserTab(), "the Browser tab should be reachable")
+        XCTAssertTrue(app.openLocalhostList(),
+                      "the localhost list is one row down the Browser tab's menu — see TabNavigation")
     }
 
     private static let notRunning =
@@ -113,7 +114,8 @@ final class LocalhostGroupingUITests: XCTestCase {
 
         app.terminate()
         app.launch()
-        XCTAssertTrue(app.openBrowserTab(), "the Browser tab should be reachable after a relaunch")
+        XCTAssertTrue(app.openLocalhostList(),
+                      "the localhost list is one row down the Browser tab's menu — see TabNavigation, and it should survive a relaunch")
         XCTAssertTrue(app.staticTexts["Harness page"].waitForExistence(timeout: 20),
                       "the name should have outlived the app")
 
@@ -146,7 +148,8 @@ final class LocalhostGroupingUITests: XCTestCase {
 
         app.terminate()
         app.launch()
-        XCTAssertTrue(app.openBrowserTab(), "the Browser tab should be reachable after a relaunch")
+        XCTAssertTrue(app.openLocalhostList(),
+                      "the localhost list is one row down the Browser tab's menu — see TabNavigation, and it should survive a relaunch")
         XCTAssertTrue(app.buttons["localhost.section.other"].waitForExistence(timeout: 20))
         XCTAssertTrue(app.buttons["localhost.section.other"].label.contains("Open"),
                       "the choice should have outlived the app")

@@ -82,11 +82,38 @@ struct TerminalScreen: View {
      */
     @State private var chatMode = false
 
+    /**
+     * A file chosen on the phone in chat mode, waiting for a press.
+     *
+     * The terminal's own menu items send the moment the picker closes, which is
+     * right there: the picker *was* the press. A conversation has a composer, and
+     * *"if we send the files we can have a preview and kind of things when we are
+     * on chat mode"* — so in chat mode the file is staged here first, drawn by
+     * the composer, and sent by a second press. Cleared either way, and the
+     * staged copy in this app's temporary directory is deleted on a discard
+     * because nothing downstream will: `FileUpload` deletes it when a transfer
+     * ends, and a file that was never sent has no transfer.
+     */
+    @State private var staged: PickedFile?
+    /// One of the machine's files, opened from a path in the conversation.
+    @State private var reading: FileReading?
+    /// Whether the note about what a transcript can and cannot show is up. See
+    /// `SessionChatView`'s header for the whole of it.
+    @State private var showingChatNote = false
+
     /// The two ways in. Both run out of process; see `FilePickers.swift`.
     private enum Picking: String, Identifiable {
         case photos
         case files
         var id: String { rawValue }
+    }
+
+    /// Identifiable so the reader is presented by *item*: presenting by a
+    /// boolean with the path in a second variable opens the sheet a frame before
+    /// the path is set, and `FileTextView` reads its path once, on appear.
+    private struct FileReading: Identifiable {
+        let path: String
+        var id: String { path }
     }
 
     /// A written transcript, on its way to the share sheet. Identifiable so the
@@ -144,9 +171,31 @@ struct TerminalScreen: View {
              * disappear while somebody is typing.
              */
             if chatMode, let bar = host?.bar {
-                SessionChatView(bar: bar, send: connection.isLive ? { message in
-                    host?.sendChatMessage(message, into: sessionID)
-                } : nil)
+                SessionChatView(bar: bar,
+                                // The session this screen is drawing, handed in
+                                // rather than read off the bar. The bar follows
+                                // one session per machine and two of these
+                                // screens can be alive at once, so "the bar's
+                                // session" and "this screen's session" are two
+                                // different facts and the chat view is only
+                                // allowed to draw the conversation when they
+                                // agree. See `SessionBarLink.release`.
+                                sessionID: sessionID,
+                                // The folder the agent's relative paths are
+                                // relative to. The machine's own answer, never
+                                // this app's guess — absent until it has sent
+                                // one, and then a relative path gets no chip.
+                                cwd: session?.cwd,
+                                reload: { reclaimBar() },
+                                // Absent for a guest device: `files` is
+                                // owner-only, so a path chip on one of those
+                                // could open nothing but a refusal.
+                                openFile: host?.canReadFiles == true ? { reading = FileReading(path: $0) } : nil,
+                                attach: host?.canSendFiles == true ? { pick($0) } : nil,
+                                attachment: attachment,
+                                send: connection.isLive ? { message in
+                                    host?.sendChatMessage(message, into: sessionID)
+                                } : nil)
             } else {
                 TerminalHostView(bridge: bridge)
                     .ignoresSafeArea(.container, edges: .bottom)
@@ -218,6 +267,33 @@ struct TerminalScreen: View {
                     .accessibilityLabel(chatMode ? "Back to the terminal"
                                                  : "Read this session as a conversation")
                     .accessibilityIdentifier("terminal.mode")
+                }
+
+                /*
+                 * The one `i` on this screen, and only while the conversation is
+                 * the thing on it.
+                 *
+                 * *"remove this full shit — I don't want long descriptions
+                 * anywhere. Just if somewhere it's very required, give the i
+                 * icon."* It is required here for one reason: a chat view that
+                 * shows an agent's prose and none of its tool calls looks like a
+                 * chat view that has lost half the conversation, and the honest
+                 * answer — the desktop's parser removed them before the frame
+                 * was built — cannot be inferred from anything on screen. Three
+                 * lines, behind a glyph, read once.
+                 */
+                if chatMode {
+                    Button {
+                        showingChatNote = true
+                    } label: {
+                        Image(systemName: "info.circle")
+                    }
+                    .accessibilityLabel("What this view shows")
+                    .accessibilityIdentifier("chat.note")
+                    .popover(isPresented: $showingChatNote) {
+                        chatNote
+                            .presentationCompactAdaptation(.popover)
+                    }
                 }
 
                 Menu {
@@ -463,6 +539,28 @@ struct TerminalScreen: View {
         .sheet(item: $sharing) { file in
             ShareSheet(url: file.url, subject: file.subject)
         }
+        /*
+         * One of the machine's files, reached from a path in the conversation.
+         *
+         * A sheet rather than a push, and that is forced rather than preferred:
+         * a push needs a case on `DeckModel.Route`, the route enum both stacks
+         * are driven by, and a second destination on this screen's stack would
+         * be a navigation state the copilot's stack has to agree about too.
+         * `FileTextView` is the same screen `FilesView` pushes — one reader, so
+         * a file read from a chat message and the same file read from the folder
+         * browser cannot disagree about whether it is text.
+         */
+        .sheet(item: $reading) { file in
+            NavigationStack {
+                FileTextView(model: model, path: file.path)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Button("Done") { reading = nil }
+                                .accessibilityIdentifier("chat.file.done")
+                        }
+                    }
+            }
+        }
         // No `open` handed in: this sheet was raised from inside the session, so
         // a button leading to the screen underneath it would be furniture.
         .sheet(isPresented: $showingDetails) {
@@ -505,6 +603,10 @@ struct TerminalScreen: View {
             // The control cluster over the same session — model, effort, fast
             // mode, permission — read the same way and over the same attach.
             host?.controls.follow(sessionID)
+            // Last, because it turns the conversation on and the read behind
+            // that is about a session the two calls above have just pointed the
+            // bar at.
+            landChatFirstOnTheCopilotStack()
         }
         .onDisappear {
             bridge.onCopy = nil
@@ -516,16 +618,50 @@ struct TerminalScreen: View {
             // held, and a finger would stop driving vim in that session.
             find?.close()
             host?.detach(sessionID)
-            // Nothing about this session is worth holding once its screen has
-            // gone: a ring from a session nobody is looking at is a ring that
-            // will be wrong by the time anybody does.
-            host?.bar.forget()
-            host?.controls.forget()
+            /*
+             * Nothing about this session is worth holding once its screen has
+             * gone: a ring from a session nobody is looking at is a ring that
+             * will be wrong by the time anybody does.
+             *
+             * **Named, rather than a bare `forget()`.** There is one bar per
+             * machine and two of these screens can be alive at once — the
+             * Sessions stack's and the Copilot stack's — and a tab swap fires
+             * the arriving screen's `onAppear` without ever firing the leaving
+             * screen's `onDisappear`. So this callback runs at moments when the
+             * bar has already been pointed at somebody else, and wiping it then
+             * is what left the chat view empty for the whole life of the screen
+             * that *is* being looked at. `SessionBarLink.release` carries the
+             * measured trace.
+             */
+            host?.bar.release(sessionID)
+            // The same rule at the call site rather than inside the control
+            // cluster, which is another lane's file: the cluster is one object
+            // per machine too, and a screen that has gone must not clear a
+            // reading another screen is drawing from.
+            if host?.controls.sessionID == sessionID { host?.controls.forget() }
             chatMode = false
+            // A file chosen and then abandoned. The copy the picker staged in
+            // this app's temporary directory is deleted here because nothing
+            // else would: `FileUpload` only deletes it when a transfer ends.
+            discardStaged()
             // The moment the grace period is measured from: whatever the desktop
             // decides about this session in the next few seconds is the tail of
             // what he was just watching, not news.
             model.stoppedWatchingSession(sessionID, on: hostID)
+        }
+        /*
+         * This screen came back in front, with no lifecycle callback to say so.
+         *
+         * Measured, and it is the whole reason this modifier exists: switching
+         * back to a tab whose stack already has a screen on it fires **nothing**
+         * — not `onAppear`, not `onDisappear` on the tab being left. So the only
+         * signal that this screen is the one being looked at is the state the
+         * `TabView` and the two `NavigationStack`s are themselves driven by. See
+         * `frontmost`, and `SessionBarLink.release` for the trace.
+         */
+        .onChange(of: frontmost) { _, front in
+            guard front else { return }
+            reclaimBar()
         }
         // No tab bar in here — *"inside the session we don't need the pill"* —
         // and the modifier that hides it is **not** on this screen. It was, and
@@ -564,17 +700,134 @@ struct TerminalScreen: View {
         return SessionControls.clusterShown(controls.reading)
     }
 
-    /// Swap the pane, and ask for the conversation the first time.
+    /**
+     * Whether this screen is the one being looked at.
+     *
+     * Derived from the same three pieces of state the `TabView` and its two
+     * `NavigationStack`s are driven by, because SwiftUI will not say. Measured on
+     * the simulator against this app's exact shape — a `TabView` of two stacks
+     * with a screen pushed on each — switching tabs fires the arriving screen's
+     * `onAppear` and never the leaving screen's `onDisappear`, and switching
+     * *back* fires nothing at all. So there is no lifecycle callback that means
+     * "you are in front again", and the top of the selected tab's stack is the
+     * fact itself rather than a signal about it.
+     *
+     * Settings and Localhost cannot have a session pushed on them, so the two
+     * stacks below are the whole of it.
+     */
+    private var frontmost: Bool {
+        let top = model.tab == .copilot ? model.copilotRoute.last : model.route.last
+        return top == .session(host: hostID, id: sessionID)
+    }
+
+    /**
+     * Point the machine's one bar back at this screen, and re-ask what it needs.
+     *
+     * Runs when this screen becomes the frontmost one and when the conversation
+     * is opened. Both are the moments at which the bar can be following a
+     * different session than the screen in front of somebody's eyes — the other
+     * tab's `TerminalScreen` claimed it on *its* `onAppear` and this one had no
+     * callback to claim it back.
+     *
+     * **`frontmost` is a guard and not a nicety.** Both `TerminalScreen`s are
+     * alive at once and both watch the bar, so a screen that re-claimed it
+     * whenever it saw the bar move would fight the other one for it: the
+     * copilot's screen claims on its `onAppear`, the sessions screen sees the
+     * change and claims it back, and the copilot's chat view sees *that* and
+     * claims again — a loop with a `chat.read` in it. Only one screen can be at
+     * the top of the selected tab's stack, so only one can be in here.
+     *
+     * Cheap on the far side: the three questions behind the bar are memory reads
+     * and a bounded tail of a file the agent is already writing.
+     */
+    private func reclaimBar() {
+        guard frontmost, let host else { return }
+        if host.bar.sessionID != sessionID { host.bar.follow(sessionID) }
+        if host.controls.sessionID != sessionID { host.controls.follow(sessionID) }
+        guard chatMode else { return }
+        host.bar.chatting = true
+        host.bar.askChat(tail: false)
+    }
+
+    /// Swap the pane. Split from `enterChat` because there is now a second way
+    /// into the conversation — arriving on the copilot's stack — and a landing
+    /// that called `toggle` would turn the chat *off* for anybody who reached
+    /// this screen with it already on.
     private func toggleMode() {
-        chatMode.toggle()
-        host?.bar.chatting = chatMode
         if chatMode {
-            // The keyboard belongs to the terminal it was raised over. Leaving
-            // it up would put the composer under it with the conversation
-            // squeezed into whatever is left.
-            bridge.blur()
-            host?.bar.askChat(tail: false)
+            chatMode = false
+            host?.bar.stopChatting()
+        } else {
+            enterChat()
         }
+    }
+
+    /**
+     * Show the conversation, and ask for it.
+     *
+     * The re-claim comes first and it is not defensive tidying: this is the
+     * press he was making when the screen came up empty. The bar is one object
+     * per machine, the other tab's terminal may have pointed it at its own
+     * session, and `SessionBarLink.askChat` returns at its `guard let sessionID`
+     * when the bar has been left with none — so the frame never left, no answer
+     * ever came, and pressing the toggle again did the same nothing. Claiming
+     * the bar before asking is what makes the press recover the screen rather
+     * than repeat the failure.
+     */
+    private func enterChat() {
+        chatMode = true
+        host?.bar.chatting = true
+        // The keyboard belongs to the terminal it was raised over. Leaving it up
+        // would put the composer under it with the conversation squeezed into
+        // whatever is left.
+        bridge.blur()
+        // Claimed here, **asked for by the view as it appears.** Both halves have
+        // to happen and doing both here would do them twice: turning the mode on
+        // is what creates `SessionChatView`, whose `onAppear` calls `reload`, so
+        // a read fired here as well would put two `chat.read` frames on the wire
+        // for one press and answer the same question with the same rows.
+        if host?.bar.sessionID != sessionID { host?.bar.follow(sessionID) }
+    }
+
+    /**
+     * **The copilot tab is a conversation; the Sessions tab is a terminal.**
+     *
+     * > *"copilot page should be always landing in a copilot session according
+     * > to the settings of the copilot — either in an existing session if there
+     * > is any, or it should start a new. But it should be always a chat to land
+     * > with, terminal and chat mode too."*
+     *
+     * A terminal reached through the copilot comes up as the chat; the same
+     * terminal reached from the session list comes up as a terminal, unchanged.
+     * `DeckModel.open(session:)` already draws that line — a session opened from
+     * the copilot stays on the copilot's stack so Back lands on the conversation
+     * that started it — and this is the same fact read at the other end. The
+     * selected tab is the test rather than the route, because a tab's stack is
+     * only ever on screen while that tab is selected, and `model.tab` is one read
+     * instead of a search through `copilotRoute`.
+     *
+     * ## Two guards, and both are exits rather than niceties
+     *
+     * `showsModeButton` refuses to draw the toggle when the socket is down or the
+     * machine cannot serve a transcript. Forcing the chat on in either state
+     * would therefore be a mode **with no way out of it** — the person would be
+     * looking at an empty conversation with no button back to the terminal they
+     * came for. That is the fault `DeckSurface.copilot` records having made once
+     * already with the tab bar, and it is not worth re-making for a default.
+     *
+     * So a machine that cannot answer `chat.read`, and a session opened while the
+     * connection is down, both land in the terminal. Both are honest: there is no
+     * conversation to show in either case.
+     *
+     * It runs on **every** appearance rather than once, which is the mirror of
+     * `onDisappear` setting `chatMode = false`. Appear decides, disappear
+     * resets — so the mode never leaks from one visit to the next, and it never
+     * leaks between the two tabs that can both be showing a terminal.
+     */
+    private func landChatFirstOnTheCopilotStack() {
+        guard model.tab == .copilot else { return }
+        guard connection.isLive, host?.bar.canReadChat == true else { return }
+        enterChat()
     }
 
     // MARK: - Find, share, size
@@ -640,6 +893,15 @@ struct TerminalScreen: View {
                 }
             }
         }
+        /*
+         * The one element that says *a session is on screen*, on every machine.
+         *
+         * `terminal.mode` is drawn only where the machine serves a transcript
+         * and `terminal.details` lives behind the overflow, so neither can tell
+         * a landed screen from an unlanded one on a host without chat — which is
+         * exactly the case `CopilotLandingUITests` walks.
+         */
+        .accessibilityIdentifier("session.header")
     }
 
     /// Copy and paste are silent by nature; without this the buttons feel
@@ -664,7 +926,75 @@ struct TerminalScreen: View {
     /// and must not produce a message.
     private func hand(_ picked: PickedFile?) {
         guard let picked else { return }
-        host?.send(picked, into: sessionID)
+        // In the terminal the picker *was* the press, and the file goes. In the
+        // conversation there is a composer to put it in front of first — see
+        // `staged`, and `SessionChatView.staged(_:)` for what is drawn.
+        if chatMode {
+            discardStaged()
+            staged = picked
+        } else {
+            host?.send(picked, into: sessionID)
+        }
+    }
+
+    /// Raise a picker from the composer's paperclip. The same two the terminal's
+    /// own menu raises, through the same `@State` and the same sheet.
+    private func pick(_ source: ChatAttachSource) {
+        // Deferred by a turn of the run loop for the reason Find and Session
+        // details are: a presentation asked for in the frame a menu is
+        // dismissing in is dropped.
+        DispatchQueue.main.async {
+            picking = source == .photos ? .photos : .files
+        }
+    }
+
+    /// What the composer draws above the field, or nil when nothing is staged.
+    /// `send` is withheld while a transfer is already running, because
+    /// `HostLink.send` refuses a second one and a button that can only be
+    /// refused is not a button.
+    private var attachment: ChatAttachment? {
+        guard let staged else { return nil }
+        let busy = host?.upload != nil
+        return ChatAttachment(file: staged,
+                              send: busy ? nil : {
+                                  host?.send(staged, into: sessionID)
+                                  // Handed over: `FileUpload` owns the staged
+                                  // copy from here and deletes it when the
+                                  // transfer ends, whichever way it ends.
+                                  self.staged = nil
+                              },
+                              discard: { discardStaged() })
+    }
+
+    /// Drop what was staged, and the copy the picker made with it. Nothing else
+    /// will: `FileUpload` deletes the temporary file when a transfer ends, and a
+    /// file that was never sent has no transfer to end.
+    private func discardStaged() {
+        if let staged, staged.temporary { try? FileManager.default.removeItem(at: staged.url) }
+        staged = nil
+    }
+
+    /**
+     * What a transcript view can and cannot show, in three lines behind the `i`.
+     *
+     * Each line is a fact about the wire rather than about this app. The middle
+     * one is the one people need: the tool calls are not withheld by the phone,
+     * they are removed by `src/main/chat-transcript.ts` before the frame is
+     * built — *"This module throws all of that away and keeps the prose, because
+     * the chat view exists precisely to hide it."* The terminal, one press away,
+     * has all of it.
+     */
+    private var chatNote: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Code, patches and file paths are drawn from the text.")
+            Text("Tool calls are not in the transcript this machine sends. The terminal has them.")
+            Text("A path opens as text. Images cannot be fetched from the machine.")
+        }
+        .font(.system(size: 13))
+        .foregroundStyle(Theme.primary)
+        .padding(16)
+        .frame(maxWidth: 320, alignment: .leading)
+        .accessibilityIdentifier("chat.note.body")
     }
 }
 

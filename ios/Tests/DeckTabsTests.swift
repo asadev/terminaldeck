@@ -246,7 +246,7 @@ final class DeckTabsTests: XCTestCase {
      * — which is a pill over a terminal again, with every other test green.
      *
      * It is worth a test rather than being obvious because the third one is not
-     * a path at all. The localhost page is `@State` inside `LocalhostListView`,
+     * a path at all. The localhost page is `@State` inside `MachineBrowserView`,
      * so this end of it is a flag the browser sets, and a flag can be left set.
      */
     func testEachTabReportsWhatIsOnTopOfIt() {
@@ -262,6 +262,11 @@ final class DeckTabsTests: XCTestCase {
         XCTAssertEqual(model.localhostSurface, .localhostPage)
 
         model.showMachines()
+        // A page open anywhere wins over the Menu stack's own depth, because a
+        // page has a bottom toolbar the floating pill would sit on. An artifact
+        // that is a prototype opens one on *this* stack — see `settingsSurface`.
+        XCTAssertEqual(model.settingsSurface, .localhostPage)
+        model.localhostPageIsOpen = false
         XCTAssertEqual(model.settingsSurface, .machines)
     }
 
@@ -301,10 +306,13 @@ final class DeckTabsTests: XCTestCase {
      * answer `.copilot`, and `.copilot` is now also hidden. The equality on the
      * surface itself is what makes this test able to fail for the real reason.
      */
-    func testNeitherTheCopilotNorATerminalOverItDrawsTheBar() {
+    func testTheCopilotDrawsTheBarAndATerminalOverItDoesNot() {
         XCTAssertEqual(model.copilotSurface, .copilot)
-        XCTAssertFalse(DeckChrome.showsTabBar(on: model.copilotSurface),
-                       "either we will type or we will use the pill")
+        // The tab keeps its bar since 2026-08-25: nothing types on this screen
+        // any more, and a four-icon pill that vanishes on one of its four is a
+        // tab that cannot be left sideways.
+        XCTAssertTrue(DeckChrome.showsTabBar(on: model.copilotSurface),
+                      "the copilot tab became a dead end without its own bar")
 
         model.tab = .copilot
         model.open(session: "01J8ZC4T9K5Q2V7XW3NHRF6MBD", on: Self.macId)
@@ -575,6 +583,12 @@ final class DeckTabsTests: XCTestCase {
 
         XCTAssertFalse(DeckChrome.showsTabBar(on: model.sessionsSurface))
         XCTAssertFalse(DeckChrome.showsTabBar(on: model.localhostSurface))
+        // A page is open, and the Menu stack now says so too — an artifact that
+        // is a prototype opens one on this stack.
+        XCTAssertFalse(DeckChrome.showsTabBar(on: model.settingsSurface),
+                       "the pill would sit on the page's own toolbar")
+
+        model.localhostPageIsOpen = false
         XCTAssertTrue(DeckChrome.showsTabBar(on: model.settingsSurface),
                       "Machines keeps the bar — it is one of the three he named")
     }

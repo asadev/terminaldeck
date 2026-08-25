@@ -59,6 +59,12 @@
  * brief's rule for iOS is *native materials for chrome*, and a tab bar is the
  * most native piece of chrome there is.
  *
+ * **And the items carry no words** — *"only icons are good enough. I think they
+ * can understand from the icons what is what."* That is one change with two
+ * halves, and the half that is easy to lose is that each tab is still *named*
+ * for VoiceOver and for the twenty-odd UI cases that press a pill by its word.
+ * `DeckTabs.pill(_:_:)` has the measurements that decided how.
+ *
  * ## What is left of the session list's `…`
  *
  * One item, and it is a place rather than an action: **Archived**. Refresh and
@@ -120,11 +126,32 @@ struct DeckTabs: View {
                             switch route {
                             case let .session(host, id):
                                 TerminalScreen(model: model, hostID: host, sessionID: id)
+                                    /*
+                                     * **The copilot's controls, on the screen it
+                                     * lands you on.**
+                                     *
+                                     * The tab now opens straight into a session
+                                     * in chat mode, so this terminal *is* the
+                                     * Copilot screen most of the time — and the
+                                     * gear has to be on it, or it disappears
+                                     * exactly when somebody is looking at the
+                                     * thing it configures.
+                                     *
+                                     * Here rather than in `TerminalScreen`
+                                     * because the same screen is pushed from
+                                     * both stacks and only this file knows which
+                                     * one it is on. The identical line at the
+                                     * Sessions stack's destination below is
+                                     * deliberately absent: a terminal reached
+                                     * from the session list is a session, not a
+                                     * copilot.
+                                     */
+                                    .copilotControlsButton(model: model, hostID: host)
                             }
                         }
                 }
                 .toolbar(DeckChrome.tabBar(on: model.copilotSurface), for: .tabBar)
-                .tabItem { Label("Copilot", systemImage: "sparkles") }
+                .tabItem { pill("Copilot", "sparkles") }
                 /*
                  * The count of questions waiting on an answer, on the pill.
                  *
@@ -167,7 +194,7 @@ struct DeckTabs: View {
              * holds the rule; each tab only has to say what is on top of it.
              */
             .toolbar(DeckChrome.tabBar(on: model.sessionsSurface), for: .tabBar)
-            .tabItem { Label("Sessions", systemImage: "terminal") }
+            .tabItem { pill("Sessions", "terminal") }
             .tag(DeckModel.Tab.sessions)
 
             /*
@@ -183,7 +210,7 @@ struct DeckTabs: View {
              * interruption, it is where the tap was going.
              */
             NavigationStack {
-                LocalhostListView(model: model)
+                MachineBrowserView(model: model)
             }
             // The page is `@State` inside that view rather than a path, so what
             // is on top of this tab is answered by a flag the browser sets. See
@@ -208,7 +235,7 @@ struct DeckTabs: View {
              * So there is one screen, it is called what it is, and the address
              * bar at the top of it is the thing a browser has.
              */
-            .tabItem { Label("Browser", systemImage: "globe") }
+            .tabItem { pill("Browser", "globe") }
             .tag(DeckModel.Tab.localhost)
 
             NavigationStack(path: $model.settingsRoute) {
@@ -228,6 +255,8 @@ struct DeckTabs: View {
                             }
                         case let .server(id):
                             ServerDetailView(model: model, serverId: id)
+                        case let .machine(id):
+                            MachineDetailView(model: model, hostID: id)
                         case .terminalTheme:
                             TerminalThemeView()
                         }
@@ -238,7 +267,17 @@ struct DeckTabs: View {
             // states. Stated rather than omitted so the screen has made the
             // decision out loud, and so the rule is not "hidden when pushed".
             .toolbar(DeckChrome.tabBar(on: model.settingsSurface), for: .tabBar)
-            .tabItem { Label("Settings", systemImage: "gearshape") }
+            /*
+             * **Menu**, not Settings.
+             *
+             * *"we can rename this settings page to menu page and we can have
+             * all of these things in the menu page and settings page can be
+             * inside the menu page."* The name follows what the screen became:
+             * a page whose first section is the machine's own tools and whose
+             * settings are one group among several is not a settings screen, and
+             * calling it one sends people looking for Files under a gear.
+             */
+            .tabItem { pill("Menu", "line.3.horizontal") }
             .tag(DeckModel.Tab.settings)
         }
     }
@@ -253,6 +292,66 @@ struct DeckTabs: View {
      * this hands the pair to the model, which keeps the one fact the button
      * needs. Everything else about it is a plain binding.
      */
+    /**
+     * **The pill carries icons and no words — and every tab is still addressable
+     * by its name.**
+     *
+     * > *"And for the pill I think no need to give the titles like Copilot,
+     * > Browser, Sessions or Terminal or Menu or things — only icons are good
+     * > enough. I think they can understand from the icons what is what."*
+     *
+     * An `Image` in the `.tabItem` instead of a `Label`, with the name moved onto
+     * `.accessibilityLabel`. That is one line per tab and it is the answer only
+     * because of what the other route measured out at.
+     *
+     * ## The route not taken, and the numbers that killed it
+     *
+     * The safer-looking option is to keep `Label(name, systemImage:)` — so the
+     * `UITabBarItem` keeps a real `title`, which is what VoiceOver reads and what
+     * every UI suite here presses a tab by — and take the words out of the *ink*
+     * with `UITabBarAppearance`: `titleTextAttributes` in `.clear`,
+     * `titlePositionAdjustment` pushing the invisible string out of the pill, and
+     * `UITabBarItem.appearance().imageInsets` nudging the glyph down into the
+     * space it vacated.
+     *
+     * It was built, run and photographed on iOS 27, and **the last two do
+     * nothing at all** on this bar. Measured on the shipped floating pill, from
+     * the screenshots rather than from the documentation:
+     *
+     * | | pill centre | icon centre | icon is high by |
+     * |---|---|---|---|
+     * | titles cleared, insets set | 2465.5 | 2444.0 | 7.2 pt |
+     * | titles cleared, no insets | 2465.5 | 2444.0 | 7.2 pt |
+     * | no title at all (this) | 2465.5 | 2465.0 | 0.2 pt |
+     *
+     * Identical to the pixel with the insets and without them, which is the
+     * measurement that settles it: the appearance proxy can still hide the text
+     * on iOS 27 but can no longer move anything, and the pill does not shrink
+     * when its labels go. So that route buys a title at the price of every glyph
+     * sitting seven points above the middle of a sixty-two point pill, with dead
+     * space underneath where the words used to be — visible, and exactly the
+     * "looks like it failed to load" reading a bar must not have.
+     *
+     * ## Which is why the accessibility label is not optional here
+     *
+     * With no `Text` in the item there is no `title`, and a tab with neither is
+     * unreachable to VoiceOver **and** to `TabNavigation.swift`, whose four
+     * helpers — `openTab`, `openSettingsTab`, `openBrowserTab`, `openCopilotTab`
+     * — find a pill with `tabBars.buttons[name]` on behalf of twenty-odd cases.
+     * `.accessibilityLabel` inside the `tabItem` closure is what replaces it, and
+     * that it survives into the accessibility tree is measured rather than
+     * assumed: `SwipeActionsUITests` presses **Menu** and **Sessions** by name
+     * against this build, and `testEveryPillIsStillAddressableByItsName` in that
+     * suite is the standing guard for all four.
+     *
+     * The badge on the copilot's pill is untouched by any of this — `.badge()`
+     * sets `UITabBarItem.badgeValue`, which has nothing to do with the item's
+     * title or its image.
+     */
+    private func pill(_ name: String, _ symbol: String) -> some View {
+        Image(systemName: symbol).accessibilityLabel(name)
+    }
+
     private var selection: Binding<DeckModel.Tab> {
         Binding(get: { model.tab }, set: { model.show($0) })
     }
@@ -331,160 +430,440 @@ private struct CopilotTabScreen: View {
 struct MachinesView: View {
     let model: DeckModel
 
+    /**
+     * The machine a Forget is waiting to be confirmed for.
+     *
+     * A value of its own rather than an id, for the reason `SessionListView`
+     * holds a whole `RemoteSession` while its Close is being answered: this list
+     * reorders and shrinks by itself — a machine can drop off it while the alert
+     * is up, and a name looked up at draw time would put one machine's title over
+     * a decision about another. The name is `model.label(for:)` at the moment of
+     * the swipe, which is also the name the row and the menu were showing.
+     *
+     * A struct rather than the `HostLink`, so the question on screen cannot be
+     * changed underneath by the object it is about answering a frame from its
+     * machine mid-decision.
+     */
+    @State private var forgetting: Forgetting?
+
+    private struct Forgetting: Identifiable {
+        let id: String
+        let name: String
+    }
+
+    /**
+     * The rows, and it is a `List` now rather than a `ScrollView` of a
+     * `LazyVStack`.
+     *
+     * Asad: *"if we click, like we have a list of browsers or sessions, we can
+     * swipe them left and right and we can have options there to delete or close
+     * the options or archive and things, just like WhatsApp has the chats."*
+     * `.swipeActions` exists only inside a `List` — a `ScrollView` compiles the
+     * modifier and silently draws nothing, which is the same failure the session
+     * list and the localhost list each had to be converted out of, and the reason
+     * their UI cases assert on the revealed buttons rather than on a screenshot.
+     *
+     * Nothing about the screen changes with the container. The cards are painted
+     * by `MachineRow` and `RowButtonStyle` rather than by the list, so
+     * `plainRow()` — the three modifiers that clear the row background, drop the
+     * separator and restate the gutter — is all it takes to keep them. Its five
+     * points top and bottom reproduce the `LazyVStack(spacing: 10)` exactly, and
+     * the seven points of content margin below make up the difference between
+     * those five and the twelve the stack had above its first card. Stated as a
+     * margin rather than as a fatter inset on the first row, because an inset
+     * that belongs to whichever row happens to be first is a gutter that changes
+     * when the list is reordered.
+     */
     var body: some View {
         ZStack {
             Theme.background.ignoresSafeArea()
-            ScrollView {
-                LazyVStack(spacing: 10) {
-                    ForEach(model.hosts) { host in
-                        MachineRow(host: host,
-                                   // From the model, not the host: two machines
-                                   // reporting one hostname drew two identical
-                                   // rows until the list broke the tie. See
-                                   // `DeckModel.label(for:)`.
-                                   name: model.label(for: host),
-                                   isCurrent: host.id == model.current?.id,
-                                   select: { model.select(host.id) },
-                                   rename: { DispatchQueue.main.async { model.beginRename(host.id) } },
-                                   forget: { model.unpair(host.id) })
-                    }
+            List {
+                ForEach(model.hosts) { host in
+                    MachineRow(host: host,
+                               // From the model, not the host: two machines
+                               // reporting one hostname drew two identical
+                               // rows until the list broke the tie. See
+                               // `DeckModel.label(for:)`.
+                               name: model.label(for: host),
+                               isCurrent: host.id == model.current?.id,
+                               select: { model.select(host.id) },
+                               about: { open(host) },
+                               rename: { beginRename(host) },
+                               forget: { askToForget(host) })
+                        .plainRow()
+                        /*
+                         * Rename towards you, Forget away from you — the same
+                         * hands the rest of the app already teaches.
+                         *
+                         * The leading edge carries the harmless verb on every
+                         * list in this product: Pin on the sessions, Rename on
+                         * the ports, Rename here. The trailing edge carries the
+                         * one that takes something away, outermost, so that the
+                         * thumb coming off the screen edge lands on the action
+                         * that has to be the most deliberate — and that action
+                         * asks before it fires.
+                         *
+                         * `allowsFullSwipe: false` on both edges. A full swipe
+                         * fires the first action on release, and the first
+                         * action on the trailing edge unpairs a computer.
+                         */
+                        .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                            renameAction(host)
+                        }
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                            forgetAction(host)
+                            aboutAction(host)
+                        }
+                }
 
-                    Button {
-                        model.addingHost = true
-                    } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: "plus")
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(Theme.accent)
-                                .frame(width: 18)
-                            Text("Pair another machine")
+                Button {
+                    model.addingHost = true
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "plus")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(Theme.accent)
+                            .frame(width: 18)
+                        Text("Pair another machine")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(Theme.accent)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(RowButtonStyle())
+                .accessibilityIdentifier("machines.add")
+                // Eleven rather than five: the six extra points this row carried
+                // as `.padding(.top, 6)` in the stack, so the doors sit slightly
+                // apart from the machines they add to.
+                .plainRow(top: 11)
+
+                /*
+                 * The second door, beside the first rather than behind it.
+                 *
+                 * A code is read off a machine somebody is standing at. A
+                 * server is a machine nobody is standing at — that is what
+                 * makes it a server — so it has no screen to show a code on
+                 * and nobody to press Approve. Both doors end in a row on
+                 * this list, so both belong at the bottom of this list;
+                 * putting the server one behind a `…` would be hiding the
+                 * only way in for the machines this product is named after.
+                 */
+                /*
+                 * The servers, on the same list as the machines and clearly
+                 * not the same thing.
+                 *
+                 * A server that has been *connected* is in both places at
+                 * once — as a machine above, because the host on it became
+                 * one, and as a server here, because the SSH login that
+                 * manages it is still what installs, starts and stops it.
+                 * That is not a duplicate: the two rows do different jobs
+                 * and lead to different screens.
+                 */
+                if !model.serverConnector.servers.isEmpty {
+                    Text("Servers")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Theme.faint)
+                        .textCase(.uppercase)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        // Twenty rather than sixteen, which is the four points
+                        // this caption had as its own horizontal padding inside
+                        // the stack's gutter. The same figure the localhost
+                        // list's section headers sit on.
+                        .listRowInsets(EdgeInsets(top: 14, leading: 20, bottom: 2, trailing: 20))
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                    ForEach(model.serverConnector.servers) { server in
+                        /*
+                         * A button rather than a `NavigationLink`, and it was
+                         * one until this screen became a `List`.
+                         *
+                         * Inside a list a `NavigationLink` draws the system's
+                         * own disclosure chevron beside whatever it is given,
+                         * and `ServerRow` already draws one — so the row would
+                         * come out with two, which is exactly what happened to
+                         * the session rows when that screen was converted.
+                         * Appending the same route does the same navigation
+                         * without the decoration.
+                         */
+                        Button {
+                            model.settingsRoute.append(.server(server.id))
+                        } label: {
+                            ServerRow(server: server,
+                                      isConnected: server.linkedHostId
+                                          .flatMap { model.host($0) } != nil)
+                        }
+                        .buttonStyle(RowButtonStyle())
+                        .accessibilityIdentifier("machines.server")
+                        .plainRow()
+                    }
+                }
+
+                Button {
+                    // The root presenter, for the reason the pairing screen
+                    // gives: one login sheet, owned by the one view that
+                    // survives a phone crossing from "no machines" to "one
+                    // server". See `DeckModel.loggingIntoServer`.
+                    model.loggingIntoServer = true
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "server.rack")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(Theme.accent)
+                            .frame(width: 18)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Log in to a server")
                                 .font(.system(size: 16, weight: .medium))
                                 .foregroundStyle(Theme.accent)
-                            Spacer(minLength: 0)
+                            // The one line on this row, and it earns it: it
+                            // is the whole difference between the two doors,
+                            // and somebody who reads "add a server" without
+                            // it will go looking for a code that no server
+                            // will ever show them.
+                            Text("Its address and the login it already trusts")
+                                .font(.system(size: 12))
+                                .foregroundStyle(Theme.faint)
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 14)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(RowButtonStyle())
+                .accessibilityIdentifier("machines.addServer")
+                .plainRow()
+
+                if let error = model.lastError {
+                    Text(error)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.warning)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(RowButtonStyle())
-                    .padding(.top, 6)
-                    .accessibilityIdentifier("machines.add")
+                        .onTapGesture { model.dismissError() }
+                        .listRowInsets(EdgeInsets(top: 14, leading: 20, bottom: 0, trailing: 20))
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                }
 
-                    /*
-                     * The second door, beside the first rather than behind it.
-                     *
-                     * A code is read off a machine somebody is standing at. A
-                     * server is a machine nobody is standing at — that is what
-                     * makes it a server — so it has no screen to show a code on
-                     * and nobody to press Approve. Both doors end in a row on
-                     * this list, so both belong at the bottom of this list;
-                     * putting the server one behind a `…` would be hiding the
-                     * only way in for the machines this product is named after.
-                     */
-                    /*
-                     * The servers, on the same list as the machines and clearly
-                     * not the same thing.
-                     *
-                     * A server that has been *connected* is in both places at
-                     * once — as a machine above, because the host on it became
-                     * one, and as a server here, because the SSH login that
-                     * manages it is still what installs, starts and stops it.
-                     * That is not a duplicate: the two rows do different jobs
-                     * and lead to different screens.
-                     */
-                    if !model.serverConnector.servers.isEmpty {
-                        Text("Servers")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(Theme.faint)
-                            .textCase(.uppercase)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 4)
-                            .padding(.top, 14)
-                        ForEach(model.serverConnector.servers) { server in
-                            NavigationLink(value: DeckModel.SettingsRoute.server(server.id)) {
-                                ServerRow(server: server,
-                                          isConnected: server.linkedHostId
-                                              .flatMap { model.host($0) } != nil)
-                            }
-                            .buttonStyle(RowButtonStyle())
-                            .accessibilityIdentifier("machines.server")
-                        }
-                    }
-
-                    Button {
-                        // The root presenter, for the reason the pairing screen
-                        // gives: one login sheet, owned by the one view that
-                        // survives a phone crossing from "no machines" to "one
-                        // server". See `DeckModel.loggingIntoServer`.
-                        model.loggingIntoServer = true
-                    } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: "server.rack")
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(Theme.accent)
-                                .frame(width: 18)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Log in to a server")
-                                    .font(.system(size: 16, weight: .medium))
-                                    .foregroundStyle(Theme.accent)
-                                // The one line on this row, and it earns it: it
-                                // is the whole difference between the two doors,
-                                // and somebody who reads "add a server" without
-                                // it will go looking for a code that no server
-                                // will ever show them.
-                                Text("Its address and the login it already trusts")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(Theme.faint)
-                            }
-                            Spacer(minLength: 0)
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(RowButtonStyle())
-                    .accessibilityIdentifier("machines.addServer")
-
-                    if let error = model.lastError {
-                        Text(error)
-                            .font(.system(size: 12))
-                            .foregroundStyle(Theme.warning)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 4)
-                            .padding(.top, 14)
-                            .onTapGesture { model.dismissError() }
-                    }
-
-                    // The one sentence on this screen, and it earns its place:
-                    // it is the answer to "why can this phone see my Mac", and
-                    // it is where somebody looks after unpairing something by
-                    // accident.
-                    Text("A machine stays on this list until you forget it. Forgetting one leaves "
-                         + "every other machine alone.")
+                /*
+                 * Behind the ⓘ, not under the list.
+                 *
+                 * > *"here you have a very long description… Remove this
+                 * > full shit. I don't want any kind of long descriptions
+                 * > anywhere. Just if somewhere it's very required, give the
+                 * > i icon."*
+                 *
+                 * The sentence is still worth having — it is the answer to
+                 * *why can this phone see my Mac*, and it is where somebody
+                 * looks after unpairing something by accident — so it moves
+                 * rather than goes. `InfoDot` is the shape the rest of the
+                 * app already uses for exactly this.
+                 */
+                HStack(spacing: 6) {
+                    Text("Forgetting is per machine")
                         .font(.system(size: 12))
                         .foregroundStyle(Theme.faint)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 4)
-                        .padding(.top, 18)
-
-                    // Machines keeps the bar, so it owes it room.
-                    TabBarClearance()
+                    InfoDot(
+                        about: "Machines",
+                        text: "A machine stays on this list until you forget it. "
+                            + "Forgetting one leaves every other machine alone."
+                    )
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 12)
-                .padding(.bottom, 28)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                // The twenty-eight at the foot is the stack's old bottom padding,
+                // which the clearance row below does not replace: that one is
+                // sized to the floating bar and is zero on a screen without one.
+                .listRowInsets(EdgeInsets(top: 18, leading: 20, bottom: 28, trailing: 20))
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+
+                // Machines keeps the bar, so it owes it room.
+                TabBarClearance()
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
             }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .environment(\.defaultMinListRowHeight, 0)
+            // See the header: the seven points that turn `plainRow`'s five into
+            // the twelve this screen had above its first card.
+            .contentMargins(.top, 7, for: .scrollContent)
             .scrollBounceBehavior(.basedOnSize)
             .refreshable {
                 model.refreshAll()
                 try? await Task.sleep(for: .milliseconds(450))
             }
         }
+        /*
+         * The question Forget did not used to ask, in one place for both ways of
+         * reaching it.
+         *
+         * Forget was wired straight to `DeckModel.unpair` from the row's `…`
+         * menu — one tap, no question, and the machine was gone. That was
+         * survivable while the only way to fire it was to open a menu and read a
+         * named item; it is not survivable next to a swipe, which is a gesture a
+         * thumb can complete without the eye having caught up. So the
+         * confirmation is new, and it is deliberately raised by the row's single
+         * `forget` closure rather than by the swipe button — the menu item and
+         * the swipe are two doors onto one verb, and a verb that asks through one
+         * door and not the other is two different verbs wearing one word.
+         *
+         * A system alert, for the reasons the session list's Close gives at
+         * length: it is modal so it cannot be scrolled away from mid-decision,
+         * and iOS draws `.destructive` in the platform's own red at the
+         * platform's own weight. The title names the machine so that a phone
+         * paired with three of them cannot produce a decision about the wrong
+         * one, and the affirmative says *forget* rather than *OK*.
+         *
+         * The message is the three facts somebody is actually unsure about, and
+         * every one of them is a property of `unpair` rather than a reassurance:
+         * the sessions do not stop, the pairing has to be made again from
+         * scratch, and no other machine is touched.
+         */
+        .alert("Forget \(forgetting?.name ?? "this machine")?",
+               isPresented: Binding(get: { forgetting != nil },
+                                    set: { if !$0 { forgetting = nil } }),
+               presenting: forgetting) { target in
+            Button("Forget", role: .destructive) {
+                model.unpair(target.id)
+                forgetting = nil
+            }
+            .accessibilityIdentifier("forget.confirm")
+            Button("Cancel", role: .cancel) { forgetting = nil }
+        } message: { target in
+            // The machine is named in the title, so the message does not say it
+            // again: rendered against a real hostname the second mention pushed
+            // this to six lines and read as though two different machines were
+            // involved.
+            Text("Its sessions keep running — this phone stops seeing them. "
+                 + "Getting back in means pairing again. "
+                 + "Every other machine is left alone.")
+        }
         .navigationTitle("Machines")
         .navigationBarTitleDisplayMode(.inline)
 
+    }
+
+    // MARK: - The three verbs, said once each
+
+    /**
+     * What a row's controls do, written here rather than inside `MachineRow`, so
+     * that the `…` menu and the swipe on the same row cannot drift into doing
+     * two different things. The row takes closures; this is what they are.
+     */
+
+    /// Push the machine's own screen. A route appended rather than a
+    /// `NavigationLink` followed — see the ⓘ on `MachineRow` for the chevron that
+    /// forced that when this screen became a `List`.
+    private func open(_ host: HostLink) {
+        model.settingsRoute.append(.machine(host.id))
+    }
+
+    /// Raise the rename alert, which `RootView` presents. Deferred by one turn of
+    /// the run loop because both callers are inside a gesture handler: presenting
+    /// while the row is still animating back leaves the alert with no presenter
+    /// and the press does nothing at all — measured on the port list, where the
+    /// swipe's Rename silently did nothing until it was deferred.
+    private func beginRename(_ host: HostLink) {
+        DispatchQueue.main.async { model.beginRename(host.id) }
+    }
+
+    /// Raise the confirmation. Nothing is unpaired here — see the alert.
+    private func askToForget(_ host: HostLink) {
+        let name = model.label(for: host)
+        DispatchQueue.main.async { forgetting = Forgetting(id: host.id, name: name) }
+    }
+
+    // MARK: - The swipes
+
+    /**
+     * The leading swipe: rename, which is the harmless one.
+     *
+     * `Theme.accent` because that is what the leading Rename on the port list is
+     * tinted, and two lists whose same-named action is a different colour is a
+     * screen somebody has to read rather than recognise.
+     *
+     * Not gated on anything, and that is honest rather than lazy: every machine
+     * on this list can be renamed — the label is stored on this phone — so a
+     * condition here would be a condition on nothing. The rule this app follows
+     * is that an action is gated on exactly what its menu counterpart is gated
+     * on, and the menu's Rename is gated on nothing either.
+     */
+    private func renameAction(_ host: HostLink) -> some View {
+        Button {
+            beginRename(host)
+        } label: {
+            Label("Rename", systemImage: "pencil")
+        }
+        .tint(Theme.accent)
+        // Named, because a phone paired with three machines is three identical
+        // swipes and VoiceOver reads this one out of the row it belongs to.
+        .accessibilityLabel("Rename \(model.label(for: host))")
+        .accessibilityIdentifier("machine.swipe.rename.\(host.id)")
+    }
+
+    /**
+     * The trailing swipe's first action, which is the outermost one drawn.
+     *
+     * `Theme.critical` and not `Theme.warning`: this app reserves the amber for
+     * the reversible thing that changes nothing on the machine — Archive on the
+     * session list says exactly that — and the red for the one that takes
+     * something away. Forgetting a machine is not reversible from this screen; it
+     * needs a fresh pairing code or a server login to undo.
+     *
+     * Tinted explicitly even though `role: .destructive` is red by default,
+     * because a default loses to an ambient tint: the session list's Close came
+     * out **blue** the first time it was built, sitting under this app's
+     * `.tint(Theme.accent)`, and nothing in the build log said so — it was
+     * visible in the first frame the simulator took. The same trap is one
+     * ancestor away here.
+     *
+     * It opens the alert rather than acting. `role: .destructive` on a swipe
+     * button is styling, not a confirmation.
+     */
+    private func forgetAction(_ host: HostLink) -> some View {
+        Button(role: .destructive) {
+            askToForget(host)
+        } label: {
+            Label("Forget", systemImage: "minus.circle")
+        }
+        .tint(Theme.critical)
+        .accessibilityLabel("Forget \(model.label(for: host))")
+        .accessibilityIdentifier("machine.swipe.forget.\(host.id)")
+    }
+
+    /**
+     * And the machine's own screen, inside the destructive one.
+     *
+     * The ⓘ is already on the row, so this is not the only way there. It is the
+     * way that does not ask a thumb to find a 40-point glyph wedged between the
+     * row's body and its `…`, which is the same argument the session list makes
+     * for putting Details on the swipe as well as behind a long press.
+     *
+     * `Theme.neutralAction`, which is what that Details is tinted, and for the
+     * same reason: a reference is neither an action worth the accent nor a risk
+     * worth a colour.
+     *
+     * Inside Forget rather than outside it, so the outermost action on this edge
+     * is the deliberate one on every list in the app.
+     */
+    private func aboutAction(_ host: HostLink) -> some View {
+        Button {
+            // The row's own ⓘ, deferred: pushing while the row is still animating
+            // back is a navigation nobody sees arrive. One function rather than a
+            // second `append` here, so the two doors cannot lead to two screens.
+            DispatchQueue.main.async { open(host) }
+        } label: {
+            Label("About", systemImage: "info.circle")
+        }
+        .tint(Theme.neutralAction)
+        .accessibilityLabel("About \(model.label(for: host))")
+        .accessibilityIdentifier("machine.swipe.about.\(host.id)")
     }
 }
 
@@ -500,6 +879,15 @@ struct MachinesView: View {
  * Tapping the row switches to that machine; the `…` beside it renames or forgets
  * it. The two are separated because one of them is a thing people do twenty times
  * a day and the other is a thing they do once and regret.
+ *
+ * ## Every verb on this row is a closure, and that is what keeps the swipe honest
+ *
+ * The same three actions are reachable two ways now — from the `…` here and from
+ * a swipe on the row, which `MachinesView` attaches because a menu is two taps
+ * for something WhatsApp does in one drag. Both doors call the *same* closure, so
+ * a Forget that asks before it fires asks from either of them; a swipe wired
+ * straight to `unpair` while the menu went through a confirmation would be two
+ * verbs sharing one word.
  */
 private struct MachineRow: View {
     let host: HostLink
@@ -507,7 +895,12 @@ private struct MachineRow: View {
     let name: String
     let isCurrent: Bool
     let select: () -> Void
+    /// Push this machine's own screen. See the ⓘ below.
+    let about: () -> Void
     let rename: () -> Void
+    /// Ask about forgetting it. Nothing is unpaired by calling this — the
+    /// confirmation `MachinesView` raises is what unpairs, and it is the only
+    /// thing that does.
     let forget: () -> Void
 
     var body: some View {
@@ -580,6 +973,40 @@ private struct MachineRow: View {
             }
             .accessibilityIdentifier("machine.\(host.id)")
 
+            /*
+             * The chevron, and the screen behind it.
+             *
+             * The row's body **selects** this machine — that is what a tap on a
+             * machine in a list of machines means, and it is what the checkmark
+             * is about. What it did not do was lead anywhere, so a machine that
+             * was not also an SSH server had no page at all: *"before we had a
+             * list of connected servers where we could click and go inside
+             * server info and settings now its gone."*
+             *
+             * Two targets on one row, which is worth being careful about: the
+             * body switches, this opens. They are drawn apart and labelled
+             * apart, the way Mail's list separates a message from its detail
+             * disclosure.
+             *
+             * A `Button` appending the route rather than a `NavigationLink`
+             * carrying it, and the reason is the container: this row lives in a
+             * `List` since the swipes were added, and a `NavigationLink` inside
+             * a list draws the system's own disclosure chevron beside whatever
+             * it is given — so this row would end up with a chevron it never
+             * asked for, hard against the `…`. The session list hit the same
+             * thing when it was converted and answered it the same way.
+             */
+            Button(action: about) {
+                Image(systemName: "info.circle")
+                    .font(.system(size: 17, weight: .light))
+                    .foregroundStyle(Theme.faint)
+                    .frame(width: 40, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("About \(name)")
+            .accessibilityIdentifier("machine.about.\(host.id)")
+
             Menu {
                 Button {
                     rename()
@@ -588,6 +1015,10 @@ private struct MachineRow: View {
                 }
                 .accessibilityIdentifier("machine.rename")
 
+                // Asks first, since 0.10.3. It used to be wired straight through
+                // to `unpair` — one tap and the machine was gone — which was
+                // survivable only while a menu was the sole way to reach it. It
+                // is not the sole way any more; see this type's header.
                 Button(role: .destructive) {
                     forget()
                 } label: {
@@ -712,6 +1143,37 @@ struct DeckSettingsView: View {
             Theme.background.ignoresSafeArea()
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
+                    /*
+                     * **The machine's own tools, first — not three taps down.**
+                     *
+                     * > *"not all the features should be inside the server page…
+                     * > they can come in the settings page… we can rename this
+                     * > settings page to menu page and we can have all of these
+                     * > things in the menu page and settings page can be inside
+                     * > the menu page… they are most used things so should not
+                     * > be this far, bring them here."*
+                     *
+                     * They were on `MachineDetailView`, behind Settings →
+                     * Machines → ⓘ, which is where a feature goes to be
+                     * undiscovered — and worse, it filed *Files* and *Source
+                     * control* under a page about SSH administration, which is a
+                     * different subject. The server page keeps what is genuinely
+                     * about the server: install, start, stop, update, remove.
+                     *
+                     * **Drawn only when the machine offers them.** A desktop
+                     * paired with six digits advertises none of these three
+                     * capabilities, so it gets no section at all rather than six
+                     * rows that refuse — *"if we don't have access to them they
+                     * will not be just simply visible here."*
+                     */
+                    MachineToolsSection(
+                        model: model,
+                        path: model.toolsFolder.isEmpty ? nil : model.toolsFolder,
+                        filesDestination: { FilesView(model: model, start: model.toolsFolder) },
+                        sourceDestination: { SourceControlView(model: model, path: model.toolsFolder) })
+
+                    SectionCaption("This phone")
+
                     SettingsGroup {
                         /*
                          * A `NavigationLink` rather than a button calling
@@ -1025,7 +1487,7 @@ struct DeckSettingsView: View {
             }
             .scrollBounceBehavior(.basedOnSize)
         }
-        .navigationTitle("Settings")
+        .navigationTitle("Menu")
         .navigationBarTitleDisplayMode(.inline)
         // Permission can be changed in the Settings app while this app is not
         // running, so the Alerts row's value is re-read rather than remembered.

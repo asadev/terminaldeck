@@ -62,6 +62,27 @@ describe('whether a server has an update waiting', () => {
     }
   })
 
+  /**
+   * A probe from a build older than the field itself.
+   *
+   * Not a hypothetical: `hostControls` renders this straight out of a probe
+   * result assembled from what a shell printed over SSH, and a host old enough
+   * to predate the version line sends an object with no `version` in it at all.
+   * It threw out of a React render — the whole server page blank, because the
+   * machine was old. The type says `string`; a remote machine has not read it.
+   *
+   * **No twin case in Swift**, and that is the one exception to the rule at the
+   * top of this file: `HostOnServer.version` is a non-optional `String` that
+   * defaults to `""`, so the absent field arrives there as the empty string and
+   * is already covered by *says nothing when there is no host to update*. The
+   * hole is JavaScript's alone.
+   */
+  it('says nothing when the host sent no version field at all', () => {
+    const noField = { command: '/home/asad/.local/bin/terminaldeck' } as { command: string; version: string }
+    expect(hostUpdateAvailable(noField, '0.10.3')).toBeNull()
+    expect(hostUpdateAvailable({ command: 'x', version: null as unknown as string }, '0.10.3')).toBeNull()
+  })
+
   /** `--version` has carried a leading `v` on some builds. */
   it('tolerates a leading v on either side', () => {
     expect(hostUpdateAvailable(on('v0.10.1'), '0.10.3')).toBe('0.10.3')

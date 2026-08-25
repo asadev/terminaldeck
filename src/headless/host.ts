@@ -48,11 +48,15 @@ import {
   MID_TURN_EVENTS,
   recordRemoteHolds,
   sessionRemoved,
+  slotName,
   takeAnnouncement,
+  view as bindingView,
+  subscribe as subscribeToBindings,
 } from '../main/browser-binding'
 import { noVerbsLine } from '../main/session-verbs'
 import { HeadlessDriveHost } from '../main/browser-headless-host'
-import { BrowserDrive } from '../main/browser-driver'
+import { boundKey, BrowserDrive, OWN_TARGET } from '../main/browser-driver'
+import { frontTab, screencastOver, type CastWindow } from '../main/screencast-host'
 import { createHeadlessBrowserControl } from '../main/browser-headless-control'
 import { startDeckControlServer, stopDeckControlServer } from '../main/deck-control/server'
 import { createSessionTools, type SessionTools } from '../main/deck-control/session-tools'
@@ -97,7 +101,34 @@ import { configureSessionAccounts } from '../main/session-account'
  */
 import { createSessionSwitch, type SessionSwitch } from '../main/session-switch-run'
 import { store } from '../main/store'
+/*
+ * The two catalogues the Store panel serves, and the pieces each is made of.
+ *
+ * `browser-store-ipc.ts` is imported for `installBrowserStore` alone, and it is
+ * the *right* door rather than a shortcut around one: it builds the store over a
+ * `userData` and files it where `installedBrowserTools()` reads it, so a tool
+ * installed from a phone against this server is a tool `browser.extract` can use
+ * in the very next turn. Its only Electron import is `type IpcMain`, which is
+ * erased before a byte is emitted — `seam.test.ts` walks this whole graph.
+ *
+ * The MCP half needs no store at all: `readStoreFacts` looks for `npx`, `uvx`
+ * and `docker` on the PATH, `installFromCatalogue` and `removeMcpServer`
+ * delegate to the person's own `claude mcp` CLI, and `loadServers` reads the
+ * configuration files that CLI writes. `panels/store.ts` says as much —
+ * *"the MCP half needs nothing but a child process"*.
+ */
+import { installBrowserStore } from '../main/browser-store-ipc'
+import { quoteArgv, removeMcpServer } from '../main/mcp-add'
+import { loadServers } from '../main/mcp-client'
+import {
+  buildStoreView,
+  installFromCatalogue,
+  probeBinaries,
+  readStoreFacts,
+  type ConfiguredServer,
+} from '../main/mcp-store'
 import { NO_COPILOT_HERE } from './cli'
+import { serverMachineBrowser } from './machine-browser'
 import { ChannelDesk } from './desk'
 import {
   createPublicHost,
@@ -580,6 +611,105 @@ export async function createHeadlessHost(
   })
 
   /*
+   * And the live view of that browser — the half the wire had and no host wired.
+   *
+   * `RemoteEndpointOptions.screencast` is the switch that makes `capabilitiesFor`
+   * advertise `watch`, and this host passed none, so the phone's **Windows on
+   * this machine** section was empty against a server that had a real Chromium
+   * sitting behind `browserDrive` five lines up. `screencast-host.ts` carries the
+   * argument for the object and for why a surface is named by its window id
+   * rather than by `B2`; what belongs here is which windows a *server* can
+   * honestly offer.
+   *
+   * There are two kinds and this host can reach both:
+   *
+   *  - **The front tab**, `''`, which is where `openUrl` below lands. It is the
+   *    whole of *"it should browser and stream here to interact"*: the address
+   *    bar opens a page in the drive's own slot, and on this host `openTab` mints
+   *    no shell id for that slot — so without {@link frontTab} the page a person
+   *    just asked for would be the one page in the list that was missing.
+   *  - **A session's windows**, `B1`, `B2`, minted through `openForSession` by an
+   *    agent running on this server. Read out of the binding store rather than
+   *    out of a second map, for the reason `machine-browser.ts` reads it: the
+   *    store is where both doors write, and a window opened by `open <url>` at a
+   *    prompt never passes through any list this file keeps.
+   *
+   * A window whose target has gone is dropped rather than offered — the same
+   * liveness question `machine-browser.ts` asks, through the same call, so the
+   * strip and the window list cannot disagree about which pages still exist.
+   * Rows for a session on a *paired* machine, and rows whose page is served by
+   * one, are skipped: neither is a page this Chromium is holding and neither can
+   * be cast from here.
+   *
+   *  - **A window the phone opened itself**, through New Window. Those hold no
+   *    binding row by design — `openWindow` mints a shell id and attaches it to
+   *    nothing — so for a while they were *drivable and not watchable*: listed by
+   *    `browser.window.rows`, navigable, bindable, and tapping one to look at it
+   *    found no surface. Half a feature, and the missing half was the one Asad
+   *    asked for in the same breath as the rest: *"it should browser and stream
+   *    here to interact."* `serverMachineBrowser.castable()` is that module's own
+   *    list of them, folded in below.
+   *
+   * A window whose target has gone is dropped rather than offered — the same
+   * liveness question `machine-browser.ts` asks, through the same call, so the
+   * strip and the window list cannot disagree about which pages still exist.
+   */
+  const front = frontTab(() => browserDrive.origin(OWN_TARGET))
+  const castWindows = async (): Promise<CastWindow[]> => {
+    const rows: CastWindow[] = []
+    const seen = new Set<string>()
+    const own = front.row()
+    if (own !== null) rows.push(own)
+    /*
+     * The phone's own windows first, so a page somebody just opened is at the
+     * top of the strip rather than behind whatever a session was holding.
+     * Guarded rather than assumed: this is only ever built for a host that has a
+     * machine browser, and `castable` answers an empty list on one whose
+     * Chromium is holding nothing.
+     */
+    for (const held of await machineBrowser?.castable().catch(() => []) ?? []) {
+      if (held.viewId === '' || browserHost.contentsFor(held.viewId) === null) continue
+      seen.add(held.browserTabId)
+      rows.push({
+        window: held.browserTabId,
+        target: {
+          key: boundKey(held.browserTabId),
+          viewId: held.viewId,
+          browserTabId: held.browserTabId,
+          // What a refusal calls it. A window no session owns has no slot name,
+          // so it is called what it is rather than given a borrowed `B1`.
+          name: 'a window',
+        },
+        url: held.url,
+        title: held.title,
+      })
+    }
+    for (const binding of bindingView().sessions) {
+      if (binding.machineId !== '') continue
+      for (const window of binding.windows) {
+        if (window.hostMachineId !== '' || window.viewId === null) continue
+        if (browserHost.contentsFor(window.viewId) === null) continue
+        // A window the phone opened and a session then bound is one window, and
+        // the first loop already has it under the same shell id.
+        if (seen.has(window.browserTabId)) continue
+        rows.push({
+          window: window.browserTabId,
+          target: {
+            key: boundKey(window.browserTabId),
+            viewId: window.viewId,
+            browserTabId: window.browserTabId,
+            // What a refusal calls it. Never printed as an id; see `DriveTarget`.
+            name: slotName(window.n),
+          },
+          url: window.url,
+          title: window.title,
+        })
+      }
+    }
+    return rows
+  }
+
+  /*
    * And the door a session *on this host* drives it through.
    *
    * The same `DeckControl` the wire already dispatches a device's `window.call`
@@ -632,6 +762,136 @@ export async function createHeadlessHost(
       })
     }
   }
+
+  /*
+   * **The machine-browser screen, on a server.** [wave-4]
+   *
+   * Asad, twice in one day, looking at the Browser tab against his own box:
+   * *"I don't see any of them."* The controls he was looking for are the ones
+   * the desktop has had for months —
+   *
+   * > *"recording the clicks flow, creating a screenshot and sending it to the
+   * > session (whatever session we want to send, take a screenshot and send to
+   * > the session) … making a browsing session into an isolated or shared one …
+   * > we don't have an option to connect any browsing window to any session, so
+   * > the session knows which browsing window it is working on."*
+   *
+   * — and not one of them was missing from the wire. `browser-control.ts`
+   * carries all of it, and `server.ts` advertises `browser.control` **exactly
+   * when this option is present**: `serves` reads the object's presence and
+   * nothing else. So on a host that constructed no `MachineBrowser`, the phone
+   * drew no machine-browser surface at all, which is precisely the screen he
+   * photographed. One argument is the whole feature here.
+   *
+   * There was a second missing line under it, found by the test rather than by
+   * reading: `CAPABILITY.browserControl` was never in `CAPABILITIES`, which is
+   * the only list `advertised` filters — so the rule that reads this object ran
+   * against a name that could never be a candidate, and *no* host advertised it
+   * whatever it passed. `host.test.ts` asks a real endpoint for its welcome
+   * instead of asking `serves` what it would have said, which is the difference
+   * between the two halves being green and the feature existing.
+   *
+   * `serverMachineBrowser` is the deps object built over this host's own
+   * Chromium; its header records which three of them a server genuinely cannot
+   * supply and why each absence is a sentence rather than a dead button.
+   *
+   * ## Withheld on the public demo box, for the argument the tool endpoint makes
+   *
+   * A stranger's container hands out a shell on purpose. Handing that shell's
+   * visitor the machine's browser as well is a fetch primitive pointed at
+   * whatever the host can route to, with an action log nobody owns — the same
+   * reason `deck-control` is withheld above. No object, so no capability, so no
+   * screen: the absence is the enforcement rather than a refusal a client has to
+   * be trusted to respect.
+   */
+  const machineBrowser = options.publicHost
+    ? null
+    : serverMachineBrowser({
+        windows: browserHost,
+        shots: browserDrive,
+        // Read per verb, never cached — the picker a window is bound to and the
+        // one a screenshot is sent to are both "the sessions running right now".
+        sessions: () =>
+          core.sessions.list().map((session) => ({
+            id: session.id,
+            title: session.title,
+            // An exited session keeps its row and says so, which is what lets
+            // the phone explain a window still on screen instead of going
+            // blank. `exitCode` is null for as long as the pty is alive.
+            ...(session.exitCode === null ? {} : { ended: true }),
+          })),
+        /*
+         * The same write the wire's `input` frame performs — `sessions.write`,
+         * one line above the one that types a person's keystrokes into a pty.
+         * That is the assertion rather than a coincidence: a screenshot handed
+         * to an agent from a phone must not be a second way of writing to a
+         * session, or the two paths will one day disagree about what a submit
+         * is. `machine-browser.test.ts` pins the two writes and the gap.
+         */
+        write: (sessionId, data) => core.sessions.write(sessionId, data),
+      })
+
+  /*
+   * What the Store panel can reach on a server, and it is both departments.
+   *
+   * `panels/store.ts` was written for exactly this split — *"a host that can
+   * list the catalogue and genuinely cannot write to it lists the catalogue and
+   * says so"* — and a daemon turns out to be able to do all six: the browser
+   * tools are files under this host's own state directory, and the MCP half is
+   * the person's `claude mcp` CLI, which is on a server's PATH for the same
+   * reason a session on it can run `claude` at all.
+   *
+   * Withheld on the demo box, where both halves are writes performed for a
+   * stranger: one downloads and installs a scraping recipe into this container's
+   * browser, the other rewrites the agent configuration of an account nobody
+   * owns. The panel then says it cannot be reached from here, which is true.
+   */
+  const toolStore = options.publicHost ? null : installBrowserStore({ userData: () => stateDir })
+  const storePanel: NonNullable<Parameters<typeof registerRemoteIpc>[1]['storePanel']> | null =
+    toolStore === null
+      ? null
+      : {
+          tools: {
+            // `ToolStore.view` and `.remove` are synchronous and the panel's
+            // shape is a promise for all six; one `async` arrow here is the cost
+            // of not putting `Promise<T> | T` on an interface that is read far
+            // more often than it is implemented.
+            read: async () => toolStore.view(),
+            install: (id) => toolStore.install(id),
+            remove: async (id) => toolStore.remove(id),
+          },
+          servers: {
+            read: async (projectPath) => {
+              const configured = configuredHere(projectPath)
+              /*
+               * Two probes, in parallel, because they answer different kinds of
+               * question — `registerMcpIpc` splits them the same way and for the
+               * same reason. `readStoreFacts` looks for the catalogue's three
+               * runtimes and does not depend on which folder is in view, so it
+               * is deduplicated across concurrent reads; `probeBinaries` looks
+               * for whatever the hand-written servers name, which does.
+               */
+              const [facts, binaries] = await Promise.all([
+                readStoreFacts(),
+                probeBinaries(configured),
+              ])
+              return buildStoreView({
+                configured,
+                runtimes: facts.runtimes,
+                environment: facts.environment,
+                environmentSource: facts.environmentSource,
+                writer: facts.writer,
+                projectPath,
+                binaries,
+              })
+            },
+            // Re-read rather than taken from the request: whether a name is
+            // already taken is a fact about the file at the moment of writing,
+            // not about the view the phone was looking at.
+            install: (request) => installFromCatalogue(request, configuredHere(request.projectPath)),
+            remove: (request) => removeMcpServer(request),
+          },
+        }
 
   const remote = registerRemoteIpc(desk, {
     sessions: core.sessions,
@@ -788,6 +1048,77 @@ export async function createHeadlessHost(
      *    typing into a public site waits on routing the confirmation to the
      *    connected owner's device.
      */
+    /*
+     * **Open a page in this server's own browser, from a phone.**
+     *
+     * Asad, typing `google.com` into the Browser tab against a server and being
+     * refused: *"it should browser and stream here to interact."*
+     *
+     * He is right, and the refusal was not a policy — it was a **missing wire**.
+     * This host has had a real Chromium of its own since wave-2, behind
+     * `browserDrive` a few lines up, and the phone has been able to watch and
+     * drive its windows through `browser.watch` / `browser.input` the whole
+     * time. What it had no way to do was *open* one: `web.open` is backed by
+     * `openUrl`, this host passed none, and `capabilitiesFor` therefore never
+     * advertised `web` — so the phone's address bar took one look at
+     * `canOpenPages`, decided the machine could not do it, and printed a
+     * sentence explaining that a site would load on the phone instead. The
+     * sentence was true of a world where this option did not exist.
+     *
+     * ## Half of the loop was wired, and the half that streamed was not
+     *
+     * This comment used to end by saying that the page then *"appears in
+     * `browser.surfaces` and therefore under **Windows** on the same screen, and
+     * tapping it streams frames back that take his taps"*. That was false, and it
+     * was false in a way that reads as true: every `browser.*` live-view frame
+     * was on the wire, `PageCast` had held the screencast since wave-3, and the
+     * one object that turns all of it on — `RemoteEndpointOptions.screencast` —
+     * was passed by no shell in this repository. `capabilitiesFor` therefore
+     * never advertised `watch`, `browser.surfaces` was dropped in silence, and
+     * the section on his phone was empty on every host that ships.
+     *
+     * The line that makes it true is `screencast` in this same options object,
+     * over the window list assembled where `browserDrive` is built: the page a
+     * device opens here lands in the drive's own slot, that slot is a row of
+     * `browser.surfaces`, and a device that watches the row is streamed frames
+     * that take its taps. `front.opened` is what gives the row its label —
+     * `open` answers the page's own address and title, and it is the only moment
+     * anything on this host can read the title of a tab that has no shell id;
+     * see {@link frontTab} for why the liveness is read live off the slot and
+     * only the label is remembered.
+     *
+     * The whole sentence is true now, *"on the same screen"* included, and it
+     * was not for a while. `BrowserSurfacesRowsFrame` has described itself as
+     * *"also pushed unsolicited when the strip changes"* since it was written
+     * and **nothing sent that push**: `server.ts` answered `browser.surfaces`
+     * and had no fan-out, while `WatchLink.ensureRead` on the phone asks once
+     * per connection and then waits. So a page opened from a phone's own address
+     * bar was in the list the next time something made that phone ask, which on
+     * a screen that never re-asks is never.
+     *
+     * `RemoteEndpoint.surfacesChanged` is that fan-out, and this host fires it
+     * off the binding store — see where `tellDevices` is assigned. `attach`,
+     * `detach`, `windowClosed` and `windowMoved` all publish there, which covers
+     * a window a session opened and a window a phone opened through
+     * `machineBrowser`.
+     *
+     * `isolate: false` so it lands in the window a person is already watching
+     * rather than spawning one per address — the desktop's own `openUrl` makes
+     * the same choice. Answering `true` is a claim that the *ask* was accepted,
+     * not that the page loaded: the drive is asynchronous and the honest report
+     * of what it did is the surface list that follows, not a boolean invented
+     * here. A refusal is logged rather than thrown, because this runs on the
+     * socket's data path.
+     */
+    openUrl: (url: string): boolean => {
+      void browserDrive
+        .open({ url, isolate: false })
+        .then((page) => front.opened(page))
+        .catch((error: unknown) => {
+          console.error('[headless] could not open a page in this server\'s browser:', error)
+        })
+      return true
+    },
     serveWindows: (deviceId, call) =>
       serveWindowCall(
         {
@@ -800,6 +1131,28 @@ export async function createHeadlessHost(
         deviceId,
         call,
       ),
+    /*
+     * And the same browser, watched rather than called. [wave-3, wired here]
+     *
+     * Passing this is what advertises `watch`; see where the window list is
+     * assembled for what a server can and cannot offer. Withheld from the public
+     * demo box on the argument its neighbours make — a stranger's container hands
+     * out a shell on purpose, and handing that stranger a live view of the
+     * machine's browser is the same fetch primitive with pictures.
+     *
+     * `drivesWindows` is the axis both halves ride, and it is the *same* call
+     * `serveWindows` above is gated on rather than a second reading of the same
+     * store: watching a signed-in browser is an owner act, and a device whose
+     * browser-windows permission a person has unticked must lose the pictures at
+     * the same moment it loses the clicks. `mayWatchNow` re-reads it per frame,
+     * so unticking it stops a running cast on the next tick.
+     */
+    ...(options.publicHost
+      ? {}
+      : {
+          screencast: screencastOver({ drive: browserDrive, windows: castWindows }),
+          drivesWindows: (deviceId: string) => core.windowGrants.drives(deviceId),
+        }),
     // Which of that device's sessions this server is holding a window for, read
     // from the one binding map at the moment of sending — the same builder the
     // desktop uses, keyed on the same `machineId` field. [wave-2 Lane D]
@@ -824,6 +1177,46 @@ export async function createHeadlessHost(
      * CDP port.
      */
     onWindowsHeld: (peer, held) => recordRemoteHolds(peer, held),
+    /*
+     * Where this host keeps its own state, said rather than guessed. [wave-4]
+     *
+     * `browserProfilesFor` in `server.ts` has read `options.stateDir` since the
+     * day it was written and no caller had ever declared it, so every profile
+     * read on every host fell back to `homedir()` — the account's home, which is
+     * the one directory this shell's paths provider is entitled to move.
+     * `XDG_DATA_HOME` and `--state-dir` both point somewhere else here, and a
+     * daemon that answered a phone out of a file in a directory the rest of the
+     * process is not using would be describing somebody else's install.
+     */
+    stateDir,
+    /*
+     * What the four panels can do here, and the two that are deliberately blank.
+     *
+     * Each of these is present exactly when this host can honestly serve it,
+     * because presence is what the panels read to decide whether to draw a
+     * button at all — see `panels/contract.ts`, where an action a client was
+     * never offered is an action it can never send.
+     *
+     *  - **`storePanel`** — both departments, assembled above.
+     *  - **`mcpPool`** — omitted, and not defaulted, because this host runs no
+     *    pool. `mcp-client.ts` keeps its pool as a module-level value behind
+     *    `registerMcpIpc`, which wants an `ipcMain` there is none of here, and a
+     *    pool minted for the panel would be a *second* copy of every server the
+     *    phone connected. Without it the MCP panel offers no Connect and no
+     *    Disconnect and reports what is configured, which is the true state of
+     *    this machine rather than a reduced one.
+     *  - **`staleAgents`** — omitted because it cannot be otherwise:
+     *    `browser-signin.ts` imports `shell` from `electron` as a **value**, so
+     *    the module throws at load under plain Node and would take the whole
+     *    daemon down at import time, not at call time. The readiness panel omits
+     *    that single row and says so in its own note.
+     */
+    ...(storePanel ? { storePanel } : {}),
+    /*
+     * And the machine's own browser, whose presence is the switch that decides
+     * whether `browser.control` is advertised at all. See where it is built.
+     */
+    ...(machineBrowser ? { machineBrowser } : {}),
     broadcast,
   })
 
@@ -832,6 +1225,30 @@ export async function createHeadlessHost(
   tellDevices = () => {
     remote.server.sessionsChanged()
   }
+
+  /*
+   * **And the browser's tab strip, when it moves.**
+   *
+   * `browser.surfaces.rows` has described itself as *"also pushed unsolicited
+   * when the strip changes"* since it was written, and nothing sent that push —
+   * so a window opened from a phone's own address bar appeared in the list the
+   * next time somebody made it ask, and the iOS client asks once per connection
+   * and then waits. The feature Asad described — *"it should browser and stream
+   * here to interact"* — was a page that opened on the server and never showed
+   * up on the phone that opened it.
+   *
+   * The binding store is the trigger because it is the one thing that already
+   * knows: `attach`, `detach`, `windowClosed` and `windowMoved` all publish to
+   * it, which covers a window a session opened and a window this phone opened
+   * through `machineBrowser`. It fires once immediately on subscribe, which is
+   * harmless — `tellSurfaces` sends nothing when nobody is watching.
+   *
+   * A window opened at the machine's own keyboard that no session ever binds is
+   * not covered by this, and there is no such keyboard on a server.
+   */
+  const stopWatchingBindings = subscribeToBindings(() => {
+    remote.server.surfacesChanged()
+  })
 
   const machines = registerMachinesIpc(desk, {
     storageDir: remoteStorageDir,
@@ -1178,6 +1595,12 @@ export async function createHeadlessHost(
   }
 
   async function stop(): Promise<void> {
+    // The strip watcher first, and it is not tidiness: `subscribe` holds this
+    // closure in a module-level set that outlives one host, so a daemon that
+    // stopped and started in the same process — which every test in
+    // `host.test.ts` does — would leave the previous host's `surfacesChanged`
+    // wired to a wire that has gone.
+    stopWatchingBindings()
     // Deadlines first. A twenty-minute cap that fired during teardown would call
     // `end` on a host that is already ending, and on the demo box `end` is
     // `process.exit`.
@@ -1231,6 +1654,44 @@ export async function createHeadlessHost(
     stop,
     publicHost,
   }
+}
+
+/**
+ * The MCP configuration as the Store panel needs to see it.
+ *
+ * Deliberately lossy, and the projection is the same one `mcp-client.ts`
+ * performs behind `registerMcpIpc`: the store asks exactly two questions of what
+ * is already configured — *is this row installed*, *is something else wearing
+ * its name* — and both are answered by a name, a scope and one string to look a
+ * package token up in. Handing it the whole `McpServerConfig`, environment
+ * variables and all, would put every configured secret on a wire that has no
+ * reason to carry one, which is why the values are dropped and only the key
+ * names survive.
+ *
+ * It is written out a second time here rather than shared because the desktop's
+ * copy is a private function inside `registerMcpIpc(ipcMain, …)` — a
+ * registration this shell has no `ipcMain` to make — and the alternative was to
+ * leave the whole MCP department off a server's Store panel. The two cannot
+ * drift far: both are `loadServers` plus `quoteArgv`, the exported pair, so this
+ * is a re-spelling of two calls rather than a second idea of what a configured
+ * server is. `quoteArgv` in particular is not cosmetic — a server pointed at
+ * `/home/me/My Folder` is two arguments in the configuration, and space-joining
+ * them reads back as two *different* arguments, so the row would print a command
+ * nobody configured.
+ */
+function configuredHere(projectPath: string | null): ConfiguredServer[] {
+  return loadServers(projectPath).map((server) => ({
+    name: server.name,
+    scope: server.scope,
+    commandLine:
+      server.transport === 'stdio'
+        ? quoteArgv([server.command ?? '', ...server.args].filter((part) => part !== ''))
+        : (server.url ?? ''),
+    transport: server.transport === 'stdio' ? 'stdio' : server.transport === 'sse' ? 'sse' : 'http',
+    // Names only, sorted. The store's custom rows print them and neither the row
+    // nor the edit form needs a value.
+    envKeys: Object.keys(server.env).sort(),
+  }))
 }
 
 /**

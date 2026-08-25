@@ -173,6 +173,14 @@ describe('the guard over the download path', () => {
       'resizes a terminal — cols and rows, not pixels. Left in the patterns rather than carved out of ' +
       'them: the scan is narrowed by naming a file, never by teaching the patterns to miss a spelling, ' +
       'because a pattern with a hole in it is invisible and a named file is not.',
+    'remote/server.ts':
+      'resizes a terminal, exactly as the probe above does — `SessionAccess.resize(id, cols, rows)`, ' +
+      'forwarded from the wire\'s own `resize` frame. It entered the scan when it grew a write of ' +
+      'its own: `browserProfilesFor` keeps the machine\'s browser-profile list in a JSON file, which ' +
+      'makes this a byte-writer by the deriver\'s rule and therefore a file the patterns run over. ' +
+      'The bytes it writes are a list it composed itself, never a file a server sent, and the only ' +
+      'download it touches it hands on untouched. Named here rather than pattern-matched away, for ' +
+      'the reason written one entry up.',
   }
 
   it('finds the writers by reading them, and is not quietly finding nothing', () => {

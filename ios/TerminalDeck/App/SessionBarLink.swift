@@ -69,6 +69,17 @@ final class SessionBarLink {
     private(set) var transcript: Bool?
 
     /**
+     * Whether the conversation on screen begins where the transcript does.
+     *
+     * True when a whole-conversation answer came back at `Copilot.maxChatRows`,
+     * which is the desktop clipping to the **end** of a longer file. The rows it
+     * dropped are not named on the frame and there is no verb to page backwards
+     * with, so the only honest thing this client can do is say that the top of
+     * what it is showing is not the top of the conversation. See the constant.
+     */
+    private(set) var atCap = false
+
+    /**
      * Whether the conversation is the thing on screen.
      *
      * Set by the screen, read here, because it decides one thing only: whether
@@ -119,14 +130,73 @@ final class SessionBarLink {
     var canReadAccount: Bool { capabilities.contains(WireCapability.account) }
     var canReadChat: Bool { capabilities.contains(WireCapability.chat) }
 
-    /// The screen opened a session. Everything held about the last one goes:
-    /// a ring from another session is worse than no ring.
+    /**
+     * The screen opened a session. Everything held about the last one goes:
+     * a ring from another session is worse than no ring.
+     *
+     * Called again for a session this bar is *already* following whenever a
+     * screen finds itself back in front — see `TerminalScreen.reclaimBar` — and
+     * that repeat is what the chat re-read at the bottom is for. A conversation
+     * asked for on a socket that then died, or on a bar that another screen took
+     * over in between, has no other event that would ever ask again: the tail
+     * read rides `output`, and a session anybody wants to *read* is by
+     * definition one that has stopped printing.
+     */
     func follow(_ id: String) {
         if sessionID != id { forget() }
         sessionID = id
         askUsage(.context)
         askPlan()
         askAccount()
+        // Only ever true on a re-follow of the same session: `forget()` above
+        // clears it whenever the id changes.
+        if chatting { askChat(tail: false) }
+    }
+
+    /**
+     * The screen for `id` has gone.
+     *
+     * **Id-scoped, and that is the whole of the fix behind the empty chat.**
+     * There is one of these per machine and there are two `TerminalScreen`s that
+     * can be alive at once — the Sessions stack's and the Copilot stack's — so
+     * "a screen went away" is not the same fact as "the session this bar is
+     * following went away". Measured on the simulator against the app's own
+     * shape (a `TabView` of two `NavigationStack`s, one pushed screen in each):
+     *
+     *     appear:leftRoot → push → appear:left-1 → tab to right →
+     *     appear:rightRoot → push → appear:right-9 → tab back to left →
+     *     *nothing at all* → pop → disappear:left-1
+     *
+     * Two things in that trace, and both are load bearing. A tab swap fires the
+     * arriving screen's `onAppear` and **never** fires the leaving screen's
+     * `onDisappear`; and coming back to a tab fires **nothing**, so a screen
+     * that is on screen again has no callback to re-claim anything in. A bare
+     * `forget()` on the leaving screen would therefore wipe the bar the screen
+     * that is actually being looked at has just pointed at itself — after which
+     * `askChat` returns at its `guard let sessionID` and the conversation is
+     * empty for as long as that screen is up, however many times the toggle is
+     * pressed. That is the defect he reported: *"when we switch in terminal we
+     * can see the whole chat; when we switch on chat mode we don't see the
+     * chat… this happens a lot, on all the versions."*
+     */
+    func release(_ id: String) {
+        guard sessionID == id else { return }
+        forget()
+    }
+
+    /**
+     * The conversation is no longer on screen.
+     *
+     * The pending tail read goes with it. `chatting = false` alone stops the
+     * *next* one being scheduled and does nothing about the one already waiting
+     * out its debounce, which then spends a round trip reading a transcript
+     * nobody is looking at — and lands, if the bar has moved on in the meantime,
+     * on an id guard that drops it.
+     */
+    func stopChatting() {
+        chatting = false
+        chatTail?.cancel()
+        chatTail = nil
     }
 
     /// The screen closed, or the socket went. Timers stop and nothing stale is
@@ -145,6 +215,7 @@ final class SessionBarLink {
         busy = false
         chat = []
         transcript = nil
+        atCap = false
         chatting = false
         askedPlanAt = nil
     }
@@ -312,6 +383,11 @@ final class SessionBarLink {
             guard pending.removeValue(forKey: rid) != nil, id == sessionID else { return false }
             chat = SessionBarLink.merge(held: chat, incoming: rows, reset: reset)
             transcript = found
+            // Only a whole-conversation answer can be at the cap in the sense
+            // that matters. A tail read carrying two hundred rows is two hundred
+            // things that happened since the last read, not the front of the
+            // file being dropped.
+            if reset { atCap = rows.count >= Copilot.maxChatRows }
             return true
 
         default:

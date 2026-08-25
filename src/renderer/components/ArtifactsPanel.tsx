@@ -52,6 +52,53 @@ import './ArtifactsPanel.css'
  * tab that is always empty and no "Build output" section built on a guess: a
  * `Bash` line that may or may not have redirected into a file is a command
  * string, not evidence. See `src/main/artifacts.ts` for what is enumerable.
+ *
+ * ## Opening the thing, which this page could name and not do
+ *
+ * > *"The artifact page should be able to drive the artifacts actually — to show
+ * > the visual artifacts, files and things. Artifacts like prototypes: in
+ * > artifacts it will be most probably for prototypes, whatever Claude will
+ * > make. … Including desktop application also is for prototypes."*
+ *
+ * Two of the three things an agent actually produces ended here as a sentence
+ * about themselves. A **picture** said *"An image, 41 KB. Open it in Files to
+ * look at it."* — and Files is a text viewer, so that instruction led to the
+ * same sentence one page over. A **prototype** — an `index.html`, which is what
+ * an agent writes when it is asked for something to look at — was shown as its
+ * own markup, in monospace, which is the difference between reviewing a page and
+ * auditing it.
+ *
+ * Both are now openable, through `window.deck.openLinkExternally` and a
+ * `file:` URL. That is not a hole cut in anything: `main/link-open.ts` routes a
+ * link from **this app's own renderer** to the system deliberately, and says so
+ * — *"Code we wrote asking for a `mailto:` or a `file://` reveal means it"* —
+ * while the same file refuses `file:` from a **guest page** in three separate
+ * places. The asymmetry is the security posture and this is the trusted side of
+ * it.
+ *
+ * ### Why the system browser and not this app's own
+ *
+ * Because the app's browser is the guest side. `browser-url.ts` allow-lists
+ * `http:` and `https:` and refuses everything else on `will-navigate`,
+ * `will-frame-navigate` and `will-redirect`, precisely so a page cannot walk
+ * that view onto the user's disk — so an artifact opened there would be refused
+ * by design. And the real browser is the better answer anyway for the thing this
+ * is for: a prototype opened in it gets devtools, the profile the person is
+ * signed into, and a `file:` origin from which every relative `src`, `href` and
+ * `fetch` in the page resolves out of the folder it lives in.
+ *
+ * A CSP is the other half of the same wall. The window runs under
+ * `img-src 'self' data:` and `script-src 'self'` (see `applySecurityPolicy` in
+ * `src/main/index.ts`), so an `<img src="file://…">` is blocked and an
+ * `<iframe srcdoc>` would load a prototype with its own inline script disabled —
+ * a page that renders and does nothing, which is worse than not offering it. The
+ * preview pane therefore keeps saying what a file is, and the *opening* is done
+ * by the machine.
+ *
+ * The phone reaches the same two artifacts by a different road, for a reason
+ * that is worth knowing when reading both: it has no machine to hand the file
+ * to, so the host serves the project over HTTP and the phone tunnels to it. See
+ * `src/main/artifact-preview.ts`.
  */
 
 /* ------------------------------------------------------------------ types -- */
@@ -172,6 +219,18 @@ export interface ArtifactsPanelProps {
    * live one that goes nowhere is worse.
    */
   onOpenFile?(relPath: string): void
+  /**
+   * Hands a `file:` URL to the machine — the real browser for a page, Preview
+   * for a picture, whatever the person has chosen for everything else.
+   *
+   * Defaults to `window.deck.openLinkExternally`, which already exists and
+   * already routes a link from this app's own renderer to the system. Optional
+   * for the same reason `onOpenFile` is: a build without it draws no button
+   * rather than a button that cannot act. Returns whether the machine took it,
+   * so a refusal can be said out loud — a silent one is indistinguishable from
+   * a broken button.
+   */
+  openExternally?(url: string): Promise<boolean>
   /** Injectable for tests; defaults to the preload bridge on `window.deck`. */
   bridge?: ArtifactsBridge
   /** Injected in tests so relative times are deterministic. */
@@ -212,6 +271,47 @@ function resolveFsBridge(): FsReadBridge | null {
   const host = (window as unknown as { deck?: { readFile?: unknown } }).deck
   if (!host || typeof host.readFile !== 'function') return null
   return host as FsReadBridge
+}
+
+/** And for the one that hands a URL to the machine. See `openExternally`. */
+function resolveOpener(): ((url: string) => Promise<boolean>) | null {
+  if (typeof window === 'undefined') return null
+  const host = (window as unknown as {
+    deck?: { openLinkExternally?: (url: string) => Promise<boolean> }
+  }).deck
+  if (!host || typeof host.openLinkExternally !== 'function') return null
+  return (url: string) => host.openLinkExternally!(url)
+}
+
+/**
+ * A project-relative path, as a `file:` URL the machine will accept.
+ *
+ * Three things here are the reason this is a function rather than a template
+ * string, and each of them was got wrong by one at some point in some codebase:
+ *
+ *  - **Windows.** `C:\\Users\\asad\\deck` has to become
+ *    `file:///C:/Users/asad/deck` — three slashes, forward separators, and the
+ *    drive letter kept. A root beginning with a drive letter is detected rather
+ *    than the platform being asked, because the renderer has no `process` and
+ *    the root is a string the main process produced.
+ *  - **Encoding.** A space, a `#` or a `?` in a filename all mean something else
+ *    in a URL. Every segment goes through `encodeURIComponent` separately, so
+ *    the separators survive and everything inside them is escaped.
+ *  - **Trailing separators.** A root that ends in one would produce `//` in the
+ *    middle of the path, which some openers follow and others do not.
+ */
+export function fileUrl(root: string, relPath: string): string {
+  const trimmed = root.replace(/[\\/]+$/, '')
+  const windows = /^[a-zA-Z]:/.test(trimmed)
+  const parts = [
+    ...trimmed.split(/[\\/]/).filter((part) => part !== ''),
+    ...relPath.split('/').filter((part) => part !== ''),
+  ]
+  // A drive letter is not a path segment and must not be escaped — the colon is
+  // part of it, and `C%3A` is not a path any opener resolves.
+  const head = windows ? `${parts[0]}/` : ''
+  const rest = (windows ? parts.slice(1) : parts).map(encodeURIComponent).join('/')
+  return `file:///${head}${rest}`
 }
 
 export function directoryOf(relPath: string): string {
@@ -281,7 +381,7 @@ export function kindOf(relPath: string): string {
 }
 
 /** Which artifacts a preview can actually render, rather than describe. */
-export type PreviewKind = 'document' | 'text' | 'image' | 'none'
+export type PreviewKind = 'document' | 'text' | 'image' | 'page' | 'none'
 
 /**
  * How the pane should show this artifact.
@@ -290,9 +390,15 @@ export type PreviewKind = 'document' | 'text' | 'image' | 'none'
  * difference between reviewing what the agent wrote and reading its source. The
  * page showed markdown as monospace source before, which is most of the reason
  * it read as a file browser.
+ *
+ * `page` is its own answer rather than `text`, and the difference is one line on
+ * screen. A prototype's markup is worth reading and is **not** the thing — so
+ * the pane still shows it, with a sentence above it saying that opening it is
+ * what makes it a page. Calling it `text` said neither.
  */
 export function previewKindOf(relPath: string): PreviewKind {
   const kind = kindOf(relPath)
+  if (kind === 'Web page') return 'page'
   if (kind === 'Document') {
     const lower = relPath.toLowerCase()
     // Only the ones this app can actually turn into prose. A PDF or a .docx is
@@ -678,20 +784,27 @@ function ArtifactPreview({
       return
     }
     if (kind === 'image') {
-      // Honest rather than empty: nothing here can turn a path into pixels
-      // without a channel that hands over the bytes, and inventing an
-      // `<img src="file://…">` in a renderer is exactly the kind of escape
-      // hatch this app has spent effort closing. Files opens it.
+      /*
+       * Honest rather than empty: nothing in this pane can turn a path into
+       * pixels. The window runs under `img-src 'self' data:`, so an
+       * `<img src="file://…">` is refused by the CSP — and cutting a hole in it
+       * would be the escape hatch this app has spent effort closing.
+       *
+       * What changed is the sentence. It used to say *"Open it in Files"*, and
+       * Files is a text viewer, so following that instruction produced the same
+       * note one page over. The button beside this one hands the file to the
+       * machine, which does have something that draws pictures.
+       */
       setState({
         status: 'note',
-        message: `An image${bytes === null ? '' : `, ${formatBytes(bytes)}`}. Open it in Files to look at it.`,
+        message: `An image${bytes === null ? '' : `, ${formatBytes(bytes)}`}. Open it to look at it.`,
       })
       return
     }
     if (kind === 'none') {
       setState({
         status: 'note',
-        message: `${kindOf(artifact.relPath)}${bytes === null ? '' : `, ${formatBytes(bytes)}`}. Open it in Files to look at it.`,
+        message: `${kindOf(artifact.relPath)}${bytes === null ? '' : `, ${formatBytes(bytes)}`}. Open it to look at it on this machine.`,
       })
       return
     }
@@ -713,6 +826,24 @@ function ArtifactPreview({
   if (state.status === 'loading') return <PageNote busy>Opening it…</PageNote>
   if (state.status === 'note') return <PageNote>{state.message}</PageNote>
   if (state.status === 'error') return <PageNote>{state.message}</PageNote>
+
+  if (kind === 'page') {
+    // The markup, with the one fact the markup does not carry: this is a thing
+    // that runs, and running it is a press away. Said above the source rather
+    // than instead of it — a prototype's source is worth reading and is not
+    // what somebody came to Artifacts for first.
+    return (
+      <>
+        <PageNote>
+          A page. Open it and your browser runs it — its stylesheet, its script
+          and its relative links all resolve from the folder it lives in.
+        </PageNote>
+        <pre className="artifact-plain">
+          <code>{state.text}</code>
+        </pre>
+      </>
+    )
+  }
 
   if (kind === 'document') {
     const html = renderDocument(state.text)
@@ -831,9 +962,28 @@ export function scanOutcome<T extends { ok: true }>(
   return { failed: response.message }
 }
 
+/**
+ * What the Open button says, which is what the thing *is*.
+ *
+ * *"Open it"* on a prototype undersells the one case he asked about by name, and
+ * *"Run it"* on a `.zip` would be a lie. The word follows the kind, which the
+ * pane has already worked out for its own preview.
+ */
+export function openLabel(kind: PreviewKind): string {
+  switch (kind) {
+    case 'page':
+      return 'Run it in your browser'
+    case 'image':
+      return 'Open the picture'
+    default:
+      return 'Open it on this machine'
+  }
+}
+
 export function ArtifactsPanel({
   projectPath,
   onOpenFile,
+  openExternally,
   bridge,
   now,
   fs,
@@ -872,6 +1022,15 @@ export function ArtifactsPanel({
 
   const host = useMemo(() => bridge ?? resolveBridge(), [bridge])
   const fsHost = useMemo(() => fs ?? resolveFsBridge(), [fs])
+  const opener = useMemo(() => openExternally ?? resolveOpener(), [openExternally])
+  /**
+   * Said when the machine would not take the file.
+   *
+   * `openSystemUrl` answers `false` rather than throwing, and a button whose
+   * only outcome is a silent refusal is indistinguishable from a broken one.
+   * Cleared on the next selection, because it belongs to one press.
+   */
+  const [openFailed, setOpenFailed] = useState<string | null>(null)
   const clock = now ?? Date.now()
   /** Guards against a slow earlier scan overwriting a newer one's answer. */
   const listRun = useRef(0)
@@ -1065,7 +1224,34 @@ export function ArtifactsPanel({
     [visible, selected],
   )
 
-  const onSelect = useCallback((relPath: string) => setSelected(relPath), [])
+  const onSelect = useCallback((relPath: string) => {
+    setSelected(relPath)
+    // A refusal belongs to the press that caused it, not to the pane.
+    setOpenFailed(null)
+  }, [])
+
+  /**
+   * Hand the artifact to the machine.
+   *
+   * `file:` and not this app's browser, and the reason is in the header: the
+   * app's browser allow-lists http(s) and refuses `file:` on three navigation
+   * hooks so a guest page cannot walk it onto the disk. The real browser is also
+   * simply the better place for a prototype — devtools, the signed-in profile,
+   * and an origin its relative URLs resolve from.
+   */
+  const openOnMachine = useCallback(
+    (relPath: string) => {
+      if (!opener) return
+      setOpenFailed(null)
+      void opener(fileUrl(projectPath, relPath)).then(
+        (taken) => {
+          if (!taken) setOpenFailed('This machine would not open that file.')
+        },
+        (error: unknown) => setOpenFailed(readFailure(error)),
+      )
+    },
+    [opener, projectPath],
+  )
 
   /*
    * Every session, not the first five.
@@ -1296,7 +1482,25 @@ export function ArtifactsPanel({
                       Open in Files
                     </button>
                   )}
+                  {/*
+                    Drawn only when there is something to open and something to
+                    open it with. A file an agent made and deleted has neither,
+                    and a build with no link channel would get a button whose
+                    press does nothing — which is the defect this whole change is
+                    about, and it must not be reintroduced by the fix.
+                  */}
+                  {opener && current.onDisk && (
+                    <button
+                      type="button"
+                      className="artifacts-open artifacts-run"
+                      data-kind={previewKindOf(current.relPath)}
+                      onClick={() => openOnMachine(current.relPath)}
+                    >
+                      {openLabel(previewKindOf(current.relPath))}
+                    </button>
+                  )}
                 </div>
+                {openFailed && <PageNote>{openFailed}</PageNote>}
               </header>
             )}
 

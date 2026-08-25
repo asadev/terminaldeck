@@ -154,6 +154,12 @@ final class LocalhostChromeTests: XCTestCase {
                        ["localhost.back",
                         "localhost.forward",
                         "localhost.reload",
+                        // Find-in-page joined the bar on 2026-08-24, when the
+                        // Browser tab absorbed the desktop's browser features.
+                        // Placed after the page's own history and before
+                        // Inspect, which keeps the blessed rule intact: the
+                        // three navigation controls lead and Done is last.
+                        "localhost.find",
                         "localhost.inspect",
                         "localhost.done"],
                        "the bottom bar's order changed. He blessed this one — \"last button I "

@@ -147,16 +147,30 @@ enum AppLockAvailability: Equatable {
     var caveat: String? {
         guard case let .passcode(why) = self else { return nil }
         switch why {
+        /*
+         * **One clause, not two sentences.**
+         *
+         * Each of these was a fact *and* its remedy — "Face ID is not set up on
+         * this iPhone, so the lock asks for its passcode. Set Face ID up in
+         * Settings › Face ID & Passcode and the lock uses that instead." — which
+         * renders as three lines under a switch, beside a second paragraph
+         * saying when the lock asks. Two paragraphs stacked under one control is
+         * what he has objected to three times: *"we don't need this much of big
+         * descriptions under each."*
+         *
+         * What survives is the half a person cannot work out by looking: **what
+         * will be asked for**. The remedy is left off deliberately — somebody
+         * who wants Face ID on knows where iOS keeps Face ID, and being told is
+         * two lines to say so.
+         */
         case let .notEnrolled(kind):
             let name = kind.name ?? "Biometric unlock"
-            return "\(name) is not set up on this iPhone, so the lock asks for its passcode. "
-                + "Set \(name) up in Settings › \(name) & Passcode and the lock uses that instead."
+            return "\(name) is not set up, so this asks for your passcode."
         case let .lockedOut(kind):
             let name = kind.name ?? "Biometric unlock"
-            return "\(name) is locked after too many failed attempts, so the lock asks for this "
-                + "iPhone’s passcode. Unlocking this iPhone with its passcode once brings \(name) back."
+            return "\(name) is locked out, so this asks for your passcode."
         case .unavailable:
-            return "This iPhone has no Face ID or Touch ID, so the lock asks for its passcode."
+            return "This iPhone has no Face ID or Touch ID, so this asks for your passcode."
         case .ready:
             return nil
         }

@@ -179,9 +179,18 @@ final class TabBarInsetUITests: XCTestCase {
         try assertLastRowClear(matching: "session.", on: "Sessions")
     }
 
-    /// The Localhost tab, whose footnote is its last row.
+    /**
+     * The localhost list, whose footnote is its last row.
+     *
+     * It was a tab of its own, then the Browser tab, and it is now one row down
+     * the Browser tab's `…` — *"even the localhost thing should be folded
+     * somewhere else."* It is still a screen that keeps the bar and therefore
+     * still owes it room, which is the only thing this case is about; how it is
+     * reached is `TabNavigation.openLocalhostList`'s business.
+     */
     func testLocalhostClearsTheBar() throws {
-        app.openTab("Localhost")
+        XCTAssertTrue(app.openLocalhostList(),
+                      "the localhost list is one row down the Browser tab's menu")
         let scrolled = scrollToTheEnd()
         save("inset-localhost")
         // A machine with no ports draws the empty state instead of the footnote,

@@ -522,6 +522,63 @@ describe('a paired device', () => {
     expect(harness.endpoint.connections()).toHaveLength(1)
   })
 
+  /**
+   * The push the frame has always claimed to send, and never sent.
+   *
+   * `browser.surfaces.rows` documents itself as *"also pushed unsolicited when
+   * the strip changes"*, and until 2026-08-25 **nothing on this endpoint sent
+   * it** — there was no fan-out at all. The iOS client asks once per connection
+   * and then waits, so a window opened from the phone's own address bar showed
+   * up in its list the next time something happened to make it ask, which on a
+   * screen that never re-asks is never. Asad's sentence for the feature was
+   * *"it should browser and stream here to interact"*; the page opened on the
+   * server and the phone that opened it never saw it.
+   *
+   * The gate is read **at send time** rather than at trigger time, which is the
+   * property worth pinning: a device that may not watch hears nothing about a
+   * strip it could not have watched anyway.
+   */
+  it('pushes the browser strip when it moves, to the devices that may watch', async () => {
+    const surfaces = [
+      { window: 'browser:1', url: 'http://localhost:3000/', title: 'Admin', live: true },
+    ]
+    const harness = await serve({
+      screencast: {
+        // `watch` is typed as returning the promise, so the fake is written
+        // `async` — an arrow returning `undefined` typechecks nowhere and the
+        // repository's real gate is `npm run typecheck`, not `tsc --noEmit`.
+        watch: async (): Promise<{ ok: boolean; reason?: string }> => ({ ok: true }),
+        unwatch: (): void => undefined,
+        ack: (): void => undefined,
+        input: async (): Promise<{ ok: boolean; reason?: string }> => ({ ok: true }),
+        surfaces: () => surfaces,
+        dropWatcher: (): void => undefined,
+      },
+    })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    // Nobody asked. The strip moving is the whole trigger.
+    expect(harness.endpoint.surfacesChanged()).toBe(1)
+    const pushed = await client.until((m) => m.t === 'browser.surfaces.rows', 'the strip')
+    expect(pushed.t === 'browser.surfaces.rows' && pushed.surfaces).toEqual(surfaces)
+    // An unsolicited push carries no `rid`: it is answering nothing.
+    expect(pushed.t === 'browser.surfaces.rows' && pushed.rid).toBeUndefined()
+  })
+
+  it('says nothing about the strip on a host that has no browser to cast', async () => {
+    // The counter-example that keeps the rule honest. `screencast` absent is how
+    // a host says it cannot cast, so the fan-out must be silent rather than
+    // sending an empty strip — an empty list reads as *this machine has no
+    // windows open*, which is a different fact.
+    const harness = await serve()
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+    expect(harness.endpoint.surfacesChanged()).toBe(0)
+  })
+
   it('is told what this desktop can do beyond protocol v1', async () => {
     // The whole reason the version did not have to move. A phone offers the
     // localhost feature only because this list said so, so a build that stops
@@ -537,7 +594,27 @@ describe('a paired device', () => {
     // so this stub-shaped host, which cannot create, close, read a screen or
     // report a plan, still serves both. Everything else on the list is gated on
     // something this fake deliberately does not have.
-    expect(welcome.t === 'welcome' && welcome.capabilities).toEqual(['localhost', 'send'])
+    // `files`, `git`, `panels` and `browser.profiles` join them since
+    // 2026-08-24, and for the same reason: they need nothing injected — a
+    // filesystem, `git` and a JSON file on disk are not things a host can be
+    // missing the way it can be missing a session layer. The narrowing that
+    // matters for them is per-device, in `capabilitiesFor`, which withholds all
+    // four from a guest.
+    //
+    // `browser.control` is deliberately **not** on this list and is the
+    // counter-example that keeps the rule honest: driving a browser needs a
+    // browser, so it is gated on `options.machineBrowser` being present, and
+    // this fake does not have one. A host with no Chromium never tells a phone
+    // it has windows — *"a tab that refuses on every press is a worse answer
+    // than a client that never knew."*
+    expect(welcome.t === 'welcome' && welcome.capabilities).toEqual([
+      'localhost',
+      'send',
+      'files',
+      'git',
+      'panels',
+      'browser.profiles',
+    ])
     expect(CAPABILITIES).toContain('localhost')
   })
 
@@ -1849,9 +1926,16 @@ describe('closing', () => {
     expect(error).toMatchObject({ code: 'unauthorized' })
     // Same sentence as any other refusal: which of the two happened is not a
     // remote caller's business.
+    //
+    // The wording names the machine rather than "the desktop app" since
+    // 2026-08-24 — a headless server has no desktop app, and telling somebody
+    // holding a phone to open one is a dead end. What this case actually
+    // guards is unchanged and is asserted below: the sentence must not say
+    // *revoked*.
     expect(error.t === 'error' && error.message).toBe(
-      'This device is not allowed in. Pair it again from the desktop app.',
+      'This device is not allowed in. Pair it again from the app on that Mac.',
     )
+    expect(error.t === 'error' && error.message).not.toMatch(/revok/i)
     await expect(client.closed).resolves.toBe(CLOSE.policyViolation)
     expect(harness.endpoint.connections()).toEqual([])
     expect(client.received.some((m) => m.t === 'welcome')).toBe(false)
@@ -2135,7 +2219,7 @@ describe('pairing, against the real trust store', () => {
     // "revoked" and "never heard of you" have to read the same from outside, or
     // the refusal is an oracle for which device ids are real.
     expect(after.ok === false && after.message).toBe(
-      'This device is not allowed in. Pair it again from the desktop app.',
+      'This device is not allowed in. Pair it again from the app on that Mac.',
     )
   })
 })

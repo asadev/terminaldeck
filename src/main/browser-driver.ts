@@ -742,6 +742,30 @@ export class BrowserDrive {
   }
 
   /**
+   * The view the copilot's own tab is holding, or null when it holds none.
+   *
+   * The one fact {@link status} cannot answer, and it is a safety question
+   * rather than a cosmetic one. `status()` describes {@link showing}, which is
+   * whichever slot the single banner is about — a page the person has been
+   * handed, else the newest one an agent touched — so on a machine with two
+   * windows in play it is not necessarily this slot.
+   *
+   * Wave-3's live view is what needed it. On the desktop the copilot's tab is an
+   * ordinary pane in the strip, so a phone listing the machine's windows sees
+   * it, and a cast started against it as `bound:<paneId>` would put a **second
+   * slot on one page**: two batons, two `grantedOrigin`s, two secret caches.
+   * The failure that matters is the curtain — `handover` stops the cast of the
+   * slot it was called on, so a handover taken on this slot would leave a cast
+   * running through the other one while the person types a password into the
+   * same document, with only the secret-rect scan left between it and a wire.
+   * One `===` against this closes it: a pane holding this view is cast through
+   * `OWN_TARGET` and there is one slot again. See `screencast-host.ts`.
+   */
+  ownView(): string | null {
+    return this.own.viewId
+  }
+
+  /**
    * The origin of the page the agent is on, or null.
    *
    * Read from the WebContents rather than from anything the model said, which

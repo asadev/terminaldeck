@@ -620,6 +620,39 @@ npm_config_prefix="$INSTALL_PREFIX"
 export npm_config_prefix
 mkdir -p "$INSTALL_PREFIX/bin"
 
+# A release URL that is not there yet, said as that rather than as npm's guess.
+#
+# `npm install -g https://…/releases/download/vX/…tgz` against a tag that has not
+# been published gets GitHub's 404 **page**, and npm reports `E404 … This package
+# name is not valid, because name can only contain URL-friendly characters` —
+# which is about the URL it was handed, not about anything a person did, and
+# names neither the version nor the fact that it does not exist.
+#
+# It is not a rare case. Every client build is newer than the last release for as
+# long as it takes to publish one, and its Update button points at a tarball that
+# is not there. Measured on 2026-08-24: a phone on 0.10.3 against a server on
+# 0.10.1, with v0.10.2 the newest tag, printing eleven lines of npm 404.
+#
+# Only for a URL — a registry spec or a local path has its own good errors, and a
+# HEAD request against npmjs.org would be a second way to be wrong about it.
+case "$PACKAGE_SPEC" in
+  http://*|https://*)
+    if have curl; then
+      if ! curl -fsIL --max-time 20 "$PACKAGE_SPEC" >/dev/null 2>&1; then
+        die "there is no published build at ${PACKAGE_SPEC}
+
+This usually means the app asking for it is newer than the newest release: it
+installs the version it ships, and that version has not been published yet.
+Install from a build you have instead —
+
+    TERMINALDECK_PACKAGE=/path/to/${PACKAGE}-<version>.tgz sh $0
+
+— or wait for the release to go out and try again."
+      fi
+    fi
+    ;;
+esac
+
 say "Installing ${PACKAGE_SPEC}…"
 npm install -g "$PACKAGE_SPEC" >/dev/null
 

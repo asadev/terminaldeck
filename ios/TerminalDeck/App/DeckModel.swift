@@ -202,6 +202,10 @@ final class DeckModel {
          * re-measured redraws from the store instead of from a stale copy.
          */
         case server(String)
+        /// One paired machine's own page — what the wire says about it, and the
+        /// crossing to its server settings when it has them. See
+        /// `MachineDetailView`; the row used only to select and lead nowhere.
+        case machine(String)
         /// The device roster for the current machine — every device signed in
         /// here, and the one verb that removes one. Pushed only over a host that
         /// advertised `devices`. See `DeviceRosterView`.
@@ -264,7 +268,24 @@ final class DeckModel {
         }
     }
     var localhostSurface: DeckSurface { localhostPageIsOpen ? .localhostPage : .localhost }
-    var settingsSurface: DeckSurface { settingsRoute.isEmpty ? .settings : .machines }
+    /**
+     * Which chrome the Menu stack wears, including when a **page** is open on it.
+     *
+     * The third case is not symmetry for its own sake. An artifact that is a
+     * prototype — an HTML file an agent wrote — is opened from the Artifacts
+     * panel, which lives on this stack, and it opens in the same
+     * `LocalhostBrowser` the Browser tab uses. That screen has a bottom toolbar,
+     * and the floating tab pill was drawn straight over it: `DeckChrome`'s own
+     * header records that `.toolbar(.hidden, for: .tabBar)` on a *pushed* screen
+     * has no effect on iOS 26, so the answer has to come from here.
+     *
+     * `localhostPageIsOpen` is deliberately read on both stacks rather than a
+     * second flag being added for this one. A page is a page; the alternative
+     * was a `settingsPageIsOpen` that means the same thing and can disagree.
+     */
+    var settingsSurface: DeckSurface {
+        localhostPageIsOpen ? .localhostPage : (settingsRoute.isEmpty ? .settings : .machines)
+    }
 
     /**
      * **Whether there is a fourth pill.**
@@ -316,6 +337,28 @@ final class DeckModel {
      */
     var showsCopilotTab: Bool {
         if tab == .copilot { return true }
+        /*
+         * **A server always has the pill; a desktop earns it.**
+         *
+         * > *"copilot should be always there when we are with server — copilot
+         * > should automatically come there. When we are with desktop then only
+         * > it is optional."*
+         *
+         * The old rule was one line — *is a copilot connected* — and it was
+         * written when the only host that could have one was a desktop. On a
+         * server it produces exactly the wrong answer: `src/headless/cli.ts`
+         * says out loud that *"the copilot's tools only run in the desktop app,
+         * so no Copilot appears on a device paired to a server"*, and the phone
+         * meets that as an **absence** — the same shape as having been approved
+         * as the wrong kind. Somebody with only a server and a phone is told
+         * nothing at all.
+         *
+         * So a headless host gets the pill unconditionally, and what is behind
+         * it says where the copilot stands on that machine rather than the pill
+         * quietly not existing. A desktop keeps the old rule, which is right for
+         * it: there, the pill appearing means a copilot really did connect.
+         */
+        if current?.hostKind == .headless { return true }
         return current?.copilotAccess.isConnected ?? false
     }
 
@@ -1388,6 +1431,111 @@ final class DeckModel {
     /// for a host older than the capability — two facts a phone cannot tell
     /// apart and does not need to, because both draw the same screen.
     var canPickFolders: Bool { current?.canPickFolders ?? false }
+
+    /* ---- the six panels, passed through to the current machine ------------- */
+
+    var canReadFiles: Bool { current?.canReadFiles ?? false }
+    var canReadGit: Bool { current?.canReadGit ?? false }
+    var canReadPanels: Bool { current?.canReadPanels ?? false }
+    /**
+     * The browser's open pages, for every machine.
+     *
+     * Held here rather than in `LocalhostListView` because a `@State` on that
+     * screen is destroyed the moment somebody taps another pill — and *"start a
+     * new window, all of that stuff"* is worthless if the windows close behind
+     * you. The store nests by host itself, so one object serves every machine
+     * and the tabs of a machine you switch away from are parked, not lost.
+     */
+    let browserTabs = BrowserTabs()
+
+    var canUseMachineProfiles: Bool { current?.canUseMachineProfiles ?? false }
+    var machineProfiles: MachineProfileList? { current?.machineProfiles }
+    func readMachineProfiles() { current?.readMachineProfiles() }
+    func useMachineProfile(_ id: String) { current?.useMachineProfile(id) }
+    func clearMachineProfile(_ id: String) { current?.clearMachineProfile(id) }
+
+    // MARK: - Panels, and what they offered
+
+    func readPanel(_ panel: PanelKind, path: String? = nil, scope: String? = nil, query: String? = nil) {
+        current?.readPanel(panel, path: path, scope: scope, query: query)
+    }
+
+    func actOnPanel(_ panel: PanelKind, action: String, path: String? = nil,
+                    id: String? = nil, fields: [String: String] = [:]) {
+        current?.actOnPanel(panel, action: action, path: path, id: id, fields: fields)
+    }
+
+    // MARK: - The machine's own browser
+
+    var canDriveBrowser: Bool { current?.canDriveBrowser ?? false }
+
+    /**
+     * What *opening a page over there* is called, on this machine.
+     *
+     * > *"when we are in a headless server, why would we have this kind of
+     * > option at all — like open on \(x) device."*
+     *
+     * The control was right and its words were wrong. On a desktop, `web.open`
+     * puts a tab on **that computer's screen**, and "Open on Asad's MacBook" is
+     * exactly what happens. On a server there is no screen: `src/headless/
+     * host.ts` backs the same verb with `browserDrive.open`, so the page lands
+     * in that server's own Chromium — a window this phone can then watch, drive
+     * and hand to a session. That is a genuinely useful thing to do and reads as
+     * nonsense under a sentence about a device nobody is sitting at.
+     *
+     * So the verb stays and the noun changes with `hostKind`. Nothing here is
+     * conditional on the *capability*: a machine that will not open pages draws
+     * no row at all, which is a separate question and already answered by
+     * `canOpenPagesThere`.
+     */
+    var openThereVerb: String {
+        let name = current?.label ?? theMachine
+        return hostKind == .headless ? "Open in \(name)'s browser" : "Open on \(name)"
+    }
+
+    /// The same fact as a sentence, for the toast that confirms the press.
+    func openedThere(_ what: String) -> String {
+        let name = current?.label ?? theMachine
+        return hostKind == .headless
+            ? "Opening \(what) in \(name)'s browser"
+            : "Opening \(what) on \(name)"
+    }
+    var machineBrowser: MachineBrowserState? { current?.machineBrowser }
+    var machineShot: MachineShot? { current?.machineShot }
+    func machineSteps(_ id: String) -> [RecordedStep]? { current?.machineSteps[id] }
+
+    func readMachineWindows() { current?.readMachineWindows() }
+    func openMachineWindow(url: String? = nil, profile: String? = nil, isolated: Bool = false) {
+        current?.openMachineWindow(url: url, profile: profile, isolated: isolated)
+    }
+    func goMachineWindow(_ id: String, to url: String) { current?.goMachineWindow(id, to: url) }
+    func actOnMachineWindow(_ id: String, _ act: MachineBrowserWire.Act) {
+        current?.actOnMachineWindow(id, act)
+    }
+    func bindMachineWindow(_ id: String, to session: String?) { current?.bindMachineWindow(id, to: session) }
+    func shotMachineWindow(_ id: String, to session: String? = nil, note: String? = nil) {
+        current?.shotMachineWindow(id, to: session, note: note)
+    }
+    func readMachineSteps(_ id: String) { current?.readMachineSteps(id) }
+
+
+    var fileListing: FileListing? { current?.fileListing }
+    var fileText: FileText? { current?.fileText }
+    var gitState: GitState? { current?.gitState }
+    var gitPatch: GitPatch? { current?.gitPatch }
+    var readError: String? { current?.readError }
+    func panelData(_ panel: PanelKind) -> PanelData? { current?.panels[panel] }
+
+    func listFiles(_ path: String) { current?.listFiles(path) }
+    func readFile(_ path: String, at: Int = 0) { current?.readFile(path, at: at) }
+    func gitStatus(_ path: String) { current?.gitStatus(path) }
+    func gitDiff(_ path: String, file: String, staged: Bool) {
+        current?.gitDiff(path, file: file, staged: staged)
+    }
+
+    /// Where the six open on, when nothing else has been chosen: the folder this
+    /// device already works in. `startableFolders` is that list.
+    var toolsFolder: String { startableFolders.first ?? "" }
     /**
      * What this phone may do with the current machine's copilot.
      *
@@ -1493,6 +1641,9 @@ final class DeckModel {
     func openOnMachine(_ url: String) { current?.openOnMachine(url) }
     func openLocalhost(port: Int) -> PortTunnel? { current?.openLocalhost(port: port) }
     func closeLocalhost() { current?.closeLocalhost() }
+    /// One port's tunnel, for the tab store — see `HostLink.closeLocalhost(port:)`.
+    func closeLocalhost(port: Int) { current?.closeLocalhost(port: port) }
+
     /// One project's dev server on the machine on screen, or nil when it has not
     /// been asked about — a folder past the subscription cap, or a machine that
     /// does not offer the capability at all.

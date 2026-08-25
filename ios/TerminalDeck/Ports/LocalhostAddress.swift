@@ -27,22 +27,42 @@
  * last offered, so a typed port either answers or is refused by the machine with
  * a sentence. See `src/main/remote/tunnel.ts`.
  *
- * ## Why a live link is refused rather than opened
+ * ## A live link is **not** refused any more, and here is what changed
  *
- * He asked for both — *"a live link and a localhost link both open on the
- * connected machine"* — and only one of them can be built, because of a decision
- * this codebase has already taken deliberately and written down at length.
- * Driving the desktop's own browser from a paired device is refused at every one
- * of the five browser tools in `src/main/deck-control/browser-tools.ts`, and the
- * comment above the check says why: a phone that can make somebody's Mac open a
- * page, click through it and raise a banner asking for a password — inside their
- * own trusted app chrome — is a remote phishing primitive with the best possible
- * disguise. That refusal is not an oversight to route around; it is the answer.
+ * This file used to end its argument with *"a live link is refused, and that
+ * refusal is the answer"*: driving the desktop's own browser from a paired
+ * device is blocked at every one of the five browser tools in
+ * `src/main/deck-control/browser-tools.ts`, because a phone that can make
+ * somebody's Mac open a page and raise a banner asking for a password — inside
+ * their own trusted chrome — is a phishing primitive with the best possible
+ * disguise.
  *
- * So this field opens **what the machine is serving**, which is the half that can
- * be honest, and it says the other half out loud rather than quietly loading the
- * site over the phone's own network and letting a person believe it ran on their
- * Mac. That would be exactly the *"phone web view pretending"* he named.
+ * That is still true of the *tools*, and it was never true of the **machine's
+ * own browser opened by its owner's own phone**. Asad, having typed a web
+ * address and been told the machine could not:
+ *
+ * > *"browsers should browse any normal Google or any web internet website
+ * > also. But it will be actually browsing on the server side; here it will be
+ * > presenting that. So it shouldn't say that it cannot browse, because before I
+ * > failed to browse. So this browser is not only for local, it is for internet
+ * > also, for live websites also. So it should work seamless for everything."*
+ *
+ * **The refusal he hit was a missing wire, not a policy**, and the wire is
+ * named: `CAPABILITY.web` is advertised only when `RemoteEndpointOptions.openUrl`
+ * is a function — `src/main/remote/server.ts` line 2280, `if (name ===
+ * CAPABILITY.web) return typeof options.openUrl === 'function'` — and the
+ * headless host passed none. `src/headless/host.ts` says so in its own words
+ * where it finally passes one: *"the refusal was not a policy — it was a missing
+ * wire… `web.open` is backed by `openUrl`, this host passed none, and
+ * `capabilitiesFor` therefore never advertised `web` — so the phone's address
+ * bar took one look at `canOpenPages`, decided the machine could not do it, and
+ * printed a sentence explaining that a site would load on the phone instead. The
+ * sentence was true of a world where this option did not exist."*
+ *
+ * So the phone's job is no longer to refuse; it is to **decide which of three
+ * things a typed line is**, and `classify` is that decision. `parse` below is
+ * unchanged and is still the narrower question — *is this one of this machine's
+ * own ports* — which is what the tunnel needs and what its own tests pin.
  *
  * ## What counts as the machine
  *
@@ -72,6 +92,216 @@ enum LocalhostAddress {
         /// as a whole sentence rather than a code, because it is drawn under the
         /// field the moment it is true and nothing else will explain it.
         case refused(String)
+    }
+
+    /**
+     * One typed line, as the app can act on it. Three outcomes are a *place to
+     * go* and the fourth is a sentence.
+     */
+    enum Typed: Equatable {
+        /// One of this machine's own ports — a tunnel, opened in this phone's
+        /// own web view on a real loopback origin, so the page gets cookies, a
+        /// service worker and the WebSocket a dev server's hot reload runs on.
+        case tunnel(port: Int, path: String)
+        /// Somewhere on the web, normalised to a URL the machine will accept.
+        /// It opens **on the machine**, in the machine's own browser.
+        case page(String)
+        /// Not an address at all, so it is a search — with the words as typed,
+        /// for the sentence that confirms it, and the URL that performs it.
+        case search(query: String, url: String)
+        /// It **is** an address and this app will not open it: a scheme that is
+        /// not http or https, a port outside 1–65535, a paste with a control
+        /// character in it. The sentence is written to be shown under the field.
+        case refused(String)
+    }
+
+    /**
+     * Where a search goes.
+     *
+     * One constant rather than a setting, because a setting nobody has asked for
+     * is a screen to maintain and a preference to migrate. Every browser on this
+     * phone has a default and this is that default; it is a `https` URL on a
+     * host the machine resolves, so it goes down exactly the same path as any
+     * other page typed here and needs no special case at either end.
+     */
+    static let searchBase = "https://www.google.com/search?q="
+
+    /**
+     * **The one decision the address bars make.** Which of three things is this?
+     *
+     * > *"So this browser is not only for local, it is for internet also, for
+     * > live websites also. So it should work seamless for everything."*
+     *
+     * Seamless means there is no mode to choose, so this is where the choosing
+     * happens — once, over a `String`, with no view and no capability in scope.
+     * Both address fields in the app call it and neither has an opinion of its
+     * own; what a caller decides is only *which door* a `page` goes through, and
+     * `MachineBrowserView` argues that separately.
+     *
+     * ## The rules, in the order they are applied, and why each is where it is
+     *
+     *  1. **Whitespace inside means a search.** A URL cannot contain a space —
+     *     it percent-encodes one — so `what is my ip` was never an address, and
+     *     a browser that answered "that is not an address this phone can read"
+     *     to a question is the flat refusal this whole change exists to delete.
+     *  2. **A control character means a paste went wrong**, or is smuggling a
+     *     second target past the eye. Refused rather than searched, because the
+     *     honest reading is that the input is damaged. `browser-url.ts` makes
+     *     the same check on the host for the same reason.
+     *  3. **A bare number is a port.** `3000` typed into this app means the
+     *     obvious thing, and `:3000` is the same habit with a colon. An
+     *     out-of-range number is refused rather than searched: somebody who
+     *     typed `70000` meant a port and wants to know it is not one.
+     *  4. **A scheme that is not http(s) is refused** — `file:`, `ws:`,
+     *     `javascript:` — and the check has to come before anything reads the
+     *     string as a host, because otherwise `file:///etc/passwd` becomes the
+     *     host `file` and is opened as a page. It also has to *not* fire on
+     *     `localhost:3000`, whose "scheme" is `localhost`: that is the single
+     *     most likely thing anybody types here and `new URL` gets it wrong.
+     *     `hostAndPort` is the same shape `browser-url.ts` matches for the same
+     *     trap, kept in step deliberately.
+     *  5. **This machine's own loopback is the tunnel**, and `parse` owns that
+     *     answer including its refusal for a loopback name with no port —
+     *     *"Which port?"* is a question with an answer somebody can type, and a
+     *     search for the word `localhost` is not.
+     *  6. **Anything that looks like a host is a page**; anything else is a
+     *     search. `looksLikeAHost` is the whole of that judgement.
+     *
+     * ## Why `google.com` is the case this is measured against
+     *
+     * Nobody types the scheme. `web.open` on the host runs what it is given
+     * through `normalizeUrl` in `browser-url.ts`, which completes a bare host
+     * itself — but `isNavigationAllowed`, the guard on a *page-initiated*
+     * navigation, does not, and `new URL('google.com')` throws. Completing it
+     * here means what goes on the wire is a thing every gate on the far side
+     * accepts, rather than a string whose fate depends on which gate reads it.
+     */
+    static func classify(_ raw: String) -> Typed {
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else {
+            return .refused("Type an address, a port on this machine, or something to search for.")
+        }
+
+        if text.contains(where: \.isWhitespace) { return searching(text) }
+        if text.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7f }) {
+            return .refused("That contains characters an address cannot contain.")
+        }
+
+        // A bare port, with or without the colon somebody types out of habit.
+        // Handed to `parse` rather than parsed again here, so the range check
+        // and its sentence exist once.
+        let bare = text.hasPrefix(":") ? String(text.dropFirst()) : text
+        if bare.allSatisfy(\.isNumber) { return fromParse(text) }
+
+        if let scheme = explicitScheme(text), scheme != "http", scheme != "https" {
+            return .refused("Only http and https pages can be opened, not \(scheme):.")
+        }
+
+        // Protocol-relative — `//example.com` — is given a scheme rather than a
+        // second pair of slashes. Vanishingly rare from a thumb and handled all
+        // the same, because `browser-url.ts` handles it on the host and a string
+        // the two ends disagree about is a refusal nobody can explain.
+        let withScheme = text.contains("://")
+            ? text
+            : (text.hasPrefix("//") ? "http:\(text)" : "http://\(text)")
+        guard var parts = URLComponents(string: withScheme),
+              let host = parts.host, !host.isEmpty else {
+            // Not readable as a URL at all — `a b`, `??`, a stray bracket. A
+            // browser searches for it rather than lecturing about grammar.
+            return searching(text)
+        }
+
+        if isLoopback(host) { return fromParse(text) }
+
+        guard looksLikeAHost(host, hasPort: parts.port != nil) else { return searching(text) }
+
+        // Lowercased on the way out as well as on the way through the checks, so
+        // `HTTP://GOOGLE.COM` and `google.com` reach the machine as one string.
+        parts.scheme = parts.scheme?.lowercased()
+        parts.host = host.lowercased()
+        return .page(parts.string ?? withScheme)
+    }
+
+    /// The tunnel half, borrowed from `parse` so that its answers and its
+    /// sentences exist in exactly one place.
+    private static func fromParse(_ text: String) -> Typed {
+        switch parse(text) {
+        case let .address(port, path): return .tunnel(port: port, path: path)
+        case let .refused(why): return .refused(why)
+        }
+    }
+
+    /// Words, and the address that searches for them. Percent-encoded against
+    /// `alphanumerics` rather than a query character set: it over-encodes, and
+    /// over-encoding a query is always safe while under-encoding one silently
+    /// changes what was searched for.
+    private static func searching(_ query: String) -> Typed {
+        let encoded = query.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? query
+        return .search(query: query, url: searchBase + encoded)
+    }
+
+    /**
+     * `host:port` with an optional path — the shape that fools `new URL` and
+     * `URL(string:)` alike into reading the host as a scheme.
+     *
+     * The same expression `browser-url.ts` matches on the host, deliberately: a
+     * string this side reads as a host and that side reads as a scheme is a
+     * refusal nobody can explain from either end.
+     */
+    private static let hostAndPort = try? NSRegularExpression(
+        pattern: "^(?:[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)*|\\[[0-9A-Fa-f:]+\\]):[0-9]{1,5}(?:[/?#].*)?$")
+
+    /// The scheme a line actually has, or nil — including nil for the two shapes
+    /// that only look like they have one.
+    private static func explicitScheme(_ text: String) -> String? {
+        let whole = NSRange(text.startIndex ..< text.endIndex, in: text)
+        if hostAndPort?.firstMatch(in: text, range: whole) != nil { return nil }
+        guard let colon = text.firstIndex(of: ":") else { return nil }
+        let scheme = String(text[text.startIndex ..< colon])
+        guard let first = scheme.first, first.isLetter,
+              scheme.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "+" || $0 == "." || $0 == "-" })
+        else { return nil }
+        return scheme.lowercased()
+    }
+
+    /**
+     * Whether a host name is a name somebody meant, rather than a word.
+     *
+     * Four ways to be one, and the last is the interesting one:
+     *
+     *  - it carries a **port**, which nobody writes on a search term;
+     *  - it is an **IPv6 literal**, which arrives bracketed;
+     *  - it is an **IPv4 literal**;
+     *  - it has a **dot** and its last label is two or more letters. That is the
+     *    rule every browser uses and it is deliberately not a list of real
+     *    top-level domains: the list changes, a phone that shipped last year
+     *    would refuse a domain that exists, and being wrong about `.zip` costs
+     *    nothing next to being wrong about a domain a person is looking at.
+     *
+     * `git`, `readme`, `terminal deck` and `1.2.3` are all *not* hosts, which is
+     * what makes them searches.
+     */
+    private static func looksLikeAHost(_ host: String, hasPort: Bool) -> Bool {
+        if hasPort { return true }
+        let name = host.lowercased()
+        if name.hasPrefix("[") { return true }
+        if isIPv4(name) { return true }
+        let labels = name.split(separator: ".", omittingEmptySubsequences: false)
+        guard labels.count >= 2, labels.allSatisfy({ !$0.isEmpty }) else { return false }
+        guard let last = labels.last, last.count >= 2, last.allSatisfy(\.isLetter) else {
+            return false
+        }
+        return true
+    }
+
+    /// A dotted quad, each octet in range. Shared by `looksLikeAHost` and
+    /// `isLoopback`, which asks the same question of the same shape.
+    private static func isIPv4(_ name: String) -> Bool {
+        let parts = name.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 4, parts.allSatisfy({ !$0.isEmpty && $0.allSatisfy(\.isNumber) }) else {
+            return false
+        }
+        return parts.compactMap { Int($0) }.allSatisfy { $0 >= 0 && $0 <= 255 }
     }
 
     /**
@@ -120,12 +350,18 @@ enum LocalhostAddress {
         }
 
         guard isLoopback(host) else {
-            // Named, because the refusal is about *where the page would come
-            // from* and the person typed a perfectly good address. The second
-            // sentence is the whole of the decision above, in the words somebody
-            // reading it on a phone needs.
-            return .refused("\(host) is not on this machine. This opens pages the machine itself is "
-                            + "serving; anything else would load on the phone rather than on it.")
+            /*
+             * A fact about **this function**, and nothing more.
+             *
+             * `parse` answers one question — *is this one of this machine's own
+             * ports* — so a host that is not loopback is a no here and is not a
+             * refusal anywhere a person can see. `classify` is what the address
+             * bars call, and it takes this case and opens it on the machine.
+             * Nothing draws this string; it is kept because `parse` is a public
+             * answer with its own tests and *"no"* with no reason attached is a
+             * worse value to hand back than one with a sentence on it.
+             */
+            return .refused("\(host) is not a page this machine is serving.")
         }
 
         guard let number = parts.port else {
@@ -160,12 +396,7 @@ enum LocalhostAddress {
     private static func isLoopback(_ host: String) -> Bool {
         let name = host.lowercased()
         if name == "localhost" || name == "::1" || name == "[::1]" { return true }
-        let parts = name.split(separator: ".", omittingEmptySubsequences: false)
-        guard parts.count == 4, parts.allSatisfy({ !$0.isEmpty && $0.allSatisfy(\.isNumber) }) else {
-            return false
-        }
-        let octets = parts.compactMap { Int($0) }
-        guard octets.count == 4, octets.allSatisfy({ $0 >= 0 && $0 <= 255 }) else { return false }
-        return octets[0] == 127
+        guard isIPv4(name) else { return false }
+        return name.split(separator: ".").first.flatMap { Int($0) } == 127
     }
 }

@@ -318,6 +318,19 @@ export interface HostOffer {
    * it does not is drawn as a sentence and a press.
    */
   linkedButNotConnected: boolean
+  /**
+   * What **this build** is, so the panel can say whether that host is behind it.
+   *
+   * On the offer rather than read where the button is drawn, because the version
+   * is a fact only the main process holds — `app.getVersion()` — and the
+   * renderer has no bridge for it. It used to be read as `BRAND.version` inside
+   * `hostUpdateAvailable`, which does not exist: `BRAND` carries the name, the
+   * id, the bundle id and the tagline and has never carried a version. Nothing
+   * said so because the repository's root `tsconfig.json` has `include: []`, so
+   * a bare `tsc --noEmit` typechecks nothing at all; `npm run typecheck` is the
+   * real gate, and it caught this along with a dozen others the moment it ran.
+   */
+  mine: string
   state: HostState
 }
 
@@ -559,6 +572,15 @@ export interface ServersIpcDeps {
    * `ServerHosts.link`.
    */
   linkThisComputer?(code: string): Promise<LinkOutcome>
+  /**
+   * What this build is — `app.getVersion()`, injected the way everything
+   * Electron-shaped is injected here so the tests do not need an `app`.
+   *
+   * It rides onto every `HostOffer` so the panel can say whether the host on
+   * that server is behind this build, which is the whole of *"whenever there is
+   * a new update for headless… it should show the update button."*
+   */
+  appVersion(): string
   /**
    * Wait until this desktop's link to a machine it has just paired with is
    * carrying. `MachinesIpc.whenReaching`.
@@ -2714,6 +2736,7 @@ export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDep
        */
       linkedAs: standing?.name ?? null,
       linkedButNotConnected: standing !== null && !standing.reaching,
+      mine: deps.appVersion(),
       state: hosts.stateOf(serverId),
     }
   }

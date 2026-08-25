@@ -11,6 +11,7 @@ import {
   SCREENED_FULFIL_HEADERS,
   SCREENED_RESOURCE_TYPES,
   screenCommand,
+  screenHistoryEntry,
   type DriveState,
 } from './browser-cdp'
 
@@ -500,6 +501,7 @@ describe('the CDP tables screen the pipe transport', () => {
     'Runtime.callFunctionOn': { executionContextId: 7 },
     'Browser.setDownloadBehavior': { behavior: 'allowAndName', downloadPath: DOWNLOADS },
     'Target.createTarget': { url: 'about:blank' },
+    'Page.navigateToHistoryEntry': { entryId: 3 },
     'Network.getCookies': { urls: ['https://example.com/'] },
     'Page.startScreencast': { format: 'jpeg', quality: 50, maxWidth: 800 },
     'Input.dispatchTouchEvent': { type: 'touchStart', touchPoints: [{ x: 10, y: 20 }] },
@@ -543,7 +545,6 @@ describe('the CDP tables screen the pipe transport', () => {
       'Fetch.continueWithAuth', // composes a password and sends it to a site
       'Page.printToPDF', // writes a file
       'Runtime.compileScript', // arbitrary script off the model's path
-      'Page.navigateToHistoryEntry', // no URL to screen; nothing drives it
     ]
     for (const method of denied) {
       expect(CDP_DENIED_METHODS).toContain(method)
@@ -572,6 +573,11 @@ describe('the CDP tables screen the pipe transport', () => {
       'Target.createTarget',
       'Browser.setDownloadBehavior',
       'Network.getCookies',
+      // The two history calls a server needs and a desktop does not: the
+      // desktop's back and forward are `webContents.navigationHistory`, an
+      // Electron API, so the protocol spelling stays off its table entirely.
+      'Page.getNavigationHistory',
+      'Page.navigateToHistoryEntry',
     ]) {
       expect(screenCommand({ state: 'agent', method, params: {} }).ok).toBe(false)
       expect(screenCommand({ transport: 'electron', state: 'agent', method, params: {} }).ok).toBe(false)
@@ -617,6 +623,84 @@ describe('navigation is the only door on the server, and it is screened there', 
 
   it('lets a target be reset to about:blank, which is what an empty view holds', () => {
     expect(screenCommand({ transport: 'cdp', state: 'agent', method: 'Page.navigate', params: { url: 'about:blank' } }).ok).toBe(true)
+  })
+})
+
+describe('back and forward on the server, which is the one call with no address in it', () => {
+  const cdp = { transport: 'cdp' as const, state: 'agent' as DriveState }
+
+  /*
+   * `Page.navigateToHistoryEntry` was on the CDP deny-list with a true reason —
+   * it names an `entryId` rather than a URL, so `isNavigationAllowed` had
+   * nothing to screen — and the cost was a phone driving a server's browser with
+   * Reload and two buttons that answered *"this server's browser cannot go
+   * back"*. What bought it a place on the allow-list is an argument check that
+   * says exactly what it does and does not know.
+   */
+  it('moves to one entry of the page’s own history, named by its id', () => {
+    expect(screenCommand({ ...cdp, method: 'Page.navigateToHistoryEntry', params: { entryId: 0 } }).ok).toBe(true)
+    expect(screenCommand({ ...cdp, method: 'Page.navigateToHistoryEntry', params: { entryId: 12 } }).ok).toBe(true)
+  })
+
+  it.each([
+    [{}],
+    [{ entryId: -1 }],
+    [{ entryId: 1.5 }],
+    [{ entryId: '3' }],
+    [{ entryId: null }],
+  ])('refuses a history move that does not name one entry: %o', (params) => {
+    expect(screenCommand({ ...cdp, method: 'Page.navigateToHistoryEntry', params }).ok).toBe(false)
+  })
+
+  /*
+   * The sharp one. A `navigateToHistoryEntry` allowed to carry a `url` would be
+   * `Page.navigate` under a name nobody screens — and a browser-initiated
+   * navigation walks past `will-navigate`, measured, so that is the whole of the
+   * `file://` protection gone. There is no spelling of this frame that carries
+   * an address.
+   */
+  it.each([
+    ['url', 'file:///etc/passwd'],
+    ['url', 'https://elsewhere.example/'],
+    ['frameId', 'frame-1'],
+  ])('refuses a history move that also carries %s', (key, value) => {
+    const verdict = screenCommand({
+      ...cdp,
+      method: 'Page.navigateToHistoryEntry',
+      params: { entryId: 2, [key]: value },
+    })
+    expect(verdict.ok).toBe(false)
+    if (!verdict.ok) expect(verdict.reason).toContain('and nothing else')
+  })
+
+  it('reads the history it takes those ids from, and takes no arguments to do it', () => {
+    // The pair is what makes the id safe: an entry id can only come from here,
+    // and this hands back the entry's address with it so the caller can screen
+    // where the page is about to be.
+    expect(CDP_ALLOWED_METHODS).toContain('Page.getNavigationHistory')
+    expect(screenCommand({ ...cdp, method: 'Page.getNavigationHistory', params: {} }).ok).toBe(true)
+  })
+
+  it('exports the same check the tab authority makes before it sends the frame', () => {
+    /*
+     * `HeadlessDriveHost.historyMove` sends this on its own transport — it is the
+     * tab authority rather than the driver, the same way it sends
+     * `Target.createTarget` — so it screens with the exported checker rather than
+     * against a rule written down somewhere else. One rule, two callers, the
+     * arrangement `isNavigationAllowed` already has.
+     */
+    expect(screenHistoryEntry({ entryId: 4 }).ok).toBe(true)
+    expect(screenHistoryEntry({ entryId: 4, url: 'file:///etc/passwd' }).ok).toBe(false)
+    expect(screenHistoryEntry({}).ok).toBe(false)
+    const host = source('browser-headless-host.ts')
+    expect(host).toContain('screenHistoryEntry(')
+    expect(host.indexOf('screenHistoryEntry(')).toBeLessThan(host.indexOf("'Page.navigateToHistoryEntry'"))
+  })
+
+  it('still refuses the whole pair while the person has the page', () => {
+    for (const method of ['Page.getNavigationHistory', 'Page.navigateToHistoryEntry']) {
+      expect(screenCommand({ transport: 'cdp', state: 'human', method, params: { entryId: 1 } }).ok).toBe(false)
+    }
   })
 })
 

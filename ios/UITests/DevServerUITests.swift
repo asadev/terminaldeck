@@ -90,7 +90,7 @@ final class DevServerUITests: XCTestCase {
         app = XCUIApplication()
         app.launch()
 
-        if app.textFields["pairing.field"].waitForExistence(timeout: 5) {
+        if app.reachPairingField(timeout: 5) {
             let code = try pairingCode()
             let field = app.textFields["pairing.field"]
             field.tap()
@@ -104,7 +104,8 @@ final class DevServerUITests: XCTestCase {
 
         // The dev-server rows are on the Localhost tab now rather than under the
         // sessions. See `DeckModel.Tab` for why the list moved.
-        XCTAssertTrue(app.openBrowserTab(), "the Browser tab should be reachable")
+        XCTAssertTrue(app.openLocalhostList(),
+                      "the localhost list is one row down the Browser tab's menu — see TabNavigation")
     }
 
     private static let notRunning =

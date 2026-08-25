@@ -99,6 +99,36 @@ import {
  *    header names is what makes "answer an image cheaply" unable to be anything
  *    else.
  *
+ * ## Back and forward, and the argument check that bought them — 2026-08-25
+ *
+ * `Page.navigateToHistoryEntry` was on the CDP deny-list for a reason that was
+ * true as far as it went: it names an `entryId` rather than an address, so
+ * `isNavigationAllowed` — which on this transport is *"the only guard there is"*
+ * — had nothing to screen. The cost was that a phone driving a server's browser
+ * had a working Reload and two buttons that answered *"this server's browser
+ * cannot go back"*.
+ *
+ * It is allow-listed now, in a pair with `Page.getNavigationHistory`, and the
+ * pairing is the argument. {@link screenHistoryEntry} verifies that the frame
+ * names **one** entry by a non-negative integer id and carries **nothing else**
+ * — in particular no `url`, since a `navigateToHistoryEntry` allowed to carry
+ * one would be `Page.navigate` under a name nobody screens. What it cannot
+ * verify is where that entry goes, or that it exists: an entry id is an index
+ * into one target's own history, and this module is a pure function with no
+ * target and no memory. So that half is done where it can be —
+ * `HeadlessDriveHost.historyMove` reads the history for that target, takes the
+ * neighbour in the direction asked for, and puts **its URL** through
+ * `isNavigationAllowed` before naming its id. The address is screened by the
+ * same function that screens a typed one; the id is only ever read back, never
+ * composed, which is the same by-construction property `screenEvaluate` rests on
+ * for the isolated world.
+ *
+ * The desktop refuses both and loses nothing — `navigateToHistoryEntry` by name
+ * on its deny-list, `getNavigationHistory` by being on neither of its tables,
+ * which is the default. Its back and forward are `webContents.navigationHistory`,
+ * an Electron API rather than a protocol call, exactly as its reads and its
+ * screenshots are.
+ *
  * ## The finding that makes the navigation re-check load-bearing
  *
  * `browser-tab.ts` refuses `file:`, `javascript:` and every non-http scheme by
@@ -401,14 +431,36 @@ export const CDP_ALLOWED_METHODS: readonly string[] = [
    * a browser-initiated navigate walks past `will-navigate`, so this check is
    * not belt-and-braces, it is the only guard there is.
    *
-   * `Page.navigateToHistoryEntry` is deliberately NOT here. It carries an
-   * `entryId`, not a URL, so there is no address for `isNavigationAllowed` to
-   * screen — a method the allow-list could not honestly argument-check the way
-   * the design requires. No `DrivenPage` touchpoint needs back/forward, so it
-   * stays on the deny-list below rather than sitting on the allow-list unable to
-   * be sent.
+   * `Page.navigateToHistoryEntry` sits beside it now, with the pair of entries
+   * below, and {@link screenHistoryEntry} says exactly what buying it cost.
    */
   'Page.navigate',
+  /*
+   * Back and forward, which a server could not do at all until 2026-08-25.
+   *
+   * `Page.navigateToHistoryEntry` was on the deny-list with a true reason — it
+   * names an `entryId` rather than an address, so `isNavigationAllowed` has
+   * nothing to screen — and the consequence was that a phone driving a server's
+   * browser had Reload and two buttons that answered *"this server's browser
+   * cannot go back"*. Two of the three controls on every browser toolbar ever
+   * made.
+   *
+   * The pair is what makes it safe, and they are allow-listed together on
+   * purpose: `Page.getNavigationHistory` is the only place an entry id can come
+   * from, and it hands back the entry's **address** with it. The caller
+   * (`HeadlessDriveHost.historyMove`) reads the history, takes the neighbour in
+   * the direction asked for, screens *its URL* through the same
+   * `isNavigationAllowed` a typed address passes, and only then names the id.
+   * So the guard screens what it always screened — where the page is about to
+   * be — and {@link screenHistoryEntry} screens the frame itself. Neither is
+   * sufficient alone, which is why both are here.
+   *
+   * `Page.getNavigationHistory` is a read of one target's own entry list: the
+   * addresses this app navigated it to, which the phone is already showing in
+   * its window list. It carries no arguments and so needs no argument check.
+   */
+  'Page.getNavigationHistory',
+  'Page.navigateToHistoryEntry',
   /*
    * Reading the page. An isolated world, made once per frame, then evaluation
    * inside it — never the main world, enforced by {@link screenEvaluate}. The
@@ -512,13 +564,6 @@ export const CDP_DENIED_METHODS: readonly string[] = [
   'Network.setExtraHTTPHeaders',
   'Emulation.setDeviceMetricsOverride',
   'Runtime.compileScript',
-  /*
-   * Back/forward. Allowed in principle — it only revisits an already-screened
-   * entry — but its `entryId` argument cannot be run through `isNavigationAllowed`
-   * the way a real address is, and nothing on the server drives it, so it stays
-   * denied rather than allow-listed without the argument check the design wants.
-   */
-  'Page.navigateToHistoryEntry',
 ]
 
 const CDP_ALLOWED = new Set(CDP_ALLOWED_METHODS)
@@ -527,14 +572,19 @@ const CDP_DENIED = new Set(CDP_DENIED_METHODS)
 /**
  * Methods whose arguments carry a destination.
  *
- * Screened even though both are denied outright, because the denial and the
- * URL check answer different questions and only one of them survives somebody
- * widening the allow-list. A reviewer removing `Page.navigate` from
- * {@link DENIED_METHODS} — which is a reasonable thing to want, the day the
- * driver needs to drive a history entry — must still land in a world where
- * `file:///etc/passwd` is refused.
+ * Screened even though it is denied outright on the desktop, because the denial
+ * and the URL check answer different questions and only one of them survives
+ * somebody widening the allow-list. A reviewer removing `Page.navigate` from
+ * {@link DENIED_METHODS} must still land in a world where `file:///etc/passwd`
+ * is refused.
+ *
+ * `Page.navigateToHistoryEntry` used to be in this set and no longer is, and
+ * that is not a relaxation: it never carried a `url`, so being here meant it was
+ * refused for having no address rather than screened for having a bad one. It
+ * has its own check — {@link screenHistoryEntry} — which is a different
+ * question asked of a different argument.
  */
-const NAVIGATING_METHODS = new Set(['Page.navigate', 'Page.navigateToHistoryEntry'])
+const NAVIGATING_METHODS = new Set(['Page.navigate'])
 
 /**
  * Resource types an interception pattern may name.
@@ -793,6 +843,75 @@ function screenDownloadBehavior(
 }
 
 /**
+ * `Page.navigateToHistoryEntry`, whose argument is not an address.
+ *
+ * ## What this check verifies
+ *
+ *  - The call names **one** entry, by an `entryId` that is a non-negative
+ *    integer — the shape CDP's own `NavigationEntry.id` has. A missing, negative
+ *    or fractional id is not an entry Chromium would find, so it is a caller
+ *    that composed the frame rather than one that read it.
+ *  - The call carries **nothing else**. That is the sharp half. `Page.navigate`
+ *    is refused on the desktop and argument-checked on the server because a URL
+ *    in a browser-initiated navigation walks past `will-navigate` — measured —
+ *    and a `navigateToHistoryEntry` that was allowed to carry a `url` would be
+ *    that same call under a name nobody screens. There is no spelling of this
+ *    frame that reaches an address.
+ *
+ * ## What it still cannot verify, and what covers that instead
+ *
+ * It cannot say **where entry 4 goes**, or even whether entry 4 exists. An entry
+ * id is an index into one target's own history: it means nothing to another
+ * target, it is not stable across a navigation, and this function is a pure
+ * screen over a method name and a bag of arguments with no target, no history
+ * and no memory. Any check pretending otherwise would be a check that reads
+ * true and holds nothing.
+ *
+ * So the part this cannot do is done where it *can* be done, one layer out, and
+ * this method is on the allow-list because that layer exists:
+ * `HeadlessDriveHost.historyMove` reads `Page.getNavigationHistory` for that
+ * target, takes the neighbouring entry in the direction asked for, and puts its
+ * **URL** through `isNavigationAllowed` before naming its id. The address is
+ * screened by the same function that screens a typed one; the id is never
+ * composed, only read back. A caller that named an id of its own would be
+ * sending a frame no code in this repository constructs — which is the property
+ * a reviewer can grep for, and the same by-construction argument
+ * {@link screenEvaluate} rests on for the isolated world.
+ */
+function screenHistoryEntryParams(params: Record<string, unknown>): Screening {
+  const entryId = params.entryId
+  if (typeof entryId !== 'number' || !Number.isInteger(entryId) || entryId < 0) {
+    return {
+      ok: false,
+      reason: 'a history move must name one entry of the page’s own history, by its id',
+    }
+  }
+  for (const key of Object.keys(params)) {
+    if (key === 'entryId') continue
+    return {
+      ok: false,
+      reason: `a history move carries an entry id and nothing else; ${key} is refused`,
+    }
+  }
+  return { ok: true }
+}
+
+/**
+ * The same check, for the one caller that has to make it before this module
+ * ever sees the frame.
+ *
+ * `HeadlessDriveHost.historyMove` sends `Page.navigateToHistoryEntry` on its own
+ * transport — it is the tab authority rather than the driver, the same way it
+ * sends `Target.createTarget` — so without this it would be composing a frame
+ * against a rule stated somewhere else. Exported so the rule has one statement
+ * and two callers, exactly as `isNavigationAllowed` is shared between
+ * `screenCommand` and `browser-driven-cdp.ts`'s navigation door.
+ */
+export function screenHistoryEntry(params: Record<string, unknown>): Screening {
+  return screenHistoryEntryParams(params)
+}
+
+/**
  * `Target.createTarget`, which opens a page at a URL.
  *
  * A new target starts at a URL, and a URL is a `file://` reach exactly as a
@@ -949,7 +1068,7 @@ export type Screening =
  *  4. **The arguments**, for the methods that carry a destination or a
  *     capability — the navigation URL, the fetch pattern, the fulfilled headers,
  *     and (server only) the evaluation world, the download path, the new
- *     target's URL and the single-URL cookie read.
+ *     target's URL, the history entry and the single-URL cookie read.
  *
  * `state` and `transport` are passed rather than read, so the module has no
  * ambient state and a test can drive every value on either transport without an
@@ -1064,6 +1183,9 @@ export function screenCommand(input: {
   }
   if (method === 'Target.createTarget') {
     return screenCreateTarget(params)
+  }
+  if (method === 'Page.navigateToHistoryEntry') {
+    return screenHistoryEntryParams(params)
   }
   if (method === 'Network.getCookies') {
     /*

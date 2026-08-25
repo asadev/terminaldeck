@@ -80,16 +80,13 @@ final class DeckChromeTests: XCTestCase {
      * bar was sitting over the bottom of the content while offering to take you
      * somewhere else.
      */
-    func testTheBarIsHiddenInsideASessionAPageAndTheCopilot() {
+    func testTheBarIsHiddenInsideASessionAndAPage() {
         XCTAssertFalse(DeckChrome.showsTabBar(on: .session),
                        "the pill was covering the bottom rows of the terminal")
         XCTAssertFalse(DeckChrome.showsTabBar(on: .localhostPage),
                        "the pill was covering the bottom of the page from the machine")
-        XCTAssertFalse(DeckChrome.showsTabBar(on: .copilot),
-                       "the pill was sitting over the chat box")
         XCTAssertEqual(DeckChrome.tabBar(on: .session), .hidden)
         XCTAssertEqual(DeckChrome.tabBar(on: .localhostPage), .hidden)
-        XCTAssertEqual(DeckChrome.tabBar(on: .copilot), .hidden)
     }
 
     /**
@@ -111,14 +108,28 @@ final class DeckChromeTests: XCTestCase {
      * screen, and now something can. So the premise fell rather than the
      * judgement being reversed.
      *
-     * **Which makes `copilot.back` load-bearing**, and that is what the second
-     * assertion here is really about: this rule is only safe while that button
-     * exists. `CopilotScreensUITests` is where a finger proves it does.
+     * **And the chat box it was protecting is not on this surface any more.**
+     *
+     * The tab lands *in a session* now — *"when we land on the copilot page
+     * there should be directly a new session started"* — and a session is
+     * `.session`, which still hides the bar for exactly the reason it always
+     * did. What is left on `.copilot` is a short list of rows with nothing to
+     * type into.
+     *
+     * The bar is back because hiding it made this the one tab in the app you
+     * could not leave sideways: the screen walk failed to reach Menu from here,
+     * and a person is in the same position with only a chevron that goes back
+     * rather than across. `copilot.back` is still drawn and still correct —
+     * going back and going across are different acts, and this screen offers
+     * both. `CopilotScreensUITests` is where a finger proves the button is there.
      */
-    func testTheCopilotHidesTheBarBecauseItHasItsOwnWayHome() {
-        XCTAssertFalse(DeckChrome.showsTabBar(on: .copilot),
-                       "either we will type or we will use the pill")
-        XCTAssertEqual(DeckChrome.tabBar(on: .copilot), .hidden)
+    func testTheCopilotKeepsItsBarNowThatNothingTypesOnIt() {
+        XCTAssertTrue(DeckChrome.showsTabBar(on: .copilot),
+                      "a four-icon pill that vanishes on one of its four cannot be trusted")
+        XCTAssertEqual(DeckChrome.tabBar(on: .copilot), .visible)
+        // The chat box moved rather than the rule being reversed.
+        XCTAssertFalse(DeckChrome.showsTabBar(on: .session),
+                       "the pill would be sitting over the composer again")
     }
 
     /**
@@ -133,8 +144,12 @@ final class DeckChromeTests: XCTestCase {
         let shown = Set(DeckSurface.allCases.filter { DeckChrome.showsTabBar(on: $0) })
         let hidden = Set(DeckSurface.allCases.filter { !DeckChrome.showsTabBar(on: $0) })
 
-        XCTAssertEqual(shown, [.sessions, .localhost, .settings, .machines])
-        XCTAssertEqual(hidden, [.session, .localhostPage, .copilot])
+        // `.copilot` moved from hidden to shown on 2026-08-25, when the tab
+        // started landing in a session: the chat box the old rule protected is
+        // on `.session`, and hiding the bar here made this the one tab in the
+        // app that could not be left sideways. See `showsTabBar`'s own header.
+        XCTAssertEqual(shown, [.sessions, .localhost, .settings, .machines, .copilot])
+        XCTAssertEqual(hidden, [.session, .localhostPage])
         XCTAssertEqual(shown.count + hidden.count, DeckSurface.allCases.count)
     }
 

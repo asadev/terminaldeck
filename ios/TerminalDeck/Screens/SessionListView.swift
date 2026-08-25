@@ -226,8 +226,37 @@ struct SessionListView: View {
             // circle — a status indicator that cannot be read is worse than
             // none, because it looks like it is telling you something.
             ToolbarItem(placement: .principal) { HostSwitcher(model: model) }
+            /*
+             * **The `+` on the left, the `…` on the right.**
+             *
+             * > *"On the sessions page the plus button is on one side and the
+             * > three dots is on the other side, and on the browser page the
+             * > three dots is on one side and the plus button is on another
+             * > side. In both, the plus button should be left and three dots
+             * > should be on the right side."*
+             *
+             * Two complaints in one sentence and the second is the sharper: the
+             * two screens disagreed with **each other**, so a thumb that had
+             * learned where New Session lives on one tab found the overflow menu
+             * there on the next. The Browser tab is being moved to match in the
+             * same round.
+             *
+             * They were one `ToolbarItemGroup` before this, which is what put
+             * them in a single glass capsule at the trailing edge. Split, each
+             * side is its own group — so each keeps the capsule rather than
+             * turning into a bare glyph on the bar, which is what a plain
+             * `ToolbarItem` would have given and what would have made this look
+             * like a stock iOS screen instead of this app.
+             *
+             * The item is conditional rather than its *content* being
+             * conditional: an item whose body resolves to nothing still occupies
+             * the bar, and on iOS 26 that is an empty capsule sitting where a
+             * button is not.
+             */
+            if model.canStartSomewhere {
+                ToolbarItemGroup(placement: .topBarLeading) { newSession }
+            }
             ToolbarItemGroup(placement: .topBarTrailing) {
-                if model.canStartSomewhere { newSession }
                 /*
                  * One item, and it used to be nine.
                  *
@@ -288,7 +317,14 @@ struct SessionListView: View {
                     }
                     .accessibilityIdentifier("sessions.archived")
                 } label: {
-                    Image(systemName: "ellipsis.circle")
+                    // `ellipsis` and not `ellipsis.circle`, since the split.
+                    // Sharing one wide capsule with the `+`, the circled glyph
+                    // read as a badge inside it; alone in a capsule of its own it
+                    // is a ring drawn just inside another ring, which was plain
+                    // in the first frame the simulator took. The capsule is the
+                    // affordance on iOS 26 — the same reason the `…` on a machine
+                    // row is bare.
+                    Image(systemName: "ellipsis")
                 }
                 .accessibilityLabel("More")
                 .accessibilityIdentifier("sessions.more")

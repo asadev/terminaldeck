@@ -56,10 +56,31 @@ final class WatchLink {
         frameHandler = nil
     }
 
-    /// Ask for the tab strip once, when the screen opens. The pushed
-    /// `browser.surfaces.rows` keeps it fresh after that.
+    /// Ask for the tab strip once, when the screen opens.
     func ensureRead() {
         guard offered, !requested else { return }
+        ask()
+    }
+
+    /**
+     * Ask again, and this one has no `requested` guard on purpose.
+     *
+     * `BrowserSurfacesRowsFrame` describes itself as *"also pushed unsolicited
+     * when the strip changes"* and **nothing sends that push**: `server.ts`
+     * answers `browser.surfaces` and has no `surfacesChanged`, which
+     * `src/headless/host.ts` records in its own words where it wires `openUrl` —
+     * *"a row opened from the address bar is in the list the next time the list
+     * is asked for."*
+     *
+     * So `ensureRead` asking once per connection meant the strip was frozen at
+     * whatever the machine had when the first screen opened. A page opened from
+     * the address bar — the whole of *"it should browser and stream here to
+     * interact"* — never appeared, and neither did a window a session opened
+     * while the phone was watching. This is one small frame, guarded on the
+     * capability, and the screens that list surfaces call it on every appearance
+     * the same way they already re-read the window list.
+     */
+    func read() {
         ask()
     }
 

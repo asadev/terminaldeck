@@ -42,7 +42,7 @@ import { thisMachineName } from './platform/host'
  * whole gesture — and listing it greyed, or not listing it, is the "screen that
  * quietly shows a subset" failure `agent-target.ts` exists to stop.
  */
-interface KnownWindow {
+export interface KnownWindow {
   tabId: string
   viewId: string | null
   url: string
@@ -299,6 +299,28 @@ export function openBarePane(
  */
 export function paneIsFree(tabId: string): boolean {
   return known.has(tabId) && ownerOf(tabId) === null
+}
+
+/**
+ * Every browser window the shell has reported, bound or not — a snapshot.
+ *
+ * Exported for a caller that is not a menu. A phone driving this machine's
+ * browser (`machine-browser-desktop.ts`) has to list what is open before
+ * it can navigate, attach or photograph any of it, and {@link known} is the only
+ * thing on this side that holds the whole set: the binding map holds the
+ * *relation*, so an unattached window is not in it at all, and `browser-tab.ts`
+ * holds views rather than windows. The two menus above already read it for the
+ * same reason and through the same map.
+ *
+ * A copy rather than the map, because the caller iterates it across an `await`
+ * and a window can close mid-list. Reading it a second time out of a listener on
+ * `browser:window-opened` is the alternative that was refused: a second map of
+ * this same relation is how the pane bar and the phone come to disagree about
+ * which page an agent is steering — the argument this file's header makes about
+ * the renderer, one wire further out.
+ */
+export function knownWindows(): readonly KnownWindow[] {
+  return [...known.values()]
 }
 
 /**

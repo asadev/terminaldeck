@@ -560,6 +560,54 @@ describe('what a public host offers', () => {
        * this is load-bearing and belt-and-braces at once.
        */
       CAPABILITY.watch,
+      /*
+       * The five 0.10.3 added, and every one of them is withheld for the same
+       * reason with a different noun in it: **they read the machine itself
+       * rather than a session on it.**
+       *
+       * `folders.pick` walks the box's filesystem — every directory name under
+       * the account, whether or not anything was granted, which is the whole
+       * point of a picker and is exactly wrong on a machine handed to a
+       * stranger. `files` reads file *contents* out of a granted folder and
+       * `git` reads the diff, so between them they are the owner's source code.
+       * `panels` is the desktop's own Artifacts, Store, AI-readiness and MCP
+       * lists — the owner's installed servers and their configuration.
+       *
+       * `browser.profiles` is the sharpest of the five and is closest to
+       * `copilot`: a profile is a signed-in cookie jar belonging to whoever sits
+       * at that machine, the list names them, and `browser.profile.clear` empties
+       * one. A guest on a demo box does not get to enumerate somebody's browser
+       * identities, let alone sign them out of everything.
+       *
+       * All five are also owner-only at the second gate — `server.ts` strips
+       * them from a device claimed as a guest — so this line is belt-and-braces
+       * for a phone that paired with six digits. It is *not* belt-and-braces for
+       * the demo box, whose visitors are enrolled as their own owners inside a
+       * throwaway container: there, the offer list is the only thing standing in
+       * front of them.
+       */
+      CAPABILITY.folderPick,
+      CAPABILITY.files,
+      CAPABILITY.git,
+      CAPABILITY.panels,
+      CAPABILITY.browserProfiles,
+      /*
+       * And driving that browser, which is the strongest verb on this wire and
+       * is withheld **twice over**.
+       *
+       * A window bound to a session can be told to navigate anywhere, be
+       * photographed, and have every click on it recorded — and the binding
+       * store hands its output to a session that is running commands. On a box
+       * handed to a stranger for an App Store review, that is a remote browser
+       * with the owner's cookies in it and a keystroke channel into a shell.
+       *
+       * Twice over because `host.ts` builds no `machineBrowser` at all when
+       * `publicHost` is set, and `advertised` reads that object's presence to
+       * decide — so a demo host could not advertise this even if the list here
+       * were wrong. Both hold on purpose: the offer list is the decision, and
+       * the absent object is what stops the advertisement outliving it.
+       */
+      CAPABILITY.browserControl,
     ])
   })
 })

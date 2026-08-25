@@ -126,7 +126,7 @@ final class ReviewScreensUITests: XCTestCase {
         app.launch()
         try connectToTheLiveHost()
 
-        XCTAssertTrue(app.openBrowserTab())
+        XCTAssertTrue(app.openLocalhostList())
         /*
          * The bar is on the screen now — there is no `+` to press first and no
          * Go button to press after. It was a sheet behind a `+` until
@@ -176,7 +176,7 @@ final class ReviewScreensUITests: XCTestCase {
         app.launch()
         try connectToTheLiveHost()
 
-        XCTAssertTrue(app.openBrowserTab())
+        XCTAssertTrue(app.openLocalhostList())
         let headers = app.buttons.matching(
             NSPredicate(format: "identifier BEGINSWITH 'localhost.section.'"))
         XCTAssertTrue(headers.firstMatch.waitForExistence(timeout: 30),
@@ -367,7 +367,8 @@ final class ReviewScreensUITests: XCTestCase {
      * opened.
      */
     private func theAddressField(_ scheme: Scheme) throws {
-        XCTAssertTrue(app.openBrowserTab(), "the Browser tab should be reachable")
+        XCTAssertTrue(app.openLocalhostList(),
+                      "the localhost list is one row down the Browser tab's menu — see TabNavigation")
         let field = app.textFields["browser.address"]
         XCTAssertTrue(field.waitForExistence(timeout: 10), "the bar should be on the screen")
         capture("\(scheme.rawValue)-08-open-address")
@@ -530,7 +531,7 @@ final class ReviewScreensUITests: XCTestCase {
         // shared."* The choice is made on the other machine and this phone
         // cannot influence it, which is exactly why the person typing the code
         // has to be able to read it before they hand it over.
-        XCTAssertTrue(app.textFields["pairing.field"].waitForExistence(timeout: 30))
+        XCTAssertTrue(app.reachPairingField(timeout: 30))
         // `.any` rather than a type: the cards are `.accessibilityElement
         // (children: .combine)`, which collapses each into a single element
         // whose type is UIKit's business and not this test's.

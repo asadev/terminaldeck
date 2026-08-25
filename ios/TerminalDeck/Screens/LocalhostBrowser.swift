@@ -32,7 +32,7 @@
  * should not come like this up. It should just move like this when we click on
  * localhost page. It comes like this, which is a bit different, feels like a
  * browser opens inside. So give it a native feel, not like this."* It is a
- * `navigationDestination` now — see `LocalhostListView` — so it slides in from
+ * `navigationDestination` now — see `LocalhostPortsView` — so it slides in from
  * the trailing edge.
  *
  * That was not enough, and he said so again: *"localhost browsing is still not
@@ -107,10 +107,28 @@ struct LocalhostBrowser: View {
      * a hand-built string would guess the wrong one about one time in a hundred.
      */
     var path: String = "/"
+    /// The phone's own browsing history. Injected rather than reached for, the
+    /// same way `LocalhostPortsView` takes its `PortBook`.
+    var history: BrowserHistory = .shared
+    /**
+     * The tab this page is in, if it is in one.
+     *
+     * Nil is a real case and stays supported — `DevServerReport` pushes this
+     * screen straight at a tunnel without going through the strip — so every use
+     * below is guarded rather than forced. When it is set, the two `onChange`
+     * hooks that already feed the history feed the strip as well, which is what
+     * makes a pill read *"admin"* instead of *"localhost:3000"* forever.
+     */
+    var tabID: String?
     let dismiss: () -> Void
 
     @State private var browser = BrowserBridge()
     @State private var toast: String?
+
+    /// The find session, while the bar is up. Nil is closed — there is no
+    /// separate `isFinding` flag, because two properties that must agree about
+    /// one thing are two properties that eventually will not.
+    @State private var find: BrowserFindSession?
 
     var body: some View {
         ZStack {
@@ -155,6 +173,21 @@ struct LocalhostBrowser: View {
                 }
                 .transition(.opacity)
                 .allowsHitTesting(false)
+            }
+        }
+        /*
+         * The find bar is **inset** rather than floated over the page, and that
+         * is the difference between this and the terminal's.
+         *
+         * A terminal is a fixed grid the wire owns: covering its last line is
+         * survivable because the machine will redraw it. A page is a document
+         * the person is reading, and a bar over its last line hides the thing
+         * they were searching for at the moment they find it. So the page is
+         * given a shorter rectangle and reflows into it.
+         */
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if let find, find.isOpen {
+                BrowserFindBar(find: find) { closeFind() }
             }
         }
         /*
@@ -244,6 +277,26 @@ struct LocalhostBrowser: View {
                 .accessibilityLabel(browser.loading ? "Stop loading" : "Reload")
                 .accessibilityIdentifier("localhost.reload")
 
+                /*
+                 * Find, beside reload rather than behind a menu.
+                 *
+                 * *"Everything that Mac side had."* The desktop browser has had
+                 * a find bar since it had a browser; the phone had none, and a
+                 * long page on a small screen is where find is most needed and
+                 * least substitutable — there is no ⌘F to fall back on.
+                 *
+                 * Filled while the bar is up, the way Inspect is, so the
+                 * shortened page is explained by something visible rather than
+                 * looking like the layout broke.
+                 */
+                SwiftUI.Button {
+                    if find?.isOpen == true { closeFind() } else { openFind() }
+                } label: {
+                    Image(systemName: find?.isOpen == true ? "magnifyingglass.circle.fill" : "magnifyingglass")
+                }
+                .accessibilityLabel("Find on page")
+                .accessibilityIdentifier("localhost.find")
+
                 Spacer()
 
                 /*
@@ -278,7 +331,7 @@ struct LocalhostBrowser: View {
                  * while Done is the sentence this screen wants to end with —
                  * *I have finished with this page* — and closing it is what
                  * takes the Mac's socket down. Both go through the same path:
-                 * whichever way this screen goes away, `LocalhostListView`
+                 * whichever way this screen goes away, `LocalhostPortsView`
                  * notices the destination is gone and closes the tunnel.
                  *
                  * He asked for it to stay where it is. *"Last button I think is
@@ -320,6 +373,24 @@ struct LocalhostBrowser: View {
             // against that URL, and the reload after it looks like the site is
             // broken rather than like it was early.
             if case let .live(url) = phase { browser.load(first(url)) }
+        }
+        /*
+         * The page on screen, written down on this phone.
+         *
+         * **Two signals rather than one**, and that is the correctness argument
+         * rather than a style: a document has no title until it has loaded, and
+         * in between `WKWebView` still reports the *previous* page's. Recording
+         * the pair together would file every new URL under the name of the page
+         * before it — a history that is confidently wrong, which is worse than
+         * one that is briefly untitled. See `BrowserHistory`.
+         */
+        .onChange(of: browser.address) { _, address in
+            history.record(address: address, host: model.current?.id ?? "")
+            if let tabID { model.browserTabs.note(address: address, for: tabID, machine: model) }
+        }
+        .onChange(of: browser.title) { _, title in
+            history.retitle(address: browser.address, title: title, host: model.current?.id ?? "")
+            if let tabID { model.browserTabs.retitle(title, for: tabID, machine: model) }
         }
         .onAppear {
             if case let .live(url) = tunnel.phase { browser.load(first(url)) }
@@ -484,6 +555,30 @@ struct LocalhostBrowser: View {
     private var isLive: Bool {
         if case .live = tunnel.phase { return true }
         return false
+    }
+
+    /**
+     * Open the find bar on the page that is actually on screen.
+     *
+     * The session is made **here and now** rather than held for the life of the
+     * screen, because it binds to a `WKWebView` and this screen's web view is
+     * rebuilt when the tunnel changes underneath it. A session made once at
+     * `init` would, after a reconnect, be searching a view that is no longer
+     * being drawn — which fails as "no matches" on a page whose text is right
+     * there, the worst shape a search can fail in.
+     */
+    private func openFind() {
+        let session = BrowserFindSession(webView: browser.webView)
+        session.open()
+        find = session
+    }
+
+    /// Close it, and take the highlight with it. `WKWebView` keeps the previous
+    /// match highlighted after a find bar goes away, so a dismissal that only
+    /// hid the bar would leave a page marked up by a search nobody can see.
+    private func closeFind() {
+        find?.close()
+        find = nil
     }
 
     private var title: String {

@@ -90,7 +90,19 @@ extension XCUIApplication {
      */
     @discardableResult
     func openSettingsTab() -> Bool {
-        openTab("Settings")
+        /*
+         * Pressed by its new name, and kept under its old one.
+         *
+         * > *"we can rename this settings page to menu page — settings should
+         * > be inside it."*
+         *
+         * The pill says **Menu** since 2026-08-24 and the screen it opens is
+         * still the settings screen with the six machine tools stacked above it,
+         * so the helper keeps the name every caller here already uses rather
+         * than renaming twenty call sites to match a label. The `settings.github`
+         * probe below is what actually proves arrival, and it is unchanged.
+         */
+        openTab("Menu")
         if buttons["settings.github"].waitForExistence(timeout: 4) { return true }
         // Something is pushed over it. One Back is enough — Settings is one deep.
         let back = navigationBars.buttons.element(boundBy: 0)
@@ -99,7 +111,7 @@ extension XCUIApplication {
     }
 
     /**
-     * The **Browser** tab, and proof it arrived.
+     * The **Browser** tab, at its root, and proof it arrived.
      *
      * Called `openBrowserTab` until 2026-08-24, when the tab it opens stopped
      * being called Localhost: *"instead of having local host page on the pill
@@ -108,18 +120,88 @@ extension XCUIApplication {
      * helper that says Localhost and presses Browser is the next person's
      * confusion.
      *
-     * The proof moved too, and that is the more interesting half. There is no
-     * row that is always present — a machine serving nothing has none — so the
-     * proof has always been the tab's own always-on control. That was a Refresh
-     * button, then the `+` that opened an address, and it is now the **address
-     * bar**, which is on the screen itself rather than behind the `+` that used
-     * to raise it. Five suites failed on `localhost.open` the day the `+` went,
-     * which is exactly what this indirection is for.
+     * ## The proof has moved three times, which is what this indirection is for
+     *
+     * There is no *row* that is always present — a machine with nothing open has
+     * none — so the proof has always been the tab's own always-on control. It
+     * was a Refresh button, then a `+` that raised an address sheet, then the
+     * address bar itself once that came out of the sheet and onto the screen.
+     * Five suites failed on `localhost.open` the day the `+` went.
+     *
+     * It is the `…` now, because the address bar is no longer on this screen:
+     * *"the home page of the browser should be for the open browser windows, and
+     * we should be able just to see only the open windows… Even the localhost
+     * thing should be folded somewhere else."* The tab's root is the machine's
+     * open windows and nothing else, and the one control on it that does not
+     * depend on a capability or on there being anything open is that menu.
+     *
+     * ## And it walks back, because this tab is now three deep
+     *
+     * Localhost, a window, that window's settings and a tunnelled page all push
+     * onto this tab's stack, and a case that left one of them standing used to
+     * come back to it rather than to the root. Tapping an already-selected tab
+     * does not pop a SwiftUI `NavigationStack`, so the chevron is pressed until
+     * the root's own menu is what is on screen — the same shape
+     * `openSettingsTab` uses one screen up, with a deeper stack to walk.
      */
     @discardableResult
     func openBrowserTab() -> Bool {
         openTab("Browser")
-        return textFields["browser.address"].waitForExistence(timeout: 10)
+        if buttons["browser.more"].waitForExistence(timeout: 8) { return true }
+        // Four, which is one more than the deepest this tab goes: Localhost, a
+        // page on it, and back out. A bounded loop rather than `while`, because
+        // a screen with a nav bar and no back button would otherwise hang here.
+        for _ in 0 ..< 4 {
+            let back = navigationBars.buttons.element(boundBy: 0)
+            guard back.exists else { break }
+            back.tap()
+            if buttons["browser.more"].waitForExistence(timeout: 3) { return true }
+        }
+        return buttons["browser.more"].waitForExistence(timeout: 10)
+    }
+
+    /**
+     * The **localhost** list — the ports, the dev servers and the address bar —
+     * which is one row down the Browser tab's `…`.
+     *
+     * It was the Browser tab itself until 2026-08-25. Every suite that wants a
+     * port row, a dev server or the address field went through `openBrowserTab`,
+     * and every one of them now goes through here instead: the tab's home is the
+     * machine's browser windows, and localhost was *"folded somewhere else"*.
+     *
+     * ## The menu row is pressed by its words, with the identifier as a fallback
+     *
+     * A `Button` inside a SwiftUI `Menu` is not reachable by
+     * `accessibilityIdentifier` — measured twice in this target, which is why
+     * `ScreenWalkUITests` presses `Choose a folder…` by its label. A
+     * `NavigationLink` inside the same menu has behaved differently on different
+     * releases, so both are tried: the label first, because that is the one that
+     * has always worked.
+     */
+    @discardableResult
+    func openLocalhostList() -> Bool {
+        // Already there — including the case where a previous test left it
+        // pushed, which is cheaper to keep than to walk back to and re-enter.
+        if textFields["browser.address"].exists { return true }
+        guard openBrowserTab() else { return false }
+
+        let more = buttons["browser.more"]
+        guard more.waitForExistence(timeout: 10) else { return false }
+        more.tap()
+
+        var row = buttons["Localhost"]
+        if !row.waitForExistence(timeout: 5) {
+            row = descendants(matching: .any).matching(identifier: "browser.localhost").firstMatch
+        }
+        guard row.exists else {
+            // Never leave a presented menu standing: everything behind it is
+            // still in the accessibility tree, so the next query is satisfied by
+            // an element under the dimming layer and every later tap is eaten.
+            dismissAnyMenu()
+            return false
+        }
+        row.tap()
+        return textFields["browser.address"].waitForExistence(timeout: 15)
     }
 
     /**
@@ -239,11 +321,25 @@ extension XCUIApplication {
      * that exists for a test is product code nobody uses, and doing it this way
      * exercises unpairing for free. Six passes, because a phone in these suites
      * is paired with at most two or three and the loop has to end.
+     *
+     * **It answers a confirmation now.** Forget went straight through to
+     * `unpair` until 0.10.3; it asks first since the same verb became a swipe on
+     * the row, because a gesture a thumb can complete must not be able to unpair
+     * a computer on its own. Six suites call this helper as teardown and every
+     * one of them would otherwise have stopped at a standing alert — which is
+     * exactly what this file exists to absorb. The confirm is taken as optional
+     * rather than asserted: this is teardown, and a helper that fails a case
+     * about something else because a dialog changed shape is worse than one that
+     * quietly does nothing.
      */
     func forgetEveryMachine() {
         for _ in 0 ..< 6 {
-            // Already at the pairing screen — there is nothing left to forget.
+            // Nothing left to forget — the phone is back at its first screen.
+            // That is the **server login** now, with pairing one tap behind it,
+            // so testing for the pairing field alone would loop six times over a
+            // phone that had already finished. See `reachPairingField`.
             if textFields["pairing.field"].exists { return }
+            if buttons["serverLogin.pairingDoor"].exists { return }
             guard openMachinesTab() else { return }
             let menu = firstMachineMenu()
             guard menu.waitForExistence(timeout: 3) else { return }
@@ -256,7 +352,19 @@ extension XCUIApplication {
                 return
             }
             forget.tap()
+            /*
+             * The confirmation, answered in the affirmative — the one place in
+             * this target that is allowed to.
+             *
+             * `.firstMatch`, for the reason `renameFirstMachine` gives about its
+             * Save: SwiftUI nests an alert's button inside a button carrying the
+             * same identifier, and a bare subscript throws on the ambiguity.
+             * Scoped to the alert's own window, because the alert is one.
+             */
+            let confirm = alerts.firstMatch.buttons["forget.confirm"].firstMatch
+            if confirm.waitForExistence(timeout: 3) { confirm.tap() }
             _ = textFields["pairing.field"].waitForExistence(timeout: 3)
+            _ = buttons["serverLogin.pairingDoor"].waitForExistence(timeout: 3)
         }
     }
 
@@ -291,6 +399,43 @@ extension XCUIApplication {
     }
 
     /// Open the sheet that takes a pairing code for an additional machine.
+    /**
+     * The six-digit field — **opening the door to it first, if that is where it
+     * is.**
+     *
+     * Every self-pairing suite in this target used to reach straight for
+     * `textFields["pairing.field"]` on the app's first frame, and for a long
+     * time that was right: the first screen *was* the pairing screen.
+     *
+     * It is not any more. *"Say no MacBook or Windows exists at all — a user
+     * only has a server and a phone"* put the **server login** on the first
+     * frame and moved pairing behind one tap — `serverLogin.pairingDoor`, which
+     * `OneLoginUITests` asserts is *"one tap away"*. Every helper that waited on
+     * the field alone therefore waited eight seconds, found nothing, and
+     * concluded the phone was **already paired** — so the suite carried on
+     * against a machine it had never connected to, and its cases failed or
+     * skipped for reasons that looked like anything but this.
+     *
+     * That is what this exists to stop happening again in twenty-two files: the
+     * question *"where is the pairing field"* is answered once, here.
+     *
+     * Returns false when there is no pairing field to be had — which is the
+     * honest answer for a phone that really is already paired, and is what the
+     * callers key their "nothing to do" branch off.
+     */
+    @discardableResult
+    func reachPairingField(timeout: TimeInterval = 8) -> Bool {
+        let field = textFields["pairing.field"]
+        if field.waitForExistence(timeout: timeout) { return true }
+        // Not on screen — so either this phone is paired, or the login is in
+        // front of it. The door is only ever on the first frame, so a short wait
+        // is enough and a long one would be eight seconds per case for nothing.
+        let door = buttons["serverLogin.pairingDoor"]
+        guard door.waitForExistence(timeout: 3), door.isHittable else { return false }
+        door.tap()
+        return field.waitForExistence(timeout: timeout)
+    }
+
     @discardableResult
     func beginPairingAnotherMachine() -> Bool {
         guard openMachinesTab() else { return false }
@@ -343,5 +488,43 @@ extension XCUIApplication {
         guard row.waitForExistence(timeout: 10) else { return false }
         row.tap()
         return buttons["alerts.done"].waitForExistence(timeout: 10)
+    }
+}
+
+extension XCUIApplication {
+    /**
+     * Close a presented `Menu`, if one is up, the way tapping outside it does.
+     *
+     * UIKit puts a full-screen `PopoverDismissRegion` behind every presented
+     * menu and popover, and tapping it is the dismissal. `app.tap()` is not a
+     * substitute: it lands in the middle of the screen, which on this app is
+     * usually a row *underneath* the popover, and whether it dismisses or
+     * navigates depends on what happens to be there.
+     *
+     * Silent when nothing is presented — every caller uses it as a "make sure
+     * nothing is over the screen" before moving to another tab, and the common
+     * case is that nothing is.
+     */
+    func dismissAnyMenu() {
+        if otherElements["PopoverDismissRegion"].exists {
+            otherElements["PopoverDismissRegion"].tap()
+            return
+        }
+        /*
+         * **A coordinate, because on iPhone there is no element to press.**
+         *
+         * Measured on iOS 26: a SwiftUI `Menu` on iPhone presents with **no**
+         * `PopoverDismissRegion` in the hierarchy at all, and neither
+         * `app.tap()` nor a tap on the navigation bar closes it — the run sat on
+         * the Browser tab with the menu standing over it until it timed out,
+         * twice, and every later tap was eaten by the invisible dismiss layer.
+         *
+         * A tap outside the popover's own bounds is what a person does, and the
+         * only way to express that here is a point. Low and left: 0.9 down the
+         * screen is under every menu this app presents from a toolbar, and 0.12
+         * across is clear of the tab bar's leftmost pill, which sits from about
+         * 0.15. Harmless when no menu is up — it lands on empty ground.
+         */
+        coordinate(withNormalizedOffset: CGVector(dx: 0.12, dy: 0.9)).tap()
     }
 }

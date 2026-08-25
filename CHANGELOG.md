@@ -10,6 +10,27 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+### Added
+
+- **Files, Source control, Artifacts, Store, AI readiness and MCP servers, on the phone.** The six panels the desktop has always had are now on the Menu tab, against any machine you are paired with — including a server with no screen. They are not read-only lists: every action the desktop offers is on the phone too. Add, edit, remove, connect and disconnect an MCP server; run the readiness scan and apply its fixes; install and remove from the Store; filter Artifacts by what an agent made or changed, by session, and by name. What a panel can do is decided by the machine and drawn by the phone, so a machine that cannot do something never shows a button for it.
+- **Drive the machine's own browser from your phone.** Not a page tunnelled onto the phone — the machine's real Chromium, with the machine's cookies. List its windows, open one (shared or isolated), navigate it, and close it. **Attach a window to a session** so the agent working in that session knows which window is its own and can address it by name. Take a screenshot and look at it, or **send it straight to a session** for the agent to read. Record a click flow and read back the steps. It works the same on a desktop and on a server.
+- **Swipe a row for what you can do to it.** Sessions, machines, ports and windows all answer a left or right swipe with the same verbs their menus carry — the way Mail and WhatsApp do it. Anything destructive refuses a full swipe and asks first.
+- **The Copilot tab lands you in a conversation.** On a machine with an agent already running it opens that session in chat mode, with the terminal one tap away. On one with nothing running it offers to start a session — one press that both creates it and puts you in the chat. Starting is never automatic: switching to a tab must not spend money. A button in the top right explains what the copilot is, where it runs and why.
+- **An Update button wherever a server's host is behind this build**, next to Install, on both the desktop and the phone.
+
+### Fixed
+
+- **Clearing a browser profile on a server actually clears it.** It removed a directory that does not exist on a server — the profile lives somewhere else there — then reported success, so anyone who cleared a profile to sign out of something was still signed in and had been told otherwise.
+- **The Store panel opens.** It said "This machine could not answer that panel" on every machine, because it called a method that does not exist. It was also reporting the app's own preferences rather than the Store.
+- **Files and Source control reach their own answers.** Both were being answered by the browser-profile handler, which is a different question entirely.
+- **A first session in a folder that is your home folder starts.** The confinement proof planted one of its two test files inside the very folder being granted, decided the test could not fail, and refused — which is every first session on a fresh server.
+- **Windows on a machine are one list, not two.** One showed them and streamed them; another showed the same windows and carried the controls.
+- **"Open on \<machine\>" says what it does on a server.** There is no screen there; the page opens in that server's browser, and now it says so.
+- **Back and forward work on a server's browser.** They were refused by a guard that could not read the frame they send.
+- **A server can hold more than one cookie jar**, so isolated and shared windows and named profiles mean something there.
+- **The app compiles what it says it compiles.** The repository's own typecheck command was a no-op — it checked nothing at all — which had hidden a dozen live errors, four of them defects a person could see.
+
+
 ## [0.10.2] — 2026-08-24
 
 ### Added

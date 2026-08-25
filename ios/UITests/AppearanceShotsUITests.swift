@@ -168,8 +168,8 @@ final class AppearanceShotsUITests: XCTestCase {
              * The copilot's *client* half is the part of `COPILOT-REMOTE.md` §8
              * that is not built yet, so which of the screen's states a phone
              * reaches against the stand-in is a moving target — connect, not
-             * granted, watching, or the full thing. Waiting for `copilot.more`
-             * specifically failed here on a screen that was drawing perfectly
+             * granted, watching, or the full thing. Waiting for the toolbar
+             * button specifically failed here on a screen that was drawing perfectly
              * well, which is a test asserting the feature's roadmap rather than
              * its appearance. The frame is still measured, so the claim this
              * suite makes about it — that it followed the scheme — still holds.
@@ -177,24 +177,42 @@ final class AppearanceShotsUITests: XCTestCase {
             sleep(3)
             capture("\(scheme.rawValue)-21-copilot")
 
-            // The three sheets behind the `…`. Each is opened, photographed and
-            // dismissed by its own Done, so a sheet that fails to open is one
-            // missing frame rather than a tour that ends here.
-            let more = app.buttons["copilot.more"]
-            if more.exists {
-                more.tap()
-                capture("\(scheme.rawValue)-22-copilot-menu")
-                for (item, done, name) in [("Sessions", "copilot.sessions", "23-copilot-sessions"),
-                                           ("Activity", "copilot.activity", "24-copilot-log")] {
-                    if app.buttons[item].waitForExistence(timeout: 3) {
-                        app.buttons[item].tap()
-                        _ = app.descendants(matching: .any)[done].waitForExistence(timeout: 10)
+            /*
+             * The controls, and the two sheets on them.
+             *
+             * This used to walk a `…` menu; that menu is gone, folded into
+             * `CopilotControlView` — *"all the control about copilot, all the
+             * settings of the copilot… whatever, three dots, maybe your settings
+             * button, whatever it is."* So the gear is the single top-right control
+             * on every screen this tab can show, and this photographs the screen
+             * behind it and then each sheet, dismissing each by its own Done so
+             * that a sheet which fails to open is one missing frame rather than a
+             * tour that ends here.
+             */
+            let controls = app.buttons["copilot.controls"]
+            if controls.exists {
+                controls.tap()
+                _ = app.navigationBars["Copilot"].waitForExistence(timeout: 5)
+                capture("\(scheme.rawValue)-22-copilot-controls")
+                // Waited on by the sheet's own navigation title rather than by
+                // an identifier on the row that opened it. The old walk waited
+                // on the menu item's id, which is not in the hierarchy once the
+                // menu has closed — so it spent its whole timeout and
+                // photographed whatever happened to be on screen.
+                for (row, title, name) in [("copilot.controls.sessions", "Sessions it started",
+                                            "23-copilot-sessions"),
+                                           ("copilot.controls.activity", "Everything it did",
+                                            "24-copilot-log")] {
+                    if app.buttons[row].waitForExistence(timeout: 3) {
+                        app.buttons[row].tap()
+                        _ = app.navigationBars[title].waitForExistence(timeout: 10)
                         capture("\(scheme.rawValue)-\(name)")
                         dismissASheet()
-                        if more.waitForExistence(timeout: 5) { more.tap() }
                     }
                 }
-                dismissASheet()
+                // Out of the controls, back to the conversation under them.
+                let up = app.navigationBars.buttons.element(boundBy: 0)
+                if up.exists { up.tap() }
             }
             let back = app.navigationBars.buttons.element(boundBy: 0)
             if back.exists { back.tap() }
@@ -266,7 +284,8 @@ final class AppearanceShotsUITests: XCTestCase {
     }
 
     private func localhost(_ scheme: Scheme) throws {
-        XCTAssertTrue(app.openBrowserTab(), "the Browser tab should be reachable")
+        XCTAssertTrue(app.openLocalhostList(),
+                      "the localhost list is one row down the Browser tab's menu — see TabNavigation")
         let headers = app.buttons.matching(
             NSPredicate(format: "identifier BEGINSWITH 'localhost.section.'"))
         XCTAssertTrue(headers.firstMatch.waitForExistence(timeout: 30),
@@ -482,8 +501,12 @@ final class AppearanceShotsUITests: XCTestCase {
 
         // Measured before anything is tapped: this is the first frame of a cold
         // launch, which is where a flash of the wrong scheme would show.
+        // Any of the three first frames counts as "up": the session list for a
+        // paired phone, the pairing field, or — since the login became the first
+        // screen — the address field in front of it.
         XCTAssertTrue(app.buttons["sessions.more"].waitForExistence(timeout: 60)
-                      || app.textFields["pairing.field"].waitForExistence(timeout: 5),
+                      || app.textFields["pairing.field"].waitForExistence(timeout: 5)
+                      || app.textFields["serverLogin.address"].waitForExistence(timeout: 5),
                       "the app should come back up")
         expecting = .light
         capture("relaunch-01-light-on-launch")

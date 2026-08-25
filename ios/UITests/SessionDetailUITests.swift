@@ -39,7 +39,7 @@ final class SessionDetailUITests: XCTestCase {
         app = XCUIApplication()
         app.launch()
 
-        if app.textFields["pairing.field"].waitForExistence(timeout: 5) {
+        if app.reachPairingField(timeout: 5) {
             guard let data = try? Data(contentsOf: Self.control.appendingPathComponent("pair")),
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let code = json["code"] as? String else {

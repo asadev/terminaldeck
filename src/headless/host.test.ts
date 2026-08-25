@@ -34,6 +34,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { currentEndpoint } from '../main/deck-control/server'
 import { createHeadlessHost, type HeadlessHost } from './host'
+import { serverMachineBrowser } from './machine-browser'
 
 /**
  * The headless host, started for real, under plain Node.
@@ -714,4 +715,248 @@ describe('a session that ends on this host leaves every connected client’s lis
     expect(source).toMatch(/onWindowsHeld:\s*\(peer, held\)\s*=>\s*recordRemoteHolds\(peer, held\)/)
     expect(source).toMatch(/windowsHeldFor:\s*\(deviceId\)\s*=>\s*heldRowsFor\(/)
   })
+})
+
+describe('the machine’s own browser, and the panels a phone reaches on this host', () => {
+  /*
+   * The join this lane exists to make, and why it is checked from two sides.
+   *
+   * Every control Asad asked for on the browser screen — *"recording the clicks
+   * flow, creating a screenshot and sending it to the session … making a
+   * browsing session into an isolated or shared one … an option to connect any
+   * browsing window to any session"* — has been on the wire since
+   * `browser-control.ts` was written, and a headless host offered none of it. Not
+   * because a verb was broken: because `server.ts` decides whether to advertise
+   * `browser.control` by asking whether a `machineBrowser` object was **passed**,
+   * and this host passed none. *"I don't see any of them"*, twice in one day, is
+   * what one missing argument looks like from a phone.
+   *
+   * So the first test drives the switch itself over a real endpoint — the object
+   * present, the capability offered; the object absent, nothing offered and
+   * therefore nothing on the phone to be refused later. The second reads
+   * `host.ts` as text, for the reason `credential-wiring.test.ts` and the
+   * `onWindowsHeld` assertion above do: these are members of an options object,
+   * so a rename or a deletion compiles perfectly and takes the whole feature
+   * with it in silence, and there is nothing to observe from a harness because
+   * `createHeadlessHost` does not hand its endpoint back.
+   *
+   * `machine-browser.test.ts` proves what the object *does*, against a fake
+   * Chromium and the real binding store.
+   */
+
+  /** Every hello is the one owner phone, and it is one of his own machines. */
+  const auth: RemoteEndpointOptions['auth'] = {
+    authenticate: async () => ({
+      ok: true,
+      deviceId: 'device-1',
+      deviceName: 'iPhone',
+      credential: null,
+    }),
+  }
+
+  const noSessions: SessionAccess = {
+    list: () => [],
+    attach: (): SessionHandle | null => null,
+    write: () => {},
+    resize: () => {},
+    detach: () => {},
+  }
+
+  /**
+   * One connected client, over the transport seam rather than a socket.
+   *
+   * Written again here rather than shared with the fan-out block above: that one
+   * is scoped to its own describe and grows the fields that block needs, and a
+   * peer shared between two tests about different things is a peer that acquires
+   * a flag for one of them.
+   */
+  async function welcomeFrom(options: Partial<RemoteEndpointOptions>): Promise<ServerMessage> {
+    const received: ServerMessage[] = []
+    let deliver: ((text: string) => void) | null = null
+    const endpoint = createRemoteEndpoint({
+      sessions: noSessions,
+      auth,
+      webRoot: join(dir, 'no-web-here'),
+      pingIntervalMs: 0,
+      // The panels are for the owner's own devices; a guest is refused before
+      // any panel is asked. Said here so the test exercises the panel and not
+      // the reach rule, which `server.test.ts` owns.
+      ownDevice: () => true,
+      ...options,
+    })
+    endpoint.attachTransport('100.64.0.2', (handlers) => {
+      deliver = handlers.message
+      return {
+        send: (text: string) => received.push(JSON.parse(text) as ServerMessage),
+        close: () => handlers.closed(),
+      }
+    })
+    const say = (message: ClientMessage): void => deliver?.(serialize(message))
+    say({
+      t: 'hello',
+      protocol: PROTOCOL_VERSION,
+      token: 'device-1.secret',
+      device: { name: 'iPhone', platform: 'iOS' },
+    })
+    for (let i = 0; i < 200 && !received.some((message) => message.t === 'welcome'); i += 1) {
+      await new Promise((done) => setTimeout(done, 5))
+    }
+    endpoint.closeAll()
+    const welcome = received.find((message) => message.t === 'welcome')
+    if (!welcome) throw new Error('never received the welcome')
+    return welcome
+  }
+
+  it('offers browser.control exactly when a machine browser was passed, and never otherwise', async () => {
+    const nothing = await welcomeFrom({})
+    expect(nothing.t === 'welcome' && nothing.capabilities).not.toContain('browser.control')
+
+    const wired = await welcomeFrom({
+      machineBrowser: serverMachineBrowser({
+        windows: {
+          openWindow: async () => ({ ok: false, why: 'no browser here' }),
+          openForSession: async () => ({ line: '', attached: false }),
+          closeWindow: async () => false,
+          contentsFor: () => null,
+          historyMove: async () => ({ moved: false, why: 'no browser here' }),
+          repartitionWindow: async () => null,
+        },
+        shots: { screenshot: async () => ({ path: '', width: 0, height: 0 }) },
+        sessions: () => [],
+        write: () => {},
+      }),
+    })
+    expect(wired.t === 'welcome' && wired.capabilities).toContain('browser.control')
+  })
+
+  it('is wired into the options this host builds, with the two a server cannot serve left out', () => {
+    const source = readFileSync(join(__dirname, 'host.ts'), 'utf8')
+
+    // Built over this host's own Chromium and its own session layer, and the
+    // write is the one the wire's `input` frame performs rather than a second
+    // way of typing into a pty.
+    expect(source).toMatch(/serverMachineBrowser\(\{/)
+    expect(source).toMatch(/windows: browserHost,/)
+    expect(source).toMatch(/shots: browserDrive,/)
+    expect(source).toMatch(/write: \(sessionId, data\) => core\.sessions\.write\(sessionId, data\)/)
+
+    // And handed over. Presence is the switch, so the spread is the feature.
+    expect(source).toMatch(/\.\.\.\(machineBrowser \? \{ machineBrowser \} : \{\}\)/)
+    expect(source).toMatch(/\.\.\.\(storePanel \? \{ storePanel \} : \{\}\)/)
+    // Read by `browserProfilesFor`, which fell back to the account home on every
+    // host until a caller declared it.
+    expect(source).toMatch(/\n {4}stateDir,\n/)
+
+    /*
+     * The two that are deliberately absent, asserted as absences.
+     *
+     * `mcpPool` because this host runs no pool and a second one would spawn a
+     * duplicate of every server the phone connected. `staleAgents` because
+     * `browser-signin.ts` imports `shell` from `electron` as a value and throws
+     * at load under plain Node — passing it would not degrade this daemon, it
+     * would stop it starting. Both panels say what they cannot answer.
+     */
+    expect(source).not.toMatch(/\bmcpPool:/)
+    expect(source).not.toMatch(/\bstaleAgents:/)
+  })
+
+  it('withholds both from the public demo box, where the browser is a stranger’s', () => {
+    /*
+     * A container that hands a stranger a shell must not hand them the machine's
+     * browser as well — a fetch primitive pointed at whatever the host can route
+     * to, with an action log nobody owns — nor a Store that installs software
+     * into it. The same argument the tool endpoint above is withheld on, and a
+     * source check for the same reason that one is: what an ordinary edit can
+     * lose is the condition itself.
+     */
+    const source = readFileSync(join(__dirname, 'host.ts'), 'utf8')
+    expect(source).toMatch(/const machineBrowser = options\.publicHost\s*\n?\s*\? null/)
+    expect(source).toMatch(/const toolStore = options\.publicHost \? null :/)
+  })
+
+  it('answers a panel over the wire with the catalogue this host can reach', async () => {
+    /*
+     * The panel path, end to end, with a `storePanel` present — which is the
+     * state this host is now in. The Store panel was the one Asad photographed:
+     * it read `store().read()`, a method `Store` has never had, so it threw on
+     * every host and the phone said *"This machine could not answer that panel."*
+     *
+     * The tools department is stubbed rather than built, and only that
+     * department is offered, because what is under test here is the route and
+     * the offer — that a `panel.read` reaches a panel and comes back carrying
+     * the buttons a phone may press. What the real catalogues answer is
+     * `panels/store.ts`'s own subject, and building them here would put a `which
+     * npx` and a read of the developer's own `~/.claude.json` inside a test
+     * about wiring.
+     */
+    const received: ServerMessage[] = []
+    let deliver: ((text: string) => void) | null = null
+    const endpoint = createRemoteEndpoint({
+      sessions: noSessions,
+      auth,
+      webRoot: join(dir, 'no-web-here'),
+      pingIntervalMs: 0,
+      ownDevice: () => true,
+      storePanel: {
+        tools: {
+          read: async () => ({
+            folder: join(dir, 'browser-tools'),
+            tools: [
+              {
+                id: 'prices',
+                name: 'Prices',
+                summary: 'Reads a price table',
+                homepage: '',
+                licence: 'MIT',
+                version: '1.0.0',
+                grants: [],
+                origins: [],
+                url: '',
+                fetched: false,
+                sha256: 'f'.repeat(64),
+                state: 'available',
+                installedVersion: '',
+                installedAt: 0,
+                message: '',
+                reads: [],
+              },
+            ],
+          }),
+          install: async () => ({ ok: true, message: 'Installed Prices.' }),
+        },
+      },
+    })
+    endpoint.attachTransport('100.64.0.2', (handlers) => {
+      deliver = handlers.message
+      return {
+        send: (text: string) => received.push(JSON.parse(text) as ServerMessage),
+        close: () => handlers.closed(),
+      }
+    })
+    const say = (message: ClientMessage): void => deliver?.(serialize(message))
+    say({
+      t: 'hello',
+      protocol: PROTOCOL_VERSION,
+      token: 'device-1.secret',
+      device: { name: 'iPhone', platform: 'iOS' },
+    })
+    for (let i = 0; i < 200 && !received.some((message) => message.t === 'welcome'); i += 1) {
+      await new Promise((done) => setTimeout(done, 5))
+    }
+    say({ t: 'panel.read', panel: 'store', path: dir })
+    for (let i = 0; i < 400 && !received.some((message) => message.t === 'panel.rows'); i += 1) {
+      await new Promise((done) => setTimeout(done, 5))
+    }
+    endpoint.closeAll()
+
+    const answer = received.find((message) => message.t === 'panel.rows')
+    expect(answer, JSON.stringify(received.map((message) => message.t))).toBeDefined()
+    const rows = answer as Extract<ServerMessage, { t: 'panel.rows' }>
+    expect(rows.panel).toBe('store')
+    // The row a phone can press, rather than a list it can only look at:
+    // *"exactly all actions that we have in desktop application, they should be
+    // inside each option of them."*
+    expect(JSON.stringify(rows.rows)).toContain('Prices')
+    expect(JSON.stringify(rows.rows)).toContain('install')
+  }, 20_000)
 })

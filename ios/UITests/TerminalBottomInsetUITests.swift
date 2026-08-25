@@ -87,7 +87,7 @@ final class TerminalBottomInsetUITests: XCTestCase {
         app = XCUIApplication()
         app.launch()
 
-        if app.textFields["pairing.field"].waitForExistence(timeout: 5) {
+        if app.reachPairingField(timeout: 5) {
             let code = try pairingCode()
             let field = app.textFields["pairing.field"]
             field.tap()

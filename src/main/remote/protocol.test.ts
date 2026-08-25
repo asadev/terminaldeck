@@ -135,6 +135,31 @@ const CLIENT_TYPES: Record<ClientMessage['t'], true> = {
   'browser.frame.ack': true,
   'browser.input': true,
   'browser.surfaces': true,
+  /*
+   * The reads a phone makes of the machine itself, and the verbs that drive its
+   * browser. Every one of these was already in `ClientMessage` and missing from
+   * this map, which is the failure this map exists to prevent — and the reason
+   * it did not fire is that the repository's root `tsconfig.json` has
+   * `include: []`, so a bare `tsc --noEmit` typechecks nothing at all. The gate
+   * is `npm run typecheck`.
+   */
+  'folders.browse': true,
+  'files.list': true,
+  'files.read': true,
+  'git.status': true,
+  'git.diff': true,
+  'panel.read': true,
+  'panel.act': true,
+  'browser.profiles': true,
+  'browser.profile.use': true,
+  'browser.profile.clear': true,
+  'browser.windows': true,
+  'browser.window.open': true,
+  'browser.window.go': true,
+  'browser.window.act': true,
+  'browser.window.bind': true,
+  'browser.window.shot': true,
+  'browser.window.steps': true,
 }
 
 /** Same guard for the other direction. */
@@ -194,6 +219,18 @@ const SERVER_TYPES: Record<ServerMessage['t'], true> = {
   'window.result': true,
   'browser.frame': true,
   'browser.surfaces.rows': true,
+  // The answers to the family above, absent for the same reason and found the
+  // same way — by running the typecheck that actually reads these files.
+  'folders.entries': true,
+  'files.rows': true,
+  'files.text': true,
+  'git.state': true,
+  'git.patch': true,
+  'panel.rows': true,
+  'browser.profile.rows': true,
+  'browser.window.rows': true,
+  'browser.shot': true,
+  'browser.record.rows': true,
 }
 
 const VALID_CLIENT: ClientMessage[] = [
@@ -384,6 +421,60 @@ const VALID_CLIENT: ClientMessage[] = [
   { t: 'browser.input', window: 'B2', seq: 42, touch: { type: 'move', points: [{ x: 1, y: 2 }, { x: 3, y: 4 }] } },
   { t: 'browser.input', window: 'B2', seq: 42, paste: 'hello world' },
   { t: 'browser.surfaces', rid: 'srf-1' },
+
+  /*
+   * **Reading the machine, and driving its browser.**
+   *
+   * Every frame below existed in `ClientMessage` with no round-trip case and no
+   * entry in `CLIENT_TYPES` — thirteen of them for weeks. The map above is
+   * supposed to make that a compile error and this list is supposed to make it a
+   * test failure, and neither fired, because the repository's root
+   * `tsconfig.json` has `include: []`: a bare `tsc --noEmit` typechecks nothing
+   * at all, and the vitest run reads the file without typechecking it. The gate
+   * is `npm run typecheck`, and running it is what found these.
+   *
+   * Both shapes of each optional-bearing frame, since the parser's job is
+   * deciding what an absent field means: `panel.read` with nothing but a panel
+   * name means *somewhere sensible*, and with a scope means a filter that the
+   * host will refuse if it does not know it.
+   */
+  { t: 'folders.browse', path: '/Users/apple/Projects' },
+  { t: 'files.list', path: '/Users/apple/Projects/terminaldeck' },
+  { t: 'files.read', path: '/Users/apple/Projects/terminaldeck/README.md' },
+  { t: 'files.read', path: '/Users/apple/Projects/terminaldeck/README.md', at: 4096, max: 65_536 },
+  { t: 'git.status', path: '/Users/apple/Projects/terminaldeck' },
+  { t: 'git.diff', path: '/Users/apple/Projects/terminaldeck', file: 'src/main/index.ts', staged: false },
+  { t: 'panel.read', panel: 'mcp' },
+  { t: 'panel.read', panel: 'artifacts', path: '/Users/apple/Projects/terminaldeck', scope: 'changed all', query: 'index' },
+  { t: 'panel.act', panel: 'readiness', action: 'scan' },
+  {
+    t: 'panel.act',
+    panel: 'mcp',
+    action: 'add',
+    path: '/Users/apple/Projects/terminaldeck',
+    id: 'context7',
+    fields: { name: 'context7', command: 'npx -y @upstash/context7-mcp', scope: 'user' },
+    scope: 'user',
+    query: 'con',
+  },
+  { t: 'browser.profiles' },
+  { t: 'browser.profile.use', id: 'default' },
+  { t: 'browser.profile.clear', id: 'work' },
+  { t: 'browser.windows' },
+  { t: 'browser.window.open' },
+  { t: 'browser.window.open', url: 'http://localhost:3000/admin', profile: 'work', isolated: true },
+  { t: 'browser.window.go', id: 'browser:1', url: 'https://example.test/' },
+  // One per verb of the closed list, because `WINDOW_ACTIONS` is the parser's
+  // whole check on this frame and a word dropped from it is a refused press.
+  ...(['back', 'forward', 'reload', 'close', 'record.on', 'record.off', 'share', 'isolate'] as const).map(
+    (action) => ({ t: 'browser.window.act', id: 'browser:1', action }) as ClientMessage,
+  ),
+  { t: 'browser.window.bind', id: 'browser:1', session: SESSION_ID },
+  // No session is the unbind, and it is a shape rather than an omission.
+  { t: 'browser.window.bind', id: 'browser:1' },
+  { t: 'browser.window.shot', id: 'browser:1' },
+  { t: 'browser.window.shot', id: 'browser:1', session: SESSION_ID, note: 'the admin page after signing in' },
+  { t: 'browser.window.steps', id: 'browser:1' },
 ]
 
 const SESSION: RemoteSession = {
@@ -858,6 +949,141 @@ const VALID_SERVER: ServerMessage[] = [
     settings: [
       { key: 'agents.defaultProvider', value: 'codex', options: ['claude', 'codex', 'gemini', 'shell'] },
       { key: 'general.restoreSessions', value: 'true' },
+    ],
+  },
+
+  /*
+   * The answers to the family added above, absent for the same reason and found
+   * the same way. Each one is drawn in both its shapes where it has two, because
+   * on this side the optional fields are the *meaning*: a `panel.rows` with a
+   * `note` explains an empty list, and one with a `notice` says what an action
+   * just did, and a screen that confused the two would print a stale event.
+   */
+  {
+    t: 'folders.entries',
+    path: '/Users/apple',
+    parent: '/Users',
+    entries: [
+      { name: 'Projects', path: '/Users/apple/Projects', readable: true, granted: false },
+      { name: 'ClaudeAsad', path: '/Users/apple/ClaudeAsad', readable: true, granted: true },
+    ],
+  },
+  {
+    t: 'files.rows',
+    path: '/Users/apple/Projects/terminaldeck',
+    parent: '/Users/apple/Projects',
+    entries: [
+      { name: 'src', path: '/Users/apple/Projects/terminaldeck/src', directory: true, readable: true },
+      {
+        name: 'README.md',
+        path: '/Users/apple/Projects/terminaldeck/README.md',
+        directory: false,
+        readable: true,
+        size: 8_192,
+        at: 1_756_000_000_000,
+      },
+    ],
+  },
+  {
+    t: 'files.text',
+    path: '/Users/apple/Projects/terminaldeck/README.md',
+    at: 0,
+    text: '# Terminal Deck\n',
+    truncated: false,
+    binary: false,
+  },
+  {
+    t: 'git.state',
+    path: '/Users/apple/Projects/terminaldeck',
+    // `status` is `unknown` on the wire — the host sends the shape `GitStatus`
+    // already has and the phone narrows it, rather than this file restating a
+    // model that lives in `src/main/git.ts`.
+    status: {
+      branch: 'wip/0.10.0',
+      ahead: 3,
+      behind: 0,
+      files: [{ file: 'src/main/index.ts', group: 'unstaged', kind: 'modified' }],
+    },
+  },
+  {
+    t: 'git.patch',
+    path: '/Users/apple/Projects/terminaldeck',
+    file: 'src/main/index.ts',
+    staged: false,
+    patch: '@@ -1 +1 @@\n-old\n+new\n',
+  },
+  {
+    t: 'panel.rows',
+    panel: 'mcp',
+    path: '/Users/apple/Projects/terminaldeck',
+    note: 'No MCP servers are configured for /Users/apple/Projects/terminaldeck.',
+    rows: [],
+  },
+  {
+    t: 'panel.rows',
+    panel: 'mcp',
+    path: '/Users/apple/Projects/terminaldeck',
+    notice: 'Added context7.',
+    scopes: [
+      { id: 'user', label: 'User', on: true },
+      { id: 'project', label: 'Project', on: false },
+    ],
+    actions: [
+      {
+        id: 'add',
+        label: 'Add server',
+        fields: [
+          { id: 'name', label: 'Name', required: true },
+          { id: 'scope', label: 'Where to save it', value: 'user', choices: ['user', 'project', 'local'] },
+        ],
+      },
+    ],
+    rows: [
+      {
+        title: 'context7',
+        detail: 'npx -y @upstash/context7-mcp',
+        value: 'user',
+        status: 'ok',
+        id: 'context7',
+        actions: [
+          { id: 'edit', label: 'Edit', fields: [{ id: 'name', label: 'Name', value: 'context7' }] },
+          { id: 'remove', label: 'Remove', kind: 'destructive', confirm: 'This removes it for you only.' },
+        ],
+      },
+    ],
+  },
+  {
+    t: 'browser.profile.rows',
+    current: 'default',
+    profiles: [{ id: 'default', name: 'Default', avatar: '', partition: 'persist:terminaldeck-browser' }],
+  },
+  { t: 'browser.window.rows', windows: [], sessions: [] },
+  {
+    t: 'browser.window.rows',
+    notice: 'B1 is in terminaldeck.',
+    windows: [
+      {
+        id: 'browser:1',
+        title: 'Admin',
+        url: 'http://localhost:3000/admin',
+        slot: 'B1',
+        session: SESSION_ID,
+        sessionTitle: 'terminaldeck',
+        profile: 'work',
+        isolated: true,
+        recording: true,
+        loading: false,
+      },
+    ],
+    sessions: [{ id: SESSION_ID, title: 'terminaldeck', windows: 1 }],
+  },
+  { t: 'browser.shot', id: 'browser:1', png: 'iVBORw0KGgo=', at: 1_756_000_000_000 },
+  {
+    t: 'browser.record.rows',
+    id: 'browser:1',
+    steps: [
+      { at: 1_756_000_000_000, kind: 'navigate', detail: 'http://localhost:3000/admin' },
+      { at: 1_756_000_001_000, kind: 'click', selector: 'button.save', value: 'Save' },
     ],
   },
 ]

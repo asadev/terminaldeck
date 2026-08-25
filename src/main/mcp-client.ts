@@ -15,6 +15,8 @@ import {
   probeBinaries,
   readStoreFacts,
   type ConfiguredServer,
+  type McpStoreResult,
+  type McpStoreView,
 } from './mcp-store'
 import { currentPlatform, envPath, isPathKey, withPath, type Platform } from './platform/host'
 import { loginPath } from './providers'
@@ -1106,6 +1108,69 @@ const subscribers = new Set<Electron.WebContents>()
 
 let ipcRegistered = false
 
+/**
+ * The one pool this process runs, for a caller that is not a window.
+ *
+ * A phone's MCP panel offers Connect and Disconnect only when it is handed a
+ * pool, and it is handed **this** one. `remote/panels/mcp.ts` declines to build
+ * its own and says why: a second pool would spawn a second copy of every server
+ * the phone connected, and the window three feet away would go on saying *not
+ * connected* about a process that is running. There is one pool because there is
+ * one set of child processes.
+ *
+ * An accessor rather than the value, so nothing can capture it before the module
+ * has finished initialising and so the pool stays private to the writes below.
+ */
+export function mcpPool(): McpPool {
+  return pool
+}
+
+/**
+ * The storefront for one folder — the read behind `mcp:store`.
+ *
+ * Exported beside the channel rather than left inside it because a phone's Store
+ * panel serves the same catalogue and cannot invoke: `remote/panels/store.ts`
+ * builds its MCP department out of this, and a catalogue rendered from two
+ * bodies is a catalogue that drifts — one of them saying *not installed* about a
+ * server the other lists. Everything specific to it is private to this file
+ * (`configuredForStore`, `optionalProjectPath`), which is why the reach has to
+ * be a function here rather than an import over there.
+ */
+export async function mcpStoreView(projectPath: unknown): Promise<McpStoreView> {
+  const project = optionalProjectPath(projectPath)
+  const configured = configuredForStore(project)
+  /*
+   * Two probes, in parallel, and they are separate because they answer
+   * different kinds of question. `readStoreFacts` looks for the catalogue's
+   * three runtimes and is deduplicated across concurrent reads, because that
+   * question does not depend on which project is open. `probeBinaries` looks
+   * for whatever the *hand-written* servers name, which does — so it is asked
+   * fresh, per read, and never shares an answer with a different project's.
+   */
+  const [facts, binaries] = await Promise.all([readStoreFacts(), probeBinaries(configured)])
+  return buildStoreView({
+    configured,
+    runtimes: facts.runtimes,
+    environment: facts.environment,
+    environmentSource: facts.environmentSource,
+    writer: facts.writer,
+    projectPath: project,
+    binaries,
+  })
+}
+
+/** Install one catalogue row — the write behind `mcp:store-install`. */
+export function mcpStoreInstall(request: unknown): Promise<McpStoreResult> {
+  // The configuration is re-read here rather than taken from the request:
+  // whether a name is already taken is a fact about the file at the moment of
+  // writing, not about the view the caller was looking at.
+  const project =
+    typeof request === 'object' && request !== null
+      ? optionalProjectPath((request as { projectPath?: unknown }).projectPath)
+      : null
+  return installFromCatalogue(request, configuredForStore(project))
+}
+
 /** Test seam: forget that the channels were claimed. Not used in the app. */
 export function resetMcpIpcForTests(): void {
   ipcRegistered = false
@@ -1302,39 +1367,9 @@ export function registerMcpIpc(ipcMain: Electron.IpcMain, deps: McpIpcDeps = {})
    * so a row cannot say "not installed" about a server the list on the other tab
    * is showing. See `mcp-store.ts` for what is measured and what is not.
    */
-  ipcMain.handle('mcp:store', async (_e, projectPath?: unknown) => {
-    const project = optionalProjectPath(projectPath)
-    const configured = configuredForStore(project)
-    /*
-     * Two probes, in parallel, and they are separate because they answer
-     * different kinds of question. `readStoreFacts` looks for the catalogue's
-     * three runtimes and is deduplicated across concurrent reads, because that
-     * question does not depend on which project is open. `probeBinaries` looks
-     * for whatever the *hand-written* servers name, which does — so it is asked
-     * fresh, per read, and never shares an answer with a different project's.
-     */
-    const [facts, binaries] = await Promise.all([readStoreFacts(), probeBinaries(configured)])
-    return buildStoreView({
-      configured,
-      runtimes: facts.runtimes,
-      environment: facts.environment,
-      environmentSource: facts.environmentSource,
-      writer: facts.writer,
-      projectPath: project,
-      binaries,
-    })
-  })
+  ipcMain.handle('mcp:store', (_e, projectPath?: unknown) => mcpStoreView(projectPath))
 
-  ipcMain.handle('mcp:store-install', (_e, request: unknown) => {
-    // The configuration is re-read here rather than taken from the request:
-    // whether a name is already taken is a fact about the file at the moment of
-    // writing, not about the view the renderer was looking at.
-    const project =
-      typeof request === 'object' && request !== null
-        ? optionalProjectPath((request as { projectPath?: unknown }).projectPath)
-        : null
-    return installFromCatalogue(request, configuredForStore(project))
-  })
+  ipcMain.handle('mcp:store-install', (_e, request: unknown) => mcpStoreInstall(request))
 
   // The other write, and it exists because the panel used to point at a
   // terminal instead of doing it: *"To remove one, run `claude mcp remove` in a

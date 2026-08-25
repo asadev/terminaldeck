@@ -163,6 +163,91 @@ enum WireCodec {
                                       entries: rows),
                        activity: [:])
 
+        case "browser.profile.rows":
+            // Never `.failed`. A machine with no profiles is not a malformed
+            // frame, a dangling `current` is repaired against the rows that
+            // survived, and one bad row is dropped rather than discarding the
+            // answer.
+            return .ok(.browserProfileRows(machineProfileList(object)), activity: [:])
+
+        case "files.rows":
+            guard let path = string(object["path"]) else { return .failed(reason: "files.rows without a path") }
+            let rows = (object["entries"] as? [Any] ?? []).compactMap { row -> FileRow? in
+                guard let e = row as? [String: Any],
+                      let name = string(e["name"]), let full = string(e["path"]) else { return nil }
+                // A malformed row is dropped, never the listing — the rule this
+                // codec already follows for session lists.
+                let millis = (e["at"] as? NSNumber)?.doubleValue
+                return FileRow(name: name,
+                               path: full,
+                               directory: e["directory"] as? Bool ?? false,
+                               readable: e["readable"] as? Bool ?? true,
+                               size: (e["size"] as? NSNumber)?.intValue,
+                               at: millis.map { Date(timeIntervalSince1970: $0 / 1000) })
+            }
+            return .ok(.fileRows(FileListing(path: path,
+                                             parent: string(object["parent"]),
+                                             entries: rows)),
+                       activity: [:])
+
+        case "files.text":
+            guard let path = string(object["path"]) else { return .failed(reason: "files.text without a path") }
+            return .ok(.fileText(FileText(path: path,
+                                          text: string(object["text"]) ?? "",
+                                          at: (object["at"] as? NSNumber)?.intValue ?? 0,
+                                          truncated: object["truncated"] as? Bool ?? false,
+                                          binary: object["binary"] as? Bool ?? false)),
+                       activity: [:])
+
+        case "git.state":
+            guard let path = string(object["path"]) else { return .failed(reason: "git.state without a path") }
+            return .ok(.gitState(path: path, status: GitState(wire: object["status"])), activity: [:])
+
+        case "git.patch":
+            guard let path = string(object["path"]), let file = string(object["file"]) else {
+                return .failed(reason: "git.patch without a path")
+            }
+            return .ok(.gitPatch(path: path,
+                                 file: file,
+                                 staged: object["staged"] as? Bool ?? false,
+                                 patch: string(object["patch"]) ?? ""),
+                       activity: [:])
+
+        case "panel.rows":
+            /*
+             * Decoded by `PanelsWire.panelData`, which is the only decoder for
+             * this frame — there were two for a while, and the one that was
+             * **not** being called was the better of the pair: it runs every
+             * string through `displayLine` and caps the list at
+             * `PanelsWire.maxPanelRows`, and the live one did neither. A panel's
+             * rows are text from another machine going straight onto a screen,
+             * so losing the sanitiser to a duplicate was the more serious half
+             * of the duplication.
+             */
+            guard let data = panelData(object) else {
+                return .failed(reason: "panel.rows for a panel this build does not draw")
+            }
+            return .ok(.panelRows(data), activity: [:])
+
+        case "browser.window.rows":
+            return .ok(.machineWindowRows(machineWindows(object)), activity: [:])
+
+        case "browser.shot":
+            guard let id = string(object["id"]), let raw = string(object["png"]),
+                  let png = Data(base64Encoded: raw) else {
+                return .failed(reason: "browser.shot without a picture in it")
+            }
+            return .ok(.machineShot(MachineShot(id: id,
+                                                png: png,
+                                                at: object["at"] as? Double ?? 0)),
+                       activity: [:])
+
+        case "browser.record.rows":
+            guard let id = string(object["id"]) else {
+                return .failed(reason: "browser.record.rows without a window")
+            }
+            return .ok(.machineRecordRows(id: id, steps: recordedSteps(object)), activity: [:])
+
         case "attached":
             guard let id = string(object["id"]) else { return .failed(reason: "attached without an id") }
             return .ok(.attached(id: id), activity: [:])
@@ -803,6 +888,66 @@ enum WireCodec {
             } else {
                 object = ["t": "folders.browse"]
             }
+        case .browserProfiles:
+            object = ["t": "browser.profiles"]
+        case let .browserProfileUse(id):
+            object = ["t": "browser.profile.use", "id": id]
+        case let .browserProfileClear(id):
+            object = ["t": "browser.profile.clear", "id": id]
+        case let .filesList(path):
+            object = ["t": "files.list", "path": path]
+        case let .filesRead(path, at, max):
+            var ask: [String: Any] = ["t": "files.read", "path": path]
+            if let at { ask["at"] = at }
+            if let max { ask["max"] = max }
+            object = ask
+        case let .gitStatus(path):
+            object = ["t": "git.status", "path": path]
+        case let .gitDiff(path, file, staged):
+            object = ["t": "git.diff", "path": path, "file": file, "staged": staged]
+        case let .panelAct(panel, action, path, id, fields):
+            var ask: [String: Any] = ["t": "panel.act", "panel": panel, "action": action]
+            if let path { ask["path"] = path }
+            if let id { ask["id"] = id }
+            // An empty form is omitted rather than sent as `{}`: the host's
+            // parser treats an absent `fields` and an empty one identically, and
+            // the smaller frame is the one that describes what happened.
+            if !fields.isEmpty { ask["fields"] = fields }
+            object = ask
+        case .machineWindows:
+            object = ["t": "browser.windows"]
+        case let .machineWindowOpen(url, profile, isolated):
+            var ask: [String: Any] = ["t": "browser.window.open"]
+            if let url { ask["url"] = url }
+            if let profile { ask["profile"] = profile }
+            if isolated { ask["isolated"] = true }
+            object = ask
+        case let .machineWindowGo(id, url):
+            object = ["t": "browser.window.go", "id": id, "url": url]
+        case let .machineWindowAct(id, action):
+            object = ["t": "browser.window.act", "id": id, "action": action.rawValue]
+        case let .machineWindowBind(id, session):
+            var ask: [String: Any] = ["t": "browser.window.bind", "id": id]
+            if let session { ask["session"] = session }
+            object = ask
+        case let .machineWindowShot(id, session, note):
+            var ask: [String: Any] = ["t": "browser.window.shot", "id": id]
+            if let session { ask["session"] = session }
+            if let note, !note.isEmpty { ask["note"] = note }
+            object = ask
+        case let .machineWindowSteps(id):
+            object = ["t": "browser.window.steps", "id": id]
+        case let .panelRead(panel, path, scope, query):
+            // `path` omitted rather than sent empty when there is none: the host
+            // reads absent as "somewhere sensible" and would read `""` as a path.
+            var ask: [String: Any] = ["t": "panel.read", "panel": panel]
+            if let path, !path.isEmpty { ask["path"] = path }
+            // The same rule for both filters, and it is load-bearing rather than
+            // tidy: the host reads an absent scope as *the panel's default* and
+            // an empty string as a scope it does not know, which is a refusal.
+            if let scope, !scope.isEmpty { ask["scope"] = scope }
+            if let query, !query.isEmpty { ask["query"] = query }
+            object = ask
         case let .close(id):
             object = ["t": "close", "id": id]
         case let .attach(id, size):

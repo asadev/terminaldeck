@@ -178,7 +178,38 @@ async function approve(options: Options): Promise<void> {
     const devices = (await ask(at, 'remote:devices')) as Device[]
     const waiting = devices.filter((device) => !device.approved && !device.revoked)
     for (const device of waiting) {
-      await ask(at, 'remote:device:approve', device.id)
+      /*
+       * **Kind first, folders with it — and the answer read.**
+       *
+       * This was `ask(at, 'remote:device:approve', device.id)` with no kind at
+       * all, which is the exact bug `src/headless/main.ts` found and fixed on
+       * its own copy of this call: the handler's first check is
+       * `asDeviceKind(kind)`, which answers null for `undefined` and falls into
+       * the branch that **decides nothing** and returns the roster. So the
+       * device was never approved, and this printed "approved" anyway — because
+       * it read the fact that a reply arrived rather than the reply.
+       *
+       * That is not theoretical here. It is why every live-host suite in this
+       * target has been *skipping*: the phone typed its code, the host recorded
+       * it as pending, this said "approved", the flag stayed false, and the
+       * phone sat on **Waiting for approval** until the suite gave up and
+       * skipped — reporting green for a run in which nothing was tested. Caught
+       * on 2026-08-24 by reading `remote-auth.json` after a run that claimed to
+       * have approved: `"approved": false`.
+       *
+       * `mine` rather than `guest`, because a harness driving this phone is
+       * standing in for the owner at their own keyboard. The empty folder list
+       * is only consulted for a guest and is the right start regardless.
+       */
+      const answered = await ask(at, 'remote:device:approve', device.id, 'mine', [])
+      const record = (answered as { devices?: Device[] } | Device[] | null)
+      const roster = Array.isArray(record) ? record : (record?.devices ?? [])
+      const now = roster.find((row) => row.id === device.id)
+      if (now && !now.approved) {
+        process.stderr.write(`refused to approve ${device.id} — the host still says pending\n`)
+        process.exitCode = 1
+        return
+      }
       process.stdout.write(`approved ${device.id} ${device.name} ${device.fingerprint ?? 'no key'}\n`)
     }
     if (waiting.length > 0) return

@@ -102,6 +102,7 @@ function harness(overrides: Partial<ServersIpcDeps> = {}): {
   const { ipcMain, call } = registrar()
   const ipc = registerServersIpc(ipcMain, {
     storageDir,
+    appVersion: () => '0.10.3',
     servers: () => [{ id: 's1', name: 'demo', address: 'example.test', username: 'root' }],
     facts: async () => serverFacts(),
     run: async (_serverId, argv) => {

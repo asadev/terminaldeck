@@ -69,7 +69,22 @@ final class HostLink: Identifiable {
     /// offer the `localhost` capability.
     private(set) var ports: [LocalPort] = []
     /// The one port being browsed on this machine, if any.
-    private(set) var tunnel: PortTunnel?
+    /**
+     * The tunnels this phone is holding on this machine, **by port**.
+     *
+     * One became many when the Browser grew tabs: *"it should have all those
+     * options — to start a new windows thing should be there."* A tab is a
+     * (port, path) pair, and the port is what a tunnel is — `PortTunnel` binds
+     * the *same* number on this phone's loopback and refuses if it is already
+     * answering, so two tabs on `3000` at different paths are one tunnel and a
+     * second one on `3000` cannot exist. Keyed by port for exactly that reason.
+     */
+    private(set) var tunnels: [Int: PortTunnel] = [:]
+
+    /// The most recently opened one, for the callers that predate tabs and mean
+    /// "the page on screen". A single-tab phone behaves exactly as it did.
+    var tunnel: PortTunnel? { lastTunnelPort.flatMap { tunnels[$0] } }
+    private var lastTunnelPort: Int?
     /// The file on its way to this machine, if any.
     private(set) var upload: FileUpload?
     /// The last thing that went wrong here. Cleared on the next success.
@@ -426,6 +441,211 @@ final class HostLink: Identifiable {
         connection.isLive && (transport?.capabilities.contains(WireCapability.folderPick) ?? false)
     }
 
+    /* ---- the six panels ---------------------------------------------------- */
+
+    /// Whether this phone may read the machine's files. Owner devices only, so
+    /// its absence means either a guest or a host older than the capability —
+    /// two facts a phone cannot tell apart and does not need to.
+    var canReadFiles: Bool {
+        connection.isLive && (transport?.capabilities.contains(WireCapability.files) ?? false)
+    }
+    var canReadGit: Bool {
+        connection.isLive && (transport?.capabilities.contains(WireCapability.git) ?? false)
+    }
+    var canReadPanels: Bool {
+        connection.isLive && (transport?.capabilities.contains(WireCapability.panels) ?? false)
+    }
+
+    /// Whether this machine will discuss its browser's profiles. Withheld from a
+    /// guest at the source — a profile is somebody's signed-in cookie jar, and
+    /// clearing one signs their machine out of everything in it.
+    var canUseMachineProfiles: Bool {
+        connection.isLive && (transport?.capabilities.contains(WireCapability.browserProfiles) ?? false)
+    }
+
+    /// The machine's profiles, or nil until a `browser.profile.rows` has landed.
+    /// Nil is *not asked yet* and draws a spinner; an empty list is an answer.
+    private(set) var machineProfiles: MachineProfileList?
+
+    /**
+     * Ask for them, on every visit rather than once.
+     *
+     * This family has no push, and what it answers moves for reasons this phone
+     * never hears about — somebody switching profile at the machine, a jar
+     * growing while a page was open. The held list is deliberately **not**
+     * cleared first, so a re-read redraws under the rows already on screen
+     * instead of blanking a list somebody is looking at.
+     */
+    func readMachineProfiles() {
+        guard canUseMachineProfiles else { return }
+        transport?.send(.browserProfiles)
+    }
+
+    /// Switch the machine's browser. The answer is the whole list coming back
+    /// with the tick moved, which is what lets the screen confirm itself.
+    func useMachineProfile(_ id: String) {
+        guard canUseMachineProfiles else { return }
+        transport?.send(.browserProfileUse(id: id))
+    }
+
+    /// Empty one profile's jar on the machine. Nothing this phone holds moves.
+    func clearMachineProfile(_ id: String) {
+        guard canUseMachineProfiles else { return }
+        transport?.send(.browserProfileClear(id: id))
+    }
+
+    /// What the machine last said about a folder, a file, git, and each panel.
+    /// Keyed by nothing: one screen is open at a time, and a stale answer for a
+    /// screen nobody is looking at is cleared when the next ask goes out.
+    private(set) var fileListing: FileListing?
+    private(set) var fileText: FileText?
+    private(set) var gitState: GitState?
+    private(set) var gitPatch: GitPatch?
+    private(set) var panels: [PanelKind: PanelData] = [:]
+    /// Why the last read could not be shown, if it could not.
+    private(set) var readError: String?
+
+    func listFiles(_ path: String) {
+        guard canReadFiles else { return }
+        fileListing = nil
+        readError = nil
+        transport?.send(.filesList(path: path))
+    }
+
+    /**
+     * Read a file, or the next window of one.
+     *
+     * The window is deliberately smaller than the 256KB the host will serve: a
+     * frame that big fails this client's own socket, because `Carrier` hands
+     * `Wire.maxFrameMessageBytes` to `URLSessionWebSocketTask.maximumMessageSize`
+     * and an oversize message ends the connection rather than being dropped. The
+     * next screen is a second read from where this one stopped.
+     */
+    func readFile(_ path: String, at: Int = 0) {
+        guard canReadFiles else { return }
+        if at == 0 { fileText = nil }
+        readError = nil
+        transport?.send(.filesRead(path: path, at: at, max: 64 * 1024))
+    }
+
+    func gitStatus(_ path: String) {
+        guard canReadGit else { return }
+        gitState = nil
+        readError = nil
+        transport?.send(.gitStatus(path: path))
+    }
+
+    func gitDiff(_ path: String, file: String, staged: Bool) {
+        guard canReadGit else { return }
+        gitPatch = nil
+        readError = nil
+        transport?.send(.gitDiff(path: path, file: file, staged: staged))
+    }
+
+    /**
+     * Read one panel, optionally filtered.
+     *
+     * The held answer is cleared first so the screen draws a spinner rather than
+     * last visit's rows under this visit's caption — the opposite of the rule
+     * `readMachineProfiles` follows, and the difference is that a panel's filter
+     * can change what it is *about*, so showing the old rows while the new scope
+     * loads would be showing an answer to a different question.
+     */
+    func readPanel(_ panel: PanelKind, path: String? = nil, scope: String? = nil, query: String? = nil) {
+        guard canReadPanels else { return }
+        panels[panel] = nil
+        readError = nil
+        transport?.send(.panelRead(panel: panel.rawValue, path: path, scope: scope, query: query))
+    }
+
+    /**
+     * Do the thing a panel offered, and redraw with whatever comes back.
+     *
+     * The held answer is **not** cleared here, unlike a read. An action is a
+     * change to a list somebody is looking at — removing a server, installing a
+     * tool — and blanking the screen for the round trip loses their place in it
+     * for no gain. The answer replaces the rows when it lands, carrying its own
+     * `notice` about what happened.
+     */
+    func actOnPanel(_ panel: PanelKind, action: String, path: String? = nil,
+                    id: String? = nil, fields: [String: String] = [:]) {
+        guard canReadPanels else { return }
+        readError = nil
+        transport?.send(.panelAct(panel: panel.rawValue, action: action,
+                                  path: path, id: id, fields: fields))
+    }
+
+    // MARK: - The machine's own browser
+
+    /// Whether this machine will let this phone drive its browser. Withheld from
+    /// a guest at the source: a bound window can be told to navigate anywhere and
+    /// photographed, and its output is handed to a session running commands.
+    var canDriveBrowser: Bool {
+        connection.isLive && (transport?.capabilities.contains(WireCapability.browserControl) ?? false)
+    }
+
+    /// What the machine's browser has open, or nil until a `browser.window.rows`
+    /// has landed. Nil is *not asked yet*; an empty list is an answer.
+    private(set) var machineBrowser: MachineBrowserState?
+
+    /// The last picture a window was photographed into, when it was not handed
+    /// to a session instead. One at a time — a screen showing two is a screen
+    /// nobody asked for, and holding every shot of a long session is megabytes.
+    private(set) var machineShot: MachineShot?
+
+    /// The recorded flow, by window. Kept per window rather than as one, because
+    /// two windows can be recording at once and their steps are unrelated.
+    private(set) var machineSteps: [String: [RecordedStep]] = [:]
+
+    /// Ask what is open. Re-read on every visit: this family has no push, and
+    /// what it answers moves for reasons this phone never hears about — somebody
+    /// at the machine opening a tab, a session binding a window of its own.
+    func readMachineWindows() {
+        guard canDriveBrowser else { return }
+        transport?.send(.machineWindows)
+    }
+
+    func openMachineWindow(url: String? = nil, profile: String? = nil, isolated: Bool = false) {
+        guard canDriveBrowser else { return }
+        transport?.send(.machineWindowOpen(url: url, profile: profile, isolated: isolated))
+    }
+
+    func goMachineWindow(_ id: String, to url: String) {
+        guard canDriveBrowser else { return }
+        transport?.send(.machineWindowGo(id: id, url: url))
+    }
+
+    func actOnMachineWindow(_ id: String, _ act: MachineBrowserWire.Act) {
+        guard canDriveBrowser else { return }
+        transport?.send(.machineWindowAct(id: id, action: act))
+    }
+
+    /// Bind a window to a session, or unbind it by passing nil.
+    func bindMachineWindow(_ id: String, to session: String?) {
+        guard canDriveBrowser else { return }
+        transport?.send(.machineWindowBind(id: id, session: session))
+    }
+
+    /**
+     * Photograph a window.
+     *
+     * With a session, the picture goes **there** and this phone gets the window
+     * list back with a notice — which is the shape *"take a screenshot and send
+     * it to the session"* actually wants: the point is that the agent receives
+     * it, not that a phone displays it. The held shot is cleared either way, so
+     * a picture sent to a session never leaves last time's on screen.
+     */
+    func shotMachineWindow(_ id: String, to session: String? = nil, note: String? = nil) {
+        guard canDriveBrowser else { return }
+        machineShot = nil
+        transport?.send(.machineWindowShot(id: id, session: session, note: note))
+    }
+
+    func readMachineSteps(_ id: String) {
+        guard canDriveBrowser else { return }
+        transport?.send(.machineWindowSteps(id: id))
+    }
+
     /// What the picker last asked for, so a stale answer can be told from the
     /// current one. Nil when nothing is browsing.
     private(set) var browsing: String?
@@ -741,15 +961,31 @@ final class HostLink: Identifiable {
             return nil
         }
         closeLocalhost()
+        // Shared rather than replaced: a second tab on a port already tunnelled
+        // is the same socket, and opening a second would be refused by the bind.
+        if let held = tunnels[port] {
+            lastTunnelPort = port
+            return held
+        }
         let tunnel = PortTunnel(port: port, wire: wire)
-        self.tunnel = tunnel
+        tunnels[port] = tunnel
+        lastTunnelPort = port
         tunnel.start()
         return tunnel
     }
 
+    /// Close one port's tunnel — the tab store's verb, called when the **last**
+    /// tab on that port goes. Closing one of two tabs on a port must not, which
+    /// is the whole of why the counting lives in `BrowserTabs`.
+    func closeLocalhost(port: Int) {
+        tunnels.removeValue(forKey: port)?.stop()
+        if lastTunnelPort == port { lastTunnelPort = tunnels.keys.first }
+    }
+
     func closeLocalhost() {
-        tunnel?.stop()
-        tunnel = nil
+        for held in tunnels.values { held.stop() }
+        tunnels.removeAll()
+        lastTunnelPort = nil
     }
 
     // MARK: - Dev servers
@@ -1170,8 +1406,9 @@ final class HostLink: Identifiable {
             if !state.isLive && wasLive {
                 attached.removeAll()
                 for id in bridges.keys { bridges[id]?.note(state.detail) }
-                tunnel?.connectionLost(state.detail)
-                tunnel = nil
+                for held in tunnels.values { held.connectionLost(state.detail) }
+                tunnels.removeAll()
+                lastTunnelPort = nil
                 ports = []
                 // Same reason the ports go: these rows are only true while
                 // something is pushing them, and a spinner nobody is going to
@@ -1231,7 +1468,10 @@ final class HostLink: Identifiable {
     private func apply(_ message: ServerMessage, activity: [String: Double]) {
         // A live tunnel gets first refusal. Byte frames are by far the chattiest
         // thing on this socket and they belong to one object.
-        if tunnel?.receive(message) == true { return }
+        // Offered to every tunnel: a frame names its own channel and only the
+        // tunnel holding it answers true, so this is a lookup rather than a
+        // broadcast — and with one tab open it is the same single call it was.
+        for held in tunnels.values where held.receive(message) { return }
         if upload?.receive(message) == true { return }
 
         switch message {
@@ -1347,6 +1587,52 @@ final class HostLink: Identifiable {
             // each and re-subscribes them, which is harmless — the answer is
             // the state they are already showing.
             askDevServers()
+
+        case let .fileRows(listing):
+            fileListing = listing
+            readError = nil
+
+        case let .fileText(text):
+            /*
+             * Appended when this is a continuation, replaced when it is a fresh
+             * read. `at` says which: a non-zero offset is the second screen of a
+             * file somebody is already reading, and replacing there would send
+             * them back to the top of a log they had scrolled into.
+             */
+            if text.at > 0, let held = fileText, held.path == text.path {
+                fileText = FileText(path: text.path,
+                                    text: held.text + text.text,
+                                    at: text.at,
+                                    truncated: text.truncated,
+                                    binary: text.binary)
+            } else {
+                fileText = text
+            }
+            readError = nil
+
+        case let .gitState(_, status):
+            gitState = status
+            readError = nil
+
+        case let .gitPatch(path, file, staged, patch):
+            gitPatch = GitPatch(path: path, file: file, staged: staged, patch: patch)
+            readError = nil
+
+        case let .browserProfileRows(list):
+            machineProfiles = list
+
+        case let .machineWindowRows(state):
+            machineBrowser = state
+
+        case let .machineShot(shot):
+            machineShot = shot
+
+        case let .machineRecordRows(id, steps):
+            machineSteps[id] = steps
+
+        case let .panelRows(data):
+            panels[data.panel] = data
+            readError = nil
 
         case let .folderEntries(path, parent, entries):
             /*

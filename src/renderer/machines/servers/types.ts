@@ -1184,6 +1184,19 @@ export interface HostOffer {
    * looking finished over a machine no client has touched.
    */
   linkedButNotConnected: boolean
+  /**
+   * What **this build** is, so the panel can say whether that host is behind it.
+   *
+   * On the offer rather than read where the button is drawn, because the version
+   * is a fact only the main process holds — `app.getVersion()` — and the
+   * renderer has no bridge for it. It used to be read as `BRAND.version` inside
+   * `hostUpdateAvailable`, which does not exist: `BRAND` carries the name, the
+   * id, the bundle id and the tagline and has never carried a version. Nothing
+   * said so because the repository's root `tsconfig.json` has `include: []`, so
+   * a bare `tsc --noEmit` typechecks nothing at all; `npm run typecheck` is the
+   * real gate, and it caught this along with a dozen others the moment it ran.
+   */
+  mine: string
   state: HostState
 }
 
@@ -1268,6 +1281,13 @@ export function asHostOffer(value: unknown): HostOffer | null {
     // reading a missing field as true would put both on screen for every build
     // whose main process is older than the field.
     linkedButNotConnected: value.linkedButNotConnected === true,
+    /*
+     * Empty rather than a guess when the main process did not send it, and the
+     * consequence is the honest one: `hostUpdateAvailable` reads an unparseable
+     * version as *say nothing*, so a bridge that has not been updated draws no
+     * Update button instead of offering to move a server to version `""`.
+     */
+    mine: text(value.mine),
     state,
   }
 }

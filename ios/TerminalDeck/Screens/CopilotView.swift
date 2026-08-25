@@ -125,8 +125,23 @@ struct CopilotView: View {
     /// See `CopilotPrompt`, which is one type rather than two `@State`s because
     /// two sheets that can both be non-nil is two sheets that fight.
     @State private var prompt: CopilotPrompt?
-    @State private var showingActivity = false
-    @State private var showingSessions = false
+
+    /**
+     * Whether this screen has already started a run for this phone.
+     *
+     * A one-shot for the life of the view, guarding the automatic start below.
+     * `state.hasRun` guards it too and is the stronger of the two, but it is a
+     * fact the machine reports and there are seconds between `copilot.start`
+     * going and the state coming back — long enough for another redraw, which
+     * without this would send a second one.
+     */
+    @State private var startedOnOpen = false
+
+    /// This phone's record of what was decided about this machine's copilot. On
+    /// a desktop it holds one thing — whether this tab may start a run by itself
+    /// — because a desktop copilot's folder is chosen at the desk and does not
+    /// travel. An absent record reads as *yes*; see `CopilotSetupBook.isArmed`.
+    var book: CopilotSetupBook = .shared
 
     /// Whether the foot of the conversation is on screen. See the anchor in
     /// `timeline`, and the scroll effect that reads this.
@@ -143,12 +158,18 @@ struct CopilotView: View {
     private var host: HostLink? { model.host(hostID) }
     private var link: CopilotLink? { model.host(hostID)?.copilot }
 
-    /// Whether this phone may see anything on this machine's copilot at all —
-    /// which is what every control in the toolbar needs, since both of the lists
-    /// behind it are read-tier.
-    private var isWatching: Bool {
-        let access = host?.copilotAccess ?? .notOffered
-        return access == .watch || access == .direct
+    /**
+     * Whether this screen is currently rendering `CopilotOnServerView` inside
+     * itself, which is the one case where it must **not** draw the gear.
+     *
+     * SwiftUI gathers toolbar items from the whole hierarchy under a navigation
+     * container, so an unguarded `copilotControlsButton` here would put two
+     * identically-labelled buttons in the bar of every server — its own and its
+     * child's. Two of those in one bar reads as a rendering fault rather than as
+     * a duplicate. That child carries its own chrome; see the modifier.
+     */
+    private var showsServerFallback: Bool {
+        (host?.copilotAccess ?? .notOffered) == .notOffered && host?.hostKind == .headless
     }
 
     var body: some View {
@@ -208,20 +229,28 @@ struct CopilotView: View {
             ToolbarItem(placement: .principal) {
                 HostSwitcher(model: model, singleHostTitle: "Copilot")
             }
-            /*
-             * No overflow for a phone that may not watch.
-             *
-             * Both lists on it are `read` — the action log and the sessions the
-             * copilot started — so on the not-connected screen they were two
-             * taps that could only open an empty sheet. Caught by looking at the
-             * screen rather than by a test: the not-granted case renders a
-             * sentence explaining that this phone has been given nothing, with a
-             * menu beside it offering it two things anyway.
-             */
-            if isWatching {
-                ToolbarItem(placement: .topBarTrailing) { menu }
-            }
         }
+        /*
+         * **The gear, and the overflow menu it replaced.**
+         *
+         * There was a `Menu` in this slot carrying four things: the action log,
+         * the sessions the copilot started, Interrupt and Stop. Every one of them
+         * is now a row on `CopilotControlView`, which is what the top-right
+         * button opens — *"all the control about copilot, all the settings of the
+         * copilot, and everything related to copilot… whatever, three dots, maybe
+         * your settings button, whatever it is."*
+         *
+         * Keeping both would have put a gear and a ⋯ side by side in one bar, with
+         * the ⋯ offering a strict subset of what is behind the gear — two doors to
+         * one room, and the smaller one first. So the menu is gone and this is
+         * the tab's single top-right control on all three of its screens.
+         *
+         * The guard that governed the menu is not lost, it has moved inward: the
+         * log and the session list are `read` tier, so `CopilotControl.panels`
+         * leaves that whole section off for a phone that may not watch, rather
+         * than offering two taps that can only open an empty sheet.
+         */
+        .copilotControlsButton(model: model, hostID: hostID, when: !showsServerFallback)
         .safeAreaInset(edge: .top, spacing: 0) { banners }
         .safeAreaInset(edge: .bottom, spacing: 0) { footer }
         .sheet(item: $prompt) { showing in
@@ -253,12 +282,6 @@ struct CopilotView: View {
                                   noun: host?.hostPlatform.noun ?? "desktop") { prompt = nil }
             }
         }
-        .sheet(isPresented: $showingActivity) {
-            CopilotActivitySheet(model: model, hostID: hostID) { showingActivity = false }
-        }
-        .sheet(isPresented: $showingSessions) {
-            CopilotSessionsSheet(model: model, hostID: hostID) { showingSessions = false }
-        }
         /*
          * A confirmation raises itself.
          *
@@ -276,6 +299,64 @@ struct CopilotView: View {
             raisePendingDecision()
         }
         .onAppear { raisePendingDecision() }
+        // `initial` so a tab opened onto a machine that is already in the right
+        // state starts without waiting for something else to move.
+        .onChange(of: autoStartKey, initial: true) { autoStart() }
+    }
+
+    /**
+     * Start a run for this phone, because this phone was told to.
+     *
+     * > *"when we land on the copilot page there should be directly a new session
+     * > started if there is no previous session."*
+     *
+     * The desktop's half of that. `CopilotOnServerView` does the server's, where
+     * the thing started is a session in a chosen folder; here the thing started
+     * is `copilot.start`, a run of the copilot the person already set up at their
+     * desk. This end cannot choose that copilot's folder, its name or its account
+     * — none of the three are on the wire — so there is nothing to configure and
+     * the switch on `CopilotControlView` is the whole of the setup.
+     *
+     * **On until a finger moves it**, which is where this ended up after he said
+     * the same thing a third time: *"When we go to copilot it should just start
+     * the session."* There is no clause in that for a desktop.
+     *
+     * The argument the other way is real and is what the switch preserves.
+     * `copilot.start` is `act` tier precisely because *"talking to the copilot
+     * spends money and causes tool calls"*, and `startCard` was written to take
+     * the tap as the consent: *"a screen that started a second Claude process
+     * because somebody looked at it would be a screen with a bill attached to
+     * opening it."* What answers it here is that the tab is not a screen somebody
+     * lands on by looking — the Copilot pill is only drawn for a machine that
+     * offers a copilot to one of *his own* devices, `available` is the machine's
+     * own statement that a run can start, and one press turns this off for that
+     * machine for good. `startCard` still exists, and is what a disarmed desktop
+     * shows.
+     *
+     * `available` rather than `deskIsRunning`: the desk's copilot and this
+     * phone's run are two different things, and the machine's own answer to *can
+     * a run start here* is the one field written for this question. A start sent
+     * against `available == false` is the button that fails, which is the thing
+     * that pair of fields exists to prevent.
+     */
+    private func autoStart() {
+        guard !startedOnOpen else { return }
+        guard book.isArmed(host: hostID) else { return }
+        guard (host?.copilotAccess ?? .notOffered) == .direct else { return }
+        guard let state = link?.state, state.available, !state.hasRun else { return }
+        startedOnOpen = true
+        link?.start()
+    }
+
+    /// The facts `autoStart()` reads, as one value `onChange` can compare. All
+    /// four together, because acting on any one of them alone would leave the
+    /// other three a frame behind — and the action here spends money.
+    private var autoStartKey: String {
+        let state = link?.state
+        return [(host?.copilotAccess ?? .notOffered) == .direct ? "1" : "0",
+                state?.available == true ? "1" : "0",
+                state?.hasRun == true ? "1" : "0",
+                book.isArmed(host: hostID) ? "1" : "0"].joined()
     }
 
     /// Put the oldest unanswered question on screen, if nothing else is there.
@@ -294,6 +375,20 @@ struct CopilotView: View {
     @ViewBuilder
     private var content: some View {
         switch host?.copilotAccess ?? .notOffered {
+        case .notOffered where host?.hostKind == .headless:
+            /*
+             * **A server, which is a different absence and gets its own screen.**
+             *
+             * The pill is now drawn unconditionally for a headless host, so this
+             * branch is no longer nearly-unreachable for that half of the list —
+             * it is what *every* server shows. The sentence below is written for
+             * a desktop and would be actively misleading here: it sends somebody
+             * to the machine to change how their phone was paired, and on a
+             * server that changes nothing. `CopilotOnServerView` says the real
+             * reason and offers the two doors that do work.
+             */
+            CopilotOnServerView(model: model, hostID: hostID)
+
         case .notOffered:
             /*
              * **Two situations, one sentence, on purpose.**
@@ -970,82 +1065,6 @@ struct CopilotView: View {
     private var canSend: Bool {
         !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
-
-    /**
-     * The overflow menu: the two lists that are references rather than places,
-     * and the two verbs that act on this phone's own run.
-     *
-     * Activity and the session list are sheets rather than pushes for the reason
-     * `SessionDetailView` is one — *"a reference somebody opens, reads and
-     * closes, not a place they are going"* — and because pushing them would put
-     * two more screens on a stack whose back button was fixed last week.
-     *
-     * **There was a fifth item and it is gone.** *"Why do we have Close the
-     * copilot here? It doesn't make any sense."* It sent `copilot.bye`, held the
-     * connection shut across reconnects, and had a whole access state of its own
-     * to draw; its justification was a shared device, and on a phone the thing
-     * that keeps somebody else out is the lock screen rather than a menu item
-     * three taps in. The two verbs below it are the ones that survive the
-     * question *what does a person actually need from a phone here* — Interrupt
-     * stops a turn, Stop ends the run that is spending money — and neither of
-     * them touches the connection. Ending the connection is done at the machine
-     * that granted it. The removal is argued at length on `CopilotLink`, where
-     * the flag behind it used to be.
-     */
-    private var menu: some View {
-        Menu {
-            Button {
-                showingActivity = true
-                host?.copilot.loadLog()
-            } label: {
-                Label("Everything it did", systemImage: "list.bullet.rectangle")
-            }
-            .accessibilityIdentifier("copilot.activity")
-
-            Button {
-                showingSessions = true
-            } label: {
-                Label(sessionsLabel, systemImage: "terminal")
-            }
-            .accessibilityIdentifier("copilot.sessions")
-
-            // Only for a phone that has a run of its own. Both verbs reach that
-            // run and nothing else — a phone cannot interrupt or stop the
-            // copilot somebody is working in at the desk, because runs are keyed
-            // by device.
-            if host?.copilotAccess == .direct && link?.hasRun == true {
-                Divider()
-                Button {
-                    link?.cancel()
-                } label: {
-                    Label("Interrupt this turn", systemImage: "stop.circle")
-                }
-                .accessibilityIdentifier("copilot.cancel")
-
-                Button(role: .destructive) {
-                    link?.stop()
-                } label: {
-                    Label("Stop this phone's copilot", systemImage: "xmark.circle")
-                }
-                .accessibilityIdentifier("copilot.stop")
-            }
-
-        } label: {
-            Image(systemName: "ellipsis.circle")
-        }
-        .accessibilityLabel("More")
-        .accessibilityIdentifier("copilot.more")
-    }
-
-    /// The count is on the label because it is the thing being asked. Zero is
-    /// still shown and still opens: an empty list saying "it has not started
-    /// anything" answers the question, and a hidden item leaves somebody
-    /// wondering where it went.
-    private var sessionsLabel: String {
-        let count = link?.sessions.count ?? 0
-        if count == 0 { return "Sessions it started" }
-        return count == 1 ? "1 session it started" : "\(count) sessions it started"
-    }
 }
 
 /**
@@ -1056,7 +1075,7 @@ struct CopilotView: View {
  * them and quietly dropping the other, which on a consent surface would be a
  * confirmation that never appeared.
  */
-private enum CopilotPrompt: Identifiable {
+enum CopilotPrompt: Identifiable {
     /// This connection may answer it, and holds the whole request.
     case decide(CopilotConsentQuestion)
     /// Somebody else's question, or one this phone reconnected in the middle of.
@@ -1296,7 +1315,7 @@ private struct CopilotActionRow: View {
  * running"* — were both true, about two different copilots, and read as a
  * contradiction on the screen he was looking at.
  */
-private struct StateChip: View {
+struct StateChip: View {
     let subject: String
     let state: String
     let tone: Color

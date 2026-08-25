@@ -190,7 +190,7 @@ enum PortRowAction: Equatable {
     /// the row leads to the reason, and this is the deliberate second press.
     case retry(folder: String)
     /// Open the ordinary session the dev server runs in. **This is also how one
-    /// is stopped** — see `LocalhostListView`'s header for why the phone will
+    /// is stopped** — see `LocalhostPortsView`'s header for why the phone will
     /// not type the interrupt on somebody's behalf.
     case openSession(id: String)
     /// Put `http://localhost:<port>` on the clipboard.
