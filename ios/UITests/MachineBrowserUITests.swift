@@ -110,6 +110,11 @@ final class MachineBrowserUITests: XCTestCase {
         "This phone is holding no page of its own over a tunnel, so there is no On this phone row "
         + "to walk. Open one from the + and choose This phone."
 
+    private static let noFrontTab =
+        "This machine is listing no front tab of its own — the surface named '' that a server "
+        + "mints for the drive's own tab. A desktop host claims every pane as a window instead, "
+        + "which is that host working correctly."
+
     // MARK: - The home is one kind of thing
 
     /**
@@ -611,6 +616,85 @@ final class MachineBrowserUITests: XCTestCase {
         }
     }
 
+    // MARK: - The machine's own front tab
+
+    /**
+     * **The row that had nothing on it can be attached now, and the two verbs
+     * that really cannot be sent are the only ones still greyed.**
+     *
+     * > *"And these three dots, we should have this attachment thing for all of
+     * > them, properly working, and the same way on the sessions side also."*
+     *
+     * This is the row the last round wrote off. All three of its items were dead
+     * under one sentence — *the machine's own tab, it has no window id to
+     * address* — and the reasoning behind it was half true: an empty window id
+     * really is refused by the host's parser, so Close and Archive really cannot
+     * be sent. Attaching never needed that id. `browser.window.open` takes an
+     * **address**, this row prints one under its own title, and opening that
+     * address again as a new window and binding *that* is the same move the *On
+     * this phone* row was given a round earlier.
+     *
+     * So this case asserts the two halves separately, because the failure this
+     * guards against is exactly the two being collapsed again:
+     *
+     *  - Close is still there and still **disabled** — the id fact, unchanged;
+     *  - the attach is either live or carries one of the three sentences that
+     *    are true of a machine that cannot serve it. What is not allowed back is
+     *    a greyed attach under the id reason, which is the thing that read as
+     *    settled and was not.
+     *
+     * And where it is live, both destinations are offered — *"all of them should
+     * have all the options"* — which is asserted by the two section headers,
+     * because an `accessibilityIdentifier` on a `Button` inside a SwiftUI `Menu`
+     * does not reach the presented row and words are all there is.
+     *
+     * **Nothing is pressed.** A session row here would open a real window on his
+     * real machine.
+     */
+    func testTheMachinesOwnTabCanBeAttachedByOpeningItAgain() throws {
+        // `descendants` rather than `app.buttons`, the way every other query for
+        // one of these `…` in this file is written: the control is a `Menu`, and
+        // which element type a `Menu` reports itself as is not something to bet
+        // a skip on.
+        let dots = app.descendants(matching: .any).matching(identifier: "browser.machine.more.front")
+            .firstMatch
+        try XCTSkipUnless(dots.waitForExistence(timeout: 20), Self.noFrontTab)
+        dots.tap()
+
+        let close = app.buttons["Close window"]
+        XCTAssertTrue(close.waitForExistence(timeout: 5),
+                      "the front tab's menu should come up like every other row's")
+        XCTAssertFalse(close.isEnabled,
+                       "the host refuses an empty window id at the parser, so closing this tab "
+                       + "from here can never be live")
+
+        let attach = app.descendants(matching: .any).matching(
+            NSPredicate(format: "label CONTAINS %@ OR label CONTAINS %@"
+                        + " OR label CONTAINS %@ OR label CONTAINS %@",
+                        "and attach",
+                        "no web address to open again",
+                        "Nothing is running on",
+                        "not offering its browser")).firstMatch
+        XCTAssertTrue(attach.waitForExistence(timeout: 5),
+                      "the front tab should either offer the attach or say in one line which of "
+                      + "the three things it needs is missing — never the old sentence about "
+                      + "window ids, which is not why an attach would fail")
+        capture("39-front-tab-menu")
+
+        let shared = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS 'signed in the way'")).firstMatch
+        if shared.exists {
+            XCTAssertTrue(app.descendants(matching: .any)
+                .matching(NSPredicate(format: "label CONTAINS 'signed into nothing'"))
+                .firstMatch.exists,
+                          "where the attach is live, the isolated window is offered beside the "
+                          + "shared one — he chooses that on the + and it was being chosen for him")
+        }
+
+        app.dismissAnyMenu()
+        _ = close.waitForNonExistence(timeout: 5)
+    }
+
     // MARK: - A page this phone is drawing
 
     /**
@@ -658,6 +742,27 @@ final class MachineBrowserUITests: XCTestCase {
                       "an On this phone row should either offer the attach or say in one line why "
                       + "it cannot — never a greyed row with nothing above it")
 
+        /*
+         * Both destinations, where the attach is live at all.
+         *
+         * > *"all of them should be identical, and all of them should have all
+         * > the options."*
+         *
+         * The move was hard-wired to a shared window everywhere it was offered,
+         * which meant the one thing an isolated window is *for* — a profile
+         * signed into nothing — could not be had for the page an agent is about
+         * to be handed. Asserted by the two section headers, because words are
+         * the only handle on a presented menu row.
+         */
+        let shared = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS 'signed in the way'")).firstMatch
+        if shared.exists {
+            XCTAssertTrue(app.descendants(matching: .any)
+                .matching(NSPredicate(format: "label CONTAINS 'signed into nothing'"))
+                .firstMatch.exists,
+                          "the isolated window should be offered beside the shared one")
+        }
+
         let settings = app.buttons["Page settings"]
         XCTAssertTrue(settings.exists,
                       "a page this phone draws has no bar of its own, so its settings are on the "
@@ -669,6 +774,20 @@ final class MachineBrowserUITests: XCTestCase {
                       "this phone renders the page, so it can photograph it")
         XCTAssertTrue(app.buttons["browser.phone.page.otherWay"].exists,
                       "and offer the move that puts the same address in the machine's browser")
+        /*
+         * The same choice the `+` asks, on the screen whose whole subject is
+         * where this page can go. Both rows are drawn in both states — live on a
+         * machine offering its browser, greyed with the reason on one that is
+         * not — so this is asserted flat rather than behind a condition.
+         */
+        XCTAssertTrue(app.buttons["browser.phone.page.otherWayIsolated"].exists,
+                      "and the isolated one beside it, which is the whole reason that choice "
+                      + "exists — a window signed into nothing")
+        if app.buttons["browser.phone.page.attach"].exists {
+            XCTAssertTrue(app.buttons["browser.phone.page.attachIsolated"].exists,
+                          "attaching offers the same two places as opening does — one row that "
+                          + "quietly chose the shared one is the choice being made for him")
+        }
         XCTAssertTrue(app.buttons["browser.phone.page.close"].exists,
                       "and close it")
         XCTAssertFalse(app.buttons["browser.machine.window.record"].exists,

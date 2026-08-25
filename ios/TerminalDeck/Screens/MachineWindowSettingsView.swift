@@ -35,16 +35,22 @@
  *
  * `MachineWindowView` is the one browser-window screen now — the machine's own
  * front tab opens it too — so the `…` on its bar reaches this screen for a page
- * that is in `browser.surfaces` and in no window list at all. Every control here
- * is a `browser.window.*` verb addressed by a window id, and
+ * that is in `browser.surfaces` and in no window list at all. Most controls here
+ * are a `browser.window.*` verb addressed by a window id, and
  * `src/main/remote/protocol.ts` refuses an empty one on every member of that
- * family, so for that page not one of them can be put on the wire.
- *
- * It gets the two controls he named, drawn **dead with the reason**, rather than
- * a screen with nothing on it:
+ * family, so those cannot be put on the wire for that page.
  *
  * > *"there is no way to attach this one too. So it should be the same case, or
  * > all the options should be available at least."*
+ *
+ * **Attaching is not one of them, and that took two rounds to see.** The round
+ * that answered him drew both controls dead under one line about window ids, and
+ * the line was doing too much work: closing has to name the window that exists,
+ * and attaching does not. `browser.window.open` takes an *address* and carries a
+ * session, so this page's own address — which this screen is already drawing —
+ * opens a new window over there and binds *that*. So the attach is live wherever
+ * there is an address to re-open, in both places a page like this can be reached
+ * from, and Close is what stays dead with the id reason. See `noWindowCards`.
  *
  * Isolation, the screenshot and the click flow are named in that reason and are
  * not drawn, and that is not the rule being bent twice: each of those cards is
@@ -335,7 +341,9 @@ struct MachineWindowSettingsView: View {
      *  - **Attach to a session.** Not this page — an agent cannot reach this
      *    app's own web view and never will. Attaching opens the same address in
      *    the machine's browser and binds *that* window, in one ask, and the card
-     *    says so in a sentence rather than implying the page moved.
+     *    says so in a sentence rather than implying the page moved. Shared or
+     *    isolated, because that is his choice on the `+` and it was being made
+     *    for him here.
      *  - **Screenshot, with a note, sent to a session.** This phone renders the
      *    page, so this phone can photograph it. See `PhonePageShot`.
      *  - **Open in the machine's browser** — the honest analogue of the
@@ -438,6 +446,18 @@ struct MachineWindowSettingsView: View {
      * Somebody signed into a dev server here may not be signed in over there.
      * A card that said "Attached" and left that out would be the app claiming
      * something it cannot do.
+     *
+     * ## Two rows, because where that window lands is his choice and was not
+     *
+     * > *"all of them should be identical, and all of them should have all the
+     * > options."*
+     *
+     * There was one row and it opened a **shared** window, always. Isolation is
+     * a choice he makes deliberately when he opens a window from the `+` — the
+     * isolated one is signed into nothing and forgets everything when it closes
+     * — and making it silently for him here decided whose cookies the page an
+     * agent is about to drive gets. Two rows now, in the New window sheet's own
+     * words, and neither is hidden behind the other.
      */
     @ViewBuilder
     private func phoneSessionCard(_ tab: BrowserTab) -> some View {
@@ -448,43 +468,33 @@ struct MachineWindowSettingsView: View {
                 + "reach a page this phone is drawing — the page is rendered here, in this app."
                 + "\n\nSo attaching opens this same address in \(machineName)'s browser and "
                 + "attaches that window. It gets a slot name — B1, B2 — and the session's tools "
-                + "address it by that name.")
+                + "address it by that name.\n\nThe window can be a shared one, using "
+                + "\(machineName)'s own cookies and logins, or an isolated one that is signed "
+                + "into nothing and is thrown away when it closes.")
 
         SchemeGroup {
             if canDrive && !sessions.isEmpty {
-                Menu {
-                    ForEach(sessions) { session in
-                        Button {
-                            attachOnMachine(tab, to: session.id)
-                        } label: {
-                            Label(MachineBrowserText.sessionRow(session), systemImage: "terminal")
-                        }
-                    }
-                } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: "link")
-                            .font(.system(size: 17, weight: .light))
-                            .foregroundStyle(Theme.accent)
-                            .frame(width: 24)
-                        Text("Open on \(machineName) and attach")
-                            .font(.system(size: 16))
-                            .foregroundStyle(Theme.accent)
-                        Spacer(minLength: 8)
-                        Image(systemName: "chevron.up.chevron.down")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(Theme.faint)
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 13)
-                    .contentShape(Rectangle())
+                attachMenuRow(title: "Open on \(machineName) and attach",
+                              meaning: "Signed in the way \(machineName) is.",
+                              icon: "link",
+                              id: "browser.phone.page.attach") { session in
+                    attachOnMachine(tab, to: session, isolated: false)
                 }
-                .accessibilityIdentifier("browser.phone.page.attach")
+
+                rowDivider(inset: 16)
+
+                attachMenuRow(title: "Open isolated and attach",
+                              meaning: "Signed into nothing, and forgotten when the window closes.",
+                              icon: "eye.slash",
+                              id: "browser.phone.page.attachIsolated") { session in
+                    attachOnMachine(tab, to: session, isolated: true)
+                }
 
                 rowDivider(inset: 16)
 
                 plainNote("The page stays open here, untouched. What the session gets is a new "
-                          + "window on \(machineName) at this address, with \(machineName)'s own "
-                          + "cookies and logins — it may not be signed in the same way.",
+                          + "window on \(machineName) at this address — either way it may not be "
+                          + "signed in the way this page is.",
                           id: "browser.phone.page.attachNote")
             } else if canDrive {
                 // No control at all rather than a picker with nothing in it: a
@@ -497,8 +507,75 @@ struct MachineWindowSettingsView: View {
                         id: "browser.phone.page.attach",
                         why: "\(machineName) is not offering its browser to this phone, so no "
                             + "window can be opened there to attach.")
+
+                rowDivider(inset: 16)
+
+                deadRow("Open isolated and attach", icon: "eye.slash",
+                        id: "browser.phone.page.attachIsolated",
+                        why: "\(machineName) is not offering its browser to this phone, so no "
+                            + "window can be opened there to attach.")
             }
         }
+    }
+
+    /**
+     * One row that offers a place, and hands the session picker over when it is
+     * pressed.
+     *
+     * Two lines rather than one, and the second is not decoration: *Machine* and
+     * *Isolated* mean nothing on their own to somebody who has not read the
+     * sheet, and the whole point of drawing both is that the difference is the
+     * thing being chosen. The words are the New window sheet's own, so the two
+     * places in this app where a window is started cannot come to describe the
+     * same choice differently.
+     *
+     * **The accessibility label is set explicitly**, and that is the trap
+     * `NewWindowSheet.destinationRow` measured and wrote down: a control holding
+     * two `Text`s is read by VoiceOver as both of them joined, so the row would
+     * answer to a sentence rather than to its own name and any test asking for
+     * the name would report it missing while it sat plainly on screen. The
+     * meaning becomes the hint, which is where VoiceOver expects the
+     * explanation of a control anyway.
+     */
+    private func attachMenuRow(title: String, meaning: String, icon: String, id: String,
+                               open: @escaping (String) -> Void) -> some View {
+        Menu {
+            ForEach(sessions) { session in
+                Button {
+                    open(session.id)
+                } label: {
+                    Label(MachineBrowserText.sessionRow(session), systemImage: "terminal")
+                }
+            }
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .font(.system(size: 17, weight: .light))
+                    .foregroundStyle(Theme.accent)
+                    .frame(width: 24)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.system(size: 16))
+                        .foregroundStyle(Theme.accent)
+                        .multilineTextAlignment(.leading)
+                    Text(meaning)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.faint)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .multilineTextAlignment(.leading)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Theme.faint)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 13)
+            .contentShape(Rectangle())
+        }
+        .accessibilityLabel(title)
+        .accessibilityHint(meaning)
+        .accessibilityIdentifier(id)
     }
 
     /**
@@ -678,6 +755,16 @@ struct MachineWindowSettingsView: View {
      * that notice is the banner two inches above this card — a second line here
      * would be the same fact twice, and the one written here would be a guess
      * printed before the machine had agreed to anything.
+     *
+     * ## Both places, because this is the same choice the `+` asks
+     *
+     * One row opened a shared window and there was no second row, so the one
+     * thing an isolated window is *for* — a throwaway profile signed into
+     * nothing — was unreachable from the screen whose whole subject is where
+     * this page can go. Two rows now, and the pair is the honest analogue of the
+     * isolation card a window on the machine gets: that card converts an
+     * existing window between the two, and this one chooses between them for a
+     * window that does not exist yet.
      */
     @ViewBuilder
     private func phoneOtherWayCard(_ tab: BrowserTab) -> some View {
@@ -685,37 +772,76 @@ struct MachineWindowSettingsView: View {
             "Open somewhere else",
             about: "opening this address on the machine",
             info: "The same address can be opened in \(machineName)'s own browser. That window is "
-                + "\(machineName)'s: it uses \(machineName)'s cookies and logins, it can be "
-                + "watched and driven from this phone, and it can record a click flow. The page "
-                + "here is left exactly as it is — you end up with both.")
+                + "\(machineName)'s: it can be watched and driven from this phone, and it can "
+                + "record a click flow. The page here is left exactly as it is — you end up with "
+                + "both.\n\nA shared window uses \(machineName)'s cookies and whatever it is "
+                + "signed into. An isolated one gets a partition of its own, signed into nothing, "
+                + "and that partition is thrown away when the window closes.")
 
         SchemeGroup {
             if canDrive {
-                Button {
+                openThereRow(title: "Open in \(machineName)'s browser",
+                             meaning: "Signed in the way \(machineName) is.",
+                             icon: "globe",
+                             id: "browser.phone.page.otherWay") {
                     host?.openMachineWindow(url: phoneAddress(tab), isolated: false)
-                } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: "globe")
-                            .font(.system(size: 19, weight: .light))
-                            .frame(width: 24)
-                        Text("Open in \(machineName)'s browser")
-                            .font(.system(size: 16))
-                        Spacer(minLength: 0)
-                    }
-                    .foregroundStyle(Theme.accent)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 13)
-                    .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
-                .accessibilityHint("Opens a second window at this address on \(machineName)")
-                .accessibilityIdentifier("browser.phone.page.otherWay")
+
+                rowDivider(inset: 16)
+
+                openThereRow(title: "Open an isolated window on \(machineName)",
+                             meaning: "Signed into nothing, and forgotten when the window closes.",
+                             icon: "eye.slash",
+                             id: "browser.phone.page.otherWayIsolated") {
+                    host?.openMachineWindow(url: phoneAddress(tab), isolated: true)
+                }
             } else {
                 deadRow("Open in \(machineName)'s browser", icon: "globe",
                         id: "browser.phone.page.otherWay",
                         why: "\(machineName) is not offering its browser to this phone.")
+
+                rowDivider(inset: 16)
+
+                deadRow("Open an isolated window on \(machineName)", icon: "eye.slash",
+                        id: "browser.phone.page.otherWayIsolated",
+                        why: "\(machineName) is not offering its browser to this phone.")
             }
         }
+    }
+
+    /// One place this address can be opened, as a row that says what choosing it
+    /// means. The label is set explicitly for the reason `attachMenuRow` gives:
+    /// a control holding two `Text`s is spoken as both of them joined, and then
+    /// it no longer answers to its own name.
+    private func openThereRow(title: String, meaning: String, icon: String, id: String,
+                              act: @escaping () -> Void) -> some View {
+        Button(action: act) {
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .font(.system(size: 19, weight: .light))
+                    .foregroundStyle(Theme.accent)
+                    .frame(width: 24)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.system(size: 16))
+                        .foregroundStyle(Theme.accent)
+                        .multilineTextAlignment(.leading)
+                    Text(meaning)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.faint)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .multilineTextAlignment(.leading)
+                }
+                Spacer(minLength: 8)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 13)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityHint(meaning)
+        .accessibilityIdentifier(id)
     }
 
     /**
@@ -767,8 +893,12 @@ struct MachineWindowSettingsView: View {
     /// Open this address on the machine and hand that window to a session, in
     /// one ask. The confirmation is the machine's own answer — the window list
     /// comes back carrying the bind notice, which the banner above draws.
-    private func attachOnMachine(_ tab: BrowserTab, to session: String) {
-        host?.openMachineWindow(url: phoneAddress(tab), isolated: false, session: session)
+    ///
+    /// `isolated` is a parameter rather than a constant `false`, because that
+    /// constant was this screen choosing whose cookies the page an agent is
+    /// about to drive gets. Both places are on the card.
+    private func attachOnMachine(_ tab: BrowserTab, to session: String, isolated: Bool) {
+        host?.openMachineWindow(url: phoneAddress(tab), isolated: isolated, session: session)
     }
 
     /**
@@ -868,30 +998,51 @@ struct MachineWindowSettingsView: View {
     /* ---- a page the machine has no window row for -------------------------- */
 
     /**
-     * The same two controls he named, and they cannot act.
+     * The same controls he named — and the attach among them is real now,
+     * wherever this page has an address.
      *
      * > *"there is no way to attach this one too. So it should be the same case,
      * > or all the options should be available at least."*
      *
-     * The reason is drawn once, at the top, and both controls under it are dead.
-     * That is the shape rather than a hint on each: *why is this page different*
-     * is one fact about the page, and repeating it under two buttons is two
-     * places for it to drift.
+     * ## What this screen said before, and the half of it that was untrue
      *
-     * The session picker is drawn as a dead row **even where the machine has
-     * sessions** — the picker itself would work and the verb behind it would be
-     * refused before it left this phone, so offering the choice would be a menu
-     * that ends in nothing.
+     * Both controls were dead under one line about window ids. The id fact is
+     * real: the machine names its windows with an id, `src/main/remote/
+     * protocol.ts` refuses an empty one on every member of the
+     * `browser.window.*` family, and this page has none — so it can never be
+     * **bound as itself**, and Close really cannot be sent.
+     *
+     * Attaching never needed the id. `browser.window.open` takes an **address**
+     * and carries a session, so the move is to open this page's address over
+     * there as a new window and hand *that* window over. `BrowserSurfaceRow.url`
+     * is the address, and this screen was already drawing the same page's title
+     * from the same row while telling him nothing could be done with it.
+     *
+     * So this card matches the row's own `…` on the Browser tab exactly, which
+     * is the point: a control that is live one tap back and dead here is the
+     * *"two different type"* complaint reappearing between two views of one
+     * page.
+     *
+     * ## And the sentence says a new window, because it is one
+     *
+     * The tab he is watching is not moved, bound or changed. There will be two
+     * pages on that address afterwards — his and the agent's — which is a thing
+     * to read before pressing rather than to work out afterwards.
+     *
+     * Close stays dead under the reason that is the whole truth about it, and it
+     * is the only claim this screen still makes about ids.
      */
     @ViewBuilder
     private var noWindowCards: some View {
         SchemeSectionCaption(
             "This page",
             about: "a page with no window row",
-            info: "The machine names each of its windows with an id, and every window verb — "
-                + "attaching to a session, closing, isolating, the screenshot, the click flow — is "
-                + "addressed by that id. This page is one the machine's window list does not name, "
-                + "so none of those can be sent for it.\n\nIt can still be watched.")
+            info: "The machine names each of its windows with an id, and closing, isolating, "
+                + "photographing or recording one is addressed by that id. This page is one the "
+                + "machine's window list does not name, so none of those can be sent for it."
+                + "\n\nIt can still be watched — and its address can still be opened as a new "
+                + "window on the machine, which is a window that has an id and can be attached to "
+                + "a session.")
 
         SchemeGroup {
             plainNote(whyNoWindow, id: "browser.machine.window.noWindowRow")
@@ -899,15 +1050,43 @@ struct MachineWindowSettingsView: View {
 
         SchemeSectionCaption(
             "Session",
-            about: "window binding",
+            about: "attaching a page with no window row",
             info: "A bound window gets a slot name — B1, B2 — and the session's tools address it by "
                 + "that name. The machine addresses the binding by the window's id, which this page "
-                + "does not have.")
+                + "does not have — so this page itself cannot be bound.\n\nWhat can be done is to "
+                + "open the same address on \(machineName) as a new window and attach that one. "
+                + "The tab here is left exactly as it is. The new window can be a shared one, "
+                + "using \(machineName)'s own cookies and logins, or an isolated one that is "
+                + "signed into nothing and thrown away when it closes.")
 
         SchemeGroup {
-            deadRow("Attach to a session", icon: "link",
-                    id: "browser.machine.window.attach",
-                    why: "This page has no window id for the machine to bind.")
+            if canDrive, !sessions.isEmpty, let address = surfaceAddress {
+                attachMenuRow(title: "Open on \(machineName) and attach",
+                              meaning: "Signed in the way \(machineName) is.",
+                              icon: "link",
+                              id: "browser.machine.window.attach") { session in
+                    host?.openMachineWindow(url: address, isolated: false, session: session)
+                }
+
+                rowDivider(inset: 16)
+
+                attachMenuRow(title: "Open isolated and attach",
+                              meaning: "Signed into nothing, and forgotten when the window closes.",
+                              icon: "eye.slash",
+                              id: "browser.machine.window.attachIsolated") { session in
+                    host?.openMachineWindow(url: address, isolated: true, session: session)
+                }
+
+                rowDivider(inset: 16)
+
+                plainNote("The tab you are watching stays as it is. What the session gets is a new "
+                          + "window on \(machineName) at the same address.",
+                          id: "browser.machine.window.attachNote")
+            } else {
+                deadRow("Open on \(machineName) and attach", icon: "link",
+                        id: "browser.machine.window.attach",
+                        why: whyNoSurfaceAttach)
+            }
         }
 
         SchemeSectionCaption("Window")
@@ -917,6 +1096,31 @@ struct MachineWindowSettingsView: View {
                     id: "browser.machine.window.close",
                     why: "This page has no window id for the machine to close.")
         }
+    }
+
+    /// The address this page can be opened **again** at, or nil when it has
+    /// none. `MachineBrowserText.reopenable` holds the rule and the reason it is
+    /// `http` and `https` only — it is the machine's own, read off
+    /// `src/main/browser-url.ts`.
+    private var surfaceAddress: String? {
+        guard let surface else { return nil }
+        return MachineBrowserText.reopenable(surface.url)
+    }
+
+    /// Why this page's address cannot be opened over there and attached, when it
+    /// cannot. Three facts, asked in the order they stop the move, so the line
+    /// under a dead control is the one that is actually true of this machine and
+    /// this page rather than a general apology about window ids.
+    private var whyNoSurfaceAttach: String {
+        if !canDrive {
+            return "\(machineName) is not offering its browser to this phone, so no window can be "
+                + "opened there to attach."
+        }
+        if surfaceAddress == nil {
+            return "This tab has no web address to open again as a window — a blank tab has "
+                + "nothing to re-open."
+        }
+        return "Nothing is running on \(machineName) to attach a window to."
     }
 
     /**
@@ -929,17 +1133,27 @@ struct MachineWindowSettingsView: View {
      * offering `watch` without `browser.control` produces. Naming the right one
      * matters because the two have different fixes and only one of them is
      * ordinary.
+     *
+     * **Attaching is no longer in the list of things it cannot do**, and that is
+     * the correction rather than a rewording: it was in that list while the card
+     * below could perfectly well open the same address as a new window and bind
+     * that. A sentence in this app is not allowed to be the reason a control was
+     * never built.
      */
     private var whyNoWindow: String {
-        let name = model.current?.label ?? model.theMachine
-        if windowID.isEmpty {
-            return "This is \(name)'s own tab rather than one of its windows, so it cannot be "
-                + "attached to a session, closed, isolated, photographed or recorded from here. "
-                + "Watching it and typing an address are the two things it does take."
-        }
-        return "\(name) is casting this page and its window list does not name it, so it cannot be "
-            + "attached to a session, closed, isolated, photographed or recorded from here. "
-            + "Watching it is what it takes."
+        let name = machineName
+        let lead = windowID.isEmpty
+            ? "This is \(name)'s own tab rather than one of its windows"
+            : "\(name) is casting this page and its window list does not name it"
+        let alsoTakes = windowID.isEmpty
+            ? "Watching it and typing an address are what it does take."
+            : "Watching it is what it takes."
+        let attaching = surfaceAddress == nil
+            ? ""
+            : " Its address can still be opened on \(name) as a new window, and that window can be "
+                + "attached to a session — below."
+        return "\(lead), so it cannot be closed, isolated, photographed or recorded from here. "
+            + alsoTakes + attaching
     }
 
     /**

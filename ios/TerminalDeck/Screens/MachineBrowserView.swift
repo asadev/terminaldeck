@@ -112,17 +112,50 @@
  * > them, properly working, and the same way on the sessions side also."*
  *
  * A reason under a dead control is better than a control that is simply missing,
- * and it is not *working*. For the machine's own front tab there is nothing to
- * be done — the host refuses an empty window id at the parser, so the row stays
- * dead with its reason. For a page **this phone** is holding there was something
- * to be done, and it needed one field on the wire: `browser.window.open` now
- * carries a session, and the host binds the new window before it answers. So
- * that row's attach opens the same address in the machine's browser and hands
- * *that* window to the session, in one ask.
+ * and it is not *working*. For a page **this phone** is holding there was
+ * something to be done, and it needed one field on the wire:
+ * `browser.window.open` now carries a session, and the host binds the new window
+ * before it answers. So that row's attach opens the same address in the
+ * machine's browser and hands *that* window to the session, in one ask.
  *
  * The wording says so plainly, because it is not the page he is looking at: this
  * phone's own web view cannot be reached by an agent and never will be. See
  * `pageItems` and `attachOnMachine`.
+ *
+ * ## The third row was written off, and half the reason was untrue
+ *
+ * That round left the machine's own front tab dead, under this sentence: *there
+ * is no address to re-open and no id to bind*. The id half is true and it is
+ * the host's own rule — `src/main/remote/protocol.ts` refuses an empty `id` on
+ * every member of the `browser.window.*` family, so that tab can never be bound
+ * **as itself**. The address half was simply false. A `.surface` row carries the
+ * page's address in `BrowserSurfaceRow.url` and this screen *prints it under the
+ * title*, which is how the sentence survived a reading: it was written about a
+ * row that was visibly showing the thing it said did not exist.
+ *
+ * So the exact move that made the phone row live was available here all along
+ * and had never been tried. A surface with a web address gets the same live
+ * *Open on the machine and attach*, and the wording carries the one difference
+ * that matters: **a new window opens** at that address and *that* is what the
+ * session gets. The tab he was looking at is untouched. Archive and Close stay
+ * dead, because both of those really do have to name the existing window, and
+ * their reason is now the only claim being made. See `surfaceItems`.
+ *
+ * A tab with nothing to re-open — blank, or `about:blank`, or one of Chromium's
+ * own `chrome://` screens, none of which `normalizeUrl` will open — keeps a dead
+ * attach, under a reason that says *that* rather than the old one.
+ *
+ * ## And every one of those offers Machine **or** Isolated
+ *
+ * > *"all of them should be identical, and all of them should have all the
+ * > options."*
+ *
+ * Both moves above were hard-wired to a shared window. That is a real choice he
+ * makes on the `+` — the isolated one is how he gets a throwaway profile that is
+ * signed into nothing — and it was silently made for him everywhere else the
+ * same act is offered. Both are offered now, as two plain lines using the New
+ * window sheet's own words, on the row menus here and on the page's settings
+ * screen. See `attachSections`.
  *
  * ## And there is no icon on any of them
  *
@@ -615,13 +648,69 @@ struct MachineBrowserView: View {
      * The banner is a record of the **ask**, exactly as `openWindow`'s is, and
      * the machine's own answer replaces it — `browser.window.rows` comes back
      * carrying the bind notice, which is the confirmation that counts.
+     *
+     * ## And the window it makes is shared **or** isolated, because he chooses
+     *
+     * `isolated` used to be hard-wired to false here. The `+` on this very
+     * screen offers that choice and he uses it — an isolated window is the one
+     * signed into nothing — so making it silently for him was this screen
+     * deciding whose cookies his page gets. It is a parameter now, and both are
+     * on the menu.
      */
-    private func attachOnMachine(_ tab: BrowserTab, to session: String) {
+    private func attachOnMachine(_ tab: BrowserTab, to session: String, isolated: Bool) {
         host?.openMachineWindow(url: "http://localhost:\(String(tab.port))\(tab.path)",
-                                isolated: false,
+                                isolated: isolated,
                                 session: session)
-        say("Opening localhost:\(String(tab.port)) in \(machineName)'s browser and attaching that "
+        say("Opening localhost:\(String(tab.port)) \(newWindowPhrase(isolated)) and attaching that "
             + "window to the session. The page open here does not move.")
+    }
+
+    /**
+     * Open a page the machine is **casting but does not list as a window** on
+     * that same machine, and hand the new window to a session.
+     *
+     * > *"we should have this attachment thing for all of them, properly
+     * > working."*
+     *
+     * ## Why this was written off, and why that was wrong
+     *
+     * The round before this one left this row dead with the sentence *there is
+     * no address to re-open and no id to bind*. Half of that is the host's own
+     * rule and cannot be argued with: an empty window id is refused at the
+     * parser, so the machine's own front tab can never be **bound as itself**.
+     * The other half was untrue while the row was printing the address on
+     * screen. `BrowserSurfaceRow.url` is what the row's second line draws, and
+     * it is all `browser.window.open` needs — the verb takes an address, not a
+     * window.
+     *
+     * ## So this is honest about what it does, in the banner rather than in a
+     * hopeful label
+     *
+     * A **new** window opens on the machine at the same address and that is what
+     * the session gets. The tab he was looking at is not moved, not bound, and
+     * not changed in any way — it cannot be, and a sentence implying otherwise
+     * would be the same defect the phone row's wording was written to avoid.
+     * There will be two pages on that address afterwards, which is a fact worth
+     * reading before pressing rather than discovering.
+     *
+     * The address is taken from the row rather than rebuilt, and it is checked
+     * first: `normalizeUrl` on the machine opens `http` and `https` and nothing
+     * else, so a `chrome://` screen or a blank tab is not offered here at all.
+     * See `reopenable`.
+     */
+    private func attachSurfaceOnMachine(_ address: String, to session: String, isolated: Bool) {
+        host?.openMachineWindow(url: address, isolated: isolated, session: session)
+        say("Opening \(shortened(address)) \(newWindowPhrase(isolated)) and attaching that window "
+            + "to the session. The tab you were looking at stays as it is.")
+    }
+
+    /// Where the new window lands, in the middle of a sentence. One phrase
+    /// rather than two whole banners, so the two attaches above cannot drift
+    /// into describing the same act differently.
+    private func newWindowPhrase(_ isolated: Bool) -> String {
+        isolated
+            ? "in a new isolated window on \(machineName), signed into nothing,"
+            : "in a new window in \(machineName)'s browser"
     }
 
     /**
@@ -1179,9 +1268,14 @@ struct MachineBrowserView: View {
      * with nothing in it is worse than no glyph."* The premise is still true and
      * the conclusion was wrong: what somebody reads off a row with no menu beside
      * a row with one is that the app can do less for this page than for that one
-     * and will not say why. So the menu is here, with the same four items, and
-     * the ones that cannot be sent are greyed under a line naming the reason. See
-     * `rowMenu`.
+     * and will not say why. So the menu is here, with the same items.
+     *
+     * And the premise turned out to be true of two of them rather than of all
+     * three. **Attaching is live on this row**: it opens the row's own address
+     * on the machine as a new window and hands *that* window to the session,
+     * which needs no id at all. Close and Archive stay greyed under the line
+     * that names the id, which is the whole truth about those two. See
+     * `surfaceItems`.
      *
      * The glyph is gone with every other row's — *"there should be no icon at all
      * actually"* — and it is this row's glyph he was watching change: it was a
@@ -1240,13 +1334,16 @@ struct MachineBrowserView: View {
                                      : "browser.machine.surface.\(surface.window)")
 
             /*
-             * No session list handed in, and that is the honest shape rather
-             * than a saving. The rows would draw and the verb behind them would
-             * be refused before it left this phone — see `rowMenu` — so a picker
-             * here would be a choice that ends in nothing. One greyed line
-             * saying the page has no id to bind is the whole truth.
+             * The machine's sessions, handed in where they used to be withheld.
+             *
+             * They were `[]` here on the argument that every verb behind this
+             * `…` is a `browser.window.*` addressed by an id this page has not
+             * got, so a picker would be a choice ending in nothing. That was
+             * true of binding **this** page and it was never true of the move
+             * that matters: `browser.window.open` takes an address, and this row
+             * is drawing one. See `surfaceItems`.
              */
-            rowMenu(.surface(surface), sessions: [])
+            rowMenu(.surface(surface), sessions: state?.sessions ?? [])
                 .padding(.trailing, 4)
         }
         .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
@@ -1406,12 +1503,17 @@ struct MachineBrowserView: View {
      * > working**."*
      *
      * A reason under a dead control is honest and it is still a dead control. So
-     * one of the two greyed rows stopped being one: `browser.window.open` carries
-     * a session now, and a page this phone is holding can be opened on the
-     * machine and bound in a single ask. The machine's own front tab cannot —
-     * there is no address to re-open and no id to bind — so that row keeps its
-     * reason. See `pageItems` and `surfaceItems`, which is why the three shapes
-     * are three builders under one `Menu` rather than one branch with an `else`.
+     * **both** greyed rows stopped being one, and they stopped for the same
+     * reason a round apart. `browser.window.open` carries a session, and it
+     * takes an *address* rather than a window — so anything on this list that
+     * knows its own address can be opened over there and bound in a single ask,
+     * whether this phone is drawing it or the machine is casting it.
+     *
+     * What is left dead is what really does need to name an existing window:
+     * Close and Archive on a `.surface`, and Archive on a page this phone holds.
+     * Each carries its own reason rather than sharing a general apology. See
+     * `pageItems` and `surfaceItems`, which is why the three shapes are three
+     * builders under one `Menu` rather than one branch with an `else`.
      *
      * Closing a page this phone holds was already real — it is this phone's own
      * socket — and is drawn live, where the destructive item goes.
@@ -1432,7 +1534,7 @@ struct MachineBrowserView: View {
             case let .window(window, _):
                 windowItems(window, sessions: sessions)
             case let .surface(surface):
-                surfaceItems(surface)
+                surfaceItems(surface, sessions: sessions)
             case let .page(tab):
                 pageItems(tab, sessions: sessions)
             }
@@ -1492,21 +1594,114 @@ struct MachineBrowserView: View {
     }
 
     /**
-     * A page in the machine's browser its window list does not name, and the one
-     * row on this list where **nothing** can be sent.
+     * A page in the machine's browser its window list does not name — and its
+     * attach is a real thing to press now, wherever the row knows an address.
      *
-     * The machine's own front tab wears `''` as its name and the host's parser
-     * refuses an empty `id` on every member of the `browser.window.*` family —
-     * `bind`, `act`, `go`, `shot`, `steps` — so there is no verb to make live
-     * here and no honest way to invent one. Every item is greyed under the one
-     * line that says why. This is the row the page rows below **stopped** being.
+     * > *"And these three dots, we should have this attachment thing for all of
+     * > them, properly working, and the same way on the sessions side also."*
+     *
+     * ## What this row used to say, and the half of it that was false
+     *
+     * All three items were greyed under one line: *the machine's own tab — it
+     * has no window id to address*. Everything downstream of that read as
+     * settled, and it was half right. The machine's own front tab wears `''` as
+     * its name and `src/main/remote/protocol.ts` refuses an empty `id` on every
+     * member of the `browser.window.*` family — `bind`, `act`, `go`, `shot`,
+     * `steps` — so this page can never be **bound as itself**, and Close and
+     * Archive really cannot be sent.
+     *
+     * Attaching never needed that id. `browser.window.open` takes an **address**
+     * and now carries a session, so the move is: open that address over there as
+     * a new window, and hand *that* window over. The row has the address —
+     * `BrowserSurfaceRow.url`, drawn on the row's own second line — so the
+     * sentence claiming there was nothing to re-open was being written directly
+     * underneath the thing it denied.
+     *
+     * ## Three states, three true reasons
+     *
+     * The attach is live only where all three of the things it needs are here,
+     * and each absence has its own sentence rather than a shared apology:
+     *
+     *  - no `browser.control` — nothing can be opened over there at all;
+     *  - no address worth re-opening — a blank tab, `about:blank`, or one of
+     *    Chromium's own screens, none of which the machine's `normalizeUrl` will
+     *    take. That row stays dead and the reason finally says *that*;
+     *  - no sessions — nothing to hand the new window to.
+     *
+     * Archive and Close keep the id reason, which is the whole truth about them.
      */
     @ViewBuilder
-    private func surfaceItems(_ surface: BrowserSurfaceRow) -> some View {
+    private func surfaceItems(_ surface: BrowserSurfaceRow, sessions: [WindowSession]) -> some View {
+        if canDrive, !sessions.isEmpty, let address = MachineBrowserText.reopenable(surface.url) {
+            attachSections(sessions) { session, isolated in
+                attachSurfaceOnMachine(address, to: session, isolated: isolated)
+            }
+        } else {
+            Section(whyNoSurfaceAttach(surface)) {
+                deadItem("Attach to a session", "terminal")
+            }
+        }
+
         Section(whyNoWindowVerbs(surface)) {
-            deadItem("Attach to a session", "terminal")
             deadItem("Archive", "archivebox")
             deadItem("Close window", "xmark")
+        }
+    }
+
+    /**
+     * **The one attach, offered as the two places a window can go.**
+     *
+     * > *"all of them should be identical, and all of them should have all the
+     * > options."*
+     *
+     * Both callers were hard-wired to a shared window. Isolation is a choice he
+     * makes deliberately on the `+` — an isolated window is the one signed into
+     * nothing, thrown away when it closes — so choosing it for him here was this
+     * menu deciding whose cookies his page gets, silently, in the one act that
+     * hands a page to an agent.
+     *
+     * ## Two sections rather than a control inside a menu
+     *
+     * Two plain lines, each saying what it means in the words the New window
+     * sheet already uses, and the sessions under whichever one is meant. Two
+     * taps either way, which is what the shared case already cost.
+     *
+     * The alternatives were both worse. A `Picker` inside a menu is the
+     * segmented control he threw out of this screen once already —
+     * *"this feels like a filter, not like a selection of this specific one"* —
+     * and it would sit above a list it does not filter. A session row that opens
+     * a submenu of two makes the ordinary case three taps and hides the choice
+     * he asked to be given.
+     *
+     * The two sections carry the same session labels, deliberately: a session is
+     * called what the machine calls it, and appending *isolated* to a title that
+     * already reads `Claude · 2 windows` is a fourth clause on a menu row. The
+     * section header above is what separates them, which is what a section
+     * header is for, and it is also the string a test can ask for — an
+     * `accessibilityIdentifier` on a `Button` inside a `Menu` does not reach the
+     * presented row, so words are all there is either way.
+     */
+    @ViewBuilder
+    private func attachSections(_ sessions: [WindowSession],
+                                open: @escaping (String, Bool) -> Void) -> some View {
+        Section("Open on \(machineName) and attach — signed in the way \(machineName) is") {
+            ForEach(sessions) { session in
+                Button {
+                    open(session.id, false)
+                } label: {
+                    Label(MachineBrowserText.sessionRow(session), systemImage: "terminal")
+                }
+            }
+        }
+
+        Section("Open isolated and attach — signed into nothing, forgotten when it closes") {
+            ForEach(sessions) { session in
+                Button {
+                    open(session.id, true)
+                } label: {
+                    Label(MachineBrowserText.sessionRow(session), systemImage: "eye.slash")
+                }
+            }
         }
     }
 
@@ -1530,6 +1725,10 @@ struct MachineBrowserView: View {
      * which is the move that was impossible before, because the old open threw
      * the new window's id away and there was nothing left to bind.
      *
+     * And it is offered as the two places a window can go, because that is a
+     * choice he makes on the `+` and it was being made for him here. See
+     * `attachSections`.
+     *
      * ## And the wording says what really happens, because it is not the same page
      *
      * The phone's own web view is not reachable by an agent and never will be:
@@ -1552,14 +1751,8 @@ struct MachineBrowserView: View {
     @ViewBuilder
     private func pageItems(_ tab: BrowserTab, sessions: [WindowSession]) -> some View {
         if canDrive && !sessions.isEmpty {
-            Section("Open on \(machineName) and attach") {
-                ForEach(sessions) { session in
-                    Button {
-                        attachOnMachine(tab, to: session.id)
-                    } label: {
-                        Label(MachineBrowserText.sessionRow(session), systemImage: "terminal")
-                    }
-                }
+            attachSections(sessions) { session, isolated in
+                attachOnMachine(tab, to: session, isolated: isolated)
             }
         } else {
             Section(whyNoAttach) {
@@ -1594,6 +1787,26 @@ struct MachineBrowserView: View {
     }
 
     /**
+     * Why a page the machine is casting cannot be opened over there and
+     * attached, when it cannot. Three facts, asked in the order they stop the
+     * move, and each one true on its own terms.
+     *
+     * The middle one is the reason this function exists at all. It replaces a
+     * sentence that claimed there was *no address to re-open* on every surface
+     * row, including the ones printing an address on screen. The claim is only
+     * ever made now about a tab that really has nothing: a blank one, or a page
+     * on a scheme the machine's `normalizeUrl` will not open — it takes `http`
+     * and `https` and nothing else.
+     */
+    private func whyNoSurfaceAttach(_ surface: BrowserSurfaceRow) -> String {
+        guard canDrive else { return "\(machineName) is not offering its browser to this phone" }
+        guard MachineBrowserText.reopenable(surface.url) != nil else {
+            return "This tab has no web address to open again"
+        }
+        return "Nothing is running on \(machineName) to attach it to"
+    }
+
+    /**
      * An item in its place, greyed, with the reason above it in the section's own
      * header.
      *
@@ -1610,18 +1823,24 @@ struct MachineBrowserView: View {
     }
 
     /**
-     * Why a cast the window list does not name can carry no window verb, in one
-     * line.
+     * Why a cast the window list does not name can be neither closed nor
+     * archived, in one line.
      *
      * Two answers and each is a different fact, so neither is a general apology:
      * the machine's own tab was never given an id, and a cast no window row
      * claims cannot be joined to a window.
      *
-     * It takes a surface rather than a row now. It used to answer for a page on
-     * this phone as well, and that third answer is gone with the greyed row it
-     * was written under: attaching one of those is a live control, and the one
-     * item still dead on it — Archive — has a reason of its own that has nothing
-     * to do with window ids. See `pageItems`.
+     * **It no longer heads the attach.** It headed all three items until this
+     * round, and using one id sentence for all of them is what let *there is no
+     * address to re-open* ride in on the back of a true claim about ids. Closing
+     * and archiving genuinely have to name the window that exists; attaching
+     * opens a **new** one, which needs an address and no id at all. So this
+     * sentence now covers exactly the two verbs it is true of.
+     *
+     * It takes a surface rather than a row. It used to answer for a page on this
+     * phone as well, and that answer is gone with the greyed row it was written
+     * under: attaching one of those is a live control, and the one item still
+     * dead on it — Archive — has a reason of its own. See `pageItems`.
      */
     private func whyNoWindowVerbs(_ surface: BrowserSurfaceRow) -> String {
         // The second is worded off **this list** rather than off the machine's,
@@ -2561,6 +2780,32 @@ enum MachineBrowserText {
         if !surface.title.isEmpty { return surface.title }
         if !surface.url.isEmpty { return surface.url }
         return surface.window.isEmpty ? "Front tab" : surface.window
+    }
+
+    /**
+     * The address a page can be opened **again** at, or nil when it has none.
+     *
+     * The one question standing between *this page is being cast* and *this page
+     * can be handed to an agent*: `browser.window.open` takes an address, so any
+     * row that knows one can be re-opened on the machine and bound, whether or
+     * not the machine has a window id for the row itself.
+     *
+     * `http` and `https` and nothing else, and that is not caution — it is the
+     * machine's own rule read off its source. `src/main/browser-url.ts` keeps
+     * `ALLOWED_PROTOCOLS` at exactly those two and refuses everything else with
+     * *"Only http and https can be opened here"*, `file:` most deliberately of
+     * all. So a `chrome://` screen, a `devtools://` one, a blank tab and
+     * `about:blank` all answer nil, and the control that would have offered them
+     * is not drawn at all rather than drawn to be refused.
+     *
+     * Trimmed first, because a url that arrived with a stray newline is an
+     * address with a real page behind it, and `URL(string:)` would refuse it.
+     */
+    static func reopenable(_ url: String) -> String? {
+        let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let scheme = URL(string: trimmed)?.scheme?.lowercased(),
+              scheme == "http" || scheme == "https" else { return nil }
+        return trimmed
     }
 
     /// The whole row as one sentence, for VoiceOver. The marks are read as words
