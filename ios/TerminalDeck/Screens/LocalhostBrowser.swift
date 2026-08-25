@@ -53,23 +53,62 @@
  *
  * **The resolution is Safari's, and it dissolves the conflict rather than
  * picking a side.** The navigation bar stays, so the chevron, the title and the
- * pop gesture are the system's; the browser's own controls move to a **bottom**
- * toolbar, which is where iOS has kept browser controls since the first iPhone.
- * The two back buttons are no longer eleven points apart arguing over one
- * meaning — they are at opposite ends of the screen and each is exactly where
- * iOS says its meaning lives: leaving this screen is the chevron top left,
+ * pop gesture are the system's; the browser's own controls live along the
+ * **bottom**, which is where iOS has kept browser controls since the first
+ * iPhone. The two back buttons are no longer eleven points apart arguing over
+ * one meaning — they are at opposite ends of the screen and each is exactly
+ * where iOS says its meaning lives: leaving this screen is the chevron top left,
  * going back a page is the chevron bottom left.
- *
- * Done is still last. *"Last button I think is on its correct place."*
  *
  * The **tab bar** is the one bar still turned off in here. *"Pill should be on
  * here… not inside the session and not also inside the localhost page."* A page
  * is the whole reason you are here and it wants the height; the pill sat over
  * the bottom of it pointing somewhere else — and it would now be sitting on the
- * toolbar this screen needs. It is not turned off in this file: iOS 26 draws it
+ * bar this screen needs. It is not turned off in this file: iOS 26 draws it
  * as a floating pill owned by the `TabView` and ignores a `.toolbar` written on
  * a pushed screen, so `DeckTabs` states it and this screen only reports that it
  * is up — `DeckModel.localhostPageIsOpen`. `DeckChrome` holds the rule.
+ *
+ * ## The bar is `BrowserPageBar` now, and the header lost its second line
+ *
+ * The bottom row used to be a system `UIToolbar` written here, carrying Back,
+ * Forward, Reload, Find, Inspect and Done. It was a good toolbar and it was the
+ * third different bar in this app under a live page. He counted them:
+ *
+ * > *"So top, header and footer, tab bar should be same in all type of browsing
+ * > windows, including on this phone, including isolated, including the server."*
+ *
+ * > *"if it is in this phone, I cannot edit the link and make a change and search
+ * > it again."*
+ *
+ * The second sentence is the one this screen could not answer at all. Its
+ * address was chosen once, in the sheet that opened it, and after that there was
+ * nowhere to type: `/admin` was reachable only by going back out to the list. A
+ * window on the machine had had an editable address for two rounds.
+ *
+ * So this screen mounts the same `BrowserPageBar` those windows mount, with the
+ * same two rows — the address and Go, then Back · Forward · Reload · Find ·
+ * Inspect · More — and the toolbar written here is gone. What moved:
+ *
+ *  - **The address arrived**, as a real field. It is spelled the way the person
+ *    who opened it thinks of it — `localhost:3000/admin`, not the random
+ *    loopback port this phone bound — and both spellings are accepted back. See
+ *    `BrowserChrome.shownAddress`.
+ *  - **Done left the bar.** It tore the tunnel down, which is a thing you do to
+ *    the window rather than to the page, so it is `Close this window` inside the
+ *    `…`. He blessed Done's position — *"last button I think is on its correct
+ *    place"* — in a round where the row ended with it; the row is the same six
+ *    controls under all three kinds of window now, and the one-tap way out was
+ *    never that button anyway. The chevron top left leaves this screen and
+ *    closes the tunnel exactly as Done did.
+ *  - **The header lost its second line.** It was the page title over a mono
+ *    `http://127.0.0.1:52311/admin  ·  3 connections`. *"even if we remove the
+ *    top header of paperclip and all of this basic information might not be
+ *    required from the outside. We can just see and enter."* The address is in
+ *    the field now, which is better than a label of it, and the connection count
+ *    is one line inside the `…` — the honest signal that a hot-reload socket is
+ *    still talking with nothing on screen changing, kept, and off the top of the
+ *    page.
  *
  * ## Forward exists because the gesture that used to do it does not
  *
@@ -81,6 +120,12 @@
  * reading is unreachable. So Forward is a button beside Back, disabled until
  * there is somewhere to go, which is the pair Safari puts in the same corner.
  * `BrowserBackTests` walks a real history through both of them.
+ *
+ * That *disabled until there is somewhere to go* is the one thing on this bar a
+ * window on the machine cannot copy, and the bar keeps the two apart rather than
+ * unifying them: this screen owns a `WKWebView` and knows the answer, a machine
+ * window has no history state on the wire at all and passes nil, which the bar
+ * reads as *do not grey these*. See `BrowserPageBar.canGoBack`.
  */
 
 import SwiftUI
@@ -130,11 +175,50 @@ struct LocalhostBrowser: View {
     /// one thing are two properties that eventually will not.
     @State private var find: BrowserFindSession?
 
+    /**
+     * What is in the address field.
+     *
+     * **Seeded, never bound** — the same rule `MachineWindowView` follows and for
+     * the same reason, which on this screen is if anything sharper: everything
+     * this feature exists to look at is a dev server, every dev server serves a
+     * single-page app, and every route change in one rewrites the URL. A two-way
+     * binding would retype the field under a thumb mid-word and send half of what
+     * was typed joined to half of where the page went.
+     */
+    @State private var address = ""
+    /// Whether somebody is in the field, so a navigation does not re-seed it
+    /// under them. Owned by `BrowserPageBar` and mirrored here.
+    @State private var editing = false
+    /**
+     * Whether the bar is in its typing row. Never true on this screen, and it is
+     * passed anyway rather than being made optional on the bar.
+     *
+     * That row exists for a **canvas** — a picture of a machine's page, which has
+     * to be told a keystroke is coming and announces its own responder back. A
+     * page on this phone is a real `WKWebView`: tapping a field in it raises the
+     * keyboard the way tapping a field raises the keyboard anywhere, and there is
+     * nothing for the bar to say about it.
+     */
+    @State private var typing = false
+
+    /// Why the last thing typed into the address was not opened, or nil. This
+    /// phone's own refusal — a `file:` URL, a port out of range, a port that is
+    /// not the one this page is on.
+    @State private var refused: String?
+
     var body: some View {
         ZStack {
             Theme.background.ignoresSafeArea()
 
             VStack(spacing: 0) {
+                // The one outcome a redraw cannot show: an address this phone
+                // refused before it ever reached the page. The same banner, in
+                // the same place, as the one over a window on the machine.
+                if let refused {
+                    Banner(text: refused, tone: .warning)
+                        .accessibilityIdentifier("localhost.refused")
+                }
+
                 /*
                  * The load bar sits under the navigation bar, which is where a
                  * browser has always put it and is now the only place it can go:
@@ -191,161 +275,36 @@ struct LocalhostBrowser: View {
             }
         }
         /*
-         * The system's navigation bar, stated rather than left to inherit.
+         * The browser's bar, under the find bar and under everything.
          *
-         * This line used to be `.toolbar(.hidden, for: .navigationBar)` and its
-         * removal is the whole of what he asked for — see the file header. The
-         * title is given as well as the principal view below it because
-         * `navigationTitle` is what names the **back button on the screen that
-         * pushes this one**, and what VoiceOver reads when the bar is focused; a
-         * principal view replaces the drawing, not the identity.
+         * Stated **after** the find inset on purpose: bottom insets stack
+         * outwards, so the one written last is the one nearest the bottom edge.
+         * The page's own controls belong against the edge and the find bar rides
+         * above them, which is also the order Safari puts them in.
+         */
+        .safeAreaInset(edge: .bottom, spacing: 0) { bar }
+        /*
+         * The system's navigation bar, stated rather than left to inherit — and
+         * now carrying nothing but the chevron and one line of title.
+         *
+         * `.toolbar(.hidden, for: .navigationBar)` used to be here and its removal
+         * is what *"still not native"* was about; see the file header. What came
+         * off since is the **principal view**, a two-line block naming the page
+         * over a mono `http://127.0.0.1:52311/admin  ·  3 connections`:
+         *
+         * > *"even if we remove the top header of paperclip and all of this basic
+         * > information might not be required from the outside. We can just see
+         * > and enter."*
+         *
+         * So the header is the chevron, the title, and nothing — which is exactly
+         * what a window on the machine has, and *"top, header and footer… should
+         * be same in all type of browsing windows."* `navigationTitle` alone does
+         * all three jobs the principal view was splitting: it draws the name, it
+         * names the back button on the screen that pushed this one, and it is what
+         * VoiceOver reads.
          */
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            // Where you are, in the slot the system reserves for exactly that.
-            ToolbarItem(placement: .principal) { header }
-
-            /*
-             * The browser's controls, along the bottom, in the order he blessed
-             * — page back, forward, reload, inspect, **Done last**.
-             *
-             * `Spacer()` between every pair rather than a block at one end.
-             * Inside a `ToolbarItemGroup` a Spacer becomes a UIToolbar flexible
-             * space, so the five spread evenly across the bar and each one keeps
-             * a thumb-sized share of it; grouped at the leading edge they would
-             * be five 15-point glyphs in a row, which is the desktop's spacing
-             * on a surface nobody clicks with a mouse.
-             *
-             * No `.font` on any of them, deliberately. The point of moving into
-             * the system's bar is that the system sizes, spaces and tints what
-             * is in it; a hand-set 15pt semibold here would be this screen
-             * disagreeing with every other bottom bar on the phone about what a
-             * toolbar button looks like.
-             */
-            ToolbarItemGroup(placement: .bottomBar) {
-                /*
-                 * The page's own Back — and it works now.
-                 *
-                 * Asad: *"the back button here doesn't work at all next to
-                 * refresh. So it should be working also."* The button was wired
-                 * to `goBack()` the whole time and the wiring was never the
-                 * problem: `canGoBack` was only ever re-read from the navigation
-                 * delegate, which does not fire for a same-document navigation.
-                 * Every dev server this feature exists to look at is a
-                 * single-page app, every route change in one is `pushState`, and
-                 * so on the pages he was testing this button was permanently
-                 * disabled no matter how far into the site he had clicked. A
-                 * disabled chevron and a dead one look identical.
-                 *
-                 * `BrowserBridge` watches the web view through KVO now, so this
-                 * is live within a frame of the page's own history changing —
-                 * and still genuinely disabled when there is nowhere to go,
-                 * which is the honest state for the first page of a site.
-                 */
-                Button {
-                    browser.goBack()
-                } label: {
-                    Image(systemName: "chevron.left")
-                }
-                .disabled(!browser.canGoBack)
-                .accessibilityLabel("Back")
-                .accessibilityIdentifier("localhost.back")
-
-                Spacer()
-
-                // Forward, because the right-edge swipe that used to do this
-                // went out with the left-edge one — they are a single property.
-                // See the file header.
-                Button {
-                    browser.goForward()
-                } label: {
-                    Image(systemName: "chevron.right")
-                }
-                .disabled(!browser.canGoForward)
-                .accessibilityLabel("Forward")
-                .accessibilityIdentifier("localhost.forward")
-
-                Spacer()
-
-                Button {
-                    browser.reload()
-                } label: {
-                    Image(systemName: browser.loading ? "xmark" : "arrow.clockwise")
-                }
-                .disabled(!isLive)
-                .accessibilityLabel(browser.loading ? "Stop loading" : "Reload")
-                .accessibilityIdentifier("localhost.reload")
-
-                /*
-                 * Find, beside reload rather than behind a menu.
-                 *
-                 * *"Everything that Mac side had."* The desktop browser has had
-                 * a find bar since it had a browser; the phone had none, and a
-                 * long page on a small screen is where find is most needed and
-                 * least substitutable — there is no ⌘F to fall back on.
-                 *
-                 * Filled while the bar is up, the way Inspect is, so the
-                 * shortened page is explained by something visible rather than
-                 * looking like the layout broke.
-                 */
-                SwiftUI.Button {
-                    if find?.isOpen == true { closeFind() } else { openFind() }
-                } label: {
-                    Image(systemName: find?.isOpen == true ? "magnifyingglass.circle.fill" : "magnifyingglass")
-                }
-                .accessibilityLabel("Find on page")
-                .accessibilityIdentifier("localhost.find")
-
-                Spacer()
-
-                /*
-                 * Inspect.
-                 *
-                 * A toggle rather than a mode you enter and leave through a
-                 * menu, because it is the one control on this screen anybody
-                 * reaches for twice in a row: tap an element, say what to change,
-                 * tap the next one. Filled while it is on, so a tap that
-                 * cancels a link instead of following it is explained by
-                 * something visible rather than looking like a broken page.
-                 */
-                Button {
-                    browser.setInspecting(!browser.inspecting)
-                } label: {
-                    Image(systemName: browser.inspecting
-                          ? "square.dashed.inset.filled"
-                          : "square.dashed")
-                }
-                .disabled(!isLive)
-                .accessibilityLabel(browser.inspecting ? "Stop inspecting" : "Inspect an element")
-                .accessibilityIdentifier("localhost.inspect")
-
-                Spacer()
-
-                /*
-                 * Done, and it is not the chevron said twice.
-                 *
-                 * The chevron in the navigation bar leaves this screen; so does
-                 * this. That is duplication and it is the good kind: the chevron
-                 * is how iOS leaves any pushed screen and belongs to the system,
-                 * while Done is the sentence this screen wants to end with —
-                 * *I have finished with this page* — and closing it is what
-                 * takes the Mac's socket down. Both go through the same path:
-                 * whichever way this screen goes away, `MachineBrowserView`
-                 * notices the destination is gone and closes the tunnel.
-                 *
-                 * He asked for it to stay where it is. *"Last button I think is
-                 * on its correct place."*
-                 */
-                Button("Done") {
-                    // Closing the view is the whole of the teardown: the
-                    // listener goes, the Mac's socket goes, and the port is
-                    // unreachable again until it is tapped.
-                    dismiss()
-                }
-                .accessibilityIdentifier("localhost.done")
-            }
-        }
         // Presented off a flag rather than off the capture itself. `.sheet(item:)`
         // tears the sheet down and builds a new one whenever the identity changes,
         // and Wider/Narrower change the capture on every press — which would make
@@ -373,6 +332,7 @@ struct LocalhostBrowser: View {
             // against that URL, and the reload after it looks like the site is
             // broken rather than like it was early.
             if case let .live(url) = phase { browser.load(first(url)) }
+            seed()
         }
         /*
          * The page on screen, written down on this phone.
@@ -387,6 +347,10 @@ struct LocalhostBrowser: View {
         .onChange(of: browser.address) { _, address in
             history.record(address: address, host: model.current?.id ?? "")
             if let tabID { model.browserTabs.note(address: address, for: tabID, machine: model) }
+            // And the field follows the page — unless somebody is in it. That
+            // guard is the whole of `seed`; see it for why a single-page app
+            // makes it load-bearing rather than tidy.
+            seed()
         }
         .onChange(of: browser.title) { _, title in
             history.retitle(address: browser.address, title: title, host: model.current?.id ?? "")
@@ -394,6 +358,7 @@ struct LocalhostBrowser: View {
         }
         .onAppear {
             if case let .live(url) = tunnel.phase { browser.load(first(url)) }
+            seed()
         }
         .onDisappear {
             // The handler holds the page's only way back into this app, and the
@@ -425,6 +390,14 @@ struct LocalhostBrowser: View {
      * address.
      */
     private func first(_ origin: URL) -> URL {
+        resolve(path, against: origin)
+    }
+
+    /// The same resolution, for a path that came out of the address field rather
+    /// than off the row that opened this screen. Written once because a `/admin`
+    /// tapped in a list and a `/admin` typed into the bar must land in the same
+    /// place, and two spellings of this is how they would stop.
+    private func resolve(_ path: String, against origin: URL) -> URL {
         guard path != "/", let resolved = URL(string: path, relativeTo: origin) else { return origin }
         return resolved.absoluteURL
     }
@@ -443,38 +416,121 @@ struct LocalhostBrowser: View {
     // MARK: - Chrome
 
     /**
-     * Where you are, in the slot the navigation bar keeps for exactly that.
+     * The bar every browser window in this app has, under the page it belongs to.
      *
-     * The same two-line shape `TerminalScreen` puts in the same slot — what this
-     * thing is, then one mono line of what it *technically* is — and that
-     * consistency is worth more than either screen's own preference: the two
-     * places this app pushes you into are a session and a page, and they now
-     * name themselves the same way.
+     * `BrowserPageBar`, the same view `MachineWindowView` mounts, with the same
+     * two rows under it — the address and Go, then Back · Forward · Reload · Find
+     * · Inspect · More. There is no bar written on this screen any more, and that
+     * is the point of the round: *"top, header and footer, tab bar should be same
+     * in all type of browsing windows, including on this phone, including
+     * isolated, including the server."*
      *
-     * Both lines are one line each and truncate rather than wrap, because the
-     * bar is 44 points tall and a title view that grows pushes the back button
-     * off the screen.
+     * The prefix is `localhost`, unchanged, so every control keeps the name it
+     * had — `localhost.back`, `localhost.reload`, `localhost.inspect`. The one
+     * name that goes is `localhost.done`: that verb is `Close this window` in the
+     * menu now, under `localhost.close`.
+     *
+     * ## What this screen answers that a machine window cannot, and the reverse
+     *
+     *  - **Back and Forward are real.** This screen owns the `WKWebView`, so
+     *    `canGoBack` and `canGoForward` are its live history — through KVO, which
+     *    is what made them work for the `pushState` navigations a dev server makes
+     *    constantly. A machine window has no history on the wire and passes nil,
+     *    which the bar reads as *do not grey these*. Both truths are kept; neither
+     *    is guessed.
+     *  - **Reload really does stop.** `BrowserBridge.reload` calls `stopLoading`
+     *    while a load is in flight, so the glyph that becomes an ✕ does what the
+     *    ✕ says. A machine window has no stop verb on the wire at all.
+     *  - **Find and Inspect are live here and only here.** Both need the document
+     *    rather than a picture of it, which is why they are greyed with a reason
+     *    on the other screen. `whyNoFind` and `whyNoInspect` are passed as nil
+     *    rather than left at their defaults: those defaults say *this page is on
+     *    the machine*, which would be a lie printed over a closed tunnel.
      */
-    private var header: some View {
-        VStack(spacing: 1) {
-            Text(title)
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(Theme.primary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-            Text(subtitle)
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(Theme.faint)
-                .lineLimit(1)
-                // The interesting end of a URL is the path, not the scheme, and
-                // every one of these starts with the same eleven characters.
-                .truncationMode(.head)
+    private var bar: some View {
+        BrowserPageBar(
+            id: "localhost",
+            address: $address,
+            editing: $editing,
+            typing: $typing,
+            placeholder: "Address or search",
+            go: isLive ? go : nil,
+            back: isLive ? { browser.goBack() } : nil,
+            forward: isLive ? { browser.goForward() } : nil,
+            reload: isLive ? { browser.reload() } : nil,
+            // No canvas on this screen: the keyboard belongs to a real web view
+            // and comes up when a field in the page is tapped.
+            page: nil,
+            more: nil,
+            unavailable: whyLimited,
+            canGoBack: browser.canGoBack,
+            canGoForward: browser.canGoForward,
+            loading: browser.loading,
+            stop: isLive ? { browser.reload() } : nil,
+            find: isLive ? toggleFind : nil,
+            finding: find?.isOpen == true,
+            whyNoFind: nil,
+            inspect: isLive ? { browser.setInspecting(!browser.inspecting) } : nil,
+            inspecting: browser.inspecting,
+            whyNoInspect: nil,
+            menu: pageMenu)
+    }
+
+    /**
+     * What the `…` opens on a page this phone is holding open.
+     *
+     * A menu rather than a screen, because there is no screen: a page over a
+     * tunnel has no window on the machine and so nothing that
+     * `MachineWindowSettingsView` would have to show. What it has is one verb and
+     * one fact.
+     *
+     * The verb is the old Done. *"Last button I think is on its correct place"*
+     * was said of a row that ended with it; the row is now the same six controls
+     * under all three kinds of window, and this is the thing that made the phone's
+     * row different. Nothing is lost by the move — closing the screen **is** the
+     * teardown, so the chevron top left has always done exactly this, and it is
+     * still one tap.
+     *
+     * The fact is the connection count, which used to be the second line of the
+     * header and is the honest signal that something is still talking: a
+     * hot-reload socket holds one open with nothing on screen changing. Only when
+     * there is more than one, because *"1 connection open"* under every page is
+     * the sort of line he means by *"remove this full shit."*
+     */
+    private var pageMenu: BrowserPageMenu {
+        BrowserPageMenu(
+            note: tunnel.streams > 1 ? "\(tunnel.streams) connections open" : nil,
+            items: [
+                BrowserPageMenu.Item(
+                    id: "localhost.close",
+                    title: "Close this window",
+                    icon: "xmark.circle",
+                    // Closing the view is the whole of the teardown: the listener
+                    // goes, the Mac's socket goes, and the port is unreachable
+                    // again until it is tapped.
+                    act: dismiss),
+            ])
+    }
+
+    /**
+     * Why the bar is greyed, or nil while the page is really there.
+     *
+     * A tunnel that is opening and a tunnel that has closed are both *this page
+     * cannot be asked for anything*, and they are different sentences because
+     * they call for different things from the person reading them: one is
+     * *wait* and the other is *this is over*. The machine is named in both,
+     * because somebody with two paired needs to know which one the port is on.
+     */
+    private var whyLimited: String? {
+        switch tunnel.phase {
+        case .opening:
+            return "Port \(tunnel.port) on \(model.theMachine) is still opening."
+        case .live:
+            return nil
+        case .ended:
+            return "Port \(tunnel.port) on \(model.theMachine) is closed, so there is nothing "
+                + "left to send this page."
         }
-        // One element, so VoiceOver reads "<page> — <address>" as the one fact
-        // it is rather than stopping between two labels that only mean something
-        // together.
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("localhost.where")
     }
 
     /**
@@ -581,25 +637,164 @@ struct LocalhostBrowser: View {
         find = nil
     }
 
-    private var title: String {
-        // The page's own title once it has one; the port until then, because
-        // "Untitled" tells nobody which of their servers they are looking at.
-        browser.title.isEmpty ? "localhost:\(tunnel.port)" : browser.title
+    private func toggleFind() {
+        if find?.isOpen == true { closeFind() } else { openFind() }
     }
 
-    private var subtitle: String {
-        switch tunnel.phase {
-        case .opening:
-            return "connecting…"
-        case let .live(url):
-            let address = browser.address.isEmpty ? url.absoluteString : browser.address
-            // The stream count is the honest signal that something is still
-            // talking — a hot-reload socket holds one open with nothing on
-            // screen changing.
-            return tunnel.streams > 1 ? "\(address)  ·  \(tunnel.streams) connections" : address
-        case .ended:
-            return "closed"
+    // MARK: - The address
+
+    /**
+     * The line somebody typed, worked out and then opened.
+     *
+     * > *"if it is in this phone, I cannot edit the link and make a change and
+     * > search it again."*
+     *
+     * The classification is `LocalhostAddress.classify` — the same pure function
+     * the new-window sheet and the machine window's own field call — so
+     * `google.com`, `https://…`, `/admin`, `3000` and *what is my ip* mean the
+     * same thing in every field in this app. What differs is only where the
+     * answer is opened, and on this screen the answer to all of them is **this
+     * web view**, because this web view *is* the browser here.
+     *
+     * The one case that has to be refused rather than opened is another port on
+     * the machine. Each port is its own tunnel with its own listener, opened by
+     * the screen that owns the list; this screen holds exactly one and cannot
+     * mint a second without leaving a socket nobody closes. So it says so plainly
+     * and points at the list, rather than silently doing nothing or — worse —
+     * loading `localhost:5173` against *this* phone, where nothing is listening.
+     *
+     * Both spellings of this page's own port are accepted: the machine's, which
+     * is what the field shows and what he thinks in, and the loopback port this
+     * phone bound, which is what a paste of the raw address contains.
+     *
+     * ## The one reading this screen adds
+     *
+     * A line that begins with `/` is a **path on the page you are standing on**.
+     * `classify` cannot know that: it reads `/admin` as a line with no host in it
+     * and searches the web for it, which is the right answer in the new-window
+     * sheet — where nothing is open yet — and a baffling one in a field attached
+     * to a page. Resolved against the page's *current* address rather than
+     * against the tunnel's root, because that is what a relative path means in
+     * every browser and because a page that has walked somewhere else is no
+     * longer at the address this window opened on.
+     */
+    private func go(_ typed: String) {
+        guard let origin else { return }
+        if typed.hasPrefix("/") {
+            let base = URL(string: browser.address) ?? origin
+            open(URL(string: typed, relativeTo: base)?.absoluteURL)
+            return
         }
+        switch LocalhostAddress.classify(typed) {
+        case let .tunnel(port, path):
+            guard port == tunnel.port || port == origin.port else {
+                refused = "Port \(port) is not the one this page is on. Open it from the "
+                    + "Browser list and it gets a window of its own."
+                return
+            }
+            open(resolve(path, against: origin))
+        case let .page(url):
+            open(URL(string: secure(url, typed: typed)))
+        case let .search(_, url):
+            open(URL(string: url))
+        case let .refused(why):
+            refused = why
+        }
+    }
+
+    /**
+     * A site typed without a scheme is asked for over https, not http.
+     *
+     * `LocalhostAddress` puts `http://` in front of a bare hostname because that
+     * is what the **machine's** browser wants — it follows the redirect to https
+     * itself, and it is not governed by App Transport Security. This web view is,
+     * and the exception this app declares is for `127.0.0.1` and nothing else, on
+     * purpose: *"an exception on a name is an exception on whatever that resolver
+     * decides it means."*
+     *
+     * So without this, typing `google.com` here would not reach Google. It would
+     * reach iOS's refusal — *"iOS refused to load this page over plain HTTP"* —
+     * which reads as the app being broken rather than as the address being
+     * spelled without an s.
+     *
+     * Two things are deliberately left alone:
+     *
+     *  - **Anything typed with a scheme.** Somebody who wrote `http://` meant it
+     *    and gets the honest refusal rather than a silent redirection to a
+     *    different origin than the one they asked for.
+     *  - **An address literal**, `192.168.1.5:8080` and the like. Those are the
+     *    dev servers on the same Wi-Fi that `NSAllowsLocalNetworking` exists for;
+     *    they are plain HTTP by nature, they load correctly as typed, and https
+     *    would break every one of them.
+     */
+    private func secure(_ url: String, typed: String) -> String {
+        guard !typed.contains("://"), url.hasPrefix("http://"),
+              let host = URL(string: url)?.host(),
+              !BrowserChrome.isLoopback(host), !isAddressLiteral(host) else { return url }
+        return "https://" + url.dropFirst("http://".count)
+    }
+
+    /// A host that is a number rather than a name — a dotted quad, or a bracketed
+    /// IPv6. Nothing clever: what it is separating is *a site somebody typed the
+    /// name of* from *a box on this Wi-Fi*.
+    private func isAddressLiteral(_ host: String) -> Bool {
+        if host.hasPrefix("[") { return true }
+        return host.allSatisfy { $0.isNumber || $0 == "." }
+    }
+
+    /// Point the web view at it, and clear whatever the last refusal said. Nil is
+    /// the case `classify` cannot really produce — every URL it emits it built
+    /// from a parsed one — and it is refused rather than force-unwrapped, because
+    /// a crash is a worse answer to a strange paste than a sentence.
+    private func open(_ url: URL?) {
+        guard let url else {
+            refused = "That is not an address this phone can open."
+            return
+        }
+        refused = nil
+        browser.load(url)
+    }
+
+    /// The tunnel's own origin while it is up. Nil is *not open yet* or *closed*,
+    /// and both are states where there is nothing to resolve a typed path against.
+    private var origin: URL? {
+        if case let .live(url) = tunnel.phase { return url }
+        return nil
+    }
+
+    /**
+     * Fill the field from the page, unless somebody is using it.
+     *
+     * The guard is the whole function, and on this screen it is sharper than
+     * anywhere else in the app: everything this feature exists to look at is a
+     * dev server, every dev server serves a single-page app, and every route
+     * change in one rewrites the URL. Without the guard the field is retyped
+     * mid-word and what gets sent is half of what was typed joined to half of
+     * where the page went.
+     *
+     * Before the first page has loaded there is no `browser.address` to seed
+     * from, so the tunnel's own origin with the opening path resolved against it
+     * stands in — the field says where it is going rather than being blank for
+     * the second it takes to get there.
+     */
+    private func seed() {
+        guard !editing else { return }
+        let raw = browser.address.isEmpty
+            ? (origin.map { resolve(path, against: $0).absoluteString } ?? "")
+            : browser.address
+        let line = BrowserChrome.shownAddress(raw, machinePort: tunnel.port)
+        guard !line.isEmpty, line != address else { return }
+        address = line
+    }
+
+    /// What the window is called: the page's own title, the address until it has
+    /// one, and the port until there is even that. One rule for every kind of
+    /// browser window — see `BrowserChrome.pageTitle`.
+    private var title: String {
+        BrowserChrome.pageTitle(title: browser.title,
+                                address: BrowserChrome.shownAddress(browser.address,
+                                                                    machinePort: tunnel.port),
+                                fallback: "localhost:\(tunnel.port)")
     }
 }
 
