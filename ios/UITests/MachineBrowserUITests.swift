@@ -106,6 +106,10 @@ final class MachineBrowserUITests: XCTestCase {
     private static let noWindows =
         "This machine's browser has no window open. Every per-window control is correctly absent."
 
+    private static let noPhonePage =
+        "This phone is holding no page of its own over a tunnel, so there is no On this phone row "
+        + "to walk. Open one from the + and choose This phone."
+
     // MARK: - The home is one kind of thing
 
     /**
@@ -275,14 +279,53 @@ final class MachineBrowserUITests: XCTestCase {
         try XCTSkipUnless(plus.waitForExistence(timeout: 20), Self.notDrivable)
         plus.tap()
 
-        XCTAssertTrue(app.textFields["browser.address"].waitForExistence(timeout: 8),
+        let field = app.textFields["browser.address"]
+        XCTAssertTrue(field.waitForExistence(timeout: 8),
                       "the sheet should open on the field that says where the window goes")
-        XCTAssertTrue(app.otherElements["browser.open.isolation"].exists
-                        || app.segmentedControls.firstMatch.exists,
-                      "shared or isolated is part of opening a window, not a control on the list")
+
+        /*
+         * **Not `segmentedControls` any more, and the `||` is gone with it.**
+         *
+         * The destination was a `.segmented` Picker and it read as a filter over
+         * the port list it was sitting on — *"this feels like a filter, not like
+         * a selection of this specific one."* It is a card of rows now, which is
+         * an `otherElement` and not a segmented control, so the second half of
+         * that `||` could only ever pass by accident from some other segmented
+         * control on screen. One assertion, on the identifier the card carries.
+         */
+        let chooser = app.otherElements["browser.open.isolation"]
+        XCTAssertTrue(chooser.exists,
+                      "where a window opens is part of opening one, not a control on the list")
+
+        // Above the field, which is the correction itself and is measurable.
+        XCTAssertLessThan(chooser.frame.minY, field.frame.minY,
+                          "the destination is chosen before the address is typed, so it reads first")
+
         XCTAssertTrue(app.buttons["browser.open.go"].exists,
                       "an address with nothing to press is not a way in")
         capture("31-open-a-window")
+
+        /*
+         * **Each destination is one tap, and the tap selects.**
+         *
+         * This is the regression guard for the trap the rebuild had to avoid: as
+         * a `Menu`, the first tap on `Isolated` would open a menu rather than
+         * choose, `TabNavigation.openLocalhostList` and `SessionPageUITests`
+         * would both go on passing, and windows would quietly start opening in
+         * his real Chromium profile. So the words are asserted — they are what
+         * those suites press — and so is the selection landing.
+         */
+        for name in ["Machine", "Isolated"] {
+            XCTAssertTrue(app.buttons[name].exists,
+                          "\(name) should be a plain button carrying its own word")
+        }
+        let isolated = app.buttons["Isolated"]
+        isolated.tap()
+        XCTAssertTrue(isolated.isSelected,
+                      "one tap on Isolated must select it, not open something")
+        XCTAssertTrue(app.buttons["Machine"].exists,
+                      "and the other destinations stay on screen, which a menu's would not")
+        capture("31b-destination-chosen")
 
         app.buttons["browser.open.cancel"].tap()
         XCTAssertTrue(app.buttons["browser.more"].waitForExistence(timeout: 8),
@@ -379,12 +422,21 @@ final class MachineBrowserUITests: XCTestCase {
              * apology. A disabled item with no reason on screen is the dead
              * control this menu was rebuilt to stop being.
              */
+            /*
+             * The third string used to be `"not in the machine's browser"`, which
+             * was the reason an **On this phone** row gave for greying its whole
+             * menu — attach included. That row's attach is live now: it opens the
+             * same address in the machine's browser and binds that window, so the
+             * only item still greyed on it is Archive, under a reason of its own
+             * about the archive rather than about window ids. See
+             * `MachineBrowserView.pageItems`.
+             */
             if !archive.isEnabled {
                 let why = app.descendants(matching: .any).matching(
                     NSPredicate(format: "label CONTAINS %@ OR label CONTAINS %@ OR label CONTAINS %@",
                                 "no window id to address",
                                 "No window row for this page",
-                                "not in the machine's browser")).firstMatch
+                                "Archiving is for the machine's own windows")).firstMatch
                 XCTAssertTrue(why.waitForExistence(timeout: 5),
                               "a greyed item with nothing saying why is worse than no item — "
                               + "\(row) should carry the sentence its section header holds")
@@ -401,7 +453,8 @@ final class MachineBrowserUITests: XCTestCase {
              * sessions" look identical from here.
              */
             let attach = app.descendants(matching: .any)
-                .matching(NSPredicate(format: "label BEGINSWITH 'Attach to'")).firstMatch
+                .matching(NSPredicate(format: "label BEGINSWITH 'Attach to'"
+                                      + " OR label CONTAINS 'and attach'")).firstMatch
             if !attach.exists {
                 XCTContext.runActivity(named: "no sessions to attach to, from \(row)") { _ in }
             }
@@ -556,6 +609,86 @@ final class MachineBrowserUITests: XCTestCase {
         } else {
             XCTContext.runActivity(named: "no sessions on this machine to send a picture to") { _ in }
         }
+    }
+
+    // MARK: - A page this phone is drawing
+
+    /**
+     * **The attach on an *On this phone* row is a live control, and its settings
+     * are a real screen.**
+     *
+     * > *"And these three dots, we should have this attachment thing for all of
+     * > them, properly working, and the same way on the sessions side also."*
+     *
+     * This row's menu used to be four greyed items under one line saying the page
+     * was not in the machine's browser. Both halves of that are checked here and
+     * both are checked by their **words**, because an `accessibilityIdentifier`
+     * on a `Button` inside a SwiftUI `Menu` does not reach the presented row —
+     * the rule this whole suite follows.
+     *
+     * Three outcomes are all correct and only one of them is the interesting one,
+     * so the assertion is a disjunction over the three sentences the menu can
+     * carry rather than a demand for the live section: the machine may be running
+     * no sessions, and it may not be offering its browser to this phone at all.
+     * What is **not** allowed is silence — a greyed row with nothing above it.
+     *
+     * **Nothing is pressed that changes anything.** A session row here would open
+     * a real window on his real machine, so the menu is revealed, read and
+     * dismissed. `Page settings` is pressed, because a settings screen is inert
+     * until one of its own controls is used, and none of them is.
+     *
+     * The click recorder's absence is asserted. It is the one control that
+     * cannot follow a page this phone renders — it is the machine's recorder
+     * watching the machine's own browser — and the failure mode of *"give it
+     * everything"* is drawing it anyway and having it refuse.
+     */
+    func testAPhonePagesMenuAttachesAndItsSettingsAreReal() throws {
+        let dots = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'browser.machine.more.page.'"))
+            .firstMatch
+        try XCTSkipUnless(dots.waitForExistence(timeout: 20), Self.noPhonePage)
+        dots.tap()
+
+        let attach = app.descendants(matching: .any).matching(
+            NSPredicate(format: "label CONTAINS %@ OR label CONTAINS %@ OR label CONTAINS %@",
+                        "and attach",
+                        "Nothing is running on",
+                        "not offering its browser")).firstMatch
+        XCTAssertTrue(attach.waitForExistence(timeout: 5),
+                      "an On this phone row should either offer the attach or say in one line why "
+                      + "it cannot — never a greyed row with nothing above it")
+
+        let settings = app.buttons["Page settings"]
+        XCTAssertTrue(settings.exists,
+                      "a page this phone draws has no bar of its own, so its settings are on the "
+                      + "menu")
+        capture("37-phone-page-menu")
+
+        settings.tap()
+        XCTAssertTrue(app.buttons["browser.phone.page.shot"].waitForExistence(timeout: 10),
+                      "this phone renders the page, so it can photograph it")
+        XCTAssertTrue(app.buttons["browser.phone.page.otherWay"].exists,
+                      "and offer the move that puts the same address in the machine's browser")
+        XCTAssertTrue(app.buttons["browser.phone.page.close"].exists,
+                      "and close it")
+        XCTAssertFalse(app.buttons["browser.machine.window.record"].exists,
+                       "the click recorder is the machine's, watching the machine's own browser — "
+                       + "it must not be drawn for a page this phone is rendering")
+        capture("38-phone-page-settings")
+
+        /*
+         * The note field is drawn only where there is somewhere to send a
+         * picture, so its absence is recorded rather than asserted — a control
+         * that could only ever refuse is one this app does not draw.
+         */
+        if app.buttons["browser.phone.page.shotTo"].exists {
+            XCTAssertTrue(app.textFields["browser.phone.page.shotNote"].exists,
+                          "a note travels with a picture handed to a session")
+        } else {
+            XCTContext.runActivity(named: "nothing running on this machine to send a picture to") { _ in }
+        }
+
+        app.navigationBars.buttons.firstMatch.tap()
     }
 
     // MARK: - Where an archived window comes back from

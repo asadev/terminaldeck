@@ -53,6 +53,26 @@
  * window row. A dead button is honest; a card labelled *Shared* about a page
  * nobody said that of is invented data.
  *
+ * ## And the fourth shape: a page **this phone** is drawing
+ *
+ * > *"all of them should be identical, and all of them should have all the
+ * > options. Should not be that much of difference in all of them."*
+ *
+ * A page opened over a tunnel had no settings screen at all. Its row on the
+ * Browser tab opened the page; the page had no `…`; and everything a window on
+ * the machine could be asked for was simply somewhere that kind of window did
+ * not go. Reached now from that row's `…` — `phoneTab` carries the tab's id and
+ * `windowID` is empty, because there is no window on the machine to name.
+ *
+ * The rule for it is the rule for the shape above, applied honestly rather than
+ * defensively: work out which controls can **really** act on a page this phone
+ * renders, and build those. Four can — attach (by opening the same address on
+ * the machine and binding *that* window), photograph with a note and hand it to
+ * a session, open it in the machine's browser, and close it. One cannot: the
+ * click-flow recorder is the machine's, watching the machine's own browser, so
+ * it is left out with the reason on the ⓘ rather than drawn dead. See
+ * `phonePageCards`.
+ *
  * ## What is deliberately not here
  *
  * The address and the four page verbs. They are on `MachineWindowView`'s bar,
@@ -91,6 +111,7 @@
 
 import SwiftUI
 import UIKit
+import WebKit
 
 struct MachineWindowSettingsView: View {
     let model: DeckModel
@@ -99,6 +120,31 @@ struct MachineWindowSettingsView: View {
     /// being cast — or the body of the window's screen, on one that is not. See
     /// the header.
     let pushed: Bool
+
+    /**
+     * The page **this phone** is drawing, when that is what these settings are
+     * about. Nil for every window on the machine.
+     *
+     * A tab **id**, never the tab, for the same reason `windowID` is an id and
+     * not a `MachineWindow`: a tab's title and path move under it as the page
+     * navigates, and a value captured when this screen appeared would name the
+     * page somebody left two taps ago. It is resolved on every redraw.
+     *
+     * A default so the two existing call sites in `MachineWindowView` are
+     * untouched — the same shape `MachineBrowserView` uses for its `shelf`.
+     */
+    var phoneTab: String? = nil
+
+    /// The picture this phone took of its own page, and how that went. See
+    /// `PhonePageShot` at the foot of this file for why the phone has to render
+    /// the page again rather than photograph the one it was showing.
+    @State private var shot = PhonePageShot()
+
+    /// What the last press asked for, held for a moment because the act it
+    /// describes leaves nothing on this screen to look at. The same two and a
+    /// half seconds every other silent act in this app holds a line for; it is a
+    /// record of the **ask**, never a claim about an answer.
+    @State private var sentLine: String?
 
     /// The optional line that travels with a screenshot handed to a session.
     /// Cleared on send, unlike an address field: it describes *that* picture, so
@@ -126,6 +172,28 @@ struct MachineWindowSettingsView: View {
         host?.watch.surfaces.first { $0.window == windowID }
     }
     private var sessions: [WindowSession] { state?.sessions ?? [] }
+
+    /// The tab these settings are about, resolved live. Nil once it has been
+    /// closed, which is a real state this screen draws rather than a fault.
+    private var tab: BrowserTab? { phoneTab.flatMap { model.browserTabs.tab($0) } }
+
+    /// What to call the machine in a sentence somebody reads.
+    private var machineName: String { model.current?.label ?? model.theMachine }
+
+    /// Whether this machine will let this phone drive its browser at all. The
+    /// gate on everything that opens a window over there.
+    private var canDrive: Bool { host?.canDriveBrowser == true }
+
+    /**
+     * The sessions a picture can be handed to.
+     *
+     * `agentTargets` rather than the `sessions` list above, and the difference
+     * matters here: that list comes off `browser.window.rows` and exists only on
+     * a machine offering `browser.control`, while handing a file to a terminal
+     * needs nothing of the sort. A phone that can tunnel to a machine with no
+     * browser at all can still photograph the page and send it.
+     */
+    private var agentSessions: [RemoteSession] { host?.agentTargets ?? [] }
     private var steps: [RecordedStep] { host?.machineSteps[windowID] ?? [] }
 
     /// Whether this machine will cast a window back at all — a different
@@ -155,7 +223,13 @@ struct MachineWindowSettingsView: View {
                 // Asked on arrival rather than only when a recording stops,
                 // because a window may already have been recording for ten
                 // minutes before anybody opened this screen.
-                host?.readMachineSteps(windowID)
+                //
+                // Not for a page this phone is drawing: there is no recorder on
+                // it and `windowID` is the empty string, which the host refuses
+                // at the parser on every member of this family. Asking anyway
+                // would put a frame on the wire whose only possible answer is a
+                // refusal.
+                if phoneTab == nil { host?.readMachineSteps(windowID) }
                 refreshPicture()
             }
             /*
@@ -196,7 +270,7 @@ struct MachineWindowSettingsView: View {
                 content
             }
             .background(Theme.background)
-            .navigationTitle("Window settings")
+            .navigationTitle(phoneTab == nil ? "Window settings" : "Page settings")
             .navigationBarTitleDisplayMode(.inline)
         } else {
             content
@@ -220,7 +294,9 @@ struct MachineWindowSettingsView: View {
 
     @ViewBuilder
     private var cards: some View {
-        if let window {
+        if phoneTab != nil {
+            phonePageCards
+        } else if let window {
             notWatchable
             isolationCard(window)
             sessionCard(window)
@@ -235,6 +311,557 @@ struct MachineWindowSettingsView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.top, 40)
                 .accessibilityIdentifier("browser.machine.window.settingsLoading")
+        }
+    }
+
+    /* ---- a page this phone is drawing ------------------------------------- */
+
+    /**
+     * The settings of a page **this phone** is holding open over a tunnel.
+     *
+     * > *"all of them should be identical, and all of them should have all the
+     * > options. Should not be that much of difference in all of them."*
+     *
+     * A page like this used to have no settings screen at all: the row on the
+     * Browser tab opened the page, the page had no `…`, and everything a window
+     * on the machine could be asked for was simply somewhere this kind of window
+     * did not go. So the comparison he was making — this row can do four things,
+     * that row can do one — was true, and the honest fix is not to grey four rows
+     * here. It is to work out which of them can **really** be done for a page
+     * this phone renders, and to build those.
+     *
+     * Four can:
+     *
+     *  - **Attach to a session.** Not this page — an agent cannot reach this
+     *    app's own web view and never will. Attaching opens the same address in
+     *    the machine's browser and binds *that* window, in one ask, and the card
+     *    says so in a sentence rather than implying the page moved.
+     *  - **Screenshot, with a note, sent to a session.** This phone renders the
+     *    page, so this phone can photograph it. See `PhonePageShot`.
+     *  - **Open in the machine's browser** — the honest analogue of the
+     *    isolation row. There is no shared-or-isolated to convert here because
+     *    the page is not in that browser at all; what there is is the move to
+     *    put it there, which is the same one the new-window sheet offers.
+     *  - **Close this window.** It was already real.
+     *
+     * One cannot, and it is left out rather than greyed: the **click-flow
+     * recorder** is the machine's recorder watching the machine's own browser
+     * (`src/main/browser-steps.ts`), and there is nothing for it to watch here.
+     * A dead Record button would be a control that can never work in any state,
+     * which is worse than an absence with a reason — so the reason is on the ⓘ
+     * at the top of the screen, and it names the move that gets him a recording:
+     * open the page over there.
+     *
+     * Nothing here is optimistic. The attach and the open both answer with the
+     * whole window list, which redraws the Browser tab and carries the machine's
+     * own notice; the two acts that leave nothing behind — a picture starting to
+     * upload — hold a line for two and a half seconds saying what was asked, the
+     * same way every other silent act in this app does.
+     */
+    @ViewBuilder
+    private var phonePageCards: some View {
+        if let tab {
+            phoneIdentityCard(tab)
+            phoneSessionCard(tab)
+            phoneScreenshotCard(tab)
+            phoneOtherWayCard(tab)
+            phoneCloseCard(tab)
+        } else {
+            /*
+             * Closed while this screen was up — usually by the Close card below,
+             * because nothing pops this screen.
+             *
+             * `MachineWindowView` owns the one watcher that pops a window's pair
+             * of screens when the machine stops listing it, and there is no such
+             * watcher for a tab this phone owns. Saying the page is gone is
+             * better than popping out from under a thumb, and it is what the rest
+             * of this file already does.
+             */
+            SchemeSectionCaption("This page")
+
+            SchemeGroup {
+                plainNote("This page is closed. It is not open on this phone any more.",
+                          id: "browser.phone.page.gone")
+            }
+        }
+    }
+
+    /// What this page is, and where it is being served from. The mark is the
+    /// same one the row on the Browser tab wears, so the two screens agree about
+    /// which machine is drawing the pixels.
+    @ViewBuilder
+    private func phoneIdentityCard(_ tab: BrowserTab) -> some View {
+        SchemeSectionCaption(
+            "This page",
+            about: "a page open on this phone",
+            info: "This page is drawn by this app, over a tunnel to \(machineName). It is not a "
+                + "window in \(machineName)'s browser, so it has its own cookies and its own "
+                + "logins.\n\nEverything on this screen works on it except recording a click "
+                + "flow. That recorder is \(machineName)'s, and it watches \(machineName)'s own "
+                + "browser — it cannot see a page this phone is drawing. Open this address in "
+                + "\(machineName)'s browser, below, and the recorder is on that window.")
+
+        SchemeGroup {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(tab.label)
+                    .font(.system(size: 16))
+                    .foregroundStyle(Theme.primary)
+                    .lineLimit(1)
+                    .accessibilityIdentifier("browser.phone.page.title")
+                Text(phoneAddress(tab))
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(Theme.faint)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .accessibilityIdentifier("browser.phone.page.address")
+                HStack(spacing: 6) {
+                    MachineWindowMark(text: "On this phone", tone: Theme.secondary)
+                    Spacer(minLength: 0)
+                }
+                .padding(.top, 2)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 13)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /**
+     * *"How to connect to it"*, for a page the machine is not showing.
+     *
+     * The picker is the same picker the machine's windows get and the verb
+     * behind it is the same one — `browser.window.open`, carrying the session so
+     * the host binds before it answers. What is different is the sentence under
+     * it, and that sentence is the whole reason this control is allowed to
+     * exist: the page on this phone does not move, a second window opens on the
+     * machine at the same address, and that window has the machine's cookies.
+     * Somebody signed into a dev server here may not be signed in over there.
+     * A card that said "Attached" and left that out would be the app claiming
+     * something it cannot do.
+     */
+    @ViewBuilder
+    private func phoneSessionCard(_ tab: BrowserTab) -> some View {
+        SchemeSectionCaption(
+            "Session",
+            about: "attaching a page to a session",
+            info: "A session's agent can drive a window in \(machineName)'s browser. It cannot "
+                + "reach a page this phone is drawing — the page is rendered here, in this app."
+                + "\n\nSo attaching opens this same address in \(machineName)'s browser and "
+                + "attaches that window. It gets a slot name — B1, B2 — and the session's tools "
+                + "address it by that name.")
+
+        SchemeGroup {
+            if canDrive && !sessions.isEmpty {
+                Menu {
+                    ForEach(sessions) { session in
+                        Button {
+                            attachOnMachine(tab, to: session.id)
+                        } label: {
+                            Label(MachineBrowserText.sessionRow(session), systemImage: "terminal")
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "link")
+                            .font(.system(size: 17, weight: .light))
+                            .foregroundStyle(Theme.accent)
+                            .frame(width: 24)
+                        Text("Open on \(machineName) and attach")
+                            .font(.system(size: 16))
+                            .foregroundStyle(Theme.accent)
+                        Spacer(minLength: 8)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(Theme.faint)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 13)
+                    .contentShape(Rectangle())
+                }
+                .accessibilityIdentifier("browser.phone.page.attach")
+
+                rowDivider(inset: 16)
+
+                plainNote("The page stays open here, untouched. What the session gets is a new "
+                          + "window on \(machineName) at this address, with \(machineName)'s own "
+                          + "cookies and logins — it may not be signed in the same way.",
+                          id: "browser.phone.page.attachNote")
+            } else if canDrive {
+                // No control at all rather than a picker with nothing in it: a
+                // machine running no sessions has nowhere to bind, and the fix is
+                // a session rather than anything on this screen.
+                plainNote("No sessions on \(machineName) to attach it to.",
+                          id: "browser.phone.page.noSessions")
+            } else {
+                deadRow("Open on \(machineName) and attach", icon: "link",
+                        id: "browser.phone.page.attach",
+                        why: "\(machineName) is not offering its browser to this phone, so no "
+                            + "window can be opened there to attach.")
+            }
+        }
+    }
+
+    /**
+     * Photograph the page, and choose who gets the photograph.
+     *
+     * The same two controls the machine's windows get, for the same reason —
+     * looking at it here and handing it to an agent are different acts with
+     * different outcomes — and the same note field, on the same card, because
+     * *"creating a screenshot and sending it to the session, whatever session we
+     * want to send"* is one move rather than two screens.
+     *
+     * ## How a picture gets from this phone into a session
+     *
+     * There is no `browser.window.shot` to lean on: that verb photographs a
+     * window in the **machine's** browser and hands the bytes to a session at the
+     * machine's end, and this page is not in that browser. So this phone does
+     * both halves itself. The sentence goes first, through `sendToAgent`, which
+     * attaches the session when this phone has not opened it — and that ordering
+     * is load-bearing rather than tidy: `HostLink.send(_:into:)` drops the landed
+     * path in silence for a session with no bridge, so a picture sent to a
+     * session nobody had opened would upload perfectly and arrive nowhere. The
+     * file follows, and its path lands in that same prompt when the upload
+     * finishes. Nothing is submitted — the same rule every other "sent to an
+     * agent" path in this app follows, and the reason there is no newline
+     * anywhere in it.
+     */
+    @ViewBuilder
+    private func phoneScreenshotCard(_ tab: BrowserTab) -> some View {
+        SchemeSectionCaption(
+            "Screenshot",
+            about: "photographing a page on this phone",
+            info: "This phone takes the picture itself. It loads the address again in a web view "
+                + "of its own and photographs that — so what you get is the page as it loads now, "
+                + "not the scroll position or the half-filled form you left behind. It is the "
+                + "same signed-in browser, so a page you are logged into is photographed logged "
+                + "in.\n\nSent to a session, the picture is uploaded to \(machineName) and its "
+                + "file name is typed into that session with your note. Press Return there to "
+                + "send it.")
+
+        SchemeGroup {
+            if canSendShot {
+                HStack(spacing: 12) {
+                    Image(systemName: "text.bubble")
+                        .font(.system(size: 17, weight: .light))
+                        .foregroundStyle(Theme.faint)
+                        .frame(width: 24, height: 26)
+                    TextField("Note for the session (optional)", text: $shotNote)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 15))
+                        .foregroundStyle(Theme.primary)
+                        .submitLabel(.done)
+                        .accessibilityIdentifier("browser.phone.page.shotNote")
+                }
+                .padding(.leading, 16)
+                .padding(.trailing, 12)
+                .padding(.vertical, 10)
+
+                rowDivider(inset: 16)
+            }
+
+            HStack(spacing: 0) {
+                Button {
+                    Task { await takePhoneShot(tab) }
+                } label: {
+                    VStack(spacing: 5) {
+                        Image(systemName: "camera")
+                            .font(.system(size: 17, weight: .medium))
+                        Text("Screenshot")
+                            .font(.system(size: 11))
+                    }
+                    .foregroundStyle(shot.phase == .working ? Theme.faint : Theme.accent)
+                    .frame(maxWidth: .infinity)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(shot.phase == .working)
+                .accessibilityHint("Takes a picture of this page and shows it here")
+                .accessibilityIdentifier("browser.phone.page.shot")
+
+                if canSendShot {
+                    Menu {
+                        ForEach(agentSessions) { session in
+                            Button {
+                                sendPhoneShot(to: session.id, tab: tab)
+                            } label: {
+                                Label(session.title, systemImage: "terminal")
+                            }
+                        }
+                    } label: {
+                        VStack(spacing: 5) {
+                            Image(systemName: "paperplane")
+                                .font(.system(size: 17, weight: .medium))
+                            Text("Send to a session")
+                                .font(.system(size: 11))
+                        }
+                        .foregroundStyle(shot.png == nil ? Theme.faint : Theme.accent)
+                        .frame(maxWidth: .infinity)
+                        .contentShape(Rectangle())
+                    }
+                    .disabled(shot.png == nil)
+                    .accessibilityLabel("Send a screenshot to a session")
+                    .accessibilityHint(shot.png == nil
+                                       ? "Take the picture first — there is nothing to send yet"
+                                       : "Uploads the picture and types its name into that session")
+                    .accessibilityIdentifier("browser.phone.page.shotTo")
+                }
+            }
+            .padding(.vertical, 12)
+
+            switch shot.phase {
+            case .working:
+                rowDivider(inset: 16)
+                HStack(spacing: 10) {
+                    ProgressView().controlSize(.small)
+                    Text("Loading the page to photograph it…")
+                        .font(.system(size: 14))
+                        .foregroundStyle(Theme.faint)
+                        .accessibilityIdentifier("browser.phone.page.shotWorking")
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 15)
+            case let .failed(why):
+                rowDivider(inset: 16)
+                plainNote(why, id: "browser.phone.page.shotFailed")
+            case .idle:
+                EmptyView()
+            }
+
+            if let picture = shot.image {
+                rowDivider(inset: 16)
+                VStack(alignment: .leading, spacing: 8) {
+                    Image(uiImage: picture)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(maxWidth: .infinity)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(Theme.hairline))
+                        .accessibilityLabel("Screenshot of \(tab.label)")
+                        .accessibilityIdentifier("browser.phone.page.picture")
+
+                    if let line = SessionDetails.activityLine(shot.takenAt) {
+                        Text("Taken \(line)")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.faint)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 13)
+            }
+
+            if let sentLine {
+                rowDivider(inset: 16)
+                plainNote(sentLine, id: "browser.phone.page.sent")
+            }
+        }
+    }
+
+    /// Whether a picture has anywhere to go. Both halves are real conditions: a
+    /// machine that will not take a file, and a machine with nothing running to
+    /// hand one to.
+    private var canSendShot: Bool { model.canSendFiles && !agentSessions.isEmpty }
+
+    /**
+     * The honest analogue of the isolation row.
+     *
+     * A window on the machine can be moved between the shared jar and a
+     * partition of its own. This page is in neither, because it is not in that
+     * browser — so the row that belongs here is the one that puts it there, and
+     * the card says what changes when it does. The page on this phone is left
+     * exactly as it is; the sheet's own `otherWay` offers the same move from the
+     * other end.
+     *
+     * No sentence of its own on the press. `browser.window.open` answers with the
+     * whole window list carrying the machine's own notice, and on this screen
+     * that notice is the banner two inches above this card — a second line here
+     * would be the same fact twice, and the one written here would be a guess
+     * printed before the machine had agreed to anything.
+     */
+    @ViewBuilder
+    private func phoneOtherWayCard(_ tab: BrowserTab) -> some View {
+        SchemeSectionCaption(
+            "Open somewhere else",
+            about: "opening this address on the machine",
+            info: "The same address can be opened in \(machineName)'s own browser. That window is "
+                + "\(machineName)'s: it uses \(machineName)'s cookies and logins, it can be "
+                + "watched and driven from this phone, and it can record a click flow. The page "
+                + "here is left exactly as it is — you end up with both.")
+
+        SchemeGroup {
+            if canDrive {
+                Button {
+                    host?.openMachineWindow(url: phoneAddress(tab), isolated: false)
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "globe")
+                            .font(.system(size: 19, weight: .light))
+                            .frame(width: 24)
+                        Text("Open in \(machineName)'s browser")
+                            .font(.system(size: 16))
+                        Spacer(minLength: 0)
+                    }
+                    .foregroundStyle(Theme.accent)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 13)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Opens a second window at this address on \(machineName)")
+                .accessibilityIdentifier("browser.phone.page.otherWay")
+            } else {
+                deadRow("Open in \(machineName)'s browser", icon: "globe",
+                        id: "browser.phone.page.otherWay",
+                        why: "\(machineName) is not offering its browser to this phone.")
+            }
+        }
+    }
+
+    /**
+     * Close the page, from inside its settings.
+     *
+     * This phone's own socket, so it takes effect immediately and there is no
+     * answer to wait for — the one act on this screen that is not a round trip.
+     * Nothing is dismissed on the press, for the reason this file's header
+     * gives: `phonePageCards` draws the closed state instead, which is honest
+     * and does not pop a screen out from under a thumb.
+     */
+    @ViewBuilder
+    private func phoneCloseCard(_ tab: BrowserTab) -> some View {
+        SchemeSectionCaption("Window")
+
+        SchemeGroup {
+            Button {
+                model.browserTabs.close(tab, machine: model)
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "xmark.circle")
+                        .font(.system(size: 19, weight: .light))
+                        .frame(width: 24)
+                    Text("Close this window")
+                        .font(.system(size: 16))
+                    Spacer(minLength: 0)
+                }
+                .foregroundStyle(Theme.critical)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 13)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("Closes this page and the tunnel it was using, on this phone")
+            .accessibilityIdentifier("browser.phone.page.close")
+        }
+    }
+
+    // MARK: - What a page on this phone can be asked for
+
+    /// The address this page is on, as the machine would have to be given it.
+    /// `String(port)` and never the `Int` interpolated: a port dropped straight
+    /// into a Swift string is formatted with the locale's grouping separator and
+    /// comes out as `localhost:3,000`.
+    private func phoneAddress(_ tab: BrowserTab) -> String {
+        "http://localhost:\(String(tab.port))\(tab.path)"
+    }
+
+    /// Open this address on the machine and hand that window to a session, in
+    /// one ask. The confirmation is the machine's own answer — the window list
+    /// comes back carrying the bind notice, which the banner above draws.
+    private func attachOnMachine(_ tab: BrowserTab, to session: String) {
+        host?.openMachineWindow(url: phoneAddress(tab), isolated: false, session: session)
+    }
+
+    /**
+     * Photograph this page.
+     *
+     * The tunnel first, because a tab can be parked: switching machines releases
+     * every socket this phone was holding, and the tab waits as a row. `resume`
+     * re-binds the port, and then there is a wait for it to actually come up.
+     *
+     * That wait is bounded and it only runs because somebody pressed a button —
+     * it is not a poller. Twelve seconds is well past `PortTunnel`'s own dial,
+     * and every path out of it ends in either a picture or a sentence.
+     */
+    private func takePhoneShot(_ tab: BrowserTab) async {
+        guard let url = await liveURL(for: tab) else {
+            shot.fail("This phone could not reach \(machineName) on that port, so there was "
+                      + "nothing to photograph.")
+            return
+        }
+        await shot.take(url: url)
+    }
+
+    /// Where the page actually lives right now: the tunnel's own origin with the
+    /// tab's current path resolved against it. The origin is used as the machine
+    /// bound it — `127.0.0.1` on most phones and `[::1]` where the v4 bind lost a
+    /// race — rather than rebuilt from a guess, which is the same rule
+    /// `LocalhostBrowser` follows.
+    private func liveURL(for tab: BrowserTab) async -> URL? {
+        guard let current = model.browserTabs.resume(tab, machine: model),
+              let tunnel = model.browserTabs.tunnel(for: current) else { return nil }
+        for _ in 0 ..< 80 {
+            if tunnel.hasEnded { return nil }
+            if case let .live(origin) = tunnel.phase {
+                guard current.path != "/",
+                      let resolved = URL(string: current.path, relativeTo: origin)
+                else { return origin }
+                return resolved.absoluteURL
+            }
+            // Cancellation checked rather than left to `try?`, which swallows it
+            // and turns the wait into a tight loop for the rest of its twelve
+            // seconds — the screen going away is exactly when that happens.
+            if Task.isCancelled { return nil }
+            try? await Task.sleep(for: .milliseconds(150))
+        }
+        return nil
+    }
+
+    /**
+     * Hand the picture to a session: the sentence, then the file.
+     *
+     * See the card's own header for why that order is not a preference. The note
+     * is flattened through `Inspect.oneLine` — the one function in this app that
+     * decides what a line typed into somebody's shell may contain — and the field
+     * is cleared, because a note describes *that* picture and leaving it standing
+     * would attach last shot's sentence to the next one.
+     */
+    private func sendPhoneShot(to session: String, tab: BrowserTab) {
+        guard let png = shot.png, !png.isEmpty else { return }
+        let name = "page-\(String(tab.port))-\(Int(Date().timeIntervalSince1970)).png"
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+        do {
+            try png.write(to: file)
+        } catch {
+            say("That picture could not be saved, so it was not sent.")
+            return
+        }
+
+        var opening = "A screenshot of \(phoneAddress(tab)) taken on my phone"
+        let note = Inspect.oneLine(shotNote.trimmingCharacters(in: .whitespacesAndNewlines))
+        if !note.isEmpty { opening += " — \(note)" }
+        opening += ": "
+
+        _ = model.sendToAgent(opening, into: session)
+        model.send(PickedFile(url: file, name: name, size: png.count, temporary: true),
+                   into: session)
+        shotNote = ""
+        say("Sending it. The picture's name is typed into that session — press Return there to "
+            + "send it.")
+    }
+
+    /// Hold a line for two and a half seconds, the same as every other silent
+    /// act in this app.
+    ///
+    /// Only the picture uses it, and only because sending one is the one act on
+    /// this screen with no answer to redraw from: the upload runs on this phone
+    /// and the machine says nothing back about it. Everything else here is a
+    /// `browser.window.*` verb whose answer is the window list and the banner
+    /// above, so nothing else is allowed to print a sentence ahead of it.
+    private func say(_ line: String) {
+        withAnimation { sentLine = line }
+        Task {
+            try? await Task.sleep(for: .seconds(2.5))
+            withAnimation { sentLine = nil }
         }
     }
 
@@ -885,5 +1512,254 @@ struct MachineWindowSettingsView: View {
             .fill(Theme.hairline)
             .frame(height: 0.5)
             .padding(.leading, inset)
+    }
+}
+
+
+/* -------------------------------------------------------------------------- */
+/* Photographing a page this phone is drawing                                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A picture of a page this phone is holding, taken by this phone.
+ *
+ * `browser.window.shot` photographs a window in the **machine's** browser, and a
+ * page opened over a tunnel is not in that browser: it is a `WKWebView` in this
+ * app, on a real loopback origin. So the picture has to be taken here, and the
+ * question is which web view takes it.
+ *
+ * ## Why it loads the page again instead of photographing the one he was reading
+ *
+ * The obvious answer is the web view `LocalhostBrowser` owns — and it does not
+ * exist by the time anybody is on this screen. That view is `@State` on the
+ * pushed page, so leaving the page tears it down along with its web content
+ * process; the settings are reached from the row, with the page not on screen.
+ * Keeping a page alive in the background so that a button on another screen
+ * could photograph it would mean every tunnelled page in the app going on
+ * running scripts, holding sockets and burning battery for a control almost
+ * nobody presses.
+ *
+ * So this loads the same address again, in a web view of its own, and
+ * photographs that. **The consequence is real and is said on screen**: what
+ * comes back is the page as it loads now, not the scroll position or the
+ * half-filled form that was on it. What is *not* lost is the sign-in —
+ * `.default()` is the same persistent store `BrowserBridge` uses, so a dev
+ * server that logged him in with a cookie photographs logged in.
+ *
+ * ## Why the view is put in the window, at one per cent alpha
+ *
+ * A `WKWebView` that is in no window has no reason to paint, and `takeSnapshot`
+ * on a detached one is a coin toss that comes back blank on some builds. There
+ * is nothing to be gained by finding out which build this is on his phone. So it
+ * goes into the key window behind everything, invisible but real, with touches
+ * off and hidden from accessibility so it cannot swallow a tap or appear in a
+ * UI test's tree — and it is taken out again the moment the picture is in hand.
+ * Nothing of it outlives the press.
+ *
+ * ## Every path out of it ends in a picture or a sentence
+ *
+ * A page that never finishes loading, one that fails, one whose snapshot comes
+ * back nil: three different outcomes and each gets its own plain line. A camera
+ * button that goes quiet is the dead control this whole screen exists to stop
+ * being.
+ */
+@MainActor
+@Observable
+final class PhonePageShot {
+
+    /// Where a capture is. `.failed` carries the sentence rather than a code,
+    /// because the only reader is a line of text on a card.
+    enum Phase: Equatable {
+        case idle
+        case working
+        case failed(String)
+    }
+
+    private(set) var phase: Phase = .idle
+    /// The decoded picture, for the card. Held rather than decoded in a view
+    /// body — the same reason `MachineWindowSettingsView.picture` is held.
+    private(set) var image: UIImage?
+    /// The bytes, for the upload. Kept beside the image rather than re-encoded
+    /// from it: a re-encode is a second PNG that is not the one on screen.
+    private(set) var png: Data?
+    /// Epoch milliseconds, the stamp `MachineShot.at` uses, so both screens can
+    /// hand it to `SessionDetails.activityLine` and get the same words.
+    private(set) var takenAt: Double?
+
+    /**
+     * The size the page is photographed at.
+     *
+     * A phone-shaped viewport, because that is the shape it was being read in. A
+     * desktop-width picture of a responsive site is a picture of a layout he
+     * never saw, and the whole point of showing an agent this page is that it is
+     * the page in front of him.
+     */
+    static let viewport = CGSize(width: 390, height: 844)
+
+    /// How long the page has to load. Deliberately longer than a dev server's
+    /// worst first compile and short enough that nobody is still waiting.
+    static let deadline: Duration = .seconds(20)
+
+    private var web: WKWebView?
+    private var watcher: PageLoadWatcher?
+
+    /// Give up before anything is loaded, with a sentence of the caller's own.
+    /// Used for the case this object cannot see: no tunnel to load through.
+    func fail(_ why: String) {
+        phase = .failed(why)
+    }
+
+    func take(url: URL) async {
+        release()
+        phase = .working
+        image = nil
+        png = nil
+        takenAt = nil
+
+        let configuration = WKWebViewConfiguration()
+        // The same persistent store `BrowserBridge` uses, deliberately: this has
+        // to photograph the page as he is signed into it, and an ephemeral store
+        // would photograph a logged-out stranger's view of his own dev server.
+        configuration.websiteDataStore = .default()
+        configuration.allowsInlineMediaPlayback = true
+
+        let view = WKWebView(frame: CGRect(origin: .zero, size: Self.viewport),
+                             configuration: configuration)
+        view.isOpaque = true
+        view.backgroundColor = .white
+        view.scrollView.backgroundColor = .white
+        view.isUserInteractionEnabled = false
+        view.alpha = 0.01
+        view.isAccessibilityElement = false
+        view.accessibilityElementsHidden = true
+        // The left edge is the system's everywhere in this app, and a view
+        // nobody can touch has no business installing edge recognisers anyway.
+        view.allowsBackForwardNavigationGestures = false
+        mount(view)
+        web = view
+
+        if let failure = await load(view, url) {
+            release()
+            phase = .failed(failure)
+            return
+        }
+
+        /*
+         * A beat between "the document finished" and the photograph.
+         *
+         * `didFinish` fires when loading is done, not when the first frame has
+         * been painted — a page whose fonts or hero image land on the next
+         * runloop turn photographs as a white rectangle. 400ms is far more than
+         * a paint and far less than anybody notices, and `afterScreenUpdates`
+         * below covers the rest.
+         */
+        try? await Task.sleep(for: .milliseconds(400))
+
+        guard let picture = await snapshot(view) else {
+            release()
+            phase = .failed("That page could not be photographed. Opening it here and trying "
+                            + "again usually works.")
+            return
+        }
+        guard let bytes = picture.pngData() else {
+            release()
+            phase = .failed("That picture could not be saved.")
+            return
+        }
+
+        image = picture
+        png = bytes
+        takenAt = Date().timeIntervalSince1970 * 1000
+        phase = .idle
+        release()
+    }
+
+    /// Load, and answer with the sentence to show or nil for success.
+    private func load(_ view: WKWebView, _ url: URL) async -> String? {
+        await withCheckedContinuation { continuation in
+            let watcher = PageLoadWatcher(deadline: Self.deadline) { failure in
+                continuation.resume(returning: failure)
+            }
+            self.watcher = watcher
+            view.navigationDelegate = watcher
+            view.load(URLRequest(url: url))
+        }
+    }
+
+    private func snapshot(_ view: WKWebView) async -> UIImage? {
+        let configuration = WKSnapshotConfiguration()
+        configuration.rect = CGRect(origin: .zero, size: view.bounds.size)
+        // The picture has to include whatever the last runloop turn drew, which
+        // is exactly the case the beat above is waiting for.
+        configuration.afterScreenUpdates = true
+        return await withCheckedContinuation { continuation in
+            view.takeSnapshot(with: configuration) { picture, _ in
+                continuation.resume(returning: picture)
+            }
+        }
+    }
+
+    /// Behind everything in the key window, invisible, untouchable. See the
+    /// header for why it cannot simply live in no window at all.
+    private func mount(_ view: UIView) {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let scene = scenes.first(where: { $0.activationState == .foregroundActive }) ?? scenes.first
+        guard let window = scene?.keyWindow ?? scene?.windows.first else { return }
+        window.insertSubview(view, at: 0)
+    }
+
+    /// Take it back out, and stop it. A web view left in the window would go on
+    /// running the page's scripts and holding the tunnel open for a screen
+    /// nobody is looking at.
+    private func release() {
+        watcher = nil
+        guard let view = web else { return }
+        view.navigationDelegate = nil
+        view.stopLoading()
+        view.removeFromSuperview()
+        web = nil
+    }
+}
+
+/**
+ * Waits for one page to load, once, and answers exactly once however it ends.
+ *
+ * The deadline is part of it rather than bolted on outside: a `WKWebView` that
+ * is never going to finish — a dev server that accepted the socket and then
+ * stopped talking — calls no delegate method at all, so a continuation waiting
+ * on the delegate alone waits forever. `answer` is nilled on the first call,
+ * which is what makes "finished, then timed out" safe rather than a crash.
+ */
+@MainActor
+private final class PageLoadWatcher: NSObject, WKNavigationDelegate {
+
+    private var answer: ((String?) -> Void)?
+
+    init(deadline: Duration, done: @escaping (String?) -> Void) {
+        answer = done
+        super.init()
+        Task { [weak self] in
+            try? await Task.sleep(for: deadline)
+            self?.finish("That page did not finish loading, so there was nothing to photograph.")
+        }
+    }
+
+    private func finish(_ failure: String?) {
+        guard let answer else { return }
+        self.answer = nil
+        answer(failure)
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        finish(nil)
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        finish("That page could not be loaded, so there was nothing to photograph.")
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!,
+                 withError error: Error) {
+        finish("That page could not be reached, so there was nothing to photograph.")
     }
 }
