@@ -1578,8 +1578,12 @@ final class DeckModel {
     func machineSteps(_ id: String) -> [RecordedStep]? { current?.machineSteps[id] }
 
     func readMachineWindows() { current?.readMachineWindows() }
-    func openMachineWindow(url: String? = nil, profile: String? = nil, isolated: Bool = false) {
-        current?.openMachineWindow(url: url, profile: profile, isolated: isolated)
+    /// Open a window on the machine, and hand it straight to a session when one
+    /// is named. See `HostLink.openMachineWindow` for why the attach cannot be a
+    /// second call.
+    func openMachineWindow(url: String? = nil, profile: String? = nil,
+                           isolated: Bool = false, session: String? = nil) {
+        current?.openMachineWindow(url: url, profile: profile, isolated: isolated, session: session)
     }
     func goMachineWindow(_ id: String, to url: String) { current?.goMachineWindow(id, to: url) }
     func actOnMachineWindow(_ id: String, _ act: MachineBrowserWire.Act) {
@@ -1590,6 +1594,17 @@ final class DeckModel {
         current?.shotMachineWindow(id, to: session, note: note)
     }
     func readMachineSteps(_ id: String) { current?.readMachineSteps(id) }
+
+    /// The element the machine last described, with the window it is on.
+    var machinePicked: MachinePickResult? { current?.machinePicked }
+    /// The window a pick is waiting on, or nil.
+    var pickingInMachineWindow: String? { current?.pickingIn }
+    /// Ask what is at one point on a window's page. Document coordinates — see
+    /// `MachinePick.documentPoint`.
+    func pickInMachineWindow(_ id: String, x: Double, y: Double, up: Int = 0) {
+        current?.pickInMachineWindow(id, x: x, y: y, up: up)
+    }
+    func clearMachinePick() { current?.clearMachinePick() }
 
 
     var fileListing: FileListing? { current?.fileListing }

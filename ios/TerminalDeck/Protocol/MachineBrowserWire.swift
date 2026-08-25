@@ -93,6 +93,49 @@ enum MachineBrowserWire {
      */
     static let maxSteps = 500
 
+    /**
+     * How many ancestors one `browser.window.pick` may ask to walk up.
+     *
+     * `MAX_PICK_UP` in `src/main/remote/protocol.ts`, and the reason it is
+     * mirrored here rather than left to the host is that the host's answer to an
+     * out-of-range one is **not a refusal, it is a closed socket**: that check
+     * lives in the *parser*, and `server.ts` answers a parse failure by dropping
+     * the connection. So Wider clamps on this side and never sends past it. A
+     * phone that walked past 64 would take somebody's whole session down —
+     * terminals, cast and all — because they pressed one button once too often.
+     *
+     * The page-side walk has its own ceiling at the same number
+     * (`MAX_PICK_ANCESTORS` in `browser-drive-script.ts`), which is what stops a
+     * hostile document lengthening the loop; `browser-driver.test.ts` asserts the
+     * two agree over there. This is the third copy and it is the one that keeps
+     * the socket open.
+     */
+    static let maxPickUp = 64
+
+    /// The host's own caps on a `browser.window.picked`, mirrored so this end
+    /// clamps to the same lengths rather than to numbers of its own — an element
+    /// described one way on the desktop and another on the phone is the defect
+    /// item V9 is about. `MAX_PICK_SELECTOR`, `MAX_PICK_WORD`, `MAX_ROW_TEXT`
+    /// and `MAX_ROW_URL` in `src/main/remote/browser-control.ts`.
+    static let maxPickSelector = 400
+    static let maxPickWord = 64
+    static let maxPickLabel = 160
+    static let maxPickURL = 512
+
+    /**
+     * The words `browser.window.picked` uses for where a label came from.
+     *
+     * `PICK_LABEL_SOURCES` in `src/main/remote/protocol.ts`. Held here as a list
+     * rather than as an enum **on purpose**, and this file is the wrong place to
+     * turn it into one: the client's instruction is to draw an unfamiliar word as
+     * it stands rather than refuse the frame, and an enum with no default case is
+     * exactly the shape that cannot. It is kept at all so a test can say out loud
+     * which words this build has seen — not so anything can reject the others.
+     */
+    static let labelSources = [
+        "text", "label", "aria-label", "placeholder", "title", "name", "alt", "value", "none",
+    ]
+
     /// The verbs `browser.window.act` accepts. Mirrors `WINDOW_ACTIONS` in
     /// `src/main/remote/protocol.ts`, which is a **closed** list there — unlike
     /// a panel's actions, these are not declared by the host per answer, so a
@@ -226,6 +269,26 @@ struct MachineBrowserState: Equatable, Hashable {
     var notDrawn: Int { max(0, sent - windows.count) }
 }
 
+/**
+ * Where a picked element sits, in the page's **own** coordinates.
+ *
+ * A port of `PickedRect` in `src/main/remote/protocol.ts`, down to the short
+ * field names: `w`/`h` rather than `width`/`height`, to match the geometry
+ * `browser.frame` already carries.
+ *
+ * Document coordinates, not viewport ones, and that is the whole usefulness of
+ * it: a viewer draws this over the **next** frame it receives by subtracting
+ * that frame's scroll, so an outline stays on the thing it names while the page
+ * moves under it. A viewport rectangle would slide off the element the moment
+ * anybody scrolled.
+ */
+struct PickedRect: Equatable, Hashable {
+    let x: Double
+    let y: Double
+    let w: Double
+    let h: Double
+}
+
 /// A picture of one window, and when it was taken. `png` is the raw bytes,
 /// already decoded from the base64 the wire carries — a screen that held the
 /// string would decode it again on every redraw.
@@ -280,6 +343,68 @@ extension WireCodec {
                                    sessions: sessions,
                                    notice: string(object["notice"]),
                                    sent: (object["windows"] as? [Any])?.count)
+    }
+
+    /**
+     * `browser.window.picked` — one element on a machine window's page.
+     *
+     * Nil when the frame names no window or describes no element: an answer with
+     * no `id` cannot be matched to the screen that asked, and one with no
+     * `selector` is not something anything can be told to change. Both are
+     * dropped rather than drawn as a sheet with blanks in it.
+     *
+     * ## Everything here is sanitised again on this side
+     *
+     * The host trims these to its own lengths already, and that is **not** the
+     * same job. This line is about to be typed into a PTY running a coding agent
+     * — one newline in it submits the prompt early and an ESC repaints the
+     * terminal it lands in — and `Inspect.sanitizeLine` is the function that
+     * makes a string safe for that, on both clients, by the same rules. A host
+     * that trims to 400 characters has said nothing about control characters.
+     *
+     * It is also the boundary where a page's own words stop being the page's.
+     * `label` comes from a document the machine loaded; bidi overrides in it
+     * would render text as something other than what it says, on a screen
+     * somebody is reading to decide what to tell an agent to do.
+     *
+     * ## `labelSource` is not narrowed
+     *
+     * Passed through as the word it is. See `MachineBrowserWire.labelSources`:
+     * the wire's rule is that a client draws an unfamiliar source as it stands,
+     * and the two words this phone's own inspector can never produce (`name`,
+     * `label`) are ordinary answers from a form field.
+     */
+    static func pickedElement(_ object: [String: Any]) -> (id: String, element: InspectedElement)? {
+        guard let id = string(object["id"]), !id.isEmpty else { return nil }
+        let selector = Inspect.sanitizeLine(object["selector"], max: MachineBrowserWire.maxPickSelector)
+        guard !selector.isEmpty else { return nil }
+
+        let element = InspectedElement(
+            tag: Inspect.sanitizeLine(object["tag"], max: MachineBrowserWire.maxPickWord),
+            selector: selector,
+            label: Inspect.sanitizeLine(object["label"], max: MachineBrowserWire.maxPickLabel),
+            labelSource: Inspect.sanitizeLine(object["labelSource"], max: MachineBrowserWire.maxPickWord),
+            url: Inspect.sanitizeLine(object["url"], max: MachineBrowserWire.maxPickURL),
+            // Negative or missing reads as zero rather than as a refusal. `depth`
+            // greys Narrower and `maxUp` greys Wider, and the safe direction for
+            // both is the one that offers less: a control that is dead when it
+            // could have worked is a nuisance, and one that is live over nothing
+            // sends a frame the host answers with a sentence.
+            depth: max(0, whole(object["depth"]) ?? 0),
+            maxUp: max(0, whole(object["maxUp"]) ?? 0),
+            rect: pickedRect(object["rect"]))
+        return (id, element)
+    }
+
+    /// The element's box, or nil where the host sent none. Every field has to be
+    /// a real finite number: a rectangle with a `NaN` in it is not a rectangle,
+    /// and a half-read one would put an outline in the wrong place rather than
+    /// nowhere.
+    private static func pickedRect(_ raw: Any?) -> PickedRect? {
+        guard let object = raw as? [String: Any],
+              let x = number(object["x"]), let y = number(object["y"]),
+              let w = number(object["w"]), let h = number(object["h"]) else { return nil }
+        return PickedRect(x: x, y: y, w: w, h: h)
     }
 
     /**

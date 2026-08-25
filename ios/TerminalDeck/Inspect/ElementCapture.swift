@@ -571,13 +571,46 @@ extension Inspect {
      * context string would send the first line as the whole instruction.
      */
     static func composeAgentContext(_ capture: Core, instruction: String = "") -> String {
+        // Straight through to the spelling below, which takes the label's source
+        // as a **word** rather than as one of this phone's seven cases. Two
+        // implementations of this line would be two ways to describe one element
+        // to an agent, and the whole of item V9 is that the two browsers must not
+        // differ. `LabelSource.text.rawValue` is `"text"`, so the delegation is
+        // byte-identical to what this function used to compute for itself.
+        composeAgentContext(url: capture.url,
+                            selector: capture.selector,
+                            tag: capture.tag,
+                            label: capture.label,
+                            labelSource: capture.labelSource.rawValue,
+                            instruction: instruction)
+    }
+
+    /**
+     * The same line, for an element **this phone did not describe itself**.
+     *
+     * `browser.window.picked` arrives with the label's source as a plain string,
+     * because its vocabulary is the host's — `PICK_LABEL_SOURCES` — and it
+     * carries two words a click on a rendered element cannot produce (`name`,
+     * and `label` for a `<label for="…">` elsewhere in the document). An
+     * unfamiliar word is **printed as it stands**, never refused: that is the
+     * wire's own instruction to clients, and the list grows the day the label
+     * rule learns a new fallback.
+     *
+     * There is deliberately no branch on the word. The one the old spelling had
+     * — *text* for `.text`, the raw value otherwise — did nothing, because the
+     * raw value of `.text` is `"text"`; keeping it would have been a place for a
+     * future word to need a case added before it could be printed at all.
+     */
+    static func composeAgentContext(url: String, selector: String, tag: String,
+                                    label: String, labelSource: String,
+                                    instruction: String = "") -> String {
         var parts: [String] = []
-        if !capture.url.isEmpty { parts.append("on \(capture.url)") }
-        parts.append("element `\(capture.selector)`")
-        if !capture.tag.isEmpty { parts.append("<\(capture.tag)>") }
-        if !capture.label.isEmpty {
-            let word = capture.labelSource == .text ? "text" : capture.labelSource.rawValue
-            parts.append("\(word) \"\(capture.label)\"")
+        if !url.isEmpty { parts.append("on \(url)") }
+        parts.append("element `\(selector)`")
+        if !tag.isEmpty { parts.append("<\(tag)>") }
+        if !label.isEmpty {
+            let word = labelSource.isEmpty ? "text" : labelSource
+            parts.append("\(word) \"\(label)\"")
         }
 
         let context = "[browser: \(parts.joined(separator: ", "))]"
@@ -620,10 +653,20 @@ extension Inspect {
 
     /// How the sheet names where the label came from. Mirrors `describeLabelSource`.
     static func describeLabelSource(_ source: LabelSource) -> String {
-        switch source {
-        case .text: return "text"
-        case .none: return ""
-        default: return source.rawValue
-        }
+        describeLabelSource(source.rawValue)
+    }
+
+    /**
+     * The same, for a word that arrived over the wire.
+     *
+     * `none` is the one value the sheet must **not** print. It is not a place a
+     * label came from, it is the absence of one, and a chip reading *none*
+     * beside a label is a screen saying two opposite things at once. Everything
+     * else is drawn exactly as it stands — including a word this build has never
+     * seen, which is what `PICK_LABEL_SOURCES` requires of a client and what a
+     * Swift enum with no default case could not have done.
+     */
+    static func describeLabelSource(_ word: String) -> String {
+        word == LabelSource.none.rawValue ? "" : word
     }
 }

@@ -256,6 +256,12 @@ enum WireCodec {
                                                 at: object["at"] as? Double ?? 0)),
                        activity: [:])
 
+        case "browser.window.picked":
+            guard let picked = pickedElement(object) else {
+                return .failed(reason: "browser.window.picked without an element in it")
+            }
+            return .ok(.machineWindowPicked(id: picked.id, element: picked.element), activity: [:])
+
         case "browser.record.rows":
             guard let id = string(object["id"]) else {
                 return .failed(reason: "browser.record.rows without a window")
@@ -948,11 +954,16 @@ enum WireCodec {
             object = ask
         case .machineWindows:
             object = ["t": "browser.windows"]
-        case let .machineWindowOpen(url, profile, isolated):
+        case let .machineWindowOpen(url, profile, isolated, session):
             var ask: [String: Any] = ["t": "browser.window.open"]
             if let url { ask["url"] = url }
             if let profile { ask["profile"] = profile }
             if isolated { ask["isolated"] = true }
+            // Omitted rather than sent empty, exactly as `bind` omits it: the
+            // host reads an absent session as *do not attach this to anything*
+            // and an empty string as a session it does not know, which is a
+            // refusal with a window already open on somebody's screen.
+            if let session { ask["session"] = session }
             object = ask
         case let .machineWindowGo(id, url):
             object = ["t": "browser.window.go", "id": id, "url": url]
@@ -969,6 +980,25 @@ enum WireCodec {
             object = ask
         case let .machineWindowSteps(id):
             object = ["t": "browser.window.steps", "id": id]
+        case let .machineWindowPick(id, x, y, up):
+            var ask: [String: Any] = ["t": "browser.window.pick", "id": id, "x": x, "y": y]
+            /*
+             * **Clamped here, and this is the line that keeps the socket open.**
+             *
+             * The host validates `up` in its parser, and `server.ts` answers a
+             * parse failure by closing the connection — not by refusing the
+             * frame. So a Wider pressed past the top of a very deep document
+             * would not draw a sentence, it would drop the terminals, the cast
+             * and everything else riding this socket. The screen clamps too;
+             * this is the second lock, on the last line before the wire.
+             *
+             * Zero is omitted because absent already means *the element that was
+             * hit*, and the smaller frame is the one that describes what
+             * happened.
+             */
+            let walk = min(max(0, up), MachineBrowserWire.maxPickUp)
+            if walk > 0 { ask["up"] = walk }
+            object = ask
         case let .panelRead(panel, path, scope, query):
             // `path` omitted rather than sent empty when there is none: the host
             // reads absent as "somewhere sensible" and would read `""` as a path.
