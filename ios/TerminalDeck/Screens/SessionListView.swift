@@ -107,6 +107,18 @@ struct SessionListView: View {
      */
     @State private var closingSession: RemoteSession?
 
+    /**
+     * Whether the model cluster is up, for the session the machine's cluster is
+     * currently following.
+     *
+     * A flag rather than a session, and that is not a shortcut: there is one
+     * `SessionControlsLink` per machine and it is pointed at one session at a
+     * time, so the sheet has exactly one subject and holding an id here would be
+     * a second copy of that fact able to disagree with it. `showsControls(for:)`
+     * is what makes sure the row that offered this is that session.
+     */
+    @State private var showingControls = false
+
     private struct SessionRef: Identifiable, Hashable {
         let host: String
         let session: String
@@ -169,6 +181,20 @@ struct SessionListView: View {
          * first, then navigate — because a push that happens behind a modal is a
          * screen nobody sees arriving.
          */
+        /*
+         * Model, effort and permission for the session the cluster is following.
+         *
+         * The same sheet the session's own `…` raises, from the same object, so
+         * the two doors cannot come to show different chips. `showsControls(for:)`
+         * is the gate and its comment is where the identity rule is argued; this
+         * is only the presentation.
+         */
+        .sheet(isPresented: $showingControls) {
+            if let controls = model.current?.controls {
+                SessionControlsView(controls: controls, dismiss: { showingControls = false })
+                    .presentationDetents([.medium, .large])
+            }
+        }
         .sheet(isPresented: $showingArchived) {
             ArchivedSessionsView(sessions: archived,
                                  machine: model.current?.label ?? "this machine",
@@ -330,6 +356,14 @@ struct SessionListView: View {
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) { banners }
+        // The three events that can change what the attach section has in it.
+        // See `askWhatTheMachinesBrowserHasOpen` — no timer, and nothing asked of
+        // a machine that would refuse it.
+        .onAppear { askWhatTheMachinesBrowserHasOpen() }
+        .onChange(of: hostId) { _, _ in askWhatTheMachinesBrowserHasOpen() }
+        .onChange(of: model.current?.watch.surfaces) { _, _ in
+            askWhatTheMachinesBrowserHasOpen()
+        }
     }
 
     // MARK: - Pieces
@@ -506,15 +540,27 @@ struct SessionListView: View {
      * back gesture at the left edge, and a different depth from every other app
      * on the phone. `LocalhostListView` made this exact trade one screen over
      * and its header argues it; the cards survive the change because the row
-     * background is cleared and the fill comes from `RowButtonStyle` as before.
+     * background is cleared and the fill is painted by the card itself — see the
+     * `HStack` below, which is where the fill moved to when the `…` arrived.
      *
-     * ## A button rather than a `NavigationLink`
+     * ## A button rather than a `NavigationLink` — and it stays one
      *
-     * Inside a `List`, a `NavigationLink` draws the system's own disclosure
-     * chevron beside whatever it is given — and `SessionRow` already draws one,
-     * so the rows came out with two. `model.open(session:)` appends the identical
-     * route, which is what the link was doing, and it is the shape every other
-     * card in this app already uses.
+     * The original reason was drawing: inside a `List`, a `NavigationLink` draws
+     * the system's own disclosure chevron beside whatever it is given, and
+     * `SessionRow` drew one of its own, so the rows came out with two.
+     *
+     * `SessionRow` does not draw a chevron any more — the `…` took its place —
+     * so that argument is spent, and this is a note for whoever notices and
+     * reaches for the link. **Do not.** The reason is now the destination rather
+     * than the drawing: `model.open(session:)` is not one route. It switches
+     * machine first where the row belongs to another one, it appends to the
+     * **copilot's** stack while that tab is up, and it declines to push at all
+     * when the tab is already showing that very session — because pushing it
+     * would stack a second copy of the same terminal on top of itself, two
+     * attaches and a Back that lands on an identical screen. A `NavigationLink`
+     * carries a value into the one stack it is in and can express none of that.
+     * The button also has one more job now: it is the half of the card that opens
+     * the session, next to a `…` that must not.
      */
     private var list: some View {
         List {
@@ -538,34 +584,73 @@ struct SessionListView: View {
              * a described element is sent. That is a use nobody has to see.
              */
             ForEach(listed) { session in
-                Button {
-                    model.open(session: session.id)
-                } label: {
-                    SessionRow(session: session,
-                               lastActivity: model.lastActivity[session.id],
-                               pinned: shelf.isPinned(host: hostId, session: session.id))
-                }
-                .buttonStyle(RowButtonStyle())
-                .accessibilityIdentifier("session.\(session.id)")
                 /*
-                 * The shortcut to the details sheet.
+                 * **Two hit targets on one card: the row, and the `…`.**
                  *
-                 * A long press rather than a second control on the row: the
-                 * row's whole job is to open the session, and a row with two
-                 * tap targets on a phone is a row people hit the wrong half
-                 * of. It is deliberately not the *only* way in — the same
-                 * screen is a named item inside the session, and it is on the
-                 * trailing swipe below, where somebody who has never
-                 * long-pressed anything will find it.
+                 * > *"since we have this, when we flip, we drag it. So maybe we
+                 * > should not have this arrow. Instead, this arrow, we can have
+                 * > three dots, and we can have more options like the way we have
+                 * > inside… Or maybe the ones that more suits outside, like
+                 * > connecting with the browser and kind of stuff."*
+                 *
+                 * The chevron the `…` replaced earned nothing: the row opens on a
+                 * tap and swipes for its actions, so an arrow was drawing a
+                 * promise the whole card already made. What is in its place is
+                 * `rowMenu`, and the geometry below is what keeps it from being
+                 * the worst possible outcome — a menu that also opens the session.
+                 *
+                 * **The `…` is a sibling of the row's button, not a child of it.**
+                 * A control nested inside a `Button`'s label does not get the tap;
+                 * the button around it does. So the card is an `HStack` of two
+                 * separate controls with the fill behind **both**, which is
+                 * exactly the shape the machines list and the Browser home
+                 * already use for the same reason — see `MachineRow` and
+                 * `MachineBrowserView`'s rows.
+                 *
+                 * That is also why the press state comes from
+                 * `MachineRowButtonStyle` rather than `RowButtonStyle` here:
+                 * `RowButtonStyle` paints the card itself, which would end the
+                 * fill where the button ends and leave the `…` sitting on the
+                 * screen's own paper. The two styles are the same press and
+                 * differ only in that one carries the background — the split is
+                 * argued where `MachineRowButtonStyle` is defined.
                  */
-                .contextMenu {
+                HStack(spacing: 0) {
                     Button {
-                        detailing = SessionRef(host: hostId, session: session.id)
+                        model.open(session: session.id)
                     } label: {
-                        Label("Details", systemImage: "info.circle")
+                        SessionRow(session: session,
+                                   lastActivity: model.lastActivity[session.id],
+                                   pinned: shelf.isPinned(host: hostId, session: session.id))
                     }
-                    .accessibilityIdentifier("session.details")
+                    .buttonStyle(MachineRowButtonStyle())
+                    .accessibilityIdentifier("session.\(session.id)")
+                    /*
+                     * The shortcut to the details sheet.
+                     *
+                     * A long press, and now also a named item in the `…` beside
+                     * it — the pair this app uses everywhere for "quick, if you
+                     * know it" and "findable, if you do not". It is on the
+                     * trailing swipe as well, for somebody who has never
+                     * long-pressed anything.
+                     *
+                     * On the row's button rather than on the card, so a long
+                     * press on the `…` opens the menu it is already holding
+                     * instead of a context menu on top of it.
+                     */
+                    .contextMenu {
+                        Button {
+                            detailing = SessionRef(host: hostId, session: session.id)
+                        } label: {
+                            Label("Details", systemImage: "info.circle")
+                        }
+                        .accessibilityIdentifier("session.details")
+                    }
+
+                    rowMenu(session)
+                        .padding(.trailing, 4)
                 }
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                 .plainRow()
                 .swipeActions(edge: .leading, allowsFullSwipe: false) {
                     pinAction(session)
@@ -619,6 +704,211 @@ struct SessionListView: View {
             // what was in the menu and why it is not any more.
             try? await Task.sleep(for: .milliseconds(450))
         }
+    }
+
+    // MARK: - The `…` on a row
+
+    /**
+     * Everything you can do to a session **without opening it**.
+     *
+     * > *"since we have this, when we flip, we drag it. So maybe we should not
+     * > have this arrow. Instead, this arrow, we can have three dots, and we can
+     * > have more options like the way we have inside, like this ones. Or maybe
+     * > the ones that more suits outside, like connecting with the browser and
+     * > kind of stuff. Maybe with three dots we can have with the sessions also.
+     * > So this smoother process will be more smoother, easier to do that
+     * > stuff."*
+     *
+     * Two lists in that sentence, and both are here. *"The way we have inside"*
+     * is the session's own `…` — details, and the model cluster. *"The ones that
+     * more suits outside, like connecting with the browser"* is attaching a
+     * browser window, which is a thing you do **to** a session and had until now
+     * only ever been reachable from the far end of the walk.
+     *
+     * ## The order, and why Close is last and asks
+     *
+     * Attach, details, model — then pin, archive, close. The first three are
+     * about *this session's work* and the last three are about *this list*, which
+     * is the split a person is actually making when they open this menu. Close is
+     * at the bottom because it is the one thing in the app that cannot be undone.
+     *
+     * **Every verb here is the same verb the swipe presses**, including that one:
+     * this sets `closingSession`, which is what raises the confirmation, and the
+     * confirmation is the only thing that closes anything. A menu wired straight
+     * to `model.closeSession` while the swipe asked first would be two doors with
+     * two different amounts of care behind one word — the defect `MachineRow`
+     * pins in its own header, in this app, on this shape of row.
+     *
+     * ## Deferred by a turn of the run loop, twice
+     *
+     * The two items that **present** — details and the model sheet — and the one
+     * that raises an alert are all deferred, for the reason written on
+     * `MachinesView.askToForget`: a presentation asked for in the frame a menu is
+     * dismissing in arrives with no presenter and does nothing at all. Pin and
+     * Archive change a stored value and present nothing, so they run straight
+     * through, exactly as they do from the swipe.
+     */
+    @ViewBuilder
+    private func rowMenu(_ session: RemoteSession) -> some View {
+        let pinned = shelf.isPinned(host: hostId, session: session.id)
+        Menu {
+            attachSection(session)
+
+            Button {
+                DispatchQueue.main.async {
+                    detailing = SessionRef(host: hostId, session: session.id)
+                }
+            } label: {
+                Label("Session details", systemImage: "info.circle")
+            }
+
+            if showsControls(for: session) {
+                Button {
+                    DispatchQueue.main.async { showingControls = true }
+                } label: {
+                    Label("Model & effort", systemImage: "slider.horizontal.3")
+                }
+            }
+
+            Divider()
+
+            Button {
+                shelf.setPinned(!pinned, host: hostId, session: session.id)
+            } label: {
+                Label(pinned ? "Unpin" : "Pin", systemImage: pinned ? "pin.slash" : "pin.fill")
+            }
+
+            Button {
+                shelf.setArchived(true, host: hostId, session: session.id)
+            } label: {
+                Label("Archive", systemImage: "archivebox")
+            }
+
+            // Absent rather than greyed on a machine that never advertised
+            // `close`, the same rule the swipe follows and the whole screen
+            // follows. See `closeAction`.
+            if model.canCloseSessions {
+                Button(role: .destructive) {
+                    DispatchQueue.main.async { closingSession = session }
+                } label: {
+                    Label("Close", systemImage: "xmark.circle")
+                }
+            }
+        } label: {
+            // Bare `ellipsis` at 44 points square, which is the size a thumb
+            // needs and the size the machines list and the Browser home already
+            // give theirs. `contentShape` is what makes the whole square press
+            // rather than the glyph.
+            Image(systemName: "ellipsis")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Theme.faint)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        // Named after the session, because a list of eight `agent` rows is eight
+        // identical menus and a screen reader would read the same three words on
+        // every one of them.
+        .accessibilityLabel("Actions for \(session.title)")
+        /*
+         * **`sessions.row.more.` and deliberately not `session.more.`.**
+         *
+         * Sixteen suites in the UI target find a session row with
+         * `identifier BEGINSWITH 'session.'` and then take `element(boundBy: 0)`
+         * or `firstMatch`. This control is on **every** row, permanently — unlike
+         * the swipe buttons, which share that prefix but only exist for the
+         * second a row is held open — so under that prefix it would be a second
+         * element per row in every one of those queries, and the ones that walk
+         * by index would start pressing a menu where they meant to open a
+         * session. Nothing in a build log would say so.
+         *
+         * `sessions.` is the screen rather than a session, and no query in the
+         * target matches it beyond `sessions.newIn.` and the two exact names on
+         * the toolbar, neither of which this can be confused with.
+         */
+        .accessibilityIdentifier("sessions.row.more.\(session.id)")
+    }
+
+    /**
+     * **Attach a browser window to this session, from the list.**
+     *
+     * > *"the ones that more suits outside, like connecting with the browser and
+     * > kind of stuff."*
+     *
+     * The same section the session's own `…` carries and the same one verb the
+     * Browser tab presses — `HostLink.bindMachineWindow`. `SessionWindowPicker`
+     * owns which windows may be offered, which one wears the checkmark and what a
+     * row says, so the three screens that can attach a window cannot drift into
+     * saying different things about the same one.
+     *
+     * Absent, not disabled, when the machine will not be driven or has nothing
+     * open: both come back as an empty list, and an empty section is not drawn.
+     * A window another session holds is still offered and says whose it is,
+     * because attaching **moves** it and moves it silently.
+     */
+    @ViewBuilder
+    private func attachSection(_ session: RemoteSession) -> some View {
+        let windows = SessionWindowPicker.attachable(model.machineBrowser?.windows,
+                                                     canDrive: model.canDriveBrowser)
+        if !windows.isEmpty {
+            Section("Attach a browser window") {
+                ForEach(windows) { window in
+                    Button {
+                        model.bindMachineWindow(window.id, to: session.id)
+                    } label: {
+                        Label(SessionWindowPicker.row(window, session: session.id),
+                              systemImage: SessionWindowPicker.holds(window, session: session.id)
+                                  ? "checkmark" : "macwindow")
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Whether *Model & effort* is worth offering on a row.
+     *
+     * The same three facts `TerminalScreen.showsControlsButton` reads — a live
+     * socket, a machine that advertised `controls`, and a reading that says an
+     * agent is drawing the session — plus one this screen has to add and the
+     * session screen does not.
+     *
+     * **The cluster is one object per machine and it follows exactly one
+     * session.** `SessionControlsLink.apply` sends its change to
+     * `SessionControlsLink.sessionID`, which a session screen sets on the way in.
+     * So an item drawn on any row *other* than the one it is following would set
+     * a different session's model — a row that quietly changes a neighbour, which
+     * is the worst kind of working control. Hence the identity test.
+     *
+     * What that costs is honesty rather than a feature: the reading is released
+     * when a session screen leaves, so on most visits to this list there is none
+     * and the item is simply absent — the same rule as everything else on this
+     * screen, and the same rule as the session's own menu over a plain shell.
+     * Making it available for **any** row is a change to `SessionControlsLink`
+     * rather than to this menu.
+     */
+    private func showsControls(for session: RemoteSession) -> Bool {
+        guard model.connection.isLive, let controls = model.current?.controls, controls.offered,
+              controls.sessionID == session.id else { return false }
+        return SessionControls.clusterShown(controls.reading)
+    }
+
+    /**
+     * Ask what the machine's browser has open, so the attach section is not empty
+     * the first time somebody opens a menu.
+     *
+     * `browser.window.rows` is **answer-only** — there is no push for it anywhere
+     * on this wire — so a screen that never asked would draw no section at all,
+     * for ever, on a machine with four windows open.
+     *
+     * Two events and no timer, which is the pattern `SessionPageView` argues at
+     * length: the screen arriving, and `browser.surfaces.rows` landing, which is
+     * the frame the machine pushes on every binding change and every navigation
+     * and is therefore the one thing that says *the browser moved*. Switching
+     * machine is the third, and it is a different `HostLink` with its own list
+     * rather than a change to this one's.
+     */
+    private func askWhatTheMachinesBrowserHasOpen() {
+        model.readMachineWindows()
     }
 
     /**
@@ -1002,10 +1292,17 @@ extension View {
  * lightens and settles back by 1%, fast enough not to be a transition and slow
  * enough to be seen.
  *
- * Internal rather than private, and shared by every card in the app — the
- * sessions, the ports, the dev servers and the machines. It was copied verbatim
- * onto the Machines screen once already under a second name, which is how two
- * lists end up pressing differently.
+ * Internal rather than private, and shared by every card in the app that is one
+ * whole control — the alerts offer below, the archived lists, the copilot's
+ * sheets, the ports. It was copied verbatim onto the Machines screen once
+ * already under a second name, which is how two lists end up pressing
+ * differently.
+ *
+ * A card with a `…` in its trailing corner takes `MachineRowButtonStyle`
+ * instead: the same press, without the background, because the fill has to be
+ * behind both halves of such a row rather than stopping where the button does.
+ * The session rows above are that shape now; the reason is written on the card
+ * in `list`.
  */
 struct RowButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
@@ -1083,14 +1380,28 @@ private struct SessionRow: View {
                 .padding(.top, 1)
             }
 
-            Spacer(minLength: 0)
-
-            Image(systemName: "chevron.right")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Theme.faint)
-                .padding(.top, 4)
+            /*
+             * There was a `chevron.right` here and it is gone.
+             *
+             * > *"since we have this, when we flip, we drag it. So maybe we
+             * > should not have this arrow. Instead, this arrow, we can have
+             * > three dots."*
+             *
+             * He is right about what it was worth: the whole card opens the
+             * session and the row already swipes for its actions, so the arrow
+             * was a promise both of those had already made. What stands in that
+             * corner now is the `…`, and it is **not drawn here** — it is a
+             * control of its own beside this row rather than part of it, because
+             * a control inside a button's label does not get the tap. See the
+             * card in `list`.
+             *
+             * So this ends in a spacer with a minimum, which is the row's half of
+             * that arrangement: it keeps the title and the folder off the menu
+             * instead of running under it.
+             */
+            Spacer(minLength: 8)
         }
-        .padding(.horizontal, 16)
+        .padding(.leading, 16)
         .padding(.vertical, 14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())

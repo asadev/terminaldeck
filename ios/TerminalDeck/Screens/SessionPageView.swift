@@ -224,24 +224,41 @@
  *    This is the one mount whose surface can change under it; the other two are
  *    handed a fixed window by the screen that pushed them.
  *
- * ## Attaching a window from in here
+ * ## A session holding no window shows nothing at all — and that took two goes
  *
  * > *"There is also no way to connect a browser window to this specific session,
  * > if you can see."*
  *
- * True, and it was the shape of the whole pane: it drew the window a session
- * **already** held and nothing at all otherwise. Binding was a Browser-tab act,
- * reached from a window's own `…` — the far end of the walk from somebody
- * sitting in a session watching an agent that needs a page.
+ * That was true, and the first answer to it was a bar drawn across the top of
+ * every session that held no window: *Attach a browser window*, with the
+ * machine's open windows behind it. He filmed the result and it is the opposite
+ * complaint:
  *
- * So a session holding no window draws one row, and it is deliberately the
- * smallest thing that can be true: a menu of the machine's open windows that
- * binds the one you pick to this session through `HostLink.bindMachineWindow` —
- * the same verb `MachineWindowSettingsView` presses, not a second road to the
- * same place. Nothing is drawn when the machine offers no windows or will not be
- * driven, because a picker with nothing in it is a control that cannot act; and
- * nothing is drawn the moment a window **is** bound, because then the pane has
- * its real job back.
+ * > *"So now if I enter into any session, this comes here that on top the attach
+ * > window is coming. If it is not connected to anyone, so it should stay clean.
+ * > Even if I go to Copilot, which has no browser window attached, it is also
+ * > showing something attached. If something is attached, then we can open it
+ * > here also, so which doesn't make any sense because it does not have anything
+ * > to do with this specific browser. It is not even linked to it."*
+ *
+ * Both halves of that are right. The bar was on **every** session on the machine
+ * at once, because the list behind it is the **machine's** and nothing about it
+ * is this session's — so it read as a claim about this session and was a claim
+ * about the browser. And it was drawn on the Copilot tab too, which renders this
+ * same screen, over a conversation that has never had a page in it.
+ *
+ * So the bar is deleted. This pane draws the window a session **holds** and
+ * nothing else, ever: a strip when there is one, and no height at all when there
+ * is not.
+ *
+ * **Nothing was lost with it.** The verb it pressed — `HostLink.bindMachineWindow`
+ * — is now on the two `…` menus somebody already opens to act on a session: the
+ * session row's on the Sessions tab (`SessionListView`) and the session's own
+ * inside the terminal (`TerminalScreen`). Both build their list through
+ * `SessionWindowPicker` below, so the three screens that can attach a window
+ * cannot come to say different things about the same one. The difference is that
+ * a menu is opened by somebody who wants it, and a bar is drawn at somebody who
+ * did not ask.
  */
 
 import SwiftUI
@@ -370,24 +387,6 @@ struct SessionPageView: View {
     }
 
     /**
-     * The machine's windows this session could be given.
-     *
-     * Everything it has open, minus nothing: a window another session holds is
-     * still one this session can be handed, which is the rule the Browser tab's
-     * own menu already follows — it says *"Attach to another session"* rather
-     * than refusing. A window **this** session holds cannot reach here at all,
-     * because a bound window is what `window` finds and this list is only read
-     * where it finds none.
-     *
-     * Empty on a machine that will not be driven, so the row is not drawn rather
-     * than drawn dead.
-     */
-    private var attachable: [MachineWindow] {
-        guard host?.canDriveBrowser == true else { return [] }
-        return host?.machineBrowser?.windows ?? []
-    }
-
-    /**
      * The handover outstanding on the page this pane is showing, if there is
      * one.
      *
@@ -407,12 +406,25 @@ struct SessionPageView: View {
         Group {
             if let window {
                 pageStack(window)
-            } else if !attachable.isEmpty {
-                attachBar
             } else {
-                // Nothing at all, taking no height. A session holding no window
-                // on a machine with none to give it is the ordinary case, and it
-                // gets the screen it always had.
+                /*
+                 * Nothing at all, taking no height, **always** — not only on a
+                 * machine with no window to give.
+                 *
+                 * > *"If it is not connected to anyone, so it should stay clean.
+                 * > Even if I go to Copilot, which has no browser window
+                 * > attached, it is also showing something attached."*
+                 *
+                 * There was a second branch here that drew an attach bar over any
+                 * session while the machine had windows open. It is deleted; the
+                 * file header has the whole argument and where the verb went.
+                 *
+                 * The view stays in the tree at zero height rather than being
+                 * removed, because the reads below are what notice a window
+                 * becoming this session's — a pane that unmounted itself when
+                 * there was nothing to draw would be a pane that never found out
+                 * there was.
+                 */
                 Color.clear.frame(height: 0)
             }
         }
@@ -572,68 +584,6 @@ struct SessionPageView: View {
         switch pane {
         case .minimised: return 0
         case .split, .full: return pageHeight > 0 ? min(pageHeight, SessionPageRoom.splitCap) : SessionPageRoom.splitCap
-        }
-    }
-
-    // MARK: - The way in for a window this session does not hold yet
-
-    /**
-     * > *"There is also no way to connect a browser window to this specific
-     * > session, if you can see."*
-     *
-     * The one case where this pane draws something on a session holding no
-     * window, and it is kept to one row for that reason: everywhere else the
-     * pane's whole promise is that it costs a session nothing until an agent
-     * puts a page in front of you.
-     *
-     * The verb is `HostLink.bindMachineWindow`, which is the one
-     * `MachineWindowSettingsView` presses from the other end — the same binding
-     * store, the same slot names, the same line into the session's next turn.
-     * Nothing new is invented here; what was missing was a place to press it
-     * from. The answer to a bind is the window list, so the page opens itself the
-     * moment it lands: `offer(_:)` sees a window where there was none.
-     *
-     * Drawn like the strip and with the same hairline under it, because it is
-     * the same piece of chrome doing the same job one step earlier.
-     */
-    private var attachBar: some View {
-        VStack(spacing: 0) {
-            Menu {
-                ForEach(attachable) { window in
-                    Button {
-                        host?.bindMachineWindow(window.id, to: sessionID)
-                    } label: {
-                        // Named, and said who has it when somebody has it: taking
-                        // a window off another session is a real thing to do and
-                        // a thing to know you are doing.
-                        Text(MachineBrowserText.owner(window).map { "\(window.label) · \($0)" }
-                             ?? window.label)
-                    }
-                }
-            } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: "link")
-                        .font(.system(size: 15))
-                        .foregroundStyle(Theme.accent)
-                        .frame(width: 20)
-                    Text("Attach a browser window")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(Theme.accent)
-                    Spacer(minLength: 8)
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(Theme.faint)
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 9)
-                .contentShape(Rectangle())
-                .background(Theme.surface)
-            }
-            .accessibilityIdentifier("session.page.attach")
-
-            Rectangle()
-                .fill(Theme.hairline)
-                .frame(height: 0.5)
         }
     }
 
@@ -1097,6 +1047,84 @@ enum SessionHandover {
         case .elsewhere: return "Another device is answering this"
         case .claim, .retry: return "The agent needs you on this page"
         }
+    }
+}
+
+/**
+ * The windows a session can be handed, and what one row for one says.
+ *
+ * ## Why this is a type and not two menu bodies
+ *
+ * > *"here we also don't have anything, like inside here, in the three dots, we
+ * > should have the options to click on something, and then all the folders will
+ * > come up, maybe here also. So we can connect the browser, whichever browser we
+ * > want to connect into the session."*
+ *
+ * There are now two `…` menus that go and get a window for a session — the
+ * session row's on the Sessions tab and the session's own inside the terminal —
+ * and this pane, which draws the one it ends up holding. Three screens, one
+ * question. The bar these replaced was a fourth, written inline, and the wording
+ * on it had **already** drifted from the Browser tab's: it named the window and
+ * its owner where the other named the session and its window count. Nobody could
+ * see that, because the two are never on screen together.
+ *
+ * So the decisions live here: which windows may be offered at all, whether a row
+ * is the one this session already holds, and what the row says. Each is a
+ * sentence or a rule rather than a layout, and `SessionPageTests` pins all three
+ * without a simulator.
+ *
+ * ## Everything the machine has open, minus nothing
+ *
+ * A window another session holds is still one this session can be handed — the
+ * rule the Browser tab's own menu already follows, where the row reads *"Attach
+ * to another session"* rather than refusing. What that means in practice is that
+ * attaching **moves** it, and silently, so the row has to say who has it now.
+ * That is the whole of `row(_:session:)`: a name, and the holder after it when
+ * somebody else is the holder.
+ *
+ * Empty on a machine that will not be driven, so the section is **absent** rather
+ * than drawn dead — this app's standing rule for a control that could only ever
+ * be refused.
+ */
+enum SessionWindowPicker {
+
+    /// What a nameless window is called. A machine mints a window before it has
+    /// a page, so `label` really can be empty, and a menu row with no words on it
+    /// is a row nobody can decide about.
+    static let unnamed = "Browser window"
+
+    /**
+     * The windows this session could be given.
+     *
+     * `windows` is nil until a `browser.window.rows` has landed — *not asked
+     * yet*, which reads the same here as *nothing open*, because in both cases
+     * there is nothing honest to offer.
+     */
+    static func attachable(_ windows: [MachineWindow]?, canDrive: Bool) -> [MachineWindow] {
+        guard canDrive else { return [] }
+        return windows ?? []
+    }
+
+    /// Whether this is the window the session already holds. It is drawn with a
+    /// checkmark rather than left out: a picker that hides the current answer is
+    /// one somebody presses again to find out.
+    static func holds(_ window: MachineWindow, session: String) -> Bool {
+        window.session == session
+    }
+
+    /// Who has it **other than this session**, when somebody does. Nil for a
+    /// window this session already holds, because "· this session" beside a
+    /// checkmark is the same fact said twice.
+    static func holder(_ window: MachineWindow, session: String) -> String? {
+        guard !holds(window, session: session) else { return nil }
+        return MachineBrowserText.owner(window)
+    }
+
+    /// The row: the window, and who it would be taken from.
+    static func row(_ window: MachineWindow, session: String) -> String {
+        let name = window.label.isEmpty ? unnamed : window.label
+        guard let holder = holder(window, session: session) else { return name }
+        return "\(name) · \(holder)"
     }
 }
 

@@ -54,13 +54,27 @@
  * the feature without it. The session is left with no window attached at the end,
  * which is the other line the same mechanism prints.
  *
- * The one control this suite opens and does **not** press through is the attach
- * menu on the session side: its rows are every window the machine has open, they
- * are named by their own page titles, and there is no way from here to tell which
- * of them is the one this suite opened. Pressing a row it cannot name would be
- * binding a stranger's window to a stranger's agent. So that case proves the door
- * is there and offers something, and the bind itself is walked from the window's
- * own end, where the window is named.
+ * The two controls this suite opens and does **not** press through are the attach
+ * sections on the session side — the one on the session row's `…` and the one
+ * inside the session's own `…`. Their rows are every window the machine has open,
+ * they are named by their own page titles, and there is no way from here to tell
+ * which of them is the one this suite opened. Pressing a row it cannot name would
+ * be binding a stranger's window to a stranger's agent. So that case proves both
+ * doors are there and offer something, and the bind itself is walked from the
+ * window's own end, where the window is named.
+ *
+ * ## The session screen itself has to stay clean
+ *
+ * > *"So now if I enter into any session, this comes here that on top the attach
+ * > window is coming. If it is not connected to anyone, so it should stay clean.
+ * > Even if I go to Copilot, which has no browser window attached, it is also
+ * > showing something attached."*
+ *
+ * There was a bar across the top of every session that held no window, offering
+ * to go and get one. It is deleted, and the assertion that it is absent is made
+ * in **both** cases below rather than only on the session that holds a page: the
+ * defect he filmed was on the sessions that hold nothing, which is nearly all of
+ * them.
  *
  * ## It skips rather than fails, and each skip is a real state
  *
@@ -222,14 +236,21 @@ final class SessionPageUITests: XCTestCase {
         XCTAssertTrue(strip.waitForExistence(timeout: 25),
                       "the session should show the window it is holding")
         /*
-         * And the way in is **gone**, which is the other half of the rule the way
-         * in was written under: *"nothing is drawn the moment a window is bound,
-         * because then the pane has its real job back."* A session holding a page
-         * that still offered to attach one would be two controls arguing about
-         * what this pane is for.
+         * And there is **no bar**, which is now an *always* rather than a
+         * *once a window is bound*.
+         *
+         * > *"If it is not connected to anyone, so it should stay clean."*
+         *
+         * The bar this asserts the absence of used to be drawn on every session
+         * that held no window, on any machine with a window open — so it was on
+         * the Copilot tab too, over a conversation that has never had a page in
+         * it. The pane draws the window a session holds and nothing else, and the
+         * case below makes the same assertion from the other side, on a session
+         * that holds nothing.
          */
-        XCTAssertFalse(app.buttons["session.page.attach"].exists,
-                       "a session holding a window has no use for the row that goes and gets one")
+        XCTAssertFalse(any("session.page.attach").exists,
+                       "the session screen shows the page it holds and nothing else — there is no "
+                       + "attach bar on it any more, whether or not a window is bound")
         capture("82-session-split")
 
         // 4. And the one control on the strip, whichever of its three acts this
@@ -243,80 +264,121 @@ final class SessionPageUITests: XCTestCase {
     }
 
     /**
-     * **A session that holds no window has a way to go and get one.**
+     * **A session that holds no window shows nothing — and the two ways in are
+     * the two `…` menus.**
      *
-     * > *"the button for making it — right now here I cannot have any kind of
-     * > click to make it… there is no way I can see here… Now maybe I can
-     * > directly connect from the session side. Let's try. But **there is also no
-     * > way to connect a browser window to this specific session**, if you can
-     * > see."*
+     * > *"So now if I enter into any session, this comes here that on top the
+     * > attach window is coming. If it is not connected to anyone, so it should
+     * > stay clean… If something is attached, then we can open it here also, so
+     * > which doesn't make any sense because it does not have anything to do with
+     * > this specific browser. It is not even linked to it."*
      *
-     * He was right, and it was the shape of the whole pane: it drew the window a
-     * session already held and nothing at all otherwise, so binding was a
-     * Browser-tab act reached from a window's own `…` — the far end of the walk
-     * from somebody sitting in a session watching an agent that needs a page.
+     * > *"since we have this, when we flip, we drag it. So maybe we should not
+     * > have this arrow. Instead, this arrow, we can have three dots, and we can
+     * > have more options like the way we have inside… Or maybe the ones that
+     * > more suits outside, like connecting with the browser and kind of stuff."*
      *
-     * The row is `session.page.attach` and its menu is the machine's open
-     * windows. This case proves the door: a window is opened so the machine
-     * certainly has one to offer, a session that holds none is found, and the
-     * menu is opened and photographed with something in it.
+     * > *"here we also don't have anything, like inside here, in the three dots,
+     * > we should have the options to click on something, and then all the folders
+     * > will come up, maybe here also."*
      *
-     * **The row is never pressed**, and the file header has the argument: the
-     * rows are named by their pages' own titles and nothing here can tell which
-     * of them is the window this suite opened, so pressing one would bind a
+     * Three sentences, one walk, because the second two are what makes the first
+     * one safe to do: the bar came off the session screen, so the verb it carried
+     * had to be somewhere a person would look for it. It is on the session row's
+     * `…` on the list, and on the session's own `…` inside. This case opens both
+     * and asserts each of them offers a window this machine really has open —
+     * and, in between, that the screen the bar was on is clean.
+     *
+     * **No row inside either menu is pressed.** The rows are every window the
+     * machine has open, named by their own page titles, and nothing here can tell
+     * which of them is the one this suite opened — pressing one would bind a
      * stranger's window to a stranger's agent. The bind itself is walked in the
-     * case above, from the end where the window is named.
+     * case above, from the end where the window is named. So what is asserted is
+     * that the section is there and has something pressable in it, which is
+     * exactly the claim *"there is a way in"*.
      *
-     * A session that already holds a window is not a failure and not a state to
-     * force: the pane has its real job in that case and the row is correctly
-     * absent, which is asserted at the end of the walk above rather than worked
-     * around here.
+     * The `…` is also asserted **not to open the session**, which is the one way
+     * this feature could be worse than the arrow it replaced.
      */
-    func testASessionWithNoWindowOffersAWayToAttachOne() throws {
+    func testTheWaysInAreTheTwoDotsMenusAndTheSessionScreenStaysClean() throws {
         let opened = try openAWindow()
         XCTAssertTrue(app.buttons["browser.machine.row.\(opened)"].waitForExistence(timeout: 20),
                       Self.noWindow)
 
         XCTAssertTrue(app.openBrowserTab(), "the Browser tab's root should be reachable again")
         app.openSessionsTab()
-        let terminal = app.buttons
-            .matching(NSPredicate(format: "identifier BEGINSWITH 'session.'"
-                                  + " AND NOT identifier CONTAINS 'swipe'"))
+
+        let row = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'session.'"
+                                                  + " AND NOT identifier CONTAINS 'swipe'"))
             .firstMatch
-        try XCTSkipUnless(terminal.waitForExistence(timeout: 20), Self.noSessions)
-        terminal.tap()
-
-        let attach = app.buttons["session.page.attach"]
-        guard attach.waitForExistence(timeout: 20) else {
-            // The two reasons the row is legitimately absent, told apart on
-            // screen rather than guessed at: a session already holding a window
-            // draws the strip instead.
-            throw XCTSkip(any("session.page.title").exists
-                          ? "This session already holds a window, so the pane is doing its real "
-                            + "job and the way in is correctly absent."
-                          : "This machine will not be driven, so there is no window it could be "
-                            + "handed and nothing to draw.")
-        }
-
-        let before = Set(app.buttons.allElementsBoundByIndex.map(\.label))
-        attach.tap()
-        // The presentation animates; the rows are not queryable in the same
-        // frame the tap lands in.
-        _ = app.buttons.element(boundBy: 0).waitForExistence(timeout: 3)
-        capture("87-attach-from-the-session")
+        try XCTSkipUnless(row.waitForExistence(timeout: 20), Self.noSessions)
+        let rowID = row.identifier
 
         /*
-         * By difference, and pressable. A window another session holds is still
-         * one this session can be handed — the rule `attachable` follows and the
-         * one the Browser tab's own menu already followed, where the row says
-         * *"Attach to another session"* rather than refusing — so a menu whose
-         * rows are all dead would be a picker that cannot pick.
+         * 1. **The row's `…`, which is what the arrow became.**
+         *
+         * Found by prefix, because the identifier carries a session id no test
+         * can know — the same shape `SwipeActionsUITests` uses for the machines
+         * list's own `…`. `descendants(matching: .any)` rather than `buttons`
+         * for the reason the menu helpers in `TabNavigation.swift` give.
+         *
+         * `sessions.row.more.` rather than `session.more.`, and the identifier is
+         * that way round on purpose: sixteen suites in this target find a row
+         * with `BEGINSWITH 'session.'` and take element zero, and a control that
+         * sits on every row for ever under that prefix would quietly become the
+         * element some of them pressed. `SessionListView` carries the note.
          */
-        let offered = app.buttons.allElementsBoundByIndex.filter { !before.contains($0.label) }
-        XCTAssertTrue(offered.contains { $0.isEnabled },
-                      "the machine has a window open — this suite just opened one — so the row "
-                      + "that goes and gets one must open onto a window this session can be "
-                      + "handed, rather than onto an empty menu")
+        let dots = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'sessions.row.more.'"))
+            .firstMatch
+        XCTAssertTrue(dots.waitForExistence(timeout: 10),
+                      "a session row carries a `…` now, in the corner the chevron used to be in")
+
+        let beforeRow = labels()
+        dots.tap()
+        // The presentation animates; the rows are not queryable in the same frame
+        // the tap lands in.
+        _ = app.buttons.element(boundBy: 0).waitForExistence(timeout: 3)
+        capture("87-the-rows-dots")
+
+        let rowMenu = labels().subtracting(beforeRow)
+        XCTAssertTrue(rowMenu.contains("Session details"),
+                      "the row's menu carries the things you do to a session without opening it")
+        XCTAssertTrue(rowMenu.contains("Archive"), "including the one the swipe carries")
+        assertOffersAWindow(rowMenu, fixed: Self.rowMenuItems,
+                            where_: "the session row's `…`")
+
+        app.dismissAnyMenu()
+
+        /*
+         * And it did **not** open the session, which is the whole risk of putting
+         * a second control inside a card that is itself one big button. The list
+         * is still on screen and the row is still on it.
+         */
+        XCTAssertTrue(app.buttons[rowID].waitForExistence(timeout: 8),
+                      "the `…` opens a menu — a `…` that also opened the session would be worse "
+                      + "than the arrow it replaced")
+
+        // 2. Into the session. The screen the bar used to be across is clean.
+        app.buttons[rowID].tap()
+        try XCTSkipUnless(app.buttons["terminal.actions"].waitForExistence(timeout: 25),
+                          "the session screen never came up, so there is nothing to look at")
+        capture("88-session-clean")
+        XCTAssertFalse(any("session.page.attach").exists,
+                       "a session that holds no window shows nothing above the terminal — "
+                       + "“if it is not connected to anyone, so it should stay clean”")
+
+        // 3. And the same way in, inside the session's own `…`.
+        let beforeSession = labels()
+        app.buttons["terminal.actions"].tap()
+        _ = app.buttons.element(boundBy: 0).waitForExistence(timeout: 3)
+        capture("89-the-sessions-dots")
+
+        let sessionMenu = labels().subtracting(beforeSession)
+        XCTAssertTrue(sessionMenu.contains("Find in output"),
+                      "this is the terminal's own menu, so its own items are still in it")
+        assertOffersAWindow(sessionMenu, fixed: Self.sessionMenuItems,
+                            where_: "the session's own `…`")
 
         app.dismissAnyMenu()
         app.navigationBars.buttons.element(boundBy: 0).tap()
@@ -608,9 +670,10 @@ final class SessionPageUITests: XCTestCase {
      * that exactly one of those two is ever true.
      *
      * The other end of the same verb — a session going and getting a window it
-     * does not have — is `session.page.attach`, and it is walked by
-     * `testASessionWithNoWindowOffersAWayToAttachOne`. One verb,
-     * `HostLink.bindMachineWindow`, reachable from both ends.
+     * does not have — is the *Attach a browser window* section on the session
+     * row's `…` and on the session's own, and both are walked by
+     * `testTheWaysInAreTheTwoDotsMenusAndTheSessionScreenStaysClean`. One verb,
+     * `HostLink.bindMachineWindow`, reachable from every end.
      *
      * ## Why the row is found by difference and the title is read off it
      *
@@ -659,6 +722,57 @@ final class SessionPageUITests: XCTestCase {
                           + "there is nothing to find it by in the Sessions tab.")
         return title
     }
+
+    /**
+     * A menu that was opened offers a window to attach, and not only its own
+     * fixed items.
+     *
+     * **By set difference of labels, never by identifier.** An
+     * `accessibilityIdentifier` on a `Button` inside a SwiftUI `Menu` does not
+     * reach the presented row — measured twice in this target — so what a case
+     * has to work with is the words. The window rows are named by their pages'
+     * own titles and nothing here knows them, so they are found the only way they
+     * can be: everything that appeared, minus the items this menu always has.
+     *
+     * `isEnabled` is asserted rather than mere existence, because a window
+     * another session holds is still one this session can be handed, and a menu
+     * whose rows were all dead would be a picker that cannot pick.
+     */
+    private func assertOffersAWindow(_ appeared: Set<String>, fixed: Set<String>, where_: String) {
+        let windows = appeared.filter { label in
+            !fixed.contains(label) && !Self.fixedPrefixes.contains { label.hasPrefix($0) }
+        }
+        XCTAssertFalse(windows.isEmpty,
+                       "this suite has a window open on the machine, so \(where_) must offer it — "
+                       + "what appeared was \(appeared.sorted())")
+        for label in windows {
+            XCTAssertTrue(app.buttons[label].firstMatch.isEnabled,
+                          "“\(label)” is offered by \(where_), so it has to be pressable")
+        }
+    }
+
+    /// Every button label on screen right now, which is the before and after a
+    /// menu is measured against.
+    private func labels() -> Set<String> {
+        Set(app.buttons.allElementsBoundByIndex.map(\.label))
+    }
+
+    /// What the session row's `…` always carries, whatever machine it is against.
+    /// Anything else that appears with it is a window — see `assertOffersAWindow`.
+    private static let rowMenuItems: Set<String> = [
+        "Session details", "Model & effort", "Pin", "Unpin", "Archive", "Close",
+    ]
+
+    /// And the terminal's own menu, verbatim from `TerminalScreen`. The two
+    /// text-size items carry the current size in their labels, so they are
+    /// matched by prefix below rather than listed here.
+    private static let sessionMenuItems: Set<String> = [
+        "Find in output", "Session details", "Model & effort",
+        "Copy Screen", "Paste", "Share output",
+        "Send Photo or Video", "Send File", "Re-attach",
+    ]
+
+    private static let fixedPrefixes = ["Bigger text", "Smaller text"]
 
     /// Every window row currently on the Browser home, by window id.
     private func rowIDs() -> Set<String> {
