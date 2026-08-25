@@ -1742,7 +1742,11 @@ final class ScaledPageView: UIView {
         web.transform = .identity
         web.bounds = CGRect(x: 0, y: 0, width: wanted, height: box.height / scale)
         web.transform = CGAffineTransform(scaleX: scale, y: scale)
-        web.center = CGPoint(x: box.midX, y: box.midY)
+        // `bounds`, not `box`: a centre is a point in this view's own coordinate
+        // space and `box` is only its size. They agree while the origin is zero,
+        // which is why this compiled as arithmetic in somebody's head and not in
+        // the compiler.
+        web.center = CGPoint(x: bounds.midX, y: bounds.midY)
     }
 }
 

@@ -322,7 +322,16 @@ struct MachineWindowView: View {
                     // the window list having been re-read.
                     Banner(text: said, tone: .neutral)
                         .accessibilityIdentifier("browser.machine.window.said")
-                } else if let notice = state?.notice, !notice.isEmpty {
+                } else if let notice = state?.notice, !notice.isEmpty,
+                          !notice.localizedCaseInsensitiveContains("cannot record a click flow") {
+                    // The recorder's refusal is the ONE notice this banner does
+                    // not draw. It is not news about the last press — it is a
+                    // standing fact about the machine, and the Click flow card
+                    // below now says it in its own place, greyed with the reason
+                    // on its ⓘ. Drawn here as well it read as a contradiction:
+                    // *"this machine's browser cannot record a click flow"* over
+                    // a live blue **Record the click flow** two inches under it,
+                    // which is the screen Asad photographed.
                     Banner(text: notice, tone: .neutral)
                         .accessibilityIdentifier("browser.machine.window.notice")
                 }
@@ -706,7 +715,7 @@ struct MachineWindowView: View {
      * > browsing windows, including on this phone, including isolated, including
      * > the server."*
      *
-     * The row is Back · Forward · Reload · Find · Inspect, and it is that row
+     * The row is Back · Forward · Reload · Find · Inspect · Width, and it is that
      * under a window on the machine, an isolated window on the machine, the
      * machine's own front tab, and a page this phone is holding open over a
      * tunnel. Find and Inspect joined it here from the phone's side, where they

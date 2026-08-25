@@ -1228,11 +1228,17 @@ struct MachineBrowserView: View {
             } label: {
                 HStack(spacing: 12) {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(window.label)
+                        // `WindowNames`, not `window.label`, so a window with no
+                        // page in it is called the same thing here as it is
+                        // inside a session. `label` answers the literal
+                        // `about:blank`, which is jargon and is the same six
+                        // characters for every blank window — he had two of them
+                        // in one menu and could not tell them apart.
+                        Text(WindowNames.name(window))
                             .font(.system(size: 16))
                             .foregroundStyle(Theme.primary)
                             .lineLimit(1)
-                        if !window.url.isEmpty && window.url != window.label {
+                        if !window.url.isEmpty && window.url != WindowNames.name(window) {
                             Text(window.url)
                                 .font(.system(size: 12, design: .monospaced))
                                 .foregroundStyle(Theme.faint)
@@ -1920,7 +1926,7 @@ struct MachineBrowserView: View {
     /// that tells two of these apart when they are read one after another.
     private func rowName(_ row: MachineBrowserRow) -> String {
         switch row {
-        case let .window(window, _): return window.label
+        case let .window(window, _): return WindowNames.name(window)
         case let .surface(surface): return MachineBrowserText.surfaceLabel(surface)
         case let .page(tab): return tab.label
         }
