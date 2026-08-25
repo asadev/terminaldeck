@@ -259,6 +259,13 @@
  * cannot come to say different things about the same one. The difference is that
  * a menu is opened by somebody who wants it, and a bar is drawn at somebody who
  * did not ask.
+ *
+ * Those menus carry a second verb now — `HostLink.openMachineWindow(session:)`,
+ * which opens a window and binds it in one ask — because *the verb is there* and
+ * *there is something under the menu* turned out to be different claims. A
+ * machine with its browser closed has no window to bind, so both sections drew
+ * nothing at all, which is the walk he recorded from the inside. See
+ * `SessionWindowPicker.showsAttach`.
  */
 
 import SwiftUI
@@ -1082,9 +1089,48 @@ enum SessionHandover {
  * That is the whole of `row(_:session:)`: a name, and the holder after it when
  * somebody else is the holder.
  *
- * Empty on a machine that will not be driven, so the section is **absent** rather
- * than drawn dead — this app's standing rule for a control that could only ever
- * be refused.
+ * ## An empty list is not a reason to draw nothing — and that is a correction
+ *
+ * This used to end: *"empty on a machine that will not be driven, so the section
+ * is absent rather than drawn dead."* Both menus read that as **absent whenever
+ * the list is empty**, and the two conditions are not the same condition. A
+ * machine that will not be driven can offer nothing, which is right. A machine
+ * that *will* be driven and simply has no browser window open right now can
+ * offer plenty — it can open one — and that is the ordinary state of a laptop,
+ * and it is the exact state he was sitting in:
+ *
+ * > *"here we also don't have anything, like inside here, in the three dots, we
+ * > should have the options to click on something, and then all the folders will
+ * > come up, maybe here also. So we can connect the browser, whichever browser we
+ * > want to connect into the session."*
+ *
+ * He opened the `…`, found nothing under it, and had to leave for the Browser
+ * tab and open a window before the session's own menu had anything in it. That
+ * is the walk the menu was added to delete, so the rule is now split in two:
+ * `showsAttach(canDrive:)` decides whether the section exists at all — the
+ * machine, and nothing about its windows — and `attachable` decides which
+ * already-open windows go in it. A section with no window in it still has the
+ * two rows that open one.
+ *
+ * ## The three things a session can be handed, and they are one section
+ *
+ *  1. **A window the machine already has open** — `attachable`, bound by
+ *     `bindMachineWindow`. Free, instant, and it *moves* the window off whoever
+ *     had it, which is why the row says so.
+ *  2. **A new window, opened for this session** — `openHere` and `openIsolated`.
+ *     One ask: `openMachineWindow(session:)` makes the host open the window and
+ *     bind it *before* it answers, because an open answers with the window list
+ *     and a client that had to pick its own new row out of that list races every
+ *     other open in flight. `browser-control.ts` checks the session is really
+ *     running first and refuses in a sentence if it is not, so a window is never
+ *     left on somebody's screen for a session that does not exist.
+ *  3. **A page this phone is already showing** — `phonePages`, opened again on
+ *     the machine at the same address and bound in the same one ask. This is the
+ *     honest half: the phone's own web view cannot be handed to an agent, ever.
+ *     What the session gets is a *second* window, on the machine, with the
+ *     machine's cookies and the machine's logins — which may not even be signed
+ *     in the same way. Every string here says that rather than implying the page
+ *     moved.
  */
 enum SessionWindowPicker {
 
@@ -1125,6 +1171,135 @@ enum SessionWindowPicker {
         let name = window.label.isEmpty ? unnamed : window.label
         guard let holder = holder(window, session: session) else { return name }
         return "\(name) · \(holder)"
+    }
+
+    // MARK: - Whether the section exists at all
+
+    /**
+     * Whether *Attach a browser window* is drawn.
+     *
+     * **The machine, and nothing about its windows.** This is the whole of the
+     * correction in the header above, and it is one line because the defect was
+     * one line: both menus tested `!attachable(...).isEmpty`, so on a machine
+     * with no browser window open — an ordinary laptop, most of the time — the
+     * `…` he opened had nothing under it, and the only way to get a window onto
+     * a session was to leave for the Browser tab first.
+     *
+     * A drivable machine can always be asked for a new window, so there is
+     * always something honest to put here. A machine that will not be driven
+     * still gets nothing: every row in this section ends in a frame that machine
+     * refuses at the source, and this app does not draw a control that can only
+     * produce a refusal.
+     */
+    static func showsAttach(canDrive: Bool) -> Bool { canDrive }
+
+    // MARK: - Opening a new one for this session
+
+    /**
+     * The row that opens a window on the machine and hands it to this session.
+     *
+     * *"So we can connect the browser, whichever browser we want to connect into
+     * the session"* — and with no window open anywhere, connecting one has to
+     * start by making one. No address: the New window sheet's Open is not
+     * disabled for an empty field either, because a blank window is a real thing
+     * to want — it is the browser, waiting, on the machine, already belonging to
+     * this session. Wherever the agent sends it next is one `go` away.
+     */
+    static let openHere = "Open a window for this session"
+
+    /**
+     * The same act, in a browser signed into nothing.
+     *
+     * A choice offered as **two rows he can read**, not as a switch he has to
+     * know the meaning of. The words are the New window sheet's own words for
+     * this destination — *"Opens in the machine's browser signed into nothing,
+     * and forgets everything when the window closes"* — cut to the half that
+     * decides it. Two named rows also survive the thing a menu does to a toggle:
+     * a `Toggle` inside a `Menu` is pressed to change it and the menu closes on
+     * the press, so choosing isolation would have cost one opening of the menu
+     * and opening the window would have cost another.
+     */
+    static let openIsolated = "Open one signed into nothing"
+
+    /// What either row means, in one line, for a screen reader and for anybody
+    /// who holds the row down. The sheet says it at length; a menu row is read
+    /// at a glance, so the long version stays where it was.
+    static func meaning(isolated: Bool, machine: String) -> String {
+        isolated
+            ? "Opens in \(machine)'s browser signed into nothing, and forgets everything when "
+                + "the window closes."
+            : "Opens in \(machine)'s own browser, signed in the way \(machine) is."
+    }
+
+    /// What the phone says while the machine is opening it. The machine's own
+    /// answer replaces it — `browser.window.rows` comes back carrying the bind
+    /// notice, which is the confirmation that counts.
+    static func opening(isolated: Bool, machine: String) -> String {
+        isolated
+            ? "Opening a window on \(machine) that is signed into nothing, and attaching it to "
+                + "this session."
+            : "Opening a window on \(machine) and attaching it to this session."
+    }
+
+    // MARK: - A page this phone is already showing
+
+    /**
+     * The pages this phone has open **on this machine**.
+     *
+     * > *"And these three dots, we should have this attachment thing for all of
+     * > them, properly working, and the same way on the sessions side also."*
+     *
+     * The Browser tab's row menu can do this now; the sessions side could not do
+     * it at all, and the sessions side is where he was looking when he said it.
+     *
+     * Filtered by host on the way through, and that is not belt-and-braces.
+     * `BrowserTabs.tabs(on:)` answers for whichever machine is **current**, and
+     * a session screen is opened for a named machine — `TerminalScreen.hostID`
+     * exists precisely because session ids are not unique across machines. On
+     * the one frame where those two disagree, an unfiltered list would offer to
+     * open another machine's `localhost:3000` on this one, which is a different
+     * program's page handed to an agent with no way to tell.
+     */
+    static func phonePages(_ tabs: [BrowserTab], on host: String, canDrive: Bool) -> [BrowserTab] {
+        guard canDrive, !host.isEmpty else { return [] }
+        return tabs.filter { $0.host == host }
+    }
+
+    /**
+     * The address the machine has to be given.
+     *
+     * `String(port)` and never the `Int` interpolated: a port dropped straight
+     * into a Swift string is formatted with the locale's grouping separator and
+     * comes out as `localhost:3,000`. Measured, and the third copy of this
+     * expression in the app to be caught by it.
+     */
+    static func address(_ tab: BrowserTab) -> String {
+        "http://localhost:\(String(tab.port))\(tab.path)"
+    }
+
+    /// The row: the page, by whatever it calls itself. `label` is the page's own
+    /// title, or its address until it has one — never "Untitled", which tells
+    /// nobody which of their servers they are looking at.
+    static func phoneRow(_ tab: BrowserTab) -> String { tab.label }
+
+    /**
+     * The line over those rows, and it is the honest one.
+     *
+     * The page on the phone does not move and cannot: it is drawn here, its
+     * cookies are this app's, and no agent can reach it. What opens is a second
+     * window, on the machine, at the same address — so the header says *opens
+     * again* and says the page here stays, in seven words, above rows that would
+     * otherwise read as *hand this over*.
+     */
+    static func phoneSection(machine: String) -> String {
+        "Open again on \(machine) — the page here stays"
+    }
+
+    /// What the phone says while that is happening. Longer than the header
+    /// because it is read once, after a press, rather than scanned in a menu.
+    static func openingPhonePage(_ tab: BrowserTab, machine: String) -> String {
+        "Opening localhost:\(String(tab.port)) in \(machine)'s browser and attaching that window "
+            + "to this session. The page open here does not move."
     }
 }
 

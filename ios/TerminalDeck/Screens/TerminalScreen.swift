@@ -1026,12 +1026,37 @@ struct TerminalScreen: View {
      * Nothing is invented here; what was missing was a place to press it from
      * while you are sitting in the session watching an agent that needs a page.
      *
-     * ## Three things it has to get right, and each is a rule rather than a taste
+     * ## It shipped drawing nothing, which is the same complaint again
      *
-     *  - **Absent, not disabled.** A machine that will not be driven refuses the
-     *    bind at the source, and one with nothing open has nothing to offer. Both
-     *    come back as an empty list from `SessionWindowPicker.attachable`, and an
-     *    empty section is not drawn at all. See `attachableWindows`.
+     * The first version of this section was `if !windows.isEmpty`. On a machine
+     * with a browser window already open it was exactly right, and on every
+     * other machine it was the screen he filmed: the `…`, opened, with nothing
+     * under it. That is the ordinary state — a laptop with the browser closed —
+     * and it is the state he was in when he recorded the sentence above. The
+     * only way out of it was the walk this menu exists to delete: leave the
+     * session, go to the Browser tab, open a window, come back.
+     *
+     * So the section is drawn whenever the machine will be **driven**
+     * (`SessionWindowPicker.showsAttach`), and it always ends with the two rows
+     * that open a new one. An empty machine now answers the press instead of
+     * being a dead end.
+     *
+     * ## What is in it, in the order a person would reach for it
+     *
+     *  - **The windows the machine already has open.** Free and instant.
+     *  - **A new window for this session** — and the same thing signed into
+     *    nothing, as a second row rather than a switch. One ask each:
+     *    `openMachineWindow(session:)` binds on the machine before it answers,
+     *    which is the only race-free way to attach something that did not exist
+     *    when the press happened. See `HostLink.openMachineWindow`.
+     *  - **A page this phone is showing**, opened again on the machine. The
+     *    header over those rows says the page here stays, because it does — what
+     *    the session gets is a second window with the machine's own logins.
+     *
+     * ## And three rules that did not change
+     *
+     *  - **Absent, not disabled.** A machine that will not be driven refuses
+     *    every one of these frames at the source, so nothing is drawn at all.
      *  - **The one this session holds wears a checkmark**, rather than being left
      *    out. A picker that hides the current answer is one somebody presses again
      *    to find out.
@@ -1046,10 +1071,9 @@ struct TerminalScreen: View {
      */
     @ViewBuilder
     private var attachSection: some View {
-        let windows = attachableWindows
-        if !windows.isEmpty {
+        if SessionWindowPicker.showsAttach(canDrive: canDriveBrowser) {
             Section("Attach a browser window") {
-                ForEach(windows) { window in
+                ForEach(attachableWindows) { window in
                     Button {
                         host?.bindMachineWindow(window.id, to: sessionID)
                     } label: {
@@ -1058,8 +1082,49 @@ struct TerminalScreen: View {
                                   ? "checkmark" : "macwindow")
                     }
                 }
+
+                openRow(isolated: false, icon: "macwindow.badge.plus")
+                openRow(isolated: true, icon: "eye.slash")
+            }
+
+            let pages = phonePages
+            if !pages.isEmpty {
+                Section(SessionWindowPicker.phoneSection(machine: machineName)) {
+                    ForEach(pages) { tab in
+                        Button {
+                            openOnMachine(tab)
+                        } label: {
+                            Label(SessionWindowPicker.phoneRow(tab), systemImage: "iphone")
+                        }
+                    }
+                }
             }
         }
+    }
+
+    /// One of the two rows that make a window rather than borrow one. Both are
+    /// the same call with one word different, so they are one function: two
+    /// copies of an `openMachineWindow(session:)` is two places for the session
+    /// to stop being passed, and a window that opens attached to nothing looks
+    /// identical to one that opens attached to this session.
+    private func openRow(isolated: Bool, icon: String) -> some View {
+        Button {
+            host?.openMachineWindow(isolated: isolated, session: sessionID)
+            show(SessionWindowPicker.opening(isolated: isolated, machine: machineName))
+        } label: {
+            Label(isolated ? SessionWindowPicker.openIsolated : SessionWindowPicker.openHere,
+                  systemImage: icon)
+        }
+        .accessibilityHint(SessionWindowPicker.meaning(isolated: isolated, machine: machineName))
+    }
+
+    /// Open a page this phone is holding on the machine, and hand that window to
+    /// this session — one ask, and a sentence saying which page did *not* move.
+    private func openOnMachine(_ tab: BrowserTab) {
+        host?.openMachineWindow(url: SessionWindowPicker.address(tab),
+                                isolated: false,
+                                session: sessionID)
+        show(SessionWindowPicker.openingPhonePage(tab, machine: machineName))
     }
 
     /// The machine's open windows, or nothing at all where nothing may be
@@ -1067,8 +1132,33 @@ struct TerminalScreen: View {
     /// session row cannot come to disagree about it.
     private var attachableWindows: [MachineWindow] {
         SessionWindowPicker.attachable(host?.machineBrowser?.windows,
-                                       canDrive: host?.canDriveBrowser == true)
+                                       canDrive: canDriveBrowser)
     }
+
+    /**
+     * The pages this phone has open on **this session's** machine.
+     *
+     * `browserTabs.tabs(on: model)` answers for whichever machine is current,
+     * and this screen is opened for a named one — see `hostID`, which exists
+     * because session ids are not unique across machines. The picker filters by
+     * host on the way through, so the one frame where those two disagree offers
+     * nothing rather than offering another machine's `localhost:3000`.
+     */
+    private var phonePages: [BrowserTab] {
+        SessionWindowPicker.phonePages(model.browserTabs.tabs(on: model),
+                                       on: hostID,
+                                       canDrive: canDriveBrowser)
+    }
+
+    /// Whether this session's machine will let this phone drive its browser.
+    /// Read once and shared, because four things below key off it and a screen
+    /// where three of them agreed and one did not is a menu that half exists.
+    private var canDriveBrowser: Bool { host?.canDriveBrowser == true }
+
+    /// What this session's machine is called in a sentence. The host's own
+    /// label, not the current machine's — this screen can be pushed for a
+    /// machine that is no longer the one on the switcher.
+    private var machineName: String { host?.label ?? model.theMachine }
 
     /**
      * Ask what the machine's browser has open, once, on the way in.

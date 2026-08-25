@@ -23,6 +23,18 @@
  *     whichever session holds it, silently, so the row that offers it has to say
  *     whose it is. Three screens draw that row; `SessionWindowPicker` is the one
  *     place it is decided.
+ *  5. **Whether that row exists at all when the machine has no window open.**
+ *     This is the one that shipped wrong. Both menus tested the *list*, so on a
+ *     machine whose browser was simply closed the `…` opened onto nothing and
+ *     the only way to attach a window to a session was to leave for the Browser
+ *     tab and make one first — the walk the menus were added to delete. The
+ *     machine being drivable is the condition, and no simulator is needed to
+ *     say so.
+ *  6. **The page on the phone does not move.** A page this phone is drawing
+ *     cannot be handed to an agent — it is rendered here, with this app's
+ *     cookies. What a session gets is a *second* window on the machine at the
+ *     same address, and every string about it has to say that rather than imply
+ *     a handover that cannot happen.
  */
 
 import XCTest
@@ -397,5 +409,159 @@ final class SessionPageTests: XCTestCase {
         let held = window("w1", session: "s-other", sessionTitle: nil)
         XCTAssertEqual(SessionWindowPicker.row(held, session: "s-mine"),
                        "Example Domain · s-other")
+    }
+
+    // MARK: - The empty machine, which is the ordinary machine
+
+    /**
+     * **A machine with no browser window open still offers the section.**
+     *
+     * This is the assertion that would have failed against what shipped, and it
+     * is the whole of the defect in one line. Both menus were written as
+     * `if !attachable(...).isEmpty`, which conflates two different facts:
+     *
+     *  - *this machine will not be driven* — nothing can be offered, correctly;
+     *  - *this machine has nothing open right now* — everything can be offered,
+     *    because it can be asked to open one.
+     *
+     * The second is the ordinary state of a laptop and it is the state he was
+     * in when he filmed the `…` with nothing under it:
+     *
+     * > *"here we also don't have anything, like inside here, in the three dots,
+     * > we should have the options to click on something… So we can connect the
+     * > browser, whichever browser we want to connect into the session."*
+     */
+    func testTheSectionIsStillDrawnOnAMachineWithNoWindowOpen() {
+        XCTAssertTrue(SessionWindowPicker.attachable([], canDrive: true).isEmpty,
+                      "nothing is open, so there is nothing to borrow")
+        XCTAssertTrue(SessionWindowPicker.showsAttach(canDrive: true),
+                      "and the section is drawn anyway, because a window can be opened")
+        XCTAssertTrue(SessionWindowPicker.showsAttach(canDrive: false) == false,
+                      "a machine that will not be driven refuses every row, so nothing is drawn")
+    }
+
+    /**
+     * The new window is offered as two rows a person can read, not as a switch.
+     *
+     * A `Toggle` in a `Menu` closes the menu on the press, so isolation would
+     * have cost one opening of the `…` to choose and a second to act. Two named
+     * rows are one press either way — and the words are the New window sheet's
+     * own words, so the same choice is not described two ways in two places.
+     */
+    func testTheIsolatedChoiceIsWordsRatherThanAFlag() {
+        XCTAssertNotEqual(SessionWindowPicker.openHere, SessionWindowPicker.openIsolated)
+        XCTAssertEqual(SessionWindowPicker.openHere, "Open a window for this session")
+        XCTAssertTrue(SessionWindowPicker.openIsolated.contains("signed into nothing"),
+                      "the row says what it is rather than naming a setting")
+
+        let shared = SessionWindowPicker.meaning(isolated: false, machine: "Air")
+        let alone = SessionWindowPicker.meaning(isolated: true, machine: "Air")
+        XCTAssertTrue(shared.contains("signed in the way Air is"))
+        XCTAssertTrue(alone.contains("signed into nothing"))
+        XCTAssertTrue(alone.contains("forgets everything when the window closes"),
+                      "the half that decides it is that the partition is thrown away")
+    }
+
+    /// And the sentence the phone puts up while the machine works says which
+    /// session it is for — a window that opened attached to nothing looks
+    /// exactly like one that opened attached to this session.
+    func testTheSentenceAfterOpeningNamesTheSessionItIsFor() {
+        XCTAssertEqual(SessionWindowPicker.opening(isolated: false, machine: "Air"),
+                       "Opening a window on Air and attaching it to this session.")
+        XCTAssertTrue(SessionWindowPicker.opening(isolated: true, machine: "Air")
+                          .contains("signed into nothing"))
+    }
+
+    // MARK: - The pages this phone is already showing
+
+    /*
+     * > *"And these three dots, we should have this attachment thing for all of
+     * > them, properly working, and the same way on the sessions side also."*
+     *
+     * The Browser tab's row menu could do this and the sessions side could not,
+     * which is the half he was looking at. Two rules decide it and both are
+     * about handing an agent the page somebody meant.
+     */
+
+    private func page(_ id: String, host: String = "m-1", port: Int = 3000,
+                      path: String = "/", title: String = "") -> BrowserTab {
+        BrowserTab(id: id, host: host, port: port, path: path, title: title)
+    }
+
+    /**
+     * A page open against **another** machine is never offered.
+     *
+     * `BrowserTabs.tabs(on:)` answers for whichever machine is current, and a
+     * session screen is opened for a *named* machine — `TerminalScreen.hostID`
+     * exists because session ids are not unique across machines. On the frame
+     * where those two disagree, an unfiltered list would open another machine's
+     * `localhost:3000` on this one and hand it to an agent, which is a different
+     * program's page with nothing on screen to say so.
+     */
+    func testAPageBelongingToAnotherMachineIsNeverOffered() {
+        let tabs = [page("t1", host: "m-1"), page("t2", host: "m-2", port: 5173)]
+        let mine = SessionWindowPicker.phonePages(tabs, on: "m-1", canDrive: true)
+        XCTAssertEqual(mine.map(\.id), ["t1"])
+
+        XCTAssertTrue(SessionWindowPicker.phonePages(tabs, on: "", canDrive: true).isEmpty,
+                      "no machine on screen is not a machine to open pages on")
+    }
+
+    /// And nothing at all where the machine will not be driven: the open is the
+    /// same `browser.window.open` frame that machine refuses at the source.
+    func testNoPageIsOfferedByAMachineThatWillNotBeDriven() {
+        XCTAssertTrue(SessionWindowPicker.phonePages([page("t1")], on: "m-1", canDrive: false)
+                          .isEmpty)
+    }
+
+    /**
+     * The address is rebuilt from the tab's **current** values, and the port is
+     * never the `Int` interpolated.
+     *
+     * A port dropped straight into a Swift string is formatted with the locale's
+     * grouping separator and comes out as `localhost:3,000` — measured, and this
+     * is the third copy of the expression in the app to be caught by it. The
+     * path is the tab's own because a tab follows its page: somebody who opened
+     * `/` and clicked through to `/admin` means `/admin`.
+     */
+    func testTheAddressCarriesTheCurrentPathAndAnUngroupedPort() {
+        XCTAssertEqual(SessionWindowPicker.address(page("t1", port: 3000, path: "/admin")),
+                       "http://localhost:3000/admin")
+        XCTAssertEqual(SessionWindowPicker.address(page("t1", port: 8080, path: "/")),
+                       "http://localhost:8080/")
+    }
+
+    /// The row is the page's own name, and a page that has not said its name yet
+    /// is its address rather than "Untitled" — which tells nobody which of their
+    /// servers they are looking at.
+    func testThePhoneRowIsWhateverThePageCallsItself() {
+        XCTAssertEqual(SessionWindowPicker.phoneRow(page("t1", title: "Deck admin")), "Deck admin")
+        XCTAssertEqual(SessionWindowPicker.phoneRow(page("t1", port: 3000, path: "/")),
+                       "localhost:3000")
+        XCTAssertEqual(SessionWindowPicker.phoneRow(page("t1", port: 3000, path: "/admin")),
+                       "localhost:3000/admin")
+    }
+
+    /**
+     * Both strings about a phone page say the page here stays.
+     *
+     * The one thing this feature must never imply. The phone's web view is not
+     * reachable by an agent and never will be — it is drawn here, its cookies
+     * are this app's. What the session is handed is a second window on the
+     * machine, which may not even be signed in the same way. A header reading
+     * *attach this page* would be the app claiming a handover that cannot
+     * happen, on the one screen where somebody is about to type a password.
+     */
+    func testEveryStringAboutAPhonePageSaysThePageHereStays() {
+        let header = SessionWindowPicker.phoneSection(machine: "Air")
+        XCTAssertTrue(header.contains("Open again on Air"))
+        XCTAssertTrue(header.contains("the page here stays"))
+
+        let said = SessionWindowPicker.openingPhonePage(page("t1", port: 3000, path: "/admin"),
+                                                        machine: "Air")
+        XCTAssertTrue(said.contains("localhost:3000"), "which page is being opened")
+        XCTAssertTrue(said.contains("Air's browser"), "and where")
+        XCTAssertTrue(said.contains("The page open here does not move."),
+                      "and the fact the whole wording exists for")
     }
 }
