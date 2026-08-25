@@ -200,14 +200,30 @@ extension XCUIApplication {
          * is a page a `localhost.done` query will never find. Every suite that
          * comes through this helper and then taps a port row is a suite about
          * this phone's own tunnel browsing; the one that does not tap a row at
-         * all (the swipe suite) is unaffected by which segment is lit.
+         * all (the swipe suite) is unaffected by which destination is lit.
          *
          * Absent on a machine that will not serve a port to a phone, which is a
-         * real state and not a failure: the segment is simply not drawn, and the
-         * suites that need a tunnel skip on the row that is missing.
+         * real state and not a failure: the destination is simply not drawn, and
+         * the suites that need a tunnel skip on the row that is missing.
+         *
+         * ## The tap landing is now asserted, and that is not tidying
+         *
+         * This was `if phone.exists { phone.tap() }` and nothing else, so a
+         * destination control that stopped selecting on one tap — a `Menu`, whose
+         * first tap only presents — would leave every one of these suites
+         * passing while they quietly opened windows in his **real** Chromium
+         * profile instead of a throwaway one. Nothing in a build log says so and
+         * no screenshot looks wrong. `isSelected` is the trait the destination
+         * rows carry, so this is one line and it closes that hole for good.
          */
         let phone = buttons["This phone"]
-        if phone.waitForExistence(timeout: 3) { phone.tap() }
+        if phone.waitForExistence(timeout: 3) {
+            phone.tap()
+            XCTAssertTrue(phone.isSelected,
+                          "one tap on This phone must SELECT it. If it does not, every suite that "
+                          + "comes through here is opening pages in the machine's own browser "
+                          + "while still passing.")
+        }
         return true
     }
 

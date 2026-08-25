@@ -104,8 +104,25 @@
  * *this page is second class* and does not say why. So the menu is on all three
  * kinds, the items that cannot be sent are drawn dead under one line naming the
  * reason, and the one verb in that set that is real — closing a page this phone
- * is holding, which is this phone's own socket — is live. Nothing new goes on the
- * wire. See `rowMenu`.
+ * is holding, which is this phone's own socket — is live. See `rowMenu`.
+ *
+ * ## And then greying the attach was still not what he asked for
+ *
+ * > *"And these three dots, we should have this attachment thing for all of
+ * > them, properly working, and the same way on the sessions side also."*
+ *
+ * A reason under a dead control is better than a control that is simply missing,
+ * and it is not *working*. For the machine's own front tab there is nothing to
+ * be done — the host refuses an empty window id at the parser, so the row stays
+ * dead with its reason. For a page **this phone** is holding there was something
+ * to be done, and it needed one field on the wire: `browser.window.open` now
+ * carries a session, and the host binds the new window before it answers. So
+ * that row's attach opens the same address in the machine's browser and hands
+ * *that* window to the session, in one ask.
+ *
+ * The wording says so plainly, because it is not the page he is looking at: this
+ * phone's own web view cannot be reached by an agent and never will be. See
+ * `pageItems` and `attachOnMachine`.
  *
  * ## And there is no icon on any of them
  *
@@ -259,6 +276,11 @@ struct MachineBrowserView: View {
     private var host: HostLink? { model.current }
 
     private var state: MachineBrowserState? { host?.machineBrowser }
+
+    /// What to call the machine in a sentence somebody reads. A name rather
+    /// than "the machine", because somebody with two paired has to know which
+    /// one is about to grow a window.
+    private var machineName: String { model.current?.label ?? model.theMachine }
 
     /// Which machine's list this is. The archive is stored against it, so a
     /// phone paired with two does not hide one machine's window because of a
@@ -461,9 +483,24 @@ struct MachineBrowserView: View {
          *
          * `WatchViewerScreen` is still the canvas mount for the Settings route,
          * which has a `WatchLink` and no model. Nothing here reaches it.
+         *
+         * ## The second case is not a second kind of browser window
+         *
+         * A page **this phone** is drawing has a screen already — it is the page
+         * itself, one tap on the row. What it did not have is anywhere to keep
+         * its settings, so the `…` reaches them here. It goes straight to the
+         * settings rather than to a window screen because there is no address bar
+         * and no Back to draw: the four page verbs belong to the web view, and
+         * the web view is what the row opens. See `MachineWindowSettingsView`,
+         * which draws that page's own shape.
          */
         .navigationDestination(item: $pushing) { destination in
-            MachineWindowView(model: model, windowID: destination.page)
+            switch destination {
+            case let .window(id):
+                MachineWindowView(model: model, windowID: id)
+            case let .phonePage(id):
+                MachineWindowSettingsView(model: model, windowID: "", pushed: true, phoneTab: id)
+            }
         }
     }
 
@@ -541,6 +578,50 @@ struct MachineBrowserView: View {
         host?.openMachineWindow(url: url, isolated: isolated)
         guard let url else { return }
         say("Opening \(shortened(url)) on \(model.current?.label ?? model.theMachine)")
+    }
+
+    /**
+     * Open a page this phone is holding **on the machine**, and hand that window
+     * to a session — one ask, one answer.
+     *
+     * > *"And these three dots, we should have this attachment thing for all of
+     * > them, properly working."*
+     *
+     * ## Why this could not be done before, in one sentence
+     *
+     * `browser.window.open` answered with the window list and threw the new
+     * window's own id away, so there was nothing to pass to
+     * `browser.window.bind` afterwards — and a second ask would have had to
+     * guess which of the rows that came back was the one it had just made. The
+     * open carries the session now and the host binds before it answers, so the
+     * row lands already wearing its slot.
+     *
+     * ## The address is rebuilt rather than remembered
+     *
+     * `http://localhost:<port><path>` off the tab's **current** values, because
+     * a tab follows its page: somebody who opened `/` and clicked through to
+     * `/admin` means `/admin`. `String(port)` and never the `Int` interpolated —
+     * a port dropped straight into a Swift string is formatted with the locale's
+     * grouping separator and comes out as `localhost:3,000`.
+     *
+     * ## And the sentence is careful on purpose
+     *
+     * Nothing about the page on this phone changes. A second window opens on the
+     * machine at the same address, with the machine's cookies and the machine's
+     * logins, and *that* is what the session gets. Saying "attached" without
+     * saying which page would be the app claiming the phone's own web view had
+     * been handed over, which is not a thing that can happen.
+     *
+     * The banner is a record of the **ask**, exactly as `openWindow`'s is, and
+     * the machine's own answer replaces it — `browser.window.rows` comes back
+     * carrying the bind notice, which is the confirmation that counts.
+     */
+    private func attachOnMachine(_ tab: BrowserTab, to session: String) {
+        host?.openMachineWindow(url: "http://localhost:\(String(tab.port))\(tab.path)",
+                                isolated: false,
+                                session: session)
+        say("Opening localhost:\(String(tab.port)) in \(machineName)'s browser and attaching that "
+            + "window to the session. The page open here does not move.")
     }
 
     /**
@@ -1183,12 +1264,15 @@ struct MachineBrowserView: View {
      * is on the row — the mark says **On this phone** — rather than being a
      * reason to keep a second list.
      *
-     * It has the same `…` as every other row and most of it is greyed: attach,
-     * archive and close-over-there are `browser.control` verbs about a window on
-     * the machine, and this page is on neither. Closing it is real and is in the
-     * menu as well as on the swipe. The menu is here rather than left off because
-     * a row with no menu beside rows with one reads as a row the app has given up
-     * on — see `rowMenu`, which is one function for exactly that reason.
+     * It has the same `…` as every other row, and most of what is on it is
+     * **live** now. Attaching opens this same address in the machine's browser and
+     * hands that window to the session — one ask, because `browser.window.open`
+     * carries the session — and the menu says exactly that rather than implying
+     * the page moved. Closing is real and is on the swipe as well. Its own
+     * settings are a row on the menu, because a page this phone draws has no `…`
+     * of its own to keep them behind. Archive is the one item still greyed, under
+     * its own reason: the archive is this phone's list of the **machine's**
+     * windows, and there is no entry here to hide. See `pageItems`.
      *
      * The `iphone` glyph went with every other row's icon: *"there should be no
      * icon at all actually. It's not required."* Whose renderer draws this page is
@@ -1232,7 +1316,17 @@ struct MachineBrowserView: View {
             .accessibilityHint("Opens this page again")
             .accessibilityIdentifier("browser.machine.page.\(tab.id)")
 
-            rowMenu(.page(tab), sessions: [])
+            /*
+             * The machine's sessions, handed in where they used to be withheld.
+             *
+             * They were `[]` here because every verb behind this `…` was a
+             * `browser.window.*` addressed by an id this page has not got, so a
+             * picker would have been a choice ending in nothing. That stopped
+             * being true of attaching: `browser.window.open` carries the session
+             * now, so choosing one opens this same address on the machine and
+             * binds *that* window in one move. See `pageItems`.
+             */
+            rowMenu(.page(tab), sessions: state?.sessions ?? [])
                 .padding(.trailing, 4)
         }
         .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
@@ -1274,8 +1368,7 @@ struct MachineBrowserView: View {
     }
 
     /**
-     * The three verbs you do to a window **without opening it**, on every row of
-     * this list, and nothing else.
+     * What you do to a window **without opening it**, on every row of this list.
      *
      * > *"from the outside we can just make it archive, close, or connect to any
      * > session."*
@@ -1303,14 +1396,25 @@ struct MachineBrowserView: View {
      * menu*.
      *
      * The rule now is that the menu is the same on every row and an item that
-     * cannot be sent is **greyed under a line saying why**. Nothing new goes on
-     * the wire; what changes is that the answer to *why can I do this to that one
-     * and not to this one* is on the screen instead of being something you work
-     * out by comparing two rows.
+     * cannot be sent is **greyed under a line saying why**, so the answer to *why
+     * can I do this to that one and not to this one* is on the screen instead of
+     * being something you work out by comparing two rows.
      *
-     * Closing a page this phone holds is the one verb in the dead set that is
-     * real — it is this phone's own socket — so it is drawn live, outside that
-     * section, where the destructive item goes.
+     * ## And then greying it was not enough either
+     *
+     * > *"we should have this attachment thing for all of them, **properly
+     * > working**."*
+     *
+     * A reason under a dead control is honest and it is still a dead control. So
+     * one of the two greyed rows stopped being one: `browser.window.open` carries
+     * a session now, and a page this phone is holding can be opened on the
+     * machine and bound in a single ask. The machine's own front tab cannot —
+     * there is no address to re-open and no id to bind — so that row keeps its
+     * reason. See `pageItems` and `surfaceItems`, which is why the three shapes
+     * are three builders under one `Menu` rather than one branch with an `else`.
+     *
+     * Closing a page this phone holds was already real — it is this phone's own
+     * socket — and is drawn live, where the destructive item goes.
      *
      * The session rows carry how many windows that session already holds,
      * because that is what decides whether the new binding is called `B1` or
@@ -1324,57 +1428,13 @@ struct MachineBrowserView: View {
     @ViewBuilder
     private func rowMenu(_ row: MachineBrowserRow, sessions: [WindowSession]) -> some View {
         Menu {
-            if let window = row.machineWindow {
-                // Absent, not empty, when the machine has no sessions: a heading
-                // over nothing is a section that exists to look furnished, and
-                // every row under it would be a control that cannot act.
-                if !sessions.isEmpty {
-                    Section("Attach to a session") {
-                        ForEach(sessions) { session in
-                            Button {
-                                host?.bindMachineWindow(window.id, to: session.id)
-                            } label: {
-                                Label(MachineBrowserText.sessionRow(session),
-                                      systemImage: session.id == window.session
-                                          ? "checkmark" : "terminal")
-                            }
-                        }
-                    }
-                }
-
-                if window.isBound {
-                    Button {
-                        host?.bindMachineWindow(window.id, to: nil)
-                    } label: {
-                        Label("Detach", systemImage: "minus.circle")
-                    }
-                }
-
-                Button {
-                    shelf.setArchived(true, host: hostId, window: window.id)
-                } label: {
-                    Label("Archive", systemImage: "archivebox")
-                }
-
-                Button(role: .destructive) {
-                    host?.actOnMachineWindow(window.id, .close)
-                } label: {
-                    Label("Close window", systemImage: "xmark")
-                }
-            } else {
-                Section(whyNoWindowVerbs(row)) {
-                    deadItem("Attach to a session", "terminal")
-                    deadItem("Archive", "archivebox")
-                    if case .surface = row { deadItem("Close window", "xmark") }
-                }
-
-                if case let .page(tab) = row {
-                    Button(role: .destructive) {
-                        closeTab(tab)
-                    } label: {
-                        Label("Close window", systemImage: "xmark")
-                    }
-                }
+            switch row {
+            case let .window(window, _):
+                windowItems(window, sessions: sessions)
+            case let .surface(surface):
+                surfaceItems(surface)
+            case let .page(tab):
+                pageItems(tab, sessions: sessions)
             }
         } label: {
             Image(systemName: "ellipsis")
@@ -1385,6 +1445,152 @@ struct MachineBrowserView: View {
         }
         .accessibilityLabel("Actions for \(rowName(row))")
         .accessibilityIdentifier("browser.machine.more.\(menuName(row))")
+    }
+
+    /**
+     * A window on the machine. Every verb here is real and every one of them is
+     * addressed by the window's own id.
+     */
+    @ViewBuilder
+    private func windowItems(_ window: MachineWindow, sessions: [WindowSession]) -> some View {
+        // Absent, not empty, when the machine has no sessions: a heading over
+        // nothing is a section that exists to look furnished, and every row
+        // under it would be a control that cannot act.
+        if !sessions.isEmpty {
+            Section("Attach to a session") {
+                ForEach(sessions) { session in
+                    Button {
+                        host?.bindMachineWindow(window.id, to: session.id)
+                    } label: {
+                        Label(MachineBrowserText.sessionRow(session),
+                              systemImage: session.id == window.session
+                                  ? "checkmark" : "terminal")
+                    }
+                }
+            }
+        }
+
+        if window.isBound {
+            Button {
+                host?.bindMachineWindow(window.id, to: nil)
+            } label: {
+                Label("Detach", systemImage: "minus.circle")
+            }
+        }
+
+        Button {
+            shelf.setArchived(true, host: hostId, window: window.id)
+        } label: {
+            Label("Archive", systemImage: "archivebox")
+        }
+
+        Button(role: .destructive) {
+            host?.actOnMachineWindow(window.id, .close)
+        } label: {
+            Label("Close window", systemImage: "xmark")
+        }
+    }
+
+    /**
+     * A page in the machine's browser its window list does not name, and the one
+     * row on this list where **nothing** can be sent.
+     *
+     * The machine's own front tab wears `''` as its name and the host's parser
+     * refuses an empty `id` on every member of the `browser.window.*` family —
+     * `bind`, `act`, `go`, `shot`, `steps` — so there is no verb to make live
+     * here and no honest way to invent one. Every item is greyed under the one
+     * line that says why. This is the row the page rows below **stopped** being.
+     */
+    @ViewBuilder
+    private func surfaceItems(_ surface: BrowserSurfaceRow) -> some View {
+        Section(whyNoWindowVerbs(surface)) {
+            deadItem("Attach to a session", "terminal")
+            deadItem("Archive", "archivebox")
+            deadItem("Close window", "xmark")
+        }
+    }
+
+    /**
+     * A page **this phone** is drawing, over a tunnel — and attaching it is now
+     * a real thing to press.
+     *
+     * > *"And these three dots, we should have this attachment thing for all of
+     * > them, properly working, and the same way on the sessions side also."*
+     *
+     * ## What the greyed row used to say, and why the reason was the wrong one
+     *
+     * This row's *Attach to a session* was dead under the line *"Open on this
+     * phone, not in the machine's browser"*. That sentence is true and it was
+     * being used as an excuse: it explains why **this** page cannot be bound and
+     * says nothing about the thing he actually wants, which is an agent driving
+     * the page he is looking at.
+     *
+     * `browser.window.open` can carry a session now. So the row opens the same
+     * address in the machine's browser and binds that new window in **one** ask —
+     * which is the move that was impossible before, because the old open threw
+     * the new window's id away and there was nothing left to bind.
+     *
+     * ## And the wording says what really happens, because it is not the same page
+     *
+     * The phone's own web view is not reachable by an agent and never will be:
+     * the page is rendered here, its cookies are this app's, and its service
+     * worker is this app's. What gets attached is a **new window on the
+     * machine**, at the same address, with the machine's cookies — it may not
+     * even be signed in the same way. So the section is named for what it does
+     * rather than for what it would be nice if it did, and the banner the press
+     * puts up says the page here does not move. A sentence implying otherwise
+     * would be the same defect in a different place.
+     *
+     * ## Archive stays greyed, and it is a different fact
+     *
+     * The archive is this phone's list of the **machine's** windows — see
+     * `WindowShelf`, which refuses an empty id and keys everything by the shell
+     * tab id the machine minted. A page this phone is holding has no entry to
+     * hide, and closing it is free and one tap. That is its own reason and it
+     * gets its own line rather than being folded under the attach one.
+     */
+    @ViewBuilder
+    private func pageItems(_ tab: BrowserTab, sessions: [WindowSession]) -> some View {
+        if canDrive && !sessions.isEmpty {
+            Section("Open on \(machineName) and attach") {
+                ForEach(sessions) { session in
+                    Button {
+                        attachOnMachine(tab, to: session.id)
+                    } label: {
+                        Label(MachineBrowserText.sessionRow(session), systemImage: "terminal")
+                    }
+                }
+            }
+        } else {
+            Section(whyNoAttach) {
+                deadItem("Attach to a session", "terminal")
+            }
+        }
+
+        Button {
+            pushing = .phonePage(tab.id)
+        } label: {
+            Label("Page settings", systemImage: "slider.horizontal.3")
+        }
+
+        Section("Archiving is for the machine's own windows") {
+            deadItem("Archive", "archivebox")
+        }
+
+        Button(role: .destructive) {
+            closeTab(tab)
+        } label: {
+            Label("Close window", systemImage: "xmark")
+        }
+    }
+
+    /// Why a page this phone is holding cannot be opened on the machine and
+    /// attached, when it cannot. Two different facts, and only one of them is
+    /// something he can do anything about.
+    private var whyNoAttach: String {
+        canDrive
+            ? "Nothing is running on \(machineName) to attach it to"
+            : "\(machineName) is not offering its browser to this phone"
     }
 
     /**
@@ -1404,28 +1610,27 @@ struct MachineBrowserView: View {
     }
 
     /**
-     * Why this row's `…` cannot carry the machine's window verbs, in one line.
+     * Why a cast the window list does not name can carry no window verb, in one
+     * line.
      *
-     * Three answers and each is a different fact, so none of them is a general
-     * apology: the machine's own tab was never given an id, a cast the window
-     * list does not name cannot be joined to a window, and a page this phone is
-     * holding is not in that browser at all.
+     * Two answers and each is a different fact, so neither is a general apology:
+     * the machine's own tab was never given an id, and a cast no window row
+     * claims cannot be joined to a window.
+     *
+     * It takes a surface rather than a row now. It used to answer for a page on
+     * this phone as well, and that third answer is gone with the greyed row it
+     * was written under: attaching one of those is a live control, and the one
+     * item still dead on it — Archive — has a reason of its own that has nothing
+     * to do with window ids. See `pageItems`.
      */
-    private func whyNoWindowVerbs(_ row: MachineBrowserRow) -> String {
-        switch row {
-        case .window:
-            return ""
-        case let .surface(surface):
-            // The second is worded off **this list** rather than off the
-            // machine's, because a window archived on this phone is one the
-            // machine still lists and this screen deliberately does not. Either
-            // way the join a window verb needs is not here.
-            return surface.window.isEmpty
-                ? "The machine's own tab — it has no window id to address"
-                : "No window row for this page on this list"
-        case .page:
-            return "Open on this phone, not in the machine's browser"
-        }
+    private func whyNoWindowVerbs(_ surface: BrowserSurfaceRow) -> String {
+        // The second is worded off **this list** rather than off the machine's,
+        // because a window archived on this phone is one the machine still lists
+        // and this screen deliberately does not. Either way the join a window
+        // verb needs is not here.
+        surface.window.isEmpty
+            ? "The machine's own tab — it has no window id to address"
+            : "No window row for this page on this list"
     }
 
     /// What the `…` is *for*, spoken. The row's own name, which is the only thing
@@ -1555,7 +1760,7 @@ struct MachineBrowserView: View {
  * The ports are in it, as what they are: the addresses this machine is already
  * serving. `PortSuggestions` carries them and its header carries the argument.
  *
- * ## Three destinations, one control, because it is one question
+ * ## Three destinations, chosen first, because it is the question the rest hangs on
  *
  * *Where does this window open* has three real answers on a machine that offers
  * everything, and they were previously spread across two screens and a swipe
@@ -1575,10 +1780,22 @@ struct MachineBrowserView: View {
  *    can be reached this way, which is a fact about what a tunnel is rather than
  *    a restriction chosen here.
  *
- * A segment is **absent**, not disabled, where the machine withholds the
+ * A destination is **absent**, not disabled, where the machine withholds the
  * capability it rides: no `ports` frame means no tunnel, and no `web` means the
  * machine cannot be sent a page at all. A control that could only ever be
  * refused is one this app does not draw.
+ *
+ * They were three segments of a `.segmented` Picker sitting inside the address
+ * card, under the field and directly above the list of the machine's web
+ * servers, and he read exactly what that placement said:
+ *
+ * > *"when we start a new session, this feels like a filter, not like a
+ * > selection of this specific one. Maybe it could be like a different kind of
+ * > choice, maybe up there, not under the bar or something."*
+ *
+ * They are a card of their own above the field now, one row each with a line
+ * saying what that choice means. See `destination` for the whole argument,
+ * including why each row has to stay a plain one-tap Button.
  *
  * ## Which door a machine window goes through, and it is not a detail
  *
@@ -1726,28 +1943,193 @@ private struct NewWindowSheet: View {
         }
     }
 
-    // MARK: - The field and the choice
+    // MARK: - Where it opens, then what to open
 
+    /**
+     * The destination first, the address under it.
+     *
+     * That order is the correction. *Where does this go* is the question the
+     * sheet has to settle before anything typed into the field means anything —
+     * a port opens on the machine or over a tunnel depending on it, and a search
+     * cannot go through a tunnel at all — so it reads first and it is answered
+     * first.
+     */
     private var header: some View {
         VStack(alignment: .leading, spacing: 0) {
+            destination
+            addressCard
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 4)
+    }
+
+    /**
+     * **Where the window opens, as a choice of three things rather than as a
+     * filter over the list below.**
+     *
+     * > *"when we start a new session, this feels like a filter, not like a
+     * > selection of this specific one. Maybe it could be like a different kind
+     * > of choice, maybe up there, not under the bar or something."*
+     *
+     * He was reading a `.segmented` Picker that sat **inside** the address card,
+     * under the field, under a hairline, directly on top of a list of the
+     * machine's web servers. Every part of that placement said *filter*: a
+     * segmented control is the shape iOS uses for scoping a list, it was
+     * touching the list it appeared to scope, and the three words on it —
+     * Machine, Isolated, This phone — read as three kinds of port to show. It was
+     * not a filter. It was the single most consequential choice on the sheet: it
+     * decides whose cookies the page gets and which machine renders it.
+     *
+     * So it is a card of its own, above the field, with a caption naming what is
+     * being chosen and one line under each option saying what that choice means.
+     * Three rows, one tap each, the selected one obvious. It is the same shape
+     * `TerminalThemeView` uses to choose a colour scheme, which is this app's
+     * pattern for *pick exactly one of these, and here is what each one is*.
+     *
+     * ## Each row is a plain Button, and that is load-bearing rather than a style
+     *
+     * `TabNavigation.openLocalhostList` taps `buttons["This phone"]` and
+     * `SessionPageUITests` taps `buttons["Isolated"]`, both with **no** second
+     * tap, and both checks were soft. Built as a `Menu`, the first tap would open
+     * a menu instead of choosing, nothing would fail, and fifteen suites later
+     * windows would quietly be opening in his **real** Chromium profile instead
+     * of a throwaway one. So each destination stays a one-tap `Button` carrying
+     * exactly the label those suites press, the selected one wears
+     * `.isSelected`, and both helpers now assert that the selection landed.
+     *
+     * ## The identifier is on the card, and the card has to say it contains things
+     *
+     * `.accessibilityIdentifier` on a container makes that container an
+     * accessibility *element* and everything inside it stops existing — measured
+     * on iOS 26.4 and written down in `TabNavigation.swift`. The three rows must
+     * stay findable, so the card is marked `.accessibilityElement(children:
+     * .contain)` as well. `browser.open.isolation` is kept as the name: it is
+     * the same choice it always was, and a renamed identifier is a suite that
+     * skips instead of failing.
+     *
+     * ## Absent, not disabled — and absent altogether where there is one option
+     *
+     * A destination the machine will not serve is not drawn: no `ports` frame
+     * means no tunnel, and no `web` means the machine cannot be sent a page at
+     * all. `places.count > 1` is the gate on the card itself — a control with one
+     * option is not a control, it is a label — and where there is only one, that
+     * destination is stated as the line it would have carried, so the sheet never
+     * goes silent about where the window is going.
+     */
+    @ViewBuilder
+    private var destination: some View {
+        if places.count > 1 {
             SchemeSectionCaption(
-                "Address",
-                about: "opening a window",
-                info: "A web address opens on the machine; anything that is not an address is "
-                    + "searched for. A port opens that port. Leave it empty for a blank window."
-                    + "\n\nA window on the machine uses its own profile — its cookies and whatever "
-                    + "it is signed into. An isolated one gets a partition of its own, and that "
+                "Open in",
+                about: "where a window opens",
+                info: "A window on \(machine) uses its own profile — its cookies and whatever it "
+                    + "is signed into. An isolated one gets a partition of its own, and that "
                     + "partition is thrown away when the window closes. A window on this phone is "
                     + "a tunnel: the page loads here, in this app's own web view, on a real "
                     + "loopback origin — so it keeps cookies and a dev server's hot reload works. "
                     + "Only \(machine)'s own ports can be reached that way.")
 
             SchemeGroup {
-                HStack(spacing: 12) {
-                    Image(systemName: place == .isolated ? "eye.slash" : (place == .phone ? "iphone" : "globe"))
-                        .font(.system(size: 19, weight: .light))
+                ForEach(places, id: \.self) { option in
+                    if option != places.first {
+                        Rectangle()
+                            .fill(Theme.hairline)
+                            .frame(height: 0.5)
+                            .padding(.leading, 52)
+                    }
+                    destinationRow(option)
+                }
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("browser.open.isolation")
+        } else if let only = places.first {
+            // One destination is not a choice, and the sentence it would have
+            // carried is still owed: a window appearing on a screen in another
+            // room is the kind of press that otherwise looks like it did nothing.
+            Text(meaning(of: only))
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.faint)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 12)
+                .padding(.horizontal, 4)
+                .accessibilityIdentifier("browser.open.destination")
+        }
+    }
+
+    /**
+     * One destination: its glyph, its name, and what choosing it means.
+     *
+     * The label is set explicitly to the destination's own name and nothing
+     * else. Left to SwiftUI, a button holding two `Text`s is read as both of them
+     * joined — *"Isolated, opens in the machine's browser signed into nothing…"* —
+     * and `buttons["Isolated"]` stops matching, which is the silent failure this
+     * whole card is written to avoid. The sentence is the hint instead, which is
+     * where VoiceOver expects the explanation of a control anyway.
+     */
+    private func destinationRow(_ option: Place) -> some View {
+        let chosen = place == option
+        return Button {
+            place = option
+            // A refusal belongs to the destination that refused. Leaving *"This
+            // phone can only open the machine's own ports"* standing after a tap
+            // on Machine would be a warning about a state nobody is in any more.
+            notice = nil
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: glyph(of: option))
+                    .font(.system(size: 19, weight: .light))
+                    .foregroundStyle(chosen ? Theme.accent : Theme.faint)
+                    .frame(width: 24, height: 28)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(name(of: option))
+                        .font(.system(size: 16, weight: chosen ? .semibold : .regular))
+                        .foregroundStyle(Theme.primary)
+                    Text(meaning(of: option))
+                        .font(.system(size: 12))
                         .foregroundStyle(Theme.faint)
-                        .frame(width: 24, height: 28)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .multilineTextAlignment(.leading)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: chosen ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 17))
+                    .foregroundStyle(chosen ? Theme.accent : Theme.faint)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(name(of: option))
+        .accessibilityHint(meaning(of: option))
+        .accessibilityAddTraits(chosen ? [.isSelected] : [])
+    }
+
+    /**
+     * The address, and only the address.
+     *
+     * **No leading glyph.** There was one and it mirrored the destination —
+     * globe, eye-slash, iPhone — which was the only signal of that choice while
+     * the choice lived under the field. With a card of its own above saying the
+     * same thing three ways at once, the glyph is a fourth copy that moves when
+     * nothing here has changed. *"There should be no icon at all actually. It's
+     * not required."*
+     *
+     * The notice under it is about **what was typed** and nothing else. It used
+     * to share this slot with the sentence naming the destination, so a refusal
+     * replaced the one line saying where the window was going. They are two views
+     * now, and the destination's line lives with the destination.
+     */
+    private var addressCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SchemeSectionCaption(
+                "Address",
+                about: "opening a window",
+                info: "A web address opens on the machine; anything that is not an address is "
+                    + "searched for. A port opens that port. Leave it empty for a blank window.")
+
+            SchemeGroup {
+                HStack(spacing: 12) {
                     // Every one of these is load-bearing, and each was learned on
                     // the localhost address bar: a URL keyboard puts the slash
                     // and the dot under a thumb, autocapitalisation would send
@@ -1790,25 +2172,7 @@ private struct NewWindowSheet: View {
                 }
                 .padding(.leading, 16)
                 .padding(.trailing, 10)
-                .padding(.vertical, 10)
-
-                if places.count > 1 {
-                    Rectangle()
-                        .fill(Theme.hairline)
-                        .frame(height: 0.5)
-                        .padding(.leading, 16)
-
-                    Picker("Open in", selection: $place) {
-                        ForEach(places, id: \.self) { option in
-                            Text(name(of: option)).tag(option)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
-                    .accessibilityIdentifier("browser.open.isolation")
-                }
+                .padding(.vertical, 12)
             }
 
             if let notice {
@@ -1819,21 +2183,8 @@ private struct NewWindowSheet: View {
                     .padding(.top, 10)
                     .padding(.horizontal, 4)
                     .accessibilityIdentifier("browser.open.notice")
-            } else {
-                // The one sentence on this sheet, because a window appearing on
-                // a screen in another room is the kind of press that otherwise
-                // looks like it did nothing.
-                Text(place == .phone
-                     ? "Opens here, over a tunnel to \(machine)."
-                     : "Opens in \(machine)'s own browser.")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.faint)
-                    .padding(.top, 10)
-                    .padding(.horizontal, 4)
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 4)
     }
 
     /// The destinations this machine actually offers, in the order they are
@@ -1846,11 +2197,43 @@ private struct NewWindowSheet: View {
         return out.isEmpty ? [.machine] : out
     }
 
+    /**
+     * The word on the row, and it is the word the suites press.
+     *
+     * `Machine`, `Isolated`, `This phone` — unchanged from the segmented control
+     * these rows replaced, deliberately. Two UI suites reach for two of them by
+     * name, and a tidier word here would make both of those skip in silence.
+     */
     private func name(of place: Place) -> String {
         switch place {
         case .machine: return "Machine"
         case .isolated: return "Isolated"
         case .phone: return "This phone"
+        }
+    }
+
+    /// The glyph each destination already wore, kept exactly: they were the
+    /// address field's leading icon, which mirrored this choice.
+    private func glyph(of place: Place) -> String {
+        switch place {
+        case .machine: return "globe"
+        case .isolated: return "eye.slash"
+        case .phone: return "iphone"
+        }
+    }
+
+    /// One plain line per destination — what you get, not how it works. The
+    /// mechanism is on the caption's info dot for anybody who wants it.
+    private func meaning(of place: Place) -> String {
+        switch place {
+        case .machine:
+            return "Opens in \(machine)'s own browser, signed in the way \(machine) is."
+        case .isolated:
+            return "Opens in \(machine)'s browser signed into nothing, and forgets everything "
+                + "when the window closes."
+        case .phone:
+            return "Opens here on this phone, over a tunnel to \(machine). Only \(machine)'s own "
+                + "ports."
         }
     }
 
@@ -2024,14 +2407,6 @@ private enum MachineBrowserRow: Identifiable {
     /// A page **this phone** is holding open over a tunnel — see `pageRow`.
     case page(BrowserTab)
 
-    /// The window on the machine this row is, when the machine listed one. Nil
-    /// for the other two, which is exactly the set of rows whose `…` can carry no
-    /// `browser.window.*` verb — see `rowMenu`.
-    var machineWindow: MachineWindow? {
-        if case let .window(window, _) = self { return window }
-        return nil
-    }
-
     var id: String {
         switch self {
         case let .window(window, _): return "window:\(window.id)"
@@ -2046,11 +2421,16 @@ private enum MachineBrowserRow: Identifiable {
  * trailing corner is a second control can still navigate from a plain closure —
  * see `pushing`.
  *
- * One case, and it used to be two. There was a `.surface` beside this that went
- * to a different screen with fewer controls on it, which is the thing he read as
- * two kinds of browser window. Every page on the machine goes to
- * `MachineWindowView` now; what it is named by — a shell tab id, or the empty
- * string the front tab wears — is a fact that screen resolves, not a fork here.
+ * **One case for every page on the machine**, and that is the part that matters.
+ * There used to be a `.surface` beside `.window` that went to a different screen
+ * with fewer controls on it, which is the thing he read as two kinds of browser
+ * window. Every page on the machine goes to `MachineWindowView` now; what it is
+ * named by — a shell tab id, or the empty string the front tab wears — is a fact
+ * that screen resolves, not a fork here.
+ *
+ * `.phonePage` is not that fork coming back. It is a page **this phone** is
+ * drawing, whose window screen is the page itself; what this pushes is its
+ * settings, which is the one thing a row on this list could not reach before.
  */
 private enum MachineBrowserDestination: Hashable, Identifiable {
     /// A page on the machine, by the name both lists call it: the live picture
@@ -2058,15 +2438,16 @@ private enum MachineBrowserDestination: Hashable, Identifiable {
     /// everything else.
     case window(String)
 
-    /// The name to address it by. `""` is the machine's own front tab and is a
-    /// name rather than a missing one — see `MachineWindowView`.
-    var page: String {
+    /// The settings of a page this phone is holding over a tunnel, by the tab's
+    /// own id. Not a window on the machine and deliberately not drawn as one.
+    case phonePage(String)
+
+    var id: String {
         switch self {
-        case let .window(id): return id
+        case let .window(id): return "window:\(id)"
+        case let .phonePage(id): return "page:\(id)"
         }
     }
-
-    var id: String { "window:\(page)" }
 }
 
 /// The card's press state, without the card. `RowButtonStyle` draws its own
