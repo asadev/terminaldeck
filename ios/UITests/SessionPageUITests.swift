@@ -28,16 +28,29 @@
  *
  * He was looking at a strip whose chevron pointed **down** — the pane believed it
  * was showing something — over an empty space, because this pane owns the fold
- * and does not own the cast. So `session.page.fold` is now one identifier
- * carrying whichever of three acts is true, and the **label** is what says which:
- * *Fold the page away* only while a picture is really arriving, *Show the page*
- * on a folded pane, *Ask for the page again* on a pane that is shown with nothing
- * under it. Where no cast can be had at all there is no control and the sentence
- * under the strip is the whole answer.
+ * and does not own the cast. So `session.page.fold` is one identifier carrying
+ * whichever of three acts is true, and the **label** is what says which: *Hide
+ * the page* while there is something in the pane, *Show the page* on a folded
+ * one, *Ask for the page again* on a pane that is open with nothing arriving and
+ * a machine that could still send it.
  *
- * Every case below therefore reads the label before it presses, and asserts the
- * label it becomes. A case that pressed a chevron and asserted the strip survived
- * would pass against exactly the screen he photographed.
+ * **There is always one of them**, which is what the second review changed:
+ *
+ * > *"browser window when it collapse it is not expanding back I can not open it
+ * > back once if I close it inside a session in any session even co-pilot or any
+ * > other normal session."*
+ *
+ * A fourth state used to draw no control at all, on a machine that would not
+ * cast — and `castable` is `isLive && watch.offered`, both of which move on their
+ * own, so a dropped socket took the way back up off a pane he had folded a second
+ * earlier. It is gone, and so is the black box behind it: an open pane is either
+ * a page or one line saying why it is not, never four hundred points of
+ * `Color.black` over a black terminal ground.
+ *
+ * Every case below therefore reads the label before it presses, asserts the label
+ * it becomes, **and asserts there is something under the strip afterwards**. A
+ * case that pressed a chevron and asserted the strip survived would pass against
+ * exactly the screen he photographed — twice.
  *
  * ## This suite **does** change the machine, which is unlike its neighbours
  *
@@ -62,9 +75,9 @@
  * are there and offer something, and the bind itself is walked from the window's
  * own end, where the window is named.
  *
- * The row it **does** press is the one that makes a new window —
- * *Open a window for this session* — because that row touches nothing that
- * existed before the press. `testOnePressInsideASessionLeavesItHoldingAWindow`
+ * The row it **does** press is the one that makes a new window — *New window*,
+ * the last row in the section — because that row touches nothing that existed
+ * before the press. `testOnePressInsideASessionLeavesItHoldingAWindow`
  * walks it and records what it made in `mine`, so `tearDown` takes it back like
  * everything else.
  *
@@ -78,8 +91,8 @@
  * Both attach sections shipped drawn `if !windows.isEmpty`, so a machine whose
  * browser simply had no window open — an ordinary laptop, and what he was looking
  * at — put nothing at all under either `…`, and the only route back was the
- * Browser tab. Every case below that opens one of those menus now asserts the two
- * rows that make a window as well as the ones that borrow one; see
+ * Browser tab. Every case below that opens one of those menus now asserts the row
+ * that makes a window as well as the ones that borrow one; see
  * `assertOffersANewWindow`, which is the check that would have failed against
  * what shipped.
  *
@@ -120,10 +133,16 @@ final class SessionPageUITests: XCTestCase {
     private var mine: String?
 
     /// The three things the one control on the strip can be, verbatim from
-    /// `SessionPageView.strip`. They are `accessibilityLabel`s rather than
-    /// identifiers because there is one identifier and three acts — see the file
-    /// header for why it is that way round.
-    private static let foldAway = "Fold the page away"
+    /// `SessionPageVerb`. They are `accessibilityLabel`s rather than identifiers
+    /// because there is one identifier and three acts — see the file header for
+    /// why it is that way round.
+    ///
+    /// *Hide* and *Show* are deliberately a pair of opposites: whatever the last
+    /// press said, the next one says the reverse of it rather than a new idea.
+    /// The fourth state — no control at all, on a machine that would not cast —
+    /// is gone, and `testTheStripAlwaysCarriesAControl` is the case that keeps it
+    /// gone.
+    private static let hideIt = "Hide the page"
     private static let showIt = "Show the page"
     private static let askAgain = "Ask for the page again"
 
@@ -479,7 +498,7 @@ final class SessionPageUITests: XCTestCase {
         _ = app.buttons.element(boundBy: 0).waitForExistence(timeout: 3)
         capture("90-inside-the-sessions-dots")
 
-        let make = app.buttons[Self.openForThisSession].firstMatch
+        let make = app.buttons[Self.newWindow].firstMatch
         try XCTSkipUnless(make.waitForExistence(timeout: 5), Self.noControl)
         make.tap()
 
@@ -598,18 +617,33 @@ final class SessionPageUITests: XCTestCase {
      * > *"So if we close it, we cannot open it. If I click on it, it is not
      * > opening. So this should be working properly, so I can at least open it."*
      *
-     * Three shapes, because the strip has three and each of them is a real state
-     * of a real machine rather than a branch to hedge with:
+     * > *"browser window when it collapse it is not expanding back I can not open
+     * > it back once if I close it inside a session in any session even co-pilot
+     * > or any other normal session."*
      *
-     *  - **A picture is arriving** — the control folds, and a fold must leave the
-     *    strip standing and turn into the way back up. Pressed twice, so the
-     *    round trip is walked rather than the way down only.
-     *  - **The pane is shown and nothing is arriving** — the control asks for the
-     *    page again instead of offering to fold an empty space, which is exactly
-     *    the screen he photographed. Pressing it must not take the strip away.
-     *  - **No cast can be had at all** — there is no control, and the sentence
-     *    under the strip is the whole answer. Asserted, because a strip with
-     *    neither a control nor a sentence is a header nobody can get past.
+     * Three quotes and one demand: **the control is always there, and pressing it
+     * always changes the screen.** The third one is what the second review added
+     * and it is the one this walk is now built around, because the state it was
+     * filmed in passes every check the earlier version made — the strip was
+     * drawn, the control was drawn, the label was right, the pane really did
+     * change state. What was missing was anything to see: `WatchStage` fills its
+     * box with `Color.black`, the session screen's ground is the terminal theme's
+     * black, and an idle terminal is blank at the top. Four hundred points of
+     * black appearing over black.
+     *
+     * So every press below is followed by `somethingIsUnderTheStrip()` — a stage
+     * with real height, or the sentence that says why there is not one. Never
+     * neither.
+     *
+     * Two shapes, because the strip has two once it is open and each is a real
+     * state of a real machine:
+     *
+     *  - **Something is in the pane** — the control hides it, and hiding must
+     *    leave the strip standing and turn into the way back up. Pressed twice,
+     *    so the round trip is walked rather than the way down only.
+     *  - **The pane is open and nothing is arriving** — the control asks for the
+     *    page again instead of offering to hide an empty space, and the space
+     *    itself carries the line that says why it is empty.
      *
      * The label is read before every press. A case that pressed by identifier and
      * asserted the strip survived would pass against the chevron pointing down
@@ -618,42 +652,50 @@ final class SessionPageUITests: XCTestCase {
     private func walkTheStripsOneControl(_ strip: XCUIElement) {
         let control = app.buttons["session.page.fold"]
 
-        guard control.waitForExistence(timeout: 10) else {
-            XCTAssertTrue(any("session.page.nocast").waitForExistence(timeout: 10),
-                          "a strip with no control on it owes the sentence that says why there is "
-                          + "no picture — a header with no way to find out is the dead end this "
-                          + "screen is meant to stop being")
-            capture("83-session-no-cast")
-            return
-        }
+        /*
+         * **There is always a control.** There used to be a state with none —
+         * a machine that would not cast anything — and it was reached by the two
+         * things `castable` is made of, both of which move on their own: a socket
+         * that drops takes the way back up off a pane he folded a second ago.
+         * *"I can not open it back once if I close it."*
+         */
+        XCTAssertTrue(control.waitForExistence(timeout: 10),
+                      "the strip's one control is never absent now — a strip he cannot press is "
+                      + "a page he cannot get back")
 
         /*
          * Which of the two the pane settled on, rather than which it was in the
-         * frame the screen appeared in. The pane arrives `.split` and the verb
-         * only becomes *fold* once a frame has really landed — `showing` is
-         * `WatchLink.isCasting`, not *is there a row for it* — so a label read
-         * straight after arrival can be *ask again* on a machine that is about to
-         * send a picture. Twelve seconds is the same order as the canvas's own
-         * wait for a first frame elsewhere in this suite.
+         * frame the screen appeared in. The pane arrives open and the verb only
+         * becomes *hide* once a cast is really running, so a label read straight
+         * after arrival can be *ask again* on a machine that is about to send a
+         * picture. Twelve seconds is the same order as the canvas's own wait for
+         * a first frame elsewhere in this suite.
          */
-        let settled = stripControl(becomesOneOf: [Self.foldAway], within: 12)
-        guard settled == Self.foldAway else {
+        let settled = stripControl(becomesOneOf: [Self.hideIt], within: 12)
+        XCTAssertTrue(somethingIsUnderTheStrip(),
+                      "an open pane is either a page or one line saying why it is not — a strip "
+                      + "with nothing under it is the screen he photographed")
+
+        guard settled == Self.hideIt else {
             XCTAssertEqual(settled, Self.askAgain,
-                           "the pane is shown, so its one control is either the fold over a "
-                           + "picture or the way to ask for one — never anything else")
+                           "the pane is open, so its one control is either the way to put it away "
+                           + "or the way to ask for a page — never anything else")
             control.tap()
             XCTAssertTrue(strip.waitForExistence(timeout: 5),
                           "asking for the page again must not take the strip away with it")
+            XCTAssertTrue(somethingIsUnderTheStrip(),
+                          "and the press has to land on something he can see: the stage, or the "
+                          + "line that says what is happening")
             capture("83-session-asked-again")
             return
         }
 
         control.tap()
         XCTAssertTrue(strip.waitForExistence(timeout: 5),
-                      "folding must not take the page away entirely")
+                      "hiding must not take the page away entirely")
         XCTAssertEqual(stripControl(becomesOneOf: [Self.showIt]), Self.showIt,
                        "a folded pane's one control is the way back up, and it has to say so — "
-                       + "a chevron that goes on offering to fold is the screen he photographed")
+                       + "a chevron that goes on offering to hide is the screen he photographed")
         capture("83-session-minimised")
 
         /*
@@ -677,18 +719,43 @@ final class SessionPageUITests: XCTestCase {
         control.tap()
         XCTAssertTrue(strip.waitForExistence(timeout: 5),
                       "and bringing it back must leave the strip where it was")
-        XCTAssertNotEqual(stripControl(becomesOneOf: [Self.foldAway, Self.askAgain]), Self.showIt,
+        XCTAssertNotEqual(stripControl(becomesOneOf: [Self.hideIt, Self.askAgain]), Self.showIt,
                           "the pane is open again, so the control must have moved off *show* — to "
-                          + "the fold where the picture came back, or to *ask again* where the "
-                          + "machine has stopped sending one")
+                          + "the way to put it away, or to *ask again* where the machine has "
+                          + "stopped sending one")
+        XCTAssertTrue(somethingIsUnderTheStrip(),
+                      "and unfolding put something on the screen: “browser window when it "
+                      + "collapse it is not expanding back”")
         capture("84-session-restored")
+    }
+
+    /**
+     * Whether the pane has anything in it a person could see.
+     *
+     * The assertion the second review is entirely about. Both halves count and
+     * neither is optional: a stage with **real height** (a page, or the black
+     * box a cast is still being waited on inside — which now carries the *Asking
+     * for the page…* line over it), or the sentence that says why there is no
+     * page at all.
+     *
+     * The stage's height is measured rather than its existence taken: the canvas
+     * is deliberately left mounted at zero height through a fold — dismantling it
+     * is what sends `browser.unwatch` and would stop the cast — so
+     * `session.page.stage` exists just as much when the pane is closed as when it
+     * is open, and a check that only asked whether it was there would pass
+     * against a folded pane that never opened.
+     */
+    private func somethingIsUnderTheStrip() -> Bool {
+        if any("session.page.nocast").exists { return true }
+        let stage = any("session.page.stage")
+        return stage.exists && stage.frame.height > 1
     }
 
     /**
      * What the strip's one control is carrying, once it has stopped moving.
      *
      * Every press here changes the label with an animation, and one of them —
-     * *show* becoming *fold* — waits on a frame from the machine as well, because
+     * *show* becoming *hide* — waits on a frame from the machine as well, because
      * `SessionPageView.show()` asks for the cast again rather than assuming one.
      * A label read in the frame after a tap is a race and not an answer, so this
      * polls for one of the labels the caller is expecting and hands back what it
@@ -908,20 +975,29 @@ final class SessionPageUITests: XCTestCase {
      * the only ones in either menu whose words are fixed and known in advance,
      * which is what makes them assertable at all.
      *
-     * Both are pressed for, not just the first: the isolated one is a **second
-     * named row** rather than a switch, because a `Toggle` in a `Menu` closes the
-     * menu on the press and choosing would have cost one opening of the `…` and
-     * acting a second. A build that quietly turned it back into a flag would
-     * still pass a check that only looked for the first row.
+     * **And it is one row, not two.** The pair that used to be here — *"Open a
+     * window for this session"* / *"Open one signed into nothing"* — is the
+     * wording he read out as the point where the menu stopped being usable, so a
+     * build that brought either sentence back is a regression and is asserted
+     * against by name.
      */
     private func assertOffersANewWindow(_ appeared: Set<String>, where_: String) {
-        XCTAssertTrue(appeared.contains(Self.openForThisSession),
+        XCTAssertTrue(appeared.contains(Self.newWindow),
                       "\(where_) has to offer a window even when the machine has none open — "
                       + "what appeared was \(appeared.sorted())")
-        XCTAssertTrue(appeared.contains(Self.openSignedIntoNothing),
-                      "and the isolated choice beside it, as words rather than a switch")
-        XCTAssertTrue(app.buttons[Self.openForThisSession].firstMatch.isEnabled,
+        XCTAssertTrue(app.buttons[Self.newWindow].firstMatch.isEnabled,
                       "a row that cannot be pressed is the same dead end in a different shape")
+
+        for row in appeared {
+            XCTAssertFalse(row.hasSuffix("."),
+                           "“\(row)” in \(where_) is a sentence — every row in this menu is a "
+                           + "name: “why don't we just simply have the name of the browsing "
+                           + "windows we can just simply click on one of them and that's it”")
+            XCTAssertFalse(row.contains("signed into nothing") || row.contains("the page here "
+                           + "stays") || row.contains("for this session"),
+                           "“\(row)” is one of the rows he could not read — it belongs on a hint "
+                           + "or in the sentence after the press, not on a row")
+        }
     }
 
     /// Every button label on screen right now, which is the before and after a
@@ -931,25 +1007,30 @@ final class SessionPageUITests: XCTestCase {
     }
 
     /**
-     * The two rows that make a window rather than borrow one, verbatim from
+     * The one row that makes a window rather than borrowing one, verbatim from
      * `SessionWindowPicker`.
      *
-     * They are the answer to *"we should have the options to click on something"*
-     * on a machine with nothing open, and they are in **both** menus. They are
-     * also why the two fixed sets below had to grow: `assertOffersAWindow` calls
-     * everything it does not recognise a window, so a menu that offered only
-     * these two would have passed a check that means *the machine's own windows
-     * are offered here*. They are named rather than folded into the sets so the
-     * cases can assert their presence directly.
+     * It is the answer to *"we should have the options to click on something"* on
+     * a machine with nothing open, and it is in **both** menus. It is also why
+     * the fixed sets below have to name it: `assertOffersAWindow` calls
+     * everything it does not recognise a window, so a menu that offered only this
+     * would have passed a check that means *the machine's own windows are offered
+     * here*.
+     *
+     * **It was two rows.** *"Open a window for this session"* and *"Open one
+     * signed into nothing"*, which he read out as the point where the menu
+     * stopped making sense — two sentences arguing about a profile in a list
+     * whose other rows are names. The isolated window did not go anywhere: the
+     * Browser tab's `+` offers *Machine* and *Isolated* on the New window sheet,
+     * and `openAWindow` below presses that very control.
      */
-    private static let openForThisSession = "Open a window for this session"
-    private static let openSignedIntoNothing = "Open one signed into nothing"
+    private static let newWindow = "New window"
 
     /// What the session row's `…` always carries, whatever machine it is against.
     /// Anything else that appears with it is a window — see `assertOffersAWindow`.
     private static let rowMenuItems: Set<String> = [
         "Session details", "Model & effort", "Pin", "Unpin", "Archive", "Close",
-        openForThisSession, openSignedIntoNothing,
+        newWindow,
     ]
 
     /// And the terminal's own menu, verbatim from `TerminalScreen`. The two
@@ -959,7 +1040,7 @@ final class SessionPageUITests: XCTestCase {
         "Find in output", "Session details", "Model & effort",
         "Copy Screen", "Paste", "Share output",
         "Send Photo or Video", "Send File", "Re-attach",
-        openForThisSession, openSignedIntoNothing,
+        newWindow,
     ]
 
     private static let fixedPrefixes = ["Bigger text", "Smaller text"]

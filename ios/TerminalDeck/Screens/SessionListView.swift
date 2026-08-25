@@ -836,10 +836,22 @@ struct SessionListView: View {
      *
      * The same section the session's own `…` carries, built from the same
      * `SessionWindowPicker` — which windows may be offered, which one wears the
-     * checkmark, what a row says and what the two new-window rows are called. The
-     * two menus cannot drift into saying different things about the same window,
-     * and `SessionPageTests` pins every one of those decisions without a
-     * simulator.
+     * checkmark, what a row says and what the last row is called. The two menus
+     * cannot drift into saying different things about the same window, and
+     * `SessionPageTests` pins every one of those decisions without a simulator.
+     *
+     * ## One flat list of names, and that is the whole section
+     *
+     * > *"why don't we just simply have the name of the search of browsing
+     * > windows we can just simply click on one of them and that's it why it's
+     * > too confusing to use."*
+     *
+     * The machine's windows, then the pages this phone is showing, each under its
+     * own name; a checkmark on the one this session already holds; a divider; and
+     * one row that makes a new window. The two rows that argued about profiles
+     * and the header that explained where a phone page lives are gone from the
+     * menu — not from the app, and not from what the app says after a press. The
+     * argument is on `SessionWindowPicker`, which both menus read.
      *
      * ## Empty is not the same as impossible, and this drew nothing for both
      *
@@ -854,7 +866,7 @@ struct SessionListView: View {
      * > whichever browser we want to connect into the session."*
      *
      * So the gate is `showsAttach(canDrive:)` — the machine, not its windows —
-     * and the section always ends with the two rows that make a window instead of
+     * and the section always ends with the row that makes a window instead of
      * borrowing one. `openMachineWindow(session:)` opens it and binds it in one
      * ask; the host checks the session is really running before it touches the
      * browser, so a refusal is a sentence rather than a stray window on somebody's
@@ -866,10 +878,11 @@ struct SessionListView: View {
      * > them, properly working, and the same way on the sessions side also."*
      *
      * The Browser tab's row menu learned this; the sessions side could not do it
-     * at all. It is the same one ask at the same address, and the header over
-     * those rows says the page on the phone stays where it is — because it does.
-     * What the session is handed is a **second** window, on the machine, with the
-     * machine's cookies and logins.
+     * at all. It is the same one ask at the same address, and what the session is
+     * handed is a **second** window on the machine, with the machine's cookies
+     * and logins — the page on this phone stays exactly where it is. That fact
+     * used to be a header over the rows; it is now the rows' accessibility hint,
+     * because a fact read once belongs where it is read once.
      *
      * Absent, not disabled, on a machine that will not be driven: every row here
      * ends in a frame that machine refuses at the source. A window another
@@ -889,51 +902,52 @@ struct SessionListView: View {
     @ViewBuilder
     private func attachSection(_ session: RemoteSession) -> some View {
         if SessionWindowPicker.showsAttach(canDrive: model.canDriveBrowser) {
+            // Read once and handed to the rows, because the row text is
+            // decided **against the list**: two windows with the same name
+            // are told apart by their place in it. See `WindowNames`.
+            let windows = attachableWindows
             Section("Attach a browser window") {
-                ForEach(attachableWindows) { window in
+                ForEach(windows) { window in
                     Button {
                         model.bindMachineWindow(window.id, to: session.id)
                     } label: {
-                        Label(SessionWindowPicker.row(window, session: session.id),
+                        Label(SessionWindowPicker.row(window, among: windows, session: session.id),
                               systemImage: SessionWindowPicker.holds(window, session: session.id)
                                   ? "checkmark" : "macwindow")
                     }
                 }
 
-                openRow(for: session, isolated: false, icon: "macwindow.badge.plus")
-                openRow(for: session, isolated: true, icon: "eye.slash")
-            }
-
-            let pages = phonePages
-            if !pages.isEmpty {
-                Section(SessionWindowPicker.phoneSection(machine: machineName)) {
-                    ForEach(pages) { tab in
-                        Button {
-                            model.openMachineWindow(url: SessionWindowPicker.address(tab),
-                                                    isolated: false,
-                                                    session: session.id)
-                        } label: {
-                            Label(SessionWindowPicker.phoneRow(tab), systemImage: "iphone")
-                        }
+                // In the same flat list and under its own name. The header that
+                // used to sit over these — *"Open again on … — the page here
+                // stays"* — is one of the rows he read out as confusing; what it
+                // said is on the hint, where it is read on request.
+                ForEach(phonePages) { tab in
+                    Button {
+                        model.openMachineWindow(url: SessionWindowPicker.address(tab),
+                                                isolated: false,
+                                                session: session.id)
+                    } label: {
+                        Label(SessionWindowPicker.phoneRow(tab), systemImage: "iphone")
                     }
+                    .accessibilityHint(SessionWindowPicker.phoneMeaning(machine: machineName))
                 }
+
+                Divider()
+                newWindowRow(for: session)
             }
         }
     }
 
-    /// One of the two rows that make a window rather than borrow one. Both are
-    /// the same call with one word different, so they are one function: two
-    /// copies of an `openMachineWindow(session:)` is two places for the session
-    /// to stop being passed, and a window that opens attached to nothing looks
-    /// exactly like one that opened attached to this session.
-    private func openRow(for session: RemoteSession, isolated: Bool, icon: String) -> some View {
+    /// The row that makes a window rather than borrowing one — one row, at the
+    /// end, after the divider. Two words on it, and everything it means on the
+    /// hint: a menu row is a name, not an explanation of itself.
+    private func newWindowRow(for session: RemoteSession) -> some View {
         Button {
-            model.openMachineWindow(isolated: isolated, session: session.id)
+            model.openMachineWindow(isolated: false, session: session.id)
         } label: {
-            Label(isolated ? SessionWindowPicker.openIsolated : SessionWindowPicker.openHere,
-                  systemImage: icon)
+            Label(SessionWindowPicker.newWindow, systemImage: "macwindow.badge.plus")
         }
-        .accessibilityHint(SessionWindowPicker.meaning(isolated: isolated, machine: machineName))
+        .accessibilityHint(SessionWindowPicker.newWindowMeaning(machine: machineName))
     }
 
     /// The machine's open windows, or nothing where nothing may be offered.
@@ -1183,14 +1197,24 @@ struct SessionListView: View {
                         .font(.system(size: 15))
                         .foregroundStyle(Theme.secondary)
                         .frame(width: 18)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Get told when a session needs you")
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundStyle(Theme.primary)
-                        Text("Alerts are off")
-                            .font(.system(size: 12))
-                            .foregroundStyle(Theme.faint)
-                    }
+                    /*
+                     * **One line. The second one came off in the second review.**
+                     *
+                     * > *"you are also putting so much of a description under the
+                     * > title of that thing under the title of the feature instead
+                     * > of just i button or nothing maybe so they have becomes too
+                     * > big you should compact all the features or buttons and
+                     * > without losing any of them."*
+                     *
+                     * It read *Alerts are off* under the title, and nothing was
+                     * lost by deleting it: this row is drawn **only** while
+                     * `alertPermission == .notAsked`, so *alerts are off* is the
+                     * one thing its presence already says. A row that explains why
+                     * it is on the screen is the shape he is describing.
+                     */
+                    Text("Get told when a session needs you")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(Theme.primary)
                     Spacer(minLength: 0)
                     Image(systemName: "chevron.right")
                         .font(.system(size: 13, weight: .semibold))

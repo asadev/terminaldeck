@@ -15,22 +15,33 @@
  *  2. **The site line names the host and nothing else.** It is the line somebody
  *     reads before typing a password into a page an agent brought them, so a
  *     value that is not a host must not be drawn as if it were one.
- *  3. **The strip's one control says which of four acts it is carrying.**
- *     `SessionPageVerb` had no test at all, which is the wrong way round: it
- *     exists *because* the screen he photographed had a control describing a
- *     state instead of an act, and it needs no simulator to be wrong.
- *  4. **Who a browser window would be taken from.** Attaching moves a window off
+ *  3. **The strip's one control says which of three acts it is carrying, and
+ *     there is always one.** `SessionPageVerb` had no test at all, which is the
+ *     wrong way round: it exists *because* the screen he photographed had a
+ *     control describing a state instead of an act. The second review deleted its
+ *     fourth act — *draw nothing* — which was how a pane he had folded became one
+ *     he could not open: *"I can not open it back once if I close it."*
+ *  4. **Every state that is not a picture has a line.** `SessionPageStage`, and
+ *     it is the other half of the same complaint. Unfolding onto a cast that had
+ *     produced no frame drew four hundred points of `Color.black` over a session
+ *     screen whose ground is the terminal's black, which is a press nobody can
+ *     see. No simulator can tell you the sentence is missing; this can.
+ *  5. **What a window is called.** Two rows both reading `about:blank` is what
+ *     made the attach menu unusable — *"another name of the window so why they
+ *     are like so much of confusing"*. `WindowNames` is the one rule, and the
+ *     numbering only fires where a row would otherwise be identical to another.
+ *  6. **Who a browser window would be taken from.** Attaching moves a window off
  *     whichever session holds it, silently, so the row that offers it has to say
  *     whose it is. Three screens draw that row; `SessionWindowPicker` is the one
  *     place it is decided.
- *  5. **Whether that row exists at all when the machine has no window open.**
+ *  7. **Whether that row exists at all when the machine has no window open.**
  *     This is the one that shipped wrong. Both menus tested the *list*, so on a
  *     machine whose browser was simply closed the `…` opened onto nothing and
  *     the only way to attach a window to a session was to leave for the Browser
  *     tab and make one first — the walk the menus were added to delete. The
  *     machine being drivable is the condition, and no simulator is needed to
  *     say so.
- *  6. **The page on the phone does not move.** A page this phone is drawing
+ *  8. **The page on the phone does not move.** A page this phone is drawing
  *     cannot be handed to an agent — it is rendered here, with this app's
  *     cookies. What a session gets is a *second* window on the machine at the
  *     same address, and every string about it has to say that rather than imply
@@ -239,7 +250,7 @@ final class SessionPageTests: XCTestCase {
     // MARK: - The one control on the strip
 
     /*
-     * `SessionPageVerb` decides which of four things the strip's single control
+     * `SessionPageVerb` decides which of three things the strip's single control
      * is. It shipped with no coverage anywhere, which is backwards for the piece
      * of this feature that exists *because* of a defect somebody photographed:
      *
@@ -252,9 +263,24 @@ final class SessionPageTests: XCTestCase {
      * eight is small and the two that matter most, a shown pane over a dead cast
      * and a machine that will never cast, are exactly the ones an example-led
      * test leaves out.
+     *
+     * **There were four acts and there are three.** The fourth was *offer
+     * nothing*, on a machine that could not cast at all, and the second review
+     * is what deleted it — from the other side of the same complaint:
+     *
+     * > *"browser window when it collapse it is not expanding back I can not open
+     * > it back once if I close it inside a session in any session even co-pilot
+     * > or any other normal session."*
+     *
+     * `castable` is `isLive && watch.offered`, and both halves move on their own.
+     * A pane folded a second ago on a socket that has since dropped had no
+     * control on its strip at all — the way back up simply not drawn — which
+     * from the outside is a button that has stopped working. A fold is now always
+     * reversible, whatever the machine is doing, because unfolding onto no
+     * picture says a line instead of showing a black box.
      */
 
-    func testAFoldedPaneOffersTheWayBackUpWheneverThereCouldBeOne() {
+    func testAFoldedPaneAlwaysOffersTheWayBackUp() {
         // A picture arriving under a fold: the ordinary unfold.
         XCTAssertEqual(SessionPageVerb.verb(folded: true, showing: true, castable: true), .show)
         // Nothing arriving, but the machine casts — *show* is still the right
@@ -263,30 +289,48 @@ final class SessionPageTests: XCTestCase {
     }
 
     /**
-     * A machine that will not cast anything offers nothing, folded or not.
+     * **His state, exactly: folded, nothing arriving, nothing castable.**
      *
-     * This is the row that stops the dead click: there is nothing to unfold *to*,
-     * so a chevron beside the strip would be a control that cannot act, and the
-     * sentence drawn under the strip is the whole answer instead.
+     * This is the assertion that fails against what he filmed. The strip drew no
+     * control at all here, so the pane he had put away could not be brought back
+     * until the machine changed its mind — *"I can not open it back once if I
+     * close it"*. The old rule read *there is nothing to unfold to*; there is,
+     * and it is one line of text saying why there is no picture.
      */
-    func testAMachineThatWillNotCastOffersNoControlAtAll() {
-        XCTAssertEqual(SessionPageVerb.verb(folded: true, showing: false, castable: false), .nothing)
-        XCTAssertEqual(SessionPageVerb.verb(folded: false, showing: false, castable: false), .nothing)
+    func testAFoldedPaneOpensEvenOnAMachineThatWillNeverCast() {
+        XCTAssertEqual(SessionPageVerb.verb(folded: true, showing: false, castable: false), .show,
+                       "a pane he folded has to open again on his next press, whatever the "
+                       + "machine is doing — the sentence in it is the answer")
+        XCTAssertEqual(SessionPageVerb.verb(folded: true, showing: true, castable: false), .show)
     }
 
-    /// A picture really arriving is the only state that offers the fold. Not *is
-    /// there a row for this window* — that was still true in the photograph, with
-    /// nothing underneath it.
-    func testOnlyAPictureThatIsArrivingMayBeFoldedAway() {
+    /**
+     * And a pane that is open on a machine that will not cast can be put away.
+     *
+     * The mirror of the case above, and the reason it is not *ask again*: there
+     * is nothing to ask a machine that does not offer the capability, so the one
+     * honest act left is closing the sentence. An unfoldable pane and an
+     * un-foldable one are the same defect from opposite ends.
+     */
+    func testAShownPaneIsAlwaysClosableEvenWithNothingToAskFor() {
+        XCTAssertEqual(SessionPageVerb.verb(folded: false, showing: false, castable: false), .fold)
+    }
+
+    /// A picture really arriving is the ordinary state that offers the fold. Not
+    /// *is there a row for this window* — that was still true in the photograph,
+    /// with nothing underneath it.
+    func testAPictureThatIsArrivingMayBeFoldedAway() {
         XCTAssertEqual(SessionPageVerb.verb(folded: false, showing: true, castable: true), .fold)
         // Showing with no route to a cast is not a state a real machine reaches —
         // a frame cannot arrive over a connection that cannot carry one — but the
-        // rule still has to be the honest one: there is a picture, so it folds.
+        // rule still has to be the honest one: there is something in the pane, so
+        // it folds.
         XCTAssertEqual(SessionPageVerb.verb(folded: false, showing: true, castable: false), .fold)
     }
 
     /**
-     * The screen he photographed: shown, empty, and a machine that could cast.
+     * The screen he photographed the first time: shown, empty, and a machine that
+     * could cast.
      *
      * The control has to become *ask for the page again*. Offering the fold here
      * is the defect verbatim — a chevron promising to put away a space that has
@@ -297,8 +341,9 @@ final class SessionPageTests: XCTestCase {
     }
 
     /// A folded pane is never asked to fold, whatever else is true. Two of the
-    /// four acts bring the page back and none of them may be the one that puts it
-    /// away — this is the assertion that would have failed against the photograph.
+    /// three acts bring the page back and none of them may be the one that puts
+    /// it away — this is the assertion that would have failed against the first
+    /// photograph.
     func testAFoldedPaneIsNeverOfferedTheFold() {
         for showing in [true, false] {
             for castable in [true, false] {
@@ -311,6 +356,124 @@ final class SessionPageTests: XCTestCase {
         }
     }
 
+    /// And there is **always** a control. The one state that drew none is the one
+    /// he could not get out of; nothing about the machine may take the strip's
+    /// only button away again.
+    func testTheStripAlwaysCarriesAnAct() {
+        for folded in [true, false] {
+            for showing in [true, false] {
+                for castable in [true, false] {
+                    let verb = SessionPageVerb.verb(folded: folded,
+                                                    showing: showing,
+                                                    castable: castable)
+                    XCTAssertTrue([.show, .fold, .askAgain].contains(verb),
+                                  "folded \(folded), showing \(showing), castable \(castable)")
+                }
+            }
+        }
+    }
+
+    /// The three words are three different words, and the two that are a pair
+    /// read as a pair: whatever the last press said, the next one says the
+    /// opposite of it rather than a new idea.
+    func testEachActSaysSomethingDifferentAndTheFoldPairReadsAsOne() {
+        XCTAssertEqual(SessionPageVerb.showLabel, "Show the page")
+        XCTAssertEqual(SessionPageVerb.hideLabel, "Hide the page")
+        XCTAssertEqual(Set([SessionPageVerb.showLabel,
+                            SessionPageVerb.hideLabel,
+                            SessionPageVerb.askLabel]).count, 3)
+    }
+
+    // MARK: - What the stage says when there is no picture
+
+    /*
+     * > *"browser window when it collapse it is not expanding back I can not open
+     * > it back once if I close it inside a session in any session even co-pilot
+     * > or any other normal session."*
+     *
+     * A session holding a window on `about:blank`. Unfolding gave the stage its
+     * height back and `WatchStage` filled it with `Color.black`, over a session
+     * screen whose ground is the terminal theme's — black — under an idle
+     * terminal. Four hundred points of black appearing over black, with no words
+     * in it, and a blank page never repaints so no frame was coming.
+     *
+     * `SessionPageStage` is what stops a state from having nothing to say. These
+     * are the four lines and the one state that has none.
+     */
+
+    func testAPictureIsItsOwnAnswerAndSaysNothing() {
+        let stage = SessionPageStage.stage(hasPicture: true, asked: true, live: true, offered: true)
+        XCTAssertEqual(stage, .picture)
+        XCTAssertNil(stage.line, "the page is on the screen — there is nothing to explain")
+    }
+
+    /**
+     * **His exact state.** A cast the wire believes is running, and not one
+     * frame drawn: the stage says it is asking rather than showing black.
+     *
+     * `asked` is true and `hasPicture` is false, which is precisely what
+     * `isCasting` cannot tell apart — it is set the moment `browser.watch`
+     * leaves and says nothing about whether anything came back.
+     */
+    func testACastWithNoFrameYetSaysItIsAsking() {
+        let stage = SessionPageStage.stage(hasPicture: false, asked: true, live: true, offered: true)
+        XCTAssertEqual(stage, .asking)
+        XCTAssertEqual(stage.line, "Asking for the page…")
+    }
+
+    /// A window the machine simply is not casting — ordinary rather than
+    /// exceptional: a server mints a window through `openForSession(NO_SESSION)`
+    /// and detaches it in the same breath, so it holds no binding row and
+    /// `castWindows` cannot see it.
+    func testAWindowThatIsNotBeingCastSaysSo() {
+        let stage = SessionPageStage.stage(hasPicture: false, asked: false, live: true, offered: true)
+        XCTAssertEqual(stage, .notCast)
+        XCTAssertEqual(stage.line, "This window is not being cast.")
+    }
+
+    /// A machine that never offered the capability. Nothing about this window;
+    /// the wire does not carry pictures at all.
+    func testAMachineThatDoesNotOfferWatchingSaysThatInstead() {
+        let stage = SessionPageStage.stage(hasPicture: false, asked: true, live: true, offered: false)
+        XCTAssertEqual(stage, .noWatching)
+        XCTAssertEqual(stage.line, "This machine does not offer its browser for watching.")
+    }
+
+    /**
+     * A dropped socket outranks everything, including a picture.
+     *
+     * The frame on screen is the last one that arrived and everything on it is as
+     * stale as the connection — which on a page somebody is about to type into is
+     * worth a line of its own. It is the only reading that is put ahead of
+     * `hasPicture`.
+     */
+    func testALostConnectionIsSaidBeforeAnythingElse() {
+        XCTAssertEqual(SessionPageStage.stage(hasPicture: true, asked: true,
+                                              live: false, offered: true),
+                       .offline)
+        XCTAssertEqual(SessionPageStage.offline.line, "Not connected to this machine.")
+    }
+
+    /// And no state is left with nothing to draw: every reading is either a page
+    /// or a sentence. This is the whole of *"it is not expanding back"* — a press
+    /// that lands on a state with neither is a press nobody can see.
+    func testEveryStateIsEitherAPictureOrASentence() {
+        for hasPicture in [true, false] {
+            for asked in [true, false] {
+                for live in [true, false] {
+                    for offered in [true, false] {
+                        let stage = SessionPageStage.stage(hasPicture: hasPicture, asked: asked,
+                                                           live: live, offered: offered)
+                        if stage == .picture { continue }
+                        XCTAssertNotNil(stage.line,
+                                        "picture \(hasPicture), asked \(asked), live \(live), "
+                                        + "offered \(offered)")
+                    }
+                }
+            }
+        }
+    }
+
     // MARK: - The window a session would be handed
 
     /*
@@ -319,8 +482,8 @@ final class SessionPageTests: XCTestCase {
      *
      * Two `…` menus offer this — the session row's on the Sessions tab and the
      * session's own inside the terminal — and neither can be reached without a
-     * machine with a browser on it. What *is* pure is the three decisions behind
-     * a row, and one of them is a claim about somebody's work: attaching a window
+     * machine with a browser on it. What *is* pure is the decisions behind a row,
+     * and one of them is a claim about somebody's work: attaching a window
      * **moves** it off whatever session holds it, without asking, so a row that
      * did not say whose it was would be a silent theft.
      */
@@ -328,6 +491,15 @@ final class SessionPageTests: XCTestCase {
     private func window(_ id: String, title: String = "Example Domain",
                         session: String? = nil, sessionTitle: String? = nil) -> MachineWindow {
         MachineWindow(id: id, title: title, url: "https://example.com",
+                      slot: session == nil ? nil : "B1",
+                      session: session, sessionTitle: sessionTitle)
+    }
+
+    /// A window with nothing in it: no title, no address. What the machine really
+    /// sends for a window it has just minted, and what `about:blank` amounts to.
+    private func blank(_ id: String, url: String = "about:blank",
+                       session: String? = nil, sessionTitle: String? = nil) -> MachineWindow {
+        MachineWindow(id: id, title: "", url: url,
                       slot: session == nil ? nil : "B1",
                       session: session, sessionTitle: sessionTitle)
     }
@@ -348,6 +520,71 @@ final class SessionPageTests: XCTestCase {
         XCTAssertTrue(SessionWindowPicker.attachable([], canDrive: true).isEmpty)
     }
 
+    // MARK: - What a window is called
+
+    /**
+     * **The two rows that both said `about:blank`.**
+     *
+     * > *"we have one section saying attach a browser window where we see all the
+     * > browser windows with their name… then we see another name of the window
+     * > so why they are like so much of confusing saying words why don't we just
+     * > simply have the name of the search of browsing windows we can just simply
+     * > click on one of them and that's it."*
+     *
+     * Photographed above that: `about:blank`, `Google`, `about:blank`. Two rows,
+     * six identical characters of jargon, and nothing to choose between them —
+     * which is what made the list unusable rather than merely ugly. A page's own
+     * title is a name; `about:blank` is the browser's word for *nothing*.
+     */
+    func testAWindowWithNoPageInItIsCalledSomethingAPersonCanPointAt() {
+        XCTAssertEqual(WindowNames.name(blank("w1")), "Empty window")
+        XCTAssertEqual(WindowNames.name(blank("w2", url: "")), "Empty window")
+        XCTAssertEqual(WindowNames.name(blank("w3", url: "ABOUT:BLANK")), "Empty window",
+                       "the machine's casing is not a different kind of nothing")
+        XCTAssertEqual(WindowNames.name(blank("w4", url: "chrome://newtab/")), "Empty window")
+    }
+
+    /// A page that has said its name is called that, and one that has not is
+    /// called by its address — which is ugly and is *specific*, which is what a
+    /// row in a picker is for. "Untitled" tells nobody which window they are
+    /// looking at.
+    func testAWindowWithAPageInItKeepsThePagesOwnName() {
+        XCTAssertEqual(WindowNames.name(window("w1", title: "Example Domain")), "Example Domain")
+        XCTAssertEqual(WindowNames.name(blank("w2", url: "https://github.com/login")),
+                       "https://github.com/login")
+    }
+
+    /**
+     * A prefix test on `about:` would have been the tidy way to write it and is
+     * wrong: `about:preferences` is a page somebody deliberately opened, and
+     * renaming it *Empty window* would hide a real window inside a name that
+     * means *nothing here*.
+     */
+    func testAnAboutPageThatIsARealPageIsNotCalledEmpty() {
+        XCTAssertEqual(WindowNames.name(blank("w1", url: "about:preferences")),
+                       "about:preferences")
+    }
+
+    /**
+     * Two windows with the same name are numbered, in the order the machine lists
+     * them — which is the order they are drawn in, because both the menu and the
+     * Browser tab draw the one `browser.window.rows` answer.
+     *
+     * The slot (`B1`) was the other candidate and is worse: it is the name the
+     * *agent's* tools use, it exists only for a bound window, and half a list
+     * numbered by something he has never seen is not a list he can read.
+     */
+    func testTwoWindowsWithOneNameAreToldApartByTheirOrder() {
+        let windows = [blank("w1"), window("w2"), blank("w3")]
+        XCTAssertEqual(WindowNames.name(windows[0], in: windows), "Empty window 1")
+        XCTAssertEqual(WindowNames.name(windows[2], in: windows), "Empty window 2")
+        XCTAssertEqual(WindowNames.name(windows[1], in: windows), "Example Domain",
+                       "a name that appears once is left alone — a number out of nowhere is one "
+                       + "more thing to work out")
+    }
+
+    // MARK: - The row that offers it
+
     /**
      * A window another session holds is offered, and says whose it is.
      *
@@ -356,10 +593,13 @@ final class SessionPageTests: XCTestCase {
      * menu already follows, where the row reads *"Attach to another session"*.
      * It says whose because pressing it takes that window off that session with
      * no further question.
+     *
+     * It survived the compacting for that reason: two words that are half of the
+     * window's identity, not a description of what the row does.
      */
     func testAWindowSomebodyElseHoldsIsOfferedAndNamesTheHolder() {
         let held = window("w1", session: "s-other", sessionTitle: "deploy")
-        XCTAssertEqual(SessionWindowPicker.row(held, session: "s-mine"),
+        XCTAssertEqual(SessionWindowPicker.row(held, among: [held], session: "s-mine"),
                        "Example Domain · deploy")
         XCTAssertEqual(SessionWindowPicker.holder(held, session: "s-mine"), "deploy")
         XCTAssertFalse(SessionWindowPicker.holds(held, session: "s-mine"))
@@ -372,33 +612,66 @@ final class SessionPageTests: XCTestCase {
         let mine = window("w1", session: "s-mine", sessionTitle: "agent")
         XCTAssertTrue(SessionWindowPicker.holds(mine, session: "s-mine"))
         XCTAssertNil(SessionWindowPicker.holder(mine, session: "s-mine"))
-        XCTAssertEqual(SessionWindowPicker.row(mine, session: "s-mine"), "Example Domain")
+        XCTAssertEqual(SessionWindowPicker.row(mine, among: [mine], session: "s-mine"),
+                       "Example Domain")
     }
 
     /// An unbound window is just its name. Nothing is taken from anybody, so
     /// there is nothing to warn about.
     func testAnUnboundWindowIsJustItsName() {
-        XCTAssertEqual(SessionWindowPicker.row(window("w1"), session: "s-mine"), "Example Domain")
-        XCTAssertNil(SessionWindowPicker.holder(window("w1"), session: "s-mine"))
+        let one = window("w1")
+        XCTAssertEqual(SessionWindowPicker.row(one, among: [one], session: "s-mine"),
+                       "Example Domain")
+        XCTAssertNil(SessionWindowPicker.holder(one, session: "s-mine"))
     }
 
     /**
-     * A window with no page in it yet still gets words.
+     * A window with no page in it yet still gets words, and two of them still get
+     * different words.
      *
-     * A machine mints a window before it has loaded anything, so `label` really is
-     * empty for a second or two — and a menu row with no words on it is a row
-     * nobody can decide about, which on this menu means handing an agent the
-     * wrong page.
+     * A machine mints a window before it has loaded anything, so the label really
+     * is empty for a second or two — and a menu row nobody can tell from the row
+     * above it is a row nobody can decide about, which on this menu means handing
+     * an agent the wrong page.
      */
-    func testANamelessWindowIsStillSomethingSomebodyCanChoose() {
-        let blank = MachineWindow(id: "w9", title: "", url: "")
-        XCTAssertEqual(SessionWindowPicker.row(blank, session: "s-mine"),
-                       SessionWindowPicker.unnamed)
+    func testTwoNamelessWindowsAreTwoThingsSomebodyCanChooseBetween() {
+        let rows = [blank("w1"), blank("w2")]
+        XCTAssertEqual(SessionWindowPicker.row(rows[0], among: rows, session: "s-mine"),
+                       "Empty window 1")
+        XCTAssertEqual(SessionWindowPicker.row(rows[1], among: rows, session: "s-mine"),
+                       "Empty window 2")
 
-        let blankAndHeld = MachineWindow(id: "w9", title: "", url: "",
-                                         slot: "B2", session: "s-other", sessionTitle: "build")
-        XCTAssertEqual(SessionWindowPicker.row(blankAndHeld, session: "s-mine"),
-                       "\(SessionWindowPicker.unnamed) · build")
+        let alone = [blank("w9")]
+        XCTAssertEqual(SessionWindowPicker.row(alone[0], among: alone, session: "s-mine"),
+                       "Empty window")
+    }
+
+    /**
+     * The holder is a distinguisher too, so a window already told apart by the
+     * session holding it is not *also* numbered.
+     *
+     * Numbering is decided against the whole row rather than against the name
+     * inside it, which is what keeps *Empty window · deploy* and *Empty window ·
+     * build* as two names instead of two names with numbers stapled on.
+     */
+    func testWindowsAlreadyToldApartByTheirHolderAreNotAlsoNumbered() {
+        let rows = [blank("w1", session: "s-a", sessionTitle: "deploy"),
+                    blank("w2", session: "s-b", sessionTitle: "build")]
+        XCTAssertEqual(SessionWindowPicker.row(rows[0], among: rows, session: "s-mine"),
+                       "Empty window · deploy")
+        XCTAssertEqual(SessionWindowPicker.row(rows[1], among: rows, session: "s-mine"),
+                       "Empty window · build")
+    }
+
+    /// And where even the holder is the same, the number goes on the **name**, so
+    /// the row still reads as a name followed by whose it is.
+    func testTwoBlankWindowsOnOneSessionAreNumberedInsideTheName() {
+        let rows = [blank("w1", session: "s-a", sessionTitle: "deploy"),
+                    blank("w2", session: "s-a", sessionTitle: "deploy")]
+        XCTAssertEqual(SessionWindowPicker.row(rows[0], among: rows, session: "s-mine"),
+                       "Empty window 1 · deploy")
+        XCTAssertEqual(SessionWindowPicker.row(rows[1], among: rows, session: "s-mine"),
+                       "Empty window 2 · deploy")
     }
 
     /// The holder falls back to the session **id** where the machine sent no
@@ -407,7 +680,7 @@ final class SessionPageTests: XCTestCase {
     /// this pins that the picker keeps it rather than inventing a second one.
     func testAnUntitledHolderIsNamedByItsIdRatherThanNotAtAll() {
         let held = window("w1", session: "s-other", sessionTitle: nil)
-        XCTAssertEqual(SessionWindowPicker.row(held, session: "s-mine"),
+        XCTAssertEqual(SessionWindowPicker.row(held, among: [held], session: "s-mine"),
                        "Example Domain · s-other")
     }
 
@@ -441,35 +714,44 @@ final class SessionPageTests: XCTestCase {
     }
 
     /**
-     * The new window is offered as two rows a person can read, not as a switch.
+     * **The row that makes a window is a name, not an explanation of itself.**
      *
-     * A `Toggle` in a `Menu` closes the menu on the press, so isolation would
-     * have cost one opening of the `…` to choose and a second to act. Two named
-     * rows are one press either way — and the words are the New window sheet's
-     * own words, so the same choice is not described two ways in two places.
+     * > *"then we see open window for this session open one signed into nothing
+     * > which is so much of confusing i don't understand what is what and what are
+     * > the differences."*
+     *
+     * Two rows arguing about a profile, in a list whose other rows are names.
+     * They are one row now, called *New window*, at the end after a divider —
+     * the section header already says what pressing a row in it does. The
+     * isolated window is not gone from the app: the Browser tab's `+` offers
+     * *Machine* and *Isolated* as a two-button picker on the New window sheet,
+     * which is where somebody choosing a partition already is.
      */
-    func testTheIsolatedChoiceIsWordsRatherThanAFlag() {
-        XCTAssertNotEqual(SessionWindowPicker.openHere, SessionWindowPicker.openIsolated)
-        XCTAssertEqual(SessionWindowPicker.openHere, "Open a window for this session")
-        XCTAssertTrue(SessionWindowPicker.openIsolated.contains("signed into nothing"),
-                      "the row says what it is rather than naming a setting")
+    func testTheRowThatMakesAWindowIsTwoWords() {
+        XCTAssertEqual(SessionWindowPicker.newWindow, "New window")
+        XCTAssertFalse(SessionWindowPicker.newWindow.contains("session"),
+                       "a row in *Attach a browser window* does not have to say it is for this "
+                       + "session — the section it is in says so")
+    }
 
-        let shared = SessionWindowPicker.meaning(isolated: false, machine: "Air")
-        let alone = SessionWindowPicker.meaning(isolated: true, machine: "Air")
-        XCTAssertTrue(shared.contains("signed in the way Air is"))
-        XCTAssertTrue(alone.contains("signed into nothing"))
-        XCTAssertTrue(alone.contains("forgets everything when the window closes"),
-                      "the half that decides it is that the partition is thrown away")
+    /**
+     * What it means is still written down — on the hint, which is read on
+     * request, and in the sentence the phone puts up after the press.
+     *
+     * Nothing was deleted here. It stopped being drawn on a row.
+     */
+    func testWhatTheNewWindowRowMeansSurvivesOffTheRow() {
+        let meaning = SessionWindowPicker.newWindowMeaning(machine: "Air")
+        XCTAssertTrue(meaning.contains("Air's own browser"))
+        XCTAssertTrue(meaning.contains("signed in the way Air is"))
     }
 
     /// And the sentence the phone puts up while the machine works says which
     /// session it is for — a window that opened attached to nothing looks
     /// exactly like one that opened attached to this session.
     func testTheSentenceAfterOpeningNamesTheSessionItIsFor() {
-        XCTAssertEqual(SessionWindowPicker.opening(isolated: false, machine: "Air"),
+        XCTAssertEqual(SessionWindowPicker.opening(machine: "Air"),
                        "Opening a window on Air and attaching it to this session.")
-        XCTAssertTrue(SessionWindowPicker.opening(isolated: true, machine: "Air")
-                          .contains("signed into nothing"))
     }
 
     // MARK: - The pages this phone is already showing
@@ -533,7 +815,8 @@ final class SessionPageTests: XCTestCase {
 
     /// The row is the page's own name, and a page that has not said its name yet
     /// is its address rather than "Untitled" — which tells nobody which of their
-    /// servers they are looking at.
+    /// servers they are looking at. A name and nothing else: the header that used
+    /// to explain these rows is gone.
     func testThePhoneRowIsWhateverThePageCallsItself() {
         XCTAssertEqual(SessionWindowPicker.phoneRow(page("t1", title: "Deck admin")), "Deck admin")
         XCTAssertEqual(SessionWindowPicker.phoneRow(page("t1", port: 3000, path: "/")),
@@ -543,25 +826,32 @@ final class SessionPageTests: XCTestCase {
     }
 
     /**
-     * Both strings about a phone page say the page here stays.
+     * Both strings about a phone page still say the page here stays.
      *
      * The one thing this feature must never imply. The phone's web view is not
      * reachable by an agent and never will be — it is drawn here, its cookies
      * are this app's. What the session is handed is a second window on the
-     * machine, which may not even be signed in the same way. A header reading
+     * machine, which may not even be signed in the same way. A row reading
      * *attach this page* would be the app claiming a handover that cannot
      * happen, on the one screen where somebody is about to type a password.
+     *
+     * > *"then we see open again on this specific desktop the page here stays."*
+     *
+     * That was the **section header**, over two rows, every time the menu opened,
+     * and he read it out as one of the things he could not understand. It is on
+     * the row's hint now and in the sentence after the press. The fact is kept;
+     * the paragraph over the list is not.
      */
     func testEveryStringAboutAPhonePageSaysThePageHereStays() {
-        let header = SessionWindowPicker.phoneSection(machine: "Air")
-        XCTAssertTrue(header.contains("Open again on Air"))
-        XCTAssertTrue(header.contains("the page here stays"))
+        let hint = SessionWindowPicker.phoneMeaning(machine: "Air")
+        XCTAssertTrue(hint.contains("Air's browser"), "where the second window opens")
+        XCTAssertTrue(hint.contains("The page open here does not move."),
+                      "and the fact the whole wording exists for")
 
         let said = SessionWindowPicker.openingPhonePage(page("t1", port: 3000, path: "/admin"),
                                                         machine: "Air")
         XCTAssertTrue(said.contains("localhost:3000"), "which page is being opened")
         XCTAssertTrue(said.contains("Air's browser"), "and where")
-        XCTAssertTrue(said.contains("The page open here does not move."),
-                      "and the fact the whole wording exists for")
+        XCTAssertTrue(said.contains("The page open here does not move."))
     }
 }

@@ -386,6 +386,86 @@ final class SwipeActionsUITests: XCTestCase {
     }
 
     /**
+     * **Every row in the `…` is a name. None of them is a sentence.**
+     *
+     * > *"you are giving too much space to the options to the features so all the
+     * > list and drop downs becoming too bigger because the you are also putting
+     * > so much of a description under the title of that thing under the title of
+     * > the feature instead of just i button or nothing maybe so they have becomes
+     * > too big you should compact all the features or buttons and without losing
+     * > any of them."*
+     *
+     * > *"many of the even buttons. Are so much of confusing I can't understand
+     * > what they mean."*
+     *
+     * This menu is where he read the worst of it out — *"open window for this
+     * session open one signed into nothing… then we see open again on this
+     * specific desktop the page here stays"* — three rows that were sentences
+     * about profiles and about which end a page lives on, sitting between rows
+     * that were window names.
+     *
+     * Nothing was deleted to answer that: the isolated window is on the Browser
+     * tab's New window sheet where a partition is actually chosen, and *the page
+     * here stays* is on the rows' accessibility hint and in the sentence the
+     * phone puts up after the press. What this case pins is that they did not
+     * come back **onto the rows**, which is the only place they were a problem.
+     *
+     * By **label**, like every other check against a `Menu` in this target: an
+     * `accessibilityIdentifier` on a `Button` inside a SwiftUI `Menu` does not
+     * reach the presented row. So the rows are what is a button after the menu
+     * opens and was not one before — and window names are unknowable from here,
+     * which is why this asserts a **shape** (no sentences) rather than a list.
+     *
+     * A full stop is the test for a sentence and it is deliberately crude: a
+     * window can legitimately be called anything its page is called, including
+     * something long, and the one thing a page title almost never is is a
+     * sentence ending in a full stop. The three phrases he actually read out are
+     * checked by name beside it, because those are the exact strings a tidy-up
+     * would put back.
+     */
+    func testEveryRowInTheSessionsMenuIsANameRatherThanASentence() throws {
+        try openTheSessionList()
+        let row = firstSessionRow()
+        try XCTSkipUnless(row.waitForExistence(timeout: 12),
+                          "nothing is running on the machine, so there is no row to press")
+
+        let dots = rowMenuButton()
+        XCTAssertTrue(dots.waitForExistence(timeout: 8),
+                      "a session row carries a `…` in the corner the chevron used to be in")
+
+        let before = Set(app.buttons.allElementsBoundByIndex.map(\.label))
+        dots.tap()
+        // The presentation animates; the rows are not queryable in the same frame
+        // the tap lands in.
+        _ = app.buttons.element(boundBy: 0).waitForExistence(timeout: 3)
+        capture("11-session-row-menu-rows")
+
+        let rows = Set(app.buttons.allElementsBoundByIndex.map(\.label)).subtracting(before)
+        try XCTSkipUnless(!rows.isEmpty, "the menu opened with nothing new on the screen")
+
+        for label in rows {
+            XCTAssertFalse(label.hasSuffix("."),
+                           "“\(label)” reads as a sentence — every row in this menu is a name he "
+                           + "can point at")
+            for phrase in Self.rowsHeCouldNotRead {
+                XCTAssertFalse(label.localizedCaseInsensitiveContains(phrase),
+                               "“\(label)” is the wording he read out as confusing — it belongs "
+                               + "on a hint or in the sentence after the press, not on a row")
+            }
+        }
+
+        app.dismissAnyMenu()
+    }
+
+    /// The exact phrases he read out of this menu, verbatim from the recording.
+    /// They are checked rather than a length limit because a window's name is
+    /// whatever its page is called and can honestly be long; what may not come
+    /// back is a row that explains itself.
+    private static let rowsHeCouldNotRead = [
+        "for this session", "signed into nothing", "the page here stays",
+    ]
+
+    /**
      * The menu's Close asks the same question the swipe asks, and Cancel means it.
      *
      * Both doors set the same value and the confirmation is the only thing that

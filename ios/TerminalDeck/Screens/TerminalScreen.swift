@@ -1017,14 +1017,38 @@ struct TerminalScreen: View {
      * **Attach a browser window to this session, from inside the session.**
      *
      * > *"here we also don't have anything, like inside here, in the three dots,
-     * > we should have the options to click on something, and then all the
-     * > folders will come up, maybe here also. So we can connect the browser,
-     * > whichever browser we want to connect into the session."*
+     * > we should have the options to click on something, and then all the folders
+     * > will come up, maybe here also. So we can connect the browser, whichever
+     * > browser we want to connect into the session."*
      *
      * The verb is `HostLink.bindMachineWindow`, which is the one the Browser
      * tab's window settings press and the one the session row's `…` presses.
      * Nothing is invented here; what was missing was a place to press it from
      * while you are sitting in the session watching an agent that needs a page.
+     *
+     * ## It is a list of windows now, and nothing else
+     *
+     * > *"we have one section saying attach a browser window where we see all the
+     * > browser windows with their name then we see open window for this session
+     * > open one signed into nothing which is so much of confusing i don't
+     * > understand what is what and what are the differences then we see open
+     * > again on this specific desktop the page here stays then we see another
+     * > name of the window so why they are like so much of confusing saying words
+     * > why don't we just simply have the name of the search of browsing windows
+     * > we can just simply click on one of them and that's it."*
+     *
+     * Everything he listed there was a row that was a **sentence** sitting
+     * between rows that were **names**. So the section is one flat list of names
+     * — the machine's windows, then the pages this phone is showing, each under
+     * its own name — with a checkmark on the one this session already holds, and
+     * one row after a divider that makes a new window.
+     *
+     * Nothing was dropped except the words. The isolated window moved out (it
+     * cannot be a short name, and the Browser tab's `+` has always offered it as
+     * a two-button picker); the *"the page here stays"* header moved onto the
+     * rows' hints and the sentence the toast puts up after the press.
+     * `SessionWindowPicker` carries the whole argument and both menus read it, so
+     * the two cannot drift into saying different things about the same window.
      *
      * ## It shipped drawing nothing, which is the same complaint again
      *
@@ -1037,21 +1061,9 @@ struct TerminalScreen: View {
      * session, go to the Browser tab, open a window, come back.
      *
      * So the section is drawn whenever the machine will be **driven**
-     * (`SessionWindowPicker.showsAttach`), and it always ends with the two rows
-     * that open a new one. An empty machine now answers the press instead of
-     * being a dead end.
-     *
-     * ## What is in it, in the order a person would reach for it
-     *
-     *  - **The windows the machine already has open.** Free and instant.
-     *  - **A new window for this session** — and the same thing signed into
-     *    nothing, as a second row rather than a switch. One ask each:
-     *    `openMachineWindow(session:)` binds on the machine before it answers,
-     *    which is the only race-free way to attach something that did not exist
-     *    when the press happened. See `HostLink.openMachineWindow`.
-     *  - **A page this phone is showing**, opened again on the machine. The
-     *    header over those rows says the page here stays, because it does — what
-     *    the session gets is a second window with the machine's own logins.
+     * (`SessionWindowPicker.showsAttach`), and it always ends with the row that
+     * opens a new one. An empty machine now answers the press instead of being a
+     * dead end.
      *
      * ## And three rules that did not change
      *
@@ -1061,8 +1073,8 @@ struct TerminalScreen: View {
      *    out. A picker that hides the current answer is one somebody presses again
      *    to find out.
      *  - **A window another session holds says so**, because attaching **moves**
-     *    it and moves it silently. `SessionWindowPicker.row` is the sentence, and
-     *    it is the same sentence the session row's menu says.
+     *    it and moves it silently. `SessionWindowPicker.row` is that half of the
+     *    name, and it is the same one the session row's menu says.
      *
      * A bind is also what pops `SessionPageView` open over the terminal, because
      * the answer to a bind is the window list and that pane opens the moment it
@@ -1072,50 +1084,51 @@ struct TerminalScreen: View {
     @ViewBuilder
     private var attachSection: some View {
         if SessionWindowPicker.showsAttach(canDrive: canDriveBrowser) {
+            // Read once and handed to the rows, because the row text is
+            // decided **against the list**: two windows with the same name
+            // are told apart by their place in it. See `WindowNames`.
+            let windows = attachableWindows
             Section("Attach a browser window") {
-                ForEach(attachableWindows) { window in
+                ForEach(windows) { window in
                     Button {
                         host?.bindMachineWindow(window.id, to: sessionID)
                     } label: {
-                        Label(SessionWindowPicker.row(window, session: sessionID),
+                        Label(SessionWindowPicker.row(window, among: windows, session: sessionID),
                               systemImage: SessionWindowPicker.holds(window, session: sessionID)
                                   ? "checkmark" : "macwindow")
                     }
                 }
 
-                openRow(isolated: false, icon: "macwindow.badge.plus")
-                openRow(isolated: true, icon: "eye.slash")
-            }
-
-            let pages = phonePages
-            if !pages.isEmpty {
-                Section(SessionWindowPicker.phoneSection(machine: machineName)) {
-                    ForEach(pages) { tab in
-                        Button {
-                            openOnMachine(tab)
-                        } label: {
-                            Label(SessionWindowPicker.phoneRow(tab), systemImage: "iphone")
-                        }
+                // In the same flat list and under its own name — no header over
+                // it, because a header over two of eight rows is the thing he was
+                // reading out. What it means is on the hint and in the toast.
+                ForEach(phonePages) { tab in
+                    Button {
+                        openOnMachine(tab)
+                    } label: {
+                        Label(SessionWindowPicker.phoneRow(tab), systemImage: "iphone")
                     }
+                    .accessibilityHint(SessionWindowPicker.phoneMeaning(machine: machineName))
                 }
+
+                Divider()
+                newWindowRow
             }
         }
     }
 
-    /// One of the two rows that make a window rather than borrow one. Both are
-    /// the same call with one word different, so they are one function: two
-    /// copies of an `openMachineWindow(session:)` is two places for the session
-    /// to stop being passed, and a window that opens attached to nothing looks
-    /// identical to one that opens attached to this session.
-    private func openRow(isolated: Bool, icon: String) -> some View {
+    /// The row that makes a window rather than borrowing one — one row, at the
+    /// end, after the divider that separates *the machine's windows* from *a
+    /// window that does not exist yet*. Two words on it: everything it means is
+    /// on the hint and in the sentence the phone puts up after the press.
+    private var newWindowRow: some View {
         Button {
-            host?.openMachineWindow(isolated: isolated, session: sessionID)
-            show(SessionWindowPicker.opening(isolated: isolated, machine: machineName))
+            host?.openMachineWindow(isolated: false, session: sessionID)
+            show(SessionWindowPicker.opening(machine: machineName))
         } label: {
-            Label(isolated ? SessionWindowPicker.openIsolated : SessionWindowPicker.openHere,
-                  systemImage: icon)
+            Label(SessionWindowPicker.newWindow, systemImage: "macwindow.badge.plus")
         }
-        .accessibilityHint(SessionWindowPicker.meaning(isolated: isolated, machine: machineName))
+        .accessibilityHint(SessionWindowPicker.newWindowMeaning(machine: machineName))
     }
 
     /// Open a page this phone is holding on the machine, and hand that window to
