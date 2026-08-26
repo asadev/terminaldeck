@@ -14,7 +14,15 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { accountDotColor, contextFraction, foreignAccount, percentText, planFraction } from './session-bar'
+import {
+  accountDotColor,
+  accountLoginLabel,
+  contextFraction,
+  foreignAccount,
+  percentText,
+  planFraction,
+} from './session-bar'
+import type { AccountWire } from '../../src/main/remote/protocol'
 
 function window(id: string, used: number | null): Record<string, unknown> {
   return {
@@ -141,5 +149,64 @@ describe('which logins the sheet lets you press', () => {
     expect(foreignAccount(wire('system', null), wire('system:codex', 'codex'))).toBe(false)
     expect(foreignAccount(wire('system', 'claude'), wire('other', null))).toBe(false)
     expect(foreignAccount(null, wire('system:codex', 'codex'))).toBe(false)
+  })
+})
+
+/* ------------------------------------------------------- what a row is called -- */
+
+/**
+ * **"Default" is not a name anybody gave a login.**
+ *
+ * > *"when we click on this link it should clearly mention the name of the
+ * > account here instead of saying default — name of the account should be
+ * > there."*
+ *
+ * He filmed a sheet reading `Default`, `Default (Codex CLI)`, `Default (Gemini
+ * CLI)` on his phone. Those are the keys `systemProfileId` generates for the
+ * machine's own install; the host has been sending the real login alongside them
+ * since 2026-08-21 and all three clients threw it away.
+ *
+ * The rungs are pinned rather than the strings, because the trap is rung 1: an
+ * expired Claude login still reports its email, so an address printed without
+ * looking at the state is a name for a login that will not run.
+ */
+describe('what an account row is called', () => {
+  const row = (over: Partial<AccountWire>): AccountWire =>
+    ({ id: 'system', name: 'Default', provider: 'claude', color: null, system: true, ...over }) as AccountWire
+
+  it('prefers the address the agent itself named', () => {
+    expect(
+      accountLoginLabel(row({ signIn: { state: 'signed-in', account: 'asad@example.com' } as never })),
+    ).toBe('asad@example.com')
+  })
+
+  it('will not print the address of a login that has expired', () => {
+    expect(
+      accountLoginLabel(row({ signIn: { state: 'signed-out', account: 'asad@example.com' } as never })),
+    ).toBe('Your own Claude Code install')
+  })
+
+  it('falls through on a state this build has never heard of', () => {
+    // A union here would drop the row; asking for the one value that means yes
+    // errs towards the name, which cannot be stale.
+    expect(
+      accountLoginLabel(row({ signIn: { state: 'from-the-future', account: 'asad@example.com' } as never })),
+    ).toBe('Your own Claude Code install')
+  })
+
+  it('says which install it is rather than the generated key', () => {
+    expect(accountLoginLabel(row({}))).toBe('Your own Claude Code install')
+    expect(accountLoginLabel(row({ id: 'system:codex', provider: 'codex', name: 'Default (Codex CLI)' })))
+      .toBe('Your own Codex CLI install')
+    expect(accountLoginLabel(row({ id: 'system:gemini', provider: 'gemini', name: 'Default (Gemini CLI)' })))
+      .toBe('Your own Gemini CLI install')
+  })
+
+  it('keeps a name a person actually chose', () => {
+    expect(accountLoginLabel(row({ id: 'work', name: 'Work', system: false }))).toBe('Work')
+  })
+
+  it('does not print a wire id at somebody for an agent it has never heard of', () => {
+    expect(accountLoginLabel(row({ id: 'system:mine', provider: 'custom:mine' }))).toBe('Your own install')
   })
 })

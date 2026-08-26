@@ -188,6 +188,95 @@ export function accountDotColor(color: string | null): string | null {
 }
 
 /**
+ * What an account row is **called** on this page.
+ *
+ * > *"when we click on this link it should clearly mention the name of the
+ * > account here instead of saying default — name of the account should be
+ * > there."*
+ *
+ * `Default`, `Default (Codex CLI)` and `Default (Gemini CLI)` are not names
+ * anybody gave a login. They are the keys `systemProfileId` in
+ * `src/main/profiles.ts` generates for the machine's own install, and they say
+ * something about *precedence* rather than about whose account it is.
+ *
+ * Three rungs, and this is the third port of them — the desktop's
+ * `profileLoginLabel` is the original and carries the full argument, the phone
+ * app has `accountLoginLabel`, and this is the page he opens in Safari on that
+ * same phone. Three copies of one rule is two too many, and this one exists
+ * because this bundle cannot import a renderer module; what keeps them together
+ * is that all three read the same `AccountWire.signIn` the host has been sending
+ * since 2026-08-21.
+ *
+ *  1. **The address the agent's own CLI named** — and only where the *state*
+ *     says it is genuinely signed in. An expired Claude login still reports its
+ *     email, so an ungated address is a name for a login that will not run.
+ *  2. **Failing that, the name** — but only where a person chose it. A generated
+ *     key is not a name, which is the whole of his complaint.
+ *  3. **Failing that, which install it is.** A list cannot fall back to a
+ *     *state* the way a single chip can: two rows can share one, and a picker
+ *     whose options both read "Signed in · max" has stopped being a picker.
+ *     Codex's CLI prints no address at all by design, so that rung is the only
+ *     one it would ever reach.
+ */
+export function accountLoginLabel(account: AccountWire): string {
+  const address = signedInAddress(account)
+  if (address !== null) return address
+  if (!isGeneratedAccount(account)) return account.name
+  const agent = knownAgentLabel(account.provider)
+  return agent ? `Your own ${agent} install` : 'Your own install'
+}
+
+/**
+ * The address, when the machine both knows one and says the login works.
+ *
+ * `state` is a bare string on the wire deliberately — a union here would turn a
+ * state this build has never heard of into a dropped row — so this asks for the
+ * one value that means *yes* rather than excluding the ones that mean no. An
+ * unknown future state therefore falls through to the name, which is the
+ * direction that cannot print a stale address.
+ */
+function signedInAddress(account: AccountWire): string | null {
+  const signIn = account.signIn
+  if (!signIn || signIn.state !== 'signed-in') return null
+  const address = typeof signIn.account === 'string' ? signIn.account.trim() : ''
+  return address === '' ? null : address
+}
+
+/**
+ * Whether this row's name was generated rather than chosen.
+ *
+ * The ids are `system`, `system:codex`, `system:gemini` — see `systemProfileId`.
+ * `system` on the wire is the machine's own answer and is what this asks first;
+ * the id is only the fallback for a payload from a build that predates the
+ * field.
+ */
+function isGeneratedAccount(account: AccountWire): boolean {
+  if (typeof account.system === 'boolean') return account.system
+  return account.id === 'system' || account.id.startsWith('system:')
+}
+
+/**
+ * The agent's product name, or null for one this build has never heard of.
+ *
+ * Null rather than the id, because rung 3 puts this inside a sentence: a machine
+ * running something newer than this bundle would otherwise be described as
+ * *"Your own custom:my-agent install"*, which is a wire id printed at somebody.
+ * "Your own install" is less specific and is true.
+ */
+function knownAgentLabel(provider: string | null): string | null {
+  switch (provider) {
+    case 'claude':
+      return 'Claude Code'
+    case 'codex':
+      return 'Codex CLI'
+    case 'gemini':
+      return 'Gemini CLI'
+    default:
+      return null
+  }
+}
+
+/**
  * Is this a login of a *different* agent than the session is running?
  *
  * `account.read` answers with every login the machine has, across agents —
@@ -432,8 +521,9 @@ export class SessionBar {
     const button = document.createElement('button')
     button.className = 'sbar__acct'
     button.type = 'button'
-    button.title = account.name
-    button.setAttribute('aria-label', `Account: ${account.name}`)
+    const label = accountLoginLabel(account)
+    button.title = label
+    button.setAttribute('aria-label', `Account: ${label}`)
     button.setAttribute('aria-haspopup', 'menu')
     button.setAttribute('aria-expanded', this.state.picking ? 'true' : 'false')
     if (this.state.busy) button.dataset.busy = 'yes'
@@ -442,7 +532,7 @@ export class SessionBar {
     const tint = accountDotColor(account.color)
     if (tint !== null) dot.style.background = tint
     const name = document.createElement('span')
-    name.textContent = account.name
+    name.textContent = label
     button.append(dot, name)
     button.addEventListener('click', () => {
       this.state.picking = !this.state.picking
@@ -482,7 +572,7 @@ export class SessionBar {
       const tint = accountDotColor(account.color)
       if (tint !== null) dot.style.background = tint
       const name = document.createElement('span')
-      name.textContent = account.name
+      name.textContent = accountLoginLabel(account)
       row.append(dot, name)
       if (!foreign) {
         row.addEventListener('click', () => {
