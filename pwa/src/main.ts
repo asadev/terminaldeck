@@ -224,6 +224,7 @@ import { relaySocket } from './relay-socket'
 import { holdUntilFilled, QUIET_MS, type Backfill } from '../../src/renderer/components/terminal-backfill'
 import { lookupMachine } from './rendezvous'
 import {
+  MAX_SESSION_TITLE,
   chunkInput,
   type DevServerReport,
   type DeviceRosterRow,
@@ -232,10 +233,12 @@ import {
   type ServerMessage,
 } from './protocol-client'
 import {
+  RENAME_NOTE,
   closeOffered,
   closeQuestion,
   formatSince,
   noticeAfter,
+  renameOffered,
   sessionTone,
   shortenPath,
   sortSessions,
@@ -867,7 +870,7 @@ class Deck {
    */
   private openRow: string | null = null
   /**
-   * The session whose Close is waiting for a second press, by id.
+   * The session whose Delete is waiting for a second press, by id.
    *
    * The confirmation he asked for — *"close the session (with a confirmation)"*
    * — lives in the list rather than in a dialog, and this is what makes it two
@@ -895,7 +898,7 @@ class Deck {
   /**
    * The device whose Remove is waiting for a second press, by id.
    *
-   * The same two-step the session Close uses, and for the same reason it is held
+   * The same two-step the session Delete uses, and for the same reason it is held
    * here rather than in the DOM: a `devices.changed` push rebuilds this list
    * mid-decision. Removing a device — especially this one, which is sign-out — is
    * a thing done once and regretted, so it asks twice.
@@ -905,8 +908,31 @@ class Deck {
   private renamingPort: number | null = null
   /** The machine being renamed, by id. */
   private renamingMachine: string | null = null
+  /**
+   * The session being renamed, by id.
+   *
+   * The third of the three and the only one that leaves this browser: a port's
+   * name and a machine's are this device's own labels, kept in its stores, while
+   * a session's goes to the machine and every other device signed in there reads
+   * it. Held here for the reason the other two are — a `sessions` push rebuilds
+   * this list, and with it the input somebody is still typing into.
+   */
+  private renamingSession: string | null = null
   /** What a rename field holds. Kept here so a redraw does not empty it. */
   private renameText = ''
+  /**
+   * Where the caret is in that field, or null before anybody has typed.
+   *
+   * Held for the reason the text is, one step further. The list under a rename
+   * field is rebuilt by every push the machine sends — and a session list is
+   * pushed on every status change, so this is seconds rather than minutes — and
+   * the rebuilt field used to be selected whole on the way in. Restoring the
+   * text and then selecting all of it means the next keystroke replaces what
+   * somebody has typed so far, which is a field that empties itself while it is
+   * being used. Null is the first frame, where selecting the whole name is
+   * exactly right: it is how a tap and one word replaces a name.
+   */
+  private renameCaret: number | null = null
   /**
    * A message that has been said and will stop being said.
    *
@@ -2265,11 +2291,16 @@ class Deck {
         // button left reading "Starting…" over a session that will never exist
         // is the same lie as a live-looking cursor over a dead socket.
         this.awaitingCreate = false
-        // And a Close that was refused is a Close that is over. The button is
-        // sitting there reading "Closing…" and disabled; leaving it would be a
+        // And a Delete that was refused is a Delete that is over. The button is
+        // sitting there reading "Deleting…" and disabled; leaving it would be a
         // control frozen mid-press with the explanation printed above the list
         // it is in. The question goes and the sentence stays.
         this.closing = null
+        // A rename is the same shape of half-finished act: the field is up over
+        // a row the machine has just refused to rename, and leaving it would be
+        // a box somebody types a second name into to no better effect. The
+        // sentence above the list says what happened.
+        this.renamingSession = null
         // The sentence itself was set by `noticeAfter` above; what is left here
         // is where it has to be *said*.
         if (message.code === 'unknown-session') {
@@ -2410,13 +2441,14 @@ class Deck {
     // would arrive with a field already open under somebody's finger.
     this.openRow = null
     // And a half-answered confirmation is abandoned rather than parked. Coming
-    // back to Sessions and finding a Close session button already waiting under
+    // back to Sessions and finding a Delete session button already waiting under
     // a thumb would be the app holding a question nobody is still asking.
     this.closing = null
     // Same rule for the device Remove confirmation.
     this.removing = null
     this.renamingPort = null
     this.renamingMachine = null
+    this.renamingSession = null
     // The roster is asked for on arrival, for the reason the dev-server list is:
     // it reads state the host already holds, and the ask is also what this
     // connection has to send to be sure of a fresh list — the `devices.changed`
@@ -3572,20 +3604,26 @@ class Deck {
       button.setAttribute(SCAN_ATTRIBUTE, session.id)
 
       /*
-       * The row, and beside it the one thing a row can do besides open.
+       * The row, and beside it the two things a row can do besides open.
        *
-       * Drawn only when the machine advertised `close` — a session layer that
-       * cannot end a session never offers the method the capability is derived
-       * from, and the public demo box withholds it on purpose — so this is never
-       * a control that discovers it does not work. The line is a flex container
-       * rather than the row being the whole `<li>`, because the tappable area
-       * has to stop before the menu: a 60-point row with a second target inside
-       * it is a row people hit the wrong half of.
+       * Each verb is drawn only when the machine advertised its own capability —
+       * a session layer that cannot end a session never offers the method
+       * `close` is derived from, and the public demo box withholds it on
+       * purpose — so neither is ever a control that discovers it does not work.
+       * The two are asked separately because at the far end they *are* separate:
+       * `server.ts` reads one method for each, and a host can perfectly well
+       * take a name for a session it will not let this browser end.
+       *
+       * The line is a flex container rather than the row being the whole `<li>`,
+       * because the tappable area has to stop before the menu: a 60-point row
+       * with a second target inside it is a row people hit the wrong half of.
        */
       const line = element('div', 'session-line')
       line.append(button)
-      const closable = this.state.phase === 'online' && closeOffered(this.capabilities)
-      if (closable) {
+      const live = this.state.phase === 'online'
+      const closable = live && closeOffered(this.capabilities)
+      const renamable = live && renameOffered(this.capabilities)
+      if (closable || renamable) {
         const open = this.openRow === session.id
         const more = element('button', 'session__more', '···')
         more.type = 'button'
@@ -3595,26 +3633,76 @@ class Deck {
           this.openRow = open ? null : session.id
           // A menu opening is a decision abandoned. Leaving the confirm up while
           // a second row's menu opened would put two live questions on one
-          // screen, with one pair of buttons between them.
+          // screen, with one pair of buttons between them — and the same goes for
+          // a half-typed name over some other row.
           this.closing = null
+          this.renamingSession = null
           this.renderContent()
         })
         line.append(more)
       }
       row.append(line)
 
-      if (closable && this.closing === session.id) row.append(this.closeConfirm(session))
-      else if (closable && this.openRow === session.id) {
+      if (renamable && this.renamingSession === session.id) row.append(this.renameSessionField(session))
+      else if (closable && this.closing === session.id) row.append(this.closeConfirm(session))
+      else if ((closable || renamable) && this.openRow === session.id) {
+        /*
+         * In a strip that carries the row's own margins.
+         *
+         * The `<li>` has no padding — the session button carries it — so a menu
+         * appended straight to it starts at the very edge of the screen while
+         * everything above it is indented. `.session-confirm` already solved
+         * that for itself by carrying its own; `session-strip` is the same
+         * measurement, shared by the two blocks that did not.
+         */
+        const strip = element('div', 'session-strip')
         const menu = element('div', 'port__menu')
-        const close = element('button', 'port__menu-item port__menu-item--warn', 'Close session')
-        close.type = 'button'
-        close.addEventListener('click', () => {
-          this.openRow = null
-          this.closing = session.id
-          this.renderContent()
-        })
-        menu.append(close)
-        row.append(menu)
+        /*
+         * **Rename first, and above the destructive one.**
+         *
+         * > *"I said before, for being able to rename sessions."*
+         *
+         * The order is the phone's, for the phone's reason: this list is scrolled
+         * with a thumb and the last row is where a stray tap lands, so the verb
+         * that cannot be undone is the one furthest from where the menu opens.
+         */
+        if (renamable) {
+          const rename = element('button', 'port__menu-item', 'Rename')
+          rename.type = 'button'
+          rename.addEventListener('click', () => {
+            this.openRow = null
+            this.renamingSession = session.id
+            // Seeded with the name it has, so the commonest edit — a word added
+            // to the folder's own name — is a tap and a word rather than
+            // retyping what is already on the row.
+            this.renameText = session.title
+            this.renameCaret = null
+            this.renderContent()
+          })
+          menu.append(rename)
+        }
+        if (closable) {
+          /*
+           * **Delete, not Close.**
+           *
+           * > *"for the sessions instead of saying close just say delete… so they
+           * > are clear."*
+           *
+           * The frame this sends is still `close` and stays that way — see
+           * `closeQuestion` in `sessions.ts` for why the wire keeps its verb and
+           * only the label changes.
+           */
+          const close = element('button', 'port__menu-item port__menu-item--warn', 'Delete session')
+          close.type = 'button'
+          close.addEventListener('click', () => {
+            this.openRow = null
+            this.closing = session.id
+            this.renderContent()
+          })
+          menu.append(close)
+        }
+        strip.append(menu)
+        row.append(strip)
       }
       list.append(row)
     }
@@ -3658,7 +3746,7 @@ class Deck {
    *
    * Cancel first. This list is scrolled with a thumb and the trailing edge is
    * where an accidental tap lands, so the irreversible one goes there only
-   * because the whole strip only exists after a deliberate press on Close
+   * because the whole strip only exists after a deliberate press on Delete
    * session in the menu — this is already the second step, and the third would
    * be a control nobody finishes.
    */
@@ -3674,7 +3762,7 @@ class Deck {
       this.renderContent()
     })
 
-    const confirm = element('button', 'button button--danger', 'Close session')
+    const confirm = element('button', 'button button--danger', 'Delete session')
     confirm.type = 'button'
     confirm.addEventListener('click', () => {
       // Sent, and nothing else. The row stays until the machine answers
@@ -3684,13 +3772,62 @@ class Deck {
       // press cannot send a second frame about a session that is already going.
       this.connection?.send({ t: 'close', id: session.id })
       confirm.disabled = true
-      confirm.textContent = 'Closing…'
+      confirm.textContent = 'Deleting…'
       cancel.disabled = true
     })
 
     actions.append(cancel, confirm)
     block.append(actions)
     return block
+  }
+
+  /**
+   * The name field, in the row, under the session it is about.
+   *
+   * ## Nothing is drawn optimistically
+   *
+   * The frame goes out and the row keeps the name it has until the machine
+   * answers with a fresh `sessions` list. That is the whole of the feedback and
+   * it is deliberate, for the reason `closeConfirm` does not remove its row
+   * either: the far end is entitled to refuse — a session that has exited, a
+   * folder taken back — and a list that had already changed would leave somebody
+   * reading a name the machine does not have. The answer *is* a list, so a
+   * client too old to know the verb still watches the name change.
+   *
+   * ## An empty field is an answer, not a cancel
+   *
+   * Saving nothing tells the machine to go back to the name it derives from the
+   * folder, which is the only way back from a rename without knowing what that
+   * folder is called. {@link RENAME_NOTE} says so under the field, because an
+   * empty box that means something is a thing nobody guesses.
+   *
+   * `MAX_SESSION_TITLE` is the host's own bound, so the field cannot hold more
+   * than the wire will keep — the same rule the port and machine fields follow
+   * against their own stores.
+   */
+  private renameSessionField(session: RemoteSession): HTMLElement {
+    // In the same strip the menu gets, and for the same reason: without it the
+    // field's rounded corners are cut off by both edges of the screen.
+    const strip = element('div', 'session-strip')
+    strip.append(
+      this.renameField(
+        this.renameText,
+        // Named the way a port's field names its subject — the thing, and which
+        // machine it is on. The folder alone would be the line directly above it
+        // repeated; the machine is the fact this list does not already carry, and
+        // it is the one that matters to a browser paired with three of them.
+        `${shortenPath(session.cwd)} on this ${this.noun}`,
+        MAX_SESSION_TITLE,
+        (value) => {
+          this.connection?.send({ t: 'rename', id: session.id, title: value })
+          this.renamingSession = null
+          this.openRow = null
+          this.renderContent()
+        },
+        RENAME_NOTE,
+      ),
+    )
+    return strip
   }
 
   /**
@@ -4479,6 +4616,7 @@ class Deck {
     rename.addEventListener('click', () => {
       this.renamingPort = port
       this.renameText = row.name ?? ''
+      this.renameCaret = null
       this.renderContent()
     })
     menu.append(rename)
@@ -5044,6 +5182,7 @@ class Deck {
       rename.addEventListener('click', () => {
         this.renamingMachine = machine.id
         this.renameText = machine.nickname ?? ''
+        this.renameCaret = null
         this.renderContent()
       })
       menu.append(rename)
@@ -5167,7 +5306,7 @@ class Deck {
    * The name leads, with a live dot when it has a socket open and a "This device"
    * tag when it is the one you are holding. Under it: what it is (or that it is
    * waiting), when it was last here, and the fingerprint to check against the one
-   * it shows. Remove is two steps for the reason the session Close is — a thing
+   * it shows. Remove is two steps for the reason the session Delete is — a thing
    * done once and regretted — and here the stakes are highest on your own row,
    * which is why that one says "Sign out".
    */
@@ -5225,20 +5364,28 @@ class Deck {
   /**
    * The one field this client has besides the pairing code.
    *
-   * Written once and used by both renames, because the two are the same
-   * interaction — a name, the thing it is about underneath it, Save and Cancel —
-   * and a second copy is how one of them ends up without an Enter handler.
+   * Written once and used by all three renames — a port, a machine, a session —
+   * because they are the same interaction: a name, the thing it is about
+   * underneath it, Save and Cancel. A second copy is how one of them ends up
+   * without an Enter handler.
    *
    * `maxLength` is set from the store's own bound rather than left to the cleaner
    * afterwards, so the field cannot show more than will be kept. Saving with the
    * field emptied is how a name is removed; `cleanLabel` folds empty and
    * whitespace onto nothing, which is why there is no separate Clear here.
+   *
+   * `note` is the one thing the three do not share. A port's name and a
+   * machine's are this browser's own labels and need no explaining; a session's
+   * crosses the wire and its empty state means something particular, so that one
+   * passes a line and the other two pass nothing rather than a line saying
+   * nothing.
    */
   private renameField(
     value: string,
     about: string,
     maximum: number,
     save: (value: string) => void,
+    note?: string,
   ): HTMLElement {
     const block = element('div', 'rename')
     block.append(element('p', 'rename__about', about))
@@ -5255,12 +5402,14 @@ class Deck {
       // pushed by the desktop rebuilds this list — and with it this input — while
       // somebody is still typing into it.
       this.renameText = field.value
+      this.renameCaret = field.selectionStart
     })
     field.addEventListener('keydown', (event) => {
       if (event.key === 'Enter') save(field.value)
       if (event.key === 'Escape') {
         this.renamingPort = null
         this.renamingMachine = null
+        this.renamingSession = null
         this.renderContent()
       }
     })
@@ -5274,17 +5423,26 @@ class Deck {
     cancel.addEventListener('click', () => {
       this.renamingPort = null
       this.renamingMachine = null
+      this.renamingSession = null
       this.renderContent()
     })
     actions.append(confirm, cancel)
 
-    block.append(field, actions)
+    block.append(field)
+    // Under the field and above the buttons, so it is read on the way to Save
+    // rather than after it.
+    if (note !== undefined) block.append(element('p', 'rename__note', note))
+    block.append(actions)
     // After the tree is built, by the caller that puts it on screen — focusing an
     // element that is not in the document does nothing, and doing nothing quietly
     // is how the pair screen's keypad stopped appearing once already.
     queueMicrotask(() => {
       field.focus()
-      field.select()
+      // Selected whole the first time it comes up, so a tap and one word replaces
+      // a name. After that the caret goes back where it was: see `renameCaret`
+      // for why a rebuild that selects everything is a field that empties itself.
+      if (this.renameCaret === null) field.select()
+      else field.setSelectionRange(this.renameCaret, this.renameCaret)
     })
     return block
   }
@@ -6748,6 +6906,7 @@ class Deck {
     this.closing = null
     this.renamingPort = null
     this.renamingMachine = null
+    this.renamingSession = null
     this.pairingAnother = false
     // Back to the safe answer. The next pairing on this browser asks again, and
     // it must not inherit "remember" from a machine this person has just said is

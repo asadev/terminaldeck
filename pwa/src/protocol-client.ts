@@ -74,6 +74,7 @@ import {
   MAX_FRAME_DATA_CHARS,
   MAX_INPUT_BYTES,
   MAX_MESSAGE_BYTES,
+  MAX_SESSION_TITLE,
   PROTOCOL_VERSION,
   parseServerFrame,
   parseSession,
@@ -138,6 +139,12 @@ export {
    */
   MAX_ENROLL_SECRET_BYTES,
   MAX_ENROLL_USERNAME_LENGTH,
+  /*
+   * The longest name a person may give a session, re-exported for the same
+   * reason the two above are: the field that takes it sets its own `maxLength`
+   * from the host's number, so it cannot show more than the wire will keep.
+   */
+  MAX_SESSION_TITLE,
   PROTOCOL_VERSION,
 }
 

@@ -13,10 +13,10 @@ import { CAPABILITY, type RemoteSession, type ServerMessage } from './protocol-c
  * Whether this machine will let this browser end a session.
  *
  * Gated on the advertisement, which is the standing rule for every capability in
- * this client and matters more here than anywhere else: closing is not undoable,
- * so a Close that turned out to be refused would be a control that either did
- * nothing or destroyed something, and the person pressing it could not tell
- * which until afterwards.
+ * this client and matters more here than anywhere else: ending a session is not
+ * undoable, so a Delete that turned out to be refused would be a control that
+ * either did nothing or destroyed something, and the person pressing it could
+ * not tell which until afterwards.
  *
  * Two hosts withhold it and both are real. A session layer that cannot end a
  * session does not offer the method the capability is derived from; and the
@@ -29,7 +29,7 @@ export function closeOffered(capabilities: readonly string[]): boolean {
 }
 
 /**
- * The sentence above the two buttons, once somebody has asked to close a row.
+ * The sentence above the two buttons, once somebody has asked to delete a row.
  *
  * Written here rather than in the renderer for the reason `noticeAfter` gives
  * about itself: there is no DOM under vitest, so copy composed inside a `render`
@@ -41,10 +41,60 @@ export function closeOffered(capabilities: readonly string[]): boolean {
  * it does not come back. It deliberately does not say "are you sure" — the two
  * buttons underneath already ask that, and a sentence spent on the question is a
  * sentence not spent on the consequence.
+ *
+ * ## The word is *Delete*, everywhere it destroys something
+ *
+ * > *"Close might be confusing for the people — they just think okay it will be
+ * > just close, soft close or something. But delete, they know that click it will
+ * > go away completely. So don't give the button as close in drop downs, in three
+ * > dots, everywhere."*
+ *
+ * The verb on the wire is still `close` and stays that way — what the machine
+ * does is end a session, and renaming a frame would break every host that
+ * already speaks it. What changes is the only part a person reads. *Close* is
+ * the word the browser this client runs in uses for a tab that reopens from the
+ * history menu, so it is the one word that could not be used for the thing that
+ * does not come back.
  */
 export function closeQuestion(session: RemoteSession): string {
-  return `Close ${session.title}? The session stops on the machine and does not come back.`
+  return `Delete ${session.title}? The session stops on the machine and does not come back.`
 }
+
+/**
+ * Whether this machine will take a name for one of its sessions.
+ *
+ * > *"I said before, for being able to rename sessions."*
+ *
+ * Read separately from {@link closeOffered} rather than folded into it, because
+ * the two are genuinely separable at the far end — a host that hands out shells
+ * and will not let a device end one can still let somebody label the shell they
+ * are looking at, and a host whose session layer has no writable title cannot,
+ * however freely it closes things. `server.ts` derives each from its own method,
+ * so a client that assumed one from the other would draw a row that can only be
+ * refused.
+ *
+ * An older desktop never advertises it and gets no Rename row at all — absent
+ * rather than greyed, the rule every capability in this client follows.
+ */
+export function renameOffered(capabilities: readonly string[]): boolean {
+  return capabilities.includes(CAPABILITY.rename)
+}
+
+/**
+ * The line under the rename field, saying the one thing the field cannot.
+ *
+ * Two facts, and neither is guessable from an empty box. A name goes to the
+ * machine, so it is not this browser's private label the way a port's name is —
+ * every device signed in there reads it. And an empty field is not a cancel:
+ * it is how the machine is told to go back to the name it derives from the
+ * folder, which is the only way to undo a rename without knowing what that
+ * folder is called.
+ *
+ * Here rather than in the renderer for the reason {@link closeQuestion} is: copy
+ * composed inside a `render` is copy nothing in this repository can check.
+ */
+export const RENAME_NOTE =
+  'Every device signed in here sees the new name. Leave it empty to go back to the folder’s own name.'
 
 /**
  * The one sentence standing above the session list, after this frame.

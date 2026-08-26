@@ -1058,8 +1058,9 @@ input[type='text']:focus-visible {
 
 /* Same three dots as a port row, in the same place on every row, for the same
    reason — a menu that moves is a menu people miss. It is only ever drawn
-   against a machine that advertised `close`; there is no greyed-out state,
-   because a disabled control still invites the ask. */
+   against a machine that advertised `close` or `rename`, and each row inside it
+   is drawn only for the one it belongs to; there is no greyed-out state, because
+   a disabled control still invites the ask. */
 .session__more {
   flex: none;
   min-width: 44px;
@@ -1069,6 +1070,21 @@ input[type='text']:focus-visible {
 }
 .session__more:active {
   background: var(--bg-active);
+}
+
+/* The row's menu and its rename field, given the row's own margins.
+
+   Both are appended to the `<li>`, and the `<li>` has no padding of its own —
+   the session button carries it — so without this a menu item began at the very
+   edge of the screen and the name field had its rounded corners cut off by both
+   of them, under a row that is indented. `.session-confirm` below already
+   carried its own padding for exactly this reason; this is the same
+   measurement, shared by the two blocks that did not have one. The rule under
+   it closes the band, so what is on it reads as belonging to the row above
+   rather than floating between two rows. */
+.session-strip {
+  padding: 2px 16px 12px;
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 /* The confirmation, in the row, under the session it names.
@@ -1868,9 +1884,10 @@ a.browse__go {
 
 /* ------------------------------------------------------------- renaming -- */
 
-/* The one field this client has besides the pairing code, shared by both
-   renames. The line above it says what is being named, because a bare field in
-   a list of nine rows is a field somebody has to remember the target of. */
+/* The one field this client has besides the pairing code, shared by all three
+   renames — a port, a machine, a session. The line above it says what is being
+   named, because a bare field in a list of nine rows is a field somebody has to
+   remember the target of. */
 .rename {
   margin-top: 10px;
 }
@@ -1895,6 +1912,20 @@ a.browse__go {
   background: var(--bg-tertiary);
   color: var(--text-primary);
   font-size: 15px;
+}
+
+/*
+ * The line under a rename field, on the one rename that needs one.
+ *
+ * Wraps, unlike `.rename__about` above the field: that one names a path and is
+ * ellipsised on purpose, this one is a sentence and a sentence cut off at the
+ * right edge is a sentence that has not been said.
+ */
+.rename__note {
+  margin: 8px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .rename__actions {

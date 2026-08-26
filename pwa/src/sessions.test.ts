@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import type { ProtocolErrorCode, RemoteSession, ServerMessage } from './protocol-client'
 import {
+  RENAME_NOTE,
   closeOffered,
   closeQuestion,
   formatSince,
   noticeAfter,
+  renameOffered,
   sessionTone,
   shortenPath,
   sortSessions,
@@ -199,13 +201,13 @@ describe('the notice above the session list', () => {
   })
 })
 
-describe('closing a session from a browser', () => {
+describe('deleting a session from a browser', () => {
   it('is offered only by a machine that advertised it', () => {
     /*
      * The whole of the negotiation, and it matters more for this verb than for
-     * any other: closing is not undoable, so a Close drawn against a host that
-     * would refuse it is a control whose outcome a person cannot predict until
-     * after they have pressed it.
+     * any other: it is not undoable, so a Delete drawn against a host that would
+     * refuse it is a control whose outcome a person cannot predict until after
+     * they have pressed it.
      */
     expect(closeOffered(['localhost', 'create', 'upload'])).toBe(false)
     expect(closeOffered(['create', 'close'])).toBe(true)
@@ -227,11 +229,62 @@ describe('closing a session from a browser', () => {
     expect(asked).toContain('does not come back')
   })
 
+  it('calls it deleting, not closing', () => {
+    /*
+     * This assertion is newer than the sentence it guards, and it is here
+     * because the word was picked over the obvious one on purpose:
+     *
+     * > *"Close might be confusing for the people — they just think okay it will
+     * > be just close, soft close or something. But delete, they know that click
+     * > it will go away completely."*
+     *
+     * The wire verb is still `close` — the frame is unchanged and older hosts
+     * still answer it — so the only place the decision is visible is this
+     * sentence and the buttons that quote it. The word being *absent* is pinned
+     * as well as the word being present, because the failure this guards against
+     * is somebody restoring the old label while the new one is still written
+     * down elsewhere.
+     */
+    const asked = closeQuestion(session({ title: 'terminaldeck' }))
+    expect(asked).toContain('Delete')
+    expect(asked).not.toContain('Close')
+  })
+
   it('asks about the row it is on, not about “this session”', () => {
     // A confirmation that could not name what it is about is a confirmation
     // people answer by reflex — and this one is drawn in a list where the row
     // above and the row below look almost identical.
     expect(closeQuestion(session({ title: 'invoices-api' }))).toContain('invoices-api')
     expect(closeQuestion(session({ title: 'invoices-web' }))).toContain('invoices-web')
+  })
+})
+
+describe('naming a session from a browser', () => {
+  it('is offered only by a machine that advertised the verb', () => {
+    // An older desktop never sends the name, so the row is absent rather than
+    // drawn and refused — the rule every capability in this client follows.
+    expect(renameOffered(['localhost', 'create', 'close'])).toBe(false)
+    expect(renameOffered(['create', 'close', 'rename'])).toBe(true)
+  })
+
+  it('is not implied by being able to end one', () => {
+    /*
+     * The two are separate methods at the far end and separate answers here.
+     * Both directions are real: a host that hands strangers a shell can refuse
+     * to end one and still let somebody label the one they are looking at, and a
+     * host whose session layer has no writable title cannot take a name however
+     * freely it closes things.
+     */
+    expect(renameOffered(['close'])).toBe(false)
+    expect(closeOffered(['rename'])).toBe(false)
+  })
+
+  it('says both of the things an empty field cannot say for itself', () => {
+    // A name crosses the wire rather than staying in this browser, and saving
+    // nothing is an instruction rather than a cancel. Neither is guessable from
+    // looking at the box, which is the whole reason this line exists.
+    expect(RENAME_NOTE).toContain('Every device')
+    expect(RENAME_NOTE).toContain('empty')
+    expect(RENAME_NOTE).toContain('folder')
   })
 })
