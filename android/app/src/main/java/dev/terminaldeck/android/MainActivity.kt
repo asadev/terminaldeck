@@ -1735,6 +1735,16 @@ private fun TerminalRoute(
             onRefreshUsage = viewModel::refreshUsage,
             onSwitchAccount = viewModel::switchAccount,
             onDetails = { onDetails(known) },
+            // The Rename row's gate — this machine's `rename` capability, absent on one too old to
+            // advertise it. Same flag the session list reads.
+            canRenameSessions = state.canRenameSessions,
+            onRename = { name -> viewModel.renameSession(hostId, name) },
+            // Always an ordinary session here: the copilot's own conversation is drawn by
+            // `CopilotScreen`, and a terminal reached from the Copilot tab is one the copilot
+            // *started*. The flag exists so the parity is correct the day that changes; the browser
+            // attach section and Restart stay on their defaults (absent) until the browser lane wires
+            // the window roster — see `TerminalScreen`'s `canAttachBrowser`.
+            isCopilot = false,
         )
 
         if (controlsOpen) {
