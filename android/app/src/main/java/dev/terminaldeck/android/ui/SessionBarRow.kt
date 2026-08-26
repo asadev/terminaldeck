@@ -41,7 +41,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.terminaldeck.android.SessionBarView
 import dev.terminaldeck.android.protocol.AccountWire
+import dev.terminaldeck.android.protocol.ServerSettingsLabels
+import dev.terminaldeck.android.protocol.accountLoginLabel
 import dev.terminaldeck.android.protocol.foreignAccount
+import dev.terminaldeck.android.protocol.namedLogin
 import dev.terminaldeck.android.ui.kit.DeckSheetChrome
 import kotlin.math.roundToInt
 
@@ -203,10 +206,25 @@ private fun ContextBar(fraction: Double, modifier: Modifier = Modifier) {
     }
 }
 
+/**
+ * Which login this session runs as.
+ *
+ * [accountLoginLabel], never `account.name`. The name of the machine's own install is a key
+ * `systemProfileId` generates — "Default", "Default (Codex CLI)" — and this chip is the one control
+ * whose entire job is saying whose account a session is on. Asad, 2026-08-26, pressing it:
+ *
+ *   > *"when we click on this link it should clearly mention the name of the account here instead of
+ *   > saying default — name of the account should be there."*
+ *
+ * The label goes through the same function the sheet's rows do, which is the property worth having:
+ * the chip and the row you press it to reach can never come to disagree about what one login is
+ * called. `maxLines = 1` and an ellipsis is the price of printing the real answer rather than a
+ * short wrong one — an address is long and this is a phone.
+ */
 @Composable
 private fun AccountChip(account: AccountWire, enabled: Boolean, onClick: () -> Unit) {
     Text(
-        text = account.name,
+        text = accountLoginLabel(account),
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurface,
         maxLines = 1,
@@ -263,7 +281,7 @@ private fun AccountSheet(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = account.name,
+                        text = accountLoginLabel(account),
                         style = MaterialTheme.typography.bodyMedium,
                         color = if (foreign) {
                             MaterialTheme.colorScheme.onSurfaceVariant
@@ -271,12 +289,31 @@ private fun AccountSheet(
                             MaterialTheme.colorScheme.onSurface
                         },
                     )
-                    account.provider?.let { provider ->
-                        Text(
-                            text = provider,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                    /*
+                     * The agent under the login, in its own words — and only where the line above
+                     * has not already said it.
+                     *
+                     * Two changes in one, and both are the same complaint. It printed
+                     * `account.provider` raw, so the second line of every row read `claude` — an id
+                     * off the wire on a screen, which is the shape of defect this whole pass is
+                     * about. And now that the line above falls back to *"Your own Claude Code
+                     * install"* when there is no login to name, a subtitle there would be the agent
+                     * printed twice eight pixels apart, which is the standing fault of the desktop's
+                     * own account pane.
+                     *
+                     * So it is drawn exactly where it adds something: when [namedLogin] answered —
+                     * the row is headed by an address or a name somebody chose — the agent is the
+                     * one fact the row is otherwise missing, and a person with the same address on
+                     * two agents needs it to tell the rows apart.
+                     */
+                    if (namedLogin(account) != null) {
+                        account.provider?.let { provider ->
+                            Text(
+                                text = ServerSettingsLabels.provider(provider),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                 }
                 if (here) {

@@ -191,6 +191,25 @@ enum ServerSettingsText {
     /// A builtin provider's own words, or its id — better a readable id than a
     /// guessed label for a `custom:` agent this build has not heard of.
     static func providerLabel(_ id: String) -> String {
-        providerLabels[id] ?? id
+        knownProviderLabel(id) ?? id
+    }
+
+    /**
+     * The same table, answering nil where {@link providerLabel} answers the id.
+     *
+     * Two callers want opposite things from an agent this build has never heard
+     * of, and both are right. A settings row is *about* that agent, so printing
+     * its id is the most honest thing available — the row would otherwise be
+     * about nothing. An account label is a sentence with the agent's name
+     * inside it, and *"Your own custom:my-agent install"* is worse than "Your
+     * own install": it reads as a slug leaking onto a screen, which is the
+     * whole complaint {@link accountLoginLabel} exists to answer.
+     *
+     * So the difference is in the fallback and nowhere else. The table stays
+     * single — a second copy in the naming file is how the phone comes to call
+     * an agent one thing on the bar and another in Settings.
+     */
+    static func knownProviderLabel(_ id: String) -> String? {
+        providerLabels[id]
     }
 }

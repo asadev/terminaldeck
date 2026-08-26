@@ -88,5 +88,21 @@ object ServerSettingsLabels {
 
     /** The builtin provider ids in the words the desktop's own picker uses; an unknown id shows as
      *  itself — better a readable id than a guessed label. */
-    fun provider(id: String): String = PROVIDERS[id] ?: id
+    fun provider(id: String): String = known(id) ?: id
+
+    /**
+     * The same table, answering null where [provider] answers the id.
+     *
+     * Two callers want opposite things from an agent this build has never heard of, and both are
+     * right. A settings row is *about* that agent, so printing its id is the most honest thing
+     * available — the row would otherwise be about nothing. An account label is a sentence with the
+     * agent's name inside it, and *"Your own custom:my-agent install"* is worse than "Your own
+     * install": it reads as a slug leaking onto a screen, which is the whole complaint
+     * [dev.terminaldeck.android.protocol.accountLoginLabel] exists to answer.
+     *
+     * So the difference is in the fallback and nowhere else. The table stays single — a second copy
+     * in the naming file is how the phone comes to call an agent one thing on the bar and another in
+     * Settings.
+     */
+    fun known(id: String): String? = PROVIDERS[id]
 }

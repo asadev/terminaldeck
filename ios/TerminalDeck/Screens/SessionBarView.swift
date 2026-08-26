@@ -166,15 +166,36 @@ struct SessionBarView: View {
 
     // MARK: - The account
 
+    /**
+     * Which login this session runs as.
+     *
+     * `accountLoginLabel`, never `account.name`. The name of the machine's own
+     * install is a key `systemProfileId` generates — "Default", "Default (Codex
+     * CLI)" — and this chip is the one control whose entire job is saying whose
+     * account a session is on. Asad, 2026-08-26, pressing it:
+     *
+     *   > *"when we click on this link it should clearly mention the name of the
+     *   > account here instead of saying default — name of the account should be
+     *   > there."*
+     *
+     * The label goes through the same function the sheet's rows do, which is the
+     * property worth having: the chip and the row you press it to reach can
+     * never come to disagree about what one login is called.
+     *
+     * `lineLimit(1)` and nothing wider: an address is long, the bar is a phone
+     * screen, and the truncation is the price of printing the real answer rather
+     * than a short wrong one. VoiceOver gets the whole label, untruncated.
+     */
     private func chip(_ account: WireAccount) -> some View {
-        Button {
+        let login = accountLoginLabel(account)
+        return Button {
             picking = true
         } label: {
             HStack(spacing: 6) {
                 Circle()
                     .fill(SessionBarView.tint(account.color))
                     .frame(width: 8, height: 8)
-                Text(account.name)
+                Text(login)
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(Theme.primary)
                     .lineLimit(1)
@@ -186,7 +207,7 @@ struct SessionBarView: View {
         }
         .buttonStyle(.plain)
         .disabled(bar.busy)
-        .accessibilityLabel("Account: \(account.name)")
+        .accessibilityLabel("Account: \(login)")
         .accessibilityIdentifier("session.bar.account")
     }
 
@@ -261,6 +282,26 @@ private struct AccountSheet: View {
         // Claude session, pressing one did nothing, said nothing and left no
         // trace. See `foreignAccount`.
         let foreign = foreignAccount(current: bar.account, account: account)
+        /*
+         * The login, not the profile's name — the rows he filmed.
+         *
+         * This sheet is the screen the complaint was made about: three rows
+         * reading "Default", "Default (Codex CLI)", "Default (Gemini CLI)", none
+         * of which is a name anybody gave a login.
+         *
+         *   > *"when we click on this link it should clearly mention the name of
+         *   > the account here instead of saying default — name of the account
+         *   > should be there."*
+         *
+         * The default `namesTheAgent: true` is deliberate here and not merely
+         * inherited: this list is *not* filtered to one agent — it is every
+         * login on the far machine — so on a fresh machine all three rows fall
+         * to the third rung with no address between them, and without the
+         * agent's name all three would read "Your own install". The same caption
+         * on three different accounts is the same defect with a politer word in
+         * it. See `accountLoginLabel`.
+         */
+        let login = accountLoginLabel(account)
         Button {
             dismiss()
             if !chosen { bar.switchTo(account.id) }
@@ -269,7 +310,7 @@ private struct AccountSheet: View {
                 Circle()
                     .fill(SessionBarView.tint(account.color))
                     .frame(width: 9, height: 9)
-                Text(account.name)
+                Text(login)
                     .foregroundStyle(Theme.primary)
                 Spacer(minLength: 0)
                 if chosen {
