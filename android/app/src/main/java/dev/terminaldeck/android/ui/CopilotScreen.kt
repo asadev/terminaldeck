@@ -27,6 +27,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -133,6 +134,13 @@ fun CopilotScreen(
     onClosed: () -> Unit,
     onSessions: () -> Unit,
     onLog: () -> Unit,
+    /**
+     * The copilot's controls — the gear in this bar opens them. Asad: *"all the control about
+     * copilot, all the settings of the copilot… three dots, maybe your settings button."* Every
+     * setting and switch about the copilot on this machine lives one push away, so the conversation's
+     * own bar keeps only what somebody uses while talking.
+     */
+    onControls: () -> Unit,
     onDismissNotice: () -> Unit,
 ) {
     val colors = DeckTheme.colors
@@ -259,6 +267,18 @@ fun CopilotScreen(
                             Icon(
                                 Icons.Filled.History,
                                 contentDescription = "What the copilot has been doing",
+                                tint = colors.secondary,
+                            )
+                        }
+                    }
+                    // The gear, at the trailing edge, over every state that has a copilot behind it
+                    // — its controls do not need a live run, so it is not gated on one. A gear
+                    // collides with nothing in this app and says what it does.
+                    if (view.access != CopilotAccess.NotOffered) {
+                        IconButton(onClick = onControls) {
+                            Icon(
+                                Icons.Filled.Settings,
+                                contentDescription = "Copilot controls",
                                 tint = colors.secondary,
                             )
                         }
