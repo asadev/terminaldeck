@@ -188,6 +188,20 @@ class HostLink(
      */
     var copilot: CopilotController? = null
 
+    /**
+     * The machine's disk and its git, as this phone reads them — the Files, file-text, Source-control
+     * and Diff screens behind the "look inside" section. Created once per link; the section draws
+     * nothing until the machine advertises [dev.terminaldeck.android.protocol.Capability.FILES] or
+     * [dev.terminaldeck.android.protocol.Capability.GIT], both owner-device only. Read-only, all of it.
+     */
+    var filesGit: FilesGitController? = null
+
+    /**
+     * The four read-only panels — artifacts, store, AI readiness, MCP servers. Created once per link;
+     * draws nothing until the machine advertises [dev.terminaldeck.android.protocol.Capability.PANELS].
+     */
+    var panels: PanelsController? = null
+
     /** The user's name for this machine, or enough of its id to tell it apart. */
     val label: String get() = record.label
 
@@ -235,6 +249,10 @@ class HostLink(
         devServer?.stop()
         tunnels?.stop()
         copilot?.stop()
+        // Read-only holders with no timer and no socket of their own; stopping them is dropping the
+        // last connection's answers so a re-pair does not draw one machine's files under another's.
+        filesGit?.stop()
+        panels?.stop()
         sessions = emptyList()
         live = false
         loaded = false

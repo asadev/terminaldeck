@@ -434,6 +434,12 @@ class DeckViewModel(
             expiry = coroutineExpiry(viewModelScope),
             onChange = { publish() },
         )
+        // The "look inside" family: files, git and the four panels. Read-only holders that keep the
+        // machine's latest answer as Compose state, so the screen reading one recomposes on the
+        // answer without folding every machine's summary for a file's bytes — the same reasoning the
+        // watcher gives for keeping its frames off the ui state. No `onChange` for that reason.
+        link.filesGit = FilesGitController(send = { link.transport.send(it) })
+        link.panels = PanelsController(send = { link.transport.send(it) })
         // Collected per machine, with the link captured, so a frame cannot arrive without the
         // answer to "which computer said this" already in hand.
         viewModelScope.launch { link.transport.state.collect { onState(link, it) } }
@@ -597,6 +603,11 @@ class DeckViewModel(
                 link.localhost?.renew()
                 link.devServer?.renew()
                 link.copilot?.renew()
+                // The look-inside holders forget the last connection's answers, for the reason the
+                // request clusters above do: a welcome may be a different machine after a switch or a
+                // re-pair, and the screens re-read on their next appearance.
+                link.filesGit?.renew()
+                link.panels?.renew()
                 link.loaded = message.sessions.isNotEmpty() || link.loaded
                 link.live = true
                 // The first list after a connection came back. What is in it happened while this
@@ -812,23 +823,38 @@ class DeckViewModel(
             }
 
             /*
-             * The wire foundation for the machine's files, git, panels, folder picker, own browser,
-             * copilot files and routines — decodable and routed here, but not yet consumed.
-             *
-             * Each of these answers a verb a later screen will send, and each will be handed to the
-             * controller that owns that screen the way the copilot family above is handed to
-             * [link.copilot]. Until those screens exist there is nothing holding the answer, so the
-             * honest thing is to drop it rather than refold the world for a frame no view reads —
-             * the same reasoning the tunnel and cast frames give for returning early. A misdelivered
-             * one — an answer to a request this phone has already forgotten — lands here too, and the
-             * outcome is identical, which is why it is safe to widen this branch into real routing
-             * one controller at a time without touching anything else.
+             * The "look inside" family — files, git status, a file's text and a diff — handed to the
+             * controller that owns those four screens, the way the copilot family above is handed to
+             * [link.copilot]. A misdelivered frame (an answer to a request this phone has already
+             * forgotten — a switch or a reconnect that raced the reply) is dropped inside the
+             * controller, which is why widening these out of the no-op below was safe.
              */
             is FileListing,
             is FileText,
             is ServerMessage.GitStateFrame,
             is ServerMessage.GitPatch,
-            is PanelData,
+            -> {
+                link.filesGit?.receive(message)
+            }
+
+            // The four read-only panels — artifacts, store, AI readiness, MCP — routed the same way
+            // and for the same reason. An act answers with the whole panel, so the controller holding
+            // this frame is the confirmation the screen redraws from.
+            is PanelData -> {
+                link.panels?.receive(message)
+            }
+
+            /*
+             * The rest of the wire foundation — the folder picker, the machine's own browser, copilot
+             * files and routines — decodable and routed here, but not yet consumed.
+             *
+             * Each answers a verb a later screen will send, and each will be handed to the controller
+             * that owns that screen the way the files/git/panel families above now are. Until those
+             * screens exist there is nothing holding the answer, so the honest thing is to drop it
+             * rather than refold the world for a frame no view reads — the same reasoning the tunnel
+             * and cast frames give for returning early. A misdelivered one lands here too, and the
+             * outcome is identical, which is why it is safe to widen this one controller at a time.
+             */
             is ServerMessage.FolderEntries,
             is MachineBrowserState,
             is MachineShot,
@@ -1540,6 +1566,22 @@ class DeckViewModel(
     fun closeServedPort() {
         selected?.tunnels?.close()
     }
+
+    /* --------------------------------------------------------------- look inside -- */
+
+    /**
+     * The selected machine's files/git controller, or null when nothing is selected.
+     *
+     * Handed to [dev.terminaldeck.android.ui.MachineToolsSection] rather than folded into
+     * [DeckUiState], because the four screens behind it read the machine's latest answer as Compose
+     * state on the controller and recompose from there — a file's bytes are read by one screen at a
+     * time and change nothing any other surface draws. The section re-fetches this on each ui-state
+     * change, so a machine switch hands over the new machine's controller by construction.
+     */
+    fun filesGit(): FilesGitController? = selected?.filesGit
+
+    /** The selected machine's panels controller, or null when nothing is selected. See [filesGit]. */
+    fun panels(): PanelsController? = selected?.panels
 
     /* ---------------------------------------------------------------------- copilot -- */
 
