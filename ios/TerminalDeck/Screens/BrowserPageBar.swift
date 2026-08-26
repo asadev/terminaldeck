@@ -594,14 +594,15 @@ struct BrowserPageBar: View {
      * this screen has only a picture.
      *
      * A `Menu` rather than a `Button` because there is nothing to toggle — the
-     * answer is *which* width, out of five — and a sheet for five one-word rows
-     * would be a screen of white space. It wears `verbLabel` like every other
-     * slot, so the row is six identical shapes rather than five and a special
-     * one.
+     * answer is *which* device — and a sheet for a list of one-line names would
+     * be a screen of white space. It wears `verbLabel` like every other slot, so
+     * the row is six identical shapes rather than five and a special one.
      *
-     * No `.buttonStyle` and no menu-order arguments: the widths lead because they
-     * are the question he asked, and the three zoom verbs follow behind a
-     * divider because they are about looking closer at whatever is already there.
+     * No `.buttonStyle` and no menu-order arguments: the devices lead because
+     * they are the question he asked, Rotate follows them behind a divider
+     * because it is a second question about the device already chosen, and the
+     * three zoom verbs come last because they are about looking closer at
+     * whatever is already there.
      */
     @ViewBuilder
     private func sizeSlot(id: String) -> some View {
@@ -620,25 +621,64 @@ struct BrowserPageBar: View {
     }
 
     /**
-     * What is in that menu: names, and nothing under them.
+     * What is in that menu: names, and the pixels quietly beside them.
      *
-     * A `Toggle` per width rather than a `Picker`, for one reason that is about
+     * A `Toggle` per device rather than a `Picker`, for one reason that is about
      * him rather than about SwiftUI: iOS draws a toggle in a menu as a row with a
-     * checkmark, which is the same shape as the widths themselves, and a
+     * checkmark, which is the same shape as the devices themselves, and a
      * `Picker`'s inline section arrives with a header — one more line of prose in
      * a menu he has now twice asked to be made shorter.
      *
-     * The current width's row is still live and does nothing when pressed. That
-     * is deliberate: this is a five-way choice and un-choosing is not one of the
-     * five, so the press closes the menu and changes nothing, which is what
+     * The current device's row is still live and does nothing when pressed. That
+     * is deliberate: this is a one-of-many choice and un-choosing is not one of
+     * them, so the press closes the menu and changes nothing, which is what
      * pressing the ticked row does everywhere else on the phone.
+     *
+     * ## Picking a device always lands on its own way up
+     *
+     * `PageSize(device)` and never `PageSize(device, turned: size.size.turned)`.
+     * Carrying the rotation across a change of device would mean tapping
+     * *Laptop* while a phone was on its side produced a laptop stood on end —
+     * a shape nobody asked for, arrived at by a control they were not touching.
+     * Rotate is one tap away and it is the tap that says so.
      */
     @ViewBuilder
     private func sizeItems(_ size: BrowserPageSize) -> some View {
-        ForEach(PageWidth.allCases) { width in
-            Toggle(width.name, isOn: Binding(get: { size.width == width },
-                                             set: { if $0 { size.choose(width) } }))
-                .accessibilityIdentifier("\(id).size.\(width.rawValue)")
+        ForEach(PageDevice.allCases) { device in
+            Toggle(isOn: Binding(get: { size.size.device == device },
+                                 set: { if $0 { size.choose(PageSize(device)) } })) {
+                sizeRow(device)
+            }
+            .accessibilityIdentifier("\(id).size.\(device.key)")
+        }
+        /*
+         * **Rotate is drawn only where there is something to rotate.**
+         *
+         * At *This phone* there is no frame — the page is the whole screen — so
+         * the row is absent rather than greyed. A greyed row inside a menu is the
+         * one place a dead control cannot carry its own sentence, and *"it should
+         * be the same case, or all the options should be available at least"* is
+         * about controls a person can see and not reach. One they never see owes
+         * nothing.
+         *
+         * A `Button` and not a `Toggle`, which is the honest shape: *Tablet
+         * landscape* is a listed device whose own way up **is** landscape, so a
+         * tick meaning "on its side" would be off while the frame plainly was on
+         * its side. A verb has no such claim to get wrong — it turns whatever is
+         * there, every time.
+         */
+        if size.size.device != .fit {
+            Divider()
+            Button { size.choose(size.size.turnedOver()) } label: {
+                // The editing-set rotate rather than `arrow.clockwise`, which
+                // this same bar already spends on Reload — two identical glyphs
+                // in one menu is a menu somebody has to read twice. Checked
+                // against this Mac's own `name_availability.plist` rather than
+                // from memory: `rotate.right` is a 2019 symbol, so iOS 13, so it
+                // is there on every phone this app will ever run on.
+                Label("Rotate", systemImage: "rotate.right")
+            }
+            .accessibilityIdentifier("\(id).size.rotate")
         }
         Divider()
         Button { size.zoomIn() } label: {
@@ -653,6 +693,29 @@ struct BrowserPageBar: View {
             Label("Actual size", systemImage: "1.magnifyingglass")
         }
         .accessibilityIdentifier("\(id).size.actual")
+    }
+
+    /**
+     * One row of the Size menu: the device, then its pixels, quieter.
+     *
+     * > *"you are also putting so much of a description under the title of that
+     * > thing under the title of the feature instead of just i button or nothing
+     * > maybe so they have becomes too big"*
+     *
+     * So the row is a **title** — *Laptop* — and the measurement is the second
+     * element of the same line rather than a sentence beneath it. Two `Text`s
+     * concatenated rather than an `HStack`, because a menu row is not a layout
+     * this app gets to arrange: iOS renders the label of a menu item itself, and
+     * a stack in there is at the system's mercy in a way a run of text is not.
+     *
+     * If a future iOS flattens the styling out of a concatenated `Text` in a
+     * menu, what is lost is the greying and the row still reads
+     * *Laptop   1280 × 800*. That is the whole reason it is written this way and
+     * not with a colour applied to the row: the fallback is the same words.
+     */
+    private func sizeRow(_ device: PageDevice) -> Text {
+        guard let measure = device.measure else { return Text(device.name) }
+        return Text(device.name) + Text("   \(measure)").foregroundStyle(Theme.faint)
     }
 
     /**
@@ -822,17 +885,21 @@ struct BrowserPageBar: View {
  * where there are two, and three of them would be screens where the menu opens
  * onto rows that do nothing.
  *
- * `width` is the choice as it stands, so the menu can tick it. It is read rather
- * than bound because the store behind it is per **site** and outlives this
- * screen — see `PageWidths` for why the memory is not per URL.
+ * `size` is the choice as it stands, so the menu can tick it and Rotate can turn
+ * it over. It is read rather than bound because the store behind it is per
+ * **site** and outlives this screen — see `PageWidths` for why the memory is not
+ * per URL.
  */
 struct BrowserPageSize {
 
-    /// The width the page is being laid out at right now.
-    var width: PageWidth
+    /// The device the page is being laid out as right now, and which way up.
+    var size: PageSize
 
-    /// Lay it out at another one. The screen writes the choice down.
-    var choose: (PageWidth) -> Void
+    /// Lay it out as another one. The screen writes the choice down. Rotate goes
+    /// through here too, as `choose(size.turnedOver())` — there is no second
+    /// closure for it, because turning a frame over is choosing a size and a
+    /// separate seam would be a second place for the store to be written.
+    var choose: (PageSize) -> Void
 
     /**
      * Magnify what is on screen, without touching the layout.
@@ -843,7 +910,7 @@ struct BrowserPageSize {
      * a readable scale that does not depend on landing a two-finger gesture
      * precisely, and a way to step in that does not overshoot.
      *
-     * Deliberately separate from `choose`: magnification and layout width are two
+     * Deliberately separate from `choose`: magnification and layout size are two
      * different questions about the same page, and a control that mixed them
      * would answer *"how does this look on a laptop"* by making a phone layout
      * bigger, which is the fake this whole feature exists to avoid.

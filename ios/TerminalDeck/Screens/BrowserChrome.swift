@@ -13,7 +13,7 @@
  * There are four things this app calls a browser window and each of them used to
  * wear its own chrome:
  *
- *  - **a window on the machine**, and **an isolated window on the machine** —
+ *  - **a window on the machine**, and **a private window on the machine** —
  *    the same Swift type (`MachineWindow`, one `isolated` flag) on the same
  *    screen, `MachineWindowView`. Header: the window's name. Bottom:
  *    `BrowserPageBar` — an address field and Go, then Back, Forward, Reload and
@@ -121,8 +121,14 @@ enum BrowserChrome {
      * last-resort name for a page that has neither yet. This is not a new rule —
      * it is `MachineWindow.label` (`title.isEmpty ? url : title`) with the third
      * case spelled out, and it is written here so that the screens cannot grow
-     * four versions of it. *"Untitled"* tells nobody which of their four windows
-     * they are looking at, which is exactly when the name matters.
+     * four versions of it.
+     *
+     * **This is not where *Untitled* belongs.** *Untitled* is this round's word
+     * for a window with **no page in it**, and a page that has an address is not
+     * one of those: naming it *Untitled* would tell nobody which of their four
+     * windows they are looking at, which is exactly when the name matters. The
+     * address is the honest name, and the caller's `fallback` covers the last
+     * case — a window that is not anywhere yet.
      */
     static func pageTitle(title: String, address: String, fallback: String) -> String {
         if !title.isEmpty { return title }
@@ -238,10 +244,10 @@ enum BrowserChrome {
      * > on Windows."*
      *
      * Both halves of that control need a **document**, and a machine window is a
-     * picture of one. Re-laying a page out at 1280 CSS px is a viewport
+     * picture of one. Re-laying a page out at 1280 × 800 CSS px is a viewport
      * instruction to the engine that owns the DOM: the engine here is the
      * machine's, the window it is drawing has whatever size the machine gave it,
-     * and there is no verb in `MachineWindow.Act` that carries a width — back,
+     * and there is no verb in `MachineWindow.Act` that carries a size — back,
      * forward, reload, close, record, share and isolate, and nothing else.
      * Magnifying the picture instead is the thing this control must never be: it
      * would answer *"how does this look on a laptop"* with a phone layout in
@@ -256,7 +262,7 @@ enum BrowserChrome {
      * Pinching a machine window is not lost and is not what this is about: that
      * screen's canvas has had its own magnification for rounds, and
      * `BrowserPageBarUITests` performs one. What it cannot do is change the
-     * width the page was laid out at.
+     * rectangle the page was laid out in.
      */
     static let sizeIsLocal =
         "Page size re-lays out a page this phone has open. This one is on the machine, which "
@@ -271,7 +277,7 @@ enum BrowserChrome {
  *
  * Placed by each screen as a trailing item in the system navigation bar, so it
  * sits beside the title with the chevron opposite it — the same two things in
- * the same two corners on a machine window, an isolated window, the machine's
+ * the same two corners on a machine window, a private window, the machine's
  * own front tab, and a page this phone is holding open. The header carries this
  * and nothing else: a control, never a line to read.
  *

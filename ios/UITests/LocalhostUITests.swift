@@ -594,7 +594,8 @@ final class LocalhostUITests: XCTestCase {
     }
 
     /**
-     * **The page can be looked at at other widths, and the menu is names only.**
+     * **The page can be looked at as other devices, and the frame is that device
+     * shaped.**
      *
      * > *"they can use the the mode currently we have this machine they can just
      * > browse as phone view and it should have all the by the way views also
@@ -603,32 +604,41 @@ final class LocalhostUITests: XCTestCase {
      * > Windows so they can have different dimensions also in phone just like
      * > MacBook."*
      *
-     * Two claims, and the second one is about him rather than about layout.
+     * > *"when i make other frame like desktop or laptop biew it is trying to fit
+     * > inside the same given space a sphone instead of giving me less hieght and
+     * > like actual laptop dimension"*
      *
-     * **The widths are there and they work.** The control is in the bottom row
-     * with the other page verbs, it opens onto the five widths, and choosing one
-     * leaves the page on screen — which is the thing a re-layout can break and a
-     * scaled screenshot cannot. What a test cannot honestly assert is what the
-     * page *looks* like at 1280: that is a picture, and the picture is the
-     * attachment. `LocalhostChromeTests` holds the claim underneath it — that the
-     * width is the web view's own rather than a transform the document cannot
-     * see — because that is the half that could be faked and still photograph
-     * correctly.
+     * > *"and there are very less options for dimensiins too"*
+     *
+     * Four claims now, and the middle two are this round's.
+     *
+     * **The devices are there and they work.** The control is in the bottom row
+     * with the other page verbs, it opens onto seven devices and the way back,
+     * and choosing one leaves the page on screen — which is the thing a re-layout
+     * can break and a scaled screenshot cannot.
+     *
+     * **A laptop is laptop shaped.** This is the round's defect and it is the one
+     * assertion here that could not be written before: the frame is a real
+     * element with a real identifier, so its drawn rectangle can be read back off
+     * the screen and asked whether it is wider than it is tall and whether it
+     * left room above and below itself. A picture cannot be asked that.
+     * `LocalhostChromeTests` holds the arithmetic underneath it (`PageFit`) and
+     * the claim that the width is the web view's own rather than a transform the
+     * document cannot see — that is the half that could be faked and still
+     * photograph correctly.
      *
      * **Every row is a name.** *"you are also putting so much of a description
      * under the title of that thing under the title of the feature instead of
      * just i button or nothing maybe so they have becomes too big."* So the
-     * labels are read off the real menu and checked for being names — the width
-     * and nothing else, no sentence, nothing under them. A menu that grew an
-     * explanation per row would pass every existence check anybody would write
-     * and would be the thing he asked twice to have removed.
+     * labels are read off the real menu and checked for being names — the device
+     * and its pixels, no sentence, nothing under them.
      *
-     * Nothing is dismissed by hand: choosing a width closes the menu, which is
+     * Nothing is dismissed by hand: choosing a device closes the menu, which is
      * also what a person does. `dismissAnyMenu` taps low on the screen and this
      * menu is presented **from** the bottom bar, so a blind dismiss here would
      * land on the control that opened it.
      */
-    func testThePageCanBeLookedAtAtOtherWidths() throws {
+    func testThePageCanBeLookedAtAsOtherDevices() throws {
         let row = portRow()
         XCTAssertTrue(row.waitForExistence(timeout: 20),
                       "no row for port \(Self.port) — is .harness/.devsite/server.mjs running?")
@@ -638,56 +648,140 @@ final class LocalhostUITests: XCTestCase {
                       "the browser screen should open on the tap")
         XCTAssertTrue(app.staticTexts["Served from the Mac"].waitForExistence(timeout: 30),
                       "the page never rendered — the tunnel did not carry the document")
-        add(screenshot(named: "the page at this phone's width"))
+        add(screenshot(named: "the page at this phone's size"))
+
+        /*
+         * The default touches nothing, and that is asserted before anything is
+         * tapped: no frame, no edge, no ground, no caption. It is the state every
+         * person is in every time they open a page, and a border of ours around
+         * it would be this feature charging rent on people who never used it.
+         *
+         * If this ever fails on a **re-run**, read it as state rather than as a
+         * defect: the choice is remembered per site in `UserDefaults`, so a run
+         * that died between choosing a laptop and choosing this phone again
+         * leaves one behind. `live-localhost.sh` erases the Simulator for exactly
+         * that reason and a clean run cannot see it.
+         */
+        XCTAssertFalse(any("localhost.pageFrame").exists,
+                       "a frame is drawn at this phone's own size, or a previous run left one "
+                       + "remembered for this site — erase the Simulator and look again")
 
         let size = any("localhost.size")
         XCTAssertTrue(size.exists,
                       "Size is one of the page verbs and belongs in the bottom row with them")
         XCTAssertGreaterThan(size.frame.minY, app.frame.midY,
-                             "it is pressed over and over while comparing one width against "
+                             "it is pressed over and over while comparing one device against "
                              + "another, so it belongs under a thumb rather than in the header")
         size.tap()
 
-        let widths = [("localhost.size.0", "This phone"),
-                      ("localhost.size.390", "Phone 390"),
-                      ("localhost.size.834", "Tablet 834"),
-                      ("localhost.size.1280", "Laptop 1280"),
-                      ("localhost.size.1440", "Desktop 1440")]
-        for (identifier, name) in widths {
+        // The set he asked for, in the order the menu draws it. Seven devices
+        // and the way back — *"there are very less options for dimensiins too"*.
+        let devices = [("localhost.size.fit", "This phone"),
+                       ("localhost.size.smallphone", "Small phone"),
+                       ("localhost.size.phone", "Phone"),
+                       ("localhost.size.largephone", "Large phone"),
+                       ("localhost.size.tablet", "Tablet"),
+                       ("localhost.size.tabletlandscape", "Tablet landscape"),
+                       ("localhost.size.laptop", "Laptop"),
+                       ("localhost.size.desktop", "Desktop")]
+        for (identifier, name) in devices {
             let item = any(identifier)
             XCTAssertTrue(item.waitForExistence(timeout: 6),
-                          "\(name) should be in the menu — \"different dimensions\" is five real "
-                          + "ones, not a slider that asks him to know the answer")
+                          "\(name) should be in the menu — \"different dimensions\" is a set of "
+                          + "real ones, not a slider that asks him to know the answer")
             let label = item.label
             XCTAssertTrue(label.contains(name), "\(identifier) reads \"\(label)\"")
             XCTAssertFalse(label.contains("."),
                            "\"\(label)\" is a sentence. A menu row is a name he can point at, and "
                            + "the explanation goes on the ⓘ or nowhere")
-            XCTAssertLessThan(label.count, name.count + 14,
+            XCTAssertLessThan(label.count, name.count + 16,
                               "\"\(label)\" has grown a description under its title, which is the "
-                              + "thing that made these lists too big to read")
+                              + "thing that made these lists too big to read. The pixels are "
+                              + "allowed; a sentence is not")
         }
 
+        // Rotate is absent at this phone's own size, because there is no frame to
+        // turn. A greyed row inside a menu is the one dead control that cannot
+        // carry its own sentence, so it is not drawn at all.
+        XCTAssertFalse(any("localhost.size.rotate").exists,
+                       "Rotate should not be in the menu while there is no frame to rotate")
+
         // And the three that magnify rather than re-lay-out, which are the pinch
-        // as buttons: a page laid out at 1440 on a phone needs a way back to a
-        // readable scale that does not depend on landing a two-finger gesture.
+        // as buttons: a laptop frame on a phone is drawn at about 29%, and
+        // getting close to it must not depend on landing a two-finger gesture.
         for (identifier, name) in [("localhost.size.in", "Zoom in"),
                                    ("localhost.size.out", "Zoom out"),
                                    ("localhost.size.actual", "Actual size")] {
             XCTAssertTrue(any(identifier).exists, "\(name) should be in the menu")
         }
-        add(screenshot(named: "the widths on offer"))
+        add(screenshot(named: "the devices on offer"))
 
-        any("localhost.size.1280").tap()
+        any("localhost.size.laptop").tap()
         XCTAssertTrue(app.staticTexts["Served from the Mac"].waitForExistence(timeout: 20),
-                      "the page should survive being laid out at 1280 — a width that loses the "
-                      + "document is worse than no width at all")
-        add(screenshot(named: "the page at laptop width"))
+                      "the page should survive being laid out as a laptop — a size that loses "
+                      + "the document is worse than no size at all")
+
+        /*
+         * **The shape, which is the whole of this round.**
+         *
+         * The frame is read off the screen and asked the two questions he asked:
+         * is it laptop shaped, and did it give back the height. A ratio rather
+         * than an exact rectangle, because the drawn size depends on the device
+         * this suite happens to be running on and pinning points here would be a
+         * test that fails on a different simulator for no reason.
+         *
+         * `0.55` of the screen is a loose bound on purpose. 1280 × 800 inside a
+         * phone-shaped page area comes out at about a third of the height; the
+         * assertion is not measuring the arithmetic — `PageFit` is tested — it is
+         * catching a regression to the old behaviour, where the frame took the
+         * whole height and only the width changed.
+         */
+        let frame = any("localhost.pageFrame")
+        XCTAssertTrue(frame.waitForExistence(timeout: 10),
+                      "a chosen device has to be drawn as a frame — an edge and ground around it "
+                      + "is what makes it read as a device rather than as a layout that broke")
+        let laptop = frame.frame
+        XCTAssertGreaterThan(laptop.width, laptop.height * 1.2,
+                             "the laptop frame came out \(laptop.size) — taller than it is wide "
+                             + "is the tall strip he reported, and it is the defect this round "
+                             + "was opened for")
+        XCTAssertLessThan(laptop.height, app.frame.height * 0.55,
+                          "\"giving me less hieght\" — a laptop frame that still fills the phone "
+                          + "is the old behaviour wearing a border")
+        XCTAssertTrue(any("localhost.pageFrame.measure").exists,
+                      "and the size is said somewhere quiet under it")
+        add(screenshot(named: "the page as a laptop"))
+
+        // Turned over, which is the other half of "different dimensions": the
+        // same device on its side. A laptop has no listed landscape twin, so this
+        // is the flag path rather than the twin path — see `PageDevice.turnedTwin`.
+        size.tap()
+        XCTAssertTrue(any("localhost.size.rotate").waitForExistence(timeout: 6),
+                      "Rotate belongs in the menu once there is a frame to turn")
+        any("localhost.size.rotate").tap()
+        XCTAssertTrue(app.staticTexts["Served from the Mac"].waitForExistence(timeout: 20),
+                      "the page should survive being turned on its side")
+        let turned = any("localhost.pageFrame").frame
+        XCTAssertGreaterThan(turned.height, turned.width,
+                             "a laptop on its side is tall and narrow — Rotate that changes "
+                             + "nothing is a row that lies")
+        add(screenshot(named: "the laptop turned on its side"))
+
+        // A phone frame is the other shape, and it is the one that proves the
+        // frame is following the device rather than the space it is drawn in.
+        size.tap()
+        any("localhost.size.phone").tap()
+        XCTAssertTrue(app.staticTexts["Served from the Mac"].waitForExistence(timeout: 20))
+        let phone = any("localhost.pageFrame").frame
+        XCTAssertGreaterThan(phone.height, phone.width,
+                             "a phone frame is taller than it is wide — if every device came out "
+                             + "the same shape, the frame is the container and not the answer")
+        add(screenshot(named: "the page as a phone"))
 
         // A pinch on the page itself, which is the half of his sentence that is
-        // a gesture. What a test can hold on to is that it does not wedge the
-        // page: the document is still there and the bar is still under it, on the
-        // address row rather than swapped for something else.
+        // a gesture, and the way back into a frame drawn at a third of life size.
+        // What a test can hold on to is that it does not wedge the page: the
+        // document is still there and the bar is still under it.
         let page = app.webViews.firstMatch
         if page.exists {
             page.pinch(withScale: 2.2, velocity: 1.2)
@@ -698,9 +792,11 @@ final class LocalhostUITests: XCTestCase {
                       "and the bar should still be under it with the address on it")
 
         size.tap()
-        any("localhost.size.0").tap()
+        any("localhost.size.fit").tap()
         XCTAssertTrue(app.staticTexts["Served from the Mac"].waitForExistence(timeout: 20),
-                      "and back to this phone's own width, which is where it started")
+                      "and back to this phone's own size, which is where it started")
+        XCTAssertFalse(any("localhost.pageFrame").exists,
+                       "the frame goes with it — the way back has to be the whole way back")
     }
 
     /**
