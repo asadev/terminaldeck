@@ -1865,14 +1865,16 @@ class DeckViewModel(
      * Give the open session a name of this person's choosing — the terminal's Rename row.
      *
      * The session is the one this host has open, exactly as [type] and [paste] read it, because the
-     * terminal renames the session it is standing in. An **empty** [title] is passed through
+     * terminal renames the session it is standing in — by host, resolving the bound session itself,
+     * which is why it is not [renameSession] (that one takes an explicit session id from the list).
+     * An **empty** [title] is passed through
      * unchanged rather than refused: the machine reads it as *take my name off it* and derives one
      * from the folder again, which the wire's [ClientMessage.Rename] documents and which is the only
      * way back from a rename. Gated up in the UI on [DeckUiState.canRenameSessions], so this is only
      * ever called for a machine that advertised `rename`; a stray call over a machine that did not
      * closes the socket for `bad-message`, so the gate is not optional.
      */
-    fun renameSession(hostId: String, title: String) {
+    fun renameForegroundSession(hostId: String, title: String) {
         val link = links[hostId] ?: return
         val live = link.binding ?: return
         if (!link.transport.send(ClientMessage.Rename(live.sessionId, title))) {

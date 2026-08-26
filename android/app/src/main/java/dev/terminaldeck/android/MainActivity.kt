@@ -1738,7 +1738,7 @@ private fun TerminalRoute(
             // The Rename row's gate — this machine's `rename` capability, absent on one too old to
             // advertise it. Same flag the session list reads.
             canRenameSessions = state.canRenameSessions,
-            onRename = { name -> viewModel.renameSession(hostId, name) },
+            onRename = { name -> viewModel.renameForegroundSession(hostId, name) },
             // Always an ordinary session here: the copilot's own conversation is drawn by
             // `CopilotScreen`, and a terminal reached from the Copilot tab is one the copilot
             // *started*. The flag exists so the parity is correct the day that changes; the browser
