@@ -47,14 +47,54 @@
  * The black area is not decorated, it is **deleted**. `WatchStage` reports the
  * height the picture is actually drawn at (`WatchSurface.onPageHeight`) and this
  * view sizes the canvas to exactly that, so the page ends where the page ends and
- * the terminal starts on the next point down. A 1280×800 page on a 393-point
- * phone is 246 points tall; before this it was 246 points of page inside a
+ * the terminal carries on underneath it. A 1280×800 page on a 393-point phone is
+ * 246 points tall; before this it was 246 points of page inside a
  * seven-hundred-point black box.
  *
- * The trade is one extra layout pass on open — the canvas is handed a generous
- * box, reports its real height, and is handed that instead — and one `resize` on
- * the wire, because the terminal genuinely does have fewer rows now. Both are
- * what a split is.
+ * The trade is one extra layout pass on open: the canvas is handed a generous
+ * box, reports its real height, and is handed that instead.
+ *
+ * ## The page comes **over** the terminal. It does not push it down
+ *
+ * > *"it should not move chat down to come in front or rerminal it should just
+ * > expand over it"*
+ *
+ * It did push it down, and that is what this section replaced. The pane was the
+ * first child of a `VStack` whose second child was the session, so opening it
+ * took four hundred points off the terminal and shoved the conversation, the
+ * composer and everything he was reading down the screen — and folding it shoved
+ * them all back. A page arriving is not supposed to move his place in the
+ * transcript.
+ *
+ * So the screen is in two pieces now and only one of them is in the flow:
+ *
+ *  - **The strip is laid out**, above the session, always, whenever this session
+ *    holds a window. It has to be: it is the one control that brings the page
+ *    back, and a strip drawn over the terminal would sit on top of the top row of
+ *    output for ever.
+ *  - **Everything the fold moves — the handover bar and the picture — floats.**
+ *    It hangs from under the strip, over the terminal, and takes the terminal's
+ *    room without taking its layout. `body` is a `ZStack` with the session
+ *    underneath and the page above it, which is why this view is handed the
+ *    session as a child rather than sitting beside it.
+ *
+ * Three things fall out of that, and each of them is a thing that used to be
+ * true and is not any more:
+ *
+ *  - **No `resize` on the wire.** The terminal keeps every row it had, so
+ *    opening the page no longer repaints the far end and no longer reflows the
+ *    transcript. That was written down here as part of *what a split is*; it was
+ *    the cost of the wrong layout rather than the cost of the feature.
+ *  - **`.full` is gone from `SessionPagePane`**, along with the last reason this
+ *    screen's parent had to know anything about the pane at all. `TerminalScreen`
+ *    owned the state because *"the terminal below has to be laid out against the
+ *    same answer"*; nothing below is laid out against it any more, so the state
+ *    came in here where the rest of it already lived.
+ *  - **The chat's composer is reachable while the page is open.** It is at the
+ *    bottom of the session, the session still has the whole screen under the
+ *    strip, and the keyboard lifts it the way it always did. Under the old stack
+ *    a page open over a conversation took the composer off the bottom of the
+ *    screen.
  *
  * ## What makes it come up on its own, and what could not
  *
@@ -167,11 +207,20 @@
  * keep going."* Folding is about what is on his screen and nothing else: the
  * window stays open, the binding stays, the agent carries on, **and the cast keeps
  * running** — the canvas stays mounted at zero height rather than being taken out
- * of the hierarchy, because `dismantleUIView` is what sends `browser.unwatch`.
- * That costs frames for a picture nobody is looking at, and it buys the thing the
- * fold is for: reopening is instant and already showing the page as it is now,
- * rather than a second of nothing while a screencast is renegotiated. The bytes
- * are bounded either way by the one-un-acked-frame backpressure the host holds.
+ * of the hierarchy, because `dismantleUIView` is what sends `browser.unwatch` and
+ * one connection is one `watcherId`, so unmounting would stop the pictures for
+ * every canvas on this phone rather than only for this one.
+ *
+ * **What that used to buy, and does not any more.** The line here read *"reopening
+ * is instant and already showing the page as it is now, rather than a second of
+ * nothing while a screencast is renegotiated"*, and it was the argument for the
+ * guard in `askForThePage` that made *Show the page* do nothing at all for three
+ * rounds. Showing renegotiates now, always — see `SessionPageAsk` — so reopening
+ * is a beat of *Asking for the page…* and then the page. Keeping the canvas
+ * mounted still buys the two things that actually matter: the fold does not stop
+ * the cast for the other screens, and it does not throw away the frame sink. The
+ * bytes are bounded either way by the one-un-acked-frame backpressure the host
+ * holds.
  *
  * ## Folding is ours. The cast is not, and that is what came apart
  *
@@ -206,11 +255,13 @@
  *
  * Three things changed, and none of them touch what folding means:
  *
- *  - **Showing asks.** `show()` re-reads both lists and, when nothing is
- *    arriving for this window, rebuilds the canvas. A rebuilt canvas re-adopts
- *    the sink and asks for the cast again, which is the only way back from
- *    either half of the failure. A page that *is* arriving is left alone, so an
- *    ordinary unfold is still instant.
+ *  - **Showing asks.** `show()` re-reads both lists and rebuilds the canvas. A
+ *    rebuilt canvas re-adopts the sink and asks for the cast again, which is the
+ *    only way back from either half of the failure. (It read *and, when nothing
+ *    is arriving for this window, rebuilds the canvas — a page that is arriving
+ *    is left alone, so an ordinary unfold is still instant.* That clause is
+ *    deleted and it is the whole of the third report; see the round-three
+ *    section below and `SessionPageAsk`.)
  *  - **The verb says what pressing it will do.** `SessionPageVerb` is the whole
  *    of it: a fold is offered only while a picture is really arriving, and a
  *    pane that is shown and empty offers *ask for it again* instead. (It had a
@@ -268,6 +319,46 @@
  *    window the machine will not cast the honest answer is *no change* and *no
  *    change* is indistinguishable from a dead button.
  *
+ * ## And it still did not open, a third time — the same wrong question, one
+ * layer down
+ *
+ * > *"but it is still not opening after closing"*
+ *
+ * Photographed: a Google window, the pane open, the words *Asking for the page…*
+ * on it and nothing else, ever.
+ *
+ * The round above is the one that found that `WatchLink.isCasting` is not *there
+ * are pixels*. It fixed that where the screen **reads** the state — `hasPicture`
+ * — and left the identical assumption standing where the screen **acts** on it,
+ * three hundred lines further down:
+ *
+ *     guard let page = surface?.window, host?.watch.isCasting(page) != true else { return }
+ *     recast()
+ *
+ * That line said: *a cast the wire believes in means there is nothing to ask
+ * for*. `isCasting` is `casting.contains(window) && frameHandler != nil`, and a
+ * fold changes neither — the canvas stays mounted at zero height precisely so it
+ * keeps the sink and keeps the watch. So every press of *Show the page* took the
+ * early return: `markAsking()` had already fired, so the sentence appeared, and
+ * then nothing was ever asked for again and no frame was ever coming to end it.
+ * *Asking for the page…*, permanently, which is the exact screen he sent.
+ *
+ * The rule now has no condition on it at all. **A press for the page always
+ * rebuilds the canvas** — `SessionPageAsk`, which exists as a type for one
+ * reason: so that the fact this must never read is visible in its signature and
+ * a test can hold it there. The cost is a renegotiation on an ordinary unfold,
+ * which is a beat of *Asking for the page…* and then the page; the thing it buys
+ * is that there is no state of the wire, of the sink, or of another tab's canvas
+ * that can make the one control on this strip do nothing.
+ *
+ * **The canvas answers for itself too**, and that half is independent of every
+ * word above: `WatchRenegotiation` makes a canvas whose box goes to nothing and
+ * comes back ask for the cast again, without letting the keyboard — which
+ * changes the height on every keystroke and never the width — restart anything.
+ * Two guarantees rather than one, because this is the third round on the same
+ * sentence and *"I have failed to fix this twice"* is not a thing to answer with
+ * one line and a hope.
+ *
  * **The Copilot tab is the same screen and needed nothing of its own**, which
  * was checked rather than assumed: `DeckTabs` builds a `TerminalScreen` for the
  * copilot's conversation as the *tab's root* rather than as a pushed screen, and
@@ -322,30 +413,32 @@
 
 import SwiftUI
 
-/// How much of the session screen the page has.
+/**
+ * How much of the session screen the page has.
+ *
+ * **There were three of these and there are two.** The third was `.full` — the
+ * page having the whole screen — and the verb that set it was deleted a round
+ * ago:
+ *
+ * > *"This button is like not working the way I was expecting. This is something
+ * > else. We do not need actually this part. We do not need this to be coming
+ * > down like with black page."*
+ *
+ * The case itself outlived the verb for one reason: `TerminalScreen` decided
+ * whether to draw the terminal at all from `pagePane != .full`. That test is
+ * gone with the layout it belonged to — the page floats over the session now and
+ * the session is never not drawn — so nothing reads it, nothing can reach it,
+ * and a state nothing can reach is a state somebody will eventually write code
+ * against by mistake.
+ */
 enum SessionPagePane: Equatable {
     /// A strip and nothing else. The cast is still running; see the file header.
     case minimised
-    /// The page at its own height, the terminal underneath it.
+    /// The page at its own height, floating over the session.
     case split
-    /**
-     * The page having the whole screen. **Nothing produces this any more.**
-     *
-     * > *"This button is like not working the way I was expecting. This is
-     * > something else. We do not need actually this part. We do not need this
-     * > to be coming down like with black page."*
-     *
-     * The verb that set it is deleted — see `strip` — so the pane is only ever
-     * `.split` or `.minimised`. The case is kept rather than removed because
-     * `TerminalScreen` decides whether to draw the terminal at all from
-     * `pagePane != .full`; with nothing able to reach this, that test is always
-     * true, the terminal is always underneath the page, and there is no black
-     * left for a fold to expose.
-     */
-    case full
 }
 
-struct SessionPageView: View {
+struct SessionPageView<Session: View>: View {
     let model: DeckModel
     let hostID: String
     let sessionID: String
@@ -361,9 +454,40 @@ struct SessionPageView: View {
      */
     let frontmost: Bool
 
-    /// How much room the page has, owned by the screen so the terminal under it
-    /// can be laid out against the same number.
-    @Binding var pane: SessionPagePane
+    /**
+     * **The session itself, drawn underneath the page.**
+     *
+     * The terminal, or the conversation — this view neither knows nor cares
+     * which, and `TerminalScreen.sessionBody` is the one thing that does. It is
+     * a child rather than a sibling because of the whole of *"it should not move
+     * chat down… it should just expand over it"*: a sibling in a stack is a
+     * thing the page's height is subtracted from, and the only way to be **over**
+     * something in SwiftUI is to be in a stack with it.
+     *
+     * It is drawn on every path through `body`, including the one where this
+     * session holds no window at all — which is nearly every session, nearly all
+     * the time. Nothing about a page is drawn there and nothing about the session
+     * changes; this view is a pane above a session and a passthrough otherwise.
+     */
+    private let sessionBelow: Session
+
+    /**
+     * How much room the page has.
+     *
+     * **It moved in here**, and the note it replaces said why it used to live on
+     * `TerminalScreen`: *"the terminal below has to be laid out against the same
+     * answer."* That was true while the two were siblings in a stack. The page
+     * floats over the session now, the session's box is the same whether the pane
+     * is open or folded, and nothing outside this file reads this — so the state
+     * belongs with the four other pieces of state that decide what the pane is
+     * doing, rather than one screen away from them.
+     *
+     * `.split` as the starting value rather than `.minimised`: nothing at all is
+     * drawn until a window is bound to this session, so this is only ever read
+     * after something has decided there is a page — and the first thing a page
+     * should do is be visible.
+     */
+    @State private var pane: SessionPagePane = .split
 
     /// The window this pane has already offered, so it is offered once. Nil until
     /// something has been shown.
@@ -431,6 +555,21 @@ struct SessionPageView: View {
      * in. Dismantling first is the trivial order and needs no argument.
      */
     @State private var recastToken = 0
+
+    /**
+     * Written out rather than left to the memberwise one, because the session is
+     * handed over as a `@ViewBuilder` and the four `@State` properties above must
+     * not appear in the signature. `session:` is a trailing closure at every call
+     * site, so what a reader sees is a page with a session inside it.
+     */
+    init(model: DeckModel, hostID: String, sessionID: String, frontmost: Bool,
+         @ViewBuilder session: () -> Session) {
+        self.model = model
+        self.hostID = hostID
+        self.sessionID = sessionID
+        self.frontmost = frontmost
+        self.sessionBelow = session()
+    }
 
     private var host: HostLink? { model.host(hostID) }
 
@@ -537,30 +676,94 @@ struct SessionPageView: View {
         return host?.watch.handover(page)
     }
 
+    /**
+     * The strip, the page hanging under it, and the session under both.
+     *
+     * > *"it should not move chat down to come in front or rerminal it should
+     * > just expand over it"*
+     *
+     * ## One stack, and only one thing in it is in the flow
+     *
+     * **The strip.** It has to be: it is the one control that brings the page
+     * back, and a strip drawn over the terminal would sit on top of the top row
+     * of output for ever. It is the same height whether the pane is open, folded
+     * or carrying a question, so the session's box is decided once — when a
+     * window becomes this session's — and never again. The transcript does not
+     * reflow, the emulator sends no `resize`, and his place in the output is where
+     * he left it.
+     *
+     * **Everything the fold moves floats.** `floatingPage` is in a `ZStack` with
+     * the session, anchored to the top of it, which is the top of the space under
+     * the strip. Opening the page draws it down over the terminal; folding rolls
+     * it back up under the strip. Nothing underneath moves either way. That is
+     * what the sentence above asks for and it is the whole of the layout change:
+     * the pane used to be a **sibling** above the session, so every point it took
+     * was a point off the terminal.
+     *
+     * ## The session is in one place, in every state
+     *
+     * `sessionBelow` is drawn from the same position in the tree whether this
+     * session holds a window or not, which is deliberate rather than tidy. The
+     * obvious shape is *a page over a session, or a session* — two branches — and
+     * SwiftUI reads those as two different places: a window binding mid-session
+     * would take `TerminalHostView` out of one hierarchy and put it into another.
+     * That is survivable (`makeUIView` hands back `bridge.container`, a view the
+     * bridge owns, so the emulator and its scrollback come with it) and it is
+     * still churn on the one view a person is reading, at the exact moment an
+     * agent has just done something. So the stack is always the stack and the
+     * strip is what comes and goes.
+     *
+     * ## A session holding no window shows nothing at all
+     *
+     * > *"If it is not connected to anyone, so it should stay clean. Even if I go
+     * > to Copilot, which has no browser window attached, it is also showing
+     * > something attached."*
+     *
+     * No strip, no hairline, no floating half, not a point of height — this is
+     * `sessionBelow` and nothing else, which is nearly every session nearly all of
+     * the time. There was a bar here that offered to go and get a window; it is
+     * deleted, and the file header has the argument and where the verb went.
+     *
+     * The **view** stays in the tree either way, because the reads below are what
+     * notice a window becoming this session's: a pane that took itself out when
+     * there was nothing to draw would be a pane that never found out there was.
+     *
+     * ## The keyboard, and the one case that is still tight
+     *
+     * The session owns the whole box under the strip, so a conversation's composer
+     * sits at the bottom of the box rather than at the bottom of whatever the page
+     * left over — which is why it is reachable with a page open at all. Under the
+     * old stack a page took four hundred points off the top and the composer went
+     * off the bottom edge with them.
+     *
+     * What is still tight, said rather than pretended about: the picture keeps its
+     * own height when the keyboard comes up, so on the shortest phones a page
+     * standing at the full `SessionPageRoom.splitCap` and a keyboard up together
+     * leave the bottom of the picture behind the keyboard. It is anchored at the
+     * **top**, so what is behind the keyboard is the bottom of the page and not
+     * its address or its first field; and the cap is only ever reached by a page
+     * taller than it is wide, which a desktop-width render rarely is. The old
+     * stack had the same ceiling and spent it on the terminal instead.
+     */
     var body: some View {
-        Group {
+        VStack(spacing: 0) {
             if let window {
-                pageStack(window)
-            } else {
-                /*
-                 * Nothing at all, taking no height, **always** — not only on a
-                 * machine with no window to give.
-                 *
-                 * > *"If it is not connected to anyone, so it should stay clean.
-                 * > Even if I go to Copilot, which has no browser window
-                 * > attached, it is also showing something attached."*
-                 *
-                 * There was a second branch here that drew an attach bar over any
-                 * session while the machine had windows open. It is deleted; the
-                 * file header has the whole argument and where the verb went.
-                 *
-                 * The view stays in the tree at zero height rather than being
-                 * removed, because the reads below are what notice a window
-                 * becoming this session's — a pane that unmounted itself when
-                 * there was nothing to draw would be a pane that never found out
-                 * there was.
-                 */
-                Color.clear.frame(height: 0)
+                strip(window)
+                // The strip's own bottom edge, drawn whatever is beneath it — the
+                // page when it is open, the terminal when it is not.
+                Rectangle()
+                    .fill(Theme.hairline)
+                    .frame(height: 0.5)
+            }
+            ZStack(alignment: .top) {
+                sessionBelow
+                // Gated on the window and not left to draw nothing on its own: a
+                // session with no window has no surface either, and the stage
+                // would answer *this window is not being cast* about a window
+                // that does not exist.
+                if window != nil {
+                    floatingPage
+                }
             }
         }
         .onAppear {
@@ -630,21 +833,42 @@ struct SessionPageView: View {
 
     // MARK: - The pane
 
+    /**
+     * The half that floats: the handover bar, the picture, and the line that
+     * stands in for the picture when there is not one.
+     *
+     * The bar is above the canvas and **outside the part that folds**, which is
+     * what makes a fold unable to hide a question somebody is being asked — see
+     * the file header. That was true when this was a stack over the terminal and
+     * it is still true now that it is a stack over the terminal: what changed is
+     * where the terminal is, not where the bar is.
+     *
+     * The bottom hairline is drawn only when there is something above it to
+     * finish. Folded, with no question outstanding, this whole stack is zero
+     * points tall and must be exactly that — a hairline left drawn would be a
+     * stray line lying across the top row of the terminal, and the terminal is
+     * what is there when the page is not.
+     */
     @ViewBuilder
-    private func pageStack(_ window: MachineWindow) -> some View {
+    private var floatingPage: some View {
         VStack(spacing: 0) {
-            strip(window)
-            // Above the canvas and outside it, which is what makes a fold unable
-            // to hide it — see the file header. `stage` is the only thing whose
-            // height the pane changes.
             if let handover, let page = surface?.window {
                 handoverBar(handover, page: page)
             }
             stage
-            Rectangle()
-                .fill(Theme.hairline)
-                .frame(height: 0.5)
+            if handover != nil || stageHasHeight {
+                Rectangle()
+                    .fill(Theme.hairline)
+                    .frame(height: 0.5)
+            }
         }
+    }
+
+    /// Whether the stage is drawing anything — a canvas with room in it, or the
+    /// one line that says why there is no canvas. Folded, it is neither, and the
+    /// floating half has to come to nothing rather than to nearly nothing.
+    private var stageHasHeight: Bool {
+        canvasHeight > 0 || (pane != .minimised && stageState.line != nil)
     }
 
     /**
@@ -653,9 +877,16 @@ struct SessionPageView: View {
      *
      * Kept in the hierarchy while minimised — at zero height — because taking it
      * out is what sends `browser.unwatch`, and folding must not stop the cast.
-     * `WatchSurfaceUIView.startWatching` guards on the **width**, which a height
-     * of zero does not change, so nothing is renegotiated on the way down or on
-     * the way back up.
+     * Nothing is renegotiated on the way **down**: `WatchRenegotiation` asks
+     * about the render width, which a height of zero does not change, and about a
+     * box *arriving*, which a box going away is not.
+     *
+     * On the way back up it does ask again, and that is the round-three change
+     * rather than an accident of this one. A canvas that has had no box has no
+     * way of knowing whether the cast it was watching is still running or whether
+     * another tab's canvas took the frame sink out from under it while nobody
+     * could see. Both of those really happen, both leave this view mounted and
+     * blind, and neither of them moves a single width.
      *
      * ## Why the sentence is a layer over the canvas rather than a branch beside it
      *
@@ -764,6 +995,26 @@ struct SessionPageView: View {
                     .accessibilityIdentifier("session.page.nocast")
             }
         }
+        /*
+         * A ground under the sentence, for the state where the sentence is the
+         * whole of the pane.
+         *
+         * It did not need one while this stack sat above the terminal: the space
+         * it took was the screen's own ground and the line was the only thing in
+         * it. The page floats over the terminal now, so a line with nothing behind
+         * it would be a sentence of the app's laid across live output — the same
+         * defect the plate over the canvas already exists to prevent, one layer
+         * out. `Theme.surface` is the strip's own fill, so the two read as one
+         * piece of chrome hanging under the strip rather than as a caption that
+         * has landed on the terminal.
+         *
+         * Only where there is no canvas. A canvas paints its own black, the plate
+         * above handles a line drawn over a picture, and a folded pane has
+         * nothing at all here and must keep having nothing.
+         */
+        .background {
+            if canvasHeight == 0 { Theme.surface }
+        }
     }
 
     /**
@@ -781,9 +1032,9 @@ struct SessionPageView: View {
      * black, and 440 points of black with no words in it is the screen he
      * photographed.
      *
-     * `.full` is unreachable — see `SessionPagePane` — and is answered with the
-     * same height rather than with the screen, so that even an impossible pane
-     * cannot bring the black area back.
+     * Whatever this answers, it is 440 points **over** the session and never 440
+     * points taken off it — see `body`. The cap is what stops a tall page
+     * from covering the terminal rather than what stops it from squeezing it.
      */
     private var canvasHeight: CGFloat {
         guard pane != .minimised, showing else { return 0 }
@@ -1163,25 +1414,46 @@ struct SessionPageView: View {
     }
 
     /**
-     * Ask the machine for this page again.
+     * Ask the machine for this page again — all three questions, every time.
      *
-     * Two questions, because *there is no picture* has two shapes and they are
-     * answered in different places. `reread()` is for the shape where the window
-     * is not in the strip at all: the answer lands, `surface` stops being nil,
-     * and the canvas is built for the first time by the ordinary redraw.
-     * `recast()` is for the shape where the row is there and nothing is arriving
-     * — the cast was stopped, or the sink was taken by a canvas that has since
-     * gone — and only a new canvas can undo either of those.
+     * > *"but it is still not opening after closing"*
      *
-     * A page that **is** arriving is left alone, which is what keeps an ordinary
-     * unfold instant: *"reopening is instant and already showing the page as it
-     * is now."* Nothing is renegotiated for a picture that is on screen.
+     * `reread()` is for the shape where the window is not in the strip at all:
+     * the answer lands, `surface` stops being nil, and the canvas is built for the
+     * first time by the ordinary redraw. `recast()` is for the shape where the row
+     * is there and nothing is arriving — the cast was stopped, or the sink was
+     * taken by a canvas that has since gone — and only a new canvas can undo
+     * either of those.
+     *
+     * **There is no longer a condition on the second one**, and the line that was
+     * here is the whole of the sentence above:
+     *
+     *     guard let page = surface?.window, host?.watch.isCasting(page) != true else { return }
+     *
+     * It was written for *"reopening is instant and already showing the page as it
+     * is now"*, which is a real thing to want and was being bought with a fact
+     * that does not mean what it was being read as. `isCasting` is *a
+     * `browser.watch` of ours left and something is registered to draw the
+     * answer*. A fold changes neither — the canvas is kept mounted at zero height
+     * on purpose — so on every press of *Show the page* this returned early,
+     * having already put *Asking for the page…* on the screen, and nothing was
+     * ever asked for. On a page that does not repaint no frame was coming to end
+     * it either. That is his photograph, exactly.
+     *
+     * `SessionPageAsk` is the rule now, and it is a type rather than a straight
+     * line of code so the thing it must never read is written into its signature
+     * and pinned by a test. The price is real and small: an ordinary unfold now
+     * renegotiates, so it is a beat of the asking line and then the page, rather
+     * than the page instantly. A beat is a fair trade for a control that cannot
+     * be dead.
      */
     private func askForThePage() {
         markAsking()
         reread()
-        guard let page = surface?.window, host?.watch.isCasting(page) != true else { return }
-        recast()
+        switch SessionPageAsk.canvas(isCasting: showing) {
+        case .rebuildIt:
+            recast()
+        }
     }
 
     /// Build a new canvas for this surface. See `recastToken` for why a rebuild
@@ -1328,35 +1600,54 @@ enum SessionHandover {
  *     recognise it, which is the whole job.
  *  2. **Its address**, until it has a title. Ugly and specific, and specific is
  *     what a menu row is for.
- *  3. **"Empty window"** for the ones that are not on a page at all — no address,
- *     `about:blank`, a new-tab screen. Two words, in English, and a person can
- *     point at it.
+ *  3. **"Untitled"** for the ones that are not on a page at all — no address,
+ *     `about:blank`, a new-tab screen. It is the word every browser already uses
+ *     for a page with no name, it is English, and a person can point at it.
  *  4. **A number, only where the same name appears twice in the same list.**
- *     *Empty window 1*, *Empty window 2*, in the order the machine lists them —
- *     which is the order they are drawn in, on this menu and on the Browser tab,
- *     because both are drawing the one `browser.window.rows` answer.
+ *     *Untitled 1*, *Untitled 2*, in the order the machine lists them — which is
+ *     the order they are drawn in, on this menu and on the Browser tab, because
+ *     both are drawing the one `browser.window.rows` answer.
  *
  * Numbering is decided against the **whole row** rather than the name, so a
  * window already told apart by the session holding it is not also numbered: two
- * blank windows on two different sessions read *Empty window · deploy* and
- * *Empty window · build*, which is two names and not a collision.
+ * blank windows on two different sessions read *Untitled · deploy* and
+ * *Untitled · build*, which is two names and not a collision.
+ *
+ * ## It was *"Empty window"*, and the word is his
+ *
+ * > *"lets make only one name as browser and window identical to normal
+ * > standards for browser everything else too"*
+ *
+ * *Empty window* was invented here. It was accurate and it was ours, and this app
+ * is a browser on a phone — every word on it should be a word somebody has
+ * already read in Safari or Chrome. *Untitled* is that word, and it is the same
+ * rename as *Private* for an isolated window and *Window settings* for a window's
+ * own screen: one vocabulary, borrowed rather than coined.
+ *
+ * The one thing it costs is that a page really can be **called** Untitled — a
+ * blank document in an editor is, most of the time. Rule 4 is what makes that
+ * survivable: two rows that read the same are numbered whatever made them the
+ * same, so an untitled page and an empty window in one list come out *Untitled 1*
+ * and *Untitled 2* rather than as a name a person cannot resolve.
  *
  * ## Why this is its own type
  *
  * *"Whatever you choose must be the same word everywhere the app names windows."*
  * A window is named in three places — this menu, the strip over the session, and
- * the Browser tab's own list — and the first two call in here. The third still
- * reads `MachineWindow.label` directly and is one line away from calling this;
- * it belongs to another screen and is left for whoever owns that screen, with
- * the consequence written down rather than half-applied: until it does, a blank
- * window is *Empty window* in a session and `about:blank` on the Browser tab.
+ * the Browser tab's own list — and all three call in here. The last of them was
+ * the one written down as an outstanding half-application, reading
+ * `MachineWindow.label` directly so that a blank window was our word in a session
+ * and `about:blank` on the Browser tab; `MachineBrowserView` calls
+ * `WindowNames.name` now, which is what makes this the one rule rather than the
+ * one rule and an exception.
  */
 enum WindowNames {
 
     /// What a window with no page in it is called. Not `about:blank`, which is
     /// the browser's word for *nothing* and is the same six characters for every
-    /// one of them.
-    static let blank = "Empty window"
+    /// one of them — and not a word of ours either: *Untitled* is what a browser
+    /// already calls a page that has not said its name.
+    static let blank = "Untitled"
 
     /**
      * The addresses that mean *this window is not on a page*.
@@ -1448,11 +1739,12 @@ enum WindowNames {
  * Every one of those sentences was true and each had a reason. They are still
  * true; they are simply not written on the rows any more:
  *
- *  - **The isolated window is gone from this menu.** It could not be said in one
- *    short row without describing a profile, and it is not lost: the Browser
- *    tab's `+` offers *Machine* and *Isolated* as a two-button picker on the New
- *    window sheet, which is where somebody choosing a partition already is. The
- *    row here opens a window the ordinary way.
+ *  - **The private window is gone from this menu.** Not because the word is long
+ *    — *Private* is the shortest row in the app — but because *which profile* is
+ *    a decision made where a window is **made**, and this section is a list of
+ *    windows that already exist. It is not lost: the Browser tab's `+` offers it
+ *    on the New window sheet, which is where somebody choosing a partition
+ *    already is. The row here opens a window the ordinary way.
  *  - **The phone-page header is gone.** Its rows join the one flat list under
  *    their own names, and the fact it carried — *the page here stays* — moves to
  *    the row's accessibility hint and to the sentence the phone puts up after the
@@ -1560,7 +1852,8 @@ enum SessionWindowPicker {
      *
      * Numbered only where the row would otherwise be **identical** to another
      * one in the same list — which is the state that made the menu unusable:
-     * *"we see another name of the window"*, two of them reading `about:blank`,
+     * *"we see another name of the window"*, two of them reading `about:blank`
+     * before either of them had a name a person could read,
      * and nothing to choose between them. The number goes on the name rather
      * than at the end, so a numbered row still reads as a name followed by its
      * holder.
@@ -1668,9 +1961,19 @@ enum SessionWindowPicker {
         "http://localhost:\(String(tab.port))\(tab.path)"
     }
 
-    /// The row: the page, by whatever it calls itself. `label` is the page's own
-    /// title, or its address until it has one — never "Untitled", which tells
-    /// nobody which of their servers they are looking at.
+    /**
+     * The row: the page, by whatever it calls itself.
+     *
+     * `label` is the page's own title, or its address until it has one — and the
+     * address is the fallback rather than *Untitled* on purpose. `WindowNames`
+     * calls a window with nothing in it Untitled because a window on the machine
+     * really can be on no page at all; a page open on this phone is always at an
+     * address somebody typed, and *Untitled* over three of his own dev servers
+     * would tell him which of them he was looking at exactly as well as
+     * `about:blank` did. Ugly and specific beats tidy and identical, which is the
+     * same rule `WindowNames` follows for a window that has an address and no
+     * title.
+     */
     static func phoneRow(_ tab: BrowserTab) -> String { tab.label }
 
     /**
@@ -1777,6 +2080,61 @@ enum SessionPageVerb: Equatable {
 }
 
 /**
+ * What a press for the page does about the canvas — and the one fact it is not
+ * allowed to read.
+ *
+ * > *"but it is still not opening after closing"*
+ *
+ * ## Why this is a type with one case in it
+ *
+ * This is the third round on that sentence and the second time the same wrong
+ * idea has been fixed in one place and left standing in another. The idea is
+ * that `WatchLink.isCasting` means *there is a picture*. It does not: it is *a
+ * `browser.watch` of ours left, and something registered to draw the answer* —
+ * both true the instant a canvas mounts, and both still true through a fold,
+ * because the canvas is deliberately kept mounted at zero height so the fold does
+ * not stop the cast.
+ *
+ * Round two found that where the pane **reads** state and answered it with
+ * `hasPicture`. It did not look at where the pane **acts**, and there the same
+ * fact was standing as a guard in front of `recast()`:
+ *
+ *     guard let page = surface?.window, host?.watch.isCasting(page) != true else { return }
+ *
+ * Which is why *Show the page* put the words *Asking for the page…* on the screen
+ * and then asked for nothing at all, for ever, on a page that had no reason to
+ * repaint.
+ *
+ * So the rule is not written as a line inside a method any more. It takes
+ * `isCasting` and **never reads it**, on purpose, so that the parameter list says
+ * what the rule refuses to depend on and `SessionPageTests` can hold it there
+ * across both values. A future round that decides some picture is worth leaving
+ * alone has to add a case, which breaks the `switch` at the one call site and
+ * fails a test whose name says what he asked for — rather than quietly reusing a
+ * fact that has already cost him three reports.
+ *
+ * ## What it costs, said plainly
+ *
+ * An unfold renegotiates the cast now, so there is a beat of the asking line
+ * before the picture instead of the picture being there already. That beat is
+ * what *"reopening is instant"* used to buy, and it was being bought with a
+ * guarantee this feature turned out not to have. A control that always works and
+ * is sometimes half a second slow is not a trade — it is the only one of the two
+ * that is worth shipping.
+ */
+enum SessionPageAsk: Equatable {
+    /// Build a new canvas. It is the only thing that re-adopts
+    /// `WatchLink.frameHandler` and the only thing that sends a fresh
+    /// `browser.watch`, and a fresh watch is the only way pixels come back for a
+    /// page that has no reason to repaint.
+    case rebuildIt
+
+    /// `isCasting` is taken and deliberately not read. See the header — the
+    /// parameter is the point of the function.
+    static func canvas(isCasting: Bool) -> SessionPageAsk { .rebuildIt }
+}
+
+/**
  * What the stage says when there is no picture in it.
  *
  * > *"browser window when it collapse it is not expanding back I can not open it
@@ -1847,9 +2205,11 @@ enum SessionPageStage: Equatable {
  * rare.
  *
  * Four hundred and forty points is a page tall enough to read a form on and still
- * leaves ten rows of terminal on the shortest phone this app supports, which is
- * the number that matters: a split where the terminal has vanished is not a
- * split, it is a page with a strip on it.
+ * leaves ten rows of terminal visible on the shortest phone this app supports,
+ * which is the number that matters: a split where the terminal has vanished is
+ * not a split, it is a page with a strip on it. *Visible* rather than *left* —
+ * the page floats over the session now, so the terminal keeps every row it had
+ * and this decides how many of them are covered.
  */
 private enum SessionPageRoom {
     static let splitCap: CGFloat = 440

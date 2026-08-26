@@ -253,6 +253,67 @@ enum WatchCurtain {
     }
 }
 
+/**
+ * When a canvas has to go back to the host and ask for the cast again.
+ *
+ * ## The fold was the case the width test did not consider
+ *
+ * > *"but it is still not opening after closing"*
+ *
+ * Photographed: a session holding a Google window, the pane open, and the words
+ * *Asking for the page…* on it with nothing else, ever. Two things had to be
+ * wrong at once for that screen to exist and this is the second of them — the
+ * first is in `SessionPageAsk`, one file over.
+ *
+ * `layoutSubviews` renegotiated on `renderWidth() != requestedWidth`, and the
+ * comment above it argued the width alone, correctly, for the case it was
+ * written for: a keyboard coming up changes the **height** and a screencast that
+ * restarted every time somebody typed would be a page that flickered under their
+ * hands. What it did not consider is that folding this pane also changes the
+ * height and nothing else. The canvas is deliberately kept mounted at zero
+ * height through a fold — taking it out of the hierarchy is what sends
+ * `browser.unwatch`, and the fold must not stop the cast — so on the way down
+ * the width did not move, on the way back up the width did not move, and a
+ * canvas that had lost its cast or its frame sink in between had no moment at
+ * which it would ever ask again.
+ *
+ * ## So the two are separate tests, deliberately
+ *
+ *  - **The width moved.** A rotation, a pinch that asked the host to render
+ *    wider. Renegotiate, because the picture would otherwise be a blown-up JPEG.
+ *  - **A box came back from nothing.** Ask again — not because the render is
+ *    wrong but because *nothing here knows whether anything is still being
+ *    sent*. One connection is one `watcherId` on the host, so a canvas going
+ *    away on another tab stops the cast for this one; a canvas arriving on
+ *    another tab takes the frame sink from this one. Both happen with no
+ *    callback on this view at all, and both leave it mounted and blind.
+ *
+ * A height that merely **changed** is not the test, and that is the part that
+ * has to stay narrow. Every keystroke moves the height of a pane sitting over a
+ * keyboard, and a re-watch per keystroke is the flicker the width-only rule was
+ * protecting. Zero is not a smaller box, it is *no box*: nothing was drawn, so
+ * there is nothing to preserve by staying quiet.
+ *
+ * Re-sending is safe and is the ordinary way this end changes its mind — *"the
+ * host is idempotent about them, re-sending it is how a resize renegotiates"*
+ * (`WatchLink.watch`). A fresh watch is also what makes a **static** page come
+ * back: a window on a page that never repaints has no next frame, so the only
+ * way pixels arrive again is to ask for the full one.
+ */
+enum WatchRenegotiation {
+
+    /**
+     * Whether the layout that has just happened has to send a `browser.watch`.
+     *
+     * `hasRoom`/`hadRoom` are *a box at all*, not a size — see the header for
+     * why a height that shrank is not this rule's business.
+     */
+    static func asksAgain(width: Int, lastWidth: Int, hasRoom: Bool, hadRoom: Bool) -> Bool {
+        if width != lastWidth { return true }
+        return hasRoom && !hadRoom
+    }
+}
+
 // MARK: - The canvas
 
 struct WatchSurface: UIViewRepresentable {
@@ -381,6 +442,20 @@ final class WatchSurfaceUIView: UIView, UIKeyInput, UIGestureRecognizerDelegate 
     private var lastFrame: BrowserFrame?
     /// The width last asked for, so a resize renegotiates only on a real change.
     private var requestedWidth = 0
+    /**
+     * Whether this canvas had a box to draw in at the end of the last layout.
+     *
+     * The other half of `WatchRenegotiation`, and the whole of what the width
+     * alone could not see. A canvas is deliberately left mounted at zero height
+     * through a fold — dismantling it is what sends `browser.unwatch` — and a
+     * fold changes the **height** only, so nothing about the width moved on the
+     * way down or on the way back up and nothing asked for the cast again.
+     *
+     * False to begin with, so the first layout with a real box counts as a box
+     * arriving. That costs nothing: `requestedWidth` is zero then too, so the
+     * width test was already going to fire.
+     */
+    private var hadRoom = false
 
     /// One decode at a time; a frame arriving mid-decode replaces the one waiting.
     private var painting = false
@@ -539,12 +614,33 @@ final class WatchSurfaceUIView: UIView, UIKeyInput, UIGestureRecognizerDelegate 
     override func layoutSubviews() {
         super.layoutSubviews()
         layoutPage()
-        // A rotation or a size change renegotiates the render width, but only
-        // when the width actually moved — a host reading a stream of identical
-        // watches would restart a screencast for nothing. The keyboard coming up
-        // changes the height and not the width, which is why this is asked of
-        // the width alone.
-        if renderWidth() != requestedWidth { startWatching() }
+        /*
+         * Two reasons to go back to the host, and the second one is the fold.
+         *
+         * The width test is the old one and it is still right for what it was
+         * written for: a rotation renegotiates the render, an identical width
+         * must not, and the keyboard changes the height without changing the
+         * width so typing never restarts a screencast. What it could not see is
+         * a canvas whose box went to **nothing** and came back, which is exactly
+         * what a fold does to this view — see `WatchRenegotiation` for the walk
+         * and for why the two tests have to be separate rather than one test on
+         * the whole size.
+         *
+         * The sink is re-taken on the way back for the same reason
+         * `didMoveToWindow` re-takes it: this canvas may have been mounted and
+         * blind the whole time it had no box, because a canvas on another tab
+         * adopted `WatchLink.frameHandler` while nobody could see this one. A
+         * box coming back is the moment to find that out, and asking is free.
+         */
+        let room = bounds.width > 0 && bounds.height > 0
+        if WatchRenegotiation.asksAgain(width: renderWidth(),
+                                        lastWidth: requestedWidth,
+                                        hasRoom: room,
+                                        hadRoom: hadRoom) {
+            if Self.owner !== self { adopt() }
+            startWatching()
+        }
+        hadRoom = room
     }
 
     /// The pixel width to ask the host to render at, magnification included: a

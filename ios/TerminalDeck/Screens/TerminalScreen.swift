@@ -130,22 +130,21 @@ struct TerminalScreen: View {
      */
     @State private var chatMode = false
 
-    /**
-     * How much of this screen the session's browser window has, when it holds
-     * one.
+    /*
+     * **How much room the page has is not this screen's business any more.**
      *
-     * Owned here rather than inside `SessionPageView`, because the terminal below
-     * has to be laid out against the same answer — *"give the page the screen"*
-     * is the terminal not being drawn, and a pane that knew that on its own could
-     * not tell anybody. Everything else about the page is over there, including
-     * what opens it and what folding means.
+     * There was a `pagePane` here, owned by this screen rather than by the pane,
+     * for one stated reason: *"the terminal below has to be laid out against the
+     * same answer"* — the two were siblings in a `VStack` and *"give the page the
+     * screen"* meant not drawing the terminal at all.
      *
-     * `.split` as the starting value rather than `.minimised`: the pane draws
-     * nothing at all until a window is bound to this session, so this is only
-     * ever read after something has decided there is a page — and the first thing
-     * a page should do is be visible.
+     * > *"it should not move chat down to come in front or rerminal it should
+     * > just expand over it"*
+     *
+     * The page floats over the session now, so nothing here is laid out against
+     * it, nothing here reads it, and the state went where the other five pieces
+     * of the pane's state already live. See `SessionPageView.pane`.
      */
-    @State private var pagePane: SessionPagePane = .split
 
     /**
      * A file chosen on the phone in chat mode, waiting for a press.
@@ -276,7 +275,7 @@ struct TerminalScreen: View {
              * that described what was already on screen.
              */
             /*
-             * **The browser window this session is holding, above whichever way
+             * **The browser window this session is holding, over whichever way
              * the session is being read.**
              *
              * > *"Generally, whenever we are talking to terminal, terminal will
@@ -284,44 +283,38 @@ struct TerminalScreen: View {
              * > show it… and the person can just minimize it from some button and
              * > it will go back."*
              *
-             * `SessionPageView` is the whole of it and its header carries the
-             * argument, including the two things this screen has to supply and
-             * cannot decide for itself: `frontmost`, because a canvas left alive
-             * on a tab nobody is looking at is the two-canvas defect
-             * `WatchStage` exists to prevent, and the pane, because the terminal
-             * below has to be laid out against the same number.
+             * > *"it should not move chat down to come in front or rerminal it
+             * > should just expand over it"*
              *
-             * Above **both** modes. A conversation is where the copilot tab
-             * lands, and *"Claude is working on this page"* is exactly as true of
-             * a chat as of a terminal — more so, because a conversation is where
-             * an agent says it needs something.
+             * **The session is inside it now.** It was a sibling underneath it —
+             * two children of a `VStack`, so every point the page took was a
+             * point off the terminal, the transcript reflowed on every open and
+             * every fold, and the composer at the bottom of a conversation went
+             * off the bottom of the screen when a page arrived. The only way to
+             * be *over* something in SwiftUI is to be in a stack with it, so the
+             * pane is handed `sessionBody` and puts the page above it. What that
+             * costs here is one closure; what it buys is that this screen has
+             * nothing left to say about how much room the page has.
              *
-             * It draws nothing and takes no height when this session holds no
-             * window, which is almost always.
+             * `frontmost` is the one thing this screen still has to supply and the
+             * pane cannot work out: a canvas left alive on a tab nobody is looking
+             * at is the two-canvas defect `WatchStage` exists to prevent, and a
+             * tab swap fires no lifecycle callback on the tab being left.
+             *
+             * Over **both** modes. A conversation is where the copilot tab lands,
+             * and *"Claude is working on this page"* is exactly as true of a chat
+             * as of a terminal — more so, because a conversation is where an agent
+             * says it needs something.
+             *
+             * It draws nothing at all — not a strip, not a point of height — when
+             * this session holds no window, which is almost always. Then this is
+             * `sessionBody` and nothing else.
              */
-            VStack(spacing: 0) {
-                SessionPageView(model: model,
-                                hostID: hostID,
-                                sessionID: sessionID,
-                                frontmost: frontmost,
-                                pane: $pagePane)
-
-                /*
-                 * The terminal is **not drawn** while the page has the screen,
-                 * and that is a real removal rather than a zero height.
-                 *
-                 * Two flexible children in one stack do not split the way either
-                 * of them means: a greedy page and a greedy terminal share the
-                 * space, so *"give the page the screen"* would give it half of
-                 * one. Removing it is safe here in a way it is not for the canvas
-                 * — `TerminalHostView.makeUIView` hands back `bridge.container`,
-                 * a view the bridge owns, so taking it out of the hierarchy and
-                 * putting it back keeps the emulator and its scrollback. The
-                 * session stays attached and stays scrolling the whole time.
-                 */
-                if pagePane != .full {
-                    sessionBody
-                }
+            SessionPageView(model: model,
+                            hostID: hostID,
+                            sessionID: sessionID,
+                            frontmost: frontmost) {
+                sessionBody
             }
 
             // Over the terminal rather than above it. See `FindBar`: inserting
@@ -700,10 +693,17 @@ struct TerminalScreen: View {
     /**
      * The session, read whichever way it is being read.
      *
-     * Lifted out of `body` when the page pane went in above it, because the two
-     * are siblings in a stack now rather than one thing in a `ZStack` — and
-     * because *"give the page the screen"* is expressed by not drawing this at
-     * all, which needs it to be one nameable thing.
+     * Lifted out of `body` when the page pane went in over it, because it has to
+     * be one nameable thing to be handed to something else — it is
+     * `SessionPageView`'s child now, drawn underneath the page rather than beside
+     * it.
+     *
+     * **Its box does not change when the page opens.** That is the whole of *"it
+     * should not move chat down… it should just expand over it"*: the only thing
+     * ever taken off this is the strip, and the strip is the same height whether
+     * the page is open, folded, or carrying a question. So the transcript does
+     * not reflow, the emulator sends no `resize`, and a conversation's composer
+     * stays where a thumb left it.
      *
      * Nothing inside has changed. The two readings are the same session and the
      * same socket, so switching costs nothing on the far machine and a message
@@ -1043,10 +1043,12 @@ struct TerminalScreen: View {
      * its own name — with a checkmark on the one this session already holds, and
      * one row after a divider that makes a new window.
      *
-     * Nothing was dropped except the words. The isolated window moved out (it
-     * cannot be a short name, and the Browser tab's `+` has always offered it as
-     * a two-button picker); the *"the page here stays"* header moved onto the
-     * rows' hints and the sentence the toast puts up after the press.
+     * Nothing was dropped except the words. The private window moved out — not
+     * for its length, *Private* is the shortest row in the app, but because
+     * *which profile* is a decision made where a window is **made**, and the
+     * Browser tab's `+` has always offered it there; the *"the page here stays"*
+     * header moved onto the rows' hints and the sentence the toast puts up after
+     * the press.
      * `SessionWindowPicker` carries the whole argument and both menus read it, so
      * the two cannot drift into saying different things about the same window.
      *

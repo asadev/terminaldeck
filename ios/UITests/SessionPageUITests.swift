@@ -52,6 +52,48 @@
  * case that pressed a chevron and asserted the strip survived would pass against
  * exactly the screen he photographed — twice.
  *
+ * ## Three times, and *something under the strip* was not enough either
+ *
+ * > *"but it is still not opening after closing"*
+ *
+ * The third photograph: a Google window, the pane open, the words *Asking for the
+ * page…* on it and nothing else, ever. Everything in the paragraph above passed
+ * against that build. The strip was drawn, the control was drawn, the label went
+ * *Hide* → *Show* → *Hide*, and there was something under the strip — five words
+ * saying the app was asking, over a pane that had asked for nothing and never
+ * would, because a fold leaves `WatchLink.isCasting` true and that was standing
+ * as a guard in front of the only thing that can restart a stopped cast.
+ *
+ * So the walk asserts one thing more, and it is the assertion that fails against
+ * what he sent: `assertTheAskingEnds`. The asking line is a moment, and what
+ * follows it is either the page or the machine's own answer about why there is
+ * not one. Never the line itself, twenty seconds later.
+ *
+ * The rules behind both halves of that fix are arithmetic and are pinned without
+ * a simulator in `SessionPageTests` — `SessionPageAsk`, which is forbidden to
+ * read `isCasting`, and `WatchRenegotiation`, which makes a canvas whose box came
+ * back from nothing ask for the cast again. This suite is what proves a real
+ * press on a real machine ends somewhere.
+ *
+ * ## The page expands **over** the session; it does not push it down
+ *
+ * > *"it should not move chat down to come in front or rerminal it should just
+ * > expand over it"*
+ *
+ * The pane used to be a sibling above the session in a stack, so opening it took
+ * four hundred points off the terminal and folding it gave them back: his place
+ * in the transcript moved twice for one press, and on a conversation the composer
+ * went off the bottom edge. The strip is the only thing in the flow now and the
+ * page floats under it, over the session.
+ *
+ * `assertTheSessionDidNotMove` is the check, and it is made after **both**
+ * presses rather than only after the open — a layout that shoves the terminal
+ * down and pulls it back up is wrong in both directions and passes any check made
+ * in only one of them. It reads `terminal.view`, the emulator's own `UIView`,
+ * because that is the one honest measure of how much of the screen the session
+ * has: its `minY` is *was the transcript pushed down* and its `height` is *were
+ * rows taken away*, which is a `resize` on the wire.
+ *
  * ## This suite **does** change the machine, which is unlike its neighbours
  *
  * `MachineBrowserUITests` refuses to press a session row because *"pressing a
@@ -145,6 +187,22 @@ final class SessionPageUITests: XCTestCase {
     private static let hideIt = "Hide the page"
     private static let showIt = "Show the page"
     private static let askAgain = "Ask for the page again"
+
+    /**
+     * The one line the pane is not allowed to be left holding, verbatim from
+     * `SessionPageStage.asking`.
+     *
+     * > *"but it is still not opening after closing"*
+     *
+     * It is an honest line for two seconds — *"the ask itself is drawn, because
+     * on a window the machine will not cast the honest answer is no change"* —
+     * and a broken screen if it is still there a minute later, which is exactly
+     * what he photographed: a Google window, the pane open, these five words and
+     * nothing else, ever. Copied rather than imported because this target has no
+     * `@testable import`; the ellipsis is the single character U+2026, like the
+     * one in the enum.
+     */
+    private static let askingForIt = "Asking for the page…"
 
     private static let noMachine =
         "This phone is not paired with a running host. Run ios/Harness/live-localhost.sh, "
@@ -676,6 +734,21 @@ final class SessionPageUITests: XCTestCase {
                       "an open pane is either a page or one line saying why it is not — a strip "
                       + "with nothing under it is the screen he photographed")
 
+        /*
+         * **Where the session is, with the page open on top of it.**
+         *
+         * > *"it should not move chat down to come in front or rerminal it should
+         * > just expand over it"*
+         *
+         * Read once, here, and compared after every press below. The page used to
+         * be a sibling above the session in a stack, so opening it took four
+         * hundred points off the terminal and folding it gave them back — his
+         * place in the transcript moved twice for one press. It floats over the
+         * session now and the only thing ever taken off the session is the strip,
+         * which is there whether the page is open or not.
+         */
+        let box = sessionBox()
+
         guard settled == Self.hideIt else {
             XCTAssertEqual(settled, Self.askAgain,
                            "the pane is open, so its one control is either the way to put it away "
@@ -687,6 +760,7 @@ final class SessionPageUITests: XCTestCase {
                           "and the press has to land on something he can see: the stage, or the "
                           + "line that says what is happening")
             capture("83-session-asked-again")
+            assertTheAskingEnds("pressing “\(Self.askAgain)”")
             return
         }
 
@@ -697,6 +771,7 @@ final class SessionPageUITests: XCTestCase {
                        "a folded pane's one control is the way back up, and it has to say so — "
                        + "a chevron that goes on offering to hide is the screen he photographed")
         capture("83-session-minimised")
+        assertTheSessionDidNotMove(box, after: "folding the page away")
 
         /*
          * And back. The same control, and the picture is the current one rather
@@ -727,6 +802,114 @@ final class SessionPageUITests: XCTestCase {
                       "and unfolding put something on the screen: “browser window when it "
                       + "collapse it is not expanding back”")
         capture("84-session-restored")
+        assertTheSessionDidNotMove(box, after: "showing the page again")
+
+        /*
+         * **And what it put there stops being *Asking for the page…*.**
+         *
+         * Everything above this line passed against the build he photographed for
+         * the third time. The strip was there, the control was there, the label
+         * went `Hide` → `Show` → `Hide`, and there was something under the strip
+         * — the something was five words saying the app was asking, over a pane
+         * that had asked for nothing at all and never would. See
+         * `assertTheAskingEnds`.
+         */
+        assertTheAskingEnds("folding the page away and showing it again")
+    }
+
+    /**
+     * The asking line is a moment, never a resting state.
+     *
+     * > *"but it is still not opening after closing"*
+     *
+     * Photographed: a session holding a Google window, the pane open, *Asking for
+     * the page…* on it and nothing else, ever. Two things had to be true at once
+     * for that screen to exist, and both are fixed in code a unit test can reach
+     * — `SessionPageAsk` and `WatchRenegotiation`, both pinned in
+     * `SessionPageTests`. This is the half neither of them can prove: that a real
+     * press on a real machine ends with something else on the screen.
+     *
+     * Three endings count and they are all honest:
+     *
+     *  - **The page.** The sentence goes entirely — a stage with a picture in it
+     *    draws no line at all — and the stage has real height.
+     *  - **A different line.** *This window is not being cast*, *This machine does
+     *    not offer its browser for watching*, *Not connected to this machine*.
+     *    Each of those is the machine answering, which is the thing that was not
+     *    happening.
+     *  - Nothing else. The one ending that fails is the one he sent.
+     *
+     * Twenty seconds because this really does go to a machine and back: the press
+     * rebuilds the canvas, the canvas sends a fresh `browser.watch`, and the host
+     * renders and encodes a full frame of a desktop-width page before anything
+     * can change on this screen. The old cast is stopped and a new one negotiated
+     * in between — that renegotiation is the price
+     * `SessionPageAsk` deliberately pays for a control that cannot be dead.
+     */
+    private func assertTheAskingEnds(_ after: String) {
+        let deadline = Date().addingTimeInterval(20)
+        var last = Self.askingForIt
+        while Date() < deadline {
+            let line = any("session.page.nocast")
+            if line.exists {
+                last = line.label
+                if last != Self.askingForIt { return }
+            } else {
+                let stage = any("session.page.stage")
+                // No line and a stage with height is the picture itself, which is
+                // the answer the whole feature exists for.
+                if stage.exists, stage.frame.height > 1 { return }
+                last = "nothing under the strip at all"
+            }
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+        capture("84b-still-asking")
+        XCTFail("twenty seconds after \(after) the pane still says “\(last)” — “but it is still "
+                + "not opening after closing”. A press for the page has to reach the machine and "
+                + "the machine has to answer with a picture or with a different sentence")
+    }
+
+    /**
+     * Where the session itself is drawn, or nil where there is nothing to read it
+     * off.
+     *
+     * `terminal.view` is the emulator's own `UIView` — `TerminalBridge` puts the
+     * identifier on it — which makes it the one honest measure of *how much of
+     * this screen the session has*. Nil in chat mode, where this screen draws a
+     * conversation instead and there is no terminal at all; the caller treats
+     * that as nothing to check rather than as a failure, because this walk
+     * arrives in terminal mode and a build that lands it in a conversation is a
+     * different case's business.
+     */
+    private func sessionBox() -> CGRect? {
+        let terminal = any("terminal.view")
+        guard terminal.exists else { return nil }
+        return terminal.frame
+    }
+
+    /**
+     * **The page arriving and leaving does not move the session under it.**
+     *
+     * > *"it should not move chat down to come in front or rerminal it should
+     * > just expand over it"*
+     *
+     * Both numbers, because only one of them is the complaint and the other is
+     * how the complaint would come back in a different shape: `minY` is *the
+     * transcript was pushed down the screen*, and `height` is *the terminal was
+     * given fewer rows*, which is a `resize` on the wire and a repaint on the far
+     * end. The old layout did both on every open and both again on every fold.
+     *
+     * A point of tolerance, and no more: this is a frame that must be the same
+     * frame, not a frame that must be close.
+     */
+    private func assertTheSessionDidNotMove(_ box: CGRect?, after: String) {
+        guard let box, let now = sessionBox() else { return }
+        XCTAssertEqual(now.minY, box.minY, accuracy: 1,
+                       "\(after) moved the session down the screen — the page is supposed to "
+                       + "expand over it, not push it")
+        XCTAssertEqual(now.height, box.height, accuracy: 1,
+                       "\(after) changed how many rows the session has, which reflows the "
+                       + "transcript and loses his place in it")
     }
 
     /**
@@ -814,8 +997,24 @@ final class SessionPageUITests: XCTestCase {
          * own and the partition is thrown away when the window closes, so a run
          * of this suite leaves nothing behind in his browser's real profile.
          */
-        let isolated = app.buttons["Isolated"]
-        if isolated.waitForExistence(timeout: 5) { isolated.tap() }
+        /*
+         * **The word on that segment is *Private* now**, and this reaches for
+         * both.
+         *
+         * > *"lets make only one name as browser and window identical to normal
+         * > standards for browser everything else too"*
+         *
+         * *Isolated* was ours. Safari and Firefox both say **Private** for a
+         * window with a profile of its own that is thrown away when it closes,
+         * so that is the word on the sheet — and the sheet is another lane's
+         * file. Asking for the new word first and the old one after costs one
+         * failed lookup and means a run of this suite does not depend on which
+         * of two files landed first.
+         */
+        let partition = app.buttons["Private"].waitForExistence(timeout: 5)
+            ? app.buttons["Private"]
+            : app.buttons["Isolated"]
+        if partition.exists { partition.tap() }
         capture("79a-sheet-filled")
         app.buttons["browser.open.go"].tap()
         capture("79b-after-go")

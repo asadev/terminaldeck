@@ -30,6 +30,10 @@
  *     made the attach menu unusable — *"another name of the window so why they
  *     are like so much of confusing"*. `WindowNames` is the one rule, and the
  *     numbering only fires where a row would otherwise be identical to another.
+ *     The word is **Untitled** now rather than *Empty window* — *"lets make only
+ *     one name as browser and window identical to normal standards for browser"*
+ *     — which is a word real pages also use, so the numbering has a new job and
+ *     a case of its own.
  *  6. **Who a browser window would be taken from.** Attaching moves a window off
  *     whichever session holds it, silently, so the row that offers it has to say
  *     whose it is. Three screens draw that row; `SessionWindowPicker` is the one
@@ -41,7 +45,16 @@
  *     tab and make one first — the walk the menus were added to delete. The
  *     machine being drivable is the condition, and no simulator is needed to
  *     say so.
- *  8. **The page on the phone does not move.** A page this phone is drawing
+ *  8. **A press for the page asks, whatever `isCasting` says.** The one he has
+ *     now reported three times: *"but it is still not opening after closing"*.
+ *     `isCasting` is not *there is a picture*, it survives a fold, and it was
+ *     standing as a guard in front of the only thing that can bring a stopped
+ *     cast back. Two rules answer it — `SessionPageAsk`, which is forbidden to
+ *     read it, and `WatchRenegotiation`, which makes a canvas whose box came back
+ *     from nothing ask on its own without letting the keyboard restart anything.
+ *     Neither needs a simulator, and neither could be checked by looking at a
+ *     screenshot — which is how it survived two rounds of screenshots.
+ *  9. **The page on the phone does not move.** A page this phone is drawing
  *     cannot be handed to an agent — it is rendered here, with this app's
  *     cookies. What a session gets is a *second* window on the machine at the
  *     same address, and every string about it has to say that rather than imply
@@ -384,6 +397,123 @@ final class SessionPageTests: XCTestCase {
                             SessionPageVerb.askLabel]).count, 3)
     }
 
+    // MARK: - Pressing for the page, which must never depend on `isCasting`
+
+    /*
+     * > *"but it is still not opening after closing"*
+     *
+     * Twice reported, twice fixed, twice still broken, and it is one idea being
+     * wrong in one more place each time: that `WatchLink.isCasting` means *there
+     * is a picture*. It means *a `browser.watch` of ours left and something is
+     * registered to draw the answer* — both of which survive a fold, because the
+     * canvas is deliberately kept mounted at zero height so the fold does not stop
+     * the cast.
+     *
+     * Round two fixed it where the pane **reads** state (`hasPicture`) and left it
+     * standing where the pane **acts**:
+     *
+     *     guard let page = surface?.window, host?.watch.isCasting(page) != true else { return }
+     *     recast()
+     *
+     * So *Show the page* wrote *Asking for the page…* on the screen and then asked
+     * for nothing, for ever.
+     *
+     * The two cases below are the guard rails, one per half of the fix, and both
+     * of them are arithmetic rather than a screenshot — which is the point, since
+     * the screenshot has been taken three times.
+     */
+
+    /**
+     * **A press for the page always rebuilds the canvas, whatever the wire
+     * believes.**
+     *
+     * `SessionPageAsk.canvas` takes `isCasting` and is required not to read it.
+     * Both values, because the failing one — `true`, which is what a folded pane
+     * always reports — is the one an example-led test would leave out.
+     *
+     * A rebuild is the act rather than a nicety: a new canvas is the only thing
+     * that re-adopts `WatchLink.frameHandler` and the only thing that sends a
+     * fresh `browser.watch`, and a fresh watch is the only way pixels come back
+     * for a page with no reason to repaint.
+     */
+    func testEveryPressForThePageRebuildsTheCanvasWhateverTheWireSays() {
+        XCTAssertEqual(SessionPageAsk.canvas(isCasting: true), .rebuildIt,
+                       "a fold leaves `isCasting` true, so this is the value that shipped the "
+                       + "defect: “but it is still not opening after closing”")
+        XCTAssertEqual(SessionPageAsk.canvas(isCasting: false), .rebuildIt)
+    }
+
+    /// And the two answers are the same answer. If a second case is ever added,
+    /// this is what says so out loud — the `switch` in `askForThePage` stops
+    /// compiling on the same change, so a future round cannot reintroduce a
+    /// condition here quietly.
+    func testTheAnswerDoesNotDependOnTheOneFactItIsHanded() {
+        XCTAssertEqual(Set([SessionPageAsk.canvas(isCasting: true),
+                            SessionPageAsk.canvas(isCasting: false)]).count, 1)
+    }
+
+    // MARK: - The canvas asking again for itself
+
+    /**
+     * **A box that came back from nothing asks for the cast again.**
+     *
+     * The second half, and it is independent of everything above: whatever the
+     * screen decides to do, a canvas that has had no box has no way of knowing
+     * whether the cast it was watching is still running or whether a canvas on
+     * another tab took the frame sink out from under it. Both of those really
+     * happen and neither moves a width.
+     */
+    func testACanvasThatComesBackFromNothingAsksForTheCastAgain() {
+        XCTAssertTrue(WatchRenegotiation.asksAgain(width: 1179, lastWidth: 1179,
+                                                   hasRoom: true, hadRoom: false),
+                      "unfolding is the press he says does nothing — it has to reach the machine")
+    }
+
+    /**
+     * **And the keyboard does not**, which is the reason the old rule was written
+     * on the width alone.
+     *
+     * Every keystroke moves the height of a pane sitting over a keyboard. A
+     * re-watch per keystroke is a screencast restarting under somebody's hands,
+     * which is the defect the width-only test was protecting against — so a
+     * smaller box is not this rule's business. Only *no box* is.
+     */
+    func testAKeyboardChangingTheHeightNeverRestartsTheCast() {
+        XCTAssertFalse(WatchRenegotiation.asksAgain(width: 1179, lastWidth: 1179,
+                                                    hasRoom: true, hadRoom: true),
+                       "the box got shorter and it is still a box")
+    }
+
+    /// Folding itself asks for nothing. The canvas stays mounted so the cast
+    /// keeps running; a `browser.watch` on the way down would be renegotiating a
+    /// picture nobody is looking at.
+    func testFoldingAsksForNothingOnTheWayDown() {
+        XCTAssertFalse(WatchRenegotiation.asksAgain(width: 1179, lastWidth: 1179,
+                                                    hasRoom: false, hadRoom: true))
+    }
+
+    /// A rotation or a pinch still renegotiates, which is what this rule was for
+    /// before the fold was added to it — and it does so whether or not the box
+    /// changed state, because the render is genuinely wrong at the old width.
+    func testARealWidthChangeStillRenegotiates() {
+        XCTAssertTrue(WatchRenegotiation.asksAgain(width: 1600, lastWidth: 1179,
+                                                   hasRoom: true, hadRoom: true))
+        XCTAssertTrue(WatchRenegotiation.asksAgain(width: 1600, lastWidth: 1179,
+                                                   hasRoom: true, hadRoom: false))
+    }
+
+    /// The first layout a canvas ever gets is both things at once — no width has
+    /// been asked for and there was no box before — and it must send exactly the
+    /// one watch either of them would have sent.
+    func testTheFirstLayoutAsksOnce() {
+        XCTAssertTrue(WatchRenegotiation.asksAgain(width: 1179, lastWidth: 0,
+                                                   hasRoom: true, hadRoom: false))
+        // And a canvas that is in the tree with no box yet asks for nothing:
+        // `startWatching` would have nothing honest to render at.
+        XCTAssertFalse(WatchRenegotiation.asksAgain(width: 1179, lastWidth: 1179,
+                                                    hasRoom: false, hadRoom: false))
+    }
+
     // MARK: - What the stage says when there is no picture
 
     /*
@@ -537,17 +667,19 @@ final class SessionPageTests: XCTestCase {
      * title is a name; `about:blank` is the browser's word for *nothing*.
      */
     func testAWindowWithNoPageInItIsCalledSomethingAPersonCanPointAt() {
-        XCTAssertEqual(WindowNames.name(blank("w1")), "Empty window")
-        XCTAssertEqual(WindowNames.name(blank("w2", url: "")), "Empty window")
-        XCTAssertEqual(WindowNames.name(blank("w3", url: "ABOUT:BLANK")), "Empty window",
+        XCTAssertEqual(WindowNames.name(blank("w1")), "Untitled")
+        XCTAssertEqual(WindowNames.name(blank("w2", url: "")), "Untitled")
+        XCTAssertEqual(WindowNames.name(blank("w3", url: "ABOUT:BLANK")), "Untitled",
                        "the machine's casing is not a different kind of nothing")
-        XCTAssertEqual(WindowNames.name(blank("w4", url: "chrome://newtab/")), "Empty window")
+        XCTAssertEqual(WindowNames.name(blank("w4", url: "chrome://newtab/")), "Untitled")
     }
 
     /// A page that has said its name is called that, and one that has not is
     /// called by its address — which is ugly and is *specific*, which is what a
-    /// row in a picker is for. "Untitled" tells nobody which window they are
-    /// looking at.
+    /// row in a picker is for. A window with an address is **not** Untitled: that
+    /// name is for the windows that are on no page at all, and spending it on a
+    /// window that is somewhere would put two different kinds of thing under one
+    /// word again.
     func testAWindowWithAPageInItKeepsThePagesOwnName() {
         XCTAssertEqual(WindowNames.name(window("w1", title: "Example Domain")), "Example Domain")
         XCTAssertEqual(WindowNames.name(blank("w2", url: "https://github.com/login")),
@@ -557,8 +689,8 @@ final class SessionPageTests: XCTestCase {
     /**
      * A prefix test on `about:` would have been the tidy way to write it and is
      * wrong: `about:preferences` is a page somebody deliberately opened, and
-     * renaming it *Empty window* would hide a real window inside a name that
-     * means *nothing here*.
+     * renaming it *Untitled* would hide a real window inside the name reserved
+     * for a window that is on no page at all.
      */
     func testAnAboutPageThatIsARealPageIsNotCalledEmpty() {
         XCTAssertEqual(WindowNames.name(blank("w1", url: "about:preferences")),
@@ -576,11 +708,37 @@ final class SessionPageTests: XCTestCase {
      */
     func testTwoWindowsWithOneNameAreToldApartByTheirOrder() {
         let windows = [blank("w1"), window("w2"), blank("w3")]
-        XCTAssertEqual(WindowNames.name(windows[0], in: windows), "Empty window 1")
-        XCTAssertEqual(WindowNames.name(windows[2], in: windows), "Empty window 2")
+        XCTAssertEqual(WindowNames.name(windows[0], in: windows), "Untitled 1")
+        XCTAssertEqual(WindowNames.name(windows[2], in: windows), "Untitled 2")
         XCTAssertEqual(WindowNames.name(windows[1], in: windows), "Example Domain",
                        "a name that appears once is left alone — a number out of nowhere is one "
                        + "more thing to work out")
+    }
+
+    /**
+     * **A page that is really called Untitled, beside a window that is on no page
+     * at all.**
+     *
+     * The one thing the borrowed word costs. *Empty window* was ours and could
+     * never collide with a page's own title; *Untitled* is a word real pages use
+     * — a blank document in an editor is called it, most of the time — so the two
+     * kinds of thing can now land in one list under one name.
+     *
+     * Which is survivable for exactly one reason, and this is it: the numbering
+     * is decided on the **row**, not on what made the row. Two rows reading the
+     * same are told apart whether they are two blank windows, two pages with the
+     * same title, or one of each. Without that, the rename would have put back
+     * the defect it was made to answer — *"we see another name of the window so
+     * why they are like so much of confusing"*.
+     */
+    func testAPageActuallyCalledUntitledIsToldApartFromAWindowWithNoPageInIt() {
+        let rows = [window("w1", title: "Untitled"), blank("w2")]
+        XCTAssertEqual(WindowNames.name(rows[0], in: rows), "Untitled 1")
+        XCTAssertEqual(WindowNames.name(rows[1], in: rows), "Untitled 2")
+        XCTAssertEqual(SessionWindowPicker.row(rows[0], among: rows, session: "s-mine"),
+                       "Untitled 1")
+        XCTAssertEqual(SessionWindowPicker.row(rows[1], among: rows, session: "s-mine"),
+                       "Untitled 2")
     }
 
     // MARK: - The row that offers it
@@ -637,13 +795,13 @@ final class SessionPageTests: XCTestCase {
     func testTwoNamelessWindowsAreTwoThingsSomebodyCanChooseBetween() {
         let rows = [blank("w1"), blank("w2")]
         XCTAssertEqual(SessionWindowPicker.row(rows[0], among: rows, session: "s-mine"),
-                       "Empty window 1")
+                       "Untitled 1")
         XCTAssertEqual(SessionWindowPicker.row(rows[1], among: rows, session: "s-mine"),
-                       "Empty window 2")
+                       "Untitled 2")
 
         let alone = [blank("w9")]
         XCTAssertEqual(SessionWindowPicker.row(alone[0], among: alone, session: "s-mine"),
-                       "Empty window")
+                       "Untitled")
     }
 
     /**
@@ -651,16 +809,16 @@ final class SessionPageTests: XCTestCase {
      * session holding it is not *also* numbered.
      *
      * Numbering is decided against the whole row rather than against the name
-     * inside it, which is what keeps *Empty window · deploy* and *Empty window ·
-     * build* as two names instead of two names with numbers stapled on.
+     * inside it, which is what keeps *Untitled · deploy* and *Untitled · build*
+     * as two names instead of two names with numbers stapled on.
      */
     func testWindowsAlreadyToldApartByTheirHolderAreNotAlsoNumbered() {
         let rows = [blank("w1", session: "s-a", sessionTitle: "deploy"),
                     blank("w2", session: "s-b", sessionTitle: "build")]
         XCTAssertEqual(SessionWindowPicker.row(rows[0], among: rows, session: "s-mine"),
-                       "Empty window · deploy")
+                       "Untitled · deploy")
         XCTAssertEqual(SessionWindowPicker.row(rows[1], among: rows, session: "s-mine"),
-                       "Empty window · build")
+                       "Untitled · build")
     }
 
     /// And where even the holder is the same, the number goes on the **name**, so
@@ -669,9 +827,9 @@ final class SessionPageTests: XCTestCase {
         let rows = [blank("w1", session: "s-a", sessionTitle: "deploy"),
                     blank("w2", session: "s-a", sessionTitle: "deploy")]
         XCTAssertEqual(SessionWindowPicker.row(rows[0], among: rows, session: "s-mine"),
-                       "Empty window 1 · deploy")
+                       "Untitled 1 · deploy")
         XCTAssertEqual(SessionWindowPicker.row(rows[1], among: rows, session: "s-mine"),
-                       "Empty window 2 · deploy")
+                       "Untitled 2 · deploy")
     }
 
     /// The holder falls back to the session **id** where the machine sent no
@@ -814,9 +972,11 @@ final class SessionPageTests: XCTestCase {
     }
 
     /// The row is the page's own name, and a page that has not said its name yet
-    /// is its address rather than "Untitled" — which tells nobody which of their
-    /// servers they are looking at. A name and nothing else: the header that used
-    /// to explain these rows is gone.
+    /// is its address rather than the blank-window name — a page on this phone is
+    /// always *somewhere*, and *Untitled* over three of his own dev servers would
+    /// tell him which of them he was looking at exactly as well as `about:blank`
+    /// did. A name and nothing else: the header that used to explain these rows
+    /// is gone.
     func testThePhoneRowIsWhateverThePageCallsItself() {
         XCTAssertEqual(SessionWindowPicker.phoneRow(page("t1", title: "Deck admin")), "Deck admin")
         XCTAssertEqual(SessionWindowPicker.phoneRow(page("t1", port: 3000, path: "/")),
