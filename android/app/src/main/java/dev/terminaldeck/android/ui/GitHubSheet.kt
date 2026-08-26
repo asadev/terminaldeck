@@ -222,11 +222,30 @@ private fun ConnectedAccount(account: GitHubAccount, onDisconnect: () -> Unit) {
                 color = DeckTheme.colors.primary,
             )
             Text(
-                // Which of the two it is, because revoking them happens in two different places and
-                // "revoke it on GitHub" without saying where is not an instruction.
+                // The date it was connected, in the platform's own medium format — the same line iOS
+                // puts here off `connectedAt`. It lets somebody tell a token added last year from one
+                // added today on the one screen that manages the account.
                 text = when (account.source) {
-                    GitHubAccount.Source.SignIn -> "Signed in. Revoke under Settings → Applications on GitHub."
-                    GitHubAccount.Source.Token -> "Personal access token. Revoke it in its own list on GitHub."
+                    GitHubAccount.Source.SignIn -> "Signed in on ${connectedOn(account.connectedAt)}"
+                    GitHubAccount.Source.Token -> "Personal access token, added ${connectedOn(account.connectedAt)}"
+                },
+                style = DeckType.caption,
+                color = DeckTheme.colors.faint,
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                // Where to revoke it, because "revoke it on GitHub" without saying where is not an
+                // instruction — and the two sources are revoked in two different places.
+                //
+                // There is deliberately no "Choose repositories on GitHub" link here, though iOS has
+                // one: iOS registered a **GitHub App**, whose token reaches only the repositories it
+                // is installed on and which has an install page to choose them. This client still
+                // borrows the GitHub **CLI** OAuth client (see `GitHubSignIn.CLIENT_IS_BORROWED`,
+                // scope `repo`) — there is no app to install and no per-repository picker, so such a
+                // link would open onto nothing. It returns the day this client registers its own app.
+                text = when (account.source) {
+                    GitHubAccount.Source.SignIn -> "Revoke under Settings → Applications on GitHub."
+                    GitHubAccount.Source.Token -> "Revoke it in its own list on GitHub."
                 },
                 style = DeckType.caption,
                 color = DeckTheme.colors.faint,
@@ -407,5 +426,12 @@ private fun Failure(sentence: String) {
     )
     Spacer(Modifier.height(14.dp))
 }
+
+/**
+ * The connection date in the platform's own medium format — "3 Jan 2026", localised — off the epoch
+ * millis [GitHubAccount.connectedAt] records. The same fact iOS prints from its own `connectedAt`.
+ */
+private fun connectedOn(epochMillis: Long): String =
+    java.text.DateFormat.getDateInstance(java.text.DateFormat.MEDIUM).format(java.util.Date(epochMillis))
 
 private val SHEET_SCRIM = Color(0x99000000)
