@@ -10,6 +10,8 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.12.0] — 2026-08-27
+
 ### Added
 
 - **Rename a session.** From the phone, from the desktop for a session on a
@@ -2130,7 +2132,8 @@ First cut. macOS 12+, Apple silicon, unsigned.
 - Preferences with live dark/light theming
 - Session resume (`⌘⇧T`)
 
-[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.12.0
 [0.11.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.11.0
 [0.10.2]: https://github.com/asadev/terminaldeck/releases/tag/v0.10.2
 [0.10.1]: https://github.com/asadev/terminaldeck/releases/tag/v0.10.1
