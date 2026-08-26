@@ -32,11 +32,11 @@ data class ServerInstallState(
     /** What the installer printed, as it printed it. */
     val output: String = "",
 ) {
-    enum class Step { IDLE, CHECKING, STAGING, INSTALLING, SERVICE, DONE, FAILED }
+    enum class Step { IDLE, CHECKING, STAGING, INSTALLING, SERVICE, REMOVING, DONE, FAILED }
 
     val isBusy: Boolean
         get() = step == Step.CHECKING || step == Step.STAGING ||
-            step == Step.INSTALLING || step == Step.SERVICE
+            step == Step.INSTALLING || step == Step.SERVICE || step == Step.REMOVING
 }
 
 /** Where an attempt to log in to a server has got to. */
@@ -65,6 +65,13 @@ data class ServersState(
     val problems: Map<String, ServerTrouble> = emptyMap(),
     val installs: Map<String, ServerInstallState> = emptyMap(),
     val login: LoginPhase = LoginPhase.Editing,
+    /**
+     * This app's own build, carried on the state so a screen can compare it against what a server
+     * is running without reaching into the connector for it. What [HostProbe.updateAvailable] and
+     * the Update button are decided from. Empty in a unit-tested default, which reads as "say
+     * nothing" — the safe answer when there is no build to compare against.
+     */
+    val appVersion: String = "",
 ) {
     val isSigningIn: Boolean get() = login is LoginPhase.Reaching || login is LoginPhase.Looking
 }
@@ -130,7 +137,7 @@ class ServerConnector(
      */
     private val installTimeoutMs = 12 * 60 * 1000L
 
-    private val _state = MutableStateFlow(ServersState(servers = store.all()))
+    private val _state = MutableStateFlow(ServersState(servers = store.all(), appVersion = appVersion))
     val state: StateFlow<ServersState> = _state.asStateFlow()
 
     /** Sessions belonging to open cards. See the header. */
@@ -431,8 +438,24 @@ class ServerConnector(
                         "that server is what stops that."
                 }
             }
-            // Fall through rather than fail: a unit that would not install is a reason to start it
-            // another way, not a reason to leave a working install switched off.
+            /*
+             * **On a systemd box, a unit that did not come up is not started another way — it is
+             * reported.**
+             *
+             * The old fall-through here went on to [ServerScripts.startDirect], a bare start over
+             * the SSH session that is being closed the moment this install returns. On a machine
+             * that has systemd — the machine that *should* be running under it — that "recovery"
+             * starts a host that dies with the connection, which is one of the two ways an update
+             * left a server dark on 2026-08-27: the files updated, the unit did not take, and a bare
+             * host filled the gap only until the phone hung up. That is the shape of Asad's report —
+             * *"after updating server app it keeps reconnecting… server is still connected but not
+             * the sessions"*. The hardened [ServerScripts.service] now proves the unit is active
+             * before it exits 0, so a non-zero code here means it genuinely could not, and the
+             * honest answer is to say so and point at the control that retries — not to paper over
+             * it with a start that cannot outlive this call.
+             */
+            return "It is installed and updated, but its background service did not come back up. " +
+                "`terminaldeck status` on the server says why; the Start button here brings it up."
         }
         val started = try {
             session.run(ServerScripts.startDirect(look.host.command))
@@ -470,6 +493,32 @@ class ServerConnector(
                 ServerScripts.stop(command = look.host.command, hasUnit = look.host.unit.isNotEmpty())
             }
             session.run(script)
+            if (running) {
+                /*
+                 * **Started is not reachable**, and the difference is the whole of the bug this
+                 * closes.
+                 *
+                 * Both start scripts return the instant the daemon is forked — `systemctl start`
+                 * by design, `nohup` by definition — while the thing a phone actually needs is a
+                 * *relay dial* that has not happened yet. So the survey below read a `status` with
+                 * no address block, [canConnect] answered false, and "start it and connect" started
+                 * it and connected to nothing, silently. [ServerScripts.address] is the wait, and
+                 * it is the host's own — it knows how old the daemon is and stops waiting when the
+                 * answer cannot improve. Its result is ignored on purpose; what this call buys is
+                 * the seconds, and the survey on the next line is what reads the answer.
+                 *
+                 * Swallowed rather than rethrown: an older host has no `address` verb, and a host
+                 * that will not start has already failed in a way the survey reports properly.
+                 * Neither is a reason to throw away a measurement that would have said so. `working`
+                 * still holds `id` for all of this — deliberately, so the spinner is still turning
+                 * while the wait happens rather than the card sitting still and looking done.
+                 */
+                try {
+                    session.run(ServerScripts.address(look.host.command))
+                } catch (e: Exception) {
+                    // Handled by the survey below, which is the one that reports the true state.
+                }
+            }
             _state.value = _state.value.copy(views = _state.value.views + (id to measure(session)))
         } catch (e: SshException) {
             trouble(id, ServerTrouble(e.problem))
@@ -494,6 +543,113 @@ class ServerConnector(
         val look = _state.value.views[id]?.host ?: return
         if (!look.host.isInstalled) return
         if (look.host.running != HostRunning.YES) start(id)
+    }
+
+    /* ------------------------------------------------------------- removing -- */
+
+    /**
+     * Take it off that server again, and say what is left.
+     *
+     * ## Why this exists at all
+     *
+     * Because the install card promised it: *"needs no administrator access, and can be taken off
+     * again."* That sentence was on screen for a build in which no verb on this side could remove
+     * anything — the phone had install, start and stop, and the way back was a desktop. A promise a
+     * product cannot keep is worse than a missing feature, and the desktop had already argued the
+     * case in `host.ts`'s own header: *"If we want to uninstall we can uninstall."*
+     *
+     * ## The confirmation is the caller's
+     *
+     * [HostProbe.removeConsequence] is the sentence shown before the press, and [alsoData] is the
+     * answer to it. By the time this runs the question has been asked, so this does the work and
+     * reports it rather than asking again — the desktop's `ServerHosts.uninstall` splits it the
+     * same way and for the same reason.
+     *
+     * ## What is deliberately left alone
+     *
+     * This phone's own record of the machine. The host is gone from that server, but the server row
+     * and its pairing are this app's, not that server's. What *is* re-read is the survey, because
+     * the card is drawn from it and it must not still be offering Stop for a program that is gone.
+     */
+    suspend fun uninstall(id: String, alsoData: Boolean) {
+        val server = store.load(id) ?: return
+        val look = _state.value.views[id]?.host ?: return
+        if (!look.host.isInstalled || _state.value.working.contains(id)) return
+        begin(id)
+
+        var state = ServerInstallState(
+            step = ServerInstallState.Step.REMOVING,
+            line = "Stopping it and taking it off ${server.name}.",
+        )
+        putInstall(id, state)
+
+        try {
+            val session = open(server)
+            val ran = session.run(
+                ServerScripts.remove(
+                    command = look.host.command,
+                    dataDir = look.host.dataDir,
+                    alsoData = alsoData,
+                )
+            )
+            if (ran.code != 0) {
+                // The server's own words, and the exit code when it had none. The one refusal with
+                // a shape worth reading is the `$HOME` guard in [ServerScripts.remove]: "not ours
+                // to remove", for a host somebody else installed for everyone on that machine.
+                val said = ran.stderr.trim()
+                state = state.copy(
+                    step = ServerInstallState.Step.FAILED,
+                    line = "That could not be removed from ${server.name}.",
+                    detail = said.ifEmpty { "It ended with ${ran.code}." },
+                )
+                putInstall(id, state)
+                return
+            }
+            state = state.copy(
+                step = ServerInstallState.Step.DONE,
+                line = "It was removed from ${server.name}.",
+                done = listOf(
+                    "The host program is gone, and its service with it.",
+                    if (alsoData) {
+                        "${look.host.dataDir} is gone too, so any device paired to it will need " +
+                            "pairing again."
+                    } else {
+                        "${look.host.dataDir} was left alone — the devices paired to it and the " +
+                            "folders each of them may use are still there for a later install."
+                    },
+                ),
+            )
+            putInstall(id, state)
+            // A survey that fails a moment later must not turn a completed removal into a failed
+            // one; the card falls back to "nothing has been looked at" and its Check button, which
+            // is a true thing to say about a phone that has just lost its connection.
+            val view = try {
+                measure(session)
+            } catch (e: Exception) {
+                null
+            }
+            if (view != null) {
+                _state.value = _state.value.copy(views = _state.value.views + (id to view))
+            }
+        } catch (e: SshException) {
+            state = state.copy(
+                step = ServerInstallState.Step.FAILED,
+                line = e.problem.headline,
+                detail = e.problem.advice,
+            )
+            putInstall(id, state)
+            drop(id)
+        } catch (e: Exception) {
+            state = state.copy(
+                step = ServerInstallState.Step.FAILED,
+                line = "That removal did not finish.",
+                detail = e.toString(),
+            )
+            putInstall(id, state)
+            drop(id)
+        } finally {
+            end(id)
+        }
     }
 
     /* ------------------------------------------------------------- connecting -- */

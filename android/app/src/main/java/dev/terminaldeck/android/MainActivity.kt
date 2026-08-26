@@ -22,6 +22,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -31,6 +32,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import kotlinx.coroutines.launch
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import android.net.Uri
@@ -62,6 +64,7 @@ import dev.terminaldeck.android.ui.WatchSurfacesScreen
 import dev.terminaldeck.android.ui.WatchViewerScreen
 import dev.terminaldeck.android.transfer.PickedFile
 import dev.terminaldeck.android.ui.HostStepCard
+import dev.terminaldeck.android.ui.ServerDetailScreen
 import dev.terminaldeck.android.ui.AlertsScreen
 import dev.terminaldeck.android.ui.CopilotConsentSheet
 import dev.terminaldeck.android.ui.CopilotScreen
@@ -276,6 +279,8 @@ private const val ARG_SESSION_ID = "sessionId"
  */
 private const val ROUTE_SETTINGS = "settings"
 private const val ROUTE_MACHINES = "machines"
+private const val ROUTE_SERVER = "server/{serverId}"
+private const val ARG_SERVER_ID = "serverId"
 private const val ROUTE_DEVICES = "devices"
 private const val ROUTE_WATCH = "watch"
 private const val ROUTE_ALERTS = "alerts"
@@ -869,14 +874,52 @@ fun TerminalDeckApp(
         }
 
         composable(ROUTE_MACHINES) {
+            val servers by viewModel.serverConnector.state.collectAsStateWithLifecycle()
             MachinesScreen(
                 hosts = state.hosts,
+                servers = servers.servers,
+                pairedHostIds = state.hosts.map { it.hostId }.toSet(),
                 onBack = { navController.popBackStack() },
                 onSelect = viewModel::select,
                 onRename = viewModel::rename,
                 onForget = viewModel::forget,
                 onAddHost = viewModel::beginAddingHost,
                 onAddServer = viewModel::beginAddingServer,
+                onOpenServer = { id -> navController.navigate("server/$id") },
+            )
+        }
+
+        /*
+         * One server's own page — install, update, start, stop, connect, disconnect and remove, the
+         * whole of what the desktop's server panel does. Reached from the Servers section of the
+         * machines list. The connector's state is collected here rather than folded into the app's
+         * so an install's live output does not recompose every screen; the relay verbs (connect,
+         * start-and-connect, disconnect) go through the view model because they spend a relay
+         * sign-in, and the rest are the connector's own.
+         */
+        composable(ROUTE_SERVER) { entry ->
+            val serverId = entry.arguments?.getString(ARG_SERVER_ID).orEmpty()
+            val servers by viewModel.serverConnector.state.collectAsStateWithLifecycle()
+            val ops = rememberCoroutineScope()
+            ServerDetailScreen(
+                serverId = serverId,
+                state = servers,
+                pairedHostIds = state.hosts.map { it.hostId }.toSet(),
+                onBack = { navController.popBackStack() },
+                onCheck = { viewModel.checkServer(serverId) },
+                onInstall = { viewModel.installOnServer(serverId) },
+                onStartAndConnect = { viewModel.startAndConnectServer(serverId) },
+                onConnect = { viewModel.connectToServer(serverId) },
+                onStop = { viewModel.stopServer(serverId) },
+                onDisconnect = { viewModel.disconnectServer(serverId) },
+                // Removal is the connector's own verb with no view-model wrapper; it is short and
+                // reports through the same install state the card already draws.
+                onRemove = { alsoData -> ops.launch { viewModel.serverConnector.uninstall(serverId, alsoData) } },
+                onRename = { name -> viewModel.serverConnector.rename(serverId, name) },
+                onForget = {
+                    viewModel.serverConnector.forget(serverId)
+                    navController.popBackStack()
+                },
             )
         }
 
@@ -991,6 +1034,10 @@ fun TerminalDeckApp(
                 linked = server.linkedHostId?.let { id -> state.hosts.any { it.hostId == id } } == true,
                 onCheck = { viewModel.checkServer(server.id) },
                 onInstall = { viewModel.installOnServer(server.id) },
+                // Update is the same verb as install — it stages this app's own release over the
+                // open session and re-surveys — so it cannot drift into a second answer about the
+                // version a server ends up on.
+                onUpdate = { viewModel.installOnServer(server.id) },
                 onStartAndConnect = { viewModel.startAndConnectServer(server.id) },
                 onConnect = { viewModel.connectToServer(server.id) },
                 onStop = { viewModel.stopServer(server.id) },

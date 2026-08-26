@@ -330,4 +330,113 @@ object HostProbe {
                     "this app's own build on, which does print one."
         }
     }
+
+    /**
+     * Whether the only thing between this phone and a connection is the **build on that server** —
+     * the one refusal an install actually repairs.
+     *
+     * The three questions [connectRefusal] asks to reach its last branch, asked again as an answer
+     * a card can act on rather than print. They sit next to each other deliberately: a condition
+     * added to one has to be added to the other, and an Install button offered for a relay that is
+     * switched off would be exactly the control §4.1 forbids — one that cannot do what pressing it
+     * claims.
+     */
+    fun needsNewerBuild(host: HostOnServer): Boolean {
+        if (!host.isInstalled || host.running != HostRunning.YES || host.address.isNotEmpty()) return false
+        return when (relay(host.status)) {
+            HostRelay.CONNECTED, HostRelay.UNKNOWN -> true
+            HostRelay.OFF, HostRelay.NOT_CONNECTED -> false
+        }
+    }
+
+    /**
+     * Whether the host on that server is **older than this app**, and by which version — or null
+     * when it is level, ahead, or has not said.
+     *
+     * > *"whenever there is a new update for headless… it should show the update button also next
+     * > to where we install and we can see we installed it… so we can just directly update anytime
+     * > directly from the connected device."*
+     *
+     * The narrow case this generalises is [needsNewerBuild] above, which fires only for a host too
+     * old to print a server address — one failure, noticed because it produced a dead end. But a
+     * host can be a release behind without failing at anything yet, and the person holding the
+     * phone is the only one who can see both numbers: the app knows what it ships, and the probe
+     * has just read what is on the server.
+     *
+     * ## It compares, rather than trusting the strings to sort
+     *
+     * `"0.9.1" > "0.10.1"` is true as text and false as a version, and this product has already
+     * shipped a 0.9 and a 0.10. Each field is compared as a number, missing fields read as zero,
+     * and anything that is not a plain `x.y.z` answers null rather than guessing.
+     *
+     * ## Ahead is not behind
+     *
+     * A phone on an older build than the server is a real case, and it must draw nothing: offering
+     * to "update" a server *down* to this app's version is a control that makes the machine worse.
+     * Level draws nothing either — the row exists to say *there is something newer*, and the honest
+     * answer when there is not is silence.
+     */
+    fun updateAvailable(host: HostOnServer, mine: String): String? {
+        if (!host.isInstalled) return null
+        val there = semver(host.version) ?: return null
+        val here = semver(mine) ?: return null
+        for (i in there.indices) {
+            if (there[i] != here[i]) return if (there[i] < here[i]) mine else null
+        }
+        return null
+    }
+
+    /**
+     * `x.y.z` as three numbers, padded, or null for anything else. Trimmed of a leading `v` because
+     * `--version` output has carried one on some builds.
+     */
+    private fun semver(text: String): List<Int>? {
+        val clean = text.trim().trim('v')
+        val parts = clean.split(".")
+        if (parts.isEmpty() || parts.size > 3) return null
+        val out = ArrayList<Int>(3)
+        for (part in parts) {
+            val n = part.toIntOrNull() ?: return null
+            if (n < 0) return null
+            out += n
+        }
+        while (out.size < 3) out += 0
+        return out
+    }
+
+    /* ------------------------------------------------------- the way back -- */
+
+    /**
+     * The button that takes it off again, named the way a person would say it. `REMOVE_HOST_LABEL`
+     * on the desktop, the same words on purpose.
+     */
+    const val removeLabel = "Remove it from this server"
+
+    /**
+     * What removing it leaves behind, said before the press rather than discovered after it.
+     *
+     * The desktop's sentence, with one difference that is the phone's situation and not a rewrite:
+     * there is no tick box here. A confirmation sheet on a phone is a list of verbs, so the choice
+     * between keeping and not keeping what the host stored is **two buttons**, and this names the
+     * other one instead of a control that does not exist.
+     *
+     * The data folder is the interesting half and it is deliberately not the default: it holds the
+     * devices paired to this host and the folders each of them may use, and somebody removing the
+     * program to put a newer one on does not expect to pair this phone again afterwards.
+     */
+    fun removeConsequence(host: HostOnServer, alsoData: Boolean): String {
+        val service = if (host.unit.isEmpty()) "" else " Its service is stopped and its unit file removed."
+        val data = if (alsoData) {
+            " Everything it stored on that server goes too — ${host.dataDir}, which is the devices " +
+                "paired to it and the folders each of them may use. This phone would need connecting " +
+                "again."
+        } else {
+            " What it stored stays: ${host.dataDir} holds the devices paired to it and the folders " +
+                "each of them may use, so a later install finds them again — the other button takes " +
+                "that too."
+        }
+        return "This removes the host program and, if this app fetched one, the private Node runtime " +
+            "beside it.$service$data This app's own record of the machine is separate — forget it " +
+            "under Machines if you want that gone too."
+    }
 }

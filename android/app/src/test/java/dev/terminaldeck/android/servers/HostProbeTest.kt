@@ -287,4 +287,73 @@ class HostProbeTest {
     fun `nothing installed has nothing to say about tomorrow`() {
         assertNull(HostProbe.reachLine(HostOnServer()))
     }
+
+    /* ------------------------------------------------------- update available -- */
+
+    private fun on(version: String): HostOnServer =
+        HostOnServer(command = "/home/asad/.local/bin/terminaldeck", version = version)
+
+    @Test
+    fun `it offers this build when the server is behind`() {
+        assertEquals("0.10.3", HostProbe.updateAvailable(on("0.10.1"), mine = "0.10.3"))
+        assertEquals("0.10.0", HostProbe.updateAvailable(on("0.9.9"), mine = "0.10.0"))
+    }
+
+    /**
+     * The one a string comparison gets wrong, and the reason this is not `<` on the strings.
+     * `"0.9.1" < "0.10.1"` is **false** as text, because `9` sorts after `1`. This product has
+     * shipped both a 0.9 and a 0.10, so that ordering is the release it is actually on.
+     */
+    @Test
+    fun `it compares fields as numbers, not as text`() {
+        assertEquals("0.10.1", HostProbe.updateAvailable(on("0.9.1"), mine = "0.10.1"))
+        assertNull(HostProbe.updateAvailable(on("0.10.1"), mine = "0.9.1"))
+    }
+
+    @Test
+    fun `it says nothing when the server is level or ahead`() {
+        assertNull(HostProbe.updateAvailable(on("0.10.3"), mine = "0.10.3"))
+        // A phone on an older build than the server is real, and "updating" it *down* would make
+        // the machine worse.
+        assertNull(HostProbe.updateAvailable(on("0.11.0"), mine = "0.10.3"))
+    }
+
+    @Test
+    fun `it says nothing with no host to update`() {
+        assertNull(HostProbe.updateAvailable(HostOnServer(version = "0.1.0"), mine = "0.10.3"))
+    }
+
+    /** Silence rather than a guess: the cost is a missing button, the cost of guessing is an install nobody asked for. */
+    @Test
+    fun `it says nothing rather than guessing at an odd version`() {
+        for (odd in listOf("", "unknown", "0.10.1-rc.1", "2026.08.24.1", "v", "0.a.1", "-1.0.0")) {
+            assertNull(odd, HostProbe.updateAvailable(on(odd), mine = "0.10.3"))
+        }
+    }
+
+    @Test
+    fun `it tolerates a leading v and pads a short version`() {
+        assertEquals("0.10.3", HostProbe.updateAvailable(on("v0.10.1"), mine = "0.10.3"))
+        assertEquals("0.10.3", HostProbe.updateAvailable(on("0.10"), mine = "0.10.3"))
+        assertNull(HostProbe.updateAvailable(on("1"), mine = "0.10.3"))
+    }
+
+    /* ------------------------------------------------------- the way back -- */
+
+    @Test
+    fun `removing names what stays and what goes with the data`() {
+        val host = HostOnServer(
+            command = "/home/asad/.local/bin/terminaldeck",
+            unit = "active",
+            dataDir = "/home/asad/.local/share/terminaldeck",
+        )
+
+        val kept = HostProbe.removeConsequence(host, alsoData = false)
+        assertTrue("it names the service it stops", kept.contains("Its service is stopped"))
+        assertTrue("and says what is left behind", kept.contains("holds the devices paired to it"))
+
+        val taken = HostProbe.removeConsequence(host, alsoData = true)
+        assertTrue(taken.contains("goes too"))
+        assertTrue("and warns pairing is lost", taken.contains("connecting again"))
+    }
 }

@@ -379,6 +379,73 @@ class ServerConnectorTest {
         )
     }
 
+    /**
+     * **A service that will not come up is reported, not papered over with a start that dies.**
+     *
+     * The hardened `service()` proves the unit is active before it exits 0, so a non-zero code
+     * means it genuinely could not. The old code then ran `startDirect` — a bare host over the SSH
+     * session being closed the instant install returns — which on a systemd box is a host that dies
+     * with the connection. That is one of the two ways an update left a server dark on 2026-08-27,
+     * and the shape of Asad's report: *"after updating server app it keeps reconnecting… server is
+     * still connected but not the sessions."*
+     */
+    @Test
+    fun `an install whose unit will not come up says so and starts no host that dies with the session`() = runTest {
+        val (connector, id) = loggedIn(bareLinux())
+        script.on(HOST_PROBE, stdout = installed())
+        script.on("install.sh <<", stdout = "/tmp/x/install.sh\n")
+        script.on("TERMINALDECK_PACKAGE", stdout = "installed\n")
+        // The unit is written, but restart-and-prove never sees it active.
+        script.on("systemctl --user restart", code = 1, stderr = "unit failed\n")
+
+        connector.install(id)
+
+        val install = connector.state.value.installs.getValue(id)
+        assertEquals(ServerInstallState.Step.DONE, install.step)
+        assertTrue(
+            "the service state is reported honestly",
+            install.done.any { it.contains("did not come back up") },
+        )
+        assertFalse(
+            "no bare host that dies when the SSH session closes",
+            script.runs.any { it.contains("nohup") },
+        )
+    }
+
+    /* ------------------------------------------------------------- removing -- */
+
+    @Test
+    fun `uninstall removes the host, says what is left, and re-reads the server`() = runTest {
+        val (connector, id) = loggedIn(installed())
+
+        connector.uninstall(id, alsoData = false)
+
+        val install = connector.state.value.installs.getValue(id)
+        assertEquals(ServerInstallState.Step.DONE, install.step)
+        assertTrue(install.line.contains("was removed"))
+        assertTrue(
+            "it says the program and its service are gone",
+            install.done.any { it.contains("host program is gone") },
+        )
+        assertTrue(
+            "the removal script actually went out",
+            script.runs.any { it.contains("not ours to remove") },
+        )
+    }
+
+    @Test
+    fun `a removal the server refuses keeps the server's own words on the card`() = runTest {
+        val (connector, id) = loggedIn(installed())
+        // The `$HOME` guard fired: a host installed for everyone, outside this account's home.
+        script.on("disable --now", code = 1, stderr = "not ours to remove\n")
+
+        connector.uninstall(id, alsoData = false)
+
+        val install = connector.state.value.installs.getValue(id)
+        assertEquals(ServerInstallState.Step.FAILED, install.step)
+        assertTrue(install.detail.contains("not ours to remove"))
+    }
+
     /* ------------------------------------------------------------- connecting -- */
 
     @Test
