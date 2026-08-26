@@ -338,6 +338,16 @@ struct MachineBrowserView: View {
     /// every tab on that port, so it cannot say which of them is open.
     @State private var currentTabID: String?
 
+    /**
+     * The one line the page says when it arrives, or nil.
+     *
+     * *"there is no clarity so if I go to again new, if I click on open in this
+     * phone, I think this one is in this phone."* Set only by `openHere` — the
+     * act of **opening** a page on this phone — and deliberately not by `resume`,
+     * which is going back to one. See both.
+     */
+    @State private var landing: String?
+
     /// Whether this phone's own browsing history is up. See `BrowserHistoryView`.
     @State private var showingHistory = false
 
@@ -526,7 +536,8 @@ struct MachineBrowserView: View {
          * `opening` to `live`.
          */
         .navigationDestination(item: $browsing) { tunnel in
-            LocalhostBrowser(model: model, tunnel: tunnel, path: browsingPath, tabID: currentTabID) {
+            LocalhostBrowser(model: model, tunnel: tunnel, path: browsingPath,
+                             tabID: currentTabID, announce: landing) {
                 browsing = nil
                 currentTabID = nil
             }
@@ -536,7 +547,14 @@ struct MachineBrowserView: View {
             // whichever way the page goes away, the port stops being reachable.
             // A gesture that left the tunnel open would leave the machine
             // serving to a phone that is no longer looking.
-            if dismissed { model.closeLocalhost() }
+            // And the arrival line goes with the page. It has already been said —
+            // `show` holds it for two and a half seconds inside a screen that is
+            // now gone — and leaving it set would hand it to whatever the *next*
+            // push is, which may be a tab somebody is only coming back to.
+            if dismissed {
+                model.closeLocalhost()
+                landing = nil
+            }
             // And whichever way it goes, the tab bar comes back. The bar belongs
             // to the `TabView` rather than to this screen — see
             // `DeckModel.localhostPageIsOpen` for why that is a flag and not a
@@ -658,11 +676,24 @@ struct MachineBrowserView: View {
      * all: without it a press that worked perfectly has nothing on screen for a
      * second or two, and the honest fix is a `surfacesChanged` push on the host
      * rather than a fourth read here.
+     *
+     * ## And it says which machine, on every press, including the blank one
+     *
+     * > *"when it is automatically opening in this phone, I am not sure now if
+     * > this opens in this phone or it is open in the other device in the server
+     * > side."*
+     *
+     * The line was `guard let url else { return }` — a blank window on the
+     * machine, which is a real thing to ask for and the one case with no address
+     * to resolve, was also the one case that put nothing on screen. So the
+     * destination he had chosen two taps ago vanished with the sheet and the list
+     * behind it did not move for a second or two. Both shapes say it now, and the
+     * words are `MachineBrowserText.opening` rather than a string built here, so
+     * the banner and the row's capsule name the machine identically.
      */
     private func openWindow(_ url: String?, isolated: Bool) {
         host?.openMachineWindow(url: url, isolated: isolated)
-        guard let url else { return }
-        say("Opening \(shortened(url)) on \(model.current?.label ?? model.theMachine)")
+        say(MachineBrowserText.opening(url, on: machineName))
     }
 
     /**
@@ -783,6 +814,25 @@ struct MachineBrowserView: View {
         guard let tab = model.browserTabs.open(port: port, path: path, machine: model) else { return }
         browsingPath = tab.path
         currentTabID = tab.id
+        /*
+         * **And the page says whose it is when it arrives.**
+         *
+         * > *"there is no clarity so if I go to again new, if I click on open in
+         * > this phone, I think this one is in this phone… there is no clarity."*
+         *
+         * The other door leaves a banner on this list — see `openWindow` — and
+         * this one cannot: it pushes the page in the same turn, so a sentence on
+         * the screen behind it is one nobody ever sees. The line rides along to
+         * `LocalhostBrowser`, which draws it in the toast it already has for the
+         * things that are silent by nature, and it is gone two and a half
+         * seconds later.
+         *
+         * Set here and **not** in `resume`, which is the whole reason it is a
+         * value rather than a fact the page could work out for itself: this is
+         * the moment a page is opened, and coming back to one already open is not
+         * news.
+         */
+        landing = MachineBrowserText.openingHere(port: port)
         browsing = model.browserTabs.tunnel(for: tab)
     }
 
@@ -793,6 +843,10 @@ struct MachineBrowserView: View {
         guard let live = model.browserTabs.resume(tab, machine: model) else { return }
         browsingPath = live.path
         currentTabID = live.id
+        // Nothing to announce: the row that was tapped already said **On this
+        // phone**, and a toast repeating it on arrival would be the app telling
+        // somebody what they just pressed.
+        landing = nil
         browsing = model.browserTabs.tunnel(for: live)
     }
 
@@ -1304,7 +1358,8 @@ struct MachineBrowserView: View {
             // One sentence rather than the five `Text`s a stack of marks reads
             // by default: the marks only mean anything attached to the window
             // they are on.
-            .accessibilityLabel(MachineBrowserText.spoken(window, streaming: cast?.live == true))
+            .accessibilityLabel(MachineBrowserText.spoken(window, on: machineName,
+                                                          streaming: cast?.live == true))
             .accessibilityHint("Opens this window")
             /*
              * `row`, not `window`, and the prefix matters.
@@ -1383,13 +1438,27 @@ struct MachineBrowserView: View {
                                 .lineLimit(1)
                                 .truncationMode(.middle)
                         }
-                        if surface.live {
-                            HStack(spacing: 6) {
+                        /*
+                         * Where it runs, first and always — see `marks`, which
+                         * makes the whole argument. A cast row is a page in the
+                         * **machine's** browser exactly as a window row is; the
+                         * only thing that separates them is whether the host
+                         * minted a shell tab id for the slot, which is not a
+                         * fact anybody holding a phone can see or should have to
+                         * think about. So it wears the same first capsule, and
+                         * `Live` — which used to be the only mark this row ever
+                         * had — follows it.
+                         */
+                        HStack(spacing: 6) {
+                            MachineWindowMark(text: MachineBrowserText.onMachine(machineName),
+                                              tone: Theme.secondary)
+                                .layoutPriority(1)
+                            if surface.live {
                                 MachineWindowMark(text: "Live", tone: Theme.positive)
-                                Spacer(minLength: 0)
                             }
-                            .padding(.top, 1)
+                            Spacer(minLength: 0)
                         }
+                        .padding(.top, 1)
                     }
                     Spacer(minLength: 8)
                 }
@@ -1399,9 +1468,10 @@ struct MachineBrowserView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(MachineRowButtonStyle())
-            .accessibilityLabel(surface.live
-                                ? "\(MachineBrowserText.surfaceLabel(surface)), being watched"
-                                : MachineBrowserText.surfaceLabel(surface))
+            // The machine is spoken as well as drawn, for the same reason it is
+            // drawn: a list read aloud that names two pages and neither of their
+            // computers is the same list he could not read with his eyes.
+            .accessibilityLabel(MachineBrowserText.spoken(surface, on: machineName))
             .accessibilityHint("Opens this window")
             // `front` rather than the empty name it actually wears: an identifier
             // ending in a bare dot is one nobody reading a failure can tell from a
@@ -1473,8 +1543,15 @@ struct MachineBrowserView: View {
                             .foregroundStyle(Theme.faint)
                             .lineLimit(1)
                             .truncationMode(.middle)
+                        // The one row on this list that has always said where it
+                        // runs. `MachineBrowserText.onThisPhone` rather than the
+                        // literal, now that the machine's rows say the other half
+                        // of the same sentence — two words that only mean
+                        // anything as a pair should not be two literals in two
+                        // view bodies.
                         HStack(spacing: 6) {
-                            MachineWindowMark(text: "On this phone", tone: Theme.secondary)
+                            MachineWindowMark(text: MachineBrowserText.onThisPhone,
+                                              tone: Theme.secondary)
                             Spacer(minLength: 0)
                         }
                         .padding(.top, 1)
@@ -1510,40 +1587,97 @@ struct MachineBrowserView: View {
     /**
      * The facts a row cannot leave implicit.
      *
-     * The slot first, because it is the name the bound session's own tools call
-     * this window by — somebody reading an agent's transcript sees `B1`, and
-     * this is the only place on the phone that says which window that is.
+     * ## Which computer drew this page, first, on every row
+     *
+     * > *"when it is automatically opening in this phone, I am not sure now if
+     * > this opens in this phone or it is open in the other device in the server
+     * > side."*
+     *
+     * > *"there is no clarity so if I go to again new, if I click on open in this
+     * > phone, I think this one is in this phone… there is no clarity."*
+     *
+     * He was standing on this list with two rows on it, both called **Paperclip**
+     * — one a window on his machine and one a page over a tunnel on the phone in
+     * his hand — and the only row that said which was which was the phone's. A
+     * window on the machine carried `Private` when it had a throwaway profile and
+     * **nothing at all** otherwise, so the ordinary case of this whole tab was a
+     * row that named a page and never named the computer rendering it. That is
+     * the one question this screen exists to answer: it is a list of windows from
+     * two machines drawn as one list, and the join is only readable if both sides
+     * say which side they are.
+     *
+     * So the first mark is where the window runs — **On DESKTOP-DDGMNCV** here,
+     * **On this phone** on `pageRow` — and it is drawn on every row rather than
+     * on the interesting ones. The words are `MachineBrowserText.onMachine` and
+     * `.onThisPhone`, which are the same two capsules
+     * `MachineWindowSettingsView.windowMarks` has always put on the Window card,
+     * so the row and the screen it opens onto say the same thing in the same
+     * words: *"if it is open in local in this machine"*, answered twice by one
+     * string.
+     *
+     * ## And this is the one mark that is allowed to be on everything
+     *
+     * The rule in this file's header is real and it points the other way —
+     * *"Castable and being cast right now are two facts: on a desktop every pane
+     * is in `castWindows`, so a mark drawn from 'there is a surface' would sit on
+     * all of them and distinguish nothing"*, which is his own *"no quantity spam,
+     * no free emphasis."* A mark every row wears usually distinguishes nothing.
+     *
+     * This one does, and the test is what happens when it is taken off: the list
+     * goes back to being two kinds of window under one heading with no way to
+     * tell them apart, which is the state he filmed. `Live`, `Private` and
+     * `Recording` are conditions — drawn when true, absent when not — and this is
+     * an **identity**, drawn always for the same reason the address under the
+     * title is drawn always. A fact that is true of every row is spam only when
+     * it is the *same* fact on every row; this one is different on the rows it
+     * matters on.
+     *
+     * ## The slot lost first place, deliberately
+     *
+     * It held it because it is the name a bound session's own tools call this
+     * window by — somebody reading an agent's transcript sees `B1`, and this is
+     * the only place on the phone that says which window that is. That is still
+     * true and it is still the second mark. What put the destination in front of
+     * it is that a slot only means anything once you know whose browser the
+     * window is in, and a row can carry a slot without ever having been read as a
+     * machine's.
      */
     @ViewBuilder
     private func marks(_ window: MachineWindow, streaming: Bool) -> some View {
-        if window.isBound || window.isolated || window.recording || streaming {
-            HStack(spacing: 6) {
-                if let slot = window.slot {
-                    MachineWindowMark(text: slot, tone: Theme.accent)
-                    if let owner = MachineBrowserText.owner(window) {
-                        Text(owner)
-                            .font(.system(size: 12))
-                            .foregroundStyle(Theme.secondary)
-                            .lineLimit(1)
-                    }
+        HStack(spacing: 6) {
+            // Never truncated away by what follows it: the marks after this one
+            // are short words and this one is a machine's name, so it takes its
+            // width first and `Recording` compresses instead. `layoutPriority`
+            // rather than a fixed frame, because DESKTOP-DDGMNCV and Air are
+            // eleven characters apart.
+            MachineWindowMark(text: MachineBrowserText.onMachine(machineName),
+                              tone: Theme.secondary)
+                .layoutPriority(1)
+            if let slot = window.slot {
+                MachineWindowMark(text: slot, tone: Theme.accent)
+                if let owner = MachineBrowserText.owner(window) {
+                    Text(owner)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.secondary)
+                        .lineLimit(1)
                 }
-                if streaming {
-                    MachineWindowMark(text: "Live", tone: Theme.positive)
-                }
-                if window.isolated {
-                    // **Private**, the word Safari and Firefox both use. The
-                    // `isolated` flag on the wire keeps its own name — see the
-                    // header — because this is what he reads, not what the
-                    // machine is sent.
-                    MachineWindowMark(text: "Private", tone: Theme.secondary)
-                }
-                if window.recording {
-                    MachineWindowMark(text: "Recording", tone: Theme.critical)
-                }
-                Spacer(minLength: 0)
             }
-            .padding(.top, 1)
+            if streaming {
+                MachineWindowMark(text: "Live", tone: Theme.positive)
+            }
+            if window.isolated {
+                // **Private**, the word Safari and Firefox both use. The
+                // `isolated` flag on the wire keeps its own name — see the
+                // header — because this is what he reads, not what the
+                // machine is sent.
+                MachineWindowMark(text: "Private", tone: Theme.secondary)
+            }
+            if window.recording {
+                MachineWindowMark(text: "Recording", tone: Theme.critical)
+            }
+            Spacer(minLength: 0)
         }
+        .padding(.top, 1)
     }
 
     /**
@@ -3047,8 +3181,18 @@ enum MachineBrowserText {
      * with the jargon in it. Everything else on the Browser tab already went
      * through `WindowNames`; this was the last caller left holding the raw label.
      */
-    static func spoken(_ window: MachineWindow, streaming: Bool = false) -> String {
+    static func spoken(_ window: MachineWindow, on machine: String = "",
+                       streaming: Bool = false) -> String {
         var parts = [WindowNames.name(window)]
+        // Second, exactly where the capsule is drawn — the row read aloud is the
+        // row seen, in the same order. Empty only for a caller with no machine to
+        // name: `ArchivedWindowsView`, which is one machine's own archive and has
+        // nothing to disambiguate against.
+        //
+        // Built here rather than `onMachine(machine).lowercased()`, which would
+        // lowercase the **machine's own name** along with the word in front of it
+        // — `DESKTOP-DDGMNCV` is not a word and is not the app's to re-spell.
+        if !machine.isEmpty { parts.append("on \(machine)") }
         if let slot = window.slot {
             parts.append(owner(window).map { "\(slot), \($0)" } ?? slot)
         }
@@ -3056,5 +3200,122 @@ enum MachineBrowserText {
         if window.isolated { parts.append("private") }
         if window.recording { parts.append("recording") }
         return parts.joined(separator: ", ")
+    }
+
+    /// The same sentence for a page the machine is casting that its window list
+    /// does not name. Written here beside the window's rather than inline in the
+    /// row, because the two rows are the same kind of thing to somebody
+    /// listening and had drifted into two shapes once already.
+    static func spoken(_ surface: BrowserSurfaceRow, on machine: String) -> String {
+        var parts = [surfaceLabel(surface)]
+        if !machine.isEmpty { parts.append("on \(machine)") }
+        if surface.live { parts.append("being watched") }
+        return parts.joined(separator: ", ")
+    }
+
+    /* ---- Which computer drew this page ------------------------------------- */
+
+    /**
+     * **The two phrases that answer *whose browser is this*, and there are only
+     * two of them in the app.**
+     *
+     * > *"when it is automatically opening in this phone, I am not sure now if
+     * > this opens in this phone or it is open in the other device in the server
+     * > side."*
+     *
+     * `MachineWindowSettingsView.windowMarks` has drawn exactly these — `On
+     * DESKTOP-DDGMNCV` and `On this phone` — on the Window card since that card
+     * existed, and the Browser tab's rows drew one of them and not the other. So
+     * they are here, where every sentence this screen says already lives, and
+     * both screens read from them. A row and the screen it opens onto disagreeing
+     * about the name of the computer they are describing is the exact class of
+     * defect this enum was written to make impossible.
+     *
+     * **On**, not *Runs on* or *Rendered by*: the shortest true word, because it
+     * is a capsule beside up to four others on a phone-width row.
+     */
+    static func onMachine(_ machine: String) -> String { "On \(machine)" }
+
+    /// The other half. A constant rather than a function because there is only
+    /// ever one phone in the sentence — this one.
+    static let onThisPhone = "On this phone"
+
+    /* ---- What just happened, for the one second before the list can say ----- */
+
+    /**
+     * **Where the window is opening, said once, at the moment Open is pressed.**
+     *
+     * > *"there is no clarity so if I go to again new, if I click on open in this
+     * > phone, I think this one is in this phone… there is no clarity."*
+     *
+     * The sheet dismisses on a press and the row it made does not arrive until
+     * the machine answers, so for a second or two the only thing on screen is a
+     * list that looks exactly as it did before. The destination was chosen two
+     * taps ago on a control that is now gone. This is the line that closes that
+     * gap, and it names the machine rather than saying *the machine*, for the
+     * same reason every other sentence on these screens does: somebody with two
+     * paired has to know which one grew a window.
+     *
+     * One line, never two. *"don't put any single statement anywhere"* — the
+     * banner is the exception this app already makes for the outcome of a press,
+     * it is held for two and a half seconds by `say`, and it leaves nothing
+     * behind.
+     *
+     * A blank window used to say **nothing at all**: `openWindow` guarded on the
+     * url and returned early, so the one destination with no address to report
+     * was also the one that reported nothing. It is the same act and it gets the
+     * same line.
+     */
+    static func opening(_ url: String?, on machine: String) -> String {
+        guard let url, !url.isEmpty else { return "Opening a blank window on \(machine)." }
+        return "Opening \(brief(url)) in a window on \(machine)."
+    }
+
+    /**
+     * The address, short enough for one line of banner and still the thing that
+     * was asked for.
+     *
+     * **Not `site`, and the difference is the port.** That one answers *where am
+     * I* under a live page, where a port is noise and the danger being guarded
+     * against is a hundred characters of query string pushing the host off the
+     * end of the strip. This one echoes a **press**, and half the presses on this
+     * sheet are `localhost:3000` — a banner that answered *"Opening localhost"*
+     * to somebody who had just typed a port would be dropping the only part of
+     * the address that told them which of their four dev servers was coming up.
+     * The old line did exactly that: it called `shortened`, which is `site` by
+     * another name.
+     *
+     * `String(port)` and never the `Int`: the same locale grouping separator that
+     * turns `localhost:3000` into `localhost:3,000` everywhere else in this app.
+     *
+     * The whole string back for anything with no host in it, because a search —
+     * which arrives here as a full `google.com/search?q=…` — has no shorter
+     * honest form, and a banner is one line that truncates rather than a label
+     * that has to fit.
+     */
+    private static func brief(_ url: String) -> String {
+        guard let parts = URLComponents(string: url), let host = parts.host, !host.isEmpty else {
+            return url
+        }
+        guard let port = parts.port else { return host }
+        return "\(host):\(String(port))"
+    }
+
+    /**
+     * And the same, for the destination that is not a window on the machine at
+     * all.
+     *
+     * It is said **on the page** rather than on the list, because this door
+     * pushes the page immediately: a banner on the screen behind it is a sentence
+     * nobody is looking at. `LocalhostBrowser.announce` carries it and its toast
+     * draws it, which is the same capsule the copy buttons on that screen use.
+     *
+     * `String(port)`, never the `Int` interpolated — a port dropped straight into
+     * a Swift string is formatted with the locale's grouping separator and comes
+     * out as `localhost:3,000`. One more copy of the trap `SessionWindowPicker.address`
+     * documents, and it is caught here for the same reason it was caught there.
+     */
+    static func openingHere(port: Int) -> String {
+        "Opening localhost:\(String(port)) here on this phone."
     }
 }
