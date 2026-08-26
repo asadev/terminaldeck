@@ -190,6 +190,49 @@ class WatchController(
         )
     }
 
+    /**
+     * One key, pressed and then released.
+     *
+     * Both halves always, never just the down: a page listening on `keyup` — search-as-you-type is
+     * the everyday one — needs the release to fire, and a viewer that sent only the press would drive
+     * every such page half way and no further. The mirror of `WatchSurfaceUIView.key` on iOS.
+     */
+    fun key(window: String, seq: Int, key: String, code: String) {
+        send(ClientMessage.BrowserInput(window = window, seq = seq, key = BrowserKeyWire(type = "down", key = key, code = code)))
+        send(ClientMessage.BrowserInput(window = window, seq = seq, key = BrowserKeyWire(type = "up", key = key, code = code)))
+    }
+
+    /**
+     * Text the soft keyboard committed, as one paste.
+     *
+     * A whole string in one frame rather than a key per character — a key-by-key replay of a soft
+     * keyboard would be dozens of frames for one word, and a paste also carries an IME candidate
+     * whole. Cleaned first so an ordinary one is not refused for a reason a person cannot see. This is
+     * what a tap-focused canvas streams `insertText` through; it does **not** press Return, so a field
+     * can be typed into without submitting it.
+     */
+    fun insert(window: String, seq: Int, text: String) {
+        val cleaned = WatchMath.cleanPaste(text)
+        if (cleaned.isEmpty()) return
+        send(ClientMessage.BrowserInput(window = window, seq = seq, paste = cleaned))
+    }
+
+    /** Return, as its own key so a form submits. */
+    fun enter(window: String, seq: Int) = key(window, seq, "Enter", "Enter")
+
+    /**
+     * Backspace: the key down-and-up, and a `char` event carrying the delete control beside it.
+     *
+     * Both, matching `WatchSurfaceUIView.deleteBackward`. The host does not act on either yet — so
+     * nothing here is drawn as a delete key claiming it works — but both are cheap and are what a page
+     * that grows the handler will read, so they are sent rather than held back for a wire that has not
+     * landed.
+     */
+    fun backspace(window: String, seq: Int) {
+        key(window, seq, "Backspace", "Backspace")
+        send(ClientMessage.BrowserInput(window = window, seq = seq, key = BrowserKeyWire(type = "char", code = "Backspace", text = "\u0008")))
+    }
+
     /** Frames this controller owns. True when the frame was claimed. */
     fun receive(message: ServerMessage): Boolean = when (message) {
         is ServerMessage.BrowserSurfacesRows -> {

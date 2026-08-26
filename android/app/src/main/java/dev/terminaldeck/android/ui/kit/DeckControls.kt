@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Visibility
@@ -407,6 +408,9 @@ fun DeckTextField(
     minLines: Int = 1,
     maxLines: Int = if (singleLine) 1 else 6,
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
+    /** What the keyboard's action key does — the address bars pass an `onGo` here so Enter submits,
+     *  which is how a browser has always worked and why they carry no Go button of their own. */
+    keyboardActions: KeyboardActions = KeyboardActions.Default,
     visualTransformation: VisualTransformation = VisualTransformation.None,
     /**
      * Override the face for the one field that is not ordinary text.
@@ -450,6 +454,7 @@ fun DeckTextField(
                 textStyle = style,
                 cursorBrush = SolidColor(colors.accent),
                 keyboardOptions = keyboardOptions,
+                keyboardActions = keyboardActions,
                 visualTransformation = visualTransformation,
                 interactionSource = interaction,
                 modifier = Modifier

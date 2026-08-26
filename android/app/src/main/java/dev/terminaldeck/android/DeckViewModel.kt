@@ -460,10 +460,15 @@ class DeckViewModel(
         )
         // The "look inside" family: files, git and the four panels. Read-only holders that keep the
         // machine's latest answer as Compose state, so the screen reading one recomposes on the
-        // answer without folding every machine's summary for a file's bytes — the same reasoning the
-        // watcher gives for keeping its frames off the ui state. No `onChange` for that reason.
+        // answer without folding every machine's summary for a file's bytes. No `onChange` for that.
         link.filesGit = FilesGitController(send = { link.transport.send(it) })
         link.panels = PanelsController(send = { link.transport.send(it) })
+        link.machineBrowser = MachineBrowserController(
+            send = { link.transport.send(it) },
+            capabilities = { link.capabilities },
+            expiry = coroutineExpiry(viewModelScope),
+            onChange = { publish() },
+        )
         // Collected per machine, with the link captured, so a frame cannot arrive without the
         // answer to "which computer said this" already in hand.
         viewModelScope.launch { link.transport.state.collect { onState(link, it) } }
@@ -515,6 +520,7 @@ class DeckViewModel(
             link.watch?.renew()
             link.localhost?.renew()
             link.devServer?.renew()
+            link.machineBrowser?.renew()
             // A tunnel cannot survive the connection carrying its bytes, and a page left spinning
             // against a socket that will never answer is exactly the lie this client is written not
             // to tell.
@@ -627,11 +633,12 @@ class DeckViewModel(
                 link.localhost?.renew()
                 link.devServer?.renew()
                 link.copilot?.renew()
-                // The look-inside holders forget the last connection's answers, for the reason the
-                // request clusters above do: a welcome may be a different machine after a switch or a
-                // re-pair, and the screens re-read on their next appearance.
+                // The look-inside and browser holders forget the last connection's answers, for the
+                // reason the request clusters above do: a welcome may be a different machine after a
+                // switch or a re-pair, and the screens re-read on their next appearance.
                 link.filesGit?.renew()
                 link.panels?.renew()
+                link.machineBrowser?.renew()
                 link.loaded = message.sessions.isNotEmpty() || link.loaded
                 link.live = true
                 // The first list after a connection came back. What is in it happened while this
@@ -847,67 +854,40 @@ class DeckViewModel(
             }
 
             // The copilot's own files, routed to the controller that owns the Files card and its
-            // editor. Handed off the same way the copilot family above is — the controller keeps the
-            // bookkeeping, and a `copilot.file.text` for a file this phone has navigated away from is
-            // dropped there rather than in a `when` that would have to know which file is open.
+            // editor — a `copilot.file.text` for a file this phone has navigated away from is dropped
+            // there rather than in a `when` that would have to know which file is open.
             is ServerMessage.CopilotFilesRows,
             is ServerMessage.CopilotFileText,
-            -> {
-                link.copilotFiles?.receive(message)
-            }
+            -> link.copilotFiles?.receive(message)
 
             // The routines family, to the controller that owns the Routines screen and its file
-            // viewer. `routines.rows` is the answer to every one of run, hold, let-run and delete as
-            // well as to the listing, and `routine.text.rows` decodes to [RoutineFile].
+            // viewer. `routines.rows` answers run, hold, let-run and delete as well as the listing.
             is ServerMessage.RoutinesRows,
             is RoutineFile,
-            -> {
-                link.routines?.receive(message)
-            }
+            -> link.routines?.receive(message)
 
-            /*
-             * The folder picker's answer — handed to [folderBrowse], which drops it when no picker
-             * is open, the same harmless outcome the no-op group below describes for an answer nobody
-             * is holding.
-             */
-            is ServerMessage.FolderEntries -> {
-                folderBrowse.receive(message)
-            }
+            // The folder picker's answer — dropped inside the controller when no picker is open.
+            is ServerMessage.FolderEntries -> folderBrowse.receive(message)
 
-            /*
-             * The "look inside" family — files, git status, a file's text and a diff — handed to the
-             * controller that owns those four screens, the way the copilot family above is handed to
-             * [link.copilot]. A misdelivered frame (an answer to a request this phone has already
-             * forgotten — a switch or a reconnect that raced the reply) is dropped inside the
-             * controller, which is why widening these out of the no-op below was safe.
-             */
+            // The "look inside" family — files, git status, a file's text and a diff.
             is FileListing,
             is FileText,
             is ServerMessage.GitStateFrame,
             is ServerMessage.GitPatch,
-            -> {
-                link.filesGit?.receive(message)
-            }
+            -> link.filesGit?.receive(message)
 
-            // The four read-only panels — artifacts, store, AI readiness, MCP — routed the same way
-            // and for the same reason. An act answers with the whole panel, so the controller holding
-            // this frame is the confirmation the screen redraws from.
-            is PanelData -> {
-                link.panels?.receive(message)
-            }
+            // The four read-only panels — artifacts, store, AI readiness, MCP.
+            is PanelData -> link.panels?.receive(message)
 
-            /*
-             * The rest of the wire foundation — the machine's own browser — decodable and routed here,
-             * but not yet consumed; the browser-window screens are the last family to grow. Dropped
-             * until then for the same reason the tunnel and cast frames return early, and a
-             * misdelivered answer lands here to the same harmless end.
-             */
+            // The machine's own browser: the window list, a screenshot, an inspected element, a
+            // recorder's steps and the profile list. A frame about a window this device no longer has
+            // open is dropped inside the controller.
             is MachineBrowserState,
             is MachineShot,
             is ServerMessage.BrowserWindowPicked,
             is ServerMessage.BrowserRecordRows,
             is MachineProfileList,
-            -> return
+            -> link.machineBrowser?.receive(message)
         }
         publish()
     }
@@ -1852,6 +1832,59 @@ class DeckViewModel(
      */
     fun watcher(): WatchController? = selected?.watch?.takeIf { it.offered() }
 
+    /* --------------------------------------------------------- machine browser -- */
+
+    /** Ask the machine on screen for its open browser windows, once, when the home opens. */
+    fun openMachineBrowser() {
+        selected?.machineBrowser?.ensureRead()
+    }
+
+    /** The user pulled to refresh the window list. */
+    fun refreshMachineBrowser() {
+        selected?.machineBrowser?.refresh()
+    }
+
+    /** Read the machine's browser profiles — sent on every appearance, because this family has no
+     *  push. */
+    fun readMachineProfiles() {
+        selected?.machineBrowser?.readProfiles()
+    }
+
+    /**
+     * The controller for the machine on screen, or null when it offers no browser driving.
+     *
+     * Handed to the driven-window and overlay screens rather than a copy of its state, because they
+     * send verbs — go, act, size, bind, screenshot, pick — through the same object whose answers
+     * redraw them. The same shape as [watcher], and the same test: null when the machine on screen
+     * stopped offering `browser.control`, which is what makes the screen pop rather than draw dead.
+     */
+    fun machineBrowser(): MachineBrowserController? = selected?.machineBrowser?.takeIf { it.offered() }
+
+    /** Open a window on the machine — the home's `+` sheet. */
+    fun openMachineWindow(url: String?, isolated: Boolean, session: String?) {
+        selected?.machineBrowser?.openWindow(url, isolated, session)
+    }
+
+    /** Attach a window to a session, or detach with a null session — the home's row menu. */
+    fun bindMachineWindow(id: String, session: String?) {
+        selected?.machineBrowser?.bind(id, session)
+    }
+
+    /** Close a window on the machine — the home's swipe and its row menu. */
+    fun closeMachineWindow(id: String) {
+        selected?.machineBrowser?.act(id, dev.terminaldeck.android.protocol.BrowserWindowAction.Close)
+    }
+
+    /** Switch the machine's browser to a profile. */
+    fun useMachineProfile(id: String) {
+        selected?.machineBrowser?.useProfile(id)
+    }
+
+    /** Empty a profile's jar on the machine. */
+    fun clearMachineProfile(id: String) {
+        selected?.machineBrowser?.clearProfile(id)
+    }
+
     /** Type text into the session open on one machine: the key bar, and paste. */
     fun type(hostId: String, text: String) {
         val link = links[hostId] ?: return
@@ -2122,6 +2155,8 @@ class DeckViewModel(
             // paired need not be the machine the switcher is pointing at.
             bar = following()?.view(),
             watch = current?.watch?.view(),
+            machineBrowser = current?.machineBrowser?.view(),
+            machineProfiles = current?.machineBrowser?.profilesView(),
             localhost = current?.localhost?.view(),
             devServers = current?.devServer?.view(),
             tunnel = current?.tunnels?.view(),
@@ -2363,6 +2398,11 @@ data class DeckUiState(
     val awayReport: String? = null,
     /** The watchable browser windows of the machine on screen, or null when it does not offer any. */
     val watch: WatchView? = null,
+    /** The machine's own open browser windows and the sessions one could be bound to, or null when
+     *  the machine does not offer its browser for driving. */
+    val machineBrowser: MachineBrowserView? = null,
+    /** The machine's browser profiles, or null when it does not offer them. */
+    val machineProfiles: MachineProfilesUiView? = null,
     /**
      * The Add-a-server screen, or null when it is not up. Null is the normal state.
      *

@@ -63,7 +63,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.navigation
-import dev.terminaldeck.android.protocol.BrowserSurfaceWire
 import dev.terminaldeck.android.protocol.HostPlatform
 import dev.terminaldeck.android.protocol.ServerSettingKey
 import dev.terminaldeck.android.protocol.SessionControls
@@ -72,8 +71,9 @@ import dev.terminaldeck.android.ui.appLock
 import dev.terminaldeck.android.ui.MachinesScreen
 import dev.terminaldeck.android.ui.SessionControlsSheet
 import dev.terminaldeck.android.ui.SettingsScreen
-import dev.terminaldeck.android.ui.WatchSurfacesScreen
-import dev.terminaldeck.android.ui.WatchViewerScreen
+import dev.terminaldeck.android.ui.MachineBrowserScreen
+import dev.terminaldeck.android.ui.MachineWindowScreen
+import dev.terminaldeck.android.ui.MachineProfilesScreen
 import dev.terminaldeck.android.transfer.PickedFile
 import dev.terminaldeck.android.ui.HostStepCard
 import dev.terminaldeck.android.ui.ServerDetailScreen
@@ -540,6 +540,22 @@ private const val ROUTE_FOLDER_PICK = "folderpick"
 private const val ROUTE_WATCH_VIEW = "watch/{window}"
 private const val ARG_WINDOW = "window"
 private const val WATCH_FRONT_TAB = "~front"
+private const val ROUTE_MACHINE_PROFILES = "watch/profiles"
+
+/** The browser home when the machine offers `watch` but not `browser.control` — a surfaces-only list
+ *  with no window verbs. The ordinary case (an owner's own machine offers both) never reaches for it. */
+private val EMPTY_MACHINE_BROWSER = MachineBrowserView(
+    windows = emptyList(),
+    sessions = emptyList(),
+    notice = null,
+    asked = null,
+    loaded = true,
+    notDrawn = 0,
+    shot = null,
+    steps = emptyMap(),
+    picked = emptyMap(),
+    pickingWindow = null,
+)
 
 @Composable
 fun TerminalDeckApp(
@@ -1332,21 +1348,40 @@ fun TerminalDeckApp(
         }
 
         composable(ROUTE_WATCH) {
-            val view = state.watch
-            if (view == null) {
+            // The home draws when the machine offers its browser for driving, for watching, or both —
+            // most owner machines offer both. Nothing at all means a switch to a machine that offers
+            // neither, and it pops.
+            val browser = state.machineBrowser
+            val watchView = state.watch
+            if (browser == null && watchView == null) {
                 LaunchedEffect(Unit) { navController.popBackStack() }
                 return@composable
             }
-            LaunchedEffect(state.live) { if (state.live) viewModel.openWatch() }
-            WatchSurfacesScreen(
-                view = view,
+            LaunchedEffect(state.live) {
+                if (state.live) {
+                    viewModel.openWatch()
+                    viewModel.openMachineBrowser()
+                }
+            }
+            MachineBrowserScreen(
+                view = browser ?: EMPTY_MACHINE_BROWSER,
+                surfaces = watchView?.surfaces ?: emptyList(),
+                ports = state.localhost?.ports ?: emptyList(),
                 machineLabel = state.hostLabel,
+                live = state.live,
+                profilesOffered = state.machineProfiles != null,
                 onBack = { navController.popBackStack() },
-                onRefresh = viewModel::refreshWatch,
-                onOpen = { surface ->
-                    val slot = surface.window.ifEmpty { WATCH_FRONT_TAB }
-                    navController.navigate("watch/" + Uri.encode(slot))
+                onRefresh = {
+                    viewModel.refreshWatch()
+                    viewModel.refreshMachineBrowser()
                 },
+                onOpenWindow = { id ->
+                    navController.navigate("watch/" + Uri.encode(id.ifEmpty { WATCH_FRONT_TAB }))
+                },
+                onNewWindow = { url, isolated, session -> viewModel.openMachineWindow(url, isolated, session) },
+                onBind = { id, session -> viewModel.bindMachineWindow(id, session) },
+                onClose = { id -> viewModel.closeMachineWindow(id) },
+                onProfiles = { navController.navigate(ROUTE_MACHINE_PROFILES) },
             )
         }
 
@@ -1356,22 +1391,43 @@ fun TerminalDeckApp(
         ) { entry ->
             val slot = entry.arguments?.getString(ARG_WINDOW).orEmpty()
             val window = if (slot == WATCH_FRONT_TAB) "" else slot
-            // The controller, not a copy of the strip: the viewer needs the object it acks and sends
-            // gestures through. Null when the machine on screen stopped offering watching — a switch
-            // or a downgrade — and then there is nothing to cast, so it pops rather than draws.
+            // The driven window: both a window row and a surface row open this one screen, which
+            // resolves the page off its id and greys individual controls rather than showing a
+            // different screen — *"it should be the same case."* Null controller means the machine
+            // stopped offering its browser for driving, so it pops rather than draws dead.
+            val browser = state.machineBrowser
+            val controller = viewModel.machineBrowser()
             val watcher = viewModel.watcher()
-            val surface = state.watch?.surfaces?.firstOrNull { it.window == window }
-            if (watcher == null) {
+            if (browser == null || controller == null || watcher == null) {
                 LaunchedEffect(Unit) { navController.popBackStack() }
                 return@composable
             }
-            WatchViewerScreen(
+            MachineWindowScreen(
+                view = browser,
+                controller = controller,
                 watch = watcher,
-                // A window the strip no longer lists is still watchable — the strip is a list of what
-                // is open, and it can move while somebody is looking at one of its pages — so the
-                // route's own name is the fallback rather than a pop.
-                surface = surface ?: BrowserSurfaceWire(window = window),
+                windowId = window,
+                machineLabel = state.hostLabel,
+                live = state.live,
                 onBack = { navController.popBackStack() },
+            )
+        }
+
+        composable(ROUTE_MACHINE_PROFILES) {
+            val profiles = state.machineProfiles
+            if (profiles == null) {
+                LaunchedEffect(Unit) { navController.popBackStack() }
+                return@composable
+            }
+            // Read on every appearance — the profile family has no push, so a profile made at the desk
+            // would otherwise never arrive.
+            LaunchedEffect(state.live) { if (state.live) viewModel.readMachineProfiles() }
+            MachineProfilesScreen(
+                view = profiles,
+                machineLabel = state.hostLabel,
+                onBack = { navController.popBackStack() },
+                onUse = { viewModel.useMachineProfile(it) },
+                onClear = { viewModel.clearMachineProfile(it) },
             )
         }
     }
