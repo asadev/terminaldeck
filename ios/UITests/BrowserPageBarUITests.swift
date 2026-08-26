@@ -48,8 +48,26 @@
  *
  * It mounts the same `BrowserPageBar` now, under the prefix `localhost`, so one
  * case here opens one and puts it through the same assertion the machine's
- * windows go through — the verbs in the row, and the `…` above them in the
- * header. Everything else in this file still stays on the machine's side.
+ * windows go through — the verbs in the row, and the door to the window's own
+ * things. Everything else in this file still stays on the machine's side.
+ *
+ * ## And on that one screen the two ends have since swapped
+ *
+ * > *"this link should be on the top header instead of bottom just like the
+ * > normal browsers. I think on top you should have back button and link only,
+ * > and then in the bottom you should have the rest of the options and three dot
+ * > in the right side which will open the rest of the options, not upside here.
+ * > Three dot should be here where we have right now size, so it can bring the
+ * > options from up to down down to up."*
+ *
+ * So the shared assertion below takes a **place** now. On a window on the machine
+ * the address is on the bar and the `…` is a trailing item in the navigation bar;
+ * on the page this phone is holding open the address is *in* the navigation bar
+ * and the `…` is the last slot of the row. The verbs are identical either way and
+ * that is still asserted unconditionally — what is asserted per screen is where
+ * the two movable things ended up, because *where* is the entire requirement and
+ * a case that could not tell the two apart would pass with either screen wearing
+ * the other's chrome.
  *
  * ## Why this is a suite and not a unit test
  *
@@ -116,6 +134,24 @@ final class BrowserPageBarUITests: XCTestCase {
     private static let noPage =
         "No row on the Browser home opens onto a page — this machine offers neither its browser "
         + "nor a cast, or has nothing open. Both are the product working."
+
+    /**
+     * Which end of the phone a screen's `…` is at.
+     *
+     * Spelled out here rather than imported: a UI test drives the app through
+     * accessibility and cannot see `BrowserMorePlace`, and a `Bool` called
+     * `moreIsInTheHeader` would read as a thing switched off when it is a place.
+     * The two cases are the two arrangements the app actually has, and the
+     * assertion below is different for each — not stricter for one of them.
+     */
+    private enum MorePlace {
+        /// A trailing item in the navigation bar, on a screen whose address is on
+        /// the bar under the page. Every window on the machine.
+        case header
+        /// The last slot of the verb row, on a screen that has given its header
+        /// to the address. The page this phone is holding open.
+        case row
+    }
 
     private static let noLocalPage =
         "No page is open on this phone. Those rows exist once a port on the machine has been "
@@ -278,7 +314,11 @@ final class BrowserPageBarUITests: XCTestCase {
      */
     func testTheSameVerbsAreOnEveryPageAndTheDeadOnesSayWhy() throws {
         let row = try openAPage()
-        try assertTheRowAndTheHeader(on: Self.bar, page: row)
+        // `.header`: this screen's address is on the bar under the page, so its
+        // `…` is still the trailing item up top. Nothing he said in the round
+        // that moved the phone page's chrome was about this screen — *"same way
+        // here it is fine because it is terminal, it should be the way I said."*
+        try assertTheRowAndTheMenu(on: Self.bar, page: row, moreIn: .header)
 
         XCTAssertFalse(app.buttons["\(Self.bar).keyboard"].exists,
                        "the keyboard verb is deleted; the page raises the keyboard when it is "
@@ -286,26 +326,45 @@ final class BrowserPageBarUITests: XCTestCase {
     }
 
     /**
-     * **The page on this phone wears the same bar, with the address he asked for.**
+     * **The page on this phone: the link on top, the verbs and the `…` below.**
      *
      * > *"if it is in this phone, I cannot edit the link and make a change and
      * > search it again."*
+     *
+     * > *"this link should be on the top header instead of bottom just like the
+     * > normal browsers. I think on top you should have back button and link only,
+     * > and then in the bottom you should have the rest of the options and three
+     * > dot in the right side which will open the rest of the options, not upside
+     * > here. Three dot should be here where we have right now size, so it can
+     * > bring the options from up to down down to up."*
      *
      * This is the kind of window the rest of this suite deliberately skips —
      * `browser.machine.page.` is a port on the machine held open through a tunnel
      * and shown in this app's own web view, which for two rounds meant it had a
      * different bar and no address anywhere. It mounts `BrowserPageBar` now under
-     * the prefix `localhost`, so the same controls are asserted by the same
-     * function, and the address is asserted to be a **field** rather than a line:
-     * that is the whole of what he could not do.
+     * the prefix `localhost`, so the row is asserted by the same function every
+     * other page's row goes through.
      *
-     * Done is asserted **gone**. It closed the tunnel, which is a thing you do to
-     * the window rather than to the page, so it is the `Close this window` card
-     * on this page's own settings screen behind the `…` — and a Done left
-     * standing in the row would make this bar one control longer than every other
-     * one, which is where this round started.
+     * ## What this case measures that no unit test can: which end things are at
+     *
+     * The address is still `localhost.address` and still a **field** rather than a
+     * line — that is the whole of what he could not do, and it did not stop being
+     * true when the field moved. What is new is *where*: it is asserted to be
+     * inside the navigation bar's own rectangle, not merely high on the screen.
+     * Those are different claims and only the first is his sentence; a field
+     * floated at the top of the page would pass the second and be the wrong thing.
+     *
+     * The `…` is asserted at the other end, on the same three terms: below the
+     * middle, on the same line as the verbs, and to the right of Size. *"Three dot
+     * should be here where we have right now size"* is a claim about the row's
+     * right-hand end, and a `…` merely *somewhere* at the bottom of the screen
+     * would pass an existence check and read as a floating button.
+     *
+     * Done is still asserted **gone**. It closed the tunnel, which is a thing you
+     * do to the window rather than to the page, so it is the `Close this window`
+     * card on this page's own settings screen behind that `…`.
      */
-    func testThePageOnThisPhoneHasTheSameBarAndAnEditableAddress() throws {
+    func testThePageOnThisPhoneHasTheLinkOnTopAndTheMenuAtTheEndOfTheRow() throws {
         let row = app.descendants(matching: .any)
             .matching(NSPredicate(format: "identifier BEGINSWITH 'browser.machine.page.'"))
             .firstMatch
@@ -320,13 +379,28 @@ final class BrowserPageBarUITests: XCTestCase {
         XCTAssertFalse(shown.isEmpty,
                        "the field should be seeded from the page it is showing, not left blank — "
                        + "an address bar that is always empty is not one (\(name))")
+
+        /*
+         * And it is **in the header**, which is the requirement rather than a
+         * detail of layout. Inside the navigation bar's own rectangle, not merely
+         * above the middle of the screen: an address floated at the top of the
+         * page would pass *above the middle* and be exactly the thing that was
+         * moved.
+         */
+        let header = app.navigationBars.firstMatch
+        XCTAssertTrue(header.exists,
+                      "the page keeps the system navigation bar — the chevron, the title and the "
+                      + "interactive pop all live on it")
+        XCTAssertTrue(header.frame.contains(CGPoint(x: address.frame.midX, y: address.frame.midY)),
+                      "the address is not in the header. \"This link should be on the top header "
+                      + "instead of bottom just like the normal browsers\" (\(name))")
         capture("67-phone-page-bar")
 
-        try assertTheRowAndTheHeader(on: "localhost", page: name)
+        try assertTheRowAndTheMenu(on: "localhost", page: name, moreIn: .row)
 
         XCTAssertFalse(app.buttons["localhost.done"].exists,
-                       "Done left the row; closing the window is inside the `…` now, so the bar "
-                       + "under this page is the same length as the bar under every other")
+                       "Done left the row; closing the window is inside the `…`, so the row under "
+                       + "this page is the six page verbs and the door, like every other")
 
         address.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 8),
@@ -337,7 +411,8 @@ final class BrowserPageBarUITests: XCTestCase {
 
     /**
      * The row under whichever page is on screen — its controls, with a reason
-     * behind every greyed one — and the `…` above it in the header.
+     * behind every greyed one — and the door to the window's own things, at
+     * whichever end of the phone this screen keeps it.
      *
      * Shared by both cases above rather than written twice, because *"it should
      * be the same case"* is a claim about two screens and a claim asserted by two
@@ -345,26 +420,40 @@ final class BrowserPageBarUITests: XCTestCase {
      *
      * ## Why the `…` is asserted differently from the verbs
      *
-     * The five are unconditional: a verb that cannot act is drawn dead in its
-     * slot, so the row is the same length under every page and a missing one is
-     * always a defect.
+     * The six are unconditional: they are the verbs that act on the page, the row
+     * is the same under every page, and a missing one is always a defect.
      *
-     * The `…` is not. It is drawn where it **opens** something, and there is one
-     * honest shape of this screen where it opens nothing: a window the machine
-     * refuses to cast draws `MachineWindowSettingsView` as its own body, so a `…`
-     * there would lead to where you are already standing. That state is visible
-     * from out here — the settings cards are on screen, and the click recorder is
-     * one of them — so the two are asserted as an exclusive pair, exactly the way
-     * `MachineBrowserUITests` asserts it: *"a window is either being cast —
-     * settings behind the dots — or it is not, and its settings are the screen.
-     * Never both and never neither."*
+     * The `…` is not, in two different ways.
+     *
+     * **Where it is** depends on where that screen's address is, and the two are
+     * one decision rather than two:
+     *
+     * > *"I think on top you should have back button and link only, and then in
+     * > the bottom you should have the rest of the options and three dot in the
+     * > right side which will open the rest of the options, not upside here."*
+     *
+     * A window on the machine keeps its address on the bar, so its header is free
+     * and the `…` is up there. The page this phone holds open has given its header
+     * to the address, so the `…` is the last slot of the row. `moreIn` is which,
+     * and it is passed by the caller rather than sniffed, because a helper that
+     * worked out where the control *happened* to be and then asserted that it was
+     * there would assert nothing at all.
+     *
+     * **Whether it is drawn** is the older rule and it survives: it is drawn where
+     * it **opens** something, and there is one honest shape of the machine's
+     * screen where it opens nothing — a window the machine refuses to cast draws
+     * `MachineWindowSettingsView` as its own body, so a `…` there would lead to
+     * where you are already standing. That state is visible from out here — the
+     * settings cards are on screen, and the click recorder is one of them — so the
+     * two are asserted as an exclusive pair, exactly the way `MachineBrowserUITests`
+     * asserts it: *"a window is either being cast — settings behind the dots — or
+     * it is not, and its settings are the screen. Never both and never neither."*
      *
      * On a page this phone is holding open there is no such shape and no such
-     * recorder, so the pair collapses to *the `…` is there*, which is the claim
-     * V9(b) is about: that page's `…` pushes its own settings screen now instead
-     * of opening a menu with one item in it.
+     * recorder, so the pair collapses to *the `…` is there*.
      */
-    private func assertTheRowAndTheHeader(on bar: String, page: String) throws {
+    private func assertTheRowAndTheMenu(on bar: String, page: String,
+                                        moreIn: MorePlace) throws {
         let back = app.buttons["\(bar).back"]
         XCTAssertTrue(back.waitForExistence(timeout: 20),
                       "Back belongs on the bar under every page, greyed where it cannot act — "
@@ -391,23 +480,69 @@ final class BrowserPageBarUITests: XCTestCase {
                       + "only sending pictures of — \"it should be the same case, or all the "
                       + "options should be available at least\"")
 
-        // The `…`, up in the header, and the one state where it is honestly not
-        // drawn. `browser.machine.window.record` is the click recorder, which is
-        // only ever on screen when the settings *are* the body of this screen.
-        let more = app.buttons["\(bar).settings"]
-        let settingsAreTheBody = app.buttons["browser.machine.window.record"].exists
-        XCTAssertNotEqual(more.exists, settingsAreTheBody,
-                          "a browser window either has its `…` in the header or has its settings "
-                          + "as the body of the screen. Never both — that is a control leading to "
-                          + "where you are standing — and never neither (\(page))")
-        if more.exists {
-            XCTAssertGreaterThan(app.frame.midY, more.frame.maxY,
-                                 "the `…` belongs in the header — \"not only the bottom, so we can "
-                                 + "have most of the important controls for the flow\" is a "
-                                 + "sentence about the top of the screen")
+        /*
+         * The `…`, at whichever end of the phone this screen keeps it.
+         *
+         * Across every element type rather than as a button, for the reason the
+         * Size slot is: it is a `Menu` on the one route that has no settings
+         * screen behind it and a `Button` everywhere else, and asking `buttons`
+         * for it would skip the claim silently on the shape that is a menu.
+         */
+        let more = any("\(bar).settings")
+
+        switch moreIn {
+        case .header:
+            // The one state where it is honestly not drawn.
+            // `browser.machine.window.record` is the click recorder, which is only
+            // ever on screen when the settings *are* the body of this screen.
+            let settingsAreTheBody = app.buttons["browser.machine.window.record"].exists
+            XCTAssertNotEqual(more.exists, settingsAreTheBody,
+                              "a browser window either has its `…` in the header or has its "
+                              + "settings as the body of the screen. Never both — that is a "
+                              + "control leading to where you are standing — and never neither "
+                              + "(\(page))")
+            if more.exists {
+                XCTAssertGreaterThan(app.frame.midY, more.frame.maxY,
+                                     "the `…` belongs in this screen's header — \"not only the "
+                                     + "bottom, so we can have most of the important controls "
+                                     + "for the flow\" is a sentence about the top of the screen")
+                XCTAssertTrue(more.isEnabled,
+                              "the `…` is drawn only where it opens something, so a greyed one "
+                              + "is a control that should not have been there at all")
+            }
+
+        case .row:
+            /*
+             * > *"in the bottom you should have the rest of the options and three
+             * > dot in the right side which will open the rest of the options,
+             * > not upside here. Three dot should be here where we have right now
+             * > size, so it can bring the options from up to down down to up."*
+             *
+             * Three claims, and the first on its own would be nearly worthless: a
+             * `…` floated anywhere over the bottom of the page passes *below the
+             * middle* and is not in the row. So it is also asserted to be on the
+             * **same line** as Back — which is what makes it a slot rather than a
+             * button somebody dropped there — and to the **right of Size**, which
+             * is the position he named.
+             */
+            XCTAssertTrue(more.exists,
+                          "the `…` is missing from the end of the row. It is the way to "
+                          + "everything this window can be asked for, closing it included "
+                          + "(\(page))")
             XCTAssertTrue(more.isEnabled,
                           "the `…` is drawn only where it opens something, so a greyed one is a "
                           + "control that should not have been there at all")
+            XCTAssertGreaterThan(more.frame.minY, app.frame.midY,
+                                 "the `…` is in the top half of the screen. On this page the "
+                                 + "header is the chevron and the link only — \"not upside "
+                                 + "here\"")
+            XCTAssertLessThan(abs(more.frame.midY - back.frame.midY), 8,
+                              "the `…` is at the bottom of the screen but not in the row. It is "
+                              + "the seventh slot beside the six verbs, not a button floating "
+                              + "over the page")
+            XCTAssertGreaterThan(more.frame.midX, size.frame.midX,
+                                 "the `…` is not at the right-hand end of the row — \"three dot "
+                                 + "in the right side… here where we have right now size\"")
         }
 
         let why = app.buttons["info.this-page"]

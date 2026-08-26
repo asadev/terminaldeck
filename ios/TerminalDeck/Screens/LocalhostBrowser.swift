@@ -113,6 +113,41 @@
  *    > we can have most of the important controls for the flow, for this kind of
  *    > things and whatever we require to get the job done."*
  *
+ * ## And then the two of them swapped ends
+ *
+ * > *"this link should be on the top header instead of bottom just like the
+ * > normal browsers. I think on top you should have back button and link only,
+ * > and then in the bottom you should have the rest of the options and three dot
+ * > in the right side which will open the rest of the options, not upside here.
+ * > Three dot should be here where we have right now size, so it can bring the
+ * > options from up to down down to up."*
+ *
+ * This screen — and only this screen — now reads:
+ *
+ *  - **header**: the system chevron and the address, and nothing else. The field
+ *    is `BrowserAddressField` with `place: .header`, mounted as the principal
+ *    item, so it is the same control with the same name as the one the bar draws
+ *    everywhere else.
+ *  - **bar**: Back · Forward · Reload · Find · Inspect · Size · `…`. The `…` is
+ *    `BrowserPageBar`'s `more` slot, the same `BrowserWindowActions` that draws it
+ *    in a header, told it is standing in a row.
+ *
+ * The round before this one moved the `…` **up** on *"not only the bottom"*, and
+ * this is not that round being undone. That sentence is about a header carrying
+ * no control at all; this header carries the address, which is a control and the
+ * one he named — and *"on top you should have back button and link only"* then
+ * says what else may be up there. Nothing. `BrowserChrome` holds the argument in
+ * full, because the same reversal will look like a flip-flop to whoever reads
+ * this next.
+ *
+ * The other three kinds of browser window are **untouched**. He was holding this
+ * page when he said it, and said of the terminal in the same breath: *"same way
+ * here it is fine because it is terminal, it should be the way I said."* So the
+ * arrangement is a named option with a default (`BrowserAddressPlace`,
+ * `BrowserMorePlace`) rather than a fork of the shared chrome — the day the same
+ * is asked of a machine window, that screen passes `.header` and nothing else in
+ * the app has to be found.
+ *
  * ## And the `…` opens the page's own settings, exactly as a window's does
  *
  * > *"all of them should be identical, and all of them should have all the
@@ -403,28 +438,42 @@ struct LocalhostBrowser: View {
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         /*
-         * **The header carries a control now, and it is the same one every other
-         * browser window has.**
+         * **The header is the chevron and the address. Nothing else is up here.**
          *
-         * > *"Maybe we can give some better one header also, not only the bottom,
-         * > so we can have most of the important controls for the flow."*
+         * > *"this link should be on the top header instead of bottom just like
+         * > the normal browsers. I think on top you should have back button and
+         * > link only, and then in the bottom you should have the rest of the
+         * > options and three dot in the right side which will open the rest of
+         * > the options, not upside here."*
          *
-         * The chevron, one line of title, and the `…`. `BrowserWindowActions`
-         * draws it, so this page's is the same glyph in the same corner under the
-         * same identifier as a machine window's — *"top, header and footer, tab
-         * bar should be same in all type of browsing windows."*
+         * Two changes in one sentence, and they are two halves of one shape:
          *
-         * What it opens depends on whether this page is a **window on the Browser
-         * list** or a preview pushed straight at a tunnel; `settingsPush` and
-         * `pageMenu` are the two answers and only one of them is ever handed
-         * over.
+         *  - the **address** moved up out of the bar and is the principal item
+         *    here, beside the chevron — `BrowserAddressField` with
+         *    `place: .header`, which is the same field with the same name and the
+         *    same keyboard that the bar draws on every other kind of window;
+         *  - the **`…`** came down off this bar and is the last slot in the row
+         *    under the page. See `bar`.
+         *
+         * The principal slot rather than a leading item beside the chevron: a
+         * leading item is sized to its content and a nav bar packs them from the
+         * edge, so an address would be as long as whatever URL the page last
+         * reported and would jump about as it navigated. The principal slot is
+         * the space between the two ends, which is what a browser puts an address
+         * in.
+         *
+         * `navigationTitle` below stays even though nothing draws it here any
+         * more. It is still the name of the back button on the screen that pushed
+         * this one, and it is still what VoiceOver reads for the screen — two
+         * jobs a principal view does not do and nobody sees break.
+         *
+         * The round before this one put the `…` up here on *"not only the bottom,
+         * so we can have most of the important controls for the flow"*, and this
+         * is not that being undone: the header carries a control, and it is the
+         * one he named. See `BrowserChrome` for the whole of that argument.
          */
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                BrowserWindowActions(id: "localhost",
-                                     open: settingsPush,
-                                     menu: settingsPush == nil ? pageMenu : nil)
-            }
+            ToolbarItem(placement: .principal) { addressField }
         }
         .navigationDestination(isPresented: $showingSettings) {
             if let tabID {
@@ -634,19 +683,24 @@ struct LocalhostBrowser: View {
     /**
      * The bar every browser window in this app has, under the page it belongs to.
      *
-     * `BrowserPageBar`, the same view `MachineWindowView` mounts, with the same
-     * two rows under it — the address and Go, then Back · Forward · Reload · Find
-     * · Inspect. There is no bar written on this screen any more, and that is the
-     * point of the round: *"top, header and footer, tab bar should be same in all
-     * type of browsing windows, including on this phone, including isolated,
-     * including the server."*
+     * `BrowserPageBar`, the same view `MachineWindowView` mounts. There is no bar
+     * written on this screen any more, and that is the point of the round it
+     * arrived in: *"top, header and footer, tab bar should be same in all type of
+     * browsing windows, including on this phone, including isolated, including
+     * the server."*
+     *
+     * **One row on this screen**, because the address is up in the navigation bar
+     * (`addressIn: .header`) and the `…` has come down into the row after Size
+     * (`more`). See this file's header for the sentence that did that and for why
+     * the other three windows keep the two-row bar.
      *
      * The prefix is `localhost`, unchanged, so every control keeps the name it
      * had — `localhost.back`, `localhost.reload`, `localhost.inspect`. The one
      * name that goes is `localhost.done`: that verb is the `Close this window`
-     * card on this page's own settings screen, behind the `…` in the header,
-     * under `browser.phone.page.close`. `localhost.settings` is the `…` itself
-     * and it kept its name through the move up there.
+     * card on this page's own settings screen, behind the `…`, under
+     * `browser.phone.page.close`. `localhost.settings` is the `…` itself and it
+     * has kept its name through both of its moves — up into the header and back
+     * down to the end of this row.
      *
      * ## What this screen answers that a machine window cannot, and the reverse
      *
@@ -677,6 +731,14 @@ struct LocalhostBrowser: View {
             typing: $typing,
             placeholder: "Address or search",
             go: isLive ? go : nil,
+            /*
+             * **This bar draws no address.** It is up in the navigation bar on
+             * this screen — *"on top you should have back button and link only"* —
+             * and `addressField` above is the one that draws it. Two copies of
+             * one field over one page would be worse than the bar he asked to
+             * have emptied.
+             */
+            addressIn: .header,
             back: isLive ? { browser.goBack() } : nil,
             forward: isLive ? { browser.goForward() } : nil,
             reload: isLive ? { browser.reload() } : nil,
@@ -692,7 +754,57 @@ struct LocalhostBrowser: View {
             inspect: isLive ? { browser.setInspecting(!browser.inspecting) } : nil,
             inspecting: browser.inspecting,
             size: isLive ? pageSize : nil,
+            /*
+             * **And the `…` is the last slot in that row, not a trailing item up
+             * in the header.**
+             *
+             * > *"in the bottom you should have the rest of the options and three
+             * > dot in the right side which will open the rest of the options,
+             * > not upside here. Three dot should be here where we have right now
+             * > size, so it can bring the options from up to down down to up."*
+             *
+             * The right-hand end of the row — the place Size was holding while
+             * Size was the last thing in it — with Size one slot to its left.
+             * Nothing was dropped to make room: *"the rest of the options"* is
+             * every page verb, and what he named was a position.
+             *
+             * The same two answers as before about what it opens: a page with a
+             * row on the Browser list pushes its own settings screen, and the one
+             * route that has no row — a prototype `ArtifactView` pushes straight
+             * at a tunnel — gets the short list. Only one of them is ever handed
+             * over, and `BrowserPageBar` builds the control from this screen's own
+             * prefix, so it is still `localhost.settings` after the move.
+             */
+            more: BrowserPageMore(open: settingsPush,
+                                  menu: settingsPush == nil ? pageMenu : nil),
             )
+    }
+
+    /**
+     * The address, up in the navigation bar beside the chevron.
+     *
+     * > *"this link should be on the top header instead of bottom just like the
+     * > normal browsers."*
+     *
+     * The same view the bar draws on every other kind of browser window, told
+     * where it is standing — so it is still `localhost.address`, still seeded
+     * rather than bound, still on a URL keyboard with no autocapitalisation, and
+     * still submitted by the keyboard's own Go key. `BrowserAddressField` carries
+     * the whole of that; what `place: .header` changes is the shape it wears to
+     * fit between a chevron and the edge of the screen.
+     *
+     * `go` is gated on `isLive` exactly as the bar's was. A tunnel that is still
+     * opening cannot be navigated, and the field draws itself read-only rather
+     * than taking a cursor that would go nowhere — which is the same answer this
+     * screen has always given, in a different place.
+     */
+    private var addressField: some View {
+        BrowserAddressField(id: "localhost",
+                            address: $address,
+                            editing: $editing,
+                            placeholder: "Address or search",
+                            go: isLive ? go : nil,
+                            place: .header)
     }
 
     /**
@@ -751,8 +863,9 @@ struct LocalhostBrowser: View {
     }
 
     /**
-     * What the header's `…` does on a page that has a row on the Browser list:
-     * it pushes that page's own settings, exactly as a machine window's does.
+     * What the `…` at the end of the row does on a page that has a row on the
+     * Browser list: it pushes that page's own settings, exactly as a machine
+     * window's does.
      *
      * > *"all of them should have all the options. Should not be that much of
      * > difference in all of them."*

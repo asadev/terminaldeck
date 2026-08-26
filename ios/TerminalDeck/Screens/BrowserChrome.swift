@@ -60,9 +60,33 @@
  *  - the address, editable, with Go;
  *  - Back · Forward · Reload · Find · Inspect · Size.
  *
- * ## Where the `…` lives, and the round that moved it back
+ * ## And then one of the four moved its address up
  *
- * **In the header, trailing side.** The pass before this one put it in the bar
+ * > *"this link should be on the top header instead of bottom just like the
+ * > normal browsers. I think on top you should have back button and link only,
+ * > and then in the bottom you should have the rest of the options and three dot
+ * > in the right side which will open the rest of the options, not upside here.
+ * > Three dot should be here where we have right now size, so it can bring the
+ * > options from up to down down to up."*
+ *
+ * On **a page this phone is holding open** — and only there — the header is the
+ * chevron and the address, the bar under the page is the six verbs, and the `…`
+ * is the seventh slot at the right-hand end of that row. `BrowserAddressPlace`
+ * and `BrowserMorePlace` are the two halves of that, and both default to what the
+ * other three screens already had, so the other three were not touched.
+ *
+ * It is one screen rather than four on purpose. He was holding that page when he
+ * said it, and about the terminal screen in the same breath: *"same way here it
+ * is fine because it is terminal, it should be the way I said."* The rule that
+ * these four wear one chrome is the rule this whole file exists for, and the way
+ * to keep it honest is to make the difference a **named option with a default**
+ * rather than a fork — so the day he says the same of a machine window, that
+ * screen passes `.header` and nothing else in this app has to be found.
+ *
+ * ## Where the `…` lives, and the two rounds that moved it
+ *
+ * **In the header, trailing side** — on the three screens whose address is still
+ * on the bar. The pass before those put it in the bar
  * as a sixth control and wrote three reasons down: a menu in the top-right
  * corner of a six-inch phone is the furthest pixel from a thumb; a header that
  * is only a chevron and a title has nothing left on it that can drift between
@@ -94,19 +118,28 @@
  * Reload, Find and Inspect are all still under the thumb; what moved is the door
  * you go through once, to do something to the window rather than to the page.
  *
- * **There is still exactly one door.** The bar does not keep a More slot, not
- * even a greyed one — `BrowserWindowActions` below is the only `…` in this app's
- * browser, and it is drawn only where it opens something. On a window the
- * machine will not cast, the settings *are* the body of the screen; a `…` there
- * would lead to where you are already standing, so there is none, and there is
- * no sentence about one either.
+ * **There is still exactly one door**, and one view that draws it —
+ * `BrowserWindowActions` below is the only `…` in this app's browser, and it is
+ * drawn only where it opens something. On a window the machine will not cast, the
+ * settings *are* the body of the screen; a `…` there would lead to where you are
+ * already standing, so there is none, and there is no sentence about one either.
+ *
+ * **And then it came back down on one screen**, which is the second move and not
+ * the first one undone. The argument for putting it up there was that a header
+ * with a chevron and a title on it carries no control at all — *"not only the
+ * bottom"*. That argument is about a header with nothing in it, and the phone's
+ * page now has the **address** up there, which is a control and the one he named.
+ * *"On top you should have back button and link only"* then says what else may be
+ * up there, and the answer is nothing, so the `…` goes back to the end of the row
+ * where a thumb is. Same view, same name, `place: .row`; still one door.
  *
  * ## What lives in this file
  *
  * The rules that would otherwise be written four times and drift: how a page is
  * named, how a loopback address is spelled for a person to read, the two
- * sentences that explain why a control this phone cannot honour is greyed, and
- * the header's `…` itself. The bottom bar is `BrowserPageBar`; the screens are
+ * sentences that explain why a control this phone cannot honour is greyed, the
+ * `…` itself and the two little enums that say which end of the phone the address
+ * and the `…` are at. The bottom bar is `BrowserPageBar`; the screens are
  * `MachineWindowView`, `LocalhostBrowser` and `WatchViewerScreen`.
  */
 
@@ -270,23 +303,104 @@ enum BrowserChrome {
 }
 
 /**
- * The `…` in the header of every browser window, and the only one in the app.
+ * Where a browser window draws its address.
+ *
+ * > *"this link should be on the top header instead of bottom just like the
+ * > normal browsers. I think on top you should have back button and link only."*
+ *
+ * Two cases rather than a `Bool`, because a flag named `addressInTheHeader` reads
+ * as a thing being switched off and this is a **place**. It is also the shape
+ * that survives a third one — a split-view window has a place for an address that
+ * is neither of these — without every call site having to be found again.
+ */
+enum BrowserAddressPlace {
+
+    /// The top row of `BrowserPageBar`, inside the card, above the verbs. What a
+    /// window on the machine, the machine's own front tab, the surface viewer and
+    /// a session's page all still do.
+    case bar
+
+    /// The system navigation bar, beside the chevron, drawn by the screen itself
+    /// as its principal item. `LocalhostBrowser` — the page this phone is holding
+    /// open over a tunnel — is the one screen on this so far, and it is the screen
+    /// he was holding when he asked for it.
+    case header
+}
+
+/**
+ * Where a window's `…` stands.
+ *
+ * There is one `…` per browser window and one view that draws it — see
+ * `BrowserWindowActions` — and the only thing that differs between the screens
+ * now is which end of the phone it is at. Which end is not a style choice: it
+ * follows the address, because a header may carry a control and never two.
+ */
+enum BrowserMorePlace {
+
+    /// A trailing item in the system navigation bar, beside the title, with the
+    /// chevron opposite it. Every screen whose address is on the bar under the
+    /// page.
+    case header
+
+    /// The last slot in `BrowserPageBar`'s verb row, drawn like the six verbs
+    /// beside it. The screen whose address has gone up into the header, and it is
+    /// the phone's own page: *"Three dot should be here where we have right now
+    /// size, so it can bring the options from up to down down to up."*
+    case row
+}
+
+/**
+ * What the `…` opens, handed to whichever place is drawing it.
+ *
+ * The same two shapes `BrowserWindowActions` has always taken, gathered into one
+ * value so that `BrowserPageBar` can be given *the door* without being given the
+ * view — the bar builds the view itself, from its own `id`, so the identifier is
+ * still spelled in exactly one place.
+ */
+struct BrowserPageMore {
+
+    /// Push the window's settings. Nil where this page has a list instead.
+    var open: (() -> Void)?
+
+    /// The short list, for the one page whose everything-else is not a screen.
+    var menu: BrowserPageMenu?
+}
+
+/**
+ * The `…` a browser window carries, and the only one in the app.
  *
  * > *"Maybe we can give some better one header also, not only the bottom, so we
  * > can have most of the important controls for the flow."*
  *
- * Placed by each screen as a trailing item in the system navigation bar, so it
- * sits beside the title with the chevron opposite it — the same two things in
- * the same two corners on a machine window, a private window, the machine's
- * own front tab, and a page this phone is holding open. The header carries this
- * and nothing else: a control, never a line to read.
+ * ## It knows two places, and that is not two `…`
+ *
+ * **In the header**, as a trailing item in the system navigation bar, so it sits
+ * beside the title with the chevron opposite it — a machine window, a private
+ * window, and the machine's own front tab.
+ *
+ * **In the row**, as the last slot of `BrowserPageBar`, on the one screen whose
+ * address has moved up into the navigation bar:
+ *
+ * > *"I think on top you should have back button and link only, and then in the
+ * > bottom you should have the rest of the options and three dot in the right
+ * > side which will open the rest of the options, not upside here. Three dot
+ * > should be here where we have right now size, so it can bring the options from
+ * > up to down down to up."*
+ *
+ * One view with a `place` rather than a second `…` written into the bar. The rule
+ * that made this a shared view in the first place — four screens drawing their
+ * own is how this app came to have three chromes — is exactly as true of two
+ * places as it was of four screens. What the place changes is the label and
+ * nothing else: three dots at the navigation bar's own weight up there,
+ * `BrowserVerbLabel` down here so the seventh slot is the same shape as the six
+ * verbs beside it.
  *
  * ## One identifier, wherever it is drawn
  *
  * `"\(id).settings"`, built here from the bar's own prefix rather than by the
  * screens, so `browser.machine.window.settings` and `localhost.settings` still
- * name this control after it changed places. Six suites reach for those two
- * strings and none of them had to move.
+ * name this control after it changed places — twice now. Six suites reach for
+ * those two strings and none of them had to move either time.
  *
  * ## Two shapes, and they are not interchangeable
  *
@@ -309,13 +423,17 @@ enum BrowserChrome {
  * draws its settings **as its body**, so a `…` leading to them would lead to
  * where you are already standing. An absent trailing button in a header is not
  * the gap a missing slot in a row of six was — the row was the thing he counted,
- * and the row is now five under every page.
+ * and the row is the page verbs under every page.
  */
 struct BrowserWindowActions: View {
 
     /// The bar's prefix for this screen — `browser.machine.window`, `localhost`.
     /// The suffix is added here so the name is spelled in one place.
     let id: String
+
+    /// Which end of the phone this one is at. Defaults to the header, so the
+    /// three screens that were not the subject of his sentence are untouched.
+    var place: BrowserMorePlace = .header
 
     /// Push the window's settings. Nil where this page has a list instead, or
     /// nothing at all.
@@ -325,25 +443,58 @@ struct BrowserWindowActions: View {
     var menu: BrowserPageMenu?
 
     var body: some View {
+        switch place {
+        case .header:
+            // No `.buttonStyle` on either shape up here, deliberately. iOS 26
+            // wraps a navigation-bar item in its own glass capsule, and a
+            // `.plain` on one of the two would draw the phone page's `…` and a
+            // machine window's `…` differently — which is the exact drift *"top,
+            // header and footer… should be same in all type of browsing
+            // windows"* is about.
+            door { glyph }
+        case .row:
+            // And `.plain` down here, because that is what every other slot in
+            // that row wears: `BrowserPageBar.verb` puts it on all six. A
+            // seventh slot with the system's own button treatment on it would be
+            // the one control in the row with a highlight of its own. It is inert
+            // on the menu shape, which is exactly how the Size slot beside it is
+            // already drawn.
+            door { BrowserVerbLabel(title: "More", icon: "ellipsis").contentShape(Rectangle()) }
+                .buttonStyle(.plain)
+        }
+    }
+
+    /// The name, spelled once. It survived the move into the header and it
+    /// survives the move back down: a control that changes places must not change
+    /// name, or every suite that reaches for it moves with it.
+    private var name: String { "\(id).settings" }
+
+    /// The door itself — a menu or a push — wearing whatever label the place
+    /// asked for. Written once so the two places cannot grow two answers to
+    /// *what does this open*, which is the half that is not about looks.
+    ///
+    /// The label is drawn once into a value up front rather than being called
+    /// inside each branch. It reads the same and it sidesteps a question nobody
+    /// should have to answer while reading this — whether the closure `Menu` and
+    /// `Button` take for their label escapes — which would otherwise decide
+    /// whether this compiles.
+    @ViewBuilder
+    private func door<Label: View>(@ViewBuilder _ label: () -> Label) -> some View {
+        let drawn = label()
         if let menu {
             Menu {
                 items(menu)
             } label: {
-                glyph
+                drawn
             }
             .accessibilityLabel("More")
-            .accessibilityIdentifier("\(id).settings")
+            .accessibilityIdentifier(name)
         } else if let open {
-            // No `.buttonStyle` on either shape, deliberately. iOS 26 wraps a
-            // navigation-bar item in its own glass capsule, and a `.plain` on one
-            // of the two would draw the phone page's `…` and a machine window's
-            // `…` differently — which is the exact drift *"top, header and
-            // footer… should be same in all type of browsing windows"* is about.
             Button(action: open) {
-                glyph
+                drawn
             }
             .accessibilityLabel("More")
-            .accessibilityIdentifier("\(id).settings")
+            .accessibilityIdentifier(name)
         }
     }
 

@@ -65,6 +65,11 @@
  * The bottom row is the page verbs. It is the same row on both screens with the
  * ones that cannot act left out, rather than two rows that drift.
  *
+ * On the one screen that has moved its address into the navigation bar there is
+ * only the second row, and the card is the verbs alone — see *Where the address
+ * is drawn* below. The typing line is not the address and stays here in every
+ * case.
+ *
  * ## Three screens now, and the row grew to the union of what they carried
  *
  * > *"So top, header and footer, tab bar should be same in all type of browsing
@@ -78,45 +83,67 @@
  *
  *     Back · Forward · Reload · Find · Inspect · Size
  *
- * ## The row is the verbs that act on the page — and the `…` is not one of them
+ * ## Where the address is drawn is the screen's choice now
+ *
+ * > *"this link should be on the top header instead of bottom just like the
+ * > normal browsers. I think on top you should have back button and link only,
+ * > and then in the bottom you should have the rest of the options and three dot
+ * > in the right side which will open the rest of the options, not upside here.
+ * > Three dot should be here where we have right now size, so it can bring the
+ * > options from up to down down to up."*
+ *
+ * So the address is not always in this card. `addressIn` is where the screen
+ * draws it: `.bar`, the top row of this card, which is what three of the four
+ * screens still do; or `.header`, the system navigation bar beside the chevron,
+ * which is what `LocalhostBrowser` does now. The field is one view either way —
+ * `BrowserAddressField` — so a screen that puts it up there is showing the same
+ * control, under the same name, with the same seeding rule and the same keyboard,
+ * wearing a shape that fits where it is standing.
+ *
+ * It is deliberately **not** applied to all four at once. He was holding the
+ * phone's own page when he said it, and he said of the terminal screen in the
+ * same breath: *"same way here it is fine because it is terminal, it should be
+ * the way I said."* Changing every screen on one screen's sentence is how a round
+ * of this gets undone by the next one.
+ *
+ * ## The `…` came back down, and that is not the last round undone
  *
  * > *"Maybe we can give some better one header also, not only the bottom, so we
  * > can have most of the important controls for the flow, for this kind of
  * > things and whatever we require to get the job done."*
  *
- * There was a slot here holding the `…`, put here by a round before this one on
- * the argument that the top-right corner of a phone is the furthest pixel from a
- * thumb. That argument is true and it is not an answer to *not only the bottom*,
- * which is the sentence — so the `…` is a trailing item in the system navigation
- * bar now (`BrowserWindowActions`) and this row holds only verbs that act on the
- * **page**.
+ * There was a slot here holding the `…`, and it was taken out and made a trailing
+ * item in the system navigation bar, because a header carrying nothing at all is
+ * the opposite of *not only the bottom*. That reading was right for a header with
+ * a chevron and a title on it. It stops being right the moment the header carries
+ * the **address**: the top is then a control rather than a label, which is what
+ * that sentence asked for — and *"on top you should have back button and link
+ * only"* says plainly what else may be up there. Nothing.
  *
- * The split is not arbitrary and it is what makes the thumb argument survive
- * the move: everything you press *while reading a page* is still down here, and
- * what went up is the door you go through once to do something to the **window**
- * — close it, bind it to a session, photograph it.
+ * So on a screen that has taken `.header` for its address, the `…` comes back
+ * down here as the last slot in the row (`more`), drawn by the same
+ * `BrowserWindowActions` that draws it in a header and under the same name.
+ * *"Three dot should be here where we have right now size"*: the right-hand end
+ * of this row, which is the place Size holds while it is the last thing in it.
  *
- * The row does **not** keep a greyed slot as a stand-in for it. There is one `…`
- * in this app's browser and it is up there; a dead one down here would be the
- * second door an earlier round exists to have removed.
+ * **Size is not deleted to make room.** It is a page verb — how wide the page is
+ * laid out is a thing done to the page, in front of your eyes, over and over
+ * while you compare — and *"in the bottom you should have the rest of the
+ * options"* keeps every one of them down here. What he named was a **position**,
+ * the right side; the `…` takes it and Size sits one slot to its left. A row that
+ * answered the sentence by dropping a control would be answering a different one.
  *
- * ## Size is the sixth, and it is on this side of that line
+ * *"so it can bring the options from up to down down to up"* is the menu's own
+ * direction, and it needs no argument: iOS opens a menu into the space it has,
+ * and a control sitting on the bottom edge of a phone has that space above it.
  *
- * > *"they can pinch and zoom also they can see all the different dimensions in
- * > responsive views how it will look like in mobile how it will look like on
- * > Windows so they can have different dimensions also in phone just like
- * > MacBook."*
+ * The screens whose `…` is still in a header pass no `more`, and this row is
+ * unchanged under them. There is still exactly one `…` per window and one view
+ * that draws it; what changed is that the view knows two places to stand.
  *
- * How wide the page is laid out is a thing done **to the page**, in front of your
- * eyes, over and over while you compare — which is the test this row is drawn
- * against. So it is here rather than behind the `…`, and *"five, not six"* was
- * never a count anybody asked for: it was shorthand for *the menu is not a page
- * verb*. That is unchanged, and the reason the sentence above was rewritten
- * rather than deleted is that somebody will otherwise put the `…` back.
- *
- * Six shares of a phone's width is about sixty-five points each, which is what
- * this row was when the `…` was still in it and it fitted then. `verbLabel`
- * carries the two lines that keep the longest word in the row on one line.
+ * Seven shares of a phone's width is about fifty points each on the narrowest
+ * phone this app runs on. `BrowserVerbLabel` carries the two lines that keep the
+ * longest word in the row — *Forward* — on one line inside that.
  *
  * The menu it opens is names and nothing else — *This phone*, *Laptop 1280* —
  * because *"you are also putting so much of a description under the title of that
@@ -199,6 +226,29 @@ struct BrowserPageBar: View {
     /// advertising `web` or `browser.control` can be watched, typed into, and not
     /// sent anywhere.
     let go: ((String) -> Void)?
+
+    /**
+     * **Where this screen draws the address** — in this card, or up in the
+     * system navigation bar.
+     *
+     * > *"this link should be on the top header instead of bottom just like the
+     * > normal browsers."*
+     *
+     * A default of `.bar`, so the three screens that were not the subject of that
+     * sentence keep the bar they had without being touched. A screen that says
+     * `.header` is promising to mount `BrowserAddressField` itself, with the same
+     * `id`, the same bindings and `place: .header` — see `LocalhostBrowser`.
+     * This bar then draws no address row at all and the card under the page is
+     * the verbs alone.
+     *
+     * The **typing** row is not covered by this and stays here in every case. It
+     * is not the address: it is the line that says the canvas has taken the
+     * keyboard, and the way out of it. A screen with a canvas and its address in
+     * the header would show the address up there and the notice down here, which
+     * is the honest arrangement rather than an oversight — the two say different
+     * things.
+     */
+    var addressIn: BrowserAddressPlace = .bar
 
     /// The verbs, or nil for a page that cannot be asked for one. A nil is drawn
     /// dead where `unavailable` says why, and left out where it does not.
@@ -287,7 +337,25 @@ struct BrowserPageBar: View {
      */
     var size: BrowserPageSize? = nil
 
-    @FocusState private var focused: Bool
+    /**
+     * What the `…` at the right-hand end of the row opens, or nil for a screen
+     * whose `…` is a trailing item in its header instead.
+     *
+     * > *"in the bottom you should have the rest of the options and three dot in
+     * > the right side which will open the rest of the options, not upside here.
+     * > Three dot should be here where we have right now size."*
+     *
+     * Data rather than a view, and the bar builds `BrowserWindowActions` from it
+     * with this bar's own `id`. Handing the view over would let a screen spell
+     * the identifier a second time, and `\(id).settings` is a name six suites
+     * reach for — one place to spell it is the whole reason that view builds it
+     * from a prefix.
+     *
+     * Nil is the ordinary case and the three screens that pass nothing are
+     * unchanged: their `…` is where it has been since the round that put it in
+     * the header, and this row is six verbs long under them.
+     */
+    var more: BrowserPageMore? = nil
 
     /**
      * **One box, with rounded corners, and nothing drawn dead in it.**
@@ -314,7 +382,15 @@ struct BrowserPageBar: View {
             if typing {
                 keyRow
                 if hasVerbs { insetDivider }
-            } else if go != nil || address != "" {
+            } else if addressIn == .bar, go != nil || address != "" {
+                /*
+                 * **Only where this bar is the one drawing it.** A screen that
+                 * has taken `.header` for its address is showing the same field
+                 * beside its chevron — *"on top you should have back button and
+                 * link only"* — and a second copy of it down here would be two
+                 * address bars over one page, which is worse than the bar he
+                 * asked to have emptied.
+                 */
                 addressRow
                 if hasVerbs { insetDivider }
             }
@@ -324,7 +400,6 @@ struct BrowserPageBar: View {
         .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .padding(.horizontal, 10)
         .padding(.bottom, 8)
-        .onChange(of: focused) { _, now in editing = now }
         /*
          * **The canvas has taken the keyboard, or given it up.**
          *
@@ -354,113 +429,23 @@ struct BrowserPageBar: View {
     // MARK: - The address
 
     /**
-     * The address, and the ⓘ that stands where the globe does on a page this
-     * phone can move.
+     * The address, drawn inside this card — the shape three of the four screens
+     * still wear.
      *
-     * One row with two shapes rather than two rows: *"This one is the one that
-     * should be everywhere."* Where the page can be navigated it is a field with
-     * a Go beside it; where it cannot, the same line is drawn read-only, because
-     * an address bar that disappears on some pages is how one of these screens
-     * turned into a video of a browser.
+     * The field itself is `BrowserAddressField`, which is the same view a screen
+     * mounts in its navigation bar when it has taken `.header`. One view for both
+     * places, because *"this link should be on the top header instead of bottom"*
+     * moved a control rather than replacing it: the same name, the same seeding
+     * rule, the same URL keyboard, the same read-only shape on a page nothing can
+     * be sent to.
      *
-     * The leading glyph carries the difference. A page that can be asked for
-     * everything gets the globe, which is decoration; a page that cannot gets the
-     * ⓘ in the same 24-point slot, and tapping it is the only place the *why*
-     * behind the greyed verbs below is written down.
+     * It used to be four properties here — the row, the editable field, the
+     * read-only line and the leading glyph. They are that view's now, unchanged,
+     * so that a bar and a header cannot grow two address fields that drift.
      */
-    @ViewBuilder
     private var addressRow: some View {
-        if go != nil { editableAddress } else { readOnlyAddress }
-    }
-
-    private var editableAddress: some View {
-        HStack(spacing: 12) {
-            leadingGlyph
-            TextField(placeholder, text: $address)
-                .textFieldStyle(.plain)
-                // Each of these is load-bearing: a URL keyboard puts the slash
-                // and the dot under a thumb, autocapitalisation would send
-                // "Localhost", autocorrect "local host", and the `.URL` content
-                // type stops iOS offering a contact's name.
-                .keyboardType(.URL)
-                .textContentType(.URL)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .submitLabel(.go)
-                .onSubmit(submit)
-                .focused($focused)
-                .font(.system(size: 15, design: .monospaced))
-                .foregroundStyle(Theme.primary)
-                .accessibilityIdentifier("\(id).address")
-            Button(action: submit) {
-                Text("Go")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(typed.isEmpty ? Theme.faint : Theme.accent)
-                    .padding(.leading, 8)
-                    .padding(.vertical, 6)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            // Genuinely disabled rather than hidden: an empty address is not a
-            // thing to send, and a button that appears the moment somebody types
-            // moves the field's width under their thumb.
-            .disabled(typed.isEmpty)
-            .accessibilityLabel("Go to this address")
-            .accessibilityIdentifier("\(id).go")
-        }
-        .padding(.leading, 16)
-        .padding(.trailing, 12)
-        .padding(.vertical, 10)
-    }
-
-    /**
-     * The same line, on a page nothing can be sent to.
-     *
-     * `Theme.secondary` rather than `Theme.primary`, and no Go: a line somebody
-     * cannot type into should not be drawn at the weight of one they can. What is
-     * in it is still the page's own address — the last thing the machine reported
-     * about this page — so *where am I* is answered on every screen in this app
-     * that shows a page.
-     *
-     * A separate identifier from the field, deliberately. A test asking for
-     * `\(id).address` is asking whether this page can be typed into, and a label
-     * wearing the field's name is exactly the pass that would mean nothing.
-     */
-    private var readOnlyAddress: some View {
-        HStack(spacing: 12) {
-            leadingGlyph
-            Text(address.isEmpty ? placeholder : address)
-                .font(.system(size: 15, design: .monospaced))
-                .foregroundStyle(address.isEmpty ? Theme.faint : Theme.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .accessibilityIdentifier("\(id).address.readOnly")
-        }
-        .padding(.leading, 16)
-        .padding(.trailing, 12)
-        .padding(.vertical, 10)
-    }
-
-    /// The globe, or the ⓘ that replaces it on a page with something to explain.
-    @ViewBuilder
-    /**
-     * The globe, and nothing else in this slot.
-     *
-     * > *"this icon is not required here, i information button, it can go so it
-     * > will be more simple."*
-     *
-     * There was an ⓘ here on any page some verb could not act on, and it carried
-     * the sentences saying why each greyed control was greyed. Those controls are
-     * not drawn any more — see `slot` — so there is nothing left for it to
-     * explain, and a dot that opens onto an empty explanation is worse than the
-     * greyed row it replaced.
-     */
-    private var leadingGlyph: some View {
-        Image(systemName: "globe")
-            .font(.system(size: 17, weight: .medium))
-            .foregroundStyle(Theme.faint)
-            .frame(width: 24, height: 28)
+        BrowserAddressField(id: id, address: $address, editing: $editing,
+                            placeholder: placeholder, go: go, place: .bar)
     }
 
     /**
@@ -556,23 +541,35 @@ struct BrowserPageBar: View {
      */
     private var hasVerbs: Bool {
         back != nil || forward != nil || reload != nil || find != nil || inspect != nil
-            || size != nil
+            || size != nil || more != nil
     }
 
     /**
-     * The five, in his order, in the same places under every page.
+     * The six page verbs, in his order, in the same places under every page — and
+     * the `…` after them on the one screen that keeps its `…` down here.
      *
      * Every identifier this row hands out is written here rather than inside the
      * helpers, so that the order of the row can be read straight off this
      * function — which is what `LocalhostChromeTests` walks. A row whose order is
      * assembled somewhere else is a row nobody can pin.
      *
-     * The `…` is not among them and there is no gap where it was: it is a trailing
-     * item in the navigation bar (`BrowserWindowActions`), which is what *"not
-     * only the bottom"* asked for. What these six have in common is that every
-     * one of them does something to the **page** a thumb is reading — including
-     * Size, which is pressed over and over while comparing one width against
-     * another and would be a poor thing to keep two taps away.
+     * What the six have in common is that every one of them does something to the
+     * **page** a thumb is reading — including Size, which is pressed over and over
+     * while comparing one width against another and would be a poor thing to keep
+     * two taps away.
+     *
+     * `moreSlot` is the seventh and it is not one of them: it is the door to the
+     * **window** — closing it, binding it to a session, photographing it — and it
+     * is drawn only where the screen handed one over.
+     *
+     * > *"in the bottom you should have the rest of the options and three dot in
+     * > the right side which will open the rest of the options, not upside here.
+     * > Three dot should be here where we have right now size."*
+     *
+     * The right-hand end of the row is the place he named, and it is where Size
+     * was standing while Size was last in the row. Both are here: the position
+     * changed hands, the control did not go anywhere. See the file header for why
+     * that is not the round before this one being undone.
      */
     private var verbRow: some View {
         HStack(spacing: 0) {
@@ -585,8 +582,37 @@ struct BrowserPageBar: View {
             slot("Inspect", inspecting ? "square.dashed.inset.filled" : "square.dashed",
                  id: "\(id).inspect", act: inspect)
             sizeSlot(id: "\(id).size")
+            moreSlot()
         }
         .padding(.vertical, 10)
+    }
+
+    /**
+     * The `…`, last in the row, on a screen whose header is carrying the address
+     * instead of this control.
+     *
+     * `BrowserWindowActions` with `place: .row` — the **same view** that draws it
+     * in a header, told where it is standing. Not a second `…` written here: the
+     * rule that there is one of them per window, spelled once, named once, is
+     * older than this round and is the reason `BrowserChrome` owns that view at
+     * all. What it wears here is `BrowserVerbLabel`, the same glyph-over-word the
+     * six verbs beside it wear, so the row is seven identical shapes rather than
+     * six and a visitor.
+     *
+     * The identifier is built inside that view from this bar's own `id`, so a
+     * page whose `…` moved from the header to the row is still `localhost.settings`
+     * and nothing that reaches for it had to move.
+     *
+     * Nothing forces the menu upwards and nothing needs to: *"so it can bring the
+     * options from up to down down to up"* is what iOS does by itself for a
+     * control sitting on the bottom edge of the screen — the space is above it, so
+     * that is where the menu goes.
+     */
+    @ViewBuilder
+    private func moreSlot() -> some View {
+        if let more {
+            BrowserWindowActions(id: id, place: .row, open: more.open, menu: more.menu)
+        }
     }
 
     /**
@@ -794,30 +820,260 @@ struct BrowserPageBar: View {
         .accessibilityIdentifier(id)
     }
 
-    /// The glyph and its word, drawn identically wherever this row puts one —
-    /// live, or greyed with a reason. Its own function rather than the body of
-    /// `verb` because `dead` draws exactly the same thing and the two must not be
-    /// allowed to drift a point apart.
+    /// The glyph and its word, drawn identically wherever this row puts one.
+    /// `BrowserVerbLabel` rather than a stack written here, because the `…` at
+    /// the end of the row is drawn by `BrowserWindowActions` in another file and
+    /// has to be the same shape to the point — a seventh slot half a point taller
+    /// than its six neighbours is exactly the drift this whole bar exists to have
+    /// removed.
     private func verbLabel(_ title: String, _ icon: String, tint: Color) -> some View {
-        VStack(spacing: 5) {
-            Image(systemName: icon)
-                .font(.system(size: 17, weight: .medium))
-            Text(title)
-                .font(.system(size: 11))
-                // Six shares of a phone's width is about sixty-five points
-                // each — the width this row had when the `…` was still in it —
-                // and *Forward* is the longest word in it. These two lines are
-                // what keeps it on one line on the narrowest phone this app still
-                // runs on, rather than wrapping the word and making one control
-                // taller than its five neighbours.
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
+        BrowserVerbLabel(title: title, icon: icon, tint: tint)
+    }
+
+    // MARK: - Actions
+
+    /// Put the keyboard away. `typing` is set here as well as being announced
+    /// back by the canvas, so the row changes on the press rather than on the
+    /// answer to it.
+    private func stopTyping() {
+        typing = false
+        guard let page else { return }
+        WatchStage.post(.endTyping, to: page)
+    }
+}
+
+/**
+ * The address, in whichever of those two places it is standing.
+ *
+ * ## Why this is a view of its own now
+ *
+ * It was four properties inside `BrowserPageBar` — the row, the editable field,
+ * the read-only line, the globe — and it could not stay there the moment one
+ * screen wanted the same control in its navigation bar. The alternatives were
+ * both worse than moving it: a second field written in `LocalhostBrowser` would
+ * be two address bars in this app with two sets of keyboard rules and one of them
+ * would quietly stop matching, and lifting the bar itself into the header would
+ * carry the verbs up with it, which is the opposite of what he asked for.
+ *
+ * So it is one view with a `place`. Everything that makes it an address bar —
+ * the URL keyboard, no autocapitalisation, no autocorrect, the Go key on the
+ * keyboard, the `\(id).address` name, seeding rather than binding, and the
+ * read-only shape for a page nothing can be sent to — is written once and is
+ * identical in both places. What the place changes is the **shape**: a full row
+ * with a globe and a Go button inside a card, or a capsule that fits between a
+ * chevron and the edge of the screen.
+ *
+ * ## What the header shape drops, and it is not silent
+ *
+ *  - **The globe.** *"on top you should have back button and link only"*. It was
+ *    decoration in the bar and it would be decoration eating a fifth of the width
+ *    of a phone's navigation bar.
+ *  - **The Go button.** The keyboard's own Go key is still there —
+ *    `submitLabel(.go)` and `onSubmit` are on the field in both places — and that
+ *    is the key every phone browser submits with, which is the benchmark he named:
+ *    *"just like the normal browsers"*. A second Go rendered beside a field with
+ *    about two hundred and eighty points to live in would take the address down to
+ *    a stub.
+ *
+ * Both are recorded here rather than dropped quietly, because the bar shape keeps
+ * both and somebody comparing the two screens will want to know which of the
+ * differences were decided.
+ */
+struct BrowserAddressField: View {
+
+    /// The screen's prefix, so the field is `localhost.address` wherever it is
+    /// drawn — a control that changed places must not change name.
+    let id: String
+
+    /// What is in it. Seeded by the screen from the page's own URL, never bound
+    /// to it; see `MachineWindowView.seed` for the dev-server route change that
+    /// would otherwise retype it under a thumb mid-word.
+    @Binding var address: String
+
+    /// Whether somebody is in it. The screen reads this to know not to re-seed.
+    @Binding var editing: Bool
+
+    let placeholder: String
+
+    /// Where a typed address goes, or nil for a page that cannot be navigated at
+    /// all — in which case the same line is drawn read-only rather than not drawn.
+    let go: ((String) -> Void)?
+
+    var place: BrowserAddressPlace = .bar
+
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        Group {
+            switch place {
+            case .bar: inTheCard
+            case .header: inTheHeader
+            }
         }
-        .foregroundStyle(tint)
+        // The focus mirror lives here rather than on the bar, which is what makes
+        // the header shape work at all: the screen still learns that somebody is
+        // in the field and still stops re-seeding it, without the bar having to
+        // be the thing that owns the cursor.
+        .onChange(of: focused) { _, now in editing = now }
+    }
+
+    // MARK: - Inside the card
+
+    /**
+     * The address, and the globe that leads it, on the bar under the page.
+     *
+     * One row with two shapes rather than two rows: *"This one is the one that
+     * should be everywhere."* Where the page can be navigated it is a field with
+     * a Go beside it; where it cannot, the same line is drawn read-only, because
+     * an address bar that disappears on some pages is how one of these screens
+     * turned into a video of a browser.
+     */
+    @ViewBuilder
+    private var inTheCard: some View {
+        if go != nil { editableAddress } else { readOnlyAddress }
+    }
+
+    private var editableAddress: some View {
+        HStack(spacing: 12) {
+            leadingGlyph
+            field
+            Button(action: submit) {
+                Text("Go")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(typed.isEmpty ? Theme.faint : Theme.accent)
+                    .padding(.leading, 8)
+                    .padding(.vertical, 6)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            // Genuinely disabled rather than hidden: an empty address is not a
+            // thing to send, and a button that appears the moment somebody types
+            // moves the field's width under their thumb.
+            .disabled(typed.isEmpty)
+            .accessibilityLabel("Go to this address")
+            .accessibilityIdentifier("\(id).go")
+        }
+        .padding(.leading, 16)
+        .padding(.trailing, 12)
+        .padding(.vertical, 10)
+    }
+
+    /**
+     * The same line, on a page nothing can be sent to.
+     *
+     * `Theme.secondary` rather than `Theme.primary`, and no Go: a line somebody
+     * cannot type into should not be drawn at the weight of one they can. What is
+     * in it is still the page's own address — the last thing the machine reported
+     * about this page — so *where am I* is answered on every screen in this app
+     * that shows a page.
+     *
+     * A separate identifier from the field, deliberately. A test asking for
+     * `\(id).address` is asking whether this page can be typed into, and a label
+     * wearing the field's name is exactly the pass that would mean nothing.
+     */
+    private var readOnlyAddress: some View {
+        HStack(spacing: 12) {
+            leadingGlyph
+            readOnlyLine
+        }
+        .padding(.leading, 16)
+        .padding(.trailing, 12)
+        .padding(.vertical, 10)
+    }
+
+    /**
+     * The globe, and nothing else in this slot.
+     *
+     * > *"this icon is not required here, i information button, it can go so it
+     * > will be more simple."*
+     *
+     * There was an ⓘ here on any page some verb could not act on, and it carried
+     * the sentences saying why each greyed control was greyed. Those controls are
+     * not drawn any more — see `BrowserPageBar.slot` — so there is nothing left
+     * for it to explain, and a dot that opens onto an empty explanation is worse
+     * than the greyed row it replaced.
+     */
+    private var leadingGlyph: some View {
+        Image(systemName: "globe")
+            .font(.system(size: 17, weight: .medium))
+            .foregroundStyle(Theme.faint)
+            .frame(width: 24, height: 28)
+    }
+
+    // MARK: - Up in the header
+
+    /**
+     * The same address, between the chevron and the edge of the screen.
+     *
+     * > *"this link should be on the top header instead of bottom just like the
+     * > normal browsers. I think on top you should have back button and link
+     * > only."*
+     *
+     * A capsule of `Theme.surface` on the navigation bar's own ground, which is
+     * `Theme.background` — the same floating-card-on-tinted-ground relationship
+     * the bar below has, so the field reads as something you can put a cursor in
+     * rather than as a title that happens to be in a monospace. The hairline round
+     * it is what keeps that true in dark mode, where the two greys are eight
+     * points apart.
+     *
+     * `maxWidth: .infinity` because a principal toolbar item is sized to its
+     * content: without it the capsule would shrink to the length of whatever URL
+     * the page last reported and jump about as the page navigated.
+     *
+     * A point smaller than the bar's field. The navigation bar is forty-four
+     * points tall and the capsule has to sit inside it with air above and below;
+     * the monospace at fifteen with seven points of padding is a point over.
+     */
+    private var inTheHeader: some View {
+        HStack(spacing: 8) {
+            if go != nil { field } else { readOnlyLine }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(Theme.surface, in: Capsule())
+        .overlay(Capsule().strokeBorder(Theme.hairline, lineWidth: 0.5))
         .frame(maxWidth: .infinity)
     }
 
+    // MARK: - The two pieces both shapes share
 
+    /**
+     * The field, written once.
+     *
+     * Each of these modifiers is load-bearing: a URL keyboard puts the slash and
+     * the dot under a thumb, autocapitalisation would send "Localhost", autocorrect
+     * "local host", and the `.URL` content type stops iOS offering a contact's
+     * name. `submitLabel(.go)` is the key that sends it, and it is the only way to
+     * send it from the header shape — see this type's own header for why there is
+     * no second Go button up there.
+     */
+    private var field: some View {
+        TextField(placeholder, text: $address)
+            .textFieldStyle(.plain)
+            .keyboardType(.URL)
+            .textContentType(.URL)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .submitLabel(.go)
+            .onSubmit(submit)
+            .focused($focused)
+            .font(.system(size: place == .header ? 14 : 15, design: .monospaced))
+            .foregroundStyle(Theme.primary)
+            .accessibilityIdentifier("\(id).address")
+    }
+
+    /// The read-only line, written once, for the same reason the field is.
+    /// `truncationMode(.middle)` because the two ends of a URL are the two halves
+    /// worth reading and the query in the middle is the part nobody is looking at.
+    private var readOnlyLine: some View {
+        Text(address.isEmpty ? placeholder : address)
+            .font(.system(size: place == .header ? 14 : 15, design: .monospaced))
+            .foregroundStyle(address.isEmpty ? Theme.faint : Theme.secondary)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityIdentifier("\(id).address.readOnly")
+    }
 
     // MARK: - Actions
 
@@ -830,14 +1086,45 @@ struct BrowserPageBar: View {
         go(typed)
         focused = false
     }
+}
 
-    /// Put the keyboard away. `typing` is set here as well as being announced
-    /// back by the canvas, so the row changes on the press rather than on the
-    /// answer to it.
-    private func stopTyping() {
-        typing = false
-        guard let page else { return }
-        WatchStage.post(.endTyping, to: page)
+/**
+ * One slot of the page bar's verb row: a glyph with its word under it.
+ *
+ * A view of its own rather than a function inside `BrowserPageBar`, because the
+ * `…` at the end of that row is drawn by `BrowserWindowActions` — a different
+ * type in a different file — and the two have to be the same shape to the point.
+ * Seven slots that were assembled in two places would drift by a point the first
+ * time either was touched, and one control half a point taller than its
+ * neighbours is the sort of thing he spots in a screenshot and nobody can find
+ * in a diff.
+ *
+ * Seven shares of the narrowest phone this app runs on is about fifty points
+ * each, and *Forward* is the longest word in the row. `lineLimit(1)` and
+ * `minimumScaleFactor(0.8)` are what keep it on one line inside that instead of
+ * wrapping and making one slot taller than the six beside it.
+ */
+struct BrowserVerbLabel: View {
+
+    let title: String
+    let icon: String
+
+    /// The accent, or `Theme.faint` for a verb that is genuinely disabled —
+    /// *nowhere to go back to* rather than *never here*. See
+    /// `BrowserPageBar.canGoBack` for why those two are not the same grey.
+    var tint: Color = Theme.accent
+
+    var body: some View {
+        VStack(spacing: 5) {
+            Image(systemName: icon)
+                .font(.system(size: 17, weight: .medium))
+            Text(title)
+                .font(.system(size: 11))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        .foregroundStyle(tint)
+        .frame(maxWidth: .infinity)
     }
 }
 
