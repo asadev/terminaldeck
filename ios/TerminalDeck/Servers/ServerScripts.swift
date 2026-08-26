@@ -226,7 +226,47 @@ enum ServerScripts {
             "WantedBy=default.target",
             "UNIT",
             "systemctl --user daemon-reload || exit 1",
-            "systemctl --user enable --now \(Brand.id).service || exit 1",
+            /*
+             * **`restart` and then a proof, not `enable --now` and a hope.**
+             *
+             * `enable --now` starts a stopped unit — but only if the daemon it
+             * runs can take the socket the instant it is asked, and after `"$b"
+             * stop` the process it just killed may still be releasing its pid
+             * lock and its relay slot. On a real WSL box on 2026-08-27 that race
+             * lost: the stop landed, the start did not, and the update finished
+             * having replaced the files and left the host **down** — while the
+             * card said *"is a machine of its own now"*. The host somebody had
+             * been reaching from a phone in another place simply stopped
+             * answering, with nothing on either end saying why.
+             *
+             * So the unit is enabled for next boot, then **restarted** — which
+             * from systemd's own view is stop-if-running-then-start and cannot
+             * be raced by a CLI stop that already happened — and then this waits
+             * for the daemon to actually take the socket and **checks that it
+             * did**. A daemon that lost the lock race gets a moment and one more
+             * restart; only then is failure real, and it is reported as failure
+             * rather than swallowed. `enable` is split off `--now` so a box where
+             * the symlink already exists does not turn a benign second enable
+             * into the thing that fails the whole step.
+             */
+            "systemctl --user enable \(Brand.id).service >/dev/null 2>&1 || true",
+            "systemctl --user restart \(Brand.id).service || exit 1",
+            "up=",
+            "for _ in 1 2 3 4 5 6; do",
+            "  if systemctl --user is-active --quiet \(Brand.id).service; then up=1; break; fi",
+            "  sleep 1",
+            "done",
+            "if [ -z \"$up\" ]; then",
+            // One deliberate retry: the daemon's own "already running" refusal
+            // clears once the killed process finishes letting go, which is
+            // exactly the window a second restart a few seconds later steps past.
+            "  systemctl --user restart \(Brand.id).service || exit 1",
+            "  for _ in 1 2 3 4 5 6; do",
+            "    if systemctl --user is-active --quiet \(Brand.id).service; then up=1; break; fi",
+            "    sleep 1",
+            "  done",
+            "fi",
+            "[ -n \"$up\" ] || { echo \"the unit was written but did not come up\" >&2; exit 1; }",
             // Lingering needs root. Asked for without sudo, so it succeeds where
             // policy allows it and fails harmlessly everywhere else — the caller
             // reads the answer back rather than assuming either way.

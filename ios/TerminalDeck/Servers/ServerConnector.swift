@@ -437,9 +437,24 @@ final class ServerConnector {
                         + "server ends — running `sudo loginctl enable-linger $(id -un)` once on "
                         + "that server is what stops that."
             }
-            // Fall through rather than fail: a unit that would not install is a
-            // reason to start it another way, not a reason to leave a working
-            // install switched off.
+            /*
+             * **On a systemd box, a unit that did not come up is not started
+             * another way — it is reported.**
+             *
+             * The old fall-through here went on to `startDirect`, a bare start
+             * over the SSH session that is being closed the moment this install
+             * returns. On a machine that has systemd — the machine that *should*
+             * be running under it — that "recovery" starts a host that dies with
+             * the connection, which is one of the two ways an update left a
+             * server dark on 2026-08-27: the files updated, the unit did not take,
+             * and a bare host filled the gap only until the phone hung up. The
+             * hardened `service()` now proves the unit is active before it exits
+             * 0, so `unit.code != 0` here means it genuinely could not, and the
+             * honest answer is to say so and point at the control that retries —
+             * not to paper over it with a start that cannot outlive this call.
+             */
+            return "It is installed and updated, but its background service did not come back up. "
+                + "`\(Brand.id) status` on the server says why; the Start button here brings it up."
         }
         let started = try? await session.run(
             ServerScripts.startDirect(command: look.host.command))

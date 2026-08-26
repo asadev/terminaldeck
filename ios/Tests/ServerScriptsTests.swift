@@ -146,7 +146,15 @@ final class ServerScriptsTests: XCTestCase {
     func testWritesAUserUnitAndAsksForLingeringWithoutSudo() {
         let script = ServerScripts.service(command: "/root/.local/bin/terminaldeck")
         XCTAssertTrue(script.contains("$HOME/.config/systemd/user/terminaldeck.service"))
-        XCTAssertTrue(script.contains("systemctl --user enable --now"))
+        // `enable` sets the boot symlink; `restart` is what actually brings it
+        // up, split apart so a benign second enable cannot fail the step — see
+        // the note over the proof loop in `service()`.
+        XCTAssertTrue(script.contains("systemctl --user enable terminaldeck.service"))
+        XCTAssertTrue(script.contains("systemctl --user restart terminaldeck.service"))
+        XCTAssertTrue(script.contains("is-active --quiet"),
+                      "the script must prove the unit came up, not assume it")
+        XCTAssertTrue(script.contains("did not come up"),
+                      "and fail loudly if it did not, so the card cannot claim success over a dead host")
         XCTAssertFalse(script.contains("sudo "), "this feature never asks for administrator access")
         XCTAssertTrue(script.contains("loginctl enable-linger"))
         XCTAssertTrue(script.contains("|| true"), "lingering is asked for, never required")
@@ -167,10 +175,10 @@ final class ServerScriptsTests: XCTestCase {
     func testStopsTheAlreadyRunningHostBeforeGivingTheUnitTheJob() {
         let script = ServerScripts.service(command: "/root/.local/bin/terminaldeck")
         guard let stopAt = script.range(of: "stop >/dev/null"),
-              let enableAt = script.range(of: "systemctl --user enable --now")
-        else { return XCTFail("the service script no longer stops or no longer enables") }
-        XCTAssertTrue(stopAt.lowerBound < enableAt.lowerBound,
-                      "the unit is enabled while another host still holds the socket")
+              let startAt = script.range(of: "systemctl --user restart")
+        else { return XCTFail("the service script no longer stops or no longer restarts") }
+        XCTAssertTrue(stopAt.lowerBound < startAt.lowerBound,
+                      "the unit is started while another host still holds the socket")
     }
 
     /**
