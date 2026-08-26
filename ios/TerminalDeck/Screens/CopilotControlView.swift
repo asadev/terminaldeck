@@ -30,13 +30,19 @@
  * already exists. Three things a control panel for a copilot obviously *should*
  * have are missing, and each one is missing because it is not on the wire:
  *
- *  - **Its instructions, and its name.** The desktop keeps both in
- *    `<userData>/copilot-layer/instructions.md` and hands the file to the CLI at
- *    spawn; `shared/copilot-identity.ts` says why there is no `copilot.name`
- *    setting anywhere. Nothing carries that file over the relay — `protocol.ts`
- *    has no `instructions` frame in either direction — so a field here would be
- *    a text box that saves to nothing. It is named in the ⓘ on the setup caption
- *    instead, pointing at where it *is* editable.
+ *  - **Its name.** The desktop keeps it in the instruction file it hands the CLI
+ *    at spawn, and `shared/copilot-identity.ts` says why there is no
+ *    `copilot.name` setting anywhere: the name is a line in the prose, not a
+ *    field. So there is nothing here to point a text box at, and the ⓘ on the
+ *    setup caption sends somebody to the file that holds it.
+ *
+ *    **Its instructions were on this list until 2026-08-27 and are not any
+ *    more.** The `copilot.files` capability carries all five of them — the
+ *    instructions, the folder's own, the app's half of the prompt, the assembled
+ *    prompt and every memory file — so `Its files` below is a real card with a
+ *    real editor behind each row. Left here as a record of what changed rather
+ *    than deleted, because a paragraph that goes stale on the screen it
+ *    describes is the exact failure the rest of this file is written against.
  *  - **Its folder, on a desktop.** `copilot-folder.ts` stores it as
  *    `copilot.home`, deliberately under the `copilot.` prefix so that
  *    `PROTECTED_SETTING_PREFIXES` refuses a `settings.write` to it, and the
@@ -110,6 +116,18 @@ struct CopilotControlView: View {
     /// session list.
     @State private var notice: String?
 
+    /// The routine whose file somebody is reading. Drives a pushed viewer rather
+    /// than a sheet for the reason the copilot's file editor is pushed: a
+    /// routine is a trigger, a folder and up to eight kilobytes of prompt, which
+    /// is a screen's worth of text and not a card's.
+    @State private var readingRoutine: RoutineRow?
+
+    /// The routine a Delete is waiting on. One optional driving one dialog, not
+    /// a flag beside each row — `MachineProfilesView` records why in as many
+    /// words: two `.confirmationDialog` modifiers on one view is a coin toss
+    /// over which of them a press reaches.
+    @State private var deletingRoutine: RoutineRow?
+
     private var host: HostLink? { model.host(hostID) }
     private var link: CopilotLink? { host?.copilot }
 
@@ -134,6 +152,15 @@ struct CopilotControlView: View {
             canPickFolders: host.canPickFolders,
             settingsOffered: host.serverSettings.offered,
             devicesOffered: host.devices.offered,
+            // Both are asked of the link rather than of a capability set,
+            // because neither is only a capability: the files card also needs
+            // the copilot to be here for this phone and this socket to have said
+            // hello, and the routines card needs the machine not to have taken
+            // the offer back with a `copilot.grant`. Each object already answers
+            // its own question in one property, and re-asking it here in three
+            // booleans is how the screen and the link come to disagree.
+            filesOffered: host.copilot.canReadCopilotFiles,
+            routinesOffered: host.copilot.canUseRoutines,
             hasCopilotSession: copilotSession != nil,
             hasRun: host.copilot.hasRun,
             waiting: host.copilot.waitingCount)
@@ -183,9 +210,27 @@ struct CopilotControlView: View {
         // the caller, so every way in lands on a section that is already filling
         // rather than one that needs a second visit. Idempotent — the link
         // refuses a second read on the same connection itself.
-        .onAppear { host?.serverSettings.ensureRead() }
+        .onAppear {
+            host?.serverSettings.ensureRead()
+            askForTheLists()
+        }
         .onChange(of: host?.serverSettings.rows == nil) { _, unknown in
             if unknown { host?.serverSettings.ensureRead() }
+        }
+        /*
+         * Neither list is in the opening burst, deliberately — they are two
+         * frames nobody on the Copilot tab needs until they come here — so this
+         * screen is what asks. Asked again when either capability turns up,
+         * because the ordinary case on a cold start is arriving before the
+         * `welcome` has landed: the guard inside each `load` refuses silently
+         * then, and without this the cards would sit empty over a machine that
+         * had been ready for several seconds.
+         */
+        .onChange(of: reading.filesOffered) { _, offered in
+            if offered { link?.loadFiles() }
+        }
+        .onChange(of: reading.routinesOffered) { _, offered in
+            if offered { link?.loadRoutines() }
         }
         .sheet(isPresented: $picking) {
             FolderPickerView(model: model, action: .choose) { folder in
@@ -198,6 +243,25 @@ struct CopilotControlView: View {
         }
         .sheet(isPresented: $showingSessions) {
             CopilotSessionsSheet(model: model, hostID: hostID) { showingSessions = false }
+        }
+        .navigationDestination(item: $readingRoutine) { routine in
+            CopilotRoutineFileView(model: model, hostID: hostID, routine: routine)
+        }
+        .confirmationDialog("Delete \(deletingRoutine?.name ?? "this routine")?",
+                            isPresented: Binding(get: { deletingRoutine != nil },
+                                                 set: { if !$0 { deletingRoutine = nil } }),
+                            titleVisibility: .visible) {
+            Button("Delete", role: .destructive) {
+                if let routine = deletingRoutine { link?.deleteRoutine(routine.id) }
+                deletingRoutine = nil
+            }
+            Button("Keep it", role: .cancel) { deletingRoutine = nil }
+        } message: {
+            // Says what is actually destroyed. A routine is a file on somebody's
+            // machine and this is the only control on this screen that unlinks
+            // one, so the sentence names the disk rather than saying "this
+            // cannot be undone", which is true of half the screen.
+            Text("Its file is removed from the \(machineNoun). The \(machineNoun) stops running it.")
         }
         .sheet(item: $prompt) { showing in
             switch showing {
@@ -232,9 +296,26 @@ struct CopilotControlView: View {
         case .permissions: permissions
         case .run: run
         case .history: history
+        case .files: files
+        case .routines: routines
         case .devices: devices
         case .about: about
         }
+    }
+
+    /**
+     * Ask the machine for the two lists this screen is the only reader of.
+     *
+     * Guarded on the capability here as well as inside each `load`, and the
+     * difference matters: `loadRoutines` reports a refusal through `onError`,
+     * which is the machine's error banner, so calling it over a desktop with no
+     * routine engine would put *"this machine cannot reach its routines"* on
+     * screen every single time somebody opened this page. A capability nobody
+     * offered is not an error; it is a card that is absent.
+     */
+    private func askForTheLists() {
+        if reading.filesOffered { link?.loadFiles() }
+        if reading.routinesOffered { link?.loadRoutines() }
     }
 
     // MARK: - Setup
@@ -284,9 +365,9 @@ struct CopilotControlView: View {
     private static let aboutSetup =
         "Where the copilot works, and whether this tab starts one for you. Both are this "
         + "phone's, kept for this machine only. The folder is filled in from the first session "
-        + "this tab starts, and can be changed here at any time. Its name and its standing "
-        + "instructions live in the desktop app, in the file it is handed every time it "
-        + "starts, and are not carried over this connection — edit them there."
+        + "this tab starts, and can be changed here at any time. Its standing instructions are "
+        + "under Its files, further down this screen. Its name is a line inside that same file "
+        + "rather than a setting anywhere."
 
     /**
      * Which folder the copilot works in — a server's copilot, which is a
@@ -763,6 +844,178 @@ struct CopilotControlView: View {
         }
     }
 
+    // MARK: - Its files
+
+    /**
+     * **Everything the copilot reads before it answers**, and the editor behind
+     * each row.
+     *
+     * > *"it reads and writes two kinds of prompts and only one is ours … its
+     * > memory folder which is actually here, the folder's own instruction, what
+     * > it was handed, its tool list, its instructions, its folder…"*
+     *
+     * Six kinds of row off one listing, and the machine decides every fact on
+     * them — the name, the purpose, whose it is, whether it exists and whether a
+     * save would be served. This end sorts nothing and derives nothing: the
+     * desktop reads its disk on every one of these frames and sends the list in
+     * the order the copilot reads the files, which is the order that answers
+     * *why did it say that*.
+     *
+     * Absent, not disabled, on a machine that never advertised `copilot.files`.
+     * An older desktop closes the channel on a frame it has never heard of and
+     * takes the terminals with it, which is why `CopilotLink.canReadCopilotFiles`
+     * asks about the capability and not only about the grant.
+     */
+    @ViewBuilder
+    private var files: some View {
+        if let link {
+            VStack(alignment: .leading, spacing: 0) {
+                caption("Its files", about: "the copilot's files", says: Self.aboutFiles)
+                card {
+                    if link.files.isEmpty {
+                        // Two different silences, and they send a person to two
+                        // different places: one is a round trip in flight, the
+                        // other is a machine that has answered nothing.
+                        valueRow(title: link.isLoadingFiles ? "Reading…" : "Nothing has come back",
+                                 value: link.isLoadingFiles
+                                     ? "Asking the \(machineNoun) what its copilot reads."
+                                     : "That \(machineNoun) has not sent its list.",
+                                 mono: false,
+                                 chevron: false)
+                            .accessibilityIdentifier("copilot.files.empty")
+                    } else {
+                        ForEach(Array(link.files.enumerated()), id: \.element.id) { index, file in
+                            if index > 0 { line }
+                            NavigationLink {
+                                CopilotFileEditorView(model: model, hostID: hostID, fileID: file.id)
+                            } label: {
+                                CopilotFileRowBody(file: file)
+                            }
+                            .buttonStyle(.plain)
+                            // Named on the link rather than inside the row body,
+                            // for the reason `devices` and `about` are: combining
+                            // children inside a `NavigationLink` takes the link's
+                            // own identifier off the element a UI test finds.
+                            .accessibilityLabel("\(file.name). \(file.purpose)")
+                            .accessibilityIdentifier("copilot.files.\(file.id)")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private static let aboutFiles =
+        "Everything the copilot reads before it answers anything, read off the machine's disk "
+        + "each time this screen opens. Two of them the app writes itself on every start and "
+        + "there is nothing to save over; the rest are yours — its instructions, the folder's "
+        + "own, and everything it has remembered."
+
+    // MARK: - Routines
+
+    /**
+     * **The saved instructions the machine runs on its own.**
+     *
+     * > *"If you go to Mac side there is 'check the work before it counts as
+     * > done', 'what happened overnight', all of these are like separate
+     * > settings for co-pilot — 'weekly', 'look at what you remember',
+     * > 'uncommitted work left behind', 'something is waiting on you', 'pick up
+     * > to-do' … Mac has a lot of things about copilot by the way."*
+     *
+     * Every one of those names is a routine, and this is the card that finally
+     * has them on the phone. `CopilotRoutineRowBody` draws a row and
+     * `RoutineLines` composes its sentences; nothing about state is worked out
+     * here, because the machine already decided all of it — see `RoutinesWire`
+     * for the argument, whose short form is *a routine that looks armed on a
+     * phone and is not*.
+     *
+     * `routinesAnswered` is what separates the two empties. *There are none* is
+     * a fact about a machine that replied; *Reading…* is a frame in flight. They
+     * look identical in any list that draws a count, and the whole health model
+     * on the far side exists to keep them apart.
+     */
+    @ViewBuilder
+    private var routines: some View {
+        if let link {
+            // The graced reading, not the live one — see `row`, where the same
+            // pair is read for the same reason.
+            let dead = host?.notice.isShowing == true && host?.connection.isLive != true
+            VStack(alignment: .leading, spacing: 0) {
+                caption("Routines", about: "the copilot's routines", says: Self.aboutRoutines)
+                card {
+                    if link.routines.isEmpty {
+                        valueRow(title: link.routinesAnswered ? "There are none" : "Reading…",
+                                 value: link.routinesAnswered
+                                     ? "A routine is one file on the \(machineNoun): a trigger, a "
+                                         + "prompt and a folder."
+                                     : "Asking the \(machineNoun) what it runs on its own.",
+                                 mono: false,
+                                 chevron: false)
+                            .accessibilityIdentifier("copilot.routines.empty")
+                    } else {
+                        ForEach(Array(link.routines.enumerated()), id: \.element.id) { index, routine in
+                            if index > 0 { line }
+                            CopilotRoutineRowBody(
+                                routine: routine,
+                                dead: dead,
+                                run: { link.runRoutine(routine.id) },
+                                hold: { link.holdRoutine(routine.id, reason: Self.heldFromHere) },
+                                arm: { link.armRoutine(routine.id) },
+                                read: { readingRoutine = routine },
+                                remove: { deletingRoutine = routine })
+                        }
+                    }
+                }
+                if let sentence = link.routineNotice {
+                    routinesNotice(sentence) { link.dismissRoutineNotice() }
+                }
+            }
+        }
+    }
+
+    private static let aboutRoutines =
+        "Saved instructions this machine runs on its own — one file each, with a trigger, a "
+        + "folder and a prompt. They are kept where the copilot may read them and cannot write "
+        + "them, so one is only made or edited on the machine itself. From here: run one now, "
+        + "hold it, let it run again, read it, or delete it."
+
+    /// The reason sent with a hold, so the machine's own list says where it came
+    /// from. The desktop writes *"Paused from Settings."* for the same press at
+    /// the machine; this is the phone's half of the same sentence.
+    private static let heldFromHere = "Held from a phone."
+
+    /**
+     * One line about what the last press did, and a way to put it away.
+     *
+     * The engine's own words, never this app's: a run that refused to start is
+     * the only place a spent budget, an overlap policy or a missing runner is
+     * ever explained, and none of the three is knowable from this end. Under the
+     * card rather than in it, so it does not move the rows when it appears.
+     */
+    private func routinesNotice(_ sentence: String,
+                                dismiss: @escaping () -> Void) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text(sentence)
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 8)
+            Button(action: dismiss) {
+                Image(systemName: "xmark.circle")
+                    .font(.system(size: 15))
+                    .foregroundStyle(Theme.faint)
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Dismiss")
+            .accessibilityIdentifier("copilot.routines.notice.dismiss")
+        }
+        .padding(.horizontal, 4)
+        .padding(.top, 8)
+        .accessibilityIdentifier("copilot.routines.notice")
+    }
+
     // MARK: - Devices
 
     /// The roster, pushed rather than sheeted because it is a place with its own
@@ -1117,6 +1370,8 @@ enum CopilotControl {
         case permissions
         case run
         case history
+        case files
+        case routines
         case devices
         case about
 
@@ -1139,6 +1394,15 @@ enum CopilotControl {
         let canPickFolders: Bool
         let settingsOffered: Bool
         let devicesOffered: Bool
+        /// Whether this phone may read the copilot's files on this machine — the
+        /// capability, the grant and the socket, already folded together by
+        /// `CopilotLink.canReadCopilotFiles`.
+        let filesOffered: Bool
+        /// Whether this machine serves routines to this phone. A separate
+        /// capability from the copilot's own, on purpose: a machine can hold a
+        /// routine engine and serve no copilot conversation, so one card can be
+        /// there without the other.
+        let routinesOffered: Bool
         let hasCopilotSession: Bool
         let hasRun: Bool
         let waiting: Int
@@ -1150,6 +1414,8 @@ enum CopilotControl {
              canPickFolders: Bool = false,
              settingsOffered: Bool = false,
              devicesOffered: Bool = false,
+             filesOffered: Bool = false,
+             routinesOffered: Bool = false,
              hasCopilotSession: Bool = false,
              hasRun: Bool = false,
              waiting: Int = 0) {
@@ -1160,6 +1426,8 @@ enum CopilotControl {
             self.canPickFolders = canPickFolders
             self.settingsOffered = settingsOffered
             self.devicesOffered = devicesOffered
+            self.filesOffered = filesOffered
+            self.routinesOffered = routinesOffered
             self.hasCopilotSession = hasCopilotSession
             self.hasRun = hasRun
             self.waiting = waiting
@@ -1202,6 +1470,19 @@ enum CopilotControl {
             panels.append(.run)
             panels.append(.history)
         }
+        /*
+         * The two cards the machine answers for, after everything about this
+         * phone's own relationship with the copilot and before everybody else's.
+         *
+         * Neither asks about the machine's kind and that is deliberate. A
+         * headless server that grows a copilot layer serves `copilot.files` on
+         * the same terms a Mac does, and `routines` is already a capability of
+         * its own precisely because a machine can run routines without serving a
+         * conversation. Gating either on `onAServer` would be this end deciding
+         * something the far end has already answered.
+         */
+        if r.filesOffered { panels.append(.files) }
+        if r.routinesOffered { panels.append(.routines) }
         if r.devicesOffered { panels.append(.devices) }
         panels.append(.about)
         return panels
