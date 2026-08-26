@@ -151,13 +151,24 @@
  *
  * Pinch is `ignoresViewportScaleLimits` on the configuration — every dev server's
  * default template ships `user-scalable=no`, and a browser is exactly the place
- * that override belongs. The widths are the honest kind: `WebSurface` lays the
- * `WKWebView` out at 1280 or 1440 **points** and scales the view to fit, so the
- * page's own media queries fire at that width, and `PageViewportScript` writes a
- * viewport for the pages that would otherwise be laid out at their own fixed
- * width or at WebKit's 980 default. The choice is remembered per site
- * (`PageWidths`). A window on the machine draws that control greyed with one
- * sentence: it sends pictures, and there is no layout here to change.
+ * that override belongs. The sizes are the honest kind: `WebSurface` lays the
+ * `WKWebView` out at the device's real **width and height** in points and scales
+ * the view to fit, so the page's own media queries fire at that width and its
+ * `100vh` is that height, and `PageViewportScript` writes a viewport for the
+ * pages that would otherwise be laid out at their own fixed width or at WebKit's
+ * 980 default. The choice is remembered per site (`PageWidths`). A window on the
+ * machine draws that control greyed with one sentence: it sends pictures, and
+ * there is no layout here to change.
+ *
+ * > *"when i make other frame like desktop or laptop biew it is trying to fit
+ * > inside the same given space a sphone instead of giving me less hieght and
+ * > like actual laptop dimension"*
+ *
+ * That is what `DeviceFrame` at the bottom of this file is: the chosen rectangle
+ * drawn with its own proportions, edged, on ground, with the pixels said quietly
+ * under it — a laptop wide and short, a phone tall and narrow. The round before
+ * this one kept the phone's height and only changed the width, which drew a
+ * laptop as a tall strip and answered nothing.
  *
  * **The click-flow recorder.**
  *
@@ -234,7 +245,7 @@ struct LocalhostBrowser: View {
      * was left out last round was the wrong reason.
      */
     var flow: PhoneClickFlow = .shared
-    /// Which width each site was last looked at in. Injected on the same terms.
+    /// Which size each site was last looked at in. Injected on the same terms.
     var widths: PageWidths = .shared
     /**
      * The tab this page is in, if it is in one.
@@ -516,7 +527,7 @@ struct LocalhostBrowser: View {
          * app's own view of the web view, never the page's claim about itself,
          * which is the rule `browser-steps.ts` is emphatic about.
          *
-         * The width is re-applied because a **document** navigation replaces the
+         * The size is re-applied because a **document** navigation replaces the
          * document, and with it the viewport meta this app wrote into the last
          * one. `BrowserBridge` re-applies on `didCommit` as well, which is the
          * earlier of the two and the one that catches it before layout; this
@@ -525,7 +536,7 @@ struct LocalhostBrowser: View {
          */
         .onChange(of: browser.address) { _, address in
             if let tabID { flow.at(tab: tabID, url: address) }
-            browser.setPageWidth(pageWidth)
+            browser.setPageSize(chosenSize)
         }
         /*
          * **The recorder is turned on and off from a card this screen cannot
@@ -541,19 +552,19 @@ struct LocalhostBrowser: View {
             browser.setRecording(on)
         }
         /*
-         * **The chosen width, applied to the page.**
+         * **The chosen size, applied to the page.**
          *
-         * Two halves and they are not the same mechanism. The view's own width is
-         * `WebSurface`'s job — the `WKWebView` is genuinely laid out at 1440
-         * points and the *view* is scaled to fit, which no CSS in the document can
-         * see. This hook is the other half: the viewport instruction for pages
-         * that declare a fixed width of their own or none at all, which WebKit
-         * would otherwise lay out at 320 or at 980 whatever size the view is. See
-         * `PageWidths` for why both halves are needed and which pages each one
-         * reaches.
+         * Two halves and they are not the same mechanism. The view's own width
+         * and height are `WebSurface`'s job — the `WKWebView` is genuinely laid
+         * out at 1280 × 800 points and the *view* is scaled to fit, which no CSS
+         * in the document can see. This hook is the other half: the viewport
+         * instruction for pages that declare a fixed width of their own or none
+         * at all, which WebKit would otherwise lay out at 320 or at 980 whatever
+         * size the view is. See `PageWidths` for why both halves are needed and
+         * which pages each one reaches.
          */
-        .onChange(of: pageWidth) { _, width in
-            browser.setPageWidth(width)
+        .onChange(of: chosenSize) { _, size in
+            browser.setPageSize(size)
         }
         .onAppear {
             // The tab first: it is what a recorded step is filed under, and a
@@ -562,7 +573,7 @@ struct LocalhostBrowser: View {
             browser.attach(tab: tabID, flow: flow)
             if case let .live(url) = tunnel.phase { browser.load(first(url)) }
             seed()
-            browser.setPageWidth(pageWidth)
+            browser.setPageSize(chosenSize)
             browser.setRecording(recording)
         }
         .onDisappear {
@@ -707,7 +718,7 @@ struct LocalhostBrowser: View {
      */
     private var pageSize: BrowserPageSize {
         BrowserPageSize(
-            width: pageWidth,
+            size: chosenSize,
             choose: { widths.choose($0, for: site) },
             zoomIn: { browser.zoom(by: 1.25) },
             zoomOut: { browser.zoom(by: 0.8) },
@@ -715,7 +726,7 @@ struct LocalhostBrowser: View {
     }
 
     /**
-     * The width this page is being looked at in, and the site it is remembered
+     * The size this page is being looked at in, and the site it is remembered
      * against.
      *
      * Both read live off the store on every redraw rather than being held in
@@ -725,7 +736,7 @@ struct LocalhostBrowser: View {
      * site rather than per URL, which is the one place a literal reading of *per
      * page* would have made the feature forget itself on the first link.
      */
-    private var pageWidth: PageWidth { widths.width(for: site) }
+    private var chosenSize: PageSize { widths.size(for: site) }
 
     private var site: String {
         let raw = browser.address.isEmpty
@@ -865,7 +876,7 @@ struct LocalhostBrowser: View {
             waiting("Opening port \(tunnel.port) on \(model.theMachine)…")
         case .live:
             ZStack {
-                WebSurface(browser: browser, layoutWidth: pageWidth.points)
+                DeviceFrame(browser: browser, size: chosenSize)
                 if let failure = browser.failure {
                     // The tunnel is up and the *page* failed, which is a
                     // different sentence from the tunnel having gone: the dev
@@ -1163,9 +1174,9 @@ final class BrowserBridge: NSObject, WKNavigationDelegate {
     /// delegate reads at a moment when the screen is not being redrawn.
     private(set) var recording = false
 
-    /// The width the page is being laid out at, kept for the same reason: a new
+    /// The size the page is being laid out at, kept for the same reason: a new
     /// document arrives with no viewport of ours in it and has to be told again.
-    private(set) var pageWidth: PageWidth = .fit
+    private(set) var pageSize: PageSize = .fit
 
     let webView: WKWebView
 
@@ -1437,18 +1448,18 @@ final class BrowserBridge: NSObject, WKNavigationDelegate {
     }
 
     /**
-     * Lay the page out at another width.
+     * Lay the page out at another size.
      *
      * This is only the **viewport** half — the half that reaches a page which
      * declares a fixed width of its own, or none. The other half is the web
-     * view's real width and belongs to the view (`WebSurface`), because a
-     * document cannot be told about it and does not need to be: it simply is that
-     * wide. See `PageWidths`.
+     * view's real width and height and belongs to the view (`WebSurface`),
+     * because a document cannot be told about those and does not need to be: it
+     * simply is that big. See `PageWidths`.
      */
-    func setPageWidth(_ width: PageWidth) {
-        pageWidth = width
+    func setPageSize(_ size: PageSize) {
+        pageSize = size
         webView.evaluateJavaScript(PageViewportScript.source, in: nil, in: Self.world) { _ in }
-        run(PageViewportScript.apply(width))
+        run(PageViewportScript.apply(size))
     }
 
     /**
@@ -1457,7 +1468,7 @@ final class BrowserBridge: NSObject, WKNavigationDelegate {
      * `scrollView.zoomScale` rather than `pageZoom`, and the difference is the
      * whole point of keeping these two features apart. `pageZoom` reflows: it
      * changes how many CSS pixels the viewport holds, which is exactly what
-     * `PageWidth` is for and would quietly make the chosen width a lie — a page
+     * `PageSize` is for and would quietly make the chosen size a lie — a page
      * asked for 1440 and zoomed to 80% would be laid out at 1800. Magnification
      * leaves the layout alone and makes the result bigger, which is what a person
      * examining a laptop layout on a phone actually wants.
@@ -1559,7 +1570,7 @@ final class BrowserBridge: NSObject, WKNavigationDelegate {
      */
     nonisolated func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         MainActor.assumeIsolated {
-            if pageWidth != .fit { setPageWidth(pageWidth) }
+            if pageSize != .fit { setPageSize(pageSize) }
         }
     }
 
@@ -1577,7 +1588,7 @@ final class BrowserBridge: NSObject, WKNavigationDelegate {
             // navigation would hand somebody a flow that is missing everything
             // they did after step one, and look complete.
             if recording { setRecording(true) }
-            if pageWidth != .fit { setPageWidth(pageWidth) }
+            if pageSize != .fit { setPageSize(pageSize) }
         }
     }
 
@@ -1635,15 +1646,138 @@ final class BrowserBridge: NSObject, WKNavigationDelegate {
 }
 
 /**
- * The page, at whatever width it is being looked at.
+ * The page, drawn in the shape of the device it is being looked at on.
+ *
+ * > *"when i make other frame like desktop or laptop biew it is trying to fit
+ * > inside the same given space a sphone instead of giving me less hieght and
+ * > like actual laptop dimension"*
+ *
+ * This is the answer to that sentence, and it is a view rather than a modifier
+ * because there are three things on screen at once and only one of them is the
+ * page: the **ground** the device sits on, the **frame** with its edge, and the
+ * quiet line under it that says the pixels. A desktop browser's device toolbar
+ * draws exactly these three, and it draws them because a rectangle floating with
+ * no edge on the same colour as the page reads as a layout that broke rather
+ * than as a laptop.
+ *
+ * ## Nothing at all in the default state
+ *
+ * At *This phone* there is no ground, no edge and no caption — the web surface
+ * is the whole space, byte-for-byte what this screen drew before any of this
+ * existed. That matters more than it looks: the default is the state every
+ * person is in every time they open a page, and a border of ours around it would
+ * be this feature charging rent on people who never used it.
+ *
+ * ## The scale is one number, and it is capped at life size
+ *
+ * `PageFit` does the arithmetic and is tested on its own, because it is the
+ * whole of *"like actual laptop dimension"*: one factor for both axes so the
+ * proportions survive, the smaller of the two ratios so the rectangle fits on
+ * the axis that binds first, and never above 1 so a 320-wide phone does not get
+ * blown up bigger than the phone in his hand.
+ *
+ * ## Why the caption is not a second line under a control
+ *
+ * *"you are also putting so much of a description under the title of that
+ * thing…"* — the standing correction, and this is not an instance of it. The
+ * caption is not under a control and it is not a description: it is the
+ * measurement of the object above it, `1280 × 800`, in the place every device
+ * toolbar puts it. There is no control on this screen it could be sitting under;
+ * the control is the Size menu in the bar, and its rows are titles.
+ */
+private struct DeviceFrame: View {
+    let browser: BrowserBridge
+    let size: PageSize
+
+    var body: some View {
+        GeometryReader { geo in
+            drawn(in: geo.size)
+                .frame(width: geo.size.width, height: geo.size.height)
+        }
+    }
+
+    /**
+     * Framed or full-bleed, and the branch is the size itself.
+     *
+     * `PageFit` returns nil exactly when the choice is *This phone*, so this
+     * `if let` is the only place the two states are told apart — a second test
+     * of `size.device == .fit` somewhere else is how one of them comes to
+     * disagree with the other.
+     */
+    @ViewBuilder
+    private func drawn(in box: CGSize) -> some View {
+        if let fit = PageFit(size, in: box) {
+            VStack(spacing: 6) {
+                Spacer(minLength: 0)
+                WebSurface(browser: browser, layout: fit.layout)
+                    .frame(width: fit.drawn.width, height: fit.drawn.height)
+                    .clipShape(Self.edge)
+                    /*
+                     * The lift is a plate **behind** the page, not a filter over
+                     * it. `.shadow` applied to a `UIViewRepresentable` asks UIKit
+                     * to composite a live-rendering `WKWebView` layer through an
+                     * offscreen pass, which is the kind of thing that is either
+                     * expensive or quietly dropped depending on the OS — and this
+                     * page is being scrolled and pinched while it is on screen. A
+                     * rounded plate under it is neither, and it also fills the
+                     * frame's interior so a document that paints no background of
+                     * its own reads as a blank screen rather than as a hole.
+                     *
+                     * The edge and the lift are both needed and neither alone
+                     * does it: a border with no lift is a table cell, and a
+                     * shadow with no border disappears against a page whose own
+                     * background is near-white.
+                     */
+                    .background(
+                        Self.edge
+                            .fill(Theme.surface)
+                            .shadow(color: .black.opacity(0.16), radius: 9, x: 0, y: 3)
+                    )
+                    .overlay(Self.edge.strokeBorder(Theme.hairline, lineWidth: 1))
+                    // A container rather than a decoration: the frame's drawn
+                    // rectangle is the claim this round is judged on, and
+                    // `LocalhostUITests` reads it back off the screen and asks
+                    // whether a laptop came out laptop shaped. `.contain` leaves
+                    // the page inside reachable, which the pinch case needs.
+                    .accessibilityElement(children: .contain)
+                    .accessibilityLabel("Page frame")
+                    .accessibilityIdentifier("localhost.pageFrame")
+                // The measurement comes off the fit rather than off `size`, so
+                // the number under the frame is the rectangle the frame was
+                // actually built from and cannot drift from it by a rounding or
+                // by somebody adding a clamp later.
+                Text(PageSize.pixels(fit.layout))
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(Theme.faint)
+                    .accessibilityIdentifier("localhost.pageFrame.measure")
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // The tinted ground. `Theme.background` is the app's raised shade
+            // rather than the page's own white, which is the difference between
+            // a device sitting on a desk and a page with a hairline drawn on it.
+            .background(Theme.background)
+        } else {
+            WebSurface(browser: browser, layout: nil)
+        }
+    }
+
+    /// 12, not the app's usual 20. A card's radius on a rectangle drawn at 0.29
+    /// would eat the corners of the page inside it; 12 reads as a bezel at every
+    /// scale in the list.
+    private static let edge = RoundedRectangle(cornerRadius: 12, style: .continuous)
+}
+
+/**
+ * The page, at whatever size it is being looked at.
  *
  * The representable's own view is a plain container rather than the `WKWebView`
- * itself, and that is the whole of how the width feature is built. SwiftUI sizes
- * the container to the screen; the container puts the web view inside it at the
- * chosen **layout** width and scales it to fit. A `UIView` transform is not
- * something the document can see — it is not a CSS transform, it changes no
- * property the page can read, and `window.innerWidth` inside a 1440-point web
- * view is 1440 no matter what its superview does with the result.
+ * itself, and that is the whole of how the size feature is built. The container
+ * puts the web view inside it at the chosen **layout** size and scales it to
+ * fit. A `UIView` transform is not something the document can see — it is not a
+ * CSS transform, it changes no property the page can read, and `window.innerWidth`
+ * inside a 1280-point web view is 1280 no matter what its superview does with
+ * the result.
  *
  * That is the difference between this and the cheap version of the feature, and
  * it is the difference he would notice in a second: scale a phone layout up and
@@ -1652,38 +1786,47 @@ final class BrowserBridge: NSObject, WKNavigationDelegate {
  */
 private struct WebSurface: UIViewRepresentable {
     let browser: BrowserBridge
-    /// The CSS width to lay the page out at, or nil for this phone's own — in
+    /// The CSS rectangle to lay the page out in, or nil for this phone's own — in
     /// which case nothing here is touched and the view is the size it always was.
-    var layoutWidth: CGFloat?
+    var layout: CGSize?
 
     func makeUIView(context: Context) -> ScaledPageView {
         ScaledPageView(browser.webView)
     }
 
     func updateUIView(_ view: ScaledPageView, context: Context) {
-        // The width is the only thing that comes through here. Every other change
+        // The size is the only thing that comes through here. Every other change
         // goes through `BrowserBridge`, which owns the web view — reloading from
         // here would restart the page on every redraw.
-        view.layoutWidth = layoutWidth
+        view.layout = layout
     }
 }
 
 /**
- * A box that holds the web view at one width and draws it at another.
+ * A box that holds the web view at one size and draws it at another.
  *
- * ## Why the height is the phone's and not a laptop's
+ * ## The height is the device's now, and that is the whole change
  *
- * A laptop window is 1440 × 900, and a 1440 × 900 rectangle scaled to fit a
- * phone's *width* is about a quarter of the screen tall with the rest of it
- * empty — you would be reading a postage stamp. So the height fills what is
- * there: the page is given a 1440-wide viewport as tall as the phone's aspect
- * ratio makes it, which is an unusually tall desktop window and nothing stranger.
+ * This used to keep the phone's own height and divide it by the scale:
  *
- * What that costs is written down rather than hidden, because somebody will hit
- * it: `100vh` blocks come out taller than they would on a laptop, so a hero
- * section that exactly fills a laptop screen overflows this one. Width is what
- * responsive layout keys off and width is exact; the height is the approximate
- * half.
+ * ```
+ * web.bounds = CGRect(x: 0, y: 0, width: wanted, height: box.height / scale)
+ * ```
+ *
+ * which drew a laptop as a 1280-wide column as tall as an iPhone — the defect he
+ * reported. The web view is now laid out at the device's real width **and**
+ * height, so `100vh` in a laptop frame is 800 CSS px, and the container it sits
+ * in has already been sized to the same rectangle by `DeviceFrame`.
+ *
+ * ## The scale is recomputed here rather than passed in
+ *
+ * `PageFit` worked it out once already and `DeviceFrame` sized this container
+ * with it, so this could take the number as a property. It does not, and takes
+ * the smaller of the two ratios of what it actually has: a rounded container is
+ * a fraction of a point off the exact ratio, and a scale that came from
+ * elsewhere would be the wrong one by that fraction — visible as a hairline of
+ * the page clipped along one edge. Derived from `bounds`, the fit is exact by
+ * construction, and the two axes agreeing is a test rather than a hope.
  *
  * ## `bounds` and `center`, never `frame`
  *
@@ -1697,10 +1840,10 @@ final class ScaledPageView: UIView {
 
     private let web: WKWebView
 
-    /// The CSS width to lay out at, or nil for the container's own width.
-    var layoutWidth: CGFloat? {
+    /// The CSS rectangle to lay out in, or nil for the container's own size.
+    var layout: CGSize? {
         didSet {
-            guard layoutWidth != oldValue else { return }
+            guard layout != oldValue else { return }
             setNeedsLayout()
         }
     }
@@ -1718,6 +1861,12 @@ final class ScaledPageView: UIView {
         // time the container changed size.
         web.autoresizingMask = []
         web.translatesAutoresizingMaskIntoConstraints = true
+        // The page's own background shows through wherever the document does not
+        // paint, and inside a frame that is the frame's own interior. Left
+        // transparent it would show the tinted ground instead, so a page with no
+        // background of its own would look like a hole rather than like a blank
+        // screen on a laptop.
+        clipsToBounds = true
     }
 
     @available(*, unavailable)
@@ -1730,17 +1879,17 @@ final class ScaledPageView: UIView {
         let box = bounds.size
         guard box.width > 0, box.height > 0 else { return }
 
-        guard let wanted = layoutWidth, wanted > 0 else {
+        guard let layout, layout.width > 0, layout.height > 0 else {
             // The ordinary path, and it is byte-for-byte what this screen did
-            // before the width control existed: the web view is the container.
+            // before the size control existed: the web view is the container.
             web.transform = .identity
             web.frame = bounds
             return
         }
 
-        let scale = box.width / wanted
+        let scale = min(box.width / layout.width, box.height / layout.height)
         web.transform = .identity
-        web.bounds = CGRect(x: 0, y: 0, width: wanted, height: box.height / scale)
+        web.bounds = CGRect(origin: .zero, size: layout)
         web.transform = CGAffineTransform(scaleX: scale, y: scale)
         // `bounds`, not `box`: a centre is a point in this view's own coordinate
         // space and `box` is only its size. They agree while the origin is zero,

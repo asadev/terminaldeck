@@ -489,7 +489,7 @@ final class LocalhostChromeTests: XCTestCase {
     }
 
     /**
-     * **Every width is a name, and the name carries the number.**
+     * **Every row is a name, and the pixels are the quiet half beside it.**
      *
      * > *"you are also putting so much of a description under the title of that
      * > thing under the title of the feature instead of just i button or nothing
@@ -498,13 +498,15 @@ final class LocalhostChromeTests: XCTestCase {
      *
      * The menu is the list he would have complained about if it had grown a line
      * of explanation under each row, so what a row may contain is asserted rather
-     * than left to taste: one line, no sentence, and — for every width that is a
-     * width — the number in the name, because *"different dimensions"* is the
-     * question and the number is the answer to it.
+     * than left to taste: the device's **name** is a title — two words, no
+     * sentence, no newline — and the numbers live in `measure`, which
+     * `BrowserPageBar.sizeRow` draws faint on the same line. Splitting them is
+     * what lets both claims be checked; a single string carrying both could only
+     * ever be checked for length.
      */
-    func testEveryWidthIsANameAndNotASentence() {
-        for width in PageWidth.allCases {
-            let name = width.name
+    func testEveryRowIsANameAndTheNumbersAreBesideIt() {
+        for device in PageDevice.allCases {
+            let name = device.name
             XCTAssertFalse(name.isEmpty)
             XCTAssertFalse(name.contains("\n"),
                            "\(name) is two lines. A row is a title — the explanation goes on the ⓘ")
@@ -512,14 +514,206 @@ final class LocalhostChromeTests: XCTestCase {
                            "\(name) is a sentence. A menu row is a name he can point at")
             XCTAssertLessThanOrEqual(name.count, 16,
                                      "\(name) is long enough to be a description of itself")
-            guard let points = width.points else { continue }
-            XCTAssertTrue(name.contains("\(Int(points))"),
-                          "\(name) does not say what width it is, which is the whole question "
-                          + "being asked of this control")
+            XCTAssertFalse(name.contains("×"),
+                           "\(name) has swallowed its own measurement — the pixels are the second "
+                           + "element of the row, not part of the title")
+            guard let size = device.size else { continue }
+            XCTAssertEqual(device.measure, "\(Int(size.width)) × \(Int(size.height))",
+                           "\(name) does not say what size it is, which is the whole question "
+                           + "being asked of this control")
         }
-        XCTAssertNil(PageWidth.fit.points,
+        XCTAssertNil(PageDevice.fit.size,
                      "\"This phone\" must lay nothing out at anything — it is the state in which "
                      + "this feature does not touch the page at all")
+        XCTAssertNil(PageDevice.fit.measure,
+                     "and it has no measurement to print: this phone is whatever this phone is")
+    }
+
+    /**
+     * **A size is a width AND a height, and the list is the real set.**
+     *
+     * > *"when i make other frame like desktop or laptop biew it is trying to fit
+     * > inside the same given space a sphone instead of giving me less hieght and
+     * > like actual laptop dimension"*
+     *
+     * > *"and there are very less options for dimensiins too"*
+     *
+     * Two complaints, one shape. The first one is the reason `size` is a `CGSize`
+     * at all — a chosen width with the phone's own height drew a laptop as a tall
+     * strip — and the second is why there are seven of them. Both are asserted
+     * here rather than left to the menu, because a list that quietly lost a row
+     * or a device that quietly became square would still draw and would still
+     * photograph.
+     */
+    func testTheSizesAreRealRectanglesAndThereAreEnoughOfThem() {
+        let devices = PageDevice.allCases.filter { $0 != .fit }
+        XCTAssertEqual(devices.count, 7,
+                       "the list he called too short is small phone, phone, large phone, tablet, "
+                       + "tablet landscape, laptop and desktop — seven")
+
+        for device in devices {
+            let size = device.size!
+            XCTAssertGreaterThan(size.width, 0)
+            XCTAssertGreaterThan(size.height, 0)
+            XCTAssertNotEqual(size.width, size.height,
+                              "\(device.name) is square, which no device is — a size with no "
+                              + "shape is the defect this round exists to fix")
+        }
+
+        XCTAssertTrue(PageDevice.laptop.size!.width > PageDevice.laptop.size!.height,
+                      "a laptop is wider than it is tall. That sentence is the entire feature")
+        XCTAssertTrue(PageDevice.phone.size!.height > PageDevice.phone.size!.width,
+                      "and a phone is taller than it is wide")
+        XCTAssertEqual(PageDevice.laptop.size, CGSize(width: 1280, height: 800))
+        XCTAssertEqual(PageDevice.desktop.size, CGSize(width: 1440, height: 900))
+    }
+
+    /**
+     * **Turning one over lands on a listed row, and never on a second name for a
+     * shape that already has one.**
+     *
+     * The trap this pins is a menu with two ways to reach one rectangle: *Tablet*
+     * + *Rotate* drawing the identical frame as *Tablet landscape* while ticking
+     * a different row. `PageDevice.turnedTwin` is what prevents it, and the last
+     * assertion is the one that would catch somebody adding a landscape row later
+     * and forgetting the mapping.
+     */
+    func testRotatingLandsOnOneRowPerShape() throws {
+        XCTAssertEqual(PageSize(.tablet).turnedOver(), PageSize(.tabletLandscape),
+                       "a tablet on its side is the row that already says so, not the same row "
+                       + "wearing a flag")
+        XCTAssertEqual(PageSize(.tabletLandscape).turnedOver(), PageSize(.tablet))
+
+        let turnedPhone = PageSize(.phone).turnedOver()
+        XCTAssertEqual(turnedPhone, PageSize(.phone, turned: true))
+        XCTAssertEqual(turnedPhone.layout, CGSize(width: 844, height: 390),
+                       "and turning one over swaps the rectangle — otherwise Rotate is a tick "
+                       + "that does nothing")
+        XCTAssertEqual(turnedPhone.turnedOver(), PageSize(.phone),
+                       "twice round is where it started")
+
+        XCTAssertEqual(PageSize.fit.turnedOver(), PageSize.fit,
+                       "this phone on its side is this phone. The row is not drawn in that state; "
+                       + "this is the belt to the menu's braces")
+        XCTAssertFalse(PageSize(.fit, turned: true).turned,
+                       "and a stored rotation on this phone is refused at the initialiser rather "
+                       + "than ignored later, which is one fact instead of two")
+
+        /*
+         * Every state a person can reach — every row, and Rotate pressed on each
+         * — collapsed to the distinct ones, and then asked whether any two of
+         * them draw the same rectangle.
+         *
+         * The collapse is the half that has to be right. `PageSize(.tablet)`
+         * turned over **is** `PageSize(.tabletLandscape)`, so walking both rows
+         * naturally meets each shape twice; a naive walk reports that as a
+         * duplicate and the test fails on correct code. It did, when this was
+         * first written — measured, not imagined. Distinct *states* first, then
+         * distinct *shapes*, is the claim: two names for one rectangle is a menu
+         * with a state you can reach twice and un-tick neither.
+         */
+        var states: [PageSize] = []
+        for device in PageDevice.allCases where device != .fit {
+            for state in [PageSize(device), PageSize(device).turnedOver()]
+            where !states.contains(state) {
+                states.append(state)
+            }
+        }
+        var seen: [CGSize] = []
+        for state in states {
+            let layout = try XCTUnwrap(state.layout)
+            XCTAssertFalse(seen.contains(layout),
+                           "\(state) draws \(layout), which another state already draws")
+            seen.append(layout)
+        }
+        XCTAssertEqual(states.count, 12,
+                       "seven rows, and Rotate opens five more — the two tablets rotate into "
+                       + "each other rather than into two new ones")
+    }
+
+    /**
+     * **A laptop frame is laptop shaped, whatever it is drawn inside.**
+     *
+     * > *"it is trying to fit inside the same given space a sphone instead of
+     * > giving me less hieght and like actual laptop dimension"*
+     *
+     * `PageFit` is the six lines that answer that, so it is tested as arithmetic
+     * rather than left to a screenshot. Three claims, and the first is the one
+     * that was wrong before: the drawn rectangle has the **device's** aspect
+     * ratio and not the phone's. Then it fits inside the space it was given, and
+     * it is never blown up past life size.
+     *
+     * The boxes are two real ones — an iPhone in portrait and the same phone
+     * turned — because the old code passed a test like this on one of them by
+     * accident: at a box whose ratio happens to be near the device's, keeping the
+     * phone's height looks right.
+     */
+    func testAFrameKeepsTheDevicesProportions() throws {
+        let boxes = [CGSize(width: 393, height: 690),   // an iPhone, page area
+                     CGSize(width: 852, height: 330),   // the same phone turned
+                     CGSize(width: 1024, height: 1180)] // an iPad, which this app runs on
+
+        for box in boxes {
+            for device in PageDevice.allCases where device != .fit {
+                let fit = try XCTUnwrap(PageFit(PageSize(device), in: box),
+                                        "\(device.name) in \(box) produced no fit at all")
+
+                let wanted = device.size!.width / device.size!.height
+                let drawn = fit.drawn.width / fit.drawn.height
+                XCTAssertEqual(drawn, wanted, accuracy: 0.02,
+                               "\(device.name) came out \(fit.drawn) in \(box) — ratio \(drawn) "
+                               + "against \(wanted). A frame that borrows the phone's height is "
+                               + "the exact defect this round was opened for")
+
+                XCTAssertLessThanOrEqual(fit.drawn.width, box.width,
+                                         "\(device.name) is wider than the space it is drawn in")
+                XCTAssertLessThanOrEqual(fit.drawn.height, box.height,
+                                         "\(device.name) is taller than the space it is drawn in")
+                XCTAssertLessThanOrEqual(fit.scale, 1,
+                                         "\(device.name) is blown up past life size, which reads "
+                                         + "as a small phone being bigger than his")
+                XCTAssertGreaterThan(fit.scale, 0)
+                XCTAssertEqual(fit.layout, device.size!,
+                               "the web view must be laid out at the device's own pixels — that "
+                               + "is the half the document can read")
+            }
+        }
+    }
+
+    /**
+     * **A laptop leaves ground above and below it; a phone leaves it either
+     * side.**
+     *
+     * The visible half of the same claim, and the one he described: *"giving me
+     * less hieght"*. On a phone-shaped space a laptop binds on width and cannot
+     * use the height; a phone frame binds on height and cannot use the width. If
+     * both ever filled the same rectangle, the frame would have stopped meaning
+     * anything again.
+     */
+    func testALaptopIsShortAndAPhoneIsNarrow() throws {
+        let box = CGSize(width: 393, height: 690)
+
+        let laptop = try XCTUnwrap(PageFit(PageSize(.laptop), in: box))
+        XCTAssertGreaterThan(laptop.drawn.width, laptop.drawn.height,
+                             "a laptop frame that is taller than it is wide is the strip he "
+                             + "complained about")
+        XCTAssertLessThan(laptop.drawn.height, box.height * 0.6,
+                          "and it has to leave real ground above and below it — \"less hieght\" "
+                          + "is the phrase, and a frame filling the screen says nothing")
+
+        let phone = try XCTUnwrap(PageFit(PageSize(.phone), in: box))
+        XCTAssertGreaterThan(phone.drawn.height, phone.drawn.width)
+        XCTAssertLessThan(phone.drawn.width, box.width)
+
+        XCTAssertNil(PageFit(.fit, in: box),
+                     "this phone's own size is the one state with no frame at all — nil here is "
+                     + "the only place the two are told apart, and a second test of the device "
+                     + "somewhere else is how they come to disagree")
+
+        // A box that has not been laid out yet still answers, clamped. Returning
+        // nil there would flip the screen from framed to unframed for one pass
+        // and back, which is a web view resized twice for nothing.
+        XCTAssertNotNil(PageFit(PageSize(.laptop), in: .zero))
     }
 
     /**
@@ -536,7 +730,7 @@ final class LocalhostChromeTests: XCTestCase {
      * key: this phone picks that number at random on every open, so a memory
      * keyed on it would be a memory that never matched twice.
      */
-    func testAWidthIsRememberedForTheSiteAndSurvivesTheTunnel() throws {
+    func testASizeIsRememberedForTheSiteAndSurvivesTheTunnel() throws {
         // Its own suite, so a test run cannot write a width onto the machine it is
         // running from — the arrangement `PortBook` and `BrowserHistory` use.
         let name = "test.pageWidths.\(UUID().uuidString)"
@@ -548,22 +742,31 @@ final class LocalhostChromeTests: XCTestCase {
         XCTAssertEqual(admin, "localhost:3000",
                        "a tunnelled page belongs to the port he chose, not to the loopback port "
                        + "this phone bound at random")
-        widths.choose(.laptop, for: admin)
+        widths.choose(PageSize(.laptop), for: admin)
 
         let orders = PageWidths.site("http://127.0.0.1:52311/orders?page=2", machinePort: 3000)
-        XCTAssertEqual(widths.width(for: orders), .laptop,
+        XCTAssertEqual(widths.size(for: orders), PageSize(.laptop),
                        "clicking a link inside the site he is examining must not put the page "
-                       + "back to phone width")
+                       + "back to phone size")
 
         // A second open of the same port through a different listener — the case
         // that decides whether the key was the right one.
         let reopened = PageWidths.site("http://127.0.0.1:61099/admin", machinePort: 3000)
-        XCTAssertEqual(widths.width(for: reopened), .laptop)
+        XCTAssertEqual(widths.size(for: reopened), PageSize(.laptop))
 
-        XCTAssertEqual(widths.width(for: PageWidths.site("http://127.0.0.1:52311/", machinePort: 5173)),
+        // And the rotation survives with it. It is packed into the same integer
+        // as the device, so a store that dropped it would be a page coming back
+        // portrait with the landscape frame he left it in remembered as gone.
+        widths.choose(PageSize(.phone, turned: true), for: admin)
+        XCTAssertEqual(widths.size(for: reopened), PageSize(.phone, turned: true))
+        XCTAssertEqual(PageWidths(defaults: suite).size(for: admin), PageSize(.phone, turned: true),
+                       "a size he chose has to survive the app being closed — the store is read "
+                       + "whole at launch, so this second instance is that launch")
+
+        XCTAssertEqual(widths.size(for: PageWidths.site("http://127.0.0.1:52311/", machinePort: 5173)),
                        .fit,
                        "and a different port is a different site, which starts where everything "
-                       + "starts: this phone's own width")
+                       + "starts: this phone's own size")
 
         XCTAssertEqual(PageWidths.site("https://WWW.Example.com/x", machinePort: 3000),
                        "www.example.com",
@@ -623,18 +826,27 @@ final class LocalhostChromeTests: XCTestCase {
      */
     func testTheWidthIsTheViewsAndNotACSSTrick() throws {
         let screen = try Self.browserSource()
-        XCTAssertTrue(screen.contains("WebSurface(browser: browser, layoutWidth: pageWidth.points)"),
-                      "the surface has to be given a real width. A page scaled instead of laid "
-                      + "out is a phone layout in bigger letters, which answers nothing about "
-                      + "how the page behaves on a laptop")
+        XCTAssertTrue(screen.contains("WebSurface(browser: browser, layout: fit.layout)"),
+                      "the surface has to be given a real rectangle. A page scaled instead of "
+                      + "laid out is a phone layout in bigger letters, which answers nothing "
+                      + "about how the page behaves on a laptop")
+        XCTAssertTrue(screen.contains("web.bounds = CGRect(origin: .zero, size: layout)"),
+                      "and the web view's own bounds are that rectangle — width and height. The "
+                      + "round before this divided the phone's height by the scale, and a laptop "
+                      + "came out a tall strip")
         XCTAssertTrue(screen.contains("CGAffineTransform(scaleX: scale, y: scale)"),
-                      "and the fitting is a UIKit transform on the view — the document cannot "
-                      + "read one, which is exactly why it is the honest half")
+                      "the fitting is a UIKit transform on the view — the document cannot read "
+                      + "one, which is exactly why it is the honest half")
+        XCTAssertFalse(screen.contains("height: box.height / scale"),
+                       "the old fitting is back: that line is what drew a 1280-wide column as "
+                       + "tall as an iPhone, and it is the defect this round was opened for")
 
-        XCTAssertTrue(PageViewportScript.apply(.laptop).contains("1280"),
+        XCTAssertTrue(PageViewportScript.apply(PageSize(.laptop)).contains("1280"),
                       "the viewport instruction should carry the width itself")
+        XCTAssertTrue(PageViewportScript.apply(PageSize(.tablet).turnedOver()).contains("1194"),
+                      "and a frame on its side carries the width it actually has")
         XCTAssertTrue(PageViewportScript.apply(.fit).contains("(0)"),
-                      "and this phone's own width is the state that clears it")
+                      "and this phone's own size is the state that clears it")
         XCTAssertFalse(PageViewportScript.source.contains("user-scalable=no"),
                        "a viewport this app writes must never take the pinch away — pinch is "
                        + "half of what this control is for")
