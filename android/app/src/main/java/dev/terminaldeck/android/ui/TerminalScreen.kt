@@ -209,6 +209,10 @@ fun TerminalScreen(
      * this screen is already correct.
      */
     isCopilot: Boolean = false,
+    // The floating browser window, supplied by the caller so this screen stays free of the
+    // machine-browser types — it renders nothing when the session holds no window, and passes all
+    // touches through, so it is safe to always invoke. See `SessionBrowserOverlay`.
+    browserOverlay: @Composable () -> Unit = {},
     /** Send `rename { id, title }`. Empty title = take the name off, machine derives from the folder. */
     onRename: (String) -> Unit = {},
     /** End the copilot's conversation and start a fresh one in the same folder — copilot only. */
@@ -707,10 +711,11 @@ fun TerminalScreen(
                 },
             )
 
-            // TODO(integrator): mount SessionBrowserOverlay here — over the terminal well, above the
-            // AndroidView and below the find bar — once the browser lane's `SessionBrowserOverlay(...)`
-            // lands. It is not called from this branch: the composable does not exist in this lane, and
-            // the attach-a-browser-window menu section above is its counterpart on the ⋯ side.
+            // The floating browser window, over the terminal well and below the find bar. A slot the
+            // caller fills with `SessionBrowserOverlay(...)`; it draws nothing until the session holds
+            // a window, so it is safe to always place here. The attach-a-browser-window menu section
+            // above is its counterpart on the ⋯ side.
+            browserOverlay()
 
             // Find floats over the top of the scrollback rather than pushing it down — taking rows off
             // a session is a `resize` on the wire, and a search must not disturb what it reads.

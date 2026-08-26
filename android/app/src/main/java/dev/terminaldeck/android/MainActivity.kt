@@ -19,6 +19,8 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
+import dev.terminaldeck.android.transport.isOnline
+import dev.terminaldeck.android.ui.SessionBrowserOverlay
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.foundation.layout.Box
@@ -72,6 +74,7 @@ import dev.terminaldeck.android.ui.MachinesScreen
 import dev.terminaldeck.android.ui.SessionControlsSheet
 import dev.terminaldeck.android.ui.SettingsScreen
 import dev.terminaldeck.android.ui.MachineBrowserScreen
+import dev.terminaldeck.android.ui.MachineToolsSection
 import dev.terminaldeck.android.ui.MachineWindowScreen
 import dev.terminaldeck.android.ui.MachineProfilesScreen
 import dev.terminaldeck.android.transfer.PickedFile
@@ -1165,6 +1168,18 @@ fun TerminalDeckApp(
                 machineLabel = state.hostLabel,
                 canServeHere = state.localhostOffered,
                 live = state.live,
+                // The "look inside the machine" section — Files, Source control, Artifacts, Store, AI
+                // readiness and MCP — on the machine tab, matching where iOS's Menu tab keeps them. It
+                // draws nothing unless this machine serves one of those, and owns its own navigation.
+                machineTools = {
+                    MachineToolsSection(
+                        state = state,
+                        files = viewModel.filesGit(),
+                        panels = viewModel.panels(),
+                        onServePort = viewModel::servePort,
+                        onCloseServedPort = viewModel::closeServedPort,
+                    )
+                },
                 onRefresh = {
                     viewModel.refreshPorts()
                     viewModel.openDevServers()
@@ -1801,6 +1816,26 @@ private fun TerminalRoute(
             // attach section and Restart stay on their defaults (absent) until the browser lane wires
             // the window roster — see `TerminalScreen`'s `canAttachBrowser`.
             isCopilot = false,
+            // The floating browser window a session may be holding — a live cast over the terminal,
+            // draggable, with an address pill and a Delete. Drawn only when this machine's browser is
+            // reachable and the session actually holds a window; otherwise the overlay is empty and
+            // the terminal is untouched. `frontmost`/`live` gate the cast, not the strip.
+            browserOverlay = {
+                val browser = viewModel.machineBrowser()
+                val view = state.machineBrowser
+                if (browser != null && view != null) {
+                    SessionBrowserOverlay(
+                        view = view,
+                        controller = browser,
+                        watch = viewModel.watcher(),
+                        hostId = hostId,
+                        sessionId = liveSession,
+                        frontmost = true,
+                        live = state.transport.isOnline,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            },
         )
 
         if (controlsOpen) {

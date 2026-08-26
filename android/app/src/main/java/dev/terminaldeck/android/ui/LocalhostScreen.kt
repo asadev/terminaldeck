@@ -108,6 +108,10 @@ fun LocalhostScreen(
      * inventing a limitation.
      */
     live: Boolean,
+    // The "look inside the machine" section — Files, Source control and the panels — supplied by the
+    // caller so this screen keeps no machine-tools types. It draws nothing unless the machine serves
+    // one of those, so it is safe to always place at the top of the column. See [MachineToolsSection].
+    machineTools: @Composable () -> Unit = {},
     onRefresh: () -> Unit,
     onServeHere: (Int) -> Unit,
     onOpenOnMachine: (Int) -> Unit,
@@ -145,6 +149,8 @@ fun LocalhostScreen(
                 .padding(horizontal = Space.screen)
                 .padding(top = Space.x2, bottom = Space.x10),
         ) {
+            machineTools()
+
             if (view == null) {
                 // A named absence, not an empty list — and the *right* absence: nothing is known
                 // about a machine this phone cannot reach, which is a different sentence from a
