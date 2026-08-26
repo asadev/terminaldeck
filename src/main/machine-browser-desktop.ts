@@ -85,6 +85,40 @@ export type { CapturedShot, HostSession } from './remote/browser-control'
  * given a shared one in whichever profile happens to be switched on. A window
  * that says it is isolated and is not is a cookie jar somebody trusted.
  *
+ * ## `resize` is absent on purpose, and it is the one absence that is a rule
+ *
+ * `browser.window.size` asks a machine to lay a window's page out in the
+ * rectangle the phone is going to draw it into, so what arrives is the page at
+ * 100% instead of at whatever ratio two unrelated numbers happened to make:
+ *
+ * > *"it opens a very big page then it compares to the normal size… it should
+ * > always open to the normal size."*
+ *
+ * A headless host supplies it (`src/headless/machine-browser.ts`). **This one
+ * must not**, and the difference is not a limit of the desktop — it is the
+ * decision `browser-cdp.ts` already wrote down in one line when it put
+ * `Emulation.setDeviceMetricsOverride` on `DENIED_METHODS` for every caller on
+ * the Electron transport: *"Changes the viewport under a person who may be
+ * reading the page."*
+ *
+ * On a headless host nobody is. There is no window, no screen and nobody at the
+ * keyboard, and the viewport is simply the size of the hole a phone is about to
+ * draw a picture into. On a desktop the page is a `WebContentsView` on
+ * somebody's screen: they may be halfway down it, mid-form, mid-sentence, and a
+ * phone in another room reflowing it under them is the app acting on its own —
+ * the class of behaviour that whole file exists to make impossible. It is also
+ * not a thing this file could route around if it wanted to: reflowing a pane is
+ * a layout the renderer owns, and the emulation route into it is the dead end
+ * `BrowserDrive.showWindow` records having spent an afternoon on.
+ *
+ * So {@link MachineBrowserDeps.resize} is left off this deps object, and
+ * `browser-control.ts` reads the absence and answers Size with one sentence —
+ * *"This machine's browser lays its own windows out, so this one cannot be
+ * resized from here."* — rather than a control that takes a tap and changes
+ * nothing. Somebody widening the allow-list for the headless transport must not
+ * quietly widen it here; the two tables are separate and
+ * `browser-cdp.test.ts` asserts each pair is disjoint.
+ *
  * ## Pointing at one thing, declared here and wired in `index.ts`
  *
  * `browser.window.pick` — the tap that says *change this* on a window the phone

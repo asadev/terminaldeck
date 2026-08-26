@@ -237,7 +237,22 @@ enum BrowserChrome {
         + "this window, so there is only its settings here."
 
     /**
-     * Why Size is greyed on a window that lives on the machine.
+     * Why Size **used to be** greyed on a window that lives on the machine.
+     *
+     * ## The expiry this sentence named has arrived — it is not read any more
+     *
+     * The last paragraph below said *"the day a host learns `browser.window.size`
+     * the screen passes a closure and this sentence stops being read."* The host
+     * has learnt it: `MachineWindowView` passes a real `BrowserPageSize` whose
+     * `choose` sends the machine a rectangle in CSS pixels, and the machine lays
+     * the document out in it. So nothing reads this string today.
+     *
+     * It is kept rather than deleted because what it states is still the **rule**,
+     * and the rule is the thing somebody will break: magnifying a picture and
+     * calling it a page size is a fake, and any future screen that has a picture
+     * and no way to ask for a re-layout owes this sentence rather than a control
+     * that quietly does the other thing. The paragraphs below are left exactly as
+     * they were written so that the argument survives its own conclusion.
      *
      * > *"they can pinch and zoom also they can see all the different dimensions
      * > in responsive views how it will look like in mobile how it will look like

@@ -46,6 +46,19 @@
  * server can inspect a watched window while the Electron desktop is still
  * waiting on one line in `index.ts`; see `machine-browser-desktop.ts`.
  *
+ * `resize` — *lay this page out this wide* — is the one dep in the family whose
+ * presence here and absence on the desktop is a **policy** rather than a limit,
+ * and it is the reverse of every other line in this section. The desktop could
+ * technically do it and must not: `browser-cdp.ts` refuses
+ * `Emulation.setDeviceMetricsOverride` on the Electron transport because it
+ * *"changes the viewport under a person who may be reading the page"*, and on a
+ * desktop there is such a person. Here there is not — no window, no screen,
+ * nobody at the keyboard — and the viewport is simply the size of the hole a
+ * phone is going to draw the picture into. Without it every window on this host
+ * stays laid out at Chromium's own 800 × 600, which is what he was looking at
+ * when he said *"it opens a very big page… it should always open to the normal
+ * size."*
+ *
  * ## The door, and the sentinel that used to stand in for it
  *
  * `HeadlessDriveHost` opens Chromium targets through three doors, and only two
@@ -241,6 +254,22 @@ export interface ServerWindows {
  */
 export interface ServerShots {
   screenshot(target?: DriveTarget | null): Promise<{ path: string; width: number; height: number }>
+  /**
+   * Lay a page out in a rectangle of this many CSS pixels.
+   *
+   * `BrowserDrive.setViewport`, which sends one
+   * `Emulation.setDeviceMetricsOverride` through the same screen every other
+   * command it issues goes through. Optional on the rule every optional member of
+   * this family follows — a host wired to something that is not a drive still
+   * lists, opens and closes windows, and the phone is told in one sentence that
+   * this machine lays its own windows out rather than being handed a Size control
+   * that answers nothing.
+   *
+   * A real server always has it, for the same reason it always has `pickAt`:
+   * `host.ts` passes `BrowserDrive` in as `shots`, and that class is where both
+   * live.
+   */
+  setViewport?(width: number, height: number, target?: DriveTarget | null): Promise<void>
   /**
    * What is at one point on a page, and what encloses it.
    *
@@ -610,6 +639,32 @@ export function serverMachineBrowser(deps: ServerMachineBrowserDeps): ServerMach
   const pickAt = deps.shots.pickAt
   if (pickAt) {
     wired.pick = ({ id, x, y, up }) => pickAt.call(deps.shots, x, y, up, targetFor(id))
+  }
+  /*
+   * Laying a window out at the size the phone is going to draw it at.
+   *
+   * > *"it should always open to the normal size."*
+   *
+   * Present here and **absent on the desktop**, and that asymmetry is the whole
+   * of the decision rather than a difference in what the two hosts can do.
+   * `browser-cdp.ts` refuses `Emulation.setDeviceMetricsOverride` for every
+   * caller on the Electron transport with one true line — *"Changes the viewport
+   * under a person who may be reading the page"* — and a `WebContentsView` really
+   * is on somebody's screen. **Nothing on this host is.** There is no window, no
+   * display and nobody at the keyboard: the only thing that ever sees one of
+   * these pages is a phone, over a screencast, and the viewport is the size of
+   * the hole that phone is about to draw the picture into. Refusing here would
+   * protect nobody and would guarantee the page stays laid out at Chromium's own
+   * 800 × 600, which is the defect.
+   *
+   * `targetFor` for the reason every other drive call in this module uses it: a
+   * resize and a screenshot must land in the *same* slot, or the two of them
+   * attach two debuggers to one page and each releases the other's.
+   */
+  const setViewport = deps.shots.setViewport
+  if (setViewport) {
+    wired.resize = (id, width, height) =>
+      setViewport.call(deps.shots, width, height, targetFor(id))
   }
   /**
    * The windows this module opened, for the thing that casts them.

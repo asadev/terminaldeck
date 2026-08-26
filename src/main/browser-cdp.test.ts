@@ -226,6 +226,14 @@ describe('the deny list', () => {
     'Fetch.fulfillRequest': { requestId: 'r1', responseCode: 200 },
     'Page.startScreencast': { format: 'jpeg', quality: 50, maxWidth: 800 },
     'Input.dispatchTouchEvent': { type: 'touchStart', touchPoints: [{ x: 10, y: 20 }] },
+    // A pane on a phone, which is the only caller: a whole width and height in
+    // CSS pixels, no mobile emulation, and one image pixel per CSS pixel.
+    'Emulation.setDeviceMetricsOverride': {
+      width: 393,
+      height: 440,
+      deviceScaleFactor: 1,
+      mobile: false,
+    },
   }
 
   it('allows exactly the methods the driver needs, given arguments it would send', () => {
@@ -612,6 +620,24 @@ describe('the CDP tables screen the pipe transport', () => {
       expect(screenCommand({ state: 'agent', method, params: {} }).ok).toBe(false)
       expect(screenCommand({ transport: 'electron', state: 'agent', method, params: {} }).ok).toBe(false)
     }
+
+    /*
+     * The viewport override, with the exact arguments the server driver sends
+     * and the desktop still refusing them.
+     *
+     * It is the one entry on this list whose desktop refusal is about a
+     * **person** rather than about a power: a `WebContentsView` is a window on
+     * somebody's screen and they may be halfway down it, while a headless host
+     * has no screen, no window and nobody at the keyboard. Asserted with real
+     * arguments rather than `{}` so that a future edit which moved it onto the
+     * Electron allow-list could not pass this test by being refused for the
+     * wrong reason.
+     */
+    const viewport = { width: 393, height: 440, deviceScaleFactor: 1, mobile: false }
+    expect(screenCommand({ state: 'agent', method: 'Emulation.setDeviceMetricsOverride', params: viewport }).ok)
+      .toBe(false)
+    expect(DENIED_METHODS).toContain('Emulation.setDeviceMetricsOverride')
+    expect(CDP_DENIED_METHODS).not.toContain('Emulation.setDeviceMetricsOverride')
   })
 
   it('shuts the pipe entirely while the person has the page, reads included', () => {

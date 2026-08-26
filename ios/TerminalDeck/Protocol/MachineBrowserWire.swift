@@ -112,6 +112,38 @@ enum MachineBrowserWire {
      */
     static let maxPickUp = 64
 
+    /**
+     * The rectangle a `browser.window.size` may ask a window to lay its page out
+     * in, in **CSS pixels**.
+     *
+     * `MIN_PAGE_WIDTH` / `MAX_PAGE_WIDTH` / `MIN_PAGE_HEIGHT` / `MAX_PAGE_HEIGHT`
+     * in `src/main/remote/protocol.ts`.
+     *
+     * ## These are not the watch widths and must never be confused with them
+     *
+     * `Wire.minWatchWidth` / `Wire.maxWatchWidth` bound the **picture**: how many
+     * image pixels the host encodes into a JPEG. These bound the **page**: how
+     * wide the browser engine lays the document out before anything is
+     * photographed. They differ by the screen scale on every phone made this
+     * decade — a 393-point pane on a three-times display asks for a
+     * 1179-*pixel* picture of a 393-*pixel-wide* page — and treating one as the
+     * other is the arithmetic that produced the defect this verb exists to fix.
+     *
+     * ## Mirrored even though the host clamps rather than refuses
+     *
+     * Unlike `maxPickUp`, an out-of-range value here does **not** cost the
+     * socket: the host's parser clamps both numbers, deliberately, because they
+     * come from a viewer measuring its own pane and a rotation must never drop a
+     * connection. So this pair is here for honesty rather than for safety — a
+     * phone that sends 12 and is silently given 240 has asked for something it
+     * will not get, and the screen that reads back what it asked for would then
+     * be wrong about the page in front of it.
+     */
+    static let minPageWidth = 240
+    static let maxPageWidth = 4096
+    static let minPageHeight = 160
+    static let maxPageHeight = 4096
+
     /// The host's own caps on a `browser.window.picked`, mirrored so this end
     /// clamps to the same lengths rather than to numbers of its own — an element
     /// described one way on the desktop and another on the phone is the defect

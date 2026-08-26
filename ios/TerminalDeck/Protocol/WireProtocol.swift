@@ -865,6 +865,53 @@ enum ClientMessage: Equatable {
     case machineWindowGo(id: String, url: String)
     /// Back, forward, reload, close, record on or off, share or isolate.
     case machineWindowAct(id: String, action: MachineBrowserWire.Act)
+    /**
+     * Lay that window's page out in a rectangle of this size, in **CSS pixels**.
+     *
+     * ## The whole of *"it should always open to the normal size"*
+     *
+     * > *"in here if you can see we have this window to come up. First of all
+     * > when we open it, it opens a very big page then it compares to the normal
+     * > size if you can see. Okay, so it should always open to the normal size."*
+     *
+     * > *"it is too zoom, it's bigger than the normal view of the website
+     * > whatever website we are browsing so keep it on 100 percent like a normal
+     * > view of any website like proper normal dimensions."*
+     *
+     * Nothing on this wire had ever told a machine how wide to lay a page out.
+     * `browser.watch` names a **picture** width in device pixels and the host
+     * only *caps* the JPEG at it; the document went on being laid out at whatever
+     * viewport the machine happened to have, which on a headless host is
+     * Chromium's own 800 × 600 because it is launched with no `--window-size`.
+     * This end then fitted that picture into its pane (`WatchMath.fit`), so the
+     * page arrived drawn at `pane points ÷ page CSS pixels` — a ratio that is
+     * 100% only by accident. This frame removes the accident: the viewer names
+     * the rectangle it is about to draw into, and the machine lays the document
+     * out in exactly that rectangle.
+     *
+     * ## Both numbers, and why a width alone is not enough
+     *
+     * `WatchMath.fit` scales by the **smaller** of the two ratios. A page laid
+     * out 393 × 600 and drawn into a pane 393 × 440 is fitted on the height and
+     * lands at 73% — the same defect from the other axis. A viewport is two
+     * numbers; this carries two numbers.
+     *
+     * ## Sent on a change, never on a frame
+     *
+     * This is a reconfiguration of the machine's browser, not a per-frame
+     * negotiation. It goes when a window is first shown in a pane and when that
+     * pane's width actually moves — a rotation, a split changing shape — and at
+     * no other time. One of these per frame would be a host reflowing a document
+     * sixty times a second, which is the mistake `WatchSurfaceUIView`'s pinch
+     * handler already avoids for `browser.watch`.
+     *
+     * Both numbers are clamped by the host's parser rather than refused, so an
+     * odd size cannot cost the connection the way an out-of-range
+     * `browser.window.pick` would — see `MachineBrowserWire.minPageWidth`. This
+     * end clamps as well, so that what a screen believes it asked for is what
+     * the machine was actually asked for.
+     */
+    case machineWindowSize(id: String, width: Int, height: Int)
     /// Bind a window to a session so the agent in it knows which window is its
     /// own. A nil session unbinds — the same frame, which is deliberate: a
     /// client that meant to unbind and one whose field went missing are the same

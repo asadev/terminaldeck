@@ -516,6 +516,42 @@ struct SessionPageView<Session: View>: View {
     @State private var pageHeight: CGFloat = 0
 
     /**
+     * How wide the canvas's own box is, in points — the rectangle the machine's
+     * page is about to be drawn into.
+     *
+     * > *"it opens a very big page then it compares to the normal size… it should
+     * > always open to the normal size."*
+     *
+     * Nothing had ever told the machine this number. A window on a headless host
+     * is laid out at Chromium's own 800 × 600 (it is launched with no
+     * `--window-size`), the `browser.watch` this canvas negotiates only caps the
+     * **picture**, and `WatchMath.fit` then squeezed an 800-pixel-wide document
+     * into a 393-point pane — the page drawn at 49%, which is the complaint.
+     * Sent to the machine as `browser.window.size`, it becomes the page's actual
+     * layout width and one CSS pixel lands on one point: 100%.
+     *
+     * Reported by the canvas rather than measured by a `GeometryReader` here,
+     * because the canvas is the thing that has the box and this screen has no
+     * geometry of its own. It is the **width only** on purpose; see
+     * `WatchSurfaceUIView.announceCanvasWidth` for the feedback loop a reported
+     * height would close through `pageHeight`.
+     */
+    @State private var canvasWidth: CGFloat = 0
+
+    /**
+     * The window and the width the machine was last asked to lay out at, so it is
+     * asked once per real change and never per frame.
+     *
+     * Held here rather than in `HostLink` because this screen is the only thing
+     * that knows its own pane moved — see `HostLink.sizeMachineWindow`, which
+     * deliberately remembers nothing. Nil and zero mean *nothing has been asked
+     * for yet*, which is the state a newly bound window starts in and the reason
+     * a first show sends without waiting for a rotation.
+     */
+    @State private var sizedWindow: String?
+    @State private var sizedWidth: CGFloat = 0
+
+    /**
      * A question of ours in flight, for as long as it takes to be visible.
      *
      * > *"browser window when it collapse it is not expanding back I can not
@@ -858,7 +894,15 @@ struct SessionPageView<Session: View>: View {
          * already the freshest thing this phone holds.
          */
         .onChange(of: host?.watch.surfaces) { _, _ in host?.readMachineWindows() }
-        .onChange(of: window?.id) { _, id in offer(id) }
+        .onChange(of: window?.id) { _, id in
+            offer(id)
+            // A different window is a machine that has never been told anything
+            // about this pane, so it is laid out the moment it arrives rather
+            // than waiting for a rotation. `layOutThePage` sends nothing if the
+            // canvas has not measured its box yet; the canvas's own announcement
+            // catches that case a layout pass later.
+            layOutThePage(paneWidth: canvasWidth)
+        }
         /*
          * **The agent has stopped and is waiting for a person, or this device
          * has just taken it.**
@@ -1033,6 +1077,61 @@ struct SessionPageView<Session: View>: View {
         }
     }
 
+    /**
+     * Ask the machine to lay this window's page out in the box it is going to be
+     * drawn into — once when the window arrives, and again only when the pane
+     * really changes width.
+     *
+     * > *"in here if you can see we have this window to come up. First of all when
+     * > we open it, it opens a very big page then it compares to the normal size
+     * > if you can see. Okay, so it should always open to the normal size."*
+     *
+     * ## Why the height is a constant and not the canvas's
+     *
+     * `SessionPageRoom.splitCap` is the room this pane *intends* to give the
+     * page. `canvasHeight` is the room it is *using*, which is the last frame's
+     * height — and asking to be laid out at that closes a loop: layout → frame →
+     * `pageHeight` → `canvasHeight` → layout. The loop is stable but it latches
+     * onto whatever started it, and what starts it is the machine's own 800 × 600
+     * first frames, which fit this pane at 294 points tall. The pane would settle
+     * there for ever: a perfect 100%, in two thirds of the room it had. So the
+     * page is laid out at the pane's full height, the picture then exactly fills
+     * it, and `canvasHeight` has no letterbox left to trim.
+     *
+     * ## Why it is guarded rather than sent whenever the canvas speaks
+     *
+     * This message re-lays-out a document on another machine. `onCanvasWidth`
+     * fires from a layout pass, and layout passes happen for the keyboard, for a
+     * fold, and for every frame that lands; sending on each of those would be a
+     * host reflowing a page sixty times a second while somebody reads it. So the
+     * pair *(window, width)* is remembered and only a real move is worth a frame.
+     * A window changing under this pane is a move by definition — it is a
+     * different page, on a machine that has never been told anything about this
+     * pane — which is what makes the first show send without waiting for a
+     * rotation.
+     *
+     * Nothing is sent to a machine that will not take the verb (`drivable` is the
+     * same gate the address and the page verbs use), and nothing is sent before
+     * the canvas has a box, because a width of zero is not a pane anybody
+     * measured.
+     *
+     * The width is a **parameter** and not a read of `canvasWidth`, and that is
+     * not tidiness: the canvas's own caller has just been handed the new width
+     * and written it into `@State` in the same closure, and a `@State` written
+     * and read back inside one closure is not a value anybody should rely on.
+     * The window-changed caller has no width in hand and passes the stored one,
+     * which by then came from a layout pass that has finished.
+     */
+    private func layOutThePage(paneWidth: CGFloat) {
+        guard drivable, let id = window?.id, !id.isEmpty, paneWidth > 0 else { return }
+        guard id != sizedWindow || abs(paneWidth - sizedWidth) > 0.5 else { return }
+        sizedWindow = id
+        sizedWidth = paneWidth
+        host?.sizeMachineWindow(id,
+                                width: Int(paneWidth.rounded()),
+                                height: Int(SessionPageRoom.splitCap.rounded()))
+    }
+
     /// Fill the field from the page, unless a thumb is in it. One writer, so a
     /// navigation cannot rewrite a half-typed address.
     private func seedAddress() {
@@ -1094,6 +1193,15 @@ struct SessionPageView<Session: View>: View {
                            window: surface.window,
                            mounted: frontmost,
                            onPageHeight: { pageHeight = $0 },
+                           // The pane's own width, on its way to the machine as
+                           // the width to lay the page out at — *"it should
+                           // always open to the normal size."* See
+                           // `layOutThePage`, which decides whether this one is
+                           // worth a frame on the wire.
+                           onCanvasWidth: { width in
+                               canvasWidth = width
+                               layOutThePage(paneWidth: width)
+                           },
                            // This screen has the bar, so the card must not print
                            // the agent's sentence a second time — measured on a
                            // 393-point phone, where the two of them between them

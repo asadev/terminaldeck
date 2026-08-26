@@ -172,6 +172,13 @@
  * uses, where there is nothing to explain.
  */
 
+// `Foundation` by name rather than left to arrive with SwiftUI: `site` builds a
+// `URL` to read a port out of an address, and this file has no other Foundation
+// type in it. `PageWidths` makes the same argument about `CoreGraphics` at
+// length — a conformance or a type that arrives only because some other file in
+// the module imported it is a build that breaks on the day somebody splits a
+// target.
+import Foundation
 import SwiftUI
 
 struct MachineWindowView: View {
@@ -181,6 +188,12 @@ struct MachineWindowView: View {
     /// and why `""` is a name rather than a missing one: it is the machine's own
     /// front tab, which `browser.surfaces` lists under exactly that.
     let windowID: String
+
+    /// Which size each site was last looked at in. A member with a default
+    /// exactly as `LocalhostBrowser` has one, so the memory is the *phone's*
+    /// (`PageWidths.shared`) and a test can hand in its own `UserDefaults` suite
+    /// rather than writing onto the machine it is running on.
+    var widths: PageWidths = .shared
 
     @State private var address = ""
     /// Whether the field has been filled from the window at least once. A window
@@ -234,6 +247,36 @@ struct MachineWindowView: View {
     /// first frame lands. See `stage` for what it is for and
     /// `WatchSurface.onPageHeight` for why the canvas is the thing that knows.
     @State private var pageHeight: CGFloat = 0
+
+    /**
+     * The whole box this screen has for the page, in points — the stage's own
+     * rectangle before anything is drawn in it.
+     *
+     * The room the page is *given*, never the room it is *using*. `pageHeight`
+     * above is the latter, and asking a machine to lay a page out at that closes
+     * a loop through the frames that come back — `WatchSurfaceUIView.announceCanvasWidth`
+     * writes out the loop and the transient it latches onto. So this is read off
+     * the `GeometryReader` in `stage`, which is a fact about the screen and not
+     * about any frame.
+     *
+     * Written from `onAppear`/`onChange` inside that reader rather than assigned
+     * in the closure body: writing `@State` during a layout pass is the
+     * *"Modifying state during view update"* warning followed by a frame of the
+     * old size, which is the same reason the canvas reports its own numbers from
+     * a runloop hop.
+     */
+    @State private var stageBox: CGSize = .zero
+
+    /**
+     * The rectangle the machine was last asked to lay this window's page out in,
+     * so it is asked once per real change and never per layout pass.
+     *
+     * `browser.window.size` reflows a document on another machine. `.zero` means
+     * *nothing has been asked for yet*, which is the state every window starts in
+     * and the reason arriving on this screen sends without waiting for a
+     * rotation.
+     */
+    @State private var sizedTo: CGSize = .zero
 
     @Environment(\.dismiss) private var dismiss
 
@@ -451,6 +494,24 @@ struct MachineWindowView: View {
         // surface list rather than on the window list, and the field has to
         // follow whichever of the two this page is on.
         .onChange(of: liveSurface?.url) { _, _ in seed() }
+        /*
+         * **The size this page should be laid out at has moved.**
+         *
+         * Two ways it can, and one watcher for both, which is what keeps a single
+         * path from *a size is wanted* to *the machine is told*:
+         *
+         *  - somebody picked a device in the Size menu, which writes the choice
+         *    against the site and changes what `chosenSize` answers;
+         *  - the page **navigated to another site**, and that site was last
+         *    looked at in a different size. Nobody pressed anything and the page
+         *    still has to come up the way it was left — *"it should always open to
+         *    the normal size"* is about a window opening, and following a link is
+         *    a page opening.
+         *
+         * `layOutThePage` is guarded on what was last asked for, so a navigation
+         * within one site costs nothing.
+         */
+        .onChange(of: chosenSize) { _, _ in layOutThePage(stage: stageBox) }
         /*
          * Leave when the window does.
          *
@@ -670,6 +731,25 @@ struct MachineWindowView: View {
                     Spacer(minLength: 0)
                 }
                 .frame(width: geometry.size.width, height: geometry.size.height)
+                /*
+                 * The box this page is going to be drawn into, on its way to the
+                 * machine as the size to lay the page out at — *"it should always
+                 * open to the normal size."*
+                 *
+                 * Both hooks, and neither is redundant. `onAppear` is the first
+                 * arrival, which is the case the whole requirement is about; the
+                 * `onChange` is a rotation and a split changing shape. Both fire
+                 * outside the layout pass, which is why the size is taken here
+                 * rather than assigned in the closure above.
+                 */
+                .onAppear {
+                    stageBox = geometry.size
+                    layOutThePage(stage: geometry.size)
+                }
+                .onChange(of: geometry.size) { _, box in
+                    stageBox = box
+                    layOutThePage(stage: box)
+                }
             }
         } else if host?.canDriveBrowser != true {
             /*
@@ -810,8 +890,154 @@ struct MachineWindowView: View {
                  */
                 find: nil,
                 inspect: (drivable && liveSurface != nil) ? toggleInspecting : nil,
-                inspecting: inspecting)
+                inspecting: inspecting,
+                /*
+                 * **Size was the last dead slot on this bar, and it is live now.**
+                 *
+                 * `BrowserChrome.sizeIsLocal` said why it could not be, and it
+                 * said it as a fact about the *wire* rather than about the
+                 * feature: *"there is no verb in `MachineWindow.Act` that carries
+                 * a size… the day a host learns `browser.window.size` the screen
+                 * passes a closure and this sentence stops being read."* That day
+                 * is this one. See `pageSize`.
+                 */
+                size: pageSize)
         }
+    }
+
+    /**
+     * The Size control, for a window that lives on the machine.
+     *
+     * > *"they can pinch and zoom also they can see all the different dimensions
+     * > in responsive views how it will look like in mobile how it will look like
+     * > on Windows so they can have different dimensions also in phone just like
+     * > MacBook."*
+     *
+     * ## The two halves are two different things and they stay apart
+     *
+     *  - **`choose` re-lays the document out**, on the machine, at a width in CSS
+     *    pixels — `browser.window.size`. That is the honest answer to *"how will
+     *    this look on a laptop"*, and it is the half that did not exist until this
+     *    round.
+     *  - **The three zoom closures change nothing about the layout.** They magnify
+     *    the picture this phone was sent, which is looking closer at whatever is
+     *    already there. They go to the canvas, not to the machine.
+     *
+     * Letting the second stand in for the first is the fake `PageWidths` exists to
+     * avoid — *"a phone layout in bigger letters"* — which is why
+     * `BrowserPageSize` keeps them as separate closures and why this passes
+     * separate closures rather than one.
+     *
+     * ## Nothing is sent here; the memory is what is written
+     *
+     * `choose` records the pick against the **site** and stops. The send is
+     * `layOutThePage`, hung off a change in `chosenSize`, so there is exactly one
+     * path from *a size is wanted* to *the machine is told* — and arriving on a
+     * site that was last looked at as a laptop takes that same path with nobody
+     * having pressed anything.
+     *
+     * Nil where there is no picture and no window to address: a machine that will
+     * not cast this window draws its settings as its body, and a bar over nothing
+     * is not a browser's bar. A machine that takes the verb and refuses it — a
+     * desktop, which must never reflow a window somebody is reading — answers with
+     * its own sentence on `state?.notice`, which is the right shape: the control
+     * acts and the machine explains, rather than this phone guessing in advance.
+     */
+    private var pageSize: BrowserPageSize? {
+        guard drivable, liveSurface != nil else { return nil }
+        let key = site
+        return BrowserPageSize(size: chosenSize,
+                               choose: { widths.choose($0, for: key) },
+                               zoomIn: { toCanvas(.zoomIn) },
+                               zoomOut: { toCanvas(.zoomOut) },
+                               actualSize: { toCanvas(.actualSize) })
+    }
+
+    /**
+     * The site this window is on, spelled the way the rest of the app spells it.
+     *
+     * Per **site** and not per URL, for the reason `PageWidths` writes out at
+     * length: every dev server serves a single-page app, every route change
+     * rewrites the address, and a memory keyed on the whole URL would drop back
+     * to this phone's size the moment somebody clicked *Orders* in the middle of
+     * checking how Orders looks on a laptop.
+     *
+     * The port comes out of the address itself rather than from a tunnel, which
+     * is the one difference from `LocalhostBrowser`'s call. There, a loopback page
+     * is reached through a tunnel and the phone's own listener port is picked at
+     * random per open, so the *machine's* port has to be supplied separately.
+     * Here the page is open in the machine's own browser, so the port in the
+     * address already **is** the machine's — `localhost:3000` means the same thing
+     * on both ends.
+     */
+    private var site: String {
+        let address = window?.url ?? liveSurface?.url ?? ""
+        return PageWidths.site(address, machinePort: URL(string: address)?.port ?? 0)
+    }
+
+    /// What this site was last looked at in, or this phone's own box for one
+    /// nobody has chosen for. Read on every redraw rather than held: `PageWidths`
+    /// is `@Observable`, and a value captured once would go on naming the size the
+    /// window had when the screen was pushed.
+    private var chosenSize: PageSize { widths.size(for: site) }
+
+    /**
+     * Ask the machine to lay this window's page out in the rectangle it is going
+     * to be drawn in.
+     *
+     * > *"it opens a very big page then it compares to the normal size… it should
+     * > always open to the normal size."*
+     *
+     * A chosen device is its own rectangle in CSS pixels — a laptop is 1280 × 800
+     * whatever phone is looking at it, which is the whole point of picking one.
+     * *This phone* is the stage's own box in points, which is the state every
+     * window starts in and the one the complaint is about: one CSS pixel drawn
+     * onto one point is 100%, and 100% is what he asked for.
+     *
+     * Guarded on what was last asked for, because this reflows a document on
+     * another machine and the two hooks that call it — `onAppear` and a geometry
+     * change — fire for a rotation, a split changing shape, and a screen being
+     * pushed. Half a point of tolerance, for the reason every other measurement
+     * comparison in this app carries one: a rectangle computed in floating point
+     * wobbles in the last digit without anything having moved.
+     */
+    private func layOutThePage(stage: CGSize) {
+        guard drivable, let box = wantedLayout(stage: stage) else { return }
+        guard abs(box.width - sizedTo.width) > 0.5 || abs(box.height - sizedTo.height) > 0.5 else { return }
+        sizedTo = box
+        host?.sizeMachineWindow(windowID,
+                                width: Int(box.width.rounded()),
+                                height: Int(box.height.rounded()))
+    }
+
+    /**
+     * The rectangle the page should be laid out in, or nil when this screen does
+     * not know one yet.
+     *
+     * The stage's box is a **parameter** rather than a read of `stageBox`, and
+     * that is not tidiness: two of the three callers have just been handed the
+     * new box by SwiftUI and have written it into `@State` in the same closure,
+     * and a `@State` written and read back inside one closure is not a value
+     * anybody should be relying on. The third caller — a size chosen in the menu
+     * — has no box in hand and passes the stored one, which by then is a box from
+     * a layout pass that has finished.
+     *
+     * A stage that has not been measured is not a size, and a zero-by-zero
+     * viewport is the one shape the host's own argument screen refuses outright.
+     */
+    private func wantedLayout(stage: CGSize) -> CGSize? {
+        if let layout = chosenSize.layout { return layout }
+        guard stage.width > 0, stage.height > 0 else { return nil }
+        return stage
+    }
+
+    /// Hand one instruction to the canvas under this screen. The three zoom verbs
+    /// and nothing else; the canvas is a `UIView` inside a `UIViewRepresentable`
+    /// and this screen is a value type, so it rides a notification — see
+    /// `WatchStage.post`.
+    private func toCanvas(_ command: WatchCommand) {
+        guard let surface = liveSurface else { return }
+        WatchStage.post(command, to: surface.window)
     }
 
     /**

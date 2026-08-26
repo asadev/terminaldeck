@@ -5830,6 +5830,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
       case 'browser.window.open':
       case 'browser.window.go':
       case 'browser.window.act':
+      case 'browser.window.size':
       case 'browser.window.bind':
       case 'browser.window.shot':
       case 'browser.window.steps':
@@ -5856,13 +5857,15 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
               ? browser.go(message)
               : message.t === 'browser.window.act'
                 ? browser.act(message)
-                : message.t === 'browser.window.bind'
-                  ? browser.bind(message)
-                  : message.t === 'browser.window.shot'
-                    ? browser.shot(message)
-                    : message.t === 'browser.window.steps'
-                      ? browser.steps(message)
-                      : browser.pick(message)
+                : message.t === 'browser.window.size'
+                  ? browser.size(message)
+                  : message.t === 'browser.window.bind'
+                    ? browser.bind(message)
+                    : message.t === 'browser.window.shot'
+                      ? browser.shot(message)
+                      : message.t === 'browser.window.steps'
+                        ? browser.steps(message)
+                        : browser.pick(message)
         ).then(
           (answer) => {
             if (!live.has(connection.id)) return

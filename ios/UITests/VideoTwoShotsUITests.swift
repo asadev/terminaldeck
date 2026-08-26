@@ -91,7 +91,9 @@ final class VideoTwoShotsUITests: XCTestCase {
      * > here I should be able to see all the browsing windows. That's all, very
      * > simple."*
      *
-     * And R5/R6 on the window itself: no keyboard verb, no expand verb.
+     * And R5/R6 on the window itself: no keyboard verb, and no expand verb — see
+     * the note in the body for why the second of those is now a comment rather
+     * than an assertion.
      */
     func testTheBrowserTabIsOnlyBrowser() throws {
         try XCTSkipUnless(app.openBrowserTab(), "the Browser tab was not reachable")
@@ -112,8 +114,26 @@ final class VideoTwoShotsUITests: XCTestCase {
                        "the Browser tab must not route into a terminal session")
         XCTAssertFalse(app.buttons["browser.machine.window.keyboard"].exists,
                        "no separate keyboard button in the browser window")
-        XCTAssertFalse(app.buttons["browser.machine.window.size"].exists,
-                       "no expand verb, and so no black band under the page")
+        /*
+         * **The third assertion is gone, and it is gone because its identifier
+         * now names a different control.**
+         *
+         * `browser.machine.window.size` used to be the **expand** verb: it put
+         * the page over the whole screen and left the black band underneath that
+         * the recording was about. That verb does not exist under any name any
+         * more — `SessionPageVerb` is the whole of what a page strip offers, and
+         * this screen has no such verb at all.
+         *
+         * The identifier is `BrowserPageBar`'s **Size** slot now: the width menu,
+         * which lays the page out at a device size *on the machine* through
+         * `browser.window.size`. It is a page verb and it belongs on this bar —
+         * *"they can see all the different dimensions in responsive views."*
+         *
+         * So the ban is deleted rather than kept, because a kept one would fail
+         * on the control that replaced the one it was written against. That is
+         * the exact trap three iOS tests fell into by matching names instead of
+         * behaviour, and it costs a round every time.
+         */
 
         leave()
     }

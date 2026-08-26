@@ -706,8 +706,13 @@ struct LocalhostBrowser: View {
      * This screen owns a real `WKWebView`, so both halves are real: the width is
      * a width the page is genuinely laid out at — its media queries fire — and
      * the zoom is the web view's own magnification, the same one a pinch drives.
-     * A window on the machine gets the greyed glyph and
-     * `BrowserChrome.sizeIsLocal`, which says why in one sentence.
+     *
+     * A window on the machine has both halves now too, and by a different route:
+     * its `choose` sends `browser.window.size` and the **machine's** engine
+     * re-lays the document out, while its zoom closures magnify the picture this
+     * phone was sent. `BrowserChrome.sizeIsLocal` was the sentence for the years
+     * that verb did not exist and is no longer read by anything — see the note on
+     * it for why the argument is kept anyway.
      *
      * `whyNoSize: nil` for the same reason `whyNoFind` and `whyNoInspect` are
      * nil here: the default sentence says *this page is on the machine*, which

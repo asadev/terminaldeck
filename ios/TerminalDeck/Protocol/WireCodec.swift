@@ -954,6 +954,27 @@ enum WireCodec {
             object = ["t": "browser.window.go", "id": id, "url": url]
         case let .machineWindowAct(id, action):
             object = ["t": "browser.window.act", "id": id, "action": action.rawValue]
+        case let .machineWindowSize(id, width, height):
+            /*
+             * **Clamped here as well as on the host, and for a different reason
+             * from the one `machineWindowPick` clamps for.**
+             *
+             * Wider clamps because an out-of-range `up` would *close the socket*:
+             * that check lives in the host's parser and `server.ts` answers a
+             * parse failure by dropping the connection. This one cannot do that —
+             * the host clamps both numbers rather than refusing them, on purpose,
+             * because they come from a viewer measuring its own pane and a
+             * rotation must never cost somebody their terminals.
+             *
+             * It is here for honesty instead. A screen that asks for 12 and is
+             * silently given 240 has a page laid out at a width it does not know
+             * about, and the fit arithmetic it does with the frames that come
+             * back is then wrong about the thing in front of it. Clamping on this
+             * side means what was asked for is what was asked for.
+             */
+            let w = min(max(MachineBrowserWire.minPageWidth, width), MachineBrowserWire.maxPageWidth)
+            let h = min(max(MachineBrowserWire.minPageHeight, height), MachineBrowserWire.maxPageHeight)
+            object = ["t": "browser.window.size", "id": id, "width": w, "height": h]
         case let .machineWindowBind(id, session):
             var ask: [String: Any] = ["t": "browser.window.bind", "id": id]
             if let session { ask["session"] = session }

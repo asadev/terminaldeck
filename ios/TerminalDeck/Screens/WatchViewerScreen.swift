@@ -129,6 +129,13 @@ struct WatchStage: View {
     /// `WatchSurface.onPageHeight`.
     var onPageHeight: ((CGFloat) -> Void)?
 
+    /// Told how wide the box is that the picture is drawn into, so a screen can
+    /// ask the machine to lay the page out at exactly that width and the cast
+    /// arrives at 100% — *"keep it on 100 percent like a normal view of any
+    /// website."* The width only, and `WatchSurface.announceCanvasWidth` records
+    /// the feedback loop that reporting a height from here would close.
+    var onCanvasWidth: ((CGFloat) -> Void)?
+
     /**
      * Set by a screen that is itself drawing the agent's sentence, so the lock
      * card says the lock and a short line instead of the same sentence again.
@@ -145,6 +152,7 @@ struct WatchStage: View {
             if mounted {
                 WatchSurface(watch: watch, window: window,
                              onPageHeight: onPageHeight,
+                             onCanvasWidth: onCanvasWidth,
                              sentenceIsDrawnAbove: sentenceIsDrawnAbove)
             }
         }
