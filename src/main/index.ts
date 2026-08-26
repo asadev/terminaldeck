@@ -2946,6 +2946,27 @@ function registerIpc(): void {
      */
     machineBrowser: machineBrowserHere(),
     /*
+     * And the routines card, over the wire.
+     *
+     * `routines.api` is the same object `registerRoutinesIpc` puts behind the
+     * settings pane a few hundred lines down, handed over rather than rebuilt —
+     * so a phone pressing Run now and a person pressing it at this keyboard go
+     * through one implementation with one set of checks, which is the whole
+     * argument `routines/ipc.ts` opens with.
+     *
+     * Passing it is what advertises the `routines` capability. A build with no
+     * engine passes nothing and a phone draws no screen, rather than one whose
+     * every press is refused — and `server.ts` reads *this* object rather than
+     * the copilot beside it, because the two are separable and a capability
+     * advertised off the wrong one is an advertisement that can outlive what it
+     * advertises.
+     *
+     * Which of the owner's devices may use it is not decided here. `server.ts`
+     * asks the same question it asks about the copilot, on every frame, off the
+     * kind the device was approved with.
+     */
+    routines: routines.api,
+    /*
      * And the same browser, watched and driven from the phone — wave-3's live
      * view, which had every frame on the wire and no host behind it.
      *

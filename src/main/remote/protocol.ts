@@ -481,6 +481,44 @@ export const CAPABILITY = {
   credential: 'credential',
   devserver: 'devserver',
   copilot: 'copilot',
+  /**
+   * The routines card, over the wire: list them, read one, run one, hold one,
+   * let it go again, throw it away.
+   *
+   * > *"the main co-pilot settings page is going around in circles: edit button,
+   * > run now, delete and toggle thing. If you go to Mac side there is 'check the
+   * > work before it counts as done', 'what happened overnight' … all of these are
+   * > like separate settings for co-pilot … you know all of these settings are
+   * > there."*
+   *
+   * Its own name rather than a corner of `copilot`, for the reason every split in
+   * this object exists: the two are genuinely separable. A routine engine is a
+   * folder of files, a scheduler and a budget, and a machine can hold one without
+   * holding a copilot a phone may talk to — so `server.ts` reads the *routines*
+   * layer to decide this, never the copilot layer, and a build with one and not
+   * the other says which one it has instead of implying both.
+   *
+   * Withheld from a guest in `capabilitiesFor`, on the same line and by the same
+   * question as `copilot` itself. A routine is a prompt this machine runs with
+   * this machine's tools in this machine's folders, and *“the copilot is never
+   * shared”* covers the thing that starts one as squarely as it covers the
+   * conversation.
+   *
+   * ## There is no verb here that writes a routine file
+   *
+   * Deliberately, and the argument is `routines/ipc.ts`'s rather than this
+   * file's: `saveText` is marked `human` — not a tier — because it writes chosen
+   * bytes into the one folder the copilot was moved out of, which is *wider* than
+   * the alter-tier `update` that goes through `routineFromDraft`'s header guard.
+   * A frame is not a window. The `human` marking exists precisely so that the
+   * operation has no tier it could be exposed at, and putting it on a wire would
+   * be inventing one. {@link MAX_ROUTINE_TEXT_CHARS} says what a phone gets
+   * instead, and `routine.text.rows` carries the sentence that says why.
+   *
+   * An older host never advertises the name, so a phone draws no Routines screen
+   * rather than sending a frame that would close the channel.
+   */
+  routines: 'routines',
   web: 'web',
   controls: 'controls',
   usage: 'usage',
@@ -934,6 +972,15 @@ export const CAPABILITIES: string[] = [
   CAPABILITY.credential,
   CAPABILITY.devserver,
   CAPABILITY.copilot,
+  /*
+   * The routines beside it, and named here rather than only in `CAPABILITY`.
+   *
+   * This list is the only one `advertised` filters, so a capability with a rule
+   * in `serves` and no line here is a capability **no host advertises, whatever
+   * it passes** — which is what happened to `browser.control` a few entries
+   * down, and what left a whole surface dark on a desktop and on a server alike.
+   */
+  CAPABILITY.routines,
   CAPABILITY.web,
   CAPABILITY.controls,
   CAPABILITY.usage,
@@ -2486,6 +2533,380 @@ export interface CopilotSettledRow {
   reason: string | null
 }
 
+/* ---- capability `routines` ----------------------------------------------- */
+
+/**
+ * What state a routine is in, as one word.
+ *
+ * A second copy of the union in `src/main/routines/engine.ts`, kept here for the
+ * reason {@link CONTROL_IDS} is a second copy of `agent-controls.ts`'s four
+ * names: that module reaches the disk, `picomatch` and the engine's own timers,
+ * and this file is bundled for a plain-Node host and for the PWA. The two are
+ * pinned against each other in `protocol.test.ts`, so they cannot drift apart in
+ * silence.
+ *
+ * All seven are worth carrying because all seven draw something different, and
+ * two of the collapses would hurt in particular. `disabled` is the file's own
+ * `enabled: no` line and `paused` is engine state kept beside the file — one is
+ * a thing the person wrote, the other a thing that happened to it, and they have
+ * different remedies. `unarmed` and `stale` are the two halves of *this looks
+ * quiet and is actually broken*, which is the failure the whole health model
+ * exists to make visible.
+ */
+export const ROUTINE_STATES = [
+  'armed',
+  'running',
+  'disabled',
+  'broken',
+  'unarmed',
+  'paused',
+  'stale',
+] as const
+
+export type RoutineStateName = (typeof ROUTINE_STATES)[number]
+
+/**
+ * The most routines one `routines.rows` will carry.
+ *
+ * `MAX_ROUTINES` in `routines/store.ts` is the same number and refuses to load
+ * past it, so this is a backstop rather than a second policy — what having it
+ * buys is that a client is never handed a list whose length was decided
+ * somewhere it cannot see.
+ */
+export const MAX_ROUTINES_REPORTED = 100
+
+/** A routine's name, its one-line purpose, its schedule, its folder. */
+export const MAX_ROUTINE_LINE_LENGTH = 200
+
+/** A sentence about a routine: the engine's reason, a problem, a run's error. */
+export const MAX_ROUTINE_REASON_LENGTH = 400
+
+/**
+ * How many of a routine's problems travel with it.
+ *
+ * The parser prints one line per thing it could not read, and a broken file
+ * produces a handful; a row on a phone draws them under the name. Eight is more
+ * than any real file produces and small enough that a garbled one cannot fill
+ * the frame with them.
+ */
+export const MAX_ROUTINE_PROBLEMS = 8
+
+/**
+ * Why somebody is holding this routine, when they say.
+ *
+ * The same 300 characters `RoutineApi.pause` clamps to, so the sentence that
+ * comes back on the next `routines.rows` is the sentence that was sent rather
+ * than a shorter one nobody asked for.
+ */
+export const MAX_ROUTINE_PAUSE_REASON = 300
+
+/**
+ * How much of a routine file one `routine.text.rows` carries, in characters.
+ *
+ * The file format allows 64 KiB (`MAX_FILE_BYTES` in `routines/format.ts`) and
+ * the frame carrying it is an ordinary text message under
+ * {@link MAX_MESSAGE_BYTES}, which is the same number — so a file at the
+ * format's own ceiling could not fit in a frame even before `JSON.stringify`
+ * touched it, and escaping only ever makes that worse. The same arithmetic
+ * `PanelsWire.fileReadWindow` does on the phone for `files.read`, and the same
+ * answer: ask for less than the format allows, and say when the answer was cut.
+ *
+ * Twelve thousand characters is far more than a real routine — a routine is a
+ * heading, a few header lines and a prompt the format caps at 8 KiB — and, once
+ * the text has been through {@link routineText}, worst case about 36 KiB of
+ * frame.
+ */
+export const MAX_ROUTINE_TEXT_CHARS = 12 * 1024
+
+/**
+ * The shape a routine id may have, as this parser will admit one.
+ *
+ * The same characters `isValidId` in `routines/format.ts` allows, and it is
+ * **not** what makes the id safe. An id from a client never becomes a path:
+ * `server.ts` looks it up in the list the host itself produced and acts on the
+ * routine it found there, so a value that got past this regex still names
+ * nothing. This is here to keep an obviously-hostile frame out of the machine's
+ * memory and its logs, which is all a charset check is ever worth.
+ */
+const ROUTINE_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/
+
+/**
+ * One routine, as a phone draws a row for it.
+ *
+ * Mirrors the half of `RoutineView` (`src/main/routines/engine.ts`) that the
+ * desktop's own Routines card draws, plus the four things that card *derives* —
+ * `armed`, `canArm`, `canRun` and their sentences. Derived here rather than at
+ * each client for the reason `CopilotLink.access` gives on the phone: a screen
+ * that reassembled *is this switch on* out of a state name and two booleans
+ * would eventually get one combination wrong, and the combination it would get
+ * wrong is the one where a routine looks armed and is not.
+ *
+ * Nothing here is a path to a file. `folder` is the folder a routine watches,
+ * which is the one location a person genuinely asked about; the routine file's
+ * own absolute path is not carried at all, on the rule this app applied to every
+ * panel on 2026-08-17 — a path stays only where the thing is a folder somebody
+ * opens. `routine.text.rows` carries the file's bare name for the same reason.
+ */
+export interface RoutineWire {
+  id: string
+  name: string
+  /**
+   * What it does, in the routine's own words: the first line of its prompt.
+   *
+   * The prompt itself is up to 8 KiB of instructions and no list on a phone
+   * wants that; its first line is what somebody wrote to say what this is for,
+   * which is the sentence a row needs. Empty when the file has no prompt — which
+   * is a `broken` routine, and the problems beside it say so.
+   */
+  purpose: string
+  /**
+   * The `when:` lines, serialised and joined — the schedule as a person reads it.
+   *
+   * The engine's own `serializeTrigger` output rather than a phrase composed
+   * here, so the row says what the file says. Empty when the routine has no
+   * trigger at all, which the desktop card draws as *no trigger*.
+   */
+  schedule: string
+  /** The folder it watches and runs in, or null when it names none. */
+  folder: string | null
+  state: RoutineStateName
+  /** The file's own `enabled:` line. Not the switch — see {@link RoutineWire.armed}. */
+  enabled: boolean
+  paused: boolean
+  /**
+   * Whether the switch on this row reads as on.
+   *
+   * `enabled` and `paused` are two different facts and this is the one a switch
+   * shows: off in its own file, and held by the engine, both read as off, and
+   * only one of the two can be changed from here.
+   */
+  armed: boolean
+  /** The engine's one sentence saying why the state is what it is. */
+  reason: string | null
+  problems: string[]
+  /**
+   * When it last **finished**, not when it last started.
+   *
+   * The sentence beside this on a row is its outcome — *finished*, *failed: …* —
+   * and an outcome belongs to a run that came back. A run still in flight is
+   * `state: 'running'`, which is this row's answer to *what is it doing now*.
+   */
+  lastRunAt: number | null
+  lastOutcome: 'ok' | 'failed' | null
+  lastError: string | null
+  nextDueAt: number | null
+  /** When a held routine comes back on its own. Null when a person has to act. */
+  pausedUntil: number | null
+  missedWhileClosed: number
+  consecutiveFailures: number
+  /**
+   * How many calls its runs were not allowed to make — a count, not the rows.
+   *
+   * Almost always an alter-tier tool refused because nobody was at the machine,
+   * which is the boundary working rather than a fault, and it is the only answer
+   * to *it ran and nothing happened*. The rows behind it carry tool names and
+   * refusal sentences and the desktop card draws none of them — it draws the
+   * count and one line — so the count is what crosses.
+   */
+  refusedCalls: number
+  canRun: boolean
+  /**
+   * Why Run now is not offered, when it is not.
+   *
+   * Only the two answers that are certain before the press: it is already
+   * running, or its file did not parse so there is no prompt to run. Every other
+   * refusal — a budget spent, an overlap policy, no runner in this build — is
+   * the engine's at the moment of the press, and arrives as its own sentence in
+   * the `notice` on the redraw. A list drawn a minute ago must not grey out a
+   * button over a budget that has since come back.
+   */
+  runBecause: string | null
+  canArm: boolean
+  /** Why the switch cannot be moved, when it cannot. */
+  armBecause: string | null
+}
+
+/**
+ * Read one {@link RoutineWire} off a `RoutineView`, bounded and cleaned.
+ *
+ * Takes `unknown` and answers null for anything that is not a routine, exactly
+ * as {@link serverSettingWire} does and for the same reason: this is the one
+ * place a host's own object becomes a frame, so it is the honest place to bound
+ * it. Every string goes through the display strip and a cap — a routine's name
+ * and its prompt's first line are text out of a file somebody hand-edited, they
+ * are drawn on a phone beside controls a person presses, and nothing else
+ * between that file and that screen is going to look at them.
+ */
+export function routineWire(raw: unknown): RoutineWire | null {
+  if (!isRecord(raw)) return null
+  const id = typeof raw.id === 'string' && ROUTINE_ID_RE.test(raw.id) ? raw.id : null
+  if (id === null) return null
+
+  const state = ROUTINE_STATES.find((name) => name === raw.state) ?? 'unarmed'
+  const reason = routineSentence(raw.reason)
+  const problems = routineProblems(raw.problems)
+  const running = raw.running === true
+  const paused = state === 'paused'
+  // The file's own `enabled: no` line, which is the one thing on this row a
+  // switch must never silently rewrite. `disabled` is the engine's word for it.
+  const fileOff = state === 'disabled'
+
+  return {
+    id,
+    name: routineLine(raw.name) || id,
+    purpose: routineLine(firstLine(raw.prompt)),
+    schedule: routineLine(routineTriggers(raw.triggers)),
+    folder: typeof raw.folder === 'string' && raw.folder !== '' ? routineLine(raw.folder) : null,
+    state,
+    enabled: raw.enabled === true,
+    paused,
+    armed: !fileOff && !paused,
+    reason,
+    problems,
+    lastRunAt: asWhole(raw.lastFinishedAt),
+    lastOutcome: raw.lastOutcome === 'ok' || raw.lastOutcome === 'failed' ? raw.lastOutcome : null,
+    lastError: routineSentence(raw.lastError),
+    nextDueAt: asWhole(raw.nextDueAt),
+    pausedUntil: asWhole(raw.pausedUntil),
+    missedWhileClosed: whole(raw.missedWhileClosed, 0, Number.MAX_SAFE_INTEGER) ?? 0,
+    consecutiveFailures: whole(raw.consecutiveFailures, 0, Number.MAX_SAFE_INTEGER) ?? 0,
+    refusedCalls: Array.isArray(raw.refusedCalls) ? raw.refusedCalls.length : 0,
+    canRun: !running && state !== 'broken',
+    runBecause: running
+      ? 'It is running now.'
+      : state === 'broken'
+        ? // The engine's own first problem, which is the sentence saying what
+          // could not be read. Restating it here would be a second copy that can
+          // drift, and on a row that means two nearly identical lines.
+          (problems[0] ?? reason ?? 'This routine could not be read.')
+        : null,
+    canArm: !fileOff,
+    armBecause: fileOff
+      ? /*
+         * Composed from the engine's sentence, and the second half differs from
+         * the desktop's on purpose.
+         *
+         * The card in Settings ends *"Press Edit and change its `enabled:` line"*
+         * because there is an editor an inch below it. There is none here and
+         * there is not going to be one — see {@link CAPABILITY.routines} — so the
+         * sentence names the only place the line can be changed. What both ends
+         * say identically is the half that matters: the switch never writes to
+         * the file.
+         */
+        `${reason ?? 'It is off in its own file.'} Change its \`enabled:\` line where the file lives — the switch never writes to the file.`
+      : null,
+  }
+}
+
+/**
+ * Every routine on a host, as rows, capped.
+ *
+ * A row that cannot be read is dropped and the list survives — the rule this
+ * file keeps wherever a list crosses, and the one `WireCodec` states on the
+ * other side: a screen showing eleven of twelve routines is useful, one showing
+ * none because the twelfth had no id is not.
+ */
+export function routineRows(raw: unknown): RoutineWire[] {
+  if (!Array.isArray(raw)) return []
+  const rows: RoutineWire[] = []
+  for (const entry of raw) {
+    if (rows.length >= MAX_ROUTINES_REPORTED) break
+    const row = routineWire(entry)
+    if (row !== null) rows.push(row)
+  }
+  return rows
+}
+
+/**
+ * A routine file's bytes, made safe to *look at* and bounded to one frame.
+ *
+ * Not the treatment display text gets, and the difference is the newline. The
+ * whole value of showing somebody the file is that it is laid out the way it was
+ * written, so newlines and tabs stay and everything else that could rewrite a
+ * line — the rest of C0, DEL, C1, the line and paragraph separators, the bidi
+ * overrides — goes, exactly as {@link DISPLAY_STRIP} takes them out of a device
+ * name. A carriage return is normalised away first, so a lone one cannot drag a
+ * cursor back over a line somebody is reading.
+ *
+ * Says what was cut as well as what survived, because a file that silently stops
+ * is a file somebody reads to the end and believes.
+ */
+export function routineText(value: unknown): { text: string; truncated: boolean } {
+  if (typeof value !== 'string') return { text: '', truncated: false }
+  const cleaned = value.replace(/\r\n?/g, '\n').replace(ROUTINE_TEXT_STRIP, '')
+  if (cleaned.length <= MAX_ROUTINE_TEXT_CHARS) return { text: cleaned, truncated: false }
+  // Cut on a code-point boundary, for the reason `label` cuts on one: a slice
+  // that lands between the halves of a surrogate pair renders as a replacement
+  // character, and a file is the last place anybody would look for the cause.
+  const last = cleaned.charCodeAt(MAX_ROUTINE_TEXT_CHARS - 1)
+  const end = last >= 0xd800 && last <= 0xdbff ? MAX_ROUTINE_TEXT_CHARS - 1 : MAX_ROUTINE_TEXT_CHARS
+  return { text: cleaned.slice(0, end), truncated: true }
+}
+
+/**
+ * Everything {@link DISPLAY_STRIP} takes out, minus tab and newline.
+ *
+ * Its own class rather than a composition of that one, because the two
+ * exceptions are the whole point: a routine file is read as a document and a
+ * device name is read as a word. The carriage return is deliberately *not* an
+ * exception here — it is removed by the normalisation in {@link routineText}
+ * instead, which turns a CRLF file into one a phone lays out correctly rather
+ * than into one with a blank line between every pair.
+ */
+const ROUTINE_TEXT_STRIP =
+  /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g
+
+/** One display line off a routine: stripped, trimmed, capped. */
+function routineLine(value: unknown): string {
+  return typeof value === 'string' ? label(value, MAX_ROUTINE_LINE_LENGTH) : ''
+}
+
+/** One sentence off a routine, or null. Absent and empty are the same answer. */
+function routineSentence(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const cleaned = label(value, MAX_ROUTINE_REASON_LENGTH)
+  return cleaned === '' ? null : cleaned
+}
+
+/** The parser's complaints about one file, capped in count and in length. */
+function routineProblems(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  const out: string[] = []
+  for (const entry of value) {
+    if (out.length >= MAX_ROUTINE_PROBLEMS) break
+    const line = routineSentence(entry)
+    if (line !== null) out.push(line)
+  }
+  return out
+}
+
+/**
+ * The `when:` lines as one string, in the separator the desktop card uses.
+ *
+ * Joined here rather than sent as a list, because every client draws the same
+ * one line out of them, and a list would be an array each end has to bound
+ * separately for a value neither of them ever takes apart.
+ */
+function routineTriggers(value: unknown): string {
+  if (!Array.isArray(value)) return ''
+  const parts: string[] = []
+  for (const entry of value) {
+    if (parts.length >= MAX_ROUTINE_PROBLEMS) break
+    if (typeof entry === 'string' && entry !== '') parts.push(entry)
+  }
+  return parts.join(' · ')
+}
+
+/** The first line with anything on it, for a prompt whose first line is blank. */
+function firstLine(value: unknown): string {
+  if (typeof value !== 'string') return ''
+  for (const line of value.split('\n')) {
+    const trimmed = line.trim()
+    if (trimmed !== '') return trimmed
+  }
+  return ''
+}
+
 /* ---- capability `controls` ---------------------------------------------- */
 
 /**
@@ -3106,6 +3527,71 @@ export type ClientMessage =
       scope?: string
       query?: string
     }
+  /* ---- capability `routines`. Refused when it is not advertised. ---------- */
+  /**
+   * Every routine on that machine, with enough state that nobody has to guess.
+   *
+   * Answered with `routines.rows`. It carries nothing, for the reason `list`
+   * carries nothing: there is one routines folder per machine and a person
+   * looking at the screen wants what is in it. The four verbs below each answer
+   * with the same frame rather than an outcome of their own, so a redraw **is**
+   * the confirmation — the shape `panel.act` settled on, and for the same
+   * argument: an outcome a client has to reconcile against a list it is holding
+   * is a second copy of the truth.
+   */
+  | { t: 'routines' }
+  /**
+   * One routine's file, to read.
+   *
+   * **To read.** There is no frame that writes one back and there is not going
+   * to be: `routines/ipc.ts` marks `saveText` `human` rather than giving it a
+   * tier, because writing chosen bytes into the routines folder is wider than
+   * the alter-tier `update` — which goes through `routineFromDraft`'s header
+   * guard — and that folder was moved out of the copilot's reach for exactly
+   * this shape of hole. A wire frame is not a window. See
+   * {@link CAPABILITY.routines}, and `routine.text.rows`, which carries the
+   * sentence a screen shows in place of a Save button.
+   */
+  | { t: 'routine.text'; id: string }
+  /**
+   * Run this one now, whatever its triggers say.
+   *
+   * The one verb here that makes the machine *do* something — an agent turn, in
+   * a folder, with this machine's tools — so it is refused by the same gate that
+   * decides who reaches the copilot at all, read on every frame. The engine still
+   * has the last word: a budget already spent, a run already going, a build with
+   * no runner behind it all come back as the engine's own sentence in the
+   * `notice` on the answering `routines.rows`.
+   */
+  | { t: 'routine.run'; id: string }
+  /**
+   * Hold it, without touching the file its owner wrote.
+   *
+   * Pause is engine state kept beside the file, which is what makes this safe to
+   * offer from a phone at all: `enabled:` is a line somebody typed into a
+   * document and nothing on this wire rewrites one. `reason` is what the person
+   * holding it wants to read later — clamped to
+   * {@link MAX_ROUTINE_PAUSE_REASON}, and the host writes its own sentence when
+   * it is absent.
+   */
+  | { t: 'routine.pause'; id: string; reason?: string }
+  /** Let it go again. Clears the hold and the failure count with it. */
+  | { t: 'routine.resume'; id: string }
+  /**
+   * Delete it. **Its file is removed from disk.**
+   *
+   * Here rather than withheld with `saveText`, and the difference is what the
+   * two operations are. Deleting names a routine the host already listed and
+   * removes exactly that; saving hands the machine bytes to write. One is a
+   * choice among things that exist, the other is authorship — and it is
+   * authorship the `human` marking is about.
+   *
+   * There is no confirmation on this wire. The desktop card asks *"Delete X? Its
+   * file is removed from disk"* before it sends anything, and the phone's screen
+   * is expected to do the same: a confirmation is a thing a person sees, which
+   * makes it the client's, not the protocol's.
+   */
+  | { t: 'routine.delete'; id: string }
   /* ---- capability `browser.control`. Refused when not advertised. --------- */
   /** What the machine's browser has open, and which sessions could own one. */
   | { t: 'browser.windows' }
@@ -4205,6 +4691,53 @@ export type ServerMessage =
       /** What can be done to the panel itself — *add a server*, and its like. */
       actions?: PanelAction[]
       rows: PanelRow[]
+    }
+  /* ---- capability `routines` ---------------------------------------------- */
+  /**
+   * Every routine on this machine, and what just happened to one.
+   *
+   * The answer to `routines` **and** to each of `routine.run`, `routine.pause`,
+   * `routine.resume` and `routine.delete`, which is why `notice` is here: the
+   * screen redrawing is the confirmation, and the notice is the line that says
+   * what the press did. It carries the engine's own sentence when a run refused
+   * to start, so *"it did not start"* and *"it did not start because the hourly
+   * budget is spent until 14:20"* are not the same answer.
+   *
+   * Unsolicited copies of this frame are not sent. The engine changes state on
+   * its own — a schedule fires, a budget recovers — and a push would be the
+   * right thing to add the day something on a phone is watching this screen
+   * while it happens. Nothing does yet, and a frame nobody subscribed to is a
+   * frame that cannot be tested by looking.
+   */
+  | { t: 'routines.rows'; routines: RoutineWire[]; notice?: string }
+  /**
+   * One routine's file, as text, to read.
+   *
+   * `file` is the file's own name and never its path — the rule this app applied
+   * to every panel on 2026-08-17, and the same reason `RoutineWire` carries no
+   * path either: a person editing a trigger is not asking where on the disk it
+   * lives, and the answer is a folder somebody else may be looking at.
+   *
+   * `readOnlyBecause` is **required**, not optional, and that is the whole point
+   * of it. The absence of a Save button is the thing a person asks about, and a
+   * field a host could leave out is a field a screen would have to invent an
+   * answer for. See {@link CAPABILITY.routines} for the argument it carries.
+   *
+   * `problem` is set when the file could not be read at all — it was deleted
+   * between the list and the tap, or the disk refused it. Every path ends in this
+   * frame rather than in silence, for the reason every serve in `server.ts`
+   * gives: a request that is never answered is a screen that spins over a machine
+   * that replied instantly.
+   */
+  | {
+      t: 'routine.text.rows'
+      id: string
+      file: string
+      text: string
+      /** True when the file was longer than one frame carries. */
+      truncated?: boolean
+      readOnlyBecause: string
+      problem?: string
     }
   /* ---- capability `browser.control` -------------------------------------- */
   | { t: 'browser.window.rows'; windows: MachineWindow[]; sessions: WindowSession[]; notice?: string }
@@ -6237,6 +6770,57 @@ export function parseClientMessage(raw: unknown): ParseResult {
       return parsed.t === 'browser.profile.use'
         ? { ok: true, message: { t: 'browser.profile.use', id: rawId } }
         : { ok: true, message: { t: 'browser.profile.clear', id: rawId } }
+    }
+    case 'routines':
+      // Carries nothing, like `list`. There is one routines folder per machine.
+      return { ok: true, message: { t: 'routines' } }
+    case 'routine.text':
+    case 'routine.run':
+    case 'routine.resume':
+    case 'routine.delete': {
+      /*
+       * One shape, four verbs: all of them are "the routine you already told me
+       * about, by name".
+       *
+       * Refused rather than cleaned, unlike the display strings above, and the
+       * reason is what this value is *for*: it is looked up, not drawn. A value
+       * that has been quietly repaired into something that matches a different
+       * routine is worse than a refusal, because the frame still succeeds — on
+       * the wrong routine. `server.ts` then looks the id up in the list this
+       * host itself produced and acts on the routine it found there, so nothing
+       * here ever reaches a path.
+       */
+      const rawId = parsed.id
+      if (typeof rawId !== 'string' || !ROUTINE_ID_RE.test(rawId)) {
+        return bad(`${parsed.t} naming a routine this build cannot address`)
+      }
+      return parsed.t === 'routine.text'
+        ? { ok: true, message: { t: 'routine.text', id: rawId } }
+        : parsed.t === 'routine.run'
+          ? { ok: true, message: { t: 'routine.run', id: rawId } }
+          : parsed.t === 'routine.resume'
+            ? { ok: true, message: { t: 'routine.resume', id: rawId } }
+            : { ok: true, message: { t: 'routine.delete', id: rawId } }
+    }
+    case 'routine.pause': {
+      const rawId = parsed.id
+      if (typeof rawId !== 'string' || !ROUTINE_ID_RE.test(rawId)) {
+        return bad('routine.pause naming a routine this build cannot address')
+      }
+      const message: Extract<ClientMessage, { t: 'routine.pause' }> = { t: 'routine.pause', id: rawId }
+      const rawReason = parsed.reason
+      if (rawReason !== undefined) {
+        // Stripped rather than refused, unlike the id beside it: this one is a
+        // sentence somebody typed and it ends up on a card the *machine's owner*
+        // reads later, so the rule is the one every display string here follows.
+        // An empty result is dropped rather than sent as `''`, because the host
+        // writes its own sentence for a hold with no reason and an empty string
+        // would replace it with nothing.
+        if (typeof rawReason !== 'string') return bad('routine.pause with an unusable reason')
+        const reason = label(rawReason, MAX_ROUTINE_PAUSE_REASON)
+        if (reason !== '') message.reason = reason
+      }
+      return { ok: true, message }
     }
     case 'panel.read': {
       const rawPanel = parsed.panel

@@ -53,7 +53,7 @@ import { homedir } from 'node:os'
 import { createServer as createPlainServer, type Server as LocalServer } from 'node:http'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Duplex } from 'node:stream'
-import { extname, join, normalize, resolve, sep } from 'node:path'
+import { basename, extname, join, normalize, resolve, sep } from 'node:path'
 // The one method of `IpcMain` this file uses, named rather than imported. That
 // is the whole of the "unpick ipcMain" step in HEADLESS.md: the headless daemon
 // registers these same handlers against a desk that keeps them in a Map, and its
@@ -119,6 +119,8 @@ import {
   PROTOCOL_VERSION,
   chunkOutput,
   parseClientMessage,
+  routineRows,
+  routineText,
   serialize,
   type BrowserFrameFrame,
   type BrowserInputFrame,
@@ -1288,6 +1290,52 @@ export interface RemoteEndpointOptions {
    * headless host over `HeadlessDriveHost` and `BrowserDrive`.
    */
   machineBrowser?: MachineBrowser
+
+  /**
+   * The routines this machine runs on its own, as a paired device may touch
+   * them.
+   *
+   * **Absent is the switch**, as everywhere here: `advertised` reads this
+   * object's presence to decide whether to offer `routines` at all, so a host
+   * with no routine engine never tells a phone it has any — which is the honest
+   * answer for the headless daemon, and `src/headless/host.ts` says so in as
+   * many words beside the same absence for the copilot.
+   *
+   * Structural rather than the engine's own `RoutineApi`, and deliberately so:
+   * this file is compiled into the headless bundle, and importing the engine
+   * would drag `picomatch`, the routines store and the copilot runner into a
+   * build that has none of them. The desktop passes `routines.api` and it
+   * satisfies this by shape.
+   *
+   * There is **no `saveText`** on it, and that is the interface stating a rule
+   * rather than forgetting a method. `routines/ipc.ts` marks that operation
+   * `human` — not a tier — because it writes chosen bytes into the one folder
+   * the copilot was moved out of, and a frame is not a window. Leaving it off
+   * the type means no handler here could reach it even by accident.
+   */
+  routines?: RemoteRoutines
+}
+
+/**
+ * Everything a paired device may do to this machine's routines.
+ *
+ * The read half of `RoutineApi` plus the three Act-tier verbs and the one Alter
+ * verb that names something that already exists. `create` and `update` are not
+ * here either: authoring a routine from a phone is the same argument as saving
+ * one, one field at a time.
+ */
+export interface RemoteRoutines {
+  /** Every routine with its state, in `RoutineView` shape. Narrowed by `routineRows`. */
+  list(): unknown[]
+  /** One routine's file, verbatim. */
+  text(id: string): { ok: true; id: string; text: string; file: string } | { ok: false; problems: string[] }
+  /** Run it now. `by` is what the action log records, and it is never the phone's to choose. */
+  run(id: string, by?: 'user' | 'copilot'): Promise<{ started: true; runId: string } | { started: false; reason: string }>
+  /** Hold it, beside its file rather than in it. */
+  pause(id: string, reason?: string): boolean
+  resume(id: string): boolean
+  /** Delete it. The file goes with it. */
+  remove(id: string): { ok: boolean; problems?: string[] }
 }
 
 export interface RemoteEndpoint {
@@ -2325,6 +2373,17 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
      */
     if (name === CAPABILITY.copilot) return options.copilot !== undefined
     /*
+     * And the routines beside it, on the same rule and off a **different**
+     * object.
+     *
+     * Reading `options.copilot` here instead would be the mistake this file
+     * warns about one branch up: the two are separable, a machine can hold a
+     * routine engine without holding a copilot a phone may talk to, and a
+     * capability advertised off something other than the thing that serves it is
+     * an advertisement that can outlive it.
+     */
+    if (name === CAPABILITY.routines) return options.routines !== undefined
+    /*
      * Same rule as every one above it: the thing that makes the feature possible
      * decides whether it is offered. A host with no window has nowhere to put a
      * page — the headless daemon and the demo box are both in that position —
@@ -2603,7 +2662,16 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     // guest is told the capability exists and is shown the ports its own grant
     // covers, which may be none; the narrowing is in the hub, where the same
     // list decides what is offered and what may be dialled.
-    return narrowed.filter((name) => name !== CAPABILITY.copilot && name !== CAPABILITY.web)
+    // And the routines with them, on the same question and in the same line.
+    // A routine is a prompt this machine runs with this machine's tools in this
+    // machine's folders, so *"the copilot is never shared"* covers the thing
+    // that starts one as squarely as it covers the conversation — and a guest
+    // that could press Run now would be doing the one thing the guest kind
+    // exists to prevent. Stripped rather than only refused, because no push
+    // frame could correct a welcome later.
+    return narrowed.filter(
+      (name) => name !== CAPABILITY.copilot && name !== CAPABILITY.web && name !== CAPABILITY.routines,
+    )
   }
 
   /**
@@ -4843,6 +4911,235 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
   const MAX_DEV_FOLDERS = 8
 
   /**
+   * Why there is no Save button on a routine a phone is looking at.
+   *
+   * One sentence, built once, sent on every `routine.text.rows` including the
+   * failures — because the absence of a control is the thing a person asks
+   * about, and a screen that had to invent the answer would eventually invent a
+   * different one. The argument behind it is `routines/ipc.ts`'s: `saveText` is
+   * marked `human` rather than given a tier, because writing chosen bytes into
+   * the routines folder is wider than the alter-tier `update` that goes through
+   * `routineFromDraft`'s header guard, and that folder was moved out of the
+   * copilot's reach for exactly this shape of hole. A frame is not a window.
+   */
+  const routinesAreReadOnly =
+    `Routines are written where they run. Change this one on the ${machineNoun(currentPlatform())} itself; ` +
+    'this is the file as it stands there.'
+
+  /**
+   * Everything a routines frame needs, or a refusal already sent.
+   *
+   * The same shape {@link copilotFor} has and for the same reason — one function
+   * rather than the checks written out at each of six verbs, because the failure
+   * mode of writing them six times is that the sixth one is missing the middle
+   * one.
+   *
+   * ## Why the gate is the copilot's and not a new one
+   *
+   * `copilotEligible` is the rule `copilot-access.ts` settled on, in his own
+   * words: *"if we are connecting as my device, copilot automatically comes. If
+   * we connect as guest then copilot don't come."* A routine is a prompt this
+   * machine runs, in this machine's folders, with this machine's tools — the
+   * copilot with a timer in front of it — so it is the same question, and asking
+   * it a second way would be inviting the two answers to disagree. It is read
+   * **here, on every frame**, never at hello, so a device whose kind changed
+   * lands on the next frame rather than the next reconnect.
+   *
+   * What is deliberately *not* required is an open copilot connection. A
+   * `copilot.hello` authorises a socket for the copilot's own conversation, and
+   * a machine can hold routines without holding a copilot a phone may talk to —
+   * so requiring one would make the routines of such a machine unreachable
+   * forever behind a frame it refuses outright. That is the shape this
+   * repository keeps recording under a different name: the mechanism written,
+   * the connection absent.
+   *
+   * The tier check `copilotFor` makes after this one is not repeated, because
+   * since 2026-08-19 it has exactly two answers and they are this same question:
+   * `CopilotAccess.granted` hands one of the owner's devices `FULL_TIERS` and
+   * everything else `NO_TIERS`. Asking twice would be asking once.
+   */
+  function routinesFor(connection: LiveConnection, deviceId: string): RemoteRoutines | null {
+    const routines = options.routines
+    if (!routines || !advertised.includes(CAPABILITY.routines)) {
+      // `unavailable`, not `unauthorized`: this device may ask, this build
+      // cannot answer, and the two have different remedies. Refused here as well
+      // as withheld from the advertisement, because `capabilitiesFor` decides
+      // what a client of ours draws and this decides what *any* client gets.
+      send(connection, {
+        t: 'error',
+        code: 'unavailable',
+        message: `This ${machineNoun(currentPlatform())} does not run routines.`,
+      })
+      return null
+    }
+    if (!copilotEligible(deviceId)) {
+      send(connection, {
+        t: 'error',
+        code: 'unauthorized',
+        message: 'Routines are not shared with guest devices.',
+      })
+      return null
+    }
+    return routines
+  }
+
+  /** This machine's routines as they stand, and one line about what just happened. */
+  function sendRoutines(connection: LiveConnection, routines: RemoteRoutines, notice?: string): void {
+    send(connection, {
+      t: 'routines.rows',
+      routines: routineRows(routines.list()),
+      ...(notice ? { notice } : {}),
+    })
+  }
+
+  /**
+   * Serve the routines card: the list, one file to read, and the four verbs.
+   *
+   * ## Every verb answers with the list
+   *
+   * Not with an outcome of its own. `panel.act` settled this shape and the
+   * argument is the same one: the screen redrawing **is** the confirmation, so
+   * there is nothing for a client to reconcile against a list it is holding, and
+   * a routine that changed state for a reason nobody pressed — a schedule that
+   * fired between the tap and the answer — is drawn correctly rather than
+   * merged. The `notice` is the one line saying what the press did, and it
+   * carries the engine's own sentence when a run refused to start.
+   *
+   * ## An id from a client never becomes a path
+   *
+   * This is the rule the whole function is arranged around. The id is looked up
+   * in the list **this host itself just produced**, and everything after that
+   * point uses `row.id` — a string that came out of the machine's own routines
+   * folder. So a frame naming a routine that is not there acts on nothing, and
+   * there is no arrangement of characters that reaches `readText`, `remove` or a
+   * `join` with a directory. The parser's charset check on the way in is a
+   * second fence in front of that, not the fence.
+   *
+   * A routine that has gone between the list and the tap is answered rather than
+   * dropped, for the reason every serve in this file gives: a request that is
+   * never answered is a screen that spins over a machine which replied instantly.
+   */
+  async function routinesServe(
+    connection: LiveConnection,
+    deviceId: string,
+    message: Extract<
+      ClientMessage,
+      { t: 'routines' | 'routine.text' | 'routine.run' | 'routine.pause' | 'routine.resume' | 'routine.delete' }
+    >,
+  ): Promise<void> {
+    const routines = routinesFor(connection, deviceId)
+    if (!routines) return
+
+    if (message.t === 'routines') {
+      sendRoutines(connection, routines)
+      return
+    }
+
+    const known = routineRows(routines.list())
+    const row = known.find((entry) => entry.id === message.id)
+    if (!row) {
+      const gone = 'That routine is not on this machine any more.'
+      if (message.t === 'routine.text') {
+        send(connection, {
+          t: 'routine.text.rows',
+          id: message.id,
+          file: '',
+          text: '',
+          readOnlyBecause: routinesAreReadOnly,
+          problem: gone,
+        })
+        return
+      }
+      // The fresh list is the useful half of this answer: whatever happened to
+      // the routine, the screen stops showing a row that is not there.
+      sendRoutines(connection, routines, gone)
+      return
+    }
+
+    if (message.t === 'routine.text') {
+      const read = routines.text(row.id)
+      if (!read.ok) {
+        send(connection, {
+          t: 'routine.text.rows',
+          id: row.id,
+          file: '',
+          text: '',
+          readOnlyBecause: routinesAreReadOnly,
+          // The store's own sentence, which names what it could not do. Passed
+          // through as written for the reason the panels pass theirs through:
+          // *"nothing to show"* and *"could not be shown"* are different facts.
+          problem: read.problems[0] ?? 'That routine could not be read.',
+        })
+        return
+      }
+      const body = routineText(read.text)
+      send(connection, {
+        t: 'routine.text.rows',
+        id: row.id,
+        // The bare name, never the path. Same rule as `RoutineWire`: a person
+        // reading a trigger is not asking where on the disk the file lives.
+        file: basename(read.file),
+        text: body.text,
+        ...(body.truncated ? { truncated: true } : {}),
+        readOnlyBecause: routinesAreReadOnly,
+      })
+      return
+    }
+
+    if (message.t === 'routine.run') {
+      /*
+       * Always `'user'`, and never a value off the frame.
+       *
+       * `registerRoutinesIpc` says the same thing about the same argument: this
+       * is a person pressing a button, and what the action log records is who
+       * caused the run. A field a client could set would be a client choosing
+       * how its own runs are attributed, which is the one thing that number is
+       * for.
+       */
+      const result = await routines.run(row.id, 'user')
+      if (!live.has(connection.id)) return
+      sendRoutines(
+        connection,
+        routines,
+        result.started
+          ? `${row.name} is running.`
+          : // The engine's own sentence. It is the only thing that knows about
+            // budgets, overlap policies and whether this build has a runner at
+            // all, and it knows them now rather than when the list was drawn.
+            result.reason,
+      )
+      return
+    }
+
+    if (message.t === 'routine.pause') {
+      const held = routines.pause(row.id, message.reason ?? 'Held from a paired device.')
+      sendRoutines(
+        connection,
+        routines,
+        held ? `${row.name} is on hold. Its file is untouched.` : `${row.name} could not be put on hold.`,
+      )
+      return
+    }
+
+    if (message.t === 'routine.resume') {
+      const armed = routines.resume(row.id)
+      sendRoutines(connection, routines, armed ? `${row.name} is armed again.` : `${row.name} could not be armed.`)
+      return
+    }
+
+    // `routine.delete`. The file goes with it, which is why the client is
+    // expected to have asked first — a confirmation is a thing a person sees,
+    // and that makes it the screen's rather than the protocol's.
+    const removed = routines.remove(row.id)
+    sendRoutines(
+      connection,
+      routines,
+      removed.ok ? `Deleted ${row.name}.` : (removed.problems?.[0] ?? `${row.name} could not be deleted.`),
+    )
+  }
+
+
+  /**
    * Look at, or start, one project's dev server.
    *
    * ## Where the folder grant is enforced — both times
@@ -5995,6 +6292,43 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
           console.error('[remote] a read failed:', error)
           if (!live.has(connection.id)) return
           send(connection, { t: 'error', code: 'unavailable', message: 'That could not be read on this machine.' })
+        })
+        return
+      case 'routines':
+      case 'routine.text':
+      case 'routine.run':
+      case 'routine.pause':
+      case 'routine.resume':
+      case 'routine.delete':
+        /*
+         * Listed one by one rather than caught by a prefix test, for the reason
+         * the copilot verbs below are: a verb added to this capability without
+         * somebody deciding what it does stops the build instead of falling
+         * through to a handler that assumes a read.
+         *
+         * Not awaited, for the reason `create` is not. `routine.run` starts an
+         * agent turn on this machine and the promise it hands back is settled by
+         * the engine's own budget and overlap checks — cheap, but not free — and
+         * the message loop is the socket's data handler. It must not stop reading
+         * for any of it.
+         *
+         * `connection.deviceId` is a `string` here rather than `string | null`:
+         * the guard at the top of this function returned for anything that had
+         * not said hello, and nothing between reassigns it. Passing it rather
+         * than letting the serve read it off the connection is the argument
+         * `create` makes — whose request this is comes from the authenticated
+         * socket, never from the frame.
+         */
+        void routinesServe(connection, connection.deviceId, message).catch((error) => {
+          console.error('[remote] a routines request failed:', error)
+          if (!live.has(connection.id)) return
+          send(connection, {
+            t: 'error',
+            code: 'unavailable',
+            // Not quoted. The error came off this machine's disk or out of a
+            // spawn on it, and this sentence is drawn on somebody's phone.
+            message: 'This machine’s routines could not be reached just now.',
+          })
         })
         return
       case 'folders.browse':
@@ -8093,6 +8427,14 @@ export interface RemoteIpcDeps {
   staleAgents?: RemoteEndpointOptions['staleAgents']
   machineBrowser?: RemoteEndpointOptions['machineBrowser']
   /**
+   * This machine's routines, forwarded for the reason the five above it are:
+   * every shell reaches the endpoint through this function, so an option the
+   * endpoint reads and this interface does not name is an option no host can
+   * ever pass — and the capability would then be advertised by nobody, however
+   * carefully the rest of it was wired.
+   */
+  routines?: RemoteEndpointOptions['routines']
+  /**
    * The live view of this machine's own browser, and the grant it rides on.
    *
    * Here for exactly the reason the five above are, and this pair is the case
@@ -8482,6 +8824,9 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
     ...(deps.storePanel ? { storePanel: deps.storePanel } : {}),
     ...(deps.staleAgents ? { staleAgents: deps.staleAgents } : {}),
     ...(deps.machineBrowser ? { machineBrowser: deps.machineBrowser } : {}),
+    // Absent stays absent, like every switch here: a host with no routine
+    // engine advertises no `routines` capability and a phone draws no screen.
+    ...(deps.routines ? { routines: deps.routines } : {}),
     // And the live view, on the same rule once more: absent is what stops
     // `watch` being advertised at all, so a host with no browser to cast draws
     // no viewer on anybody's phone rather than one that never receives a frame.

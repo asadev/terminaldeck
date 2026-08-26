@@ -1037,6 +1037,32 @@ export async function createHeadlessHost(
      * than the desktop's. That is an assembly, and it is a different lane's.
      */
     /*
+     * **No `routines` either, and it is the copilot's absence wearing a second
+     * name rather than a separate decision.**
+     *
+     * The engine itself would assemble here — `createRoutines` reaches nothing
+     * this bundle cannot have, and it swallows a missing Electron store rather
+     * than throwing. What it would produce is a folder of routines that can list
+     * themselves and can never fire. A routine's whole job is to run a prompt
+     * *through the copilot*, `RoutineEngine.runNow` refuses outright when there
+     * is no runner behind it — *"the copilot is not running in this build yet,
+     * so there is nothing for a routine to run through"* — and every routine on
+     * such a host reports itself `unarmed` with that sentence attached.
+     *
+     * So passing the layer would draw a Routines screen on somebody's phone in
+     * which every row is unarmed and every Run now comes back refused. That is
+     * the failure `capabilitiesFor` names in `server.ts` — *"a tab that refuses
+     * on every press is a worse answer than a client that never knew"* — and it
+     * is the same trade the copilot's own absence above is argued on.
+     *
+     * What it would take is not a line here. It is the assembly that paragraph
+     * describes: a `deck-control` this host can confirm an alter-tier call
+     * through with no window, and a copilot run over *this* core. Routines
+     * arrive the same day the copilot does, out of the same wiring, and until
+     * then the capability is not advertised and the phone is told nothing
+     * exists rather than shown something that cannot work.
+     */
+    /*
      * The git credential proxy, on every host except the public one.
      *
      * Withholding it is what stops the `credential` capability being advertised

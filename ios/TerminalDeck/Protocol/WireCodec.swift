@@ -704,6 +704,26 @@ enum WireCodec {
             }
             return .ok(.browserHandover(state), activity: [:])
 
+        case "routines.rows":
+            /*
+             * Never `.failed`. A machine with no routines is an answer rather
+             * than a malformed frame, and one bad row is dropped instead of
+             * discarding the list — the rule this codec keeps for every list it
+             * reads. See `RoutinesWire`.
+             */
+            return .ok(.routineRows(routines: WireCodec.routineRows(object),
+                                    notice: displayLine(object["notice"])),
+                       activity: [:])
+
+        case "routine.text.rows":
+            // The id is the one field worth refusing over: it says *which*
+            // routine this text belongs to, and two taps two seconds apart must
+            // not draw the second answer under the first heading.
+            guard let file = WireCodec.routineFile(object) else {
+                return .failed(reason: "routine.text.rows without a routine")
+            }
+            return .ok(.routineFile(file), activity: [:])
+
         default:
             return .failed(reason: "unknown message type")
         }
@@ -1185,6 +1205,32 @@ enum WireCodec {
             // in different places and a frame that forgot to say which is one
             // whose meaning the far side would be inventing.
             object = ["t": "browser.handover.done", "rid": rid, "window": window, "carryOn": carryOn]
+
+        /*
+         * The routines verbs. Note what is not in any of them, for the same
+         * reason the copilot's list says so: no file, no folder, no text to
+         * write. The only field this phone ever composes is `reason` — prose,
+         * for a person to read later — and `id`, which came off a row the machine
+         * itself sent in the last `routines.rows`. That is what makes them safe
+         * to send: the phone can only name a routine it was handed.
+         */
+        case .routines:
+            object = ["t": "routines"]
+        case let .routineText(id):
+            object = ["t": "routine.text", "id": id]
+        case let .routineRun(id):
+            object = ["t": "routine.run", "id": id]
+        case let .routinePause(id, reason):
+            var ask: [String: Any] = ["t": "routine.pause", "id": id]
+            // Omitted rather than sent empty. The machine writes its own sentence
+            // for a hold with no reason, and an empty string would replace that
+            // sentence with a blank on the card its owner reads later.
+            if let reason, !reason.isEmpty { ask["reason"] = String(reason.prefix(RoutinesWire.maxPauseReason)) }
+            object = ask
+        case let .routineResume(id):
+            object = ["t": "routine.resume", "id": id]
+        case let .routineDelete(id):
+            object = ["t": "routine.delete", "id": id]
         }
         guard let data = try? JSONSerialization.data(withJSONObject: object, options: []),
               let text = String(data: data, encoding: .utf8) else {
