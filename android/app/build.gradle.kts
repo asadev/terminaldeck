@@ -92,7 +92,7 @@ android {
         //    limits who can install this.
         minSdk = 26
         targetSdk = 35
-        versionCode = 4
+        versionCode = 5
         /**
          * **This number decides which host a server gets**, so it is not cosmetic and it is not
          * allowed to lag the repo.
@@ -109,7 +109,7 @@ android {
          * iOS carries `MARKETING_VERSION: "0.10.1"` in `ios/project.yml` for the same reason. When
          * one moves, this moves.
          */
-        versionName = "0.11.0"
+        versionName = "0.12.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
