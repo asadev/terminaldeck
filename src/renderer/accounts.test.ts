@@ -56,6 +56,7 @@ const SNAPSHOT: AccountsSnapshot = {
   defaultId: null,
   projectDefaults: { '/w/app': 'work' },
   inherited: [],
+    machine: "this-mac",
 }
 
 describe('parseSnapshot', () => {
@@ -519,7 +520,7 @@ describe('accountForFolder', () => {
   })
 
   it('has nothing to say when there are no accounts', () => {
-    expect(accountForFolder({ accounts: [], defaultId: null, projectDefaults: {}, inherited: [] }, '/w')).toBeNull()
+    expect(accountForFolder({ accounts: [], defaultId: null, projectDefaults: {}, inherited: [], machine: '' }, '/w')).toBeNull()
   })
 })
 

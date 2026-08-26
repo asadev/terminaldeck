@@ -79,6 +79,7 @@ const ACCOUNTS: AccountsSnapshot = {
   defaultId: null,
   projectDefaults: {},
   inherited: [],
+    machine: "this-mac",
 }
 
 const signedIn: SignInView = {
@@ -206,6 +207,7 @@ describe('AccountsView', () => {
       defaultId: null,
       projectDefaults: {},
       inherited: [],
+    machine: "this-mac",
     }
     // Nothing has answered about Codex, so it reaches the install rung — which
     // names the agent, and is therefore still different from the row above it.
@@ -618,6 +620,7 @@ describe('what the Accounts pane asks the rest of the app for', () => {
       defaultId: null,
       projectDefaults: {},
       inherited: [],
+    machine: "this-mac",
     }
     const html = render({ snapshot: threeSystems, providerRows: ALL_RUNNABLE })
     expect(html.split('settings-badge">Default').length - 1).toBe(1)

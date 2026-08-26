@@ -5,6 +5,7 @@ import type { ProviderId } from '@shared/types'
 // aliases, and this component's render tests import it directly.
 import { AGENT_CATALOG, type AgentEntry } from '../../shared/agent-catalog'
 import { useChipMenu } from './chip-menu'
+import { ThisMachine } from '../platform'
 import { isolationNotice } from '../components/ProfilePicker'
 import { HoverNote } from '../components/HoverNote'
 import { ProviderBadge } from '../components/ProviderBadge'
@@ -18,6 +19,7 @@ import {
   askForAddAccount,
   inheritedInstallNote,
   isSystemAccountId,
+  oneRowPerLogin,
   profileLoginLabel,
   renameAccount,
   signInStateSummary,
@@ -560,7 +562,6 @@ export function AccountChip({
    */
   const accounts = useAccounts(true, menu.open)
 
-  const rows: readonly AccountView[] = accounts.snapshot.accounts
 
   /**
    * Save the name being edited, then re-read the list.
@@ -659,6 +660,33 @@ export function AccountChip({
    */
   const namedAccount = sessionAccount ?? current ?? null
   const currentId = namedAccount?.id ?? fallback?.id ?? null
+
+  /*
+   * One row per login, and the machine they are logins on.
+   *
+   * > *"per machine all the accounts, and then one machine name, then all the
+   * > accounts under that machine in one drop-down… instead of showing two
+   * > different accounts."*
+   *
+   * `oneRowPerLogin` carries the whole argument for the merge and for which of
+   * two rows survives; `currentId` is handed over because the row a session is
+   * actually running as is the one that must never be the one dropped.
+   */
+  const rows: readonly AccountView[] = oneRowPerLogin(
+    accounts.snapshot.accounts,
+    accounts.signIn,
+    currentId,
+  )
+  /*
+   * The machine these logins are on, named.
+   *
+   * An account is a login held by an agent CLI **on one machine** — the app
+   * never holds the credential, so it cannot travel — which makes the machine
+   * part of what the list means rather than a caption on it. A host with no
+   * name of its own falls back to the platform's noun rather than to a blank
+   * heading or an invented name.
+   */
+  const machineName = accounts.snapshot.machine || ThisMachine()
   const listed = currentId === null ? null : rows.find((row) => row.id === currentId) ?? null
 
   /**
@@ -1109,11 +1137,16 @@ export function AccountChip({
                are two different promises — "run the session in front of you as"
                is not "open a new one as", and a screen reader hearing the wrong
                one has been told the wrong thing about what a press will do. */
-            aria-label={MENU_HEAD[switching ? 'switch' : 'start']}
+            aria-label={`${MENU_HEAD[switching ? 'switch' : 'start']} on ${machineName}`}
             style={{ left: menu.at.left, top: menu.at.top }}
           >
             <p className="folder-menu-head">
-              {MENU_HEAD[switching ? 'switch' : 'start']}
+              {/* The machine first and the rows under it, which is the shape he
+                  asked for and is also the honest one: these are the logins
+                  *this computer's* agents hold, and a list of accounts with no
+                  machine on it is a list that cannot say whose logins they are
+                  the moment a second machine is in the window. */}
+              {machineName}
               {/*
                 Why some rows below cannot be picked — behind the dot, not over
                 them.

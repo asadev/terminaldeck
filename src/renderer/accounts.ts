@@ -157,6 +157,19 @@ export interface AccountsSnapshot {
   projectDefaults: Record<string, string>
   /** Nearly always empty. See {@link inheritedInstallNote}. */
   inherited: InheritedInstallView[]
+  /**
+   * The computer these logins are **on**, or empty when it has no name.
+   *
+   * > *"per machine all the accounts, and then one machine name, then all the
+   * > accounts under that machine in one drop-down."*
+   *
+   * An account is a login held by an agent CLI **on one machine** — the
+   * credential is in that machine's keychain or in a file in its own home, and
+   * this app never holds it — so which machine a list of accounts belongs to is
+   * part of what the list means rather than decoration on it. Empty is a real
+   * answer and a caller substitutes its own noun; see `thisMachineName`.
+   */
+  machine: string
 }
 
 export const EMPTY_SNAPSHOT: AccountsSnapshot = {
@@ -164,6 +177,7 @@ export const EMPTY_SNAPSHOT: AccountsSnapshot = {
   defaultId: null,
   projectDefaults: {},
   inherited: [],
+  machine: '',
 }
 
 /** Mirrors `SignInState` in `src/main/profiles-signin.ts`. */
@@ -272,6 +286,9 @@ export function parseSnapshot(value: unknown): AccountsSnapshot {
     defaultId: typeof raw?.defaultProfileId === 'string' ? raw.defaultProfileId : null,
     projectDefaults,
     inherited,
+    // Absent on a payload from a build before the field existed, which reads as
+    // "no name" and draws the caller's own noun rather than a blank heading.
+    machine: typeof raw?.machine === 'string' ? raw.machine : '',
   }
 }
 
@@ -878,6 +895,152 @@ export function profileLoginLabel(
       ? undefined
       : AGENT_CATALOG[account.provider]?.label
   return agent ? `Your own ${agent} install` : 'Your own install'
+}
+
+/**
+ * The account on this machine that already holds a login, or null.
+ *
+ * > *"if we try to add again the same account either it should refuse or it
+ * > should just override."*
+ *
+ * Refusing is what this feeds, and it is the cheaper half of the pair: the
+ * override would mean signing a directory in a second time to reach a login the
+ * machine already has, which is the cost the whole rule exists to remove. On
+ * macOS the credential is filed under a keychain name derived from the config
+ * directory, so a second directory is *always* a second sign-in — an override
+ * that produced no new capability and one more login to do.
+ *
+ * Matched on the **agent as well as the address**, because an account belongs to
+ * one agent: the same address can be a Claude login and a ChatGPT login, and
+ * those are two accounts rather than one seen twice.
+ *
+ * Compared case-insensitively and trimmed, because this is an address somebody
+ * types into a field and `Asad@…` and `asad@…` are one login to every agent
+ * that holds one.
+ *
+ * It looks at what an account is **named** as well as what it is signed in as.
+ * A directory added a minute ago and not yet signed into has no login to read,
+ * and the name is the address that was typed at it — so a second Add of the
+ * same address while the first is still signing in is caught rather than
+ * waved through into the state this is here to prevent.
+ */
+export function accountHoldingLogin(
+  accounts: readonly AccountView[],
+  signIn: Readonly<Record<string, SignInFacts | undefined>>,
+  provider: ProviderId,
+  address: string,
+): AccountView | null {
+  const wanted = address.trim().toLowerCase()
+  if (wanted === '') return null
+  for (const account of accounts) {
+    if (account.provider !== provider) continue
+    const login = namedLogin(account, signIn[account.id])
+    if (login !== null && login.trim().toLowerCase() === wanted) return account
+    // The name it was added under, for the moment before a login exists to read.
+    if (!isGeneratedAccount(account) && account.name.trim().toLowerCase() === wanted) return account
+  }
+  return null
+}
+
+/**
+ * One row per login, on a list that may hold the same login twice.
+ *
+ * > *"we should not have an account twice."*
+ * > *"if one login can work in all folders so it should not be folder based…
+ * > we need to keep it hard only one login of one account."*
+ *
+ * ## How a list comes to hold one login twice
+ *
+ * An account **is a config directory** — that is the whole mechanism, and
+ * `main/profiles.ts` opens with the measurement: point an agent CLI at another
+ * directory and it is another login. Two directories signed in to the *same*
+ * login are therefore two accounts by the app's own definition and one account
+ * by every definition a person has. His had exactly that shape: the machine's
+ * own Claude install, and a profile added on 2026-08-14, named after the same
+ * address, never used for a single session.
+ *
+ * It is not a naming accident either. `profileLoginLabel`'s first rung is *the
+ * address the agent's own CLI named*, so both rows print the address whatever
+ * their stored names are — which is right, and which is what makes two
+ * directories on one login indistinguishable on screen.
+ *
+ * ## Why merging is the honest answer rather than a cosmetic one
+ *
+ * Because a second directory on a login you already have **buys nothing and
+ * costs a sign-in**: on macOS the credential is filed under a keychain name
+ * derived from the directory (`main/profiles.ts`, point 3), so a new directory
+ * is always a fresh login even for an account already signed in. There is no
+ * situation where the same login in two directories does something one cannot —
+ * folders do not need their own login, and machines cannot share one.
+ *
+ * So the list shows the login once. Nothing is deleted here: the other
+ * directory is still on disk and still signed in, and this is a rendering rule
+ * rather than a migration.
+ *
+ * ## Which of the two survives
+ *
+ * In this order, and each rung is a real case:
+ *
+ *  1. **The one in force**, when `prefer` names it. Dropping the row a session
+ *     is actually running as would take the tick off the menu, which is the
+ *     strongest claim it makes.
+ *  2. **The machine's own install.** It is the account every fallback chain
+ *     ends on, it cannot be deleted, and it is the one that keeps working when
+ *     a profile directory is cleared.
+ *  3. **The one that has actually been used**, most recently, so a merge never
+ *     hides history behind a directory nobody has run anything in.
+ *
+ * Rows whose login is **not known** are never merged. `namedLogin` is null for
+ * an install nobody has signed into and for Codex, whose CLI does not print an
+ * address at all by design — and two rows this list cannot name are two rows it
+ * cannot prove are one.
+ */
+export function oneRowPerLogin(
+  accounts: readonly AccountView[],
+  signIn: Readonly<Record<string, SignInFacts | undefined>>,
+  prefer?: string | null,
+): AccountView[] {
+  const kept = new Map<string, AccountView>()
+  const order: string[] = []
+  const unnamed: AccountView[] = []
+
+  for (const account of accounts) {
+    const login = namedLogin(account, signIn[account.id])
+    if (login === null) {
+      unnamed.push(account)
+      continue
+    }
+    // Keyed on the agent as well as the address: one person's Claude login and
+    // their ChatGPT login can carry the same address and are not one account —
+    // an account belongs to one agent, and handing a Codex home to Claude Code
+    // is a broken session rather than a login.
+    const key = `${account.provider ?? ''}\u0000${login}`
+    const held = kept.get(key)
+    if (held === undefined) {
+      kept.set(key, account)
+      order.push(key)
+      continue
+    }
+    kept.set(key, betterRow(held, account, prefer ?? null))
+  }
+
+  // The machine's order, with each login at the position its first row had, and
+  // the rows this list cannot name after them. Re-sorting would move rows under
+  // somebody's pointer for a reason they cannot see.
+  const merged = order.map((key) => kept.get(key)).filter((row): row is AccountView => row !== undefined)
+  return [...merged, ...unnamed]
+}
+
+/** Which of two rows for one login the list keeps. See {@link oneRowPerLogin}. */
+function betterRow(held: AccountView, next: AccountView, prefer: string | null): AccountView {
+  if (prefer !== null) {
+    if (held.id === prefer) return held
+    if (next.id === prefer) return next
+  }
+  if (held.system !== next.system) return held.system ? held : next
+  const heldUsed = held.lastUsedAt ?? -1
+  const nextUsed = next.lastUsedAt ?? -1
+  return nextUsed > heldUsed ? next : held
 }
 
 /**

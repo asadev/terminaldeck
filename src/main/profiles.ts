@@ -62,7 +62,7 @@ import type { IpcMain, IpcMainInvokeEvent } from 'electron'
 import type { ProviderId } from '../shared/types'
 import { writeFileAtomic } from './atomic-write'
 import { profileIsolation, type ProfileIsolation } from './platform/credential-store'
-import { currentPlatform, type Platform } from './platform/host'
+import { currentPlatform, thisMachineName, type Platform } from './platform/host'
 import { userDataDir } from './platform/paths'
 import {
   ACCOUNT_STRATEGIES,
@@ -1283,6 +1283,23 @@ export interface ProfilesSnapshot {
    * something true to say about why that account is the one it is naming.
    */
   inherited: InheritedInstall[]
+  /**
+   * The computer these accounts are logins **on**.
+   *
+   * > *"in the drop-down it should show the machine name first then the account
+   * > names… per machine all the accounts, and then one machine name, then all
+   * > the accounts under that machine in one drop-down."*
+   *
+   * It is on the snapshot rather than fetched separately because an account
+   * list and the machine it belongs to are one fact: a picker that had to ask
+   * twice could draw somebody else's logins under this machine's name for a
+   * frame, which is the one mistake a heading like that must never make.
+   *
+   * Empty where `thisMachineName` has nothing — a host with no name is real —
+   * and the caller substitutes its own noun rather than inventing one. See that
+   * function for why it never guesses.
+   */
+  machine: string
 }
 
 /**
@@ -1298,6 +1315,7 @@ function snapshot(provider: ProviderId | null = null): ProfilesSnapshot {
     defaultProfileId: state.defaultProfileId,
     projectDefaults: { ...state.projectDefaults },
     inherited: inheritedSystemInstalls(),
+    machine: thisMachineName(),
   }
 }
 

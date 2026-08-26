@@ -720,7 +720,7 @@ describe('running this session as somebody else', () => {
     expect(rows.slice(0, 1200)).toMatch(/switching && session && onSwitchAccount/)
   })
 
-  it('heads the menu with one word, and the same word to a screen reader', () => {
+  it('heads the menu with the machine, and says so to a screen reader too', () => {
     /*
      *   > *"So run them as is not the best way. Maybe you can say primary
      *   > account, choose primary account or this kind of words, or default
@@ -735,12 +735,28 @@ describe('running this session as somebody else', () => {
      * A sighted user reading one thing while a screen reader announces another
      * has been given two accounts of one press, so the two still come from one
      * constant.
+     *
+     * ## And the machine, since 2026-08-26
+     *
+     *   > *"in the drop-down it should show the machine name first then the
+     *   > account names… per machine all the accounts, and then one machine
+     *   > name, then all the accounts under that machine in one drop-down."*
+     *
+     * The heading on screen is the machine, because that is the grouping he
+     * asked for and because an account is a login held by an agent CLI on one
+     * machine — the app never holds the credential, so it cannot travel. The
+     * accessible name keeps the noun *and* gains the machine, so the two are
+     * still one sentence rather than two different promises.
      */
     expect(MENU_HEAD.start).toBe('Account')
     expect(MENU_HEAD.switch).toBe('Account')
     expect(MENU_HEAD.start).not.toMatch(/run|as$/i)
-    expect(source).toContain("aria-label={MENU_HEAD[switching ? 'switch' : 'start']}")
-    expect(source).toContain("{MENU_HEAD[switching ? 'switch' : 'start']}")
+    expect(source).toContain(
+      "aria-label={`${MENU_HEAD[switching ? 'switch' : 'start']} on ${machineName}`}",
+    )
+    // The machine's own name where it has one, and the platform's noun where it
+    // does not — never a blank heading and never an invented name.
+    expect(source).toContain("accounts.snapshot.machine || ThisMachine()")
   })
 
   it('says nothing at all about a switch, because there is nothing left to warn about', () => {

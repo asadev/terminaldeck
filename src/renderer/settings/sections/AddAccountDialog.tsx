@@ -7,7 +7,12 @@ import {
   chosenAccountProvider,
   type AccountProviderRow,
 } from '../../components/ProviderPicker'
-import { MAX_ACCOUNT_NAME_LENGTH } from '../../accounts'
+import {
+  accountHoldingLogin,
+  MAX_ACCOUNT_NAME_LENGTH,
+  type AccountView,
+  type SignInFacts,
+} from '../../accounts'
 import { agentProblem } from './account-agent'
 import './AddAccountDialog.css'
 
@@ -113,6 +118,24 @@ export interface AddAccountDialogProps {
    * unchanged behaviour for the pane's own button and for the session chip.
    */
   provider?: ProviderId | null
+  /**
+   * The logins this machine already holds, so a second one is refused rather
+   * than made.
+   *
+   * > *"if we try to add again the same account either it should refuse or it
+   * > should just override."*
+   *
+   * Refused, and here rather than after the sign-in, because the address is
+   * typed *in this dialog* — the one moment the answer is known before a
+   * directory exists and a keychain entry has been made for it. See
+   * `accountHoldingLogin` for why an override would be the more expensive half
+   * of his pair rather than the friendlier one.
+   *
+   * Optional so that a caller with nothing to compare against — a board, a test
+   * — behaves exactly as this dialog did before the rule.
+   */
+  accounts?: readonly AccountView[]
+  signIn?: Readonly<Record<string, SignInFacts | undefined>>
   onClose(): void
 }
 
@@ -150,6 +173,8 @@ export function AddAccountSteps({
   busy,
   onSignIn,
   provider = null,
+  accounts = [],
+  signIn = {},
   onClose,
 }: AddAccountDialogProps) {
   const [draft, setDraft] = useState('')
@@ -201,6 +226,15 @@ export function AddAccountSteps({
 
   const chosen = chosenAccountProvider(providerRows, clicked)
   const problem = agentProblem(providerRows, chosen?.id ?? null)
+  /*
+   * The account this machine already has for the address being typed, or null.
+   *
+   * Live against the field rather than checked on submit, so the button is
+   * already refused when the sentence under it appears — a press that failed
+   * would be a sign-in flow opened and thrown away, which is a terminal on
+   * screen and a keychain entry for nothing.
+   */
+  const already = chosen ? accountHoldingLogin(accounts, signIn, chosen.id, draft) : null
 
   const submit = useCallback(
     (event: FormEvent) => {
@@ -214,9 +248,10 @@ export function AddAccountSteps({
       // and letting the session die is how the 2026-08-16 recording ended with
       // five orphan rows in the sidebar and nothing cleaned up.
       if (problem) return
+      if (already) return
       onSignIn(email, chosen.id)
     },
-    [chosen, draft, onSignIn, problem],
+    [already, chosen, draft, onSignIn, problem],
   )
 
   if (!open) return null
@@ -327,6 +362,18 @@ export function AddAccountSteps({
         {/* The agent is installed nowhere this app can start it. Said here,
             before the button is pressed, rather than in a terminal
             afterwards. */}
+        {/*
+          One login, one account. The sentence names the login rather than
+          describing the rule, because what a person needs here is *you already
+          have this* and not a paragraph about config directories.
+        */}
+        {already && (
+          <p className="add-account-warn" role="status" data-kind="already">
+            This {chosen?.label ?? 'agent'} login is already on this computer. Use it from the
+            account menu — a second copy would only be another sign-in for the same login.
+          </p>
+        )}
+
         {problem && (
           <p className="add-account-warn" role="status">
             {problem.text}
@@ -364,7 +411,9 @@ export function AddAccountSteps({
           <button
             type="submit"
             className="add-account-go"
-            disabled={busy || draft.trim() === '' || !chosen || !onSignIn || problem !== null}
+            disabled={
+              busy || draft.trim() === '' || !chosen || !onSignIn || problem !== null || already !== null
+            }
           >
             {busy ? 'Opening…' : 'Sign in'}
           </button>

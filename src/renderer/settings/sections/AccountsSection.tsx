@@ -1044,6 +1044,10 @@ export function AccountsView({
         provider={addingFor}
         providerRows={providerRows}
         busy={busy}
+        /* What this machine already holds, so a second copy of a login is
+           refused in the dialog rather than made and then merged in the list. */
+        accounts={snapshot.accounts}
+        signIn={signIn}
         onSignIn={
           onSignInNew
             ? (name, provider) => {
