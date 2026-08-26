@@ -110,6 +110,7 @@ import {
     type DevServerReport,
     type ProtocolErrorCode,
     type RemoteSession,
+    type RoutineWire,
     type ServerMessage,
     type ServerSettingWire,
 } from '../../src/main/remote/protocol'
@@ -2216,6 +2217,147 @@ class Channel {
                 }
                 return
             }
+
+            /* ---- capability `routines` --------------------------------- */
+            case 'routines':
+            case 'routine.text':
+            case 'routine.run':
+            case 'routine.pause':
+            case 'routine.resume':
+            case 'routine.delete': {
+                /*
+                 * Served here for the reason the copilot's files are, one block
+                 * up: **this file sends `CAPABILITIES` verbatim**, and
+                 * `CAPABILITY.routines` has been on that list since the wire
+                 * landed. So this stand-in has been *advertising* routines and
+                 * answering none of them, which is precisely the defect
+                 * `CopilotLink.isImplemented` exists to catch — a phone drawing
+                 * a card that spins forever, which in a screenshot is
+                 * indistinguishable from a card that is simply loading.
+                 *
+                 * The gate is the **device kind**, not a copilot tier. Routines
+                 * are not in `COPILOT_FRAME_TIER` and must not be looked up
+                 * there: the host asks one question about them — is this one of
+                 * his own devices — which here is the same question
+                 * `copilotField` answers by writing the object at all.
+                 */
+                if (copilotOffer === null) {
+                    return this.send({
+                        t: 'error',
+                        code: 'unauthorized',
+                        message: `This device has not been given the routines on this ${hostNoun()}. `
+                            + 'They go where the copilot goes.',
+                    })
+                }
+                switch (message.t) {
+                    case 'routines':
+                        return this.send({ t: 'routines.rows', routines: routineRows() })
+                    case 'routine.text': {
+                        const held = harnessRoutines.get(message.id)
+                        // Every path ends in this frame rather than in silence —
+                        // the rule every serve in `server.ts` keeps, because a
+                        // request that is never answered is a screen spinning
+                        // over a machine that replied instantly.
+                        return this.send({
+                            t: 'routine.text.rows',
+                            id: message.id,
+                            file: held ? `${message.id}.md` : '',
+                            text: held?.text ?? '',
+                            readOnlyBecause: ROUTINE_READ_ONLY,
+                            ...(held === undefined
+                                ? { problem: 'That routine is not on this machine any more.' }
+                                : {}),
+                        })
+                    }
+                    case 'routine.run': {
+                        const held = harnessRoutines.get(message.id)
+                        if (!held) return this.send({ t: 'routines.rows', routines: routineRows() })
+                        if (held.running || held.broken) {
+                            /*
+                             * The refusal arrives as a **notice on the redraw**,
+                             * not as an error frame, and that is the shape the
+                             * phone is built against: a list drawn a minute ago
+                             * must not grey out a button over a budget that has
+                             * since come back, so `canRun` carries only what is
+                             * certain and everything else is the engine's answer
+                             * at the moment of the press.
+                             */
+                            return this.send({
+                                t: 'routines.rows',
+                                routines: routineRows(),
+                                notice: held.running
+                                    ? `${held.name} is already running.`
+                                    : `${held.name} could not be read, so there is nothing to run.`,
+                            })
+                        }
+                        held.running = true
+                        held.stale = false
+                        this.send({
+                            t: 'routines.rows',
+                            routines: routineRows(),
+                            notice: `${held.name} is running.`,
+                        })
+                        // It finishes on its own a moment later, unsolicited, so
+                        // a screen driven against this stand-in shows the badge
+                        // move from `running now` to a finished run rather than
+                        // sitting on the first frame for ever.
+                        setTimeout(() => {
+                            held.running = false
+                            held.lastRunAt = Date.now()
+                            held.lastOutcome = 'ok'
+                            held.lastError = null
+                            held.consecutiveFailures = 0
+                            held.nextDueAt = Date.now() + 3_600_000
+                            this.send({
+                                t: 'routines.rows',
+                                routines: routineRows(),
+                                notice: `${held.name} finished.`,
+                            })
+                        }, 1500).unref()
+                        return
+                    }
+                    case 'routine.pause': {
+                        const held = harnessRoutines.get(message.id)
+                        if (!held) return this.send({ t: 'routines.rows', routines: routineRows() })
+                        // The file is not touched. A hold is engine state kept
+                        // beside it, which is the whole reason this verb is
+                        // offered from a phone when `saveText` is not.
+                        held.paused = true
+                        held.pausedUntil = null
+                        return this.send({
+                            t: 'routines.rows',
+                            routines: routineRows(),
+                            notice: `${held.name} is on hold. Its file is untouched.`,
+                        })
+                    }
+                    case 'routine.resume': {
+                        const held = harnessRoutines.get(message.id)
+                        if (!held) return this.send({ t: 'routines.rows', routines: routineRows() })
+                        held.paused = false
+                        held.pausedUntil = null
+                        // The failure run goes with the hold, matching the
+                        // engine: a routine somebody deliberately let go again
+                        // starts its count from nothing, or the sixth failure
+                        // would arrive on the first attempt.
+                        held.consecutiveFailures = 0
+                        return this.send({
+                            t: 'routines.rows',
+                            routines: routineRows(),
+                            notice: `${held.name} is armed again.`,
+                        })
+                    }
+                    case 'routine.delete': {
+                        const held = harnessRoutines.get(message.id)
+                        harnessRoutines.delete(message.id)
+                        return this.send({
+                            t: 'routines.rows',
+                            routines: routineRows(),
+                            notice: held ? `Deleted ${held.name}.` : 'It was already gone.',
+                        })
+                    }
+                }
+                return
+            }
         }
     }
 }
@@ -2343,6 +2485,321 @@ function harnessRow(id: string, held: HarnessFile): CopilotFileRow {
         modifiedAt: held.modifiedAt,
         writable: held.writable,
     }
+}
+
+/* -------------------------------------------------------------------------- */
+/* The routines, in memory                                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * What this stand-in keeps instead of a routines folder on disk.
+ *
+ * Six routines, and their names are **his** — *"check the work before it counts
+ * as done", "what happened overnight", "weekly", "look at what you remember",
+ * "uncommitted work left behind", "pick up to-do"* — because the whole point of
+ * driving a screen against this file is looking at the thing he described rather
+ * than at six rows of lorem.
+ *
+ * They are deliberately in six *different* states. Every interesting thing about
+ * the Routines card is a state that looks like another one: a routine the engine
+ * stopped after five failures and a routine nobody has triggered lately are the
+ * same row in any list showing a name and a time, and only one of them is
+ * somebody's problem. A stand-in where everything is healthy proves that a list
+ * renders and nothing else.
+ *
+ * Nothing here composes a path, matching the frames: a routine's file name is
+ * its id plus `.md`, the folder it *watches* is a fact on the row, and the
+ * routine file's own location never crosses.
+ */
+interface HarnessRoutine {
+    name: string
+    /** The first line of its prompt — what it is for, in its own words. */
+    purpose: string
+    /** The `when:` lines as the engine would serialise them. Empty is a real and
+     *  worrying state: a prompt nothing will ever fire. */
+    schedule: string
+    folder: string | null
+    /** Its file's own `enabled:` line. The one thing a hold must never rewrite. */
+    enabled: boolean
+    /** Held by the engine, beside the file. This is what Hold and Let it run move. */
+    paused: boolean
+    /** When a held routine comes back on its own. Null when a person has to act. */
+    pausedUntil: number | null
+    running: boolean
+    /** Its file did not parse: no prompt, no trigger, nothing to run. */
+    broken: boolean
+    problems: string[]
+    /** Quiet for longer than it said its silences are allowed to be. */
+    stale: boolean
+    lastRunAt: number | null
+    lastOutcome: 'ok' | 'failed' | null
+    lastError: string | null
+    nextDueAt: number | null
+    missedWhileClosed: number
+    consecutiveFailures: number
+    refusedCalls: number
+    text: string
+}
+
+/**
+ * The sentence that stands where the Mac draws a Save.
+ *
+ * Required on the wire rather than optional, and this is why: the absence of a
+ * Save is the thing a person asks about, and a host that could leave the field
+ * out is a host a screen would have to invent an answer for. `routines/ipc.ts`
+ * marks the desktop's own `saveText` **`human`** rather than giving it a
+ * permission tier, because writing chosen bytes into the routines folder is
+ * wider than the alter tier — and that folder was moved out of the copilot's
+ * reach for exactly that hole.
+ */
+const ROUTINE_READ_ONLY =
+    'A routine is written where it runs. This is the file as it stands on that machine — '
+    + 'nothing on this connection writes one back.'
+
+const MINUTE = 60_000
+const HOUR = 60 * MINUTE
+const DAY = 24 * HOUR
+
+const harnessRoutines = new Map<string, HarnessRoutine>([
+    ['check-the-work', {
+        name: 'Check the work before it counts as done',
+        purpose: 'Read the diff on the branch and say what is not finished.',
+        schedule: 'when a session finishes',
+        folder: '~/Projects/terminaldeck',
+        enabled: true,
+        paused: false,
+        pausedUntil: null,
+        running: false,
+        broken: false,
+        problems: [],
+        stale: false,
+        lastRunAt: Date.now() - 20 * MINUTE,
+        lastOutcome: 'ok',
+        lastError: null,
+        nextDueAt: Date.now() + 40 * MINUTE,
+        missedWhileClosed: 0,
+        consecutiveFailures: 0,
+        refusedCalls: 0,
+        text: '---\nwhen: session.finished\nfolder: ~/Projects/terminaldeck\nenabled: yes\n---\n\n'
+            + 'Read the diff on the branch and say what is not finished.\n',
+    }],
+    ['overnight', {
+        name: 'What happened overnight',
+        purpose: 'Summarise every session that ran while nobody was here.',
+        schedule: 'every day at 08:00',
+        folder: '~/Projects',
+        enabled: true,
+        // The one case the Mac's card calls out above everything else about a
+        // routine: switched off by its own failures, and silent about it in any
+        // list that draws a name and a time.
+        paused: true,
+        pausedUntil: null,
+        running: false,
+        broken: false,
+        problems: [],
+        stale: false,
+        lastRunAt: Date.now() - 9 * HOUR,
+        lastOutcome: 'failed',
+        lastError: 'the agent exited before it answered',
+        nextDueAt: null,
+        missedWhileClosed: 0,
+        consecutiveFailures: 5,
+        refusedCalls: 0,
+        text: '---\nwhen: daily at 08:00\nfolder: ~/Projects\nenabled: yes\n---\n\n'
+            + 'Summarise every session that ran while nobody was here.\n',
+    }],
+    ['weekly', {
+        name: 'Weekly',
+        purpose: 'What moved this week, and what did not.',
+        schedule: 'every Monday at 09:00',
+        folder: null,
+        // Off in its **file**, which is the state a switch must never silently
+        // rewrite — so the phone gets `canArm: false` and the sentence saying
+        // where the line is.
+        enabled: false,
+        paused: false,
+        pausedUntil: null,
+        running: false,
+        broken: false,
+        problems: [],
+        stale: false,
+        lastRunAt: Date.now() - 8 * DAY,
+        lastOutcome: 'ok',
+        lastError: null,
+        nextDueAt: null,
+        missedWhileClosed: 0,
+        consecutiveFailures: 0,
+        refusedCalls: 0,
+        text: '---\nwhen: weekly on monday at 09:00\nenabled: no\n---\n\n'
+            + 'What moved this week, and what did not.\n',
+    }],
+    ['what-you-remember', {
+        name: 'Look at what you remember',
+        purpose: 'Re-read the memory files and drop anything that stopped being true.',
+        schedule: 'every day at 23:00',
+        folder: '~/ClaudeAsad',
+        enabled: true,
+        paused: false,
+        pausedUntil: null,
+        running: false,
+        broken: false,
+        problems: [],
+        // Quiet longer than it said its silences may be. The one derived state,
+        // and the useful one: this looks healthy in every other column.
+        stale: true,
+        lastRunAt: Date.now() - 3 * DAY,
+        lastOutcome: 'ok',
+        lastError: null,
+        nextDueAt: Date.now() + 5 * HOUR,
+        missedWhileClosed: 0,
+        consecutiveFailures: 0,
+        // An unattended run cannot answer a confirmation, so an alter-tier call
+        // is refused at the boundary rather than hanging on a dialog nobody will
+        // see. The count is the only answer to *it ran and nothing happened*.
+        refusedCalls: 3,
+        text: '---\nwhen: daily at 23:00\nfolder: ~/ClaudeAsad\nquiet-for-at-most: 1d\n---\n\n'
+            + 'Re-read the memory files and drop anything that stopped being true.\n',
+    }],
+    ['uncommitted-work', {
+        name: 'Uncommitted work left behind',
+        purpose: '',
+        schedule: '',
+        folder: '~/Projects',
+        enabled: true,
+        paused: false,
+        pausedUntil: null,
+        running: false,
+        broken: true,
+        problems: ['Its `when:` line names a trigger this build does not have.'],
+        stale: false,
+        lastRunAt: null,
+        lastOutcome: null,
+        lastError: null,
+        nextDueAt: null,
+        missedWhileClosed: 0,
+        consecutiveFailures: 0,
+        refusedCalls: 0,
+        text: '---\nwhen: whenever-i-feel-like-it\nfolder: ~/Projects\n---\n\n'
+            + 'List every folder with work that was never committed.\n',
+    }],
+    ['pick-up-todo', {
+        name: 'Pick up to-do',
+        purpose: 'Take the next unticked line and do it.',
+        schedule: 'every 8 hours',
+        folder: '~/Projects/terminaldeck',
+        enabled: true,
+        paused: false,
+        pausedUntil: null,
+        running: false,
+        broken: false,
+        problems: [],
+        stale: false,
+        lastRunAt: null,
+        lastOutcome: null,
+        lastError: null,
+        nextDueAt: Date.now() + 2 * HOUR,
+        // Times a schedule came due while the machine's app was not running.
+        missedWhileClosed: 2,
+        consecutiveFailures: 0,
+        refusedCalls: 0,
+        text: '---\nwhen: every 8h\nfolder: ~/Projects/terminaldeck\n---\n\n'
+            + 'Take the next unticked line and do it.\n',
+    }],
+])
+
+/**
+ * Which state a routine is in, in the engine's own order of precedence.
+ *
+ * Written as one ordered chain rather than as a set of flags on the row for the
+ * reason the client refuses to re-derive any of this: two places deciding *is
+ * this armed* is two places that will eventually disagree, and the disagreement
+ * that matters is the one where a routine looks armed and is not.
+ */
+function routineState(held: HarnessRoutine): RoutineWire['state'] {
+    if (held.running) return 'running'
+    if (held.broken) return 'broken'
+    if (!held.enabled) return 'disabled'
+    if (held.paused) return 'paused'
+    if (held.stale) return 'stale'
+    if (held.schedule === '') return 'unarmed'
+    return 'armed'
+}
+
+/** The engine's one sentence saying why the state is what it is, or null. */
+function routineReason(held: HarnessRoutine, state: RoutineWire['state']): string | null {
+    switch (state) {
+        case 'disabled':
+            return 'It is off in its own file.'
+        case 'broken':
+            return 'Its front matter did not parse, so it has no prompt and no trigger.'
+        case 'paused':
+            return held.consecutiveFailures > 0
+                ? `Stopped after ${held.consecutiveFailures} failures in a row.`
+                : 'Somebody put it on hold.'
+        case 'stale':
+            return 'It said its silences should not run past a day, and it has been quiet for three.'
+        case 'unarmed':
+            return 'It has no trigger, so nothing will ever fire it.'
+        default:
+            return null
+    }
+}
+
+/**
+ * Every routine as a row, with the four things the phone refuses to work out for
+ * itself already decided.
+ *
+ * `armed`, `canRun`, `canArm` and their two sentences are derived **here**, on
+ * the machine side, exactly as `routineWire` does it on the desktop — because
+ * that is where the client expects them to have been decided, and a stand-in
+ * that left them out would be reproducing a host this app has never had to talk
+ * to.
+ */
+function routineRows(): RoutineWire[] {
+    const rows: RoutineWire[] = []
+    for (const [id, held] of harnessRoutines) {
+        const state = routineState(held)
+        const fileOff = state === 'disabled'
+        const paused = state === 'paused'
+        rows.push({
+            id,
+            name: held.name,
+            purpose: held.purpose,
+            schedule: held.schedule,
+            folder: held.folder,
+            state,
+            enabled: held.enabled,
+            paused,
+            armed: !fileOff && !paused,
+            reason: routineReason(held, state),
+            problems: held.problems,
+            lastRunAt: held.lastRunAt,
+            lastOutcome: held.lastOutcome,
+            lastError: held.lastError,
+            nextDueAt: held.nextDueAt,
+            pausedUntil: held.pausedUntil,
+            missedWhileClosed: held.missedWhileClosed,
+            consecutiveFailures: held.consecutiveFailures,
+            refusedCalls: held.refusedCalls,
+            // Only the two refusals that are certain before the press. Everything
+            // else — a spent budget, an overlap policy, no runner in this build —
+            // is the engine's answer at the moment of the press and arrives as a
+            // notice on the redraw, so a list drawn a minute ago never greys out
+            // a button over a budget that has since come back.
+            canRun: !held.running && !held.broken,
+            runBecause: held.running
+                ? 'It is already running.'
+                : held.broken
+                    ? (held.problems[0] ?? 'This routine could not be read.')
+                    : null,
+            canArm: !fileOff,
+            armBecause: fileOff
+                ? 'It is off in its own file. Change its `enabled:` line on the machine — the '
+                    + 'switch never writes to the file.'
+                : null,
+        })
+    }
+    return rows
 }
 
 /* -------------------------------------------------------------------------- */
