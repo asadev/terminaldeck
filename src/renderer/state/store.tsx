@@ -7,7 +7,7 @@ import {
   type ReactNode,
 } from 'react'
 import type { SessionMeta, SessionStatus } from '@shared/types'
-import { folderName } from '../session-title'
+import { folderName, sameFolder } from '../session-title'
 
 export interface Project {
   /** Absolute path — also the identity of the project. */
@@ -265,9 +265,22 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const removeProject = useCallback((path: string) => {
     setProjects((prev) => prev.filter((p) => p.path !== path))
     setSessions((prev) => {
-      // Kill the processes too, or they linger with no way to reach them.
-      for (const s of prev.filter((x) => x.projectPath === path)) void window.deck.killSession(s.id)
-      return prev.filter((s) => s.projectPath !== path)
+      /*
+       * Kill the processes too, or they linger with no way to reach them.
+       *
+       * Matched with `sameFolder` rather than `===`, and on Windows that is the
+       * difference between this working and this producing the exact thing the
+       * line above is written to prevent. NTFS folds case, so a session spawned
+       * in `C:\Users\Asad\proj` and a project stored as `c:\users\asad\proj`
+       * are one folder that `===` calls two: the pty was not killed *and* the
+       * row was not dropped, leaving a live agent in a project heading that had
+       * just been taken off the rail. `Sidebar.tsx` then filed it under "loose",
+       * which is the app describing its own bug as a category.
+       */
+      for (const s of prev.filter((x) => sameFolder(x.projectPath, path))) {
+        void window.deck.killSession(s.id)
+      }
+      return prev.filter((s) => !sameFolder(s.projectPath, path))
     })
     void window.deck.removeProject(path)
   }, [])
@@ -350,7 +363,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   )
 
   const sessionsForProject = useCallback(
-    (path: string) => sessions.filter((s) => s.projectPath === path),
+    // The same comparison `removeProject` makes, for the same Windows reason:
+    // two spellings of one folder must not be two projects on screen.
+    (path: string) => sessions.filter((s) => sameFolder(s.projectPath, path)),
     [sessions],
   )
 

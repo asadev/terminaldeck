@@ -30,6 +30,16 @@ interface Props {
    * a rename would have nothing to write to.
    */
   sessionId?: string | null
+  /**
+   * Where a name typed into the heading goes, when it does not go into this
+   * app's own session store.
+   *
+   * Absent for a session running here, which is the ordinary case — see
+   * {@link SessionTitle.onRename}. Present when the heading names a session on a
+   * paired machine, where the name belongs to a different computer and leaves
+   * this one as a `rename` frame.
+   */
+  onRenameSession?: (name: string) => void
   /** A quiet second line: what the view is for, when there is nothing better. */
   subtitle?: string | null
   /**
@@ -174,6 +184,7 @@ const CHEVRON_RIGHT = 'M9.5 6.5 15 12l-5.5 5.5'
 export function WindowToolbar({
   title = null,
   sessionId = null,
+  onRenameSession,
   subtitle,
   meta,
   headingFocused = true,
@@ -257,7 +268,7 @@ export function WindowToolbar({
                 renames the session. `SessionTitle` renders the plain `<h1>` this
                 was whenever there is no session behind it or nowhere to write a
                 name to — see the note there. */}
-            <SessionTitle title={title} sessionId={sessionId} />
+            <SessionTitle title={title} sessionId={sessionId} onRename={onRenameSession} />
             {meta ?? (subtitle && <p className="toolbar-subtitle">{subtitle}</p>)}
           </div>
         )}

@@ -236,11 +236,13 @@ describe('ProjectRow', () => {
     expect(render(0)).toContain('the folder is not deleted')
   })
 
-  it('asks first when removing would close something that is running', () => {
+  it('asks first when removing would end something that is running', () => {
     // Removing a project kills every pty in it. Silently, from a picker, that
-    // is the same loss as closing every one of those tabs by hand.
-    expect(render(3, true)).toContain('Close 3 sessions?')
-    expect(render(1, true)).toContain('Close 1 session?')
+    // is the same loss as ending every one of those sessions by hand. The verb
+    // is *delete* since 2026-08-27 — *"instead of saying close just say
+    // delete"* — everywhere the act destroys, and this row is one of them.
+    expect(render(3, true)).toContain('Delete 3 sessions?')
+    expect(render(1, true)).toContain('Delete 1 session?')
   })
 })
 

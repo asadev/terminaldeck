@@ -3,7 +3,7 @@ import { ALERTS_GLYPH } from '../components/AlertsPanel'
 import { StatusDot } from '../components/StatusDot'
 import type { Project } from '../state/store'
 import { useSessionRename } from '../state/session-rename'
-import { folderName, MAX_TITLE_LENGTH } from '../session-title'
+import { folderName, MAX_TITLE_LENGTH, sameFolder } from '../session-title'
 import { tip } from '../keymap'
 import { bindKey, SessionBindChips, WindowBindChip } from '../browser/BindChip'
 import { demote, MAX_PROMOTED, promote, usePromotedOrder } from '../browser/workspace-strip'
@@ -22,6 +22,7 @@ import {
   KIND_ICON,
   MACHINE_ICON,
   machineTabId,
+  readMachineTabId,
   sessionLabel,
   startTabDrag,
   tabQualifiers,
@@ -351,6 +352,21 @@ interface Props {
    */
   onCloseMachine?(machineId: string): void
   /**
+   * Give one session on another machine a new name.
+   *
+   * A prop, where a local session's rename reaches the store directly — and the
+   * asymmetry is the point rather than an inconsistency. A local name is one
+   * field of one record this window already owns, so a callback threaded down
+   * would only add a place for `App.tsx` to answer differently than the store
+   * does. A remote name is owned by a different computer: it has to leave here
+   * as a frame, and the rail has no wire and must not grow one.
+   *
+   * Absent by default, so a rail rendered on its own — the static-render tests
+   * here, `.harness/` — draws no gesture on a remote row rather than one that
+   * types into nothing.
+   */
+  onRenameMachineSession?(machineId: string, sessionId: string, name: string): void
+  /**
    * Open another terminal on one server.
    *
    * No dialog behind it, and that is the difference from the machine ＋ above
@@ -523,6 +539,13 @@ export function Sidebar({
   servers = [],
   onNewMachineSession = () => {},
   onCloseMachine = () => {},
+  /*
+   * No default, unlike every other optional callback above it. A no-op here
+   * would be a row that opens a field, takes a name and throws it away — the
+   * inert control this rail refuses to draw — so `canRename` reads the prop's
+   * absence directly and offers no gesture at all.
+   */
+  onRenameMachineSession,
   onNewServerSession = () => {},
   onCloseServer = () => {},
   alerts = true,
@@ -696,9 +719,32 @@ export function Sidebar({
   const endRename = (save: boolean): void => {
     if (!editing.current) return
     editing.current = false
-    // A blank field is a cancel — `userSessionTitle` refuses it, and a session
-    // called nothing is a row in this rail with nothing written on it.
-    if (save && renaming) sessionRename.rename(renaming.id, renaming.draft)
+    if (save && renaming) {
+      /*
+       * Which of the two write paths this row's name goes down.
+       *
+       * `readMachineTabId` is the only code that knows a remote row's id is a
+       * machine and a session joined together, and asking it here is what keeps
+       * the two apart: a remote id handed to `sessionRename` would have written
+       * a row in *this* app's store that nothing reads, and the field would have
+       * accepted a name that vanished on the next push. The gesture is only
+       * offered on a remote row when the far machine advertised `rename` — see
+       * `canRename` — so by the time a draft gets this far there is a frame
+       * waiting for it.
+       *
+       * The cleaning is deliberately not done here for the remote half. A local
+       * name goes through `userSessionTitle`, which is also what makes a blank
+       * field a cancel; a remote one is cleaned and bounded by the machine that
+       * stores it, and a blank one is not a cancel over there — it is *use the
+       * folder's name again*, which is the only way back from a rename and would
+       * be unreachable if this swallowed it.
+       */
+      const remote = readMachineTabId(renaming.id)
+      if (remote) onRenameMachineSession?.(remote.machineId, remote.sessionId, renaming.draft)
+      // A blank field is a cancel — `userSessionTitle` refuses it, and a session
+      // called nothing is a row in this rail with nothing written on it.
+      else sessionRename.rename(renaming.id, renaming.draft)
+    }
     setRenaming(null)
   }
 
@@ -818,16 +864,32 @@ export function Sidebar({
    */
   const { mine: ownTabs, copilot: copilotTabs } = partitionByOrigin(listed)
 
+  /*
+   * Which rows sit under which heading — four comparisons of one folder against
+   * another, and every one of them through `sameFolder`.
+   *
+   * `===` was the wrong tool on Windows, where NTFS folds case and the two
+   * spellings of a folder really do both turn up: a picker hands back the drive
+   * letter capitalised, a stored path keeps whatever was typed, and a held row's
+   * `cwd` comes back off a transcript directory. The failure was not a missing
+   * row — it was a row filed under *Loose*, three headings below the project it
+   * belongs to, with the app apparently claiming its folder had gone.
+   *
+   * The rule is one function so the four cannot drift: a session that counts as
+   * inside a project for `sessionsIn` and outside it for `orphaned` is a row
+   * drawn twice, and one that fails both is a row drawn nowhere.
+   */
   const sessionsIn = (path: string) =>
-    ownTabs.filter((tab) => tab.kind === 'session' && tab.projectPath === path)
+    ownTabs.filter((tab) => tab.kind === 'session' && sameFolder(tab.projectPath, path))
   /** Sessions whose project has been closed out from under them. */
   const orphaned = ownTabs.filter(
     (tab) =>
-      tab.kind === 'session' && !projects.some((project) => project.path === tab.projectPath),
+      tab.kind === 'session' &&
+      !projects.some((project) => sameFolder(project.path, tab.projectPath)),
   )
 
   /** Held sessions for one project, in the order they were tabs in. */
-  const heldIn = (path: string) => held.filter((row) => row.cwd === path)
+  const heldIn = (path: string) => held.filter((row) => sameFolder(row.cwd, path))
   /**
    * Held sessions with no project heading to sit under.
    *
@@ -839,7 +901,9 @@ export function Sidebar({
    * frequently a volume that has not mounted or a distribution that has not
    * woken, and the row is the only offer to try again.
    */
-  const heldLoose = held.filter((row) => !projects.some((project) => project.path === row.cwd))
+  const heldLoose = held.filter(
+    (row) => !projects.some((project) => sameFolder(project.path, row.cwd)),
+  )
 
   const labelFor = (tab: WorkspaceTab, index: number, projectName?: string): string =>
     tab.kind === 'session' ? sessionLabel(tab.label, index, projectName) : tab.label
@@ -1025,28 +1089,52 @@ export function Sidebar({
    * drawn and inert, which is the rule this window holds itself to.
    */
   const canRename = (tab: WorkspaceTab): boolean =>
+    tab.kind === 'session' &&
     /*
-     * And not a session on another machine.
-     *
-     * `sessionRename` writes into *this* app's session store, keyed by session
-     * id, and a remote session's id belongs to a store on a different computer.
-     * Renaming one would have written a row nothing reads, so the field would
-     * have accepted a name and the row would have gone back to what it said
-     * before — a control that appears to work and does not, which is worse than
-     * one that is absent. The far machine names its own sessions and pushes the
-     * name; there is no verb on the wire for renaming one, so there is no
-     * gesture here either.
-     */
-    /*
-     * And not a shell on a server, for the same reason one letter along.
+     * And not a shell on a server.
      *
      * `sessionRename` writes into this app's session store keyed by session id,
      * and a server shell has no row in that store at all — it is a tab this
      * window holds and nothing else. The field would have accepted a name and
      * the row would have gone straight back to what it said, which is a control
-     * that appears to work and does not.
+     * that appears to work and does not. Unlike a session on a paired machine
+     * below, there is no verb on the wire that would help: a server is a
+     * sign-in and a shell, with no session record on either end to write to.
      */
-    tab.kind === 'session' && !tab.machine && !tab.server && sessionRename.available
+    !tab.server &&
+    /*
+     * And never the copilot.
+     *
+     * *"Don't give rename session inside the copilot, because it will always be
+     * the name we choose for copilot to have."* It cannot reach here today — the
+     * rail filters `isCopilot` out before any row is built — so this is a guard
+     * against that filter being loosened rather than a live case. It is written
+     * anyway because the alternative is a rule that holds by accident: `kind`
+     * stays `'session'` on the copilot deliberately, so every predicate in this
+     * window that asks only that question answers yes about it.
+     */
+    !tab.isCopilot &&
+    /*
+     * A session on another machine renames over the wire, and one here renames
+     * into the store — two write paths, so two questions.
+     *
+     * This row said no to a remote session until tonight, and the note that
+     * stood here was right at the time: *"the far machine names its own sessions
+     * and pushes the name; there is no verb on the wire for renaming one, so
+     * there is no gesture here either."* There is a verb now — `rename`, sent by
+     * `MachineLink.rename` and answered with a fresh session list — and the
+     * reason for the silence is gone with it. *"The things that are aligned they
+     * can work seamlessly together when they are connected with remote also."*
+     *
+     * What has not changed is the rule underneath: the gesture is offered only
+     * where it can act. For a remote row that means the far machine advertised
+     * the capability (`tab.renameable`, set in `App.tsx` off the link) *and*
+     * `App.tsx` handed down a way to send it; for a local one it means there is
+     * a session store to write into at all.
+     */
+    (tab.machine
+      ? tab.renameable === true && onRenameMachineSession !== undefined
+      : sessionRename.available)
 
   const tabRow = (tab: WorkspaceTab, label: string, qualifier: string | null = null) => {
     /*
@@ -1404,7 +1492,7 @@ export function Sidebar({
             aria-haspopup="menu"
             aria-expanded={rowMenu === tab.id}
             aria-label={`More for ${label}`}
-            title="More — connect a browser, move to the top, close"
+            title="More — connect a browser, move to the top, delete"
             onClick={() => {
               setRowMenu(tab.id)
               const key = bindKey(tab)
@@ -1722,9 +1810,22 @@ export function Sidebar({
                   title: tip('New session', 'session.new'),
                   onPress: () => onNewSession(project.path),
                 }}
+                /*
+                  His verb, and never his folder as its object.
+
+                  *"Close might be confusing for the people — they just think
+                  okay it will be just close, soft close or something. But
+                  delete, they know that click it will go away completely."* This
+                  press ends every session in the folder, so *close* was exactly
+                  the soft-sounding word he is describing. `Delete project` would
+                  have been the opposite error and a far worse one: nothing on
+                  disk is touched, and a rail button that reads as *delete my
+                  folder* is a button nobody dares press. So the verb is his and
+                  the object is what actually goes — the sessions.
+                */
                 close={{
-                  label: `Close ${project.name}`,
-                  title: 'Close project',
+                  label: `Delete the sessions in ${project.name}`,
+                  title: 'Delete these sessions. The folder is left alone.',
                   onPress: () => onCloseProject(project.path),
                 }}
               />
@@ -1890,8 +1991,8 @@ export function Sidebar({
                   rest of the machine state.
                 */
                 close={{
-                  label: `Close the sessions on ${group.name}`,
-                  title: `Close the sessions on ${group.name}. It stays connected.`,
+                  label: `Delete the sessions on ${group.name}`,
+                  title: `Delete the sessions on ${group.name}. It stays connected.`,
                   onPress: () => onCloseMachine(group.machineId),
                   disabledReason: group.canClose
                     ? null
@@ -1983,7 +2084,7 @@ export function Sidebar({
                   onPress: () => onNewServerSession(group.serverId),
                 }}
                 /*
-                  Close ends the terminals and keeps the server.
+                  Delete ends the terminals and keeps the server.
 
                   The same sentence the machine heading makes, one kind down, and
                   the second half is the one a person is actually worried about:
@@ -1994,8 +2095,8 @@ export function Sidebar({
                   `SidebarServer`.
                 */
                 close={{
-                  label: `Close the terminals on ${group.name}`,
-                  title: `Close the terminals on ${group.name}. The server itself is left alone.`,
+                  label: `Delete the terminals on ${group.name}`,
+                  title: `Delete the terminals on ${group.name}. The server itself is left alone.`,
                   onPress: () => onCloseServer(group.serverId),
                   disabledReason: null,
                 }}

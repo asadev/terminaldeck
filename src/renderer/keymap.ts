@@ -549,7 +549,24 @@ export const KEYMAP: readonly KeyBinding[] = [
     scope: 'global',
     group: 'Sessions',
   },
-  { id: 'session.close', keys: ['mod+w'], label: 'Close session', scope: 'global', group: 'Sessions' },
+  /*
+   * ⌘W, and the label it wears in the shortcuts sheet and in the palette.
+   *
+   * *"Close might be confusing for the people — they just think okay it will be
+   * just close, soft close or something. But delete, they know that click it
+   * will go away completely."* The id keeps its old spelling because it is a
+   * wire between this table, the application menu and `App.tsx`, and renaming a
+   * wire to change a word on screen is how a chord stops firing. The word on
+   * screen is what he asked about.
+   *
+   * It is honest for both things this chord acts on: on a session it ends the
+   * pty after the confirmation, and on a browser tab it destroys the window. The
+   * one case it is *not* the whole truth about is the copilot, which ⌘W puts
+   * away rather than ends — and that exception is written where it is enforced,
+   * in `closeTab`, rather than hedged into a label that has to describe three
+   * things at once.
+   */
+  { id: 'session.close', keys: ['mod+w'], label: 'Delete session', scope: 'global', group: 'Sessions' },
   // ⌘⇧T belongs to the dialog, because that is the accelerator the application
   // menu has always printed next to "New Session…", and an Electron menu
   // accelerator is what actually fires. This table used to give ⌘⇧T to

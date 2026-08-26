@@ -201,21 +201,25 @@ describe('the server heading is the project heading', () => {
     expect(server.replace(/<svg class="sb-glyph sb-machine-mark".*?<\/svg>/, '')).toBe(project)
   })
 
-  it('offers a new terminal and a close on the server, in the rail', () => {
+  it('offers a new terminal and a delete on the server, in the rail', () => {
     const html = rail()
     expect(html).toContain(`New terminal on ${NAME}`)
-    expect(html).toContain(`Close the terminals on ${NAME}`)
+    // *"Instead of saying close just say delete"* — 2026-08-27. The control and
+    // what it costs are unchanged; only the verb on it is his now.
+    expect(html).toContain(`Delete the terminals on ${NAME}`)
   })
 
-  it('says on Close that the server itself survives it', () => {
+  it('says on Delete that the server itself survives it', () => {
     /*
-     * The question a person actually has, pressing Close on a heading that names
-     * a live server, is whether this stops their website. It is answered on the
-     * control rather than in a dialog they have to commit to the press to reach.
+     * The question a person actually has, pressing this on a heading that names
+     * a live server, is whether it stops their website. It is answered on the
+     * control rather than in a dialog they have to commit to the press to reach
+     * — and it matters more since the verb became *delete*, which sounds like a
+     * bigger act than *close* did.
      */
     const html = rail()
     const button =
-      new RegExp(`<button[^>]*aria-label="Close the terminals on ${NAME}"[^>]*>`).exec(html)?.[0] ?? ''
+      new RegExp(`<button[^>]*aria-label="Delete the terminals on ${NAME}"[^>]*>`).exec(html)?.[0] ?? ''
     expect(button).toContain('The server itself is left alone.')
     // And it can always act — unlike a machine's, which carries the far end's
     // capability, there is nothing on a server that can refuse.
@@ -293,7 +297,8 @@ describe('a terminal on a server is a row like any other', () => {
       join(__dirname, '..', 'components', 'CloseSessionConfirm.tsx'),
       'utf8',
     )
-    expect(confirm).toContain('This closes the terminal on that server.')
+    // Reworded to his verb on 2026-08-27; the sentence is otherwise the same one.
+    expect(confirm).toContain('This deletes the terminal on that server.')
     expect(confirm).toContain('Nothing else on the server is touched')
 
     expect(rail()).toContain(`on ${NAME}`)

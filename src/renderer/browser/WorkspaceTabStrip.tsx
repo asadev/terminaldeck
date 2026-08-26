@@ -118,9 +118,17 @@ import './WorkspaceTabStrip.css'
  * it. `[data-ends]` goes on the browser one only: it is what paints
  * `--color-critical` under the pointer, and it is the same mark the rail's
  * destructive control wears. And each title names its own act in one phrase —
- * *Take off the bar*, *Close this page*. A phrase and not a sentence, because
+ * *Take off the bar*, *Delete this window*. A phrase and not a sentence, because
  * the standing instruction this round is no explanatory prose on screen; the
  * reasoning lives here instead.
+ *
+ * The browser one said *Close this page* until 2026-08-27, and his objection is
+ * the whole reason the two phrases now share no word at all: *"close might be
+ * confusing for the people — they just think okay it will be just close, soft
+ * close or something. But delete, they know that click it will go away
+ * completely… for the windows also instead of saying close just say delete."*
+ * On a bar carrying both a soft ✕ and a destroying one, the soft-sounding word
+ * was on the wrong glyph.
  *
  * A session tab leaves the strip three ways — its ✕, a drag out of the bar, and
  * the toggle on its row in the rail. All three are the same act, a *view*
@@ -1109,8 +1117,12 @@ export function WorkspaceTabStrip({
             // and without this marker a press that slides a few pixels
             // reorders the strip instead of closing this window.
             data-no-drag=""
-            aria-label={`Close ${full}`}
-            title="Close this page"
+            // *"For the windows also instead of saying close just say delete."*
+            // This one really does destroy the window — see `data-ends` above —
+            // and *close* is the word he named as reading like a soft put-away,
+            // which is exactly what the ✕ one tab along actually is.
+            aria-label={`Delete ${full}`}
+            title="Delete this window"
             onClick={() => onCloseWindow(tab.id)}
           >
             <Glyph path={CLOSE} />

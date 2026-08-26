@@ -137,21 +137,25 @@ describe('closeWarning for a terminal on a server', () => {
    *
    * Somebody pressing ✕ on a row that belongs to a live server is not worried
    * about losing a scrollback. They are worried that they have just stopped
-   * their website — which is exactly what the word "close" beside a server's
+   * their website — which is exactly what a destroying verb beside a server's
    * name suggests to a person who does not know better, and is the same argument
    * the *Forget this server* control is written around one file over. So what is
    * still running is said in the second clause, where it will be read.
+   *
+   * The verb is *delete* since 2026-08-27, at his word, and it suggests the fear
+   * harder than *close* did — which is why the second clause matters more now,
+   * not less, and why the server is never the object of the sentence.
    */
   it('says what it leaves running, on one terminal', () => {
     const warning = closeWarning('idle', 1, 'server')
-    expect(warning.headline).toBe('This closes the terminal on that server.')
+    expect(warning.headline).toBe('This deletes the terminal on that server.')
     expect(warning.detail).toContain('Nothing else on the server is touched')
     expect(warning.detail).toContain('open another terminal whenever you like')
   })
 
   it('counts them when there is more than one, and still says it', () => {
     const warning = closeWarning('working', 3, 'server')
-    expect(warning.headline).toBe('This closes 3 terminals on that server.')
+    expect(warning.headline).toBe('This deletes 3 terminals on that server.')
     expect(warning.detail).toContain('Nothing else on the server is touched')
   })
 

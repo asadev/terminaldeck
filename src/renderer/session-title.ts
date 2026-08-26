@@ -288,6 +288,70 @@ export function folderName(path: string): string {
 }
 
 /**
+ * A path that names a directory on a case-insensitive filesystem.
+ *
+ * A drive letter — `C:\Users\…`, `c:/Users/…` — or a UNC share, `\\server\share`.
+ * Both are Windows, and Windows folds case: `C:\Users\Asad\proj` and
+ * `c:\users\asad\proj` are one directory that two APIs will hand you two
+ * spellings of.
+ */
+const WINDOWS_PATH = /^(?:[A-Za-z]:[\\/]|\\\\)/
+
+/**
+ * Are these two strings the same folder?
+ *
+ * ## Why this is here rather than compared with `===`
+ *
+ * Because on Windows `===` says no about one directory, and this window keys
+ * real decisions on the answer. `store.tsx` ends a project by killing every
+ * session whose `projectPath` matches and then dropping those rows: a session
+ * whose path differs only in case survived *both* halves — a live pty with no
+ * heading left in the rail to reach it from — and the rail then filed it under
+ * "loose". The same comparison decides which sessions sit under a project's
+ * heading and which held rows come back under it.
+ *
+ * `sameFolder` in `src/main/remote/session-create.ts` is the same rule for the
+ * remote wire and says at length why folding is Windows-only. This is a second
+ * implementation because the renderer cannot import from `src/main` — different
+ * bundle, different runtime — and the header of `platform.ts` makes the same
+ * point about `machineNoun`.
+ *
+ * ## Why the *path* decides, and not `process.platform`
+ *
+ * A window on a Mac routinely holds Windows paths: a session on a paired PC
+ * carries that PC's `cwd`, and the rail draws it. Asking which platform *this*
+ * app is running on would fold the wrong ones and refuse to fold the right ones
+ * on exactly the screen this lane exists to make work across machines. The
+ * shape of the string is the fact that matters, and it is decidable from the
+ * string alone.
+ *
+ * Trailing separators are trimmed for the reason the main process trims them: a
+ * project stored as `C:\proj\` and a session spawned in `C:\proj` are one
+ * folder, and a difference nobody typed must not become a rule nobody can act
+ * on. Nothing else is normalised — no `..`, no repeated separators — because
+ * every path this compares came from the operating system or from a folder
+ * picker, and inventing a normaliser here would be a second answer to a question
+ * `session-create.ts` already answers for the paths that arrive over a wire.
+ */
+export function sameFolder(a: string | undefined, b: string | undefined): boolean {
+  if (a === undefined || b === undefined) return a === b
+  const trim = (path: string): string => path.replace(/[\\/]+$/, '') || path
+  const left = trim(a)
+  const right = trim(b)
+  if (left === right) return true
+  // Folded only when *both* are Windows paths. One of each is two machines'
+  // filesystems being compared, and they are never the same directory.
+  if (!WINDOWS_PATH.test(left) || !WINDOWS_PATH.test(right)) return false
+  // Case *and* separator. Windows accepts both slashes and hands back whichever
+  // the API that answered happens to use, so `C:\proj` and `c:/proj` reach this
+  // window as two strings naming one folder. A forward slash is a legal
+  // character in a POSIX directory name and is not touched there — the guard
+  // above is what keeps that true.
+  const fold = (path: string): string => path.toLowerCase().replace(/\//g, '\\')
+  return fold(left) === fold(right)
+}
+
+/**
  * Shapes a shell writes into its own window title, which are not names.
  *
  * A login shell sets the terminal's title from its prompt — `\e]0;%n@%m: %~\a`

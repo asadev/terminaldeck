@@ -163,21 +163,33 @@ export interface CloseWarning {
 export type CloseSubject = 'session' | 'project' | 'machine' | 'server'
 
 /**
- * The nouns, per subject, in one table.
+ * The nouns, per subject, in one table — and every one of them names the thing
+ * that actually goes away.
  *
- * A fourth subject arrived with terminals on servers, and it is genuinely a
- * fourth case rather than a machine by another name. The one question a person
- * has at this dialog is *what else does this take with it*, and the answers are
- * different: a project's close takes its folder off the rail, a machine's leaves
- * it paired, and a server's leaves a live machine — somebody's website — running
- * exactly as it was. Telling them they are about to close a *server* would be
- * the worst sentence on this screen, which is why the group heading below says
- * terminals and not the thing they are running on.
+ * They named the *container* until tonight: `project`, `machine`, `terminals`.
+ * That was the right instinct answering the wrong question. The one thing a
+ * person has to know at this dialog is *what else does this take with it*, and
+ * the container is precisely what it does **not** take: a project's folder is
+ * still on disk afterwards, a machine is still paired, and a server — somebody's
+ * website — is still running exactly as it was. The sessions are what end.
+ *
+ * Naming them is also what lets the verb be his. *"Close might be confusing for
+ * the people — they just think okay it will be just close, soft close or
+ * something. But delete, they know that click it will go away completely… for
+ * the sessions instead of saying close just say delete."* The old note here
+ * argued that the group headings had to keep the word Close, because `Delete
+ * this machine?` describes something that does not happen — and that was true of
+ * the sentence it was written about. It stops being true the moment the sentence
+ * is about the sessions, which is the half that genuinely is deleted.
+ *
+ * A server keeps a noun of its own because a shell on somebody's box is not what
+ * this app calls a session anywhere else, and a dialog is the last place to
+ * start teaching a new word for it.
  */
 const GROUP_NOUN: Record<CloseSubject, string> = {
-  session: 'project',
-  project: 'project',
-  machine: 'machine',
+  session: 'sessions',
+  project: 'sessions',
+  machine: 'sessions',
   server: 'terminals',
 }
 
@@ -202,7 +214,7 @@ export function closeWarning(
 ): CloseWarning {
   if (subject === 'machine' && count > 1) {
     return {
-      headline: `Closing this machine closes ${count} sessions on it.`,
+      headline: `This deletes ${count} sessions on that machine.`,
       detail:
         'Every one of them stops where it is, on that machine, and anything they have not written to disk goes with them. The machine itself stays connected — New session brings it straight back.',
     }
@@ -219,28 +231,30 @@ export function closeWarning(
    *
    * Somebody pressing ✕ on a row that belongs to a live server is not worried
    * about losing a scrollback. They are worried that they have just stopped
-   * their website, which is exactly what the word "close" beside a server's name
-   * suggests to a person who does not know better — the same argument the
-   * *Forget this server* control is written around one file over. So the detail
-   * says what is left running, in the second clause, where it will be read.
+   * their website, which is exactly what a destroying verb beside a server's
+   * name suggests to a person who does not know better — and *delete* suggests
+   * it harder than *close* did, which is the price of the clearer word. The same
+   * argument the *Forget this server* control is written around one file over.
+   * So the detail says what is left running, in the second clause, where it will
+   * be read, and the verb is never given the server as its object.
    */
   if (subject === 'server' && count > 1) {
     return {
-      headline: `This closes ${count} terminals on that server.`,
+      headline: `This deletes ${count} terminals on that server.`,
       detail:
         'Each of them stops where it is, and anything half-typed goes with it. Nothing else on the server is touched — whatever it was running before, it is still running now.',
     }
   }
   if (subject === 'server') {
     return {
-      headline: 'This closes the terminal on that server.',
+      headline: 'This deletes the terminal on that server.',
       detail:
         'Whatever is running inside it stops, and the terminal goes with its scrollback. Nothing else on the server is touched — it keeps running exactly as it was, and you can open another terminal whenever you like.',
     }
   }
   if (count > 1) {
     return {
-      headline: `Closing this project closes ${count} sessions.`,
+      headline: `This deletes ${count} sessions in that project.`,
       detail:
         'Every one of them stops where it is. Anything they have not already written to disk goes with them.',
     }
@@ -249,14 +263,14 @@ export function closeWarning(
     return {
       headline: 'This session asked you something.',
       detail:
-        'It is blocked until it gets an answer. Closing now discards the question and whatever it was about to do.',
+        'It is blocked until it gets an answer. Deleting it now discards the question and whatever it was about to do.',
     }
   }
   if (status === 'working') {
     return {
       headline: 'This session is still working.',
       detail:
-        'Closing stops the agent part-way through. Anything it has not already written to disk goes with it.',
+        'Deleting it stops the agent part-way through. Anything it has not already written to disk goes with it.',
     }
   }
   /*
@@ -273,7 +287,7 @@ export function closeWarning(
   if (status === 'exited') {
     return {
       headline: 'This session has already ended.',
-      detail: 'Closing takes the row out of the sidebar. Its scrollback goes with it.',
+      detail: 'Deleting takes the row out of the sidebar. Its scrollback goes with it.',
     }
   }
   return {
@@ -430,16 +444,16 @@ export function CloseSessionConfirm({
   const group = count > 1
   const noun = GROUP_NOUN[subject]
   /*
-   * "Close these terminals?" and not "Close this server?".
+   * "Delete these sessions?" — and never the name of the thing they are in.
    *
-   * The other three subjects name the container because closing it is what the
-   * press does — a project, a machine's group. A server's container is a machine
-   * that is still running, and putting its name after the word Close in the
-   * largest type on the dialog is the one thing this screen must not do. The
-   * name is still on screen, in `description` just below, where it identifies
-   * which server without being the object of the verb.
+   * One sentence for all four subjects now, where the server used to be a
+   * special case. It stopped being one when the other three stopped naming their
+   * container: a project, a machine and a server are all still there afterwards,
+   * so none of them may be the object of this verb, and the exception collapsed
+   * into the rule. Which project, machine or server is still on screen, in
+   * `description` just below, where it identifies without being what is deleted.
    */
-  const groupTitle = subject === 'server' ? 'Close these terminals?' : `Close this ${noun}?`
+  const groupTitle = `Delete these ${noun}?`
   /*
    * Everything this dialog knows that is not the headline, as one paragraph
    * behind one dot.
@@ -468,10 +482,11 @@ export function CloseSessionConfirm({
        * delete. It should give the warning also, warning should also use the
        * word delete."*
        *
-       * The group titles keep the word `Close`, and deliberately: closing a
-       * project or a machine takes its sessions with it but leaves the project
-       * and the machine exactly where they were, so `Delete this machine?` would
-       * be a sentence about something that does not happen.
+       * The group titles say it too now — *"don't give the button as close in
+       * drop downs, in three dots, everywhere"* — which they could not while
+       * they named the project or the machine, because `Delete this machine?`
+       * is a sentence about something that does not happen. They name the
+       * sessions instead; see `GROUP_NOUN`.
        */
       title={group ? groupTitle : 'Delete this session?'}
       description={title}
@@ -490,9 +505,7 @@ export function CloseSessionConfirm({
             {busy
               ? 'Deleting…'
               : group
-                ? subject === 'server'
-                  ? 'Close terminals'
-                  : `Close ${noun}`
+                ? `Delete ${noun}`
                 : 'Delete'}
           </button>
         </>
@@ -566,7 +579,7 @@ export function CloseSessionConfirm({
           would have ticked it.
         */}
           <HoverNote label="Don’t ask again">
-            Sessions close straight away from then on. Settings → General turns this back on.
+            Sessions go straight away from then on. Settings → General turns this back on.
           </HoverNote>
         </div>
       </div>

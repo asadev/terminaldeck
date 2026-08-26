@@ -1,5 +1,5 @@
 import { MAX_TITLE_LENGTH } from '../session-title'
-import { useRenameField, useSessionRename } from '../state/session-rename'
+import { useRenameField, useSessionRename, type SessionRename } from '../state/session-rename'
 import './SessionTitle.css'
 
 /**
@@ -72,11 +72,54 @@ interface Props {
    * pane, so the window's markup is byte-for-byte what it was.
    */
   scale?: 'window' | 'pane'
+  /**
+   * Where the typed name goes, when it does not go into this app's own session
+   * store.
+   *
+   * Absent for every session running on this computer, and absent is the
+   * ordinary case: the name is one field of one record `useSessionRename`
+   * already owns, and a callback threaded in for those would be a second answer
+   * to a question the store has already answered.
+   *
+   * Present for a session on a **paired machine**, where the name belongs to a
+   * different computer and has to leave here as a frame. That was impossible
+   * until tonight and the heading said so by staying a plain `<h1>`; the wire
+   * has a `rename` verb now, and *"the things that are aligned they can work
+   * seamlessly together when they are connected with remote also."*
+   *
+   * The text arrives exactly as it was typed. `userSessionTitle`'s cleaning and
+   * its "a blank field is a cancel" rule belong to the store's path and are
+   * deliberately not applied here: the machine that stores the name is what
+   * bounds and strips it, and over there a blank name is not a cancel but *use
+   * the folder's name again* — the only way back from a rename, which this would
+   * swallow.
+   */
+  onRename?: (name: string) => void
 }
 
-export function SessionTitle({ title, sessionId = null, scale = 'window' }: Props) {
+export function SessionTitle({ title, sessionId = null, scale = 'window', onRename }: Props) {
   const paneScale = scale === 'pane' ? 'pane' : undefined
-  const rename = useSessionRename()
+  const store = useSessionRename()
+  /*
+   * One rename, two places it can land.
+   *
+   * `useRenameField` owns the mechanics that must not be written twice — the
+   * focus steal, the double-`end` guard, Escape versus blur — so the remote path
+   * is expressed as a different *destination* handed to the same field rather
+   * than as a second field beside it. `available: true` because the caller only
+   * passes this when the far machine has said it will take a name; the question
+   * is asked once, up where the link's capabilities are read, and not again
+   * here.
+   */
+  const rename: SessionRename = onRename
+    ? {
+        available: true,
+        rename: (_sessionId, typed) => {
+          onRename(typed)
+          return true
+        },
+      }
+    : store
   const field = useRenameField(rename)
   const renameable = sessionId !== null && rename.available
 

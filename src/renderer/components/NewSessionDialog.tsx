@@ -545,8 +545,12 @@ export function ProjectRow({
 
       {confirming ? (
         <span className="ns-project-confirm" role="group" aria-label={`Remove ${project.name}`}>
+          {/* The verb is his, and the count is what makes it worth saying at
+              all: Remove takes the folder off the list, and the thing a person
+              cannot see from this row is that it ends the sessions running in
+              it. *"Instead of saying close just say delete."* */}
           <span className="ns-caveat">
-            Close {liveSessions} session{liveSessions === 1 ? '' : 's'}?
+            Delete {liveSessions} session{liveSessions === 1 ? '' : 's'}?
           </span>
           <button type="button" className="ns-project-btn danger" onClick={onRemove}>
             Remove
@@ -1226,9 +1230,11 @@ export function NewSessionDialog({
    *
    * It was not quite permanent: the sidebar's project header carries a ✕ that
    * calls the same store method. But it is a hover-revealed glyph among three
-   * others, labelled *Close project*, which reads as "close the thing that is
-   * open" rather than "take this out of the list" — and this panel, where the
-   * offending row is actually being looked at, had no way out at all.
+   * others — it reads as an act on what is *open* rather than "take this out of
+   * the list", and this panel, where the offending row is actually being looked
+   * at, had no way out at all. (That glyph says *Delete the sessions in …* since
+   * 2026-08-27, which sharpens the same point: it is about the sessions, and
+   * this is the only control that forgets the folder.)
    *
    * Routed through the renderer store rather than straight at the bridge,
    * because the sidebar draws its own copy of the project list: calling

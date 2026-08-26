@@ -229,9 +229,11 @@ describe('continue-last-session on a project heading', () => {
     const labels = controls(railMarkup({ canResume: false }))
     expect(labels).not.toContain('Continue the last session in p')
     // And the two beside it are untouched — the heading still opens a session
-    // and still closes the project.
+    // and still ends the sessions in the project. That second one says `Delete`
+    // since 2026-08-27, and names the sessions rather than the folder: the
+    // folder is exactly what the press does not touch.
     expect(labels).toContain('New session in p')
-    expect(labels).toContain('Close p')
+    expect(labels).toContain('Delete the sessions in p')
   })
 
   it('defaults to not drawing it, so a host that never answers cannot lie', () => {

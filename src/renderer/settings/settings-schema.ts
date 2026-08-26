@@ -937,9 +937,9 @@ export const SETTINGS: readonly Setting[] = [
      * That has to exist."* It did exist, and nothing said so; the dialog now
      * names this section by name, so the two have to keep agreeing.
      */
-    label: 'Confirm before closing a session',
-    help: 'Closing a session or a project asks first.',
-    more: 'The confirmation says what is at stake: a session mid-task loses that work, one that has already ended loses only its scrollback. Off, everything closes straight away.',
+    label: 'Confirm before deleting a session',
+    help: 'Deleting a session, or the sessions in a project, asks first.',
+    more: 'The confirmation says what is at stake: a session mid-task loses that work, one that has already ended loses only its scrollback. Off, it goes straight away.',
     store: 'extra',
     kind: 'toggle',
     default: true,

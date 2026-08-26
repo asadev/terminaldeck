@@ -144,7 +144,11 @@ describe('what the confirmation says about a machine', () => {
      * afterwards costs watching whether the machine came back.
      */
     const many = closeWarning('working', 4, 'machine')
-    expect(many.headline).toBe('Closing this machine closes 4 sessions on it.')
+    // The verb moved to his word on 2026-08-27 — *"instead of saying close just
+    // say delete"* — and the object moved with it, from the machine to the
+    // sessions. The promise this test is actually about is unchanged and is the
+    // reason the object had to move: the machine is exactly what does *not* go.
+    expect(many.headline).toBe('This deletes 4 sessions on that machine.')
     expect(many.detail).toContain('stays connected')
   })
 
@@ -157,10 +161,13 @@ describe('what the confirmation says about a machine', () => {
     expect(one.detail).toContain('stays connected')
   })
 
-  it('still calls a project a project', () => {
+  it('still names the project the sessions are in', () => {
     // The subject decides the nouns and nothing else, and the default is what
-    // every caller meant before there was a third one.
-    expect(closeWarning('working', 4).headline).toBe('Closing this project closes 4 sessions.')
+    // every caller meant before there was a third one. The project is named as
+    // *where* they are rather than as what is deleted, for the same reason the
+    // machine sentence above stopped naming the machine: the folder is still
+    // there afterwards.
+    expect(closeWarning('working', 4).headline).toBe('This deletes 4 sessions in that project.')
     expect(closeWarning('working', 1).headline).toBe('This session is still working.')
   })
 })

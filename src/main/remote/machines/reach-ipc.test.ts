@@ -152,6 +152,9 @@ function rig(options: { online: boolean }): Rig {
         resize: () => true,
         create: () => true,
         close: () => true,
+        // The rename verb, present so this fake still satisfies `MachineLink`.
+        // Nothing in this file sends one — it is about reaching a port.
+        rename: () => true,
         ports: () => options.online,
         localhost: (message) => {
           if (!options.online) return false

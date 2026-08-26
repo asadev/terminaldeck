@@ -79,6 +79,7 @@ function railElement(props: {
   activeTabId?: string | null
   onCloseMachine?: (id: string) => void
   onNewMachineSession?: (id: string) => void
+  onRenameMachineSession?: (machineId: string, sessionId: string, name: string) => void
   canResume?: boolean
 } = {}) {
   const { machines = [machineGroup()], activeTabId = 's1', ...rest } = props
@@ -196,10 +197,12 @@ describe('the machine heading is the project heading', () => {
     expect(machine.replace(/<svg class="sb-glyph sb-machine-mark".*?<\/svg>/, '')).toBe(project)
   })
 
-  it('offers New session and Close on the machine, in the rail', () => {
+  it('offers New session and Delete on the machine, in the rail', () => {
     const html = rail()
     expect(html).toContain('New session on DESKTOP-DDGMNCV')
-    expect(html).toContain('Close the sessions on DESKTOP-DDGMNCV')
+    // *"Instead of saying close just say delete"* — 2026-08-27. The object was
+    // already the sessions rather than the machine, so only the verb moved.
+    expect(html).toContain('Delete the sessions on DESKTOP-DDGMNCV')
   })
 
   it('never prints a keyboard shortcut on the machine’s New session', () => {
@@ -230,14 +233,14 @@ describe('the machine heading is the project heading', () => {
     expect(html).not.toMatch(/Continue the last session on/)
   })
 
-  it('says why Close cannot act against a machine that will not accept it', () => {
+  it('says why Delete cannot act against a machine that will not accept it', () => {
     // A machine on an older build never advertised `close`. The button stays —
     // its neighbours have one, and a silently missing control reads as the bug
     // he reported — and it carries the reason instead of a press that does
     // nothing.
     const html = rail({ machines: [machineGroup({ canClose: false })] })
     const button =
-      /<button[^>]*aria-label="Close the sessions on DESKTOP-DDGMNCV"[^>]*>/.exec(html)?.[0] ?? ''
+      /<button[^>]*aria-label="Delete the sessions on DESKTOP-DDGMNCV"[^>]*>/.exec(html)?.[0] ?? ''
     expect(button).toContain('aria-disabled="true"')
     expect(button).toContain('cannot end sessions from here')
   })
@@ -287,13 +290,22 @@ describe('a remote row says where it is, in its hover and nowhere else', () => {
     expect(rail()).toContain('on DESKTOP-DDGMNCV')
   })
 
-  it('offers no rename on a remote row, where a local one has it', () => {
+  it('offers no rename on a remote row whose machine cannot take one', () => {
     /*
-     * `sessionRename` writes into *this* app's session store, keyed by session
-     * id, and a remote session's id belongs to a store on another computer. So
-     * the field would have taken a name, written a row nothing reads, and the
-     * label would have gone back to what it said before — a control that appears
-     * to work and does not, which is worse than one that is absent.
+     * This assertion used to be about remote rows in general, and the reasoning
+     * under it was that `sessionRename` writes into *this* app's session store
+     * and a remote session's id belongs to a store on another computer — so the
+     * field would have taken a name, written a row nothing reads, and the label
+     * would have gone straight back to what it said.
+     *
+     * That reasoning ended on 2026-08-27, when the wire grew a `rename` verb and
+     * the rail learned to send it. What it leaves behind is a narrower rule and
+     * a sharper one: the gesture is offered exactly where it can act. A machine
+     * paired to a build from before the verb never advertises it, and a frame it
+     * has never heard of is answered by **closing the channel** — so a rename
+     * typed on one of those rows would not fail, it would take every remote
+     * session on that machine off the screen for as long as it took to dial
+     * again. The fixture carries no `renameable`, which is that machine.
      *
      * Inside a `StoreProvider`, because that is what makes renaming available at
      * all: without one, `useSessionRename` reports unavailable and *no* row gets
@@ -303,6 +315,37 @@ describe('a remote row says where it is, in its hover and nowhere else', () => {
     const html = renderToStaticMarkup(<StoreProvider>{railElement()}</StoreProvider>)
     expect(html).toMatch(/Session 1 — double-click or F2 to rename/)
     expect(html).not.toMatch(/Fix the parser[^"]*double-click or F2/)
+  })
+
+  it('offers one when the machine advertised the verb and the window can send it', () => {
+    /*
+     * The other half, and the point of the whole lane: *"the things that are
+     * aligned they can work seamlessly together when they are connected with
+     * remote also."* The same double-click and the same F2 on a session running
+     * on his PC, with the name landing over there rather than in a store here.
+     *
+     * Two conditions, asserted together because either alone is a dead control.
+     * `renameable` is the far machine's own word, off its capability list; the
+     * handler is this window's, and without it the draft would have nowhere to
+     * go. A rail rendered with one and not the other draws no gesture — which is
+     * what the two rows below the assertion prove, since `Session 2` carries
+     * neither.
+     */
+    const renameable = REMOTE.map((tab, index) =>
+      index === 0 ? { ...tab, renameable: true } : tab,
+    )
+    const html = renderToStaticMarkup(
+      <StoreProvider>
+        {railElement({
+          machines: [machineGroup({ sessions: renameable })],
+          onRenameMachineSession: () => {},
+        })}
+      </StoreProvider>,
+    )
+    expect(html).toMatch(/Fix the parser[^"]*double-click or F2 to rename/)
+    // And the row beside it, on the same machine, still has none — the flag is
+    // per session and not per group.
+    expect(html).not.toMatch(/Session 2[^"]*double-click or F2/)
   })
 })
 

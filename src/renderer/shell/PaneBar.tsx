@@ -89,6 +89,24 @@ export type PaneSubject =
       kind: 'session'
       /** The pty, and what the heading renames. */
       id: string
+      /**
+       * True on the **copilot's own session**, which is drawn here like any
+       * other and renamed like none of them.
+       *
+       * *"Don't give rename session inside the copilot, because it will always
+       * be the name we choose for copilot to have, just like we do in the Mac
+       * application."* Its name comes from its own instruction file and is
+       * rebuilt into the tab on every render, so a name typed over it was taken
+       * and then overwritten a frame later — the control that appears to work
+       * and does not.
+       *
+       * Only the heading changes. The status dot, the folder, the account chip
+       * and the browser binding all stay, because the copilot **is** a session
+       * and Asad settled that in as many words on 2026-08-17: *"nothing should
+       * be less than that."* This is the one field of it that is not somebody's
+       * to choose.
+       */
+      isCopilot?: true
       title: string
       status: SessionStatus
       /** The folder the pty was spawned in. Null for a session with no project. */
@@ -288,8 +306,18 @@ export function PaneBar({ paneId, subject, focused, controls, onClose }: Props) 
               pane's scale. Double-click and F2 both still open it — see
               `SessionTitle`, and note that this one never had to give up a
               drag region for the gesture, because a pane is not the window's
-              title bar. */}
-          <SessionTitle title={subject.title} sessionId={subject.id} scale="pane" />
+              title bar.
+
+              Null for the copilot, which renames nowhere — see `isCopilot`
+              above. `SessionTitle` draws its plain heading for a null id, so
+              the copilot in a guest pane reads exactly as it does in the
+              window's own bar rather than being the one place the gesture
+              survived. */}
+          <SessionTitle
+            title={subject.title}
+            sessionId={subject.isCopilot ? null : subject.id}
+            scale="pane"
+          />
           {subject.folder && (
             /* Where, and who — the same pair, in the same order, with the same
                separator the window's bar uses, because they are the same two
@@ -324,10 +352,17 @@ export function PaneBar({ paneId, subject, focused, controls, onClose }: Props) 
       {subject.kind === 'elsewhere' && (
         <>
           <StatusDot status={subject.status} />
-          {/* A plain span rather than `SessionTitle`: that component's whole
-              point is that double-click and F2 open a rename, and a rename here
-              would edit nothing — the name is the far machine's. Same class, so
-              it is the same text at the same weight in the same place. */}
+          {/* A plain span rather than `SessionTitle`, and the reason is smaller
+              than it was. It used to be that a rename here could edit nothing —
+              the name is the far machine's, and no frame on the wire carried
+              one. The wire has a `rename` verb since 2026-08-27, and the rail's
+              row and the window's own bar both send it. What is left is that
+              this branch also draws a shell on a *server*, which has no session
+              record anywhere to rename, and that `SessionTitle` wears the
+              toolbar's own class rather than this one — so putting it here would
+              restyle a guest pane's heading to answer a case that already has
+              two other doors. Same class as the session branch above, so it is
+              the same text at the same weight in the same place. */}
           <span className="pane-cell-title">{subject.title}</span>
           <span className="pane-cell-where">{subject.where}</span>
         </>

@@ -217,6 +217,10 @@ function rig(
         resize: () => true,
         create: () => true,
         close: () => true,
+        // The verb behind a rename typed on a remote row. `true` is *the frame
+        // left this machine*, which is all the real link promises; the far end
+        // answers with a fresh session list and nothing here models that.
+        rename: () => true,
         ports: () => true,
         localhost: () => true,
         copilotAttach: () => {
@@ -901,6 +905,8 @@ describe('waking', () => {
             resize: () => true,
             create: () => true,
             close: () => true,
+            // As above: the frame leaves, and the far end answers with a list.
+            rename: () => true,
             ports: () => true,
             localhost: () => true,
             copilotAttach: () => ({ ok: true, message: 'Watching that machine’s copilot.' }),
