@@ -245,6 +245,19 @@ export interface MachinesBridge {
   createMachineSession(id: string, cwd?: string, provider?: string): Promise<unknown>
   /** End one session over there. Refused unless that machine advertised `close`. */
   closeMachineSession(id: string, sessionId: string): Promise<unknown>
+  /**
+   * Give one session over there a name. Refused unless that machine advertised
+   * `rename`; an empty title asks it to use the folder's name again.
+   *
+   * Optional, and deliberately **not** on {@link BRIDGE_METHODS}, for the reason
+   * `setMachineDrivesWindows` gives above: that list is an all-or-nothing gate,
+   * and a verb added this round must not be able to blank the whole machines
+   * surface on a build whose preload is a minute older than this window. The
+   * gesture is drawn only where the method is there *and* the far machine
+   * advertised the capability — two questions, both answered before anything is
+   * offered, because this window does not draw controls that cannot act.
+   */
+  renameMachineSession?(id: string, sessionId: string, title: string): Promise<unknown>
   refreshMachinePorts(id: string): Promise<unknown>
   openOnMachine(id: string, url: string): Promise<unknown>
   /**

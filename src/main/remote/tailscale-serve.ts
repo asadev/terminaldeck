@@ -264,5 +264,8 @@ function describe(said: string): string {
   if (lower.includes('permission') || lower.includes('access denied')) {
     return 'Tailscale refused the request. Serving may be disabled for this tailnet in the admin console.'
   }
-  return `Tailscale could not put a proxy in front of this app: ${said.split('\n')[0]}`
+  // Trimmed, because `tailscale.exe` ends its lines with CRLF and splitting on
+  // `\n` alone leaves the carriage return on the end of the sentence this puts in
+  // front of a person. Every other read in this file trims; this one did not.
+  return `Tailscale could not put a proxy in front of this app: ${said.split('\n')[0]?.trim() ?? ''}`
 }

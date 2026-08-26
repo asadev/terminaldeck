@@ -10,6 +10,7 @@ import {
   isUsableTitle,
   MAX_TITLE_LENGTH,
   MIN_ID_CHARS,
+  sameFolder,
   shortSessionId,
   stripAnsi,
   titleFromOutput,
@@ -230,6 +231,50 @@ describe('folderName', () => {
     expect(folderName('C:\\')).toBe('C:')
   })
 
+  it('calls two spellings of one Windows folder the same folder', () => {
+    /*
+     * The comparison the rail and the session store key on, and `===` was the
+     * wrong tool for it. NTFS folds case, and both spellings reach this window
+     * in the ordinary course of using the app: a folder picker hands back the
+     * drive letter capitalised, a stored project keeps whatever was typed years
+     * ago, and a held row's `cwd` comes back off a transcript directory.
+     *
+     * The consequence was not a missing row. `removeProject` killed only the
+     * sessions whose path matched exactly and dropped only those rows, so a
+     * session in the other spelling kept a live pty *and* lost the heading that
+     * was the way to reach it — and the rail then filed it under "loose", which
+     * is the app reporting its own bug as a category.
+     */
+    expect(sameFolder('C:\\Users\\Asad\\proj', 'c:\\users\\asad\\proj')).toBe(true)
+    // The two separators Windows accepts, for one folder.
+    expect(sameFolder('C:\\Users\\Asad\\proj', 'C:/Users/Asad/proj')).toBe(true)
+    // A trailing separator nobody typed must not become a rule nobody can act on.
+    expect(sameFolder('C:\\proj\\', 'C:\\proj')).toBe(true)
+    expect(sameFolder('\\\\server\\share\\Work', '\\\\SERVER\\share\\work')).toBe(true)
+    // Two folders that genuinely differ are still two folders.
+    expect(sameFolder('C:\\Users\\Asad\\proj', 'C:\\Users\\Asad\\other')).toBe(false)
+  })
+
+  it('keeps two POSIX folders apart when only their case differs', () => {
+    /*
+     * The other half, and it is the half a folded-everywhere implementation
+     * would have broken. A POSIX filesystem genuinely distinguishes `Proj` from
+     * `proj`, and calling them one folder would end a session running in a
+     * directory nobody asked about. `session-create.ts` makes the same argument
+     * about the same rule on the wire.
+     */
+    expect(sameFolder('/Users/apple/Proj', '/Users/apple/proj')).toBe(false)
+    expect(sameFolder('/Users/apple/proj/', '/Users/apple/proj')).toBe(true)
+    // One of each is two machines' filesystems, which are never one directory —
+    // and this window holds both at once, because a session on a paired PC
+    // carries that PC's path into a rail running on a Mac.
+    expect(sameFolder('C:\\proj', '/proj')).toBe(false)
+    // Absent is not a folder, and two absences are not the same folder either
+    // way round — a session with no project must not join one.
+    expect(sameFolder(undefined, '/Users/apple/proj')).toBe(false)
+    expect(sameFolder(undefined, undefined)).toBe(true)
+  })
+
   it('is the only one of its name in the renderer', () => {
     /*
      * `state/store.tsx` carried a character-for-character copy of this, which is
@@ -245,7 +290,10 @@ describe('folderName', () => {
      */
     const store = readFileSync(join(__dirname, 'state', 'store.tsx'), 'utf8')
     expect(store).not.toMatch(/function folderName\(/)
-    expect(store).toContain("import { folderName } from '../session-title'")
+    // `sameFolder` joined it on the same import for the same reason — the store
+    // and the rail must agree about which folder a session is in, on Windows as
+    // well as here — so the line is asserted whole rather than by its old text.
+    expect(store).toContain("import { folderName, sameFolder } from '../session-title'")
   })
 })
 

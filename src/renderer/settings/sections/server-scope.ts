@@ -139,10 +139,10 @@ export const SERVER_CONTROLS: readonly ServerControlEntry[] = [
     group: 'sessions',
   },
   {
-    local: 'Ask before closing a working session',
+    local: 'Ask before deleting a working session',
     mirrors: ['general.confirmCloseWorking'],
     verdict: 'carried',
-    say: 'Closing a terminal on a server asks first, exactly as closing one here does.',
+    say: 'Deleting a terminal on a server asks first, exactly as deleting one here does.',
   },
   {
     local: 'Copy on select',

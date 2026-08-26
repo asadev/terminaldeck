@@ -948,6 +948,51 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
   )
 
   /**
+   * Rename one session on another machine.
+   *
+   * The channel behind a double-click on a remote session's name, so that
+   * gesture reaches the same field over the wire that it writes at this
+   * keyboard: *"the things that are aligned they can work seamlessly together
+   * when they are connected with remote also."*
+   *
+   * Its own channel rather than an argument on `machines:close` above, for the
+   * reason that one gives about `detach`: those two are a screen and a process,
+   * and these two are a label and a process. Sharing a channel between an act
+   * that can be typed again and an act that cannot be taken back is how a client
+   * comes to end somebody's work by passing the wrong argument.
+   *
+   * The boolean is *the request left this machine*, exactly as `close`'s is. The
+   * name lands over there and comes back in the `sessions` list the far end
+   * pushes to every device, this one included — so a renderer that treated
+   * `true` as "the row now says that" would be drawing an answer it has not been
+   * given. `false` means the link refused to send: the machine is not linked, or
+   * it never advertised `rename`, which is an older build over there and the
+   * question the row has already asked before offering the gesture.
+   *
+   * The title is not cleaned here. `parseClientMessage` on the far machine
+   * strips controls and cuts it to `MAX_SESSION_TITLE`, and a second set of
+   * rules on this side would be a second answer to what a name is allowed to be
+   * — one that could drift from the machine actually storing it. An empty string
+   * is passed through rather than refused, because empty is the way back to the
+   * host's own name for the session.
+   *
+   * The channel says `session` in the middle of it because `machines:rename` was
+   * already taken, a few hundred lines up, by renaming the **computer** in this
+   * app's own list — a write to a local store that never leaves this machine.
+   * Two verbs one word apart in conversation, and `ipcMain.handle` refuses a
+   * second handler for a channel outright, so the collision would have been a
+   * desktop that threw on startup rather than a wire that misbehaved.
+   */
+  ipcMain.handle(
+    'machines:session:rename',
+    (_event, id: unknown, sessionId: unknown, title: unknown): boolean =>
+      typeof id === 'string' &&
+      typeof sessionId === 'string' &&
+      typeof title === 'string' &&
+      (links.get(id)?.rename(sessionId, title) ?? false),
+  )
+
+  /**
    * Ask again what is listening on that machine.
    *
    * A refresh rather than the first read: the link asks once on every `welcome`

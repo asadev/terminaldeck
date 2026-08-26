@@ -110,6 +110,23 @@ export interface MachinesRead {
    * `closeMachine` in `App.tsx`, which counts them.
    */
   closeSession(machineId: string, sessionId: string): Promise<boolean>
+  /**
+   * Give one session on one machine the name somebody typed, and answer whether
+   * the request left here.
+   *
+   * The same shape as {@link closeSession} and for the same reason: the name is
+   * written on the other computer, and the far machine answers by pushing every
+   * device a fresh session list — this one included, which is the one way a
+   * rename differs from a close on the wire. So the row redraws off the push,
+   * nothing here waits, and nothing here edits a cached title. A local edit
+   * beside the push would be a second copy of a name the far machine owns.
+   *
+   * False means the request never left: this build has no machine channels, its
+   * preload predates the verb, the machine is not linked, or it never advertised
+   * `rename`. Callers draw the gesture off `capabilities` rather than off this,
+   * so a false here is a genuine surprise and worth re-reading the rail for.
+   */
+  renameSession(machineId: string, sessionId: string, title: string): Promise<boolean>
 }
 
 /**
@@ -285,6 +302,21 @@ export function useMachines(provided?: MachinesBridge): MachinesRead {
     [bridge],
   )
 
+  const renameSession = useCallback(
+    async (machineId: string, sessionId: string, title: string): Promise<boolean> => {
+      // The method as well as the bridge, because this one is optional on
+      // `MachinesBridge` — see the note there about why a verb added this round
+      // stays off `BRIDGE_METHODS`.
+      const rename = bridge?.renameMachineSession
+      if (!bridge || !rename) return false
+      // `=== true` rather than a truthiness test, for the reason every other
+      // read of this bridge narrows: the channel is typed `unknown` on purpose,
+      // and an older preload answering `undefined` must not read as success.
+      return (await rename.call(bridge, machineId, sessionId, title).catch(() => false)) === true
+    },
+    [bridge],
+  )
+
   return {
     wired: bridge !== null,
     machines: reachableMachines(view),
@@ -293,5 +325,6 @@ export function useMachines(provided?: MachinesBridge): MachinesRead {
     reread,
     startSession,
     closeSession,
+    renameSession,
   }
 }

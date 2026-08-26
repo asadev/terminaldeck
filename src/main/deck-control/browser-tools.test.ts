@@ -518,7 +518,9 @@ describe('naming a session’s window', () => {
     ])
     // The summary a person reads names the window and not the id under it.
     const written = readFileSync(join(dir, 'actions.jsonl'), 'utf8')
-    expect(written).toContain('Close B1')
+    // *"Instead of saying close just say delete"* — 2026-08-27. The action log
+    // is one of the places he reads this, so the verb had to move here too.
+    expect(written).toContain('Delete B1')
     expect(written).not.toContain('browser:1:1')
   })
 

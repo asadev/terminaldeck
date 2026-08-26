@@ -544,6 +544,25 @@ const api = {
   closeMachineSession: (id: string, sessionId: string): Promise<unknown> =>
     ipcRenderer.invoke('machines:close', id, sessionId),
   /*
+   * And naming one, which is the other half of owning a session you can see.
+   *
+   * *"The things that are aligned they can work seamlessly together when they
+   * are connected with remote also."* Double-click on a name over a terminal has
+   * renamed a local session since the last review; over a remote one the gesture
+   * was simply not offered, because there was no frame on the wire behind it.
+   * There is one now, and this is the channel to it.
+   *
+   * Nothing in common with `renameMachine` further up despite the neighbouring
+   * name: that renames the *computer* in this app's own list and never leaves
+   * this machine. This renames one session running on it, over the wire, and the
+   * far machine is what stores the answer. They are also why the channel below
+   * is `machines:session:rename` and not `machines:rename` — that one is the
+   * computer's, and `ipcMain.handle` refuses a second handler for a channel, so
+   * sharing the name would have been a desktop that threw at startup.
+   */
+  renameMachineSession: (id: string, sessionId: string, title: string): Promise<unknown> =>
+    ipcRenderer.invoke('machines:session:rename', id, sessionId, title),
+  /*
    * Remote localhost, in the direction this desktop could not go.
    *
    * `web.open` has been on the wire since the web client needed it, and only the

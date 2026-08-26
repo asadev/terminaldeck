@@ -397,8 +397,12 @@ describe('the strip’s markup', () => {
     // `[data-ends]` is what the stylesheet paints `--color-critical` on: this
     // one destroys something, so it wears the window's mark for that.
     expect(buttons[1]).toContain('data-ends=""')
-    expect(buttons[1]).toContain('title="Close this page"')
-    expect(html).toContain('aria-label="Close New tab"')
+    // *"For the windows also instead of saying close just say delete"* —
+    // 2026-08-27. The two ✕ on this bar now share no word at all, which is the
+    // point: the soft one says *take off the bar* and the destroying one says
+    // *delete*, and the soft-sounding word is no longer on the destroying glyph.
+    expect(buttons[1]).toContain('title="Delete this window"')
+    expect(html).toContain('aria-label="Delete New tab"')
     // No sentence on either. The reasoning lives in the source, not on screen.
     expect(html).not.toContain('top bar. It keeps running')
   })
@@ -2022,7 +2026,7 @@ describe('the ✕ at the end of a tab', () => {
         storage={store({ 'terminaldeck.strip.promoted': '["a","b1"]' })}
       />,
     )
-    expect(strip).toContain('title="Close this page"')
+    expect(strip).toContain('title="Delete this window"')
     expect(strip).toContain('title="Take off the bar"')
     expect(rule('.strip-tab-close:hover')).toContain('color: var(--text-primary)')
     expect(rule('.strip-tab-close[data-ends]:hover')).toContain('color: var(--color-critical)')

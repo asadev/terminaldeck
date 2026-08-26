@@ -1204,16 +1204,26 @@ export function browserTools(drive: BrowserDrive, forward?: VerbForwarder): Tool
     id: 'browser.close',
     wire: 'browser_close',
     tier: 'act',
-    title: 'Close a window',
+    /*
+     * Named *delete* rather than *close* on the three strings a person reads.
+     *
+     * *"For the windows also instead of saying close just say delete."* The
+     * consent screen and the action log are where he meets this tool, and a
+     * window the copilot ends does not come back — the same act the strip's ✕
+     * performs, so it must not read as the softer of the two words there and the
+     * harder one here. The id and the wire name are untouched: those are how the
+     * tool is called, and a renamed wire is a tool the model can no longer reach.
+     */
+    title: 'Delete a window',
     description:
-      'Close one of a session’s windows. Numbers are not reused, so closing B1 leaves B2 called B2. ' +
+      'Delete one of a session’s windows. Numbers are not reused, so deleting B1 leaves B2 called B2. ' +
       'Your own tab is closed by the person.',
     inputSchema: CLOSE_SCHEMA,
     precheck: (args, context) => {
       mayDrive(context, 'browser.close')
       boundOf(args, context)
     },
-    summary: (args, context) => `Close ${whereOf(args, context)}`,
+    summary: (args, context) => `Delete ${whereOf(args, context)}`,
     run: async (args, context): Promise<ToolOutput> =>
       asTool(async () => {
         const bound = boundOf(args, context)

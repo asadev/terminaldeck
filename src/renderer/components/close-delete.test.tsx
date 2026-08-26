@@ -64,6 +64,31 @@ describe('the control is called Delete wherever it is spelled', () => {
     expect(render()).toContain('Deleting this session ends it.')
   })
 
+  it('says it on a group too, and names the sessions rather than what holds them', () => {
+    /*
+     * The group titles kept the word `Close` when the single-session one changed,
+     * and the argument was sound as far as it went: `Delete this machine?`
+     * describes something that does not happen — the machine stays paired, the
+     * project stays on disk, the server keeps running.
+     *
+     * He closed that gap himself on 2026-08-27: *"don't give the button as close
+     * in drop downs, in three dots, everywhere — for the sessions instead of
+     * saying close just say delete."* So the object moved to the half that
+     * really is deleted, and the verb became his. Both halves are asserted here
+     * because either alone is the old bug in a new costume: his word on the
+     * wrong object would be the app threatening to delete a folder.
+     */
+    for (const subject of ['project', 'machine'] as const) {
+      const html = render({ count: 4, subject })
+      expect(html).toContain('Delete these sessions?')
+      expect(html).not.toContain('Close this')
+      expect(html).not.toMatch(/Delete this (?:project|machine)/)
+    }
+    const server = render({ count: 3, subject: 'server' })
+    expect(server).toContain('Delete these terminals?')
+    expect(server).not.toContain('Close these terminals?')
+  })
+
   it('is the word the rail’s menu uses', () => {
     const menu = readFileSync(join(__dirname, '..', '..', 'main', 'session-row-menu.ts'), 'utf8')
     expect(menu).toContain("label: 'Delete',")

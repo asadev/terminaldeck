@@ -119,6 +119,45 @@ const nodeOps: AtomicWriteOps = {
   wait: blockFor,
 }
 
+/**
+ * Rename `from` over `to`, retrying while Windows says somebody has it open.
+ *
+ * Split out of {@link writeFileAtomic} so that a caller which cannot use the
+ * whole of it still gets this half. `secret-file.ts` is the one that matters:
+ * it opens its temp file with `wx`, fsyncs it, chmods it and — on Windows —
+ * writes an ACL onto it, none of which this module knows how to do, and it was
+ * finishing all that work with a bare `renameSync`. A freshly ACL'd file is
+ * precisely what a scanner opens to look at, so the one write in this app that
+ * must not fail — the device's private key and the credential hashes behind the
+ * remote wire — was the one write with no retry behind it.
+ *
+ * Two implementations of the retry would have been worse than none: the point
+ * of the numbers above is that they describe *how long this app is willing to
+ * wait for a scanner*, and an answer that differs by caller is not an answer.
+ */
+export function renameWithRetry(
+  from: string,
+  to: string,
+  platform: Platform = currentPlatform(),
+  ops: AtomicWriteOps = nodeOps,
+): void {
+  // One attempt on POSIX: `rename(2)` replaces the destination or fails for a
+  // reason a second try cannot change.
+  const attempts = isWindows(platform) ? RENAME_ATTEMPTS : 1
+  for (let attempt = 1; ; attempt++) {
+    try {
+      ops.rename(from, to)
+      return
+    } catch (error) {
+      if (attempt < attempts && isTransient(error)) {
+        ops.wait(RENAME_RETRY_MS)
+        continue
+      }
+      throw error
+    }
+  }
+}
+
 /** Distinct per process and per call, for the reason in the header. */
 let sequence = 0
 
@@ -147,27 +186,17 @@ export function writeFileAtomic(
 ): void {
   const tmp = tempNameFor(file)
   ops.writeFile(tmp, contents)
-  // One attempt on POSIX: `rename(2)` replaces the destination or fails for a
-  // reason a second try cannot change.
-  const attempts = isWindows(platform) ? RENAME_ATTEMPTS : 1
-  for (let attempt = 1; ; attempt++) {
+  try {
+    renameWithRetry(tmp, file, platform, ops)
+  } catch (error) {
+    // The temp file is ours and nothing else will ever clean it up, so it goes
+    // even on the failure path — otherwise a machine where the rename is
+    // genuinely refused accumulates one orphan per save, forever.
     try {
-      ops.rename(tmp, file)
-      return
-    } catch (error) {
-      if (attempt < attempts && isTransient(error)) {
-        ops.wait(RENAME_RETRY_MS)
-        continue
-      }
-      // The temp file is ours and nothing else will ever clean it up, so it
-      // goes even on the failure path — otherwise a machine where the rename
-      // is genuinely refused accumulates one orphan per save, forever.
-      try {
-        ops.unlink(tmp)
-      } catch {
-        /* never created, or already gone */
-      }
-      throw error
+      ops.unlink(tmp)
+    } catch {
+      /* never created, or already gone */
     }
+    throw error
   }
 }

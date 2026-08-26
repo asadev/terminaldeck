@@ -143,6 +143,22 @@ export interface WorkspaceTab {
   /** True for tabs the user can close. */
   closable: boolean
   /**
+   * Sessions on another machine only — whether that machine will take a new name
+   * for this one.
+   *
+   * The far machine's own answer, read off the `rename` capability, and it is
+   * here for the same reason {@link closable} is: a machine paired to a build
+   * from before the verb existed answers a frame it has never heard of by
+   * closing the channel, so a row that offered the gesture there would not fail
+   * — it would drop the link and take every remote session on that machine off
+   * the screen for as long as it took to dial again.
+   *
+   * Absent on a local session, where the name is a field of this app's own store
+   * and there is nothing over a wire to ask. Absent is not "no": `canRename` in
+   * `Sidebar.tsx` reads this only for a tab that names a machine.
+   */
+  renameable?: boolean
+  /**
    * The machine this session is running on, when it is not this one.
    *
    * Absent on everything local, and absent is the answer rather than a gap: a

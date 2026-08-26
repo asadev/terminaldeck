@@ -1063,6 +1063,12 @@ function Workspace() {
         ...(session.cwd ? { projectPath: session.cwd } : {}),
         machine: { id: row.machine.id, name: row.machine.name },
         closable: row.link?.capabilities.includes('close') === true,
+        // And the same question about the name, asked of the same list. A
+        // machine paired to a build from before tonight has never heard of
+        // `rename` and answers a frame it has never heard of by closing the
+        // channel, so the rail offers no gesture there rather than one that
+        // drops the link. See `WorkspaceTab.renameable`.
+        renameable: row.link?.capabilities.includes('rename') === true,
       })),
     )
 
@@ -1559,6 +1565,28 @@ function Workspace() {
   const focusedSession = focusedId
     ? sessions.find((session) => session.id === focusedId) ?? null
     : null
+
+  /**
+   * Whether the thing in front of you is the copilot itself.
+   *
+   * *"When we click on three dots and then Session details when we are in
+   * copilot, let's not give that there — or anything that is more about a
+   * generic session."*
+   *
+   * Compared against the copilot's id rather than looked up as a tab, because
+   * that works the same split and unsplit: `focusedId` is the focused pane's tab
+   * while split and the selected tab otherwise, and the copilot's tab id **is**
+   * its session id.
+   *
+   * It was worse than a control that did not apply. `sessions` above is the list
+   * with the copilot filtered out of it, so with the copilot in front
+   * `focusedSession` is null and Session details fell back to
+   * `activeProjectPath` — it opened, headed itself with nothing, and showed the
+   * newest transcript of the project you were last in. A dialog answering a
+   * question about a session you are not looking at, opened from a session it
+   * cannot describe.
+   */
+  const copilotInFront = focusedId !== null && focusedId === copilotSessionId
 
   /**
    * The tab whose *view* is on screen — which is not always the local one.
@@ -2922,8 +2950,8 @@ function Workspace() {
    * single most destructive control in this window and it was the quietest.
    *
    * `count` is now every session in the folder rather than only the busy ones,
-   * because that is the number the dialog is telling you about: *"Closing this
-   * project closes 4 sessions."* Counting only the busy ones made the sentence
+   * because that is the number the dialog is telling you about: *"This deletes 4
+   * sessions in that project."* Counting only the busy ones made the sentence
    * describe a subset of what the button was about to do.
    *
    * An empty folder still asks. It costs one press and it is the one case where
@@ -2997,6 +3025,45 @@ function Workspace() {
       setMachineSessionPanes((open) =>
         open.filter((pane) => pane.machineId !== machineId || pane.sessionId !== sessionId),
       )
+    },
+    [machines],
+  )
+
+  /**
+   * Give a session on another machine the name somebody typed for it.
+   *
+   * *"Now this time once you do all of these then you will align all of the
+   * other versions of the application with it… so the things that are aligned
+   * they can work seamlessly together when they are connected with remote
+   * also."* Double-click and F2 have renamed a session at this keyboard since
+   * the last review, and stopped dead at the edge of this computer. They do not
+   * any more.
+   *
+   * Nothing here asks first, where every close in this window does, and the
+   * asymmetry is the whole difference between the two verbs: a close ends work
+   * that cannot be recovered, and a name typed by mistake is undone by typing
+   * another. A confirmation on this would be the app asking permission to do the
+   * thing the person is in the middle of doing.
+   *
+   * Nothing here edits a row either. The far machine answers a rename by pushing
+   * every connected device a fresh session list — this one included, which is
+   * the one way a rename differs from a close on the wire — so the name arrives
+   * down the channel the row was drawn from. A local edit beside it would be a
+   * second copy of a name this computer does not own, and the two would disagree
+   * for as long as the push took.
+   *
+   * A refusal is reported rather than swallowed, exactly as the close above
+   * reports one. Both surfaces that offer the gesture ask the far machine's
+   * capabilities before drawing it, so a `false` here means something changed
+   * between the draw and the Return key — the link dropped, the session had
+   * already exited — and a field that quietly eats a name is the shape of defect
+   * this pass exists to remove.
+   */
+  const renameMachineSession = useCallback(
+    (machineId: string, sessionId: string, name: string) => {
+      void machines.renameSession(machineId, sessionId, name).then((sent) => {
+        if (!sent) machines.reread()
+      })
     },
     [machines],
   )
@@ -4081,12 +4148,25 @@ function Workspace() {
         group: 'View',
         run: () => sidebar.toggleCollapsed(),
       },
-      {
-        id: 'view.inspector',
-        title: 'Session details',
-        group: 'App',
-        run: () => setInspectorOpen(true),
-      },
+      /*
+       * Session details, and not while the copilot is what is on screen.
+       *
+       * Absent rather than opened-and-empty, which is the rule this window holds
+       * itself to everywhere else — see `copilotInFront` for what it did instead
+       * before this. Absent from the palette also takes ⌘⇧I with it: `run` looks
+       * the chord's id up in this very list, so a row that is not here is a
+       * chord that does nothing rather than one that opens the wrong session.
+       */
+      ...(copilotInFront
+        ? []
+        : [
+            {
+              id: 'view.inspector',
+              title: 'Session details',
+              group: 'App',
+              run: () => setInspectorOpen(true),
+            },
+          ]),
       {
         id: 'app.preferences',
         title: 'Settings',
@@ -4166,6 +4246,9 @@ function Workspace() {
     closeFocusedPane,
     closeSplit,
     features,
+    // Session details is in this list or it is not, depending on whether the
+    // copilot is on screen — so the list has to be rebuilt when that changes.
+    copilotInFront,
   ])
 
   /**
@@ -4260,7 +4343,11 @@ function Workspace() {
           setPaletteMode('sessions')
           return true
         case 'app.inspector':
-          setInspectorOpen(true)
+          // The application menu's door to the same dialog, and it is gated the
+          // same way the palette's row is — see `copilotInFront`. Answered
+          // `true` either way: the menu item fired, this window heard it, and
+          // there is nothing about the copilot for it to say.
+          if (!copilotInFront) setInspectorOpen(true)
           return true
         // The application menu's name for the same view.
         case 'view.overview':
@@ -4295,6 +4382,9 @@ function Workspace() {
       sessions,
       focusNeighbour,
       features,
+      // The application menu's Session Inspector is withdrawn over the copilot,
+      // the same as the palette's row — see the `app.inspector` case.
+      copilotInFront,
     ],
   )
 
@@ -4856,6 +4946,12 @@ function Workspace() {
                         ? {
                             kind: 'session',
                             id: session.id,
+                            // The copilot can be dropped into a guest pane like
+                            // anything else, and `windowSessions` is the list
+                            // that includes it — so this is the one field that
+                            // has to travel, and it withdraws the rename and
+                            // nothing else. See `PaneSubject.isCopilot`.
+                            isCopilot: sessionTab.isCopilot,
                             title: labelOf(sessionTab),
                             status: session.status,
                             folder: session.projectPath ?? null,
@@ -5200,6 +5296,27 @@ function Workspace() {
   const openRemoteSession = openMachine?.link?.sessions.find(
     (session) => session.id === openMachineSession?.sessionId,
   )
+
+  /**
+   * Whether the heading over that remote session opens a rename, and the id it
+   * would be renaming.
+   *
+   * Off the far machine's own capability list, not off this build's hope. A
+   * machine paired to a build from before tonight has never heard of the verb
+   * and answers one it has never heard of by closing the channel — so this is
+   * null there and the heading stays a plain line of text, rather than a
+   * double-click that drops the link and takes every remote session on that
+   * machine off the screen.
+   *
+   * The composite tab id rather than the far machine's session id, because that
+   * is the id this window knows the row by everywhere else: the same string
+   * `machineTabs` builds, so a field opened from the heading and a field opened
+   * from the rail are a field opened on the same tab.
+   */
+  const remoteHeadingRename =
+    openMachineSession && openMachine?.link?.capabilities.includes('rename') === true
+      ? machineTabId(openMachineSession.machineId, openMachineSession.sessionId)
+      : null
 
   /**
    * Whose login that remote session is running as, and the logins that machine
@@ -5938,6 +6055,12 @@ function Workspace() {
           */
           onNewMachineSession={(machineId) => openNewSessionDialog(null, machineId)}
           onCloseMachine={closeMachine}
+          /* And renaming one of its sessions, which is the row's other verb and
+             the one that leaves this computer. The rail reports the typed name
+             and owns none of it: the frame, the capability check behind it and
+             what a refusal means all live in `renameMachineSession` beside the
+             rest of the machine state. */
+          onRenameMachineSession={renameMachineSession}
           /*
             And the terminals open on servers, grouped by the server they are on.
 
@@ -6080,7 +6203,8 @@ function Workspace() {
                it in the same place. A guest's name is renamed in the guest's
                own bar, which carries the same control. */
                 /*
-                 * And only while that heading is one of *this* window's sessions.
+                 * And it has to be the session the heading is *of*, which is not
+                 * always one of this window's own.
                  *
                  * `headingTab` is `activeTab`, which is a local tab — but the title
                  * above it is `heading.title`, which a session on another machine or
@@ -6092,10 +6216,26 @@ function Workspace() {
                  * from the tab in the first place. A control acting on something
                  * other than the thing it is drawn over.
                  *
-                 * Null is the honest answer rather than a stopgap: `SessionTitle`
-                 * draws its plain heading for it, and there is nothing to route a
-                 * rename to — no frame on the wire renames a session on another
-                 * machine, and a shell on a server has no session record to rename.
+                 * The fix for that was to hand it null and let `SessionTitle` draw a
+                 * plain heading, on the grounds that there was nowhere to route the
+                 * rename: *"no frame on the wire renames a session on another
+                 * machine."* That sentence stopped being true tonight. The wire has
+                 * a `rename` verb, `MachineLink.rename` sends it, and the far end
+                 * answers by pushing every device a fresh session list — so a remote
+                 * heading now renames the session it is actually the name of, at the
+                 * far machine's own word, through `onRenameSession` below. *"The
+                 * things that are aligned they can work seamlessly together when
+                 * they are connected with remote also."*
+                 *
+                 * Still null in three cases, and each is a different reason. A shell
+                 * on a **server** has no session record anywhere to rename. A
+                 * **panel** heading is the app's word for a page and nobody's
+                 * session. And the **copilot** is not a session somebody chose to
+                 * start: *"don't give rename session inside the copilot, because it
+                 * will always be the name we choose for copilot to have."* Its name
+                 * is set on the copilot's own page and rebuilt into the tab on every
+                 * render, so a name typed here was accepted and then overwritten —
+                 * the control that appears to work and does not.
                  *
                  * Written without any angle bracket in it on purpose. `wiring.test.ts`
                  * reads this opening tag by scanning for the first unbraced `(gt)`,
@@ -6103,12 +6243,36 @@ function Workspace() {
                  * and the seam check silently stops seeing every prop after it.
                  */
                 sessionId={
-                  !showingPanel &&
-                  openMachineSession === null &&
-                  openServerSession === null &&
-                  headingTab?.kind === 'session'
-                    ? headingTab.id
-                    : null
+                  showingPanel || openServerSession !== null
+                    ? null
+                    : openMachineSession !== null
+                      ? remoteHeadingRename
+                      : headingTab?.kind === 'session' && headingTab.isCopilot !== true
+                        ? headingTab.id
+                        : null
+                }
+                /*
+                 * And where a name typed into it goes, when it does not go into
+                 * this app's own store.
+                 *
+                 * Undefined for a local session, which is the ordinary case and the
+                 * one `useSessionRename` already owns. Present only over a remote
+                 * session, where the name belongs to the machine running it and
+                 * leaves here as a frame. The pair is deliberately two props rather
+                 * than one: the id says *which row this heading is*, and this says
+                 * *where its name is written*, and folding them together would mean
+                 * a heading that could not be identified without also being
+                 * writable.
+                 */
+                onRenameSession={
+                  openMachineSession
+                    ? (name) =>
+                        renameMachineSession(
+                          openMachineSession.machineId,
+                          openMachineSession.sessionId,
+                          name,
+                        )
+                    : undefined
                 }
                 /* The host pane's focus, said in the host pane's chrome — which is
                up here. Without it the pane drawn flush with the window has no
@@ -6787,7 +6951,7 @@ function Workspace() {
           How many sessions this press ends.
         
           A machine's count is the sessions running on it, which is what makes
-          *"Closing this machine closes 4 sessions on it"* a true sentence and
+          *"This deletes 4 sessions on that machine"* a true sentence and
           the reason there is one dialog rather than four. One session on another
           machine is one, exactly as a local one is.
         */

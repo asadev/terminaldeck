@@ -80,6 +80,29 @@ describe('preload → main transport', () => {
     expect(wrong).toEqual([])
   })
 
+  it('registers each channel exactly once', () => {
+    /*
+     * `ipcMain.handle` throws on a second handler for a channel it already has,
+     * and it throws at *registration* — so a collision is not a misbehaving
+     * feature, it is a desktop that does not start.
+     *
+     * It is easy to walk into, because the names are grouped by subject rather
+     * than by verb. `machines:rename` renames the **computer** in this app's own
+     * list; a session on that computer got its own rename on 2026-08-27, and the
+     * obvious channel for it was the one already taken. The only reason that was
+     * caught before it shipped was somebody grepping the file by hand.
+     *
+     * The ellipsis is the placeholder two files use when they *describe* this
+     * scan in a comment, and it is not a channel.
+     */
+    const counts = new Map<string, number>()
+    for (const [, channel] of main.matchAll(/ipcMain\.handle\(\s*'([^']+)'/g)) {
+      if (channel === '…') continue
+      counts.set(channel, (counts.get(channel) ?? 0) + 1)
+    }
+    expect([...counts].filter(([, n]) => n > 1).map(([channel]) => channel)).toEqual([])
+  })
+
   it('every send() targets a channel registered with ipcMain.on', () => {
     const wrong: string[] = []
     for (const [, channel] of preload.matchAll(/ipcRenderer\.send\(\s*'([^']+)'/g)) {

@@ -387,6 +387,33 @@ export interface MachineLink {
    */
   close(sessionId: string): boolean
   /**
+   * Give a session over there the name somebody typed here. Refused unless that
+   * machine advertised `rename`.
+   *
+   * *"Now this time once you do all of these then you will align all of the
+   * other versions of the application with it… so the things that are aligned
+   * they can work seamlessly together when they are connected with remote
+   * also."* The name over a terminal is editable at this keyboard by
+   * double-click and F2, and until this verb existed that gesture stopped dead
+   * at the edge of this computer: a session on his PC was named by his PC and by
+   * nothing else. This is the same gesture reaching the same field one machine
+   * over.
+   *
+   * The opposite of {@link close} in the one way that matters — nothing is
+   * destroyed and a rename is taken back by renaming again — which is why it is
+   * sent with no confirmation anywhere above it. An empty title is not a
+   * refusal: it means *take my name off it*, and the far end answers by deriving
+   * the folder's name again.
+   *
+   * There is no `renamed` frame to wait for and deliberately so. `server.ts`
+   * answers a rename by resending **every** connected device its own `sessions`
+   * list, this one included, so the new name arrives down the same channel the
+   * row was drawn from. That is why nothing here touches the cached state: the
+   * push is the answer, and a local edit alongside it would be a second copy of
+   * the name that can disagree with the machine that owns it.
+   */
+  rename(sessionId: string, title: string): boolean
+  /**
    * Tell that machine which of its sessions this app is holding a browser window
    * for, right now.
    *
@@ -1828,6 +1855,19 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
       // gate an IPC call can walk around.
       if (!current.capabilities.includes(CAPABILITY.close)) return false
       return send({ t: 'close', id: sessionId })
+    },
+    rename(sessionId, title): boolean {
+      // Refused here rather than sent and refused there, for the reason `close`
+      // gives above and with more at stake than usual: a machine paired to a
+      // build from before tonight has never heard of this verb, and its answer
+      // to one it has never heard of is to close the channel — so a rename typed
+      // into a row would have taken every remote session on that machine off the
+      // screen for the two seconds it took to reconnect. The row asks the same
+      // question before it offers the gesture at all, so this is the backstop
+      // rather than the gate; it is here because a gate that lives only in a
+      // renderer is a gate an IPC call can walk around.
+      if (!current.capabilities.includes(CAPABILITY.rename)) return false
+      return send({ t: 'rename', id: sessionId, title })
     },
     ports(): boolean {
       // Refused here rather than sent and refused there, for the reason

@@ -138,12 +138,12 @@ import {
   fsyncSync,
   mkdirSync,
   openSync,
-  renameSync,
   unlinkSync,
   writeSync,
 } from 'node:fs'
 import { userInfo } from 'node:os'
 import { win32 } from 'node:path'
+import { renameWithRetry } from '../atomic-write'
 import { currentPlatform, isWindows, type Env, type Platform } from '../platform/host'
 
 /**
@@ -410,7 +410,23 @@ export function writeSecretFile(
     // Not memoised: the temp path repeats every write, but the *file* behind it
     // is a new object each time and carries no entry of its own until this runs.
     if (windows) protect(tmp, 'file', options, file)
-    renameSync(tmp, file)
+    /*
+     * Retried, because on Windows this is the line most likely to be refused.
+     *
+     * `MoveFileEx` fails with `EPERM` — which reads as a permission problem and
+     * is not one — while any process holds the destination open, and the line
+     * above has just written an ACL onto the source, which is exactly what makes
+     * Defender open a file to look at it. A bare `renameSync` here threw out of
+     * the one write in this app that must not fail: the device's private key and
+     * the credential hashes the remote wire is built on.
+     *
+     * `atomic-write.ts` has owned that retry for every other file in the app;
+     * this one could not use `writeFileAtomic` because of the `wx` open, the
+     * fsync, the chmod and the ACL above, so the retry was split out to be
+     * shared rather than written twice with two different ideas of how long to
+     * wait for a scanner.
+     */
+    renameWithRetry(tmp, file, options.platform ?? currentPlatform())
     chmodSync(file, 0o600)
     try {
       const handle = openSync(dir, 'r')

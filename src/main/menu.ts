@@ -207,7 +207,13 @@ export function menuTemplate(
       separator,
       { label: 'New Session', accelerator: 'CmdOrCtrl+T', click: send('session.new') },
       { label: 'New Session…', accelerator: 'CmdOrCtrl+Shift+T', click: send('session.newDialog') },
-      { label: 'Close Session', accelerator: 'CmdOrCtrl+W', click: send('session.close') },
+      // *"Don't give the button as close in drop downs, in three dots,
+      // everywhere."* The File menu is one of the everywheres: this item ends
+      // the session for real, through the same confirmation the rail's ⋯ opens.
+      // The command it sends keeps its old name — that string is the wire to
+      // `keymap.ts` and `App.tsx`, and renaming it to change a word on a menu is
+      // how a menu item stops firing.
+      { label: 'Delete Session', accelerator: 'CmdOrCtrl+W', click: send('session.close') },
       // Where a Windows user looks for them. On macOS these stay in the app
       // menu, so repeating them here would be a second door to one room.
       ...(mac ? [] : [separator, settings, shortcuts, separator, quit]),
