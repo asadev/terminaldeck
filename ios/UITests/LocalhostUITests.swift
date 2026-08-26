@@ -706,13 +706,22 @@ final class LocalhostUITests: XCTestCase {
         XCTAssertFalse(any("localhost.size.rotate").exists,
                        "Rotate should not be in the menu while there is no frame to rotate")
 
-        // And the three that magnify rather than re-lay-out, which are the pinch
-        // as buttons: a laptop frame on a phone is drawn at about 29%, and
-        // getting close to it must not depend on landing a two-finger gesture.
-        for (identifier, name) in [("localhost.size.in", "Zoom in"),
-                                   ("localhost.size.out", "Zoom out"),
-                                   ("localhost.size.actual", "Actual size")] {
-            XCTAssertTrue(any(identifier).exists, "\(name) should be in the menu")
+        /*
+         * One row that is not a device, and it is asked for with a WAIT.
+         *
+         * Zoom in and Zoom out used to be here too, and the three of them pushed
+         * this menu to twelve rows — the last below the fold, where a bare
+         * `.exists` finds nothing because nothing was ever rendered. That is how
+         * this assertion failed against a live host while the app was correct,
+         * and it is also the menu he said was too long. Pinch does the zooming;
+         * the reset is the one thing a gesture cannot land on, so it is the one
+         * that stayed.
+         */
+        XCTAssertTrue(any("localhost.size.actual").waitForExistence(timeout: 6),
+                      "Actual size should be in the menu — it is the reset pinch cannot land on")
+        for gone in ["localhost.size.in", "localhost.size.out"] {
+            XCTAssertFalse(any(gone).exists,
+                           "\(gone) is pinch as a button, and it made this menu too long to read")
         }
         add(screenshot(named: "the devices on offer"))
 

@@ -680,15 +680,25 @@ struct BrowserPageBar: View {
             }
             .accessibilityIdentifier("\(id).size.rotate")
         }
+        /*
+         * **Zoom in and Zoom out are not here, and that is the second time this
+         * menu has been cut.**
+         *
+         * They were: three rows, on the argument that getting close to a laptop
+         * frame drawn at 29% should not depend on landing a two-finger gesture.
+         * With eight devices and Rotate above them the menu became twelve rows,
+         * the last of them below the fold — measured against a live host, where
+         * `Actual size` could not be found at all because it was never rendered.
+         *
+         * > *"you should compact all the features or buttons and without losing
+         * > any of them"*
+         *
+         * Nothing is lost: **pinch works**, on every frame, and that is the whole
+         * point of the control it belongs to. What pinch cannot do is land on
+         * exactly 100%, so the one row that survives is the one that is not a
+         * gesture — the reset.
+         */
         Divider()
-        Button { size.zoomIn() } label: {
-            Label("Zoom in", systemImage: "plus.magnifyingglass")
-        }
-        .accessibilityIdentifier("\(id).size.in")
-        Button { size.zoomOut() } label: {
-            Label("Zoom out", systemImage: "minus.magnifyingglass")
-        }
-        .accessibilityIdentifier("\(id).size.out")
         Button { size.actualSize() } label: {
             Label("Actual size", systemImage: "1.magnifyingglass")
         }
