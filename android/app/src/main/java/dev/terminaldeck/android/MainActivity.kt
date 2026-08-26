@@ -1,10 +1,17 @@
 package dev.terminaldeck.android
 
+import android.app.KeyguardManager
+import android.content.Context
+import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
+import android.hardware.biometrics.BiometricManager
+import android.os.Build
 import android.os.Bundle
 import android.provider.OpenableColumns
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.result.ActivityResult
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -23,10 +30,12 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -55,6 +64,8 @@ import androidx.navigation.compose.navigation
 import dev.terminaldeck.android.protocol.BrowserSurfaceWire
 import dev.terminaldeck.android.protocol.HostPlatform
 import dev.terminaldeck.android.protocol.SessionControls
+import dev.terminaldeck.android.ui.AppLockOverlay
+import dev.terminaldeck.android.ui.appLock
 import dev.terminaldeck.android.ui.MachinesScreen
 import dev.terminaldeck.android.ui.SessionControlsSheet
 import dev.terminaldeck.android.ui.SettingsScreen
@@ -90,10 +101,44 @@ import dev.terminaldeck.android.ui.theme.currentAppearance
 import dev.terminaldeck.android.ui.theme.TerminalSchemeStore
 import dev.terminaldeck.android.ui.theme.currentTerminalScheme
 import dev.terminaldeck.android.ui.theme.installTerminalPalette
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
     private var onResumed: (() -> Unit)? = null
+
+    /**
+     * The lock on the front door, primed in [onCreate] before the first frame and held here because
+     * it is older than any screen: a fresh process is a locked process. [AppLock] itself is a plain
+     * state machine; this activity is what hands it an authenticator and drives it off the lifecycle.
+     */
+    private lateinit var lock: AppLock
+
+    /**
+     * One authentication in flight, completed by [confirmCredential]'s result.
+     *
+     * The confirm screen is a separate activity, so its answer arrives as an activity result rather
+     * than as a return value — this deferred is what bridges that back into the `suspend` call
+     * [AppLock] awaits.
+     */
+    private var pendingAuth: CompletableDeferred<AppLockOutcome>? = null
+
+    /**
+     * The system's confirm-device-credential screen: biometric with the PIN, pattern or password
+     * behind it — the permission-free, dependency-free stand-in for iOS's `.deviceOwnerAuthentication`.
+     * Registered as a property so it is in place before the activity is started.
+     */
+    private val confirmCredential = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result: ActivityResult ->
+        val deferred = pendingAuth
+        pendingAuth = null
+        deferred?.complete(
+            if (result.resultCode == RESULT_OK) AppLockOutcome.Unlocked else AppLockOutcome.Cancelled
+        )
+    }
 
     /*
      * There is no pairing-link intent any more, and its absence is the change.
@@ -131,6 +176,28 @@ class MainActivity : ComponentActivity() {
          * nothing" this app's design brief refuses.
          */
         AlertCenter.ensureChannels(this)
+
+        /*
+         * The lock, primed before the first frame so a locked cold start is covered on the first pass
+         * rather than after a frame of the session list. The authenticator is bound here — to this
+         * activity and its confirm-credential launcher — because an activity result belongs to an
+         * activity; [AppLock] holds no Android type of its own.
+         */
+        lock = AppLockStore.prime(this)
+        lock.authenticator = object : AppLockAuthenticator {
+            override fun availability(): AppLockAvailability = appLockAvailability(this@MainActivity)
+            override suspend fun authenticate(reason: String): AppLockOutcome = confirmDeviceCredential(reason)
+        }
+        /*
+         * `FLAG_SECURE` follows whatever the lock is covering — the lock screen, or the shield on the
+         * way into recents — so the thumbnail is blank and screenshots are blocked exactly while the
+         * person must not see the app. Collected off the lock's own state so a change from anywhere
+         * (an unlock succeeding, the switch moving) reaches the window; the lifecycle callbacks set it
+         * synchronously as well, because the flag has to be up *before* the recents snapshot is taken.
+         */
+        lifecycleScope.launch {
+            snapshotFlow { lock.isCovered }.collect { syncSecureFlag() }
+        }
 
         val appearance = AppearanceStore.prime(this)
         val dark = appearance.isDark(resources.configuration)
@@ -214,7 +281,133 @@ class MainActivity : ComponentActivity() {
      */
     override fun onStart() {
         super.onStart()
+        // Before the reconnect: whether five minutes have passed is a question about the moment the
+        // app came back, answered against the moment it left. See [AppLock.becameActive].
+        lock.becameActive()
+        syncSecureFlag()
         onResumed?.invoke()
+    }
+
+    /**
+     * Losing the foreground — the recents overview opening, a call arriving. The shield goes up here,
+     * before the recents snapshot is taken, so the thumbnail is the brand mark rather than somebody's
+     * terminal. iOS raises the same cover on `.inactive`.
+     */
+    override fun onPause() {
+        super.onPause()
+        lock.wentInactive()
+        syncSecureFlag()
+    }
+
+    /**
+     * Actually gone. The grace clock starts here — unless the confirm screen is what stopped us, which
+     * [AppLock.wentToBackground] ignores, because returning from an unlock prompt is not being away.
+     */
+    override fun onStop() {
+        super.onStop()
+        lock.wentToBackground()
+        syncSecureFlag()
+    }
+
+    /**
+     * Keep `FLAG_SECURE` in step with what the lock is covering. On means the recents thumbnail is
+     * blank and screenshots are blocked; off is the ordinary state of an unlocked app in front of its
+     * owner — the same call iOS makes, where the cover is up only while there is something to hide.
+     */
+    private fun syncSecureFlag() {
+        if (lock.isCovered) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        }
+    }
+
+    /* --------------------------------------------------------------------- the app lock -- */
+
+    /**
+     * What this phone can do about locking, asked fresh.
+     *
+     * `isDeviceSecure` is the "is there anybody to ask at all" question — the analogue of iOS's
+     * `canAskForPasscode` — and false means no PIN, pattern, password or biometric, the one state
+     * [AppLock] refuses to enter. The rest only refines the label: the unlock itself always goes
+     * through the confirm screen, which offers the biometric when one is enrolled and the credential
+     * behind it either way.
+     */
+    private fun appLockAvailability(context: Context): AppLockAvailability {
+        val keyguard = context.getSystemService(KeyguardManager::class.java)
+        if (keyguard == null || !keyguard.isDeviceSecure) return AppLockAvailability.None
+        val kind = biometricHardware(context.packageManager)
+        val enrolled = when {
+            // API 29 is where a permission-free "is a biometric actually enrolled" answer exists.
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q -> biometricEnrolled(context)
+            // Below that, without `USE_FINGERPRINT` there is no enrolment query — so name the hardware
+            // if it is present and let the confirm screen fall to the credential when nothing is enrolled.
+            else -> kind != null
+        }
+        return if (enrolled && kind != null) {
+            AppLockAvailability.Biometric(kind)
+        } else {
+            AppLockAvailability.DeviceCredential
+        }
+    }
+
+    /** The kind of biometric this phone has hardware for, or null — read from the package manager,
+     *  which needs no permission. Face and iris are only distinguishable from API 29. */
+    private fun biometricHardware(pm: PackageManager): BiometryKind? = when {
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+            pm.hasSystemFeature(PackageManager.FEATURE_FACE) -> BiometryKind.Face
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+            pm.hasSystemFeature(PackageManager.FEATURE_IRIS) -> BiometryKind.Iris
+        pm.hasSystemFeature(PackageManager.FEATURE_FINGERPRINT) -> BiometryKind.Fingerprint
+        else -> null
+    }
+
+    /**
+     * Whether a biometric is enrolled and usable, on the versions that can say so without a permission.
+     *
+     * `BiometricManager` arrived in API 29, so this is isolated in its own method and guarded at the
+     * call site, and the class is never loaded on an older device. Wrapped, because a query that
+     * throws on some OEM skin should degrade to "use the screen lock", never take the settings screen
+     * down with it.
+     */
+    private fun biometricEnrolled(context: Context): Boolean = try {
+        val manager = context.getSystemService(BiometricManager::class.java)
+        val result = when {
+            manager == null -> BiometricManager.BIOMETRIC_ERROR_NO_HARDWARE
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.R ->
+                manager.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_WEAK)
+            else ->
+                @Suppress("DEPRECATION") manager.canAuthenticate()
+        }
+        result == BiometricManager.BIOMETRIC_SUCCESS
+    } catch (t: Throwable) {
+        false
+    }
+
+    /**
+     * Raise the confirm screen and suspend until it answers.
+     *
+     * Launching must happen on the main thread, which the callers are on — [AppLock.unlock] and
+     * [AppLock.setEnabled] run in a Compose coroutine. The title is the brand; the description is the
+     * reason [AppLock] passes, so the same sentence names the action on the screen the person sees.
+     */
+    private suspend fun confirmDeviceCredential(reason: String): AppLockOutcome {
+        val keyguard = getSystemService(KeyguardManager::class.java)
+            ?: return AppLockOutcome.Unavailable
+        @Suppress("DEPRECATION")
+        val intent = keyguard.createConfirmDeviceCredentialIntent("Terminal Deck", reason)
+            ?: return AppLockOutcome.Unavailable
+        // At most one prompt in flight; if somehow another is pending, let it go as a cancel.
+        pendingAuth?.complete(AppLockOutcome.Cancelled)
+        val deferred = CompletableDeferred<AppLockOutcome>()
+        pendingAuth = deferred
+        return try {
+            confirmCredential.launch(intent)
+            deferred.await()
+        } catch (t: Throwable) {
+            pendingAuth = null
+            AppLockOutcome.Failed(t.message ?: "The screen lock could not be shown.")
+        }
     }
 
 }
@@ -319,6 +512,9 @@ fun TerminalDeckApp(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val screenTick by viewModel.screenTick.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    // The front-door lock, read here so the overlay at the bottom of this Box can watch it. This is
+    // the process-wide instance MainActivity primed and wired; a @Preview gets a coherent off default.
+    val lock = appLock()
     /**
      * Whether the GitHub sheet is up.
      *
@@ -1097,6 +1293,15 @@ fun TerminalDeckApp(
             onDisconnect = viewModel::disconnectGitHub,
             onDismiss = { github = false },
         )
+    }
+
+    /*
+     * The lock, above everything under it — the pair screen, the tabs, the credential prompt and the
+     * GitHub sheet. iOS puts its lock in a UIWindow over the alert level to clear the sheets; here the
+     * sheets are drawn in this same Box, so the last child of it is already above every one of them.
+     */
+    if (lock.isCovered) {
+        AppLockOverlay(lock)
     }
 
     } // end of the Box the sheets are stacked in

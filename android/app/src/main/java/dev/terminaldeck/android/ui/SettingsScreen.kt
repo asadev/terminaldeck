@@ -189,6 +189,10 @@ fun SettingsScreen(
                 )
             }
 
+            // Phone-local, like Alerts and Appearance above it, and off until somebody moves it. The
+            // switch is behind the screen lock in both directions — see [AppLockSection] and [AppLock].
+            AppLockSection(appLock())
+
             state.serverSettings?.let { settings ->
                 SectionCaption("This server")
                 ServerSettingsSection(view = settings, onApply = onApplyServerSetting)
