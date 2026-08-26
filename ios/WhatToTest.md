@@ -1,61 +1,51 @@
-# What to test — 0.11.0
+# What to test — 0.12.0
 
-Two screen recordings and three rounds of your review, all about the browser.
+A long evening of your review, one change at a time, then everything aligned
+across the Mac, Windows, the browser client and the phone.
 
-## The browser windows are one thing now
+## The browser window a session holds
 
-There used to be three different browsers depending on where the page lived —
-different header, different buttons, different settings screen, different name.
-They are one now.
+- **It floats over the terminal now.** One bar: the address, which you can tap
+  and edit, a red **Delete** that closes the window on the machine, and a fold.
+- **Folded, it is one round glass button** in the corner — the terminal gets its
+  room back. Drag the button along either edge; drag the open window up and down.
+  Neither can be pushed off the screen.
+- **The page inside is desktop-sized**, so it looks like a browser, not a phone.
+- Start typing an address while the agent is using the page — what you type is no
+  longer wiped when the page moves.
 
-- **Same header everywhere**: back, the page's name, and the `…`. Nothing else.
-  The address and the connection count are gone from the top; they were
-  information, not controls.
-- **Same bottom bar everywhere**: an address you can type in, then Back, Forward,
-  Reload, Find, Inspect and Size.
-- **One settings screen**, called Window settings whether the page is on your
-  phone or on your machine. Same cards, same order.
-- **One vocabulary**, the one every browser uses: a window with no page in it is
-  *Untitled*, a throwaway one is *Private*.
+## Rename a session
 
-## The page can be looked at as other devices
+Hold or open a session's `…` → **Rename**. The name shows on every device signed
+in to that machine — and the other way too, a name given on the Mac shows here.
+Leave it empty to go back to the folder's own name.
 
-On a page your phone is showing: **Size** on the bar. Seven real devices — small
-phone through to desktop — each drawn at its own proportions, so a laptop is wide
-and short with room above and below it, not a tall column. The page genuinely
-re-lays-out, so its own mobile and desktop layouts appear. Pinch works on all of
-them, and Rotate turns one on its side.
+## The copilot's own settings
 
-## Tap one thing and send it to the agent
+Open the Copilot tab → the `…`. Two new cards:
 
-The dashed-box **Inspect** button now works on every kind of window, not only the
-one your phone draws. Tap an element, widen or narrow the selection, say what you
-want done, and send it to a session.
+- **Its files** — its instructions and the folder's own (edit and save), the
+  app's half of the prompt and the whole assembled prompt (read-only, and it
+  says why), its memory files (forget one).
+- **Routines** — what runs overnight, weekly, when work is left uncommitted, when
+  something is waiting on you. Run one now, Hold it, Read it, Delete it.
 
-## Recording a click flow works on your phone's browser too
+Inside the copilot there is no Rename and no Session details — those are for
+sessions you start. **Restart** lives only there.
 
-It used to be your machine's browser only.
+## Smaller things to feel
 
-## Your own login pages are not blacked out any more
+- **One finger scrolls the terminal.** It was starting a text selection under
+  Claude Code; long-press still selects.
+- **Delete, not Close**, everywhere a session or a window really goes away.
+- **The `…` menus that opened a full page** now slide up from the bottom, like a
+  phone browser, leaving the screen behind visible.
+- **New window** is in the same list as the windows, and pressing it opens the
+  session so you see the window it made.
+- **Photo and File** are back in the session's `…`.
 
-A page with a password box on it used to come through as a padlock and a
-sentence. On a device paired to your own machine it now comes through as the
-page, and you can type into it. A guest device still gets the padlock, and what
-the **agent** photographs still has the password blacked out.
+## And on the machine side
 
-## Sessions
-
-- The `>` on a session row is a `…` — attach a browser window, details, pin,
-  archive, close.
-- A session with no browser attached shows **nothing** above the terminal. It used
-  to offer to attach one on every screen, including Copilot.
-- When a page is open in a session it now **floats over** the terminal instead of
-  pushing it down.
-- **Folding the page away and opening it again works.** It did not, twice.
-
-## Worth poking at
-
-- Fold the page and open it again, a few times, on a window that has no page in
-  it yet.
-- Open a page at Laptop, then Desktop, then rotate a Tablet.
-- Attach a browser window from inside a session when your machine has none open.
+The Mac, Windows and the browser client all learned the same words and the same
+rename. If you have two of your own devices open on one machine, a session reads
+the same name on both.
