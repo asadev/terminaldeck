@@ -77,6 +77,50 @@ struct WireAccount: Equatable, Identifiable, Hashable {
     let color: String?
     /// The machine's own install — the login every fallback ends on.
     let system: Bool
+    /**
+     * What that machine's own CLI said about this login, or nil.
+     *
+     * The field the chip could not tell the truth without. Until it was decoded
+     * here, `name` was all this app had to draw, and for the machine's own
+     * install that name is the key `systemProfileId` generates — which is what
+     * put "Default", "Default (Codex CLI)", "Default (Gemini CLI)" on the sheet
+     * he filmed on 2026-08-26:
+     *
+     *   > *"when we click on this link it should clearly mention the name of the
+     *   > account here instead of saying default — name of the account should be
+     *   > there."*
+     *
+     * The address existed on the far machine the whole time — its own Accounts
+     * screen prints it, and `account-serve.ts`'s `toWire` has spread a `signIn`
+     * object onto every row since 2026-08-21. This client simply dropped it on
+     * the floor. See {@link accountLoginLabel}, which is the only thing that
+     * reads it.
+     *
+     * **Nil is a real answer and it is not "signed out".** It means *that
+     * machine did not say* — an older desktop, or a probe that threw on the far
+     * side. The two have different remedies and only one of them is fixed by
+     * logging in again, so nothing here collapses them; the label falls to the
+     * rung below instead, which says something true either way.
+     *
+     * Defaulted in the initialiser rather than left required, so the rows built
+     * by hand in the tests and by any future fixture keep meaning "this machine
+     * said nothing" without restating it.
+     */
+    let signIn: WireSignIn?
+
+    init(id: String,
+         name: String,
+         provider: String?,
+         color: String?,
+         system: Bool,
+         signIn: WireSignIn? = nil) {
+        self.id = id
+        self.name = name
+        self.provider = provider
+        self.color = color
+        self.system = system
+        self.signIn = signIn
+    }
 }
 
 /**
@@ -203,7 +247,35 @@ extension WireCodec {
                            // arrives from another machine and its only use is
                            // to pick a colour out of a table on this side.
                            color: customProperty(string(row["color"])),
-                           system: row["system"] as? Bool == true)
+                           system: row["system"] as? Bool == true,
+                           signIn: signIn(row["signIn"]))
+    }
+
+    /**
+     * What the far machine said about one login, or nil.
+     *
+     * `state` is required and `account` is not, which is the wire's own shape:
+     * a machine always has a word for what it found, and very often has no
+     * address to go with it — `codex login status` prints *"Logged in using
+     * ChatGPT"* and never names anybody.
+     *
+     * A row with no `signIn` key, a `signIn` that is not an object, and a
+     * `signIn` with no `state` all answer nil, and all three mean the same
+     * thing to the label above: *this machine did not say*. There is
+     * deliberately no fabricated `unknown` state — composing one would be this
+     * client claiming the far end answered a question it never put.
+     *
+     * The address goes through `displayLine` like every other string this app
+     * prints: it arrives from another machine, it lands in a chip on a phone,
+     * and a control character or a two-thousand-character "address" is a bar
+     * that no longer fits on the screen. `state` goes through `string` instead
+     * — it is compared, never drawn, and trimming a token that is only ever
+     * matched against a constant would be theatre.
+     */
+    static func signIn(_ value: Any?) -> WireSignIn? {
+        guard let row = value as? [String: Any],
+              let state = string(row["state"]), !state.isEmpty else { return nil }
+        return WireSignIn(state: state, account: displayLine(row["account"]))
     }
 
     static func accounts(_ value: Any?) -> [WireAccount] {

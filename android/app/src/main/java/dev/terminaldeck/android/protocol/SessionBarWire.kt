@@ -81,6 +81,44 @@ data class UsageFigures(
 }
 
 /**
+ * What the far machine's own CLI said about one login.
+ *
+ * Two fields of the four `SignInWire` carries in `src/main/remote/protocol.ts`, and the pair is not
+ * an accident: it is exactly the desktop's own `SignInFacts` — *"the two fields an address is
+ * decided from, and nothing else"*. `plan` and `detail` are read by the desktop because the desktop
+ * draws a state line and a tooltip. This bar draws neither, and drawing neither is a rule rather
+ * than an omission — Asad, four times in one recording: *"don't put any single statement in
+ * anywhere… We want simplicity."* A field lifted here that nothing draws is a field that will
+ * eventually be drawn. `ignoreUnknownKeys` takes care of the two that are left on the wire.
+ *
+ * `command` is not here for the reason it is not on the wire either: it is a command line for a
+ * shell on the *far* machine, so it could only ever be offered to somebody who cannot run it.
+ *
+ * ## Why [state] is a bare string
+ *
+ * Because the wire's is. `SignInWire.state` is deliberately not a union on the far side — this app
+ * is shipped against desktops that may have grown a state it has never heard of — and the only
+ * question ever asked of it is *"is this the signed-in one?"*. An unrecognised value answers no,
+ * which is the conservative answer and the one that costs nothing: the row falls to a lower rung
+ * and says something true about the install instead of claiming an address. An enum here would turn
+ * a state added next month into a dropped account.
+ */
+@Serializable
+data class SignInWire(
+    /** The far machine's own word: `signed-in`, `signed-out`, `unknown`, `unsupported` — or a value
+     *  this build has never seen. */
+    val state: String,
+    /** The address the CLI named, when it named one. Null is common and honest: `codex login status`
+     *  prints *"Logged in using ChatGPT"* and never an address, by design. */
+    val account: String? = null,
+) {
+    companion object {
+        /** The one state that lets the address be printed. See [accountAddress]. */
+        const val SIGNED_IN = "signed-in"
+    }
+}
+
+/**
  * One login on the far machine, as the chip draws it.
  *
  * [provider] is a bare agent id — `claude`, `codex`, `gemini` — and is deliberately not an enum:
@@ -100,6 +138,29 @@ data class AccountWire(
     val color: String? = null,
     /** The machine's own install — the login every fallback ends on. */
     val system: Boolean = false,
+    /**
+     * What that machine's own CLI said about this login, or null.
+     *
+     * The field the chip could not tell the truth without. Until it was decoded, [name] was all this
+     * app had to draw, and for the machine's own install that name is the key `systemProfileId`
+     * generates in `src/main/profiles.ts` — which is what put "Default", "Default (Codex CLI)",
+     * "Default (Gemini CLI)" on the sheet Asad filmed on 2026-08-26:
+     *
+     *   > *"when we click on this link it should clearly mention the name of the account here
+     *   > instead of saying default — name of the account should be there."*
+     *
+     * The address existed on the far machine the whole time — its own Accounts screen prints it, and
+     * `account-serve.ts`'s `toWire` has spread a `signIn` object onto every row since 2026-08-21.
+     * This client simply dropped it on the floor. See [accountLoginLabel], which is the only thing
+     * that reads it.
+     *
+     * **Null is a real answer and it is not "signed out".** It means *that machine did not say* — a
+     * desktop older than this field, or a probe that threw on the far side. The two have different
+     * remedies and only one of them is fixed by logging in again, so nothing here collapses them:
+     * the label falls to the rung below instead, which says something true either way. Defaulted so
+     * that a desktop that sends no `signIn` decodes rather than failing the whole row.
+     */
+    val signIn: SignInWire? = null,
 ) {
     /**
      * The custom-property name this row asked to be tinted with, or null.
