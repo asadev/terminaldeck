@@ -178,7 +178,11 @@ struct WatchSurfacesView: View {
                 .foregroundStyle(surface.live ? Theme.positive : Theme.secondary)
                 .frame(width: 20)
             VStack(alignment: .leading, spacing: 2) {
-                Text(surface.title.isEmpty ? (surface.window.isEmpty ? "Front tab" : surface.window) : surface.title)
+                // `MachineBrowserText.surfaceLabel`, not a second copy of the
+                // rule. The inline version here answered a raw shell tab id for
+                // a blank cast, so one window was "Untitled" on the Browser tab
+                // and a hex string on this one.
+                Text(MachineBrowserText.surfaceLabel(surface))
                     .font(.system(size: 16))
                     .foregroundStyle(Theme.primary)
                     .lineLimit(1)

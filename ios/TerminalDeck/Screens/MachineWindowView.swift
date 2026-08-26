@@ -589,8 +589,13 @@ struct MachineWindowView: View {
     }
 
     private var fallbackName: String {
-        guard window != nil || liveSurface != nil else { return "Window" }
-        return windowID.isEmpty ? "Front tab" : windowID
+        // Never a raw window id. It is a shell tab id — `browser:1756…:3` — and
+        // putting one where a person reads a name is the jargon this round
+        // exists to delete. `Untitled` is what a browser calls a window it has
+        // nothing better to say about; the machine's own tab keeps its own name
+        // because *which* tab it is, is the useful fact about it.
+        guard window != nil || liveSurface != nil else { return WindowNames.blank }
+        return windowID.isEmpty ? "Front tab" : WindowNames.blank
     }
 
     @ViewBuilder
