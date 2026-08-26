@@ -909,6 +909,10 @@ final class HostLink: Identifiable {
         // this, and a re-pair mints a **new** device id, so nothing about the old
         // one may be carried across.
         copilot.forget()
+        // And its routines with it, on exactly the argument above: a re-pair
+        // mints a new device id, and nothing about the old one may be carried
+        // across.
+        copilot.forgetRoutines()
     }
 
     /**
@@ -964,6 +968,10 @@ final class HostLink: Identifiable {
         // to keep. Splitting the two is the whole of the tab-bar fix — see
         // `restart()`.
         copilot.connectionLost()
+        // The routines' own half of the same split. The rows stay — a routine
+        // is a file that exists whether or not this socket does — and what
+        // goes is the claim that they are current. See `CopilotLink.routines`.
+        copilot.routinesConnectionLost()
         attached = []
         wanted = []
         bridges = [:]
@@ -1707,6 +1715,7 @@ final class HostLink: Identifiable {
                 // drop because it happened; a countdown over a dead channel is a
                 // lie with a clock on it.
                 copilot.connectionLost()
+                copilot.routinesConnectionLost()
                 /*
                  * The figures go, the conversation stays.
                  *
@@ -1821,6 +1830,11 @@ final class HostLink: Identifiable {
              * capability list claims. See `CopilotConnection`.
              */
             copilot.welcomed(capabilities: capabilities, connection: copilotConnection)
+            // And whether this machine offers its routines to this phone. Its
+            // own call rather than a field on the one above, because they are
+            // two capabilities and a machine can serve one without the other —
+            // which is the whole reason `routines` has a name of its own.
+            copilot.welcomed(routines: capabilities)
             // The same list, to the one other object that gates itself on it.
             // Replaced rather than merged on every welcome, because a device
             // that reconnects as a guest is handed a shorter one and a bar that
@@ -2167,12 +2181,29 @@ final class HostLink: Identifiable {
             // arrives as a frame is also proof this machine has a copilot, and
             // the same object arriving inside a `welcome` is not.
             copilot.apply(pushed: connection)
+            // The same push takes the routines away, because the machine asks
+            // one question about this device's kind for both. Only ever takes:
+            // whether it *has* routines is the capability list's answer.
+            copilot.routinesGrantChanged(linked: connection.linked)
 
         case let .copilotAsk(question):
             copilot.apply(ask: question)
 
         case let .copilotSettled(settled):
             copilot.apply(settled: settled)
+
+        /*
+         * The routines, forwarded the same way and to the same object.
+         *
+         * Two frames at human speed, so they go through the switch like the
+         * copilot's own — which is what keeps the compiler checking that every
+         * message this app can receive has somewhere to go.
+         */
+        case let .routineRows(rows, notice):
+            copilot.apply(routines: rows, notice: notice)
+
+        case let .routineFile(file):
+            copilot.apply(routineFile: file)
 
         case .usageReading, .accountState, .accountSwitched:
             // Everything about which answer belongs to which question is the

@@ -561,6 +561,20 @@ enum WireCapability {
     /// above, so the string lives beside the model it belongs to.
     static let browserControl = MachineBrowserWire.capability
 
+    /// The machine's routines — the saved instructions it runs on its own, which
+    /// are the rest of what the Mac's copilot page has and this one did not:
+    /// *"what happened overnight"*, *"check the work before it counts as done"*,
+    /// *"uncommitted work left behind"*. Aliased to `RoutinesWire.capability` the
+    /// way `browserProfiles` and `browserControl` are aliased above, so the
+    /// string lives beside the model it belongs to.
+    ///
+    /// Advertised only by a host that holds a routine engine, and only to one of
+    /// its owner's own devices — a routine is a prompt that machine runs with its
+    /// own tools, so it goes exactly where the copilot goes. Its absence
+    /// therefore has the same two meanings `copilot`'s does and the screen does
+    /// not need to tell them apart.
+    static let routines = RoutinesWire.capability
+
     /**
      * What this build tells a desktop it can do, in `hello.capabilities`.
      *
@@ -1438,6 +1452,61 @@ enum ClientMessage: Equatable {
      * cancel.
      */
     case browserHandoverDone(rid: String, window: String, carryOn: Bool)
+
+    /* ---- capability `routines`. Never sent unless the machine offered it. --- */
+
+    /**
+     * Every routine on that machine. Answered with `routines.rows`.
+     *
+     * Carries nothing — there is one routines folder per machine — and it is the
+     * answer to each of the four verbs below as well as to itself. The screen
+     * redrawing **is** the confirmation, which is the shape `panelAct` settled
+     * on and for the same reason: an outcome a client reconciles against a list
+     * it is holding is a second copy of the truth.
+     */
+    case routines
+    /**
+     * One routine's file, **to read**.
+     *
+     * There is no frame that writes one back and this enum must not grow one.
+     * The desktop marks that operation `human` rather than giving it a
+     * permission tier, because writing chosen bytes into the routines folder is
+     * wider than anything the copilot may be handed — see `RoutinesWire`, and
+     * `routine.text.rows`, which carries the machine's own sentence saying why
+     * there is no Save.
+     */
+    case routineText(id: String)
+    /**
+     * Run this one now, whatever its triggers say. **This starts an agent turn
+     * on that machine**, in a folder, with that machine's tools.
+     *
+     * The engine has the last word: a budget already spent, a run already going,
+     * a build with no runner behind it all come back as its own sentence in the
+     * notice on the answering `routines.rows`. A row's `canRun` covers only the
+     * two refusals that are certain before the press.
+     */
+    case routineRun(id: String)
+    /**
+     * Hold it. **Its file is not touched.**
+     *
+     * A hold is engine state kept beside the file, which is what makes it safe
+     * to offer from a phone at all: `enabled:` is a line somebody typed into a
+     * document and nothing on this wire rewrites one. `reason` is what they will
+     * read later; nil lets the machine write its own sentence rather than
+     * leaving a blank one.
+     */
+    case routinePause(id: String, reason: String?)
+    /// Let it go again. Clears the hold and the failure count with it.
+    case routineResume(id: String)
+    /**
+     * Delete it. **Its file is removed from disk.**
+     *
+     * There is no confirmation on the wire. The desktop card asks before it
+     * sends anything and the screen here is expected to do the same: a
+     * confirmation is a thing a person sees, which makes it the screen's rather
+     * than the protocol's.
+     */
+    case routineDelete(id: String)
 }
 
 /// How a sign-in offers its secret. A password, or a private-key PEM — the host
@@ -1865,6 +1934,25 @@ enum ServerMessage: Equatable {
     /// of ours, and an unsolicited push to every watcher when the state moves.
     /// See `BrowserHandoverState`.
     case browserHandover(BrowserHandoverState)
+
+    /* ---- capability `routines` -------------------------------------------- */
+    /**
+     * Every routine on that machine, and one line about what just happened.
+     *
+     * The answer to `routines` **and** to each of run, pause, resume and delete,
+     * which is what `notice` is for: the redraw is the confirmation and the
+     * notice says what the press did. It carries the engine's own sentence when
+     * a run refused to start, so *"it did not start"* and *"it did not start
+     * because the hourly budget is spent until 14:20"* are not the same answer.
+     *
+     * Never unsolicited today. The engine does change state on its own — a
+     * schedule fires, a budget recovers — and the day something watches this
+     * screen while that happens, the push goes on this same frame.
+     */
+    case routineRows(routines: [RoutineRow], notice: String?)
+    /// One routine's file, to read, with the machine's own sentence saying why
+    /// there is no Save. See `RoutineFile`.
+    case routineFile(RoutineFile)
 }
 
 enum ProtocolErrorCode: String, CaseIterable, Equatable {

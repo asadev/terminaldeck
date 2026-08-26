@@ -1217,6 +1217,281 @@ final class CopilotLink {
      * that the machine refused.
      */
     private static let machineRefusal = "That machine is not letting this phone"
+
+    // MARK: - Routines
+
+    /*
+     * **The rest of what the Mac's copilot page has and this one did not.**
+     *
+     * > *"the main co-pilot settings page is going around in circles: edit
+     * > button, run now, delete and toggle thing. If you go to Mac side there is
+     * > … 'check the work before it counts as done', 'what happened overnight'
+     * > … all of these are like separate settings for co-pilot … Mac has a lot
+     * > of things about copilot by the way."*
+     *
+     * Every name in that sentence is a routine: one file each, in the machine's
+     * own routines folder, with a trigger, a folder and a prompt. They live on
+     * this object rather than on a link of their own because they are the
+     * copilot with a timer in front of them — one machine, one copilot, one set
+     * of routines, and the machine gates them on exactly the question it gates
+     * the copilot on.
+     *
+     * **The screen is a separate lane's.** What it calls is: `canUseRoutines` to
+     * decide whether to exist at all, `loadRoutines()` when it appears,
+     * `routines` for the rows, `openRoutine(_:)` / `routineFile` / `closeRoutine()`
+     * for the read-only file sheet, `runRoutine(_:)`, `holdRoutine(_:reason:)`,
+     * `armRoutine(_:)` and `deleteRoutine(_:)` for the four controls on a row,
+     * and `routineNotice` / `dismissRoutineNotice()` for the one line that says
+     * what a press did. Nothing on a row needs deriving: `armed`, `canRun`,
+     * `canArm` and their sentences arrive already decided by the machine.
+     */
+
+    /**
+     * This machine's routines as it last described them.
+     *
+     * Replaced wholesale on every answer and never merged, for the reason the
+     * dev-server rows are: the machine is the only thing that knows whether a
+     * routine is armed, running, held or gone, and a merge would keep a row it
+     * had just deleted or a state it had just moved on from.
+     *
+     * Kept across a reconnect rather than cleared with the copilot's own claims
+     * above, and that is a deliberate difference. A routine is a file that goes
+     * on existing whether or not this socket does, and a list that emptied
+     * itself during a three-second reconnect would take the whole screen away
+     * inside the window `ConnectionGrace` spends deliberately saying nothing.
+     * What does not survive is `routinesAnswered`, so a screen can tell *these
+     * are what the machine last said* from *this is current*.
+     */
+    private(set) var routines: [RoutineRow] = []
+
+    /// A `routines.rows` has arrived **on this connection**. False until then,
+    /// which is what separates "this machine has no routines" from "nothing has
+    /// answered yet" — the same distinction the whole routines feature exists to
+    /// keep on the machine itself.
+    private(set) var routinesAnswered = false
+
+    /// The routine whose file is open, if one is. Read-only: there is no verb on
+    /// this wire that writes one back, and `RoutineFile.readOnlyBecause` carries
+    /// the machine's own sentence saying why. See `RoutinesWire`.
+    private(set) var routineFile: RoutineFile?
+
+    /// The routine an `openRoutine` is waiting on, so a slow answer for one
+    /// somebody has navigated away from is dropped rather than drawn under the
+    /// heading of the one they are looking at now.
+    private var openingRoutine: String?
+
+    /// One line about what the last press did — including the machine's own
+    /// sentence when a run refused to start, which is the only place a budget, an
+    /// overlap policy or a missing runner is ever explained.
+    private(set) var routineNotice: String?
+
+    /// Whether this machine's capability list names `routines`.
+    private(set) var isRoutinesOffered = false
+
+    /**
+     * Whether there are routines here **for this phone**.
+     *
+     * One fact rather than the three behind `isAvailable`, and the difference is
+     * worth stating. The host strips this capability from what a guest is told,
+     * so its presence in a `welcome` already answers both halves — this machine
+     * holds a routine engine, and this device may reach it. `linked` is
+     * deliberately *not* consulted: that flag is a fact about the **copilot's**
+     * connection, and `CAPABILITY.routines` exists on the far side precisely
+     * because a machine can serve routines without serving a copilot
+     * conversation. Folding them together here would reproduce, on this side of
+     * the wire, the coupling the capability was split to avoid.
+     *
+     * The one case that could go stale — a device demoted from *My device* while
+     * it is connected — is handled by `routinesGrantChanged(linked:)`, which the
+     * same `copilot.grant` push that takes the copilot away calls.
+     */
+    var canUseRoutines: Bool { isRoutinesOffered }
+
+    /// A `welcome` arrived: does this machine offer routines to this phone?
+    ///
+    /// Its own entry point rather than a line inside `welcomed(capabilities:connection:)`,
+    /// so the copilot's own welcome path stays exactly as it was. `HostLink`
+    /// calls both, one after the other, off the same frame.
+    func welcomed(routines capabilities: Set<String>) {
+        isRoutinesOffered = capabilities.contains(WireCapability.routines)
+        // A machine that has stopped offering them has nothing left to draw, and
+        // rows kept from the last one it did offer would be rows about a feature
+        // that is no longer there.
+        if !isRoutinesOffered { clearRoutines() }
+    }
+
+    /**
+     * The copilot grant moved, which moves this too.
+     *
+     * The push that carries `linked: false` is how a device demoted at the
+     * machine finds out without the socket dropping, and the same demotion takes
+     * the routines: the host asks one question about the device kind on every
+     * frame, for the copilot's verbs and for these. Acting on it here is what
+     * stops a screen sitting there with four controls whose every press is
+     * refused — *"a blocked control that opens onto a paragraph is a
+     * description"*.
+     *
+     * Only ever takes it away. A grant arriving with `linked: true` says nothing
+     * about whether this machine has a routine engine, which is the capability
+     * list's answer and arrives only in a `welcome`.
+     */
+    func routinesGrantChanged(linked: Bool) {
+        guard !linked else { return }
+        isRoutinesOffered = false
+        clearRoutines()
+    }
+
+    /// The socket went. What is kept and what is not is argued on `routines`.
+    func routinesConnectionLost() {
+        routinesAnswered = false
+        // A notice is one line about a press that is over. Over a dead channel
+        // it is a claim about a machine nothing is talking to any more.
+        routineNotice = nil
+    }
+
+    /// That machine is gone for good — `HostLink.forget()`. Everything goes.
+    func forgetRoutines() {
+        isRoutinesOffered = false
+        clearRoutines()
+    }
+
+    private func clearRoutines() {
+        routines = []
+        routinesAnswered = false
+        routineFile = nil
+        openingRoutine = nil
+        routineNotice = nil
+    }
+
+    // MARK: - Routines: what the screen asks for
+
+    /// Ask for the list. The answer replaces whatever is held.
+    @discardableResult
+    func loadRoutines() -> Bool { sendRoutine(.routines, failure: "Not connected — the routines could not be read.") }
+
+    /**
+     * Open one routine's file.
+     *
+     * The old one is dropped first, so a slow answer for a routine somebody has
+     * already navigated away from cannot appear under the new heading — the
+     * frame carries its own id and `apply(routineFile:)` checks it, and this is
+     * the half that stops the *previous* file being on screen while the next one
+     * loads.
+     */
+    @discardableResult
+    func openRoutine(_ id: String) -> Bool {
+        routineFile = nil
+        openingRoutine = id
+        guard sendRoutine(.routineText(id: id), failure: "Not connected — that routine could not be read.") else {
+            openingRoutine = nil
+            return false
+        }
+        return true
+    }
+
+    func closeRoutine() {
+        routineFile = nil
+        openingRoutine = nil
+    }
+
+    /// Run one now. **This starts an agent turn on that machine.** Whether it
+    /// took is the notice on the answer, in the engine's own words.
+    @discardableResult
+    func runRoutine(_ id: String) -> Bool {
+        sendRoutine(.routineRun(id: id), failure: "Not connected — that routine was not started.")
+    }
+
+    /// Hold one. Its file is not touched — a hold is engine state kept beside the
+    /// file, which is the whole reason this is offered from a phone at all.
+    @discardableResult
+    func holdRoutine(_ id: String, reason: String? = nil) -> Bool {
+        sendRoutine(.routinePause(id: id, reason: reason),
+                    failure: "Not connected — that routine was not put on hold.")
+    }
+
+    /// Let one go again.
+    @discardableResult
+    func armRoutine(_ id: String) -> Bool {
+        sendRoutine(.routineResume(id: id), failure: "Not connected — that routine was not armed.")
+    }
+
+    /// Delete one. **Its file is removed from disk**, so the screen is expected
+    /// to have asked first — a confirmation is a thing a person sees, which makes
+    /// it the screen's rather than the protocol's.
+    @discardableResult
+    func deleteRoutine(_ id: String) -> Bool {
+        sendRoutine(.routineDelete(id: id), failure: "Not connected — that routine was not deleted.")
+    }
+
+    func dismissRoutineNotice() { routineNotice = nil }
+
+    /**
+     * One send, one sentence when it does not go.
+     *
+     * The refusal names what did *not* happen rather than saying "not
+     * connected", because those are two different pieces of news: somebody who
+     * pressed Run now needs to know the run did not start, not that a socket is
+     * down. The same shape `say` and `answer` above use for the same reason.
+     */
+    @discardableResult
+    private func sendRoutine(_ message: ClientMessage, failure: String) -> Bool {
+        guard canUseRoutines else {
+            onError?("\(Self.machineRefusal) reach its routines.")
+            return false
+        }
+        guard wire.send(message) else {
+            onError?(failure)
+            return false
+        }
+        return true
+    }
+
+    // MARK: - Routines: what arrives
+
+    /**
+     * The list, replaced.
+     *
+     * `routinesAnswered` latches here rather than on the ask, because the point
+     * of it is that a machine **answered** — a phone that set it when it sent the
+     * frame would draw *no routines* over a host that had said nothing at all,
+     * which is exactly the failure the far side's whole health model is built to
+     * prevent.
+     *
+     * Any frame arriving is also proof this machine serves the capability, so it
+     * latches `isRoutinesOffered` for the reason `implemented()` latches its own
+     * flag above: a build whose capability list drifted from what it can actually
+     * do is caught by the code path that *is* the implementation.
+     */
+    func apply(routines rows: [RoutineRow], notice: String?) {
+        isRoutinesOffered = true
+        routines = rows
+        routinesAnswered = true
+        // Kept when the frame carries none, rather than cleared. An unsolicited
+        // redraw — the day the machine pushes one — must not silently wipe the
+        // line explaining what the last press did.
+        if let notice, !notice.isEmpty { routineNotice = notice }
+        // The open file's routine may have just been deleted from under it.
+        if let open = routineFile, !rows.contains(where: { $0.id == open.id }) {
+            routineFile = nil
+            openingRoutine = nil
+        }
+    }
+
+    /**
+     * One routine's file.
+     *
+     * Kept only while something is asking for it: a file that arrives for a
+     * routine nobody opened is an answer to an ask this screen has moved on
+     * from, and drawing it would put the wrong document under the heading. The
+     * id on the frame is what makes that checkable, which is why the machine
+     * sends it even on the failure path.
+     */
+    func apply(routineFile file: RoutineFile) {
+        isRoutinesOffered = true
+        guard file.id == openingRoutine else { return }
+        openingRoutine = nil
+        routineFile = file
+    }
 }
 
 /**

@@ -21,6 +21,8 @@ import {
   SHA256_HEX_LENGTH,
   OUTPUT_CHUNK_BYTES,
   CONTROL_IDS,
+  ROUTINE_STATES,
+  MAX_ROUTINE_PAUSE_REASON,
   MAX_WINDOW_ARGS_BYTES,
   MAX_WINDOW_RESULT_BYTES,
   MIN_WATCH_WIDTH,
@@ -48,6 +50,10 @@ import {
 // Type-only, so this test does not drag a terminal emulator into the protocol
 // suite. The pin below is what it is for.
 import type { ControlId } from '../agent-controls'
+// Type-only for the same reason, and here it matters more: the engine reaches
+// `picomatch`, the disk and its own timers, none of which a protocol test wants
+// to load. The pin further down is what it is for.
+import type { RoutineStateName } from '../routines/engine'
 
 /**
  * Two properties are worth testing here, and they pull in opposite directions.
@@ -165,6 +171,18 @@ const CLIENT_TYPES: Record<ClientMessage['t'], true> = {
   'browser.window.shot': true,
   'browser.window.steps': true,
   'browser.window.pick': true,
+  /*
+   * The routines card, over the wire. One read, one file, and the four verbs
+   * that act on a routine somebody is looking at — and deliberately nothing
+   * that writes a routine file; `routines/ipc.ts` marks that operation `human`
+   * rather than giving it a tier, and a frame is not a window.
+   */
+  routines: true,
+  'routine.text': true,
+  'routine.run': true,
+  'routine.pause': true,
+  'routine.resume': true,
+  'routine.delete': true,
 }
 
 /** Same guard for the other direction. */
@@ -237,6 +255,10 @@ const SERVER_TYPES: Record<ServerMessage['t'], true> = {
   'browser.shot': true,
   'browser.record.rows': true,
   'browser.window.picked': true,
+  // Their two answers. Every verb above answers with the list, so a redraw is
+  // the confirmation and there is no outcome frame to reconcile.
+  'routines.rows': true,
+  'routine.text.rows': true,
 }
 
 const VALID_CLIENT: ClientMessage[] = [
@@ -497,6 +519,24 @@ const VALID_CLIENT: ClientMessage[] = [
   // Wider has been pressed three times.
   { t: 'browser.window.pick', id: 'browser:1', x: 120.5, y: 2048 },
   { t: 'browser.window.pick', id: 'browser:1', x: 0, y: 0, up: 3 },
+
+  /*
+   * **The routines card.**
+   *
+   * Both shapes of `routine.pause`, since the parser's job on that frame is
+   * deciding what an absent `reason` means: the host writes its own sentence
+   * for a hold with no reason, so an empty string would replace a sentence
+   * with nothing. The reason below is already clean and inside
+   * `MAX_ROUTINE_PAUSE_REASON`, so the strip and the cap leave it alone and the
+   * round trip holds; the cleaning itself is exercised further down.
+   */
+  { t: 'routines' },
+  { t: 'routine.text', id: 'overnight-report' },
+  { t: 'routine.run', id: 'overnight-report' },
+  { t: 'routine.pause', id: 'overnight-report' },
+  { t: 'routine.pause', id: 'overnight-report', reason: 'Held from my phone.' },
+  { t: 'routine.resume', id: 'overnight-report' },
+  { t: 'routine.delete', id: 'uncommitted-work' },
 ]
 
 const SESSION: RemoteSession = {
@@ -1143,6 +1183,52 @@ const VALID_SERVER: ServerMessage[] = [
     depth: 0,
     maxUp: 6,
   },
+  /*
+   * The routines card's two answers.
+   *
+   * The row below is a whole `RoutineWire` rather than a trimmed one on
+   * purpose: this list's job is to prove the serializer carries every field a
+   * host can put on a frame, and a field left out of the sample is a field
+   * nothing here would notice going missing.
+   */
+  {
+    t: 'routines.rows',
+    notice: 'overnight-report is running.',
+    routines: [
+      {
+        id: 'overnight-report',
+        name: 'What happened overnight',
+        purpose: 'Read last night’s sessions and write one paragraph about what changed.',
+        schedule: 'schedule 07:30',
+        folder: '/Users/apple/Projects/terminaldeck',
+        state: 'armed',
+        enabled: true,
+        paused: false,
+        armed: true,
+        reason: null,
+        problems: [],
+        lastRunAt: 1_756_000_000_000,
+        lastOutcome: 'ok',
+        lastError: null,
+        nextDueAt: 1_756_080_000_000,
+        pausedUntil: null,
+        missedWhileClosed: 0,
+        consecutiveFailures: 0,
+        refusedCalls: 1,
+        canRun: true,
+        runBecause: null,
+        canArm: true,
+        armBecause: null,
+      },
+    ],
+  },
+  {
+    t: 'routine.text.rows',
+    id: 'overnight-report',
+    file: 'overnight-report.md',
+    text: '# What happened overnight\n\nwhen: schedule 07:30\n\n---\n\nRead last night’s sessions.\n',
+    readOnlyBecause: 'Routines are written where the file is. This is the file as it stands.',
+  },
 ]
 
 /**
@@ -1192,6 +1278,53 @@ const CONTROL_PIN: Record<ControlId, true> = { model: true, effort: true, fast: 
 describe('the controls capability', () => {
   it('names the same four controls agent-controls.ts performs', () => {
     expect(new Set<string>(CONTROL_IDS)).toEqual(new Set(Object.keys(CONTROL_PIN)))
+  })
+})
+
+/**
+ * The wire's list of routine states and the engine that produces them name the
+ * same seven things.
+ *
+ * Two copies for the reason `CONTROL_PIN` above guards two: the engine reaches
+ * the disk, `picomatch` and its own timers, and `protocol.ts` is bundled for a
+ * plain-Node host and for the PWA. It fails the same two ways — the record fails
+ * to *compile* if the engine's union gains a state, and the comparison fails at
+ * *run time* if `ROUTINE_STATES` does. A state in one and not the other is a
+ * badge a phone draws as `unarmed` over a routine that is something else, which
+ * is precisely the "quiet and broken look the same" failure the states exist to
+ * prevent.
+ */
+const ROUTINE_STATE_PIN: Record<RoutineStateName, true> = {
+  armed: true,
+  running: true,
+  disabled: true,
+  broken: true,
+  unarmed: true,
+  paused: true,
+  stale: true,
+}
+
+describe('the routines capability', () => {
+  it('names the same seven states the engine reports', () => {
+    expect(new Set<string>(ROUTINE_STATES)).toEqual(new Set(Object.keys(ROUTINE_STATE_PIN)))
+  })
+
+  it('refuses a routine id that could be a path', () => {
+    for (const id of ['../../etc/passwd', '/etc/passwd', 'Overnight', 'a'.repeat(65), '', 'a b']) {
+      expect(refused(serialize({ t: 'routine.run', id } as ClientMessage), id).code).toBe('bad-message')
+    }
+  })
+
+  it('cleans a pause reason rather than refusing one, and drops it when nothing is left', () => {
+    const long = 'x'.repeat(MAX_ROUTINE_PAUSE_REASON + 50)
+    const capped = accepted(serialize({ t: 'routine.pause', id: 'nightly', reason: long } as ClientMessage))
+    expect(capped).toEqual({ t: 'routine.pause', id: 'nightly', reason: 'x'.repeat(MAX_ROUTINE_PAUSE_REASON) })
+    // Nothing but whitespace is nothing to say, and the field goes rather than
+    // arriving as `''` — which would replace the host's own sentence with a gap.
+    expect(accepted(serialize({ t: 'routine.pause', id: 'nightly', reason: '   ' } as ClientMessage))).toEqual({
+      t: 'routine.pause',
+      id: 'nightly',
+    })
   })
 })
 
