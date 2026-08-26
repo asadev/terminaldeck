@@ -15,11 +15,18 @@ import { describe, expect, it } from 'vitest'
  *   > including remote session, including local session"*
  *
  * The two buttons were drawn and refused, each with a written sentence. The
- * sentences were true about the wiring: chat reads a transcript file on the far
- * machine's disk, and split arranges panes that were filled from this window's
+ * sentences were true about the wiring: chat read a transcript file on the far
+ * machine's disk, and split arranged panes that were filled from this window's
  * own session list only. This file pins what changed and — as importantly —
  * what did not, because the shape of the fix is a pile of small invariants that
  * each look like tidying and are not.
+ *
+ * **Half of the complaint was answered by deletion.** Chat mode was removed
+ * from every client on 2026-08-26 — *"I don't think so it can work smoothly so
+ * it's better to completely remove this"* — so there is no longer a second view
+ * for a remote session to be missing. What survives here is the other half, and
+ * it is the half that was structural: a pane holds a session on any of the
+ * three computers, and the window has one name for what is on screen.
  *
  * Written against the source text, like the other wiring files here. What it is
  * checking is *which expression is wired to which*, and that is exactly the
@@ -33,30 +40,27 @@ describe('what is on screen has one name', () => {
   /*
    * `focusedId` is the *local* answer — the focused pane's tab while split, the
    * selected tab otherwise — and it was also the only answer. Everything about
-   * how the window is drawn was keyed on it, including `sessionView[focusedId]`
-   * and the write behind the mode switch. With a session on a paired machine or
+   * how the window is drawn was keyed on it, including the per-session view
+   * state the mode switch read and wrote. With a session on a paired machine or
    * a terminal on a server filling the pane, that is the id of a session **that
-   * is not on screen**.
+   * is not on screen**, so a control in the bar acted on something behind what
+   * he was looking at and nothing on screen moved.
    *
-   * The consequence is not cosmetic and it was live: with a remote session in
-   * front and the underlying local tab already in chat mode, `shown` is 'chat',
-   * the destination is 'terminal', nothing refuses that direction — so the
-   * toggle was pressable and the press turned a local tab back into a terminal
-   * while the remote pane carried on unchanged. Nothing on screen moved.
+   * The per-session half of that state went with chat mode. What is left is
+   * one question — is this window split — which is a fact about the window and
+   * cannot be read off the wrong session at all.
    */
-  it('reads the mode of the session on screen, not of a local tab behind it', () => {
-    expect(APP).toContain(
-      "const sessionMode: SessionViewMode = shownTabId ? sessionView[shownTabId] ?? 'terminal' : 'terminal'",
-    )
+  it('reads the window and nothing per-session', () => {
+    expect(APP).toContain("const mode: WorkspaceMode = splitting ? 'split' : 'terminal'")
+    expect(APP, 'the per-session view map is back').not.toContain('sessionView[')
   })
 
-  it('writes the mode back to the same session it read', () => {
+  it('writes only the window, and lands the collapse where you were', () => {
     const setMode = /const setMode = useCallback\([\s\S]*?\n {2}\)/.exec(APP)?.[0] ?? ''
     expect(setMode, 'setMode has changed shape').not.toBe('')
-    expect(setMode).toContain('setSessionView((views) => ({ ...views, [shownTabId]: next }))')
-    expect(setMode, 'the mode is written to the local focused tab again').not.toContain(
-      '[focusedId]: next',
-    )
+    expect(setMode).toContain('splitPanes()')
+    expect(setMode).toContain('closeSplit()')
+    expect(setMode, 'a per-session mode is being written again').not.toContain('setSessionView')
   })
 
   it('resolves that name from the window and the layout, in one place', () => {
@@ -139,13 +143,14 @@ describe('a pane can hold a session on any of the three computers', () => {
      */
     expect(APP).toContain('<div className="pane-remote-slot" {...{ [SLOT_ATTR]: elsewhere.tab.id }} />')
     /*
-     * Measured once per server tab and handed to both of its panes. A terminal
-     * on a server has a conversation view drawn in the same rectangle now, and
-     * two `slotStyle` calls for one hole is two chances for the pair to be
-     * given different rectangles.
+     * Measured once per server tab. It was handed to two panes while a terminal
+     * on a server also had a conversation drawn in the same rectangle; the
+     * conversation went with chat mode, so there is one now — and it is still
+     * read from one place, because two `slotStyle` calls for one hole is two
+     * chances for the pair to be given different rectangles.
      */
     expect(APP).toContain('const box = slotStyle(paneSlots[entry.tabId])')
-    expect((APP.match(/\bbox=\{box\}/g) ?? []).length).toBe(2)
+    expect((APP.match(/\bbox=\{box\}/g) ?? []).length).toBe(1)
     expect(APP).toContain('style={slotStyle(paneSlots[machineTabId(pane.machineId, pane.sessionId)])}')
   })
 
@@ -167,8 +172,8 @@ describe('the window and the layout never both claim the frame', () => {
     /*
      * `openMachineSession` / `openServerSession` are the *unsplit* window's way
      * of saying "this fills the frame". Leaving them set through a split meant
-     * `heading`, `modesBlocked` and every pane's visibility disagreeing about
-     * whether the far terminal was the whole window or one of two panes.
+     * `heading` and every pane's visibility disagreeing about whether the far
+     * terminal was the whole window or one of two panes.
      */
     const split = /const splitPanes = useCallback\(\(\) => \{[\s\S]*?\n {2}\}, \[/.exec(APP)?.[0] ?? ''
     expect(split, 'splitPanes has changed shape').not.toBe('')
@@ -212,32 +217,20 @@ describe('the window and the layout never both claim the frame', () => {
   })
 })
 
-describe('what the mode switch still refuses, and what it no longer does', () => {
-  const table = (): string =>
-    /const modesBlocked:[\s\S]*?\n {8}: undefined\n/.exec(APP)?.[0] ?? ''
-
-  it('no longer refuses split for either kind', () => {
-    expect(table(), 'modesBlocked has changed shape').not.toBe('')
-    expect(table(), 'split is refused again').not.toContain('split:')
-  })
-
-  it('no longer refuses chat for a server either, and refuses only what is absent', () => {
+describe('what the mode switch refuses now', () => {
+  it('refuses nothing at all, because there is nothing left it cannot do', () => {
     /*
-     * The sentence here used to read *"Chat reads the agent's own transcript
-     * file, which is on that server's disk. This app opens a terminal there,
-     * not a filesystem it reads conversations out of."* Every clause of it was
-     * true and it described a hole rather than a reason: the transcript is a
-     * file on a machine this app holds an SSH connection to, and
-     * `servers/chat.ts` now finds which file belongs to this shell while
-     * `connection.ts` reads byte ranges out of it.
-     *
-     * What is left refuses two things that really are missing — a build with no
-     * such channel, and a terminal the server has not answered for yet — and
-     * both are questions rather than a policy about a mode.
+     * There were two sentences here and both were about chat: a build with no
+     * channel for reading a transcript off a server, and a terminal the server
+     * had not answered for yet. Chat mode is gone, and split arranges this
+     * window's own panes over whatever they are holding — so the control has
+     * no state in which it has to explain itself, and the `unavailable` prop is
+     * passed by nobody.
      */
-    expect(table()).toContain('shownIsServer')
-    expect(table()).toContain('!serverChatWired(serversBridge)')
-    expect(table()).toContain('shownServerShellId === null')
-    expect(table()).not.toMatch(/not a filesystem it reads conversations out of/)
+    const mount = /<ModeSwitch[\s\S]*?\/>/.exec(APP)?.[0] ?? ''
+    expect(mount, 'the mode switch mount has changed shape').not.toBe('')
+    expect(mount).toContain('splitOffer={!features.on(\'split\')}')
+    expect(mount, 'a refusal table is back').not.toContain('unavailable')
+    expect(APP, 'modesBlocked is back').not.toContain('modesBlocked')
   })
 })

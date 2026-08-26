@@ -116,19 +116,6 @@ struct TerminalScreen: View {
     /// See `SessionControlsView`. Only offered when an agent is drawing this
     /// session, the same rule the desktop's own cluster keeps.
     @State private var showingControls = false
-    /**
-     * Whether this session is being read as a conversation rather than as a
-     * terminal.
-     *
-     * The two are the same session and the same socket — chat mode is a
-     * different *view*, not a second channel — so switching costs nothing on
-     * the far machine and a message typed in one appears in the other.
-     *
-     * The terminal is not rebuilt on the way back: `TerminalHostView` hands
-     * back `bridge.container`, a UIView the bridge owns, so taking it out of
-     * the hierarchy and putting it back keeps the emulator and its scrollback.
-     */
-    @State private var chatMode = false
 
     /*
      * **How much room the page has is not this screen's business any more.**
@@ -146,21 +133,6 @@ struct TerminalScreen: View {
      * of the pane's state already live. See `SessionPageView.pane`.
      */
 
-    /**
-     * A file chosen on the phone in chat mode, waiting for a press.
-     *
-     * The terminal's own menu items send the moment the picker closes, which is
-     * right there: the picker *was* the press. A conversation has a composer, and
-     * *"if we send the files we can have a preview and kind of things when we are
-     * on chat mode"* — so in chat mode the file is staged here first, drawn by
-     * the composer, and sent by a second press. Cleared either way, and the
-     * staged copy in this app's temporary directory is deleted on a discard
-     * because nothing downstream will: `FileUpload` deletes it when a transfer
-     * ends, and a file that was never sent has no transfer.
-     */
-    @State private var staged: PickedFile?
-    /// One of the machine's files, opened from a path in the conversation.
-    @State private var reading: FileReading?
 
     /// The two ways in. Both run out of process; see `FilePickers.swift`.
     private enum Picking: String, Identifiable {
@@ -424,18 +396,7 @@ struct TerminalScreen: View {
                     .accessibilityIdentifier("copilot.back")
                 }
             }
-            /*
-             * The group is conditional where the home page's is not, and that is
-             * the same fact read the other way rather than a difference of taste:
-             * there the `…` is always drawn, so the group always has something in
-             * it. Here neither control is unconditional — the toggle is absent on
-             * a machine that cannot serve a transcript, the `…` is absent in chat
-             * mode — and a group whose body resolves to nothing still occupies the
-             * bar as an empty capsule with nothing inside it.
-             */
-            if showsModeButton || !chatMode {
-                ToolbarItemGroup(placement: .topBarTrailing) { sessionControls }
-            }
+            ToolbarItemGroup(placement: .topBarTrailing) { sessionControls }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
             VStack(spacing: 0) {
@@ -528,28 +489,6 @@ struct TerminalScreen: View {
         .sheet(item: $sharing) { file in
             ShareSheet(url: file.url, subject: file.subject)
         }
-        /*
-         * One of the machine's files, reached from a path in the conversation.
-         *
-         * A sheet rather than a push, and that is forced rather than preferred:
-         * a push needs a case on `DeckModel.Route`, the route enum both stacks
-         * are driven by, and a second destination on this screen's stack would
-         * be a navigation state the copilot's stack has to agree about too.
-         * `FileTextView` is the same screen `FilesView` pushes — one reader, so
-         * a file read from a chat message and the same file read from the folder
-         * browser cannot disagree about whether it is text.
-         */
-        .sheet(item: $reading) { file in
-            NavigationStack {
-                FileTextView(model: model, path: file.path)
-                    .toolbar {
-                        ToolbarItem(placement: .topBarLeading) {
-                            Button("Done") { reading = nil }
-                                .accessibilityIdentifier("chat.file.done")
-                        }
-                    }
-            }
-        }
         // No `open` handed in: this sheet was raised from inside the session, so
         // a button leading to the screen underneath it would be furniture.
         .sheet(isPresented: $showingDetails) {
@@ -620,10 +559,6 @@ struct TerminalScreen: View {
             // The control cluster over the same session — model, effort, fast
             // mode, permission — read the same way and over the same attach.
             host?.controls.follow(sessionID)
-            // Last, because it turns the conversation on and the read behind
-            // that is about a session the two calls above have just pointed the
-            // bar at.
-            landChatFirstOnTheCopilotStack()
             askWhatTheMachinesBrowserHasOpen()
         }
         .onDisappear {
@@ -657,11 +592,6 @@ struct TerminalScreen: View {
             // per machine too, and a screen that has gone must not clear a
             // reading another screen is drawing from.
             if host?.controls.sessionID == sessionID { host?.controls.forget() }
-            chatMode = false
-            // A file chosen and then abandoned. The copy the picker staged in
-            // this app's temporary directory is deleted here because nothing
-            // else would: `FileUpload` only deletes it when a transfer ends.
-            discardStaged()
             // The moment the grace period is measured from: whatever the desktop
             // decides about this session in the next few seconds is the tail of
             // what he was just watching, not news.
@@ -709,64 +639,9 @@ struct TerminalScreen: View {
      * same socket, so switching costs nothing on the far machine and a message
      * typed in one appears in the other.
      */
-    @ViewBuilder
     private var sessionBody: some View {
-        if chatMode, let bar = host?.bar {
-            SessionChatView(bar: bar,
-                            // The session this screen is drawing, handed in
-                            // rather than read off the bar. The bar follows
-                            // one session per machine and two of these
-                            // screens can be alive at once, so "the bar's
-                            // session" and "this screen's session" are two
-                            // different facts and the chat view is only
-                            // allowed to draw the conversation when they
-                            // agree. See `SessionBarLink.release`.
-                            sessionID: sessionID,
-                            // The folder the agent's relative paths are
-                            // relative to. The machine's own answer, never
-                            // this app's guess — absent until it has sent
-                            // one, and then a relative path gets no chip.
-                            cwd: session?.cwd,
-                            // The same live state the header pill draws. A
-                            // conversation and a terminal are two views of one
-                            // pty, so what the pty is doing decides whether a
-                            // typed sentence lands — and until this was handed
-                            // over, chat mode was the one view that could not
-                            // say so. *"in chat mode I don't know anything.
-                            // First of all, this is the biggest problem."*
-                            // See `SessionChatView.Unready`.
-                            status: session?.status,
-                            reload: { reclaimBar() },
-                            // Absent for a guest device: `files` is
-                            // owner-only, so a path chip on one of those
-                            // could open nothing but a refusal.
-                            openFile: host?.canReadFiles == true ? { reading = FileReading(path: $0) } : nil,
-                            attach: host?.canSendFiles == true ? { pick($0) } : nil,
-                            attachment: attachment,
-                            send: connection.isLive ? { message in
-                                host?.sendChatMessage(message, into: sessionID)
-                            } : nil)
-        } else {
-            TerminalHostView(bridge: bridge)
-                .ignoresSafeArea(.container, edges: .bottom)
-        }
-    }
-
-    // MARK: - Mode
-
-    /**
-     * Whether the conversation can be reached from here at all.
-     *
-     * Four facts and every one of them load bearing: a live socket, a machine
-     * that said it can read a transcript, and — once it has answered — that it
-     * found one. The fourth is the way back: the button stays while the chat is
-     * on screen even if the answer says there is no transcript, because a screen
-     * with no way off it is worse than a button that does nothing new.
-     */
-    private var showsModeButton: Bool {
-        guard connection.isLive, host?.bar.canReadChat == true else { return false }
-        if chatMode { return true }
-        return host?.bar.transcript != false
+        TerminalHostView(bridge: bridge)
+            .ignoresSafeArea(.container, edges: .bottom)
     }
 
     /// The two controls this screen owns — the mode toggle and then the
@@ -775,33 +650,6 @@ struct TerminalScreen: View {
     /// that block is about placement and this one is about contents.
     @ViewBuilder
     private var sessionControls: some View {
-                /*
-                 * The glyph is the **destination**, not the current mode.
-                 *
-                 * His correction rather than a preference, and it reverses what
-                 * was built the first time: *"chat icon should be when I am on
-                 * the terminal mode. And when I am on the chat mode, then it
-                 * should show the terminal icon."* So the icon always names
-                 * where the press goes.
-                 *
-                 * Absent — not disabled — when this machine cannot read a
-                 * transcript at all, and absent again when it has looked and
-                 * found none for this folder. Both are real states (a session
-                 * running a shell, a desktop older than the capability) and the
-                 * alternative is a button that opens an empty screen with
-                 * nothing on it to say why.
-                 */
-                if showsModeButton {
-                    Button {
-                        toggleMode()
-                    } label: {
-                        Image(systemName: chatMode ? "terminal" : "bubble.left.and.bubble.right")
-                    }
-                    .accessibilityLabel(chatMode ? "Back to the terminal"
-                                                 : "Read this session as a conversation")
-                    .accessibilityIdentifier("terminal.mode")
-                }
-
                 /*
                  * **The `…` is the terminal's menu, so it is drawn where the
                  * terminal is.**
@@ -833,184 +681,182 @@ struct TerminalScreen: View {
                  * is the fact that decides whether these items have anything
                  * visible to act on.
                  */
-                if !chatMode {
-                    Menu {
-                        /*
-                         * Find, at the top, because on a phone it is the thing this
-                         * menu is opened for most.
-                         *
-                         * Deferred by one turn of the run loop for the same reason
-                         * Rename is on the session list: raised in the frame the
-                         * menu is dismissing in, the focus request that raises the
-                         * keyboard arrives while a presentation is in flight and is
-                         * dropped — the bar appears with no keyboard under it and
-                         * reads as a field that will not accept typing.
-                         */
-                        Button {
-                            DispatchQueue.main.async { openFind() }
-                        } label: {
-                            Label("Find in output", systemImage: "magnifyingglass")
-                        }
-                        .accessibilityIdentifier("terminal.find")
-
-                        /*
-                         * Where this session runs, what it runs as, and on which
-                         * machine — the desktop's folder and account chips, which
-                         * have no room to be chips on a phone.
-                         *
-                         * Named in the menu as well as reachable by a long press on
-                         * the list row, because a gesture nobody is told about is a
-                         * feature nobody has. Deferred by a turn of the run loop for
-                         * the same reason Find above it is: a presentation asked for
-                         * in the frame a menu is dismissing in is dropped.
-                         */
-                        Button {
-                            DispatchQueue.main.async { showingDetails = true }
-                        } label: {
-                            Label("Session details", systemImage: "info.circle")
-                        }
-                        .accessibilityIdentifier("terminal.details")
-
-                        /*
-                         * Model, effort, fast mode, permission — the desktop's
-                         * control cluster, which has no room to be inline chips on a
-                         * phone. Shown only when an agent is drawing this session
-                         * (`clusterShown`): a model menu over a plain shell is the
-                         * defect the desktop's own cluster withdraws itself for, and
-                         * over an older desktop that never advertised `controls` the
-                         * reading never arrives so this stays hidden.
-                         */
-                        if showsControlsButton {
-                            Button {
-                                DispatchQueue.main.async { showingControls = true }
-                            } label: {
-                                Label("Model & effort", systemImage: "slider.horizontal.3")
-                            }
-                            .accessibilityIdentifier("terminal.controls")
-                        }
-
-                        attachSection
-
-                        Divider()
-
-                        /*
-                         * Copy Screen, and deliberately *only* Copy Screen.
-                         *
-                         * There was a "Copy Selection" item here and it had to go,
-                         * because it could never do what it said. SwiftTerm clears
-                         * its selection on a touch outside the terminal, so reaching
-                         * this menu at all destroys the selection on the way — the
-                         * item opened, correctly reported that nothing was selected,
-                         * and left the pasteboard untouched. Measured on a live
-                         * session: the whole screen was selected in one screenshot
-                         * and the pasteboard's change count did not move.
-                         *
-                         * Copying a *selection* therefore lives in the two places a
-                         * selection survives, and both of them are *inside* the
-                         * terminal: the system callout that a long press puts over
-                         * the selection itself, and the `copy` key in the key grid,
-                         * which is the terminal's own `inputView`. Both are
-                         * exercised in `ClipboardAndTransferUITests`.
-                         */
-                        Button {
-                            show(host?.copyScreen(from: sessionID) ?? "Nothing to copy.")
-                        } label: {
-                            Label("Copy Screen", systemImage: "doc.on.doc")
-                        }
-                        .accessibilityIdentifier("terminal.copyScreen")
-                        Button {
-                            host?.paste(into: sessionID)
-                        } label: {
-                            Label("Paste", systemImage: "doc.on.clipboard")
-                        }
-                        .disabled(!connection.isLive)
-                        .accessibilityIdentifier("terminal.paste")
-
-                        /*
-                         * Share, which is the other half of Copy rather than a
-                         * second one: Copy takes the screen, this takes the whole
-                         * scrollback as a file. See `ShareOutput` for why a file and
-                         * not a string.
-                         */
-                        Button {
-                            DispatchQueue.main.async { shareOutput() }
-                        } label: {
-                            Label("Share output", systemImage: "square.and.arrow.up")
-                        }
-                        .accessibilityIdentifier("terminal.share")
-
-                        Divider()
-
-                        /*
-                         * Text size: two ordinary items with the size in their
-                         * labels, rather than a submenu or a section.
-                         *
-                         * The tidier shapes were tried — "Text size ▸" with two
-                         * steps inside it, and a `Section` whose header carried the
-                         * size — and both cost a tap for nothing: a step is a thing
-                         * people do two or three times in a row while deciding, and
-                         * a submenu doubles every one of them. The size reads fine
-                         * in the label, which is where the eye already is.
-                         */
-                        Button {
-                            step(TextSize.larger(bridge.textSize))
-                        } label: {
-                            Label("Bigger text — \(TextSize.label(bridge.textSize))",
-                                  systemImage: "textformat.size.larger")
-                        }
-                        .disabled(!TextSize.canGoLarger(bridge.textSize))
-                        .accessibilityIdentifier("terminal.textLarger")
-
-                        Button {
-                            step(TextSize.smaller(bridge.textSize))
-                        } label: {
-                            Label("Smaller text — \(TextSize.label(bridge.textSize))",
-                                  systemImage: "textformat.size.smaller")
-                        }
-                        .disabled(!TextSize.canGoSmaller(bridge.textSize))
-                        .accessibilityIdentifier("terminal.textSmaller")
-
-                        // Absent rather than disabled when the Mac cannot receive
-                        // one: a control that can only produce a refusal is not a
-                        // control. See `DeckModel.canSendFiles`.
-                        if host?.canSendFiles == true {
-                            Divider()
-                            Button {
-                                picking = .photos
-                            } label: {
-                                Label("Send Photo or Video", systemImage: "photo")
-                            }
-                            .accessibilityIdentifier("terminal.sendPhoto")
-                            Button {
-                                picking = .files
-                            } label: {
-                                Label("Send File", systemImage: "doc")
-                            }
-                            .accessibilityIdentifier("terminal.sendFile")
-                        }
-
-                        Divider()
-                        Button {
-                            host?.reattach(sessionID)
-                            show("Re-attaching…")
-                        } label: {
-                            Label("Re-attach", systemImage: "arrow.clockwise")
-                        }
-                        .disabled(!connection.isLive)
+                Menu {
+                    /*
+                     * Find, at the top, because on a phone it is the thing this
+                     * menu is opened for most.
+                     *
+                     * Deferred by one turn of the run loop for the same reason
+                     * Rename is on the session list: raised in the frame the
+                     * menu is dismissing in, the focus request that raises the
+                     * keyboard arrives while a presentation is in flight and is
+                     * dropped — the bar appears with no keyboard under it and
+                     * reads as a field that will not accept typing.
+                     */
+                    Button {
+                        DispatchQueue.main.async { openFind() }
                     } label: {
-                        // `ellipsis` and not `ellipsis.circle`, which is what it
-                        // wore while it stood in the leading group. *"Exactly
-                        // like this page. This terminal homepage"* — and there
-                        // the capsule is the affordance and the glyphs inside it
-                        // are bare, so a ringed `…` reads as a badge stuck to the
-                        // right-hand end of the pill rather than as the second of
-                        // two controls. `SessionListView` carries the same note
-                        // over `sessions.more`.
-                        Image(systemName: "ellipsis")
+                        Label("Find in output", systemImage: "magnifyingglass")
                     }
-                    .accessibilityLabel("Session actions")
-                    .accessibilityIdentifier("terminal.actions")
+                    .accessibilityIdentifier("terminal.find")
+
+                    /*
+                     * Where this session runs, what it runs as, and on which
+                     * machine — the desktop's folder and account chips, which
+                     * have no room to be chips on a phone.
+                     *
+                     * Named in the menu as well as reachable by a long press on
+                     * the list row, because a gesture nobody is told about is a
+                     * feature nobody has. Deferred by a turn of the run loop for
+                     * the same reason Find above it is: a presentation asked for
+                     * in the frame a menu is dismissing in is dropped.
+                     */
+                    Button {
+                        DispatchQueue.main.async { showingDetails = true }
+                    } label: {
+                        Label("Session details", systemImage: "info.circle")
+                    }
+                    .accessibilityIdentifier("terminal.details")
+
+                    /*
+                     * Model, effort, fast mode, permission — the desktop's
+                     * control cluster, which has no room to be inline chips on a
+                     * phone. Shown only when an agent is drawing this session
+                     * (`clusterShown`): a model menu over a plain shell is the
+                     * defect the desktop's own cluster withdraws itself for, and
+                     * over an older desktop that never advertised `controls` the
+                     * reading never arrives so this stays hidden.
+                     */
+                    if showsControlsButton {
+                        Button {
+                            DispatchQueue.main.async { showingControls = true }
+                        } label: {
+                            Label("Model & effort", systemImage: "slider.horizontal.3")
+                        }
+                        .accessibilityIdentifier("terminal.controls")
+                    }
+
+                    attachSection
+
+                    Divider()
+
+                    /*
+                     * Copy Screen, and deliberately *only* Copy Screen.
+                     *
+                     * There was a "Copy Selection" item here and it had to go,
+                     * because it could never do what it said. SwiftTerm clears
+                     * its selection on a touch outside the terminal, so reaching
+                     * this menu at all destroys the selection on the way — the
+                     * item opened, correctly reported that nothing was selected,
+                     * and left the pasteboard untouched. Measured on a live
+                     * session: the whole screen was selected in one screenshot
+                     * and the pasteboard's change count did not move.
+                     *
+                     * Copying a *selection* therefore lives in the two places a
+                     * selection survives, and both of them are *inside* the
+                     * terminal: the system callout that a long press puts over
+                     * the selection itself, and the `copy` key in the key grid,
+                     * which is the terminal's own `inputView`. Both are
+                     * exercised in `ClipboardAndTransferUITests`.
+                     */
+                    Button {
+                        show(host?.copyScreen(from: sessionID) ?? "Nothing to copy.")
+                    } label: {
+                        Label("Copy Screen", systemImage: "doc.on.doc")
+                    }
+                    .accessibilityIdentifier("terminal.copyScreen")
+                    Button {
+                        host?.paste(into: sessionID)
+                    } label: {
+                        Label("Paste", systemImage: "doc.on.clipboard")
+                    }
+                    .disabled(!connection.isLive)
+                    .accessibilityIdentifier("terminal.paste")
+
+                    /*
+                     * Share, which is the other half of Copy rather than a
+                     * second one: Copy takes the screen, this takes the whole
+                     * scrollback as a file. See `ShareOutput` for why a file and
+                     * not a string.
+                     */
+                    Button {
+                        DispatchQueue.main.async { shareOutput() }
+                    } label: {
+                        Label("Share output", systemImage: "square.and.arrow.up")
+                    }
+                    .accessibilityIdentifier("terminal.share")
+
+                    Divider()
+
+                    /*
+                     * Text size: two ordinary items with the size in their
+                     * labels, rather than a submenu or a section.
+                     *
+                     * The tidier shapes were tried — "Text size ▸" with two
+                     * steps inside it, and a `Section` whose header carried the
+                     * size — and both cost a tap for nothing: a step is a thing
+                     * people do two or three times in a row while deciding, and
+                     * a submenu doubles every one of them. The size reads fine
+                     * in the label, which is where the eye already is.
+                     */
+                    Button {
+                        step(TextSize.larger(bridge.textSize))
+                    } label: {
+                        Label("Bigger text — \(TextSize.label(bridge.textSize))",
+                              systemImage: "textformat.size.larger")
+                    }
+                    .disabled(!TextSize.canGoLarger(bridge.textSize))
+                    .accessibilityIdentifier("terminal.textLarger")
+
+                    Button {
+                        step(TextSize.smaller(bridge.textSize))
+                    } label: {
+                        Label("Smaller text — \(TextSize.label(bridge.textSize))",
+                              systemImage: "textformat.size.smaller")
+                    }
+                    .disabled(!TextSize.canGoSmaller(bridge.textSize))
+                    .accessibilityIdentifier("terminal.textSmaller")
+
+                    // Absent rather than disabled when the Mac cannot receive
+                    // one: a control that can only produce a refusal is not a
+                    // control. See `DeckModel.canSendFiles`.
+                    if host?.canSendFiles == true {
+                        Divider()
+                        Button {
+                            picking = .photos
+                        } label: {
+                            Label("Send Photo or Video", systemImage: "photo")
+                        }
+                        .accessibilityIdentifier("terminal.sendPhoto")
+                        Button {
+                            picking = .files
+                        } label: {
+                            Label("Send File", systemImage: "doc")
+                        }
+                        .accessibilityIdentifier("terminal.sendFile")
+                    }
+
+                    Divider()
+                    Button {
+                        host?.reattach(sessionID)
+                        show("Re-attaching…")
+                    } label: {
+                        Label("Re-attach", systemImage: "arrow.clockwise")
+                    }
+                    .disabled(!connection.isLive)
+                } label: {
+                    // `ellipsis` and not `ellipsis.circle`, which is what it
+                    // wore while it stood in the leading group. *"Exactly
+                    // like this page. This terminal homepage"* — and there
+                    // the capsule is the affordance and the glyphs inside it
+                    // are bare, so a ringed `…` reads as a badge stuck to the
+                    // right-hand end of the pill rather than as the second of
+                    // two controls. `SessionListView` carries the same note
+                    // over `sessions.more`.
+                    Image(systemName: "ellipsis")
                 }
+                .accessibilityLabel("Session actions")
+                .accessibilityIdentifier("terminal.actions")
     }
 
     /**
@@ -1273,113 +1119,6 @@ struct TerminalScreen: View {
         guard frontmost, let host else { return }
         if host.bar.sessionID != sessionID { host.bar.follow(sessionID) }
         if host.controls.sessionID != sessionID { host.controls.follow(sessionID) }
-        guard chatMode else { return }
-        host.bar.chatting = true
-        host.bar.askChat(tail: false)
-    }
-
-    /// Swap the pane. Split from `enterChat` because there is now a second way
-    /// into the conversation — arriving on the copilot's stack — and a landing
-    /// that called `toggle` would turn the chat *off* for anybody who reached
-    /// this screen with it already on.
-    private func toggleMode() {
-        if chatMode {
-            chatMode = false
-            host?.bar.stopChatting()
-        } else {
-            enterChat()
-        }
-    }
-
-    /**
-     * Show the conversation, and ask for it.
-     *
-     * The re-claim comes first and it is not defensive tidying: this is the
-     * press he was making when the screen came up empty. The bar is one object
-     * per machine, the other tab's terminal may have pointed it at its own
-     * session, and `SessionBarLink.askChat` returns at its `guard let sessionID`
-     * when the bar has been left with none — so the frame never left, no answer
-     * ever came, and pressing the toggle again did the same nothing. Claiming
-     * the bar before asking is what makes the press recover the screen rather
-     * than repeat the failure.
-     */
-    private func enterChat() {
-        chatMode = true
-        host?.bar.chatting = true
-        // The keyboard belongs to the terminal it was raised over. Leaving it up
-        // would put the composer under it with the conversation squeezed into
-        // whatever is left.
-        bridge.blur()
-        // Claimed here, **asked for by the view as it appears.** Both halves have
-        // to happen and doing both here would do them twice: turning the mode on
-        // is what creates `SessionChatView`, whose `onAppear` calls `reload`, so
-        // a read fired here as well would put two `chat.read` frames on the wire
-        // for one press and answer the same question with the same rows.
-        if host?.bar.sessionID != sessionID { host?.bar.follow(sessionID) }
-    }
-
-    /**
-     * **The copilot tab is a conversation; the Sessions tab is a terminal.**
-     *
-     * > *"copilot page should be always landing in a copilot session according
-     * > to the settings of the copilot — either in an existing session if there
-     * > is any, or it should start a new. But it should be always a chat to land
-     * > with, terminal and chat mode too."*
-     *
-     * A terminal reached through the copilot comes up as the chat; the same
-     * terminal reached from the session list comes up as a terminal, unchanged.
-     * `DeckModel.open(session:)` already draws that line — a session opened from
-     * the copilot stays on the copilot's stack so Back lands on the conversation
-     * that started it — and this is the same fact read at the other end. The
-     * selected tab is the test rather than the route, because a tab's stack is
-     * only ever on screen while that tab is selected, and `model.tab` is one read
-     * instead of a search through `copilotRoute`.
-     *
-     * ## Two guards, and both are exits rather than niceties
-     *
-     * `showsModeButton` refuses to draw the toggle when the socket is down or the
-     * machine cannot serve a transcript. Forcing the chat on in either state
-     * would therefore be a mode **with no way out of it** — the person would be
-     * looking at an empty conversation with no button back to the terminal they
-     * came for. That is the fault `DeckSurface.copilot` records having made once
-     * already with the tab bar, and it is not worth re-making for a default.
-     *
-     * So a machine that cannot answer `chat.read`, and a session opened while the
-     * connection is down, both land in the terminal. Both are honest: there is no
-     * conversation to show in either case.
-     *
-     * It runs on **every** appearance rather than once, which is the mirror of
-     * `onDisappear` setting `chatMode = false`. Appear decides, disappear
-     * resets — so the mode never leaks from one visit to the next, and it never
-     * leaks between the two tabs that can both be showing a terminal.
-     */
-    private func landChatFirstOnTheCopilotStack() {
-        guard model.tab == .copilot else { return }
-        guard connection.isLive, host?.bar.canReadChat == true else { return }
-        /*
-         * **His setting, asked last on purpose.**
-         *
-         * > *"It should directly land in terminal or chat mode, and user can set
-         * > its default from settings."*
-         *
-         * After the two guards above rather than before them, and the order is
-         * the argument: those two refuse the chat over a dead socket or a machine
-         * that cannot serve a transcript, where the conversation would be empty
-         * and the toggle back to the terminal is not drawn — a mode with no way
-         * out of it. A stored preference is a preference about which of two
-         * working screens to open in, not a licence to open a broken one.
-         *
-         * Read from the book directly, the way this screen reads
-         * `TerminalThemeStore.shared`: it is a property of this phone, and the
-         * screen is built from two stacks — threading it through the one that
-         * knows about copilots would leave the other silently opting out.
-         *
-         * An absent record means chat, which is what the tab already did and what
-         * he asked for the round before: *"it should be always a chat to land
-         * with."*
-         */
-        guard CopilotSetupBook.shared.opensInChat(host: hostID) else { return }
-        enterChat()
     }
 
     // MARK: - Find, share, size
@@ -1550,52 +1289,8 @@ struct TerminalScreen: View {
     /// and must not produce a message.
     private func hand(_ picked: PickedFile?) {
         guard let picked else { return }
-        // In the terminal the picker *was* the press, and the file goes. In the
-        // conversation there is a composer to put it in front of first — see
-        // `staged`, and `SessionChatView.staged(_:)` for what is drawn.
-        if chatMode {
-            discardStaged()
-            staged = picked
-        } else {
-            host?.send(picked, into: sessionID)
-        }
-    }
-
-    /// Raise a picker from the composer's paperclip. The same two the terminal's
-    /// own menu raises, through the same `@State` and the same sheet.
-    private func pick(_ source: ChatAttachSource) {
-        // Deferred by a turn of the run loop for the reason Find and Session
-        // details are: a presentation asked for in the frame a menu is
-        // dismissing in is dropped.
-        DispatchQueue.main.async {
-            picking = source == .photos ? .photos : .files
-        }
-    }
-
-    /// What the composer draws above the field, or nil when nothing is staged.
-    /// `send` is withheld while a transfer is already running, because
-    /// `HostLink.send` refuses a second one and a button that can only be
-    /// refused is not a button.
-    private var attachment: ChatAttachment? {
-        guard let staged else { return nil }
-        let busy = host?.upload != nil
-        return ChatAttachment(file: staged,
-                              send: busy ? nil : {
-                                  host?.send(staged, into: sessionID)
-                                  // Handed over: `FileUpload` owns the staged
-                                  // copy from here and deletes it when the
-                                  // transfer ends, whichever way it ends.
-                                  self.staged = nil
-                              },
-                              discard: { discardStaged() })
-    }
-
-    /// Drop what was staged, and the copy the picker made with it. Nothing else
-    /// will: `FileUpload` deletes the temporary file when a transfer ends, and a
-    /// file that was never sent has no transfer to end.
-    private func discardStaged() {
-        if let staged, staged.temporary { try? FileManager.default.removeItem(at: staged.url) }
-        staged = nil
+        // The picker *was* the press, so the file goes.
+        host?.send(picked, into: sessionID)
     }
 
 }

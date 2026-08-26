@@ -79,25 +79,8 @@ final class VideoTwoShotsUITests: XCTestCase {
         XCTAssertGreaterThan(actions.frame.midX, width / 2,
                              "the … should be on the trailing edge, not beside Back")
 
-        let mode = app.buttons["terminal.mode"]
-        guard mode.waitForExistence(timeout: 10) else {
-            capture("03-session-no-chat-offered")
-            return
-        }
-        XCTAssertGreaterThan(mode.frame.midX, width / 2,
-                             "the mode switch should be on the trailing edge, not beside Back")
-
-        mode.tap()
-        _ = app.staticTexts.firstMatch.waitForExistence(timeout: 10)
-        capture("04-session-chat-header")
-
-        // R1, when the far session happens to be in a state a sentence cannot
-        // reach. Photographed when it is there; not a failure when it is not,
-        // because a healthy session is the common case.
-        if app.descendants(matching: .any).matching(identifier: "chat.notready").firstMatch.exists {
-            capture("05-chat-not-ready")
-        }
-
+        // The mode switch stood beside it until 2026-08-26 and went with chat
+        // mode itself, so the `…` is the whole of the trailing cluster now.
         leave()
     }
 

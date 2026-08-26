@@ -171,15 +171,6 @@ object Protocol {
     /** The most account rows one `account.state` may carry. */
     const val MAX_ACCOUNTS_REPORTED = 64
 
-    /**
-     * The most bubbles one `chat.rows` may carry, **newest kept**.
-     *
-     * Trimmed from the end, matching `rows.slice(-MAX_CHAT_ROWS)` over there: a chat view shows the
-     * newest of a conversation, and trimming the head of an over-long answer would keep the oldest
-     * bubbles and drop the reply somebody is waiting to read.
-     */
-    const val MAX_CHAT_ROWS = 200
-
     /* ---- capability `localhost`: the tunnel's own bounds ------------------------------------ */
 
     /** Largest chunk of tunnelled bytes in one `net.data`, before base64. */
@@ -444,15 +435,6 @@ object Capability {
      * into a socket.
      */
     const val SEND = "send"
-
-    /**
-     * The conversation, as a chat rather than as a terminal.
-     *
-     * A bounded tail of the JSONL the agent is already writing, collapsed on the far side by the
-     * desktop's own `ChatCollapser`. What travels is the collapsed bubbles, never the file — a
-     * transcript runs to tens of megabytes and this is a relay.
-     */
-    const val CHAT = "chat"
 
     /** Open a page **on the machine**, in its own browser. A tap here is a tab over there. */
     const val WEB = "web"

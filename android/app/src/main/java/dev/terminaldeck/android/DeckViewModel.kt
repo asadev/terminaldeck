@@ -754,7 +754,6 @@ class DeckViewModel(
             is ServerMessage.UsageReading,
             is ServerMessage.AccountState,
             is ServerMessage.AccountSwitched,
-            is ServerMessage.ChatRows,
             is ServerMessage.SessionSent,
             -> {
                 link.bar?.receive(message)
@@ -1466,23 +1465,6 @@ class DeckViewModel(
         following()?.switchAccount(accountId)
     }
 
-    /** The conversation opened or closed. Only a screen that is up asks for a transcript. */
-    fun chatting(on: Boolean) {
-        following()?.chatting(on)
-    }
-
-    /**
-     * Send a whole message at the open session.
-     *
-     * Returns whether the draft may be cleared: false keeps it in the box, which is the whole reason
-     * a composer rides `session.send` rather than `input`.
-     */
-    fun sendMessage(text: String): Boolean = following()?.sendMessage(text) ?: false
-
-    fun dismissChatNotice() {
-        following()?.dismissNotice()
-    }
-
     /* -------------------------------------------------------------- localhost + web -- */
 
     fun openLocalhost() {
@@ -1910,7 +1892,6 @@ class DeckViewModel(
             // same reason: they are about the session on screen, which on a phone with two machines
             // paired need not be the machine the switcher is pointing at.
             bar = following()?.view(),
-            chat = following()?.chatView(),
             watch = current?.watch?.view(),
             localhost = current?.localhost?.view(),
             devServers = current?.devServer?.view(),
@@ -2121,7 +2102,6 @@ data class DeckUiState(
     /** The open session's bar: the two figures and the login it runs as. Null over an older machine. */
     val bar: SessionBarView? = null,
     /** The open session's conversation and composer. Null when this machine serves no transcript. */
-    val chat: SessionChatView? = null,
     /** What is listening on the machine, and whether a row may be opened over there. */
     val localhost: LocalhostView? = null,
     /** One dev-server row per granted folder a status has arrived for. */
@@ -2275,8 +2255,6 @@ data class DeckUiState(
     /** Whether this machine will say what a project's dev server is doing, and start one. */
     val devServerOffered: Boolean get() = live && capabilities.contains(Capability.DEVSERVER)
 
-    /** Whether the open session's conversation can be read as a chat rather than as a terminal. */
-    val chatOffered: Boolean get() = live && capabilities.contains(Capability.CHAT)
 
     /**
      * Whether git on this machine may ask **this phone** for a login.

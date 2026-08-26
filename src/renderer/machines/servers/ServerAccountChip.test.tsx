@@ -13,7 +13,7 @@
 
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { signInLine, type ServerSignIn } from './server-chat'
+import { signInLine, type ServerSignIn } from './server-signin'
 import {
   agentCommand,
   menuStateLine,

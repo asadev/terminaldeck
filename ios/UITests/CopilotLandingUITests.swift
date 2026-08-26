@@ -135,26 +135,17 @@ final class CopilotLandingUITests: XCTestCase {
          * point where a start that is going to work has worked, and well inside
          * the thirty the screen itself waits before saying it did not.
          */
-        let composer = app.textViews["chat.field"].firstMatch
         /*
-         * Either half of the landed screen proves arrival: the chat's own field,
-         * or the terminal's **Details** item, which every session screen draws.
-         *
-         * Not `terminal.mode`, which was the first guess and is wrong: the chat
-         * toggle is drawn only where the machine will serve a transcript, so on a
-         * host without it this test would have reported a failure to land while
-         * looking straight at the landed screen.
+         * What proves arrival is the terminal's own `…`, which every session
+         * screen draws, and the session's title in the navigation bar. The
+         * chat's composer used to be the first of these; the whole mode went on
+         * 2026-08-26, so a landed copilot tab is a terminal like any other.
          */
-        let terminal = app.buttons["terminal.mode"].firstMatch
-        // A third proof, and the only one that holds on every machine: the
-        // session's own title in the navigation bar. `terminal.mode` is drawn
-        // only where the machine serves a transcript and `terminal.details`
-        // lives behind the overflow, so neither on its own can tell *landed* from
-        // *did not land* on a host without chat.
+        let actions = app.buttons["terminal.actions"].firstMatch
         let landedBar = app.staticTexts["session.header"].firstMatch
             .exists ? app.staticTexts["session.header"].firstMatch : app.otherElements["session.header"].firstMatch
         let deadline = Date().addingTimeInterval(25)
-        while Date() < deadline && !composer.exists && !terminal.exists && !landedBar.exists {
+        while Date() < deadline && !actions.exists && !landedBar.exists {
             usleep(500_000)
         }
         capture("copilot-landing")
@@ -177,7 +168,7 @@ final class CopilotLandingUITests: XCTestCase {
                        "the tab offered to start a session instead of starting one")
         XCTAssertFalse(app.staticTexts["copilot.onServer.title"].exists,
                        "the page he asked to have removed is on screen")
-        XCTAssertTrue(composer.exists || terminal.exists || landedBar.exists,
+        XCTAssertTrue(actions.exists || landedBar.exists,
                       "the tab did not land in a session")
     }
 
@@ -282,17 +273,11 @@ final class CopilotLandingUITests: XCTestCase {
     /**
      * Something only the landed conversation draws.
      *
-     * Four of them, and none is redundant. `chat.field` is the chat's composer
-     * and exists only where the machine serves a transcript; `terminal.mode` is
-     * the toggle between the two and is absent for the same reason;
-     * `session.header` is the title, which is a `staticText` on some hosts and an
-     * `otherElement` on others depending on what the principal item resolves to.
-     * `terminal.actions` is what makes this reliable on a machine **without**
-     * chat, which is exactly the case it is left in for: the landing falls back
-     * to the terminal there, and the terminal is where that menu is drawn. It is
-     * deliberately absent from a conversation — every item under it acts on the
-     * emulator, which a conversation is not showing — so on a machine *with*
-     * chat this answer comes from the three above it.
+     * Two of them, and neither is redundant. `session.header` is the title,
+     * which is a `staticText` on some hosts and an `otherElement` on others
+     * depending on what the principal item resolves to; `terminal.actions` is
+     * the `…` every session screen draws. The chat's own composer and the mode
+     * toggle used to be here too and went with chat mode on 2026-08-26.
      *
      * Read afresh on every call rather than held in a `let`, because the whole
      * point of the case above is that this answer **changes underneath** — a
@@ -300,9 +285,7 @@ final class CopilotLandingUITests: XCTestCase {
      * not see the bug it was written for.
      */
     private var theConversationIsUp: Bool {
-        app.textViews["chat.field"].firstMatch.exists
-            || app.buttons["terminal.mode"].firstMatch.exists
-            || app.buttons["terminal.actions"].firstMatch.exists
+        app.buttons["terminal.actions"].firstMatch.exists
             || app.staticTexts["session.header"].firstMatch.exists
             || app.otherElements["session.header"].firstMatch.exists
     }

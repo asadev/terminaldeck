@@ -151,7 +151,6 @@ describe('the files app.terminaldeck.dev is built from', () => {
       // composer owns the measurement; the phone's composer imports it rather
       // than keeping a second one to go stale. `mentions.ts` has no imports of
       // its own, so what crosses is the two functions and nothing else.
-      'src/renderer/chat/attach/mentions.ts',
       // The control vocabulary — the model rows, the seven efforts, the five
       // permission modes, and the words each is called by. The phone's control
       // cluster (`pwa/src/session-controls.ts`) sends `controls.apply` values a

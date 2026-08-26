@@ -486,22 +486,6 @@ export const CAPABILITY = {
    */
   devices: 'devices',
   /**
-   * The conversation, as a chat rather than as a terminal.
-   *
-   * Asad, about the desktop's chat view: *"my message should start from the
-   * right… the left side will be the agent… no need to give a name actually on
-   * both sides… just the text only and time only… give the copy button"*. That
-   * view exists on the Mac and reads a transcript **on the Mac's own disk**,
-   * through `chat:load`/`chat:tail`, which is why nothing on this wire carried
-   * it and why a phone could only ever see a terminal.
-   *
-   * The reading is the same one: a bounded tail of the JSONL the agent is
-   * already writing, collapsed by the same `ChatCollapser`. What travels is the
-   * collapsed bubbles, never the file — a transcript runs to tens of megabytes
-   * and this is a relay.
-   */
-  chat: 'chat',
-  /**
    * The two settings this machine owns rather than each device.
    *
    * Almost every choice in the settings window is the device's own — a theme, a
@@ -939,7 +923,6 @@ export const CAPABILITIES: string[] = [
   CAPABILITY.account,
   CAPABILITY.logins,
   CAPABILITY.devices,
-  CAPABILITY.chat,
   CAPABILITY.settings,
   CAPABILITY.windows,
   CAPABILITY.hostWindows,
@@ -3733,26 +3716,6 @@ export type ClientMessage =
    * that was dropped is a spinner on a panel that has no other way to find out.
    */
   | { t: 'session.send'; rid: string; id: string; data: string }
-  /**
-   * That session's conversation, as bubbles.
-   *
-   * `tail` is the difference between the two things a chat view does. False is
-   * *give me the conversation* — what opening the view asks for, answered with
-   * `reset: true` so the client replaces whatever it held. True is *what has
-   * changed*, which is what the same view asks for when the session prints
-   * something, and is answered with only the bubbles that are new or have grown.
-   *
-   * One verb with a flag rather than two, unlike `usage.read`'s three wants,
-   * because the two cost the same on the far side: both are a tail read of a
-   * file the agent is already writing. What `usage.read` was splitting was a
-   * reading that boots a 725 MB CLI, and there is no such thing here.
-   *
-   * Authorised by `mayTouch`, the same per-device folder reach every keystroke
-   * asks: a device that may not type into a session may not read what was said
-   * in it either.
-   */
-  | { t: 'chat.read'; rid: string; id: string; tail: boolean }
-
   /* ---- capability `devices` ------------------------------------------- */
   /**
    * List every device signed in here. Capability `devices`, and one of the
@@ -4554,26 +4517,6 @@ export type ServerMessage =
    * it does not know.
    */
   | { t: 'settings.changed'; settings: ServerSettingWire[] }
-  /**
-   * The answer to one `chat.read`, and only ever to one.
-   *
-   * `rows` are collapsed bubbles, never transcript lines, and never the file:
-   * one transcript on this machine is 154 MB and this is a relay. `reset` says
-   * to replace rather than merge — the answer to a `tail: false`, and also what
-   * a rolled-over transcript produces mid-conversation, which is the case a
-   * client that only ever appended would render as the conversation happening
-   * twice.
-   *
-   * Bounded at {@link MAX_CHAT_ROWS} per answer, newest kept: a chat view is
-   * read from the bottom, and a phone that was handed nine thousand bubbles
-   * would spend its memory on the part nobody scrolls to.
-   *
-   * `found` is false when the folder has no transcript at all, which is a
-   * different empty state from a session that has not spoken yet — the same
-   * distinction `ChatUpdate` draws, and it travels because the two want
-   * different things drawn.
-   */
-  | { t: 'chat.rows'; rid: string; id: string; rows: CopilotChatMessage[]; reset: boolean; found: boolean }
   /* ---- capability `send` ------------------------------------------------- */
   /**
    * What happened to one `session.send`, and only ever to one.
@@ -6514,22 +6457,6 @@ export function parseClientMessage(raw: unknown): ParseResult {
       return { ok: true, message: { t: 'settings.apply', rid: requestId, key, value: rawValue } }
     }
 
-    /* ---- capability `chat` ----------------------------------------------- */
-    // Shape only, like `account.read` above. Whether this desktop can read a
-    // transcript at all, and whether this device may touch the session named,
-    // are the server's questions.
-    case 'chat.read': {
-      const requestId = id(parsed.rid)
-      if (!requestId) return bad('chat.read without a request id')
-      const sessionId = id(parsed.id)
-      if (!sessionId) return bad('chat.read without a session id')
-      // Absent reads as `false` — *give me the conversation* — which is the
-      // answer that is always correct to send: a client that meant `tail` and
-      // was given the whole thing renders the same conversation, while the
-      // reverse would silently drop everything said before it connected.
-      return { ok: true, message: { t: 'chat.read', rid: requestId, id: sessionId, tail: parsed.tail === true } }
-    }
-
     /* ---- capability `devices` ------------------------------------------- */
     // Shape only. Whether this host keeps a roster, whether this device is one
     // of the owner's own, and whether the id names a real device are the
@@ -8322,49 +8249,6 @@ export function parseServerFrame(parsed: unknown): ServerParse {
       }
       return { ok: true, message: { t: 'settings.changed', settings } }
     }
-    /* ---- capability `chat` ------------------------------------------------- */
-    /*
-     * One answer's worth of bubbles.
-     *
-     * Every row is narrowed by `copilotChatMessage`, which is the same reader
-     * the copilot's own conversation goes through — deliberately one reader, so
-     * a bubble that a phone can draw in one place is a bubble it can draw in the
-     * other. A row that will not read is dropped rather than costing the frame:
-     * a chat view missing one message is a great deal better than a chat view
-     * that stayed empty because the desktop appended a field.
-     *
-     * Clipped to {@link MAX_CHAT_ROWS} keeping the **end**, because a
-     * conversation is read from the bottom and the newest bubbles are the ones
-     * somebody opened the view for.
-     */
-    case 'chat.rows': {
-      const requestId = id(parsed.rid)
-      if (requestId === null) return { ok: false, reason: 'chat.rows without a request id' }
-      const sessionId = id(parsed.id)
-      if (sessionId === null) return { ok: false, reason: 'chat.rows without a session id' }
-      if (!Array.isArray(parsed.rows)) return { ok: false, reason: 'chat.rows without a list' }
-      const rows: CopilotChatMessage[] = []
-      for (const row of parsed.rows) {
-        const bubble = copilotChatMessage(row)
-        if (bubble !== null) rows.push(bubble)
-      }
-      return {
-        ok: true,
-        message: {
-          t: 'chat.rows',
-          rid: requestId,
-          id: sessionId,
-          rows: rows.slice(-MAX_CHAT_ROWS),
-          // `reset` and `found` must both be the literal `true`. A garbled frame
-          // read as `reset` would throw away a conversation somebody is reading;
-          // read as `found` it would draw an empty conversation for a folder
-          // that has none, which are two different things to say.
-          reset: parsed.reset === true,
-          found: parsed.found === true,
-        },
-      }
-    }
-
     /* ---- capability `send` ------------------------------------------------- */
     /*
      * The answer to one `session.send`, read the way `controls.applied` is.

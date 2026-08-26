@@ -73,7 +73,7 @@ import type { FocusReport } from '../../driving/FocusOverlay'
 import { isDriveControlTarget, isTransportKey } from './interruption'
 import { attachInterruption, browserScanEngine, type ScanEngine } from './scan-engine'
 import { navigator as driveNavigator } from './navigator'
-import { focusOf, paneFor, type TourMessage, type TourRecord, type TourStop } from './tour'
+import { focusOf, type TourMessage, type TourRecord, type TourStop } from './tour'
 import { isScanning, type ScanState } from '../../../shared/scan'
 
 /* ------------------------------------------------------------- constants -- */
@@ -282,19 +282,7 @@ export function playTour(message: TourMessage, deps: PlayerDeps): RunningTour {
     lastFailure = null
 
     if (nav !== null) {
-      const pane = paneFor(stop)
-      if (pane !== null) {
-        /*
-         * The pane first, then the tab.
-         *
-         * Both orders work and this one flickers less: setting the mode on a
-         * session that is not in front changes nothing anybody can see, whereas
-         * bringing it forward first shows one frame of the pane the person is
-         * not being taken to.
-         */
-        nav.setSessionMode(stop.sessionId, pane)
-        nav.selectTab(stop.sessionId)
-      } else if (stop.kind === 'anchor' && stop.at === 'git-file') {
+      if (stop.kind === 'anchor' && stop.at === 'git-file') {
         // Source control is one of the ten project views and is keyed on the
         // folder, not the session — see `focus-target.ts` on why the git anchor
         // carries a `cwd`. The session still comes forward first, because the
@@ -302,8 +290,8 @@ export function playTour(message: TourMessage, deps: PlayerDeps): RunningTour {
         nav.selectTab(stop.sessionId)
         nav.showPanel('git')
       } else {
-        // A usage strip lives under a session's chat, so the session is the
-        // whole of the navigation.
+        // Everything else is inside the session's own window, so bringing the
+        // session forward is the whole of the navigation.
         nav.selectTab(stop.sessionId)
       }
     }

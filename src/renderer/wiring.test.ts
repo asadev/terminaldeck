@@ -45,32 +45,20 @@ function openingTag(source: string, name: string): string | null {
 const SEAMS: Array<{ file: string; child: string; props: string[]; why: string }> = [
   {
     file: 'renderer/App.tsx',
-    child: 'ChatView',
-    props: ['cwd', 'session', 'sessionId'],
-    why: 'without sessionId the controls row and usage strip render their empty state, and without session the pane reads whatever transcript in the folder was written last',
-  },
-  {
-    file: 'renderer/copilot/CopilotView.tsx',
-    child: 'ChatView',
-    props: ['cwd', 'session', 'sessionId', 'provider'],
-    why: 'the copilot is a session like any other, so its conversation pane has the same three seams — and `provider` besides, because without it the pane writes shell copy over an agent',
-  },
-  {
-    file: 'renderer/App.tsx',
     child: 'CopilotView',
-    props: ['copilot', 'visible', 'mode', 'focus'],
+    props: ['copilot', 'visible', 'focus'],
     // It moved here from `PanelView` on 2026-08-17, when the copilot stopped
     // being a page and became a window: it is rendered beside the other
     // sessions' terminals, because that is where a session is rendered.
     //
-    // `visible` and `mode` are the two that joined and they are the two that
-    // make it a window rather than a page. Without `visible` it is either
-    // painted over whatever tab you actually chose or remounted on every switch
-    // — and a remount redraws its terminal from scrollback, losing the place a
-    // half-finished login prompt is sitting in. Without `mode` it is stuck on
-    // one pane while the window's own Terminal/Chat switch moves everything
-    // else, which is the shape of a control that looks broken.
-    why: 'without `copilot` it has no connection to the agent and draws its "not wired" state; `visible` and `mode` are what make it a window like the others rather than a page; without `focus` a session row asking why it exists lands on the copilot instead of on the turn that started it',
+    // `mode` was the third of these until 2026-08-26. It named which of two
+    // panes this window drew, and it went with chat mode: there is one pane
+    // now, so there is nothing left to tell it. `visible` is what still makes
+    // this a window rather than a page — without it the copilot is either
+    // painted over whatever tab you actually chose or remounted on every switch,
+    // and a remount redraws its terminal from scrollback, losing the place a
+    // half-finished login prompt is sitting in.
+    why: 'without `copilot` it has no connection to the agent and draws its "not wired" state; `visible` is what makes it a window like the others rather than a page; without `focus` a session row asking why it exists lands on the copilot instead of on the turn that started it',
   },
   {
     file: 'renderer/App.tsx',

@@ -314,14 +314,16 @@ final class DeckModel {
     /**
      * What the Copilot row on the Menu page says without being opened.
      *
-     * The mode, because that is the setting he asked for by name — *"user can
-     * set its default from settings"* — and because it is the one a person
-     * changes more than once. The folder is on the screen behind it; naming it
-     * here would make the row as long as the path.
+     * It used to say which of two panes the tab opened in — a setting that went
+     * with chat mode on 2026-08-26, since there is one pane now. What is left is
+     * the setting a person still changes: whether opening the tab is allowed to
+     * *start* something on that machine, which is the row that spends money. The
+     * folder is on the screen behind it; naming it here would make the row as
+     * long as the path.
      */
     var copilotSettingsValue: String {
         guard let host = currentHostId else { return "" }
-        return CopilotSetupBook.shared.opensInChat(host: host) ? "Opens in chat" : "Opens in terminal"
+        return CopilotSetupBook.shared.isArmed(host: host) ? "Starts a session" : "Starts nothing"
     }
 
     var showingSession: Bool {

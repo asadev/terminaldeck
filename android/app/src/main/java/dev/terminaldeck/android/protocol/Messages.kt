@@ -647,17 +647,6 @@ sealed interface ClientMessage {
 
     /* ---- capability `chat`. The conversation, as a chat. --------------------------------- */
 
-    /**
-     * Read the conversation of one session.
-     *
-     * [tail] false is what opening the view asks — the whole bounded tail; true is what a session
-     * going quiet asks, which is the cheap follow-up. Answered with `chat.rows`, whose `reset` says
-     * whether what comes back extends what is held or replaces it.
-     */
-    @Serializable
-    @SerialName("chat.read")
-    data class ChatRead(val rid: String, val id: String, val tail: Boolean) : ClientMessage
-
     /* ---- capability `web`. A page, opened on the machine. -------------------------------- */
 
     /**
@@ -1453,26 +1442,6 @@ sealed interface ServerMessage {
         val id: String,
         val ok: Boolean = false,
         val message: String = "",
-    ) : ServerMessage
-
-    /* ---- capability `chat` ----------------------------------------------------------------- */
-
-    /**
-     * A bounded tail of the conversation.
-     *
-     * [reset] cannot be ignored: it means the far side's document is not the one this view holds a
-     * prefix of, and appending through one draws the conversation twice. [found] is false when the
-     * folder has no transcript at all — a different empty from a session that has not spoken yet,
-     * and the reason a chat toggle is absent rather than opening an empty screen.
-     */
-    @Serializable
-    @SerialName("chat.rows")
-    data class ChatRows(
-        val rid: String,
-        val id: String,
-        val rows: kotlin.collections.List<ChatMessageWire> = emptyList(),
-        val reset: Boolean = false,
-        val found: Boolean = false,
     ) : ServerMessage
 
     /* ---- capability `web` ------------------------------------------------------------------ */

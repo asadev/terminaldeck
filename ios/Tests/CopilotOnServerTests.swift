@@ -1107,51 +1107,6 @@ final class CopilotOnServerTests: XCTestCase {
     }
 
     /**
-     * **Which mode the tab opens in, and an absent record means chat.**
-     *
-     * > *"It should directly land in terminal or chat mode, and user can set its
-     * > default from settings."*
-     *
-     * The default is the assertion that matters. A machine nobody has opened the
-     * Copilot tab on has no record, and reading that as *terminal* would make the
-     * tab behave one way on a machine he had touched and another on a machine he
-     * had not — for a setting whose whole point is that he decides it once. Chat
-     * is what the tab does today and what he asked for the round before: *"it
-     * should be always a chat to land with."*
-     *
-     * Both directions are written, for `setStartOnOpen`'s reason: chat being the
-     * default makes *terminal* the departure, and a departure that was not
-     * written would be undone by the next visit — a setting that springs back.
-     *
-     * The last assertion is the one that would be missed. Choosing a mode on a
-     * machine with no record must not quietly answer the *other* question: an
-     * absent record already means armed, so writing `startOnOpen: false` here
-     * would switch the tab off for somebody who had only said which view they
-     * wanted.
-     */
-    func testTheTabOpensInChatUnlessSomebodyHasSaidOtherwise() {
-        let store = scratchSuite()
-        let book = CopilotSetupBook(defaults: store)
-        XCTAssertTrue(book.opensInChat(host: "h"), "an absent record means chat")
-
-        book.setOpensInChat(false, host: "h")
-        XCTAssertFalse(book.opensInChat(host: "h"))
-        XCTAssertTrue(CopilotSetupBook(defaults: store).opensInChat(host: "h") == false,
-                      "the decision has to survive being made")
-
-        book.setOpensInChat(true, host: "h")
-        XCTAssertTrue(book.opensInChat(host: "h"))
-        XCTAssertTrue(book.isArmed(host: "second"), "an untouched machine is untouched")
-
-        // Its own suite: `scratchSuite` keys on `#function`, so a second call
-        // with no name would wipe the store the assertions above ran against.
-        let fresh = CopilotSetupBook(defaults: scratchSuite("modeWithoutArming"))
-        fresh.setOpensInChat(false, host: "h")
-        XCTAssertTrue(fresh.isArmed(host: "h"),
-                      "choosing a mode must not answer the question about starting")
-    }
-
-    /**
      * **A book written by the build before this one still opens.**
      *
      * The failure this is written against is silent and total. `load()` decodes
@@ -1160,13 +1115,12 @@ final class CopilotOnServerTests: XCTestCase {
      * once, on the launch after an update, with no error anywhere. Swift's
      * synthesised `Decodable` calls `decode` rather than `decodeIfPresent` for a
      * non-optional property and does **not** consult its default value, so adding
-     * `opensInChat` without a hand-written initialiser would have done exactly
-     * that.
+     * a field without a hand-written initialiser would do exactly that.
      *
      * The literal below is the shape actually on disk in the simulator this lane
      * tests against, copied rather than invented.
      */
-    func testARecordWrittenBeforeTheModeSettingExistedStillLoads() throws {
+    func testARecordWrittenBeforeAFieldExistedStillLoads() throws {
         let store = scratchSuite()
         let old = #"{"KZ2J9AWGK8BWGQUEZDYKW5RS22":{"folder":"\/home\/asad","startOnOpen":true}}"#
         store.set(Data(old.utf8), forKey: "terminaldeck.copilotSetup.v1")
@@ -1175,8 +1129,6 @@ final class CopilotOnServerTests: XCTestCase {
         XCTAssertEqual(book.folder(host: "KZ2J9AWGK8BWGQUEZDYKW5RS22"), "/home/asad",
                        "the folder somebody chose must survive the update that added a field")
         XCTAssertTrue(book.isArmed(host: "KZ2J9AWGK8BWGQUEZDYKW5RS22"))
-        XCTAssertTrue(book.opensInChat(host: "KZ2J9AWGK8BWGQUEZDYKW5RS22"),
-                      "a record with nothing to say about the mode means chat")
     }
 
     /**

@@ -550,8 +550,14 @@ describe('a shell session is not described as an agent', () => {
     expect(view).toContain("from '../shell/agent-presence'")
   })
 
-  it('is handed the provider by the app, or it cannot know', () => {
-    expect(read('renderer/App.tsx')).toMatch(/provider=\{session\.provider\}/)
+  it('is handed the provider by whatever mounts it, or it cannot know', () => {
+    // It was `App.tsx` until 2026-08-26, where a session could be drawn as a
+    // conversation. Chat mode is gone and the app mounts no chat pane at all;
+    // the copilot's rail is the one surface left that does, and it is the one
+    // that has to carry the provider now.
+    expect(read('renderer/copilot/driving/CopilotRailPanel.tsx')).toMatch(
+      /provider: local\.provider/,
+    )
   })
 
   it('withdraws the model, effort and permission pickers', () => {

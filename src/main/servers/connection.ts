@@ -619,7 +619,7 @@ export class ServerConnections {
    * hour, almost all of them answering "nothing new", and still up to three
    * seconds late when there was. A `tail -f` on this channel is the same fact
    * arriving instead of being asked for, and it costs nothing while the agent
-   * over there is quiet. `servers/chat.ts` is the caller.
+   * over there is quiet. the server chat reader that was removed with chat mode is the caller.
    *
    * ## What it hands over, and what it refuses to
    *
@@ -742,7 +742,7 @@ export class ServerConnections {
    * replacement character into somebody's conversation once per read — which is
    * exactly what {@link exec} above does to its output, and why a transcript
    * cannot be read through `run` or `runScript`. Buffers go up to
-   * `servers/chat.ts`, which holds one `StringDecoder` across every read.
+   * the server chat reader that was removed with chat mode, which holds one `StringDecoder` across every read.
    *
    * It also does not loop. SFTP is free to answer short — fewer bytes than were
    * asked for, with more still there — and rather than hide that, what came back
@@ -1022,7 +1022,7 @@ function exec(client: Client, command: string, stdin: string | null): Promise<Ru
        * data. TCP decides where a chunk ends, not UTF-8: a three-byte `\u00e9`
        * whose first byte is the last byte of one chunk and whose remaining two
        * open the next is decoded twice, as two replacement characters, and no
-       * later byte repairs it. It is not hypothetical here — `servers/chat.ts`
+       * later byte repairs it. It is not hypothetical here — the server chat reader that was removed with chat mode
        * asks the far end for **file paths**, one per line, and a folder named
        * with anything outside ASCII comes back as a path that cannot be opened,
        * which then reads as "the app cannot find a conversation that is right

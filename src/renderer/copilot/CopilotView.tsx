@@ -1,5 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ChatView } from '../components/ChatView'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { PageEmpty } from '../components/PageEmpty'
 import { TerminalView } from '../components/TerminalView'
 import { CopilotMachines } from './CopilotMachines'
@@ -7,9 +6,7 @@ import { RemoteCopilot } from './RemoteCopilot'
 import { TourRecap } from './driving/TourRecap'
 import { COPILOT_ICON } from './identity'
 import { useCopilotMachines } from './useCopilotMachines'
-import type { CopilotPane } from './copilot-model'
 import type { Copilot } from './useCopilot'
-import { sendToTerminal } from '../chat/attach/mentions'
 import './copilot.css'
 
 /**
@@ -46,11 +43,12 @@ import './copilot.css'
  * cluster it never had at all, because those hang off `headingSession` in
  * `App.tsx` and the copilot was being filtered out of the list that feeds it.
  *
- * `mode` is now a prop for the same reason: it is the window's `sessionView` for
- * this session, driven by the same segmented control every other session's is,
- * so there is one answer to "how is this drawn" instead of two that could
- * disagree. `defaultPane` decides where it opens — the terminal, always, since
- * 2026-08-20 — and `App.tsx` seeds that, once, into the shared state.
+ * It draws a **terminal**, and only a terminal. It used to take a `mode` and
+ * draw the same session as a conversation instead; chat mode was removed on
+ * 2026-08-26 — *"I don't think so it can work smoothly so it's better to
+ * completely remove this"* — and the copilot's own conversation is the rail
+ * panel (`CopilotRailPanel`), which is a different surface reading the
+ * copilot's own transcript rather than a second view of a pty.
  *
  * ## What stayed, and why each one earned it
  *
@@ -100,16 +98,6 @@ interface Props {
    * remount would throw away the scrollback the login prompt is sitting in.
    */
   visible?: boolean
-  /**
-   * Terminal or conversation — the window's own `sessionView` for this session,
-   * set by the same mode switch every other session uses.
-   *
-   * Defaulted to the terminal rather than the conversation, agreeing with
-   * `defaultPane`: a caller that has not wired the window's mode state — a test,
-   * the harness — must draw what the app draws, or the two go looking right in
-   * different places.
-   */
-  mode?: CopilotPane
   /**
    * An action-log row id, when the window was opened *from* something — a
    * session row asking why it exists. Lands the reader on that turn.
@@ -179,7 +167,6 @@ function when(at: string): string {
 export function CopilotView({
   copilot,
   visible = true,
-  mode = 'terminal',
   focus = null,
   startedSessions = [],
   onOpenSession,
@@ -280,25 +267,6 @@ export function CopilotView({
   const focused = focus === null ? null : turns.find((turn) => turn.id === focus) ?? null
   const fromFocusedTurn = focus === null ? [] : startedSessions.filter((s) => s.runId === focus)
 
-  const send = useCallback(
-    (text: string) => {
-      const id = state?.sessionId
-      if (!id) return
-      // Typed into the copilot's own terminal, exactly as chat mode does for any
-      // other session: this is a second view of one session, not a second
-      // channel into it, so what is said here also appears in the terminal.
-      //
-      // Two writes, through `sendToTerminal`, and never one with a `\r` on the
-      // end. A stdin chunk of 64 bytes or more is pasted text to the CLI, where
-      // a carriage return is a newline rather than submit — so the single-write
-      // form left every message longer than half a line sitting in the copilot's
-      // input box. Measured in the packed app on 2026-08-22; `mentions.ts` holds
-      // the sequence and the photograph.
-      void sendToTerminal(text, (data) => window.deck.writeToSession(id, data))
-    },
-    [state?.sessionId],
-  )
-
   const root = state?.paths?.root ?? null
   const sessionId = state?.sessionId ?? null
 
@@ -347,17 +315,13 @@ export function CopilotView({
               everywhere that account is used, and you can do it under Settings → Accounts instead.
             </p>
             {/*
-              Where the login actually is, said accurately for whichever pane is
-              in front. The terminal is only "below" while the terminal is the
-              one being drawn — this window is switchable from its own toolbar,
-              and a sentence pointing at something that is not on the screen is
-              the kind of small lie that makes a person doubt the rest of the
-              paragraph.
+              Where the login actually is. The terminal is the only pane this
+              window draws, so it really is below, and the sentence can say so
+              without a branch.
             */}
             <p>
-              {mode === 'terminal'
-                ? 'Its terminal is below. Run /login there: it prints a URL, and you paste the code back here.'
-                : 'The login is on its terminal — press Terminal in the bar above, and run /login there.'}
+              Its terminal is below. Run /login there: it prints a URL, and you paste the code back
+              here.
             </p>
           </div>
         )}
@@ -486,9 +450,8 @@ export function CopilotView({
           </PageEmpty>
         ) : (
           <>
-            {/* Both stay mounted; only one is shown. The terminal keeps its
-                scrollback and the login prompt in it across a trip through
-                Chat, which is the whole reason the session views do the same.
+            {/* The terminal, mounted and kept mounted: it holds its own
+                scrollback and whatever login prompt is sitting in it.
 
                 A trip through *another machine* does unmount it, and that is the
                 one place this rule is not held: the remote copilot has no
@@ -496,31 +459,15 @@ export function CopilotView({
                 `TerminalView` redraws from the main process's scrollback when it
                 comes back, so what is actually lost is a half-typed line — and
                 switching machines is a deliberate act, unlike clicking a pill. */}
-            <div className="cp-pane" data-shown={mode === 'terminal' ? 'true' : undefined}>
+            <div className="cp-pane" data-shown="true">
               <TerminalView
                 sessionId={sessionId}
-                visible={visible && mode === 'terminal'}
+                visible={visible}
                 {...(fontSize === undefined ? {} : { fontSize })}
                 {...(fontFamily === undefined ? {} : { fontFamily })}
                 {...(copyOnSelect === undefined ? {} : { copyOnSelect })}
               />
             </div>
-            {mode === 'chat' && (
-              <ChatView
-                cwd={root}
-                // Which conversation this is a view of. Without it the pane
-                // reads the folder's newest transcript, which for the copilot's
-                // folder would be a previous copilot run's.
-                session={{ startedAt: state?.startedAt ?? 0, resumed: false }}
-                // Without this the controls row and the usage strip render in
-                // their "no session focused" state.
-                sessionId={sessionId}
-                // It is a Claude CLI session. Saying so is what stops the pane
-                // writing shell copy over an agent.
-                provider="claude"
-                onSend={send}
-              />
-            )}
           </>
         )}
       </div>

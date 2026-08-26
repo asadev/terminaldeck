@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { asServerSignIn, setupChangedTheAnswer, signInLine } from './server-chat'
+import { asServerSignIn, setupChangedTheAnswer, signInLine } from './server-signin'
 
 /**
  * The slot on the bar over a terminal on a server, and the rule it now obeys.

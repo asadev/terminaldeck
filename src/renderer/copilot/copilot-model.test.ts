@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
   copilotStage,
-  defaultPane,
   entryDot,
   entryTooltip,
   readCopilotSignIn,
@@ -114,28 +113,6 @@ describe('the stage', () => {
 
   it('says stopped when nothing has been read at all', () => {
     expect(copilotStage(null, null)).toBe('stopped')
-  })
-})
-
-describe('which pane opens', () => {
-  /*
-   * One answer, and it used to be two.
-   *
-   * The rule was `first-run ? terminal : chat`, so which pane the window opened
-   * on depended on whether a sign-in probe had come back yet — a race, decided
-   * by something nobody on the outside can see. Asad, 2026-08-20: *"And always
-   * terminal should be the default view."*
-   *
-   * There is no stage to pass any more, which is the point: the two cases below
-   * are the same call, written twice, because the thing worth pinning is that
-   * nothing can make it answer anything else.
-   */
-  it('opens the terminal', () => {
-    expect(defaultPane()).toBe('terminal')
-  })
-
-  it('opens the terminal again, whatever has happened since', () => {
-    expect(defaultPane()).toBe('terminal')
   })
 })
 

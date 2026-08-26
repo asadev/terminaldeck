@@ -155,15 +155,13 @@ fun TerminalScreen(
      */
     notice: String? = null,
     /**
-     * The plan ring, the context bar, the login this session runs as, and the way into the
-     * conversation. Null over a machine that advertises none of `usage`/`account`/`chat`/`send` —
-     * which gets a terminal that is exactly what it was rather than a bar with nothing in it.
+     * The plan ring, the context bar and the login this session runs as. Null over a machine that
+     * advertises none of `usage`/`account`/`send` — which gets a terminal that is exactly what it
+     * was rather than a bar with nothing in it.
      */
     bar: SessionBarView? = null,
     onRefreshUsage: () -> Unit = {},
     onSwitchAccount: (String) -> Unit = {},
-    /** The way into the conversation. Absent when this machine serves no transcript for it. */
-    onOpenChat: () -> Unit = {},
     /** Everything about this one session, as a sheet. iOS reaches it from here and from the row. */
     onDetails: () -> Unit = {},
     /**
@@ -432,7 +430,6 @@ fun TerminalScreen(
                         view = row,
                         onRefresh = onRefreshUsage,
                         onSwitchAccount = onSwitchAccount,
-                        onOpenChat = onOpenChat,
                     )
                 }
 

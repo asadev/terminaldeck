@@ -1,11 +1,11 @@
 /**
- * What one session's bar knows, and the conversation behind it.
+ * What one session's bar knows.
  *
- * The client half of `usage`, `account` and `chat` — a port of
- * `pwa/src/session-bar.ts` and `pwa/src/chat-view.ts`, which the browser client
- * has had since 2026-08-18 and this app had none of. On his phone the app was
- * a session list and a terminal: no ring, no context, no account, no
- * conversation. Everything drawn from here is the far machine's own figure,
+ * The client half of `usage` and `account` — a port of
+ * `pwa/src/session-bar.ts`, which the browser client has had since 2026-08-18
+ * and this app had none of. On his phone the app was a session list and a
+ * terminal: no ring, no context, no account. Everything drawn from here is the
+ * far machine's own figure,
  * read by the same `readUsage`, `readContextWindow` and `sessionAccount` that
  * draw the bar at the desk, which is what keeps one session from having two
  * truths depending on which screen is looking at it.
@@ -60,35 +60,6 @@ final class SessionBarLink {
     /// A refresh or a switch is in flight.
     private(set) var busy = false
 
-    /// The conversation, oldest first.
-    private(set) var chat: [CopilotChatMessage] = []
-    /// Nil until the far machine has answered once. False means the folder has
-    /// no transcript at all — a different empty from a session that has not
-    /// spoken yet, and the reason the toggle is absent rather than opening an
-    /// empty screen.
-    private(set) var transcript: Bool?
-
-    /**
-     * Whether the conversation on screen begins where the transcript does.
-     *
-     * True when a whole-conversation answer came back at `Copilot.maxChatRows`,
-     * which is the desktop clipping to the **end** of a longer file. The rows it
-     * dropped are not named on the frame and there is no verb to page backwards
-     * with, so the only honest thing this client can do is say that the top of
-     * what it is showing is not the top of the conversation. See the constant.
-     */
-    private(set) var atCap = false
-
-    /**
-     * Whether the conversation is the thing on screen.
-     *
-     * Set by the screen, read here, because it decides one thing only: whether
-     * a session going quiet is worth a transcript read. A terminal somebody is
-     * typing into must not send a file read across a relay after every burst of
-     * output.
-     */
-    var chatting = false
-
     /// What this machine said it can answer. Nothing is asked for a name that
     /// is not in here, so a desktop older than these capabilities gets a screen
     /// that is exactly what it was rather than one explaining what it lacks.
@@ -99,7 +70,6 @@ final class SessionBarLink {
     private var counter = 0
     private var askedPlanAt: Date?
     private var quiet: Task<Void, Never>?
-    private var chatTail: Task<Void, Never>?
     private let now: () -> Date
 
     /// How long before a quiet session's plan figure is worth asking for again.
@@ -109,7 +79,6 @@ final class SessionBarLink {
         case usage(UsageWant)
         case account
         case accountSwitch
-        case chat
     }
 
     init(wire: CopilotWire, now: @escaping () -> Date = Date.init) {
@@ -128,19 +97,13 @@ final class SessionBarLink {
 
     var canReadUsage: Bool { capabilities.contains(WireCapability.usage) }
     var canReadAccount: Bool { capabilities.contains(WireCapability.account) }
-    var canReadChat: Bool { capabilities.contains(WireCapability.chat) }
 
     /**
      * The screen opened a session. Everything held about the last one goes:
      * a ring from another session is worse than no ring.
      *
      * Called again for a session this bar is *already* following whenever a
-     * screen finds itself back in front — see `TerminalScreen.reclaimBar` — and
-     * that repeat is what the chat re-read at the bottom is for. A conversation
-     * asked for on a socket that then died, or on a bar that another screen took
-     * over in between, has no other event that would ever ask again: the tail
-     * read rides `output`, and a session anybody wants to *read* is by
-     * definition one that has stopped printing.
+     * screen finds itself back in front — see `TerminalScreen.reclaimBar`.
      */
     func follow(_ id: String) {
         if sessionID != id { forget() }
@@ -148,16 +111,12 @@ final class SessionBarLink {
         askUsage(.context)
         askPlan()
         askAccount()
-        // Only ever true on a re-follow of the same session: `forget()` above
-        // clears it whenever the id changes.
-        if chatting { askChat(tail: false) }
     }
 
     /**
      * The screen for `id` has gone.
      *
-     * **Id-scoped, and that is the whole of the fix behind the empty chat.**
-     * There is one of these per machine and there are two `TerminalScreen`s that
+     * **Id-scoped**, and it has to be. There is one of these per machine and there are two `TerminalScreen`s that
      * can be alive at once — the Sessions stack's and the Copilot stack's — so
      * "a screen went away" is not the same fact as "the session this bar is
      * following went away". Measured on the simulator against the app's own
@@ -172,31 +131,12 @@ final class SessionBarLink {
      * `onDisappear`; and coming back to a tab fires **nothing**, so a screen
      * that is on screen again has no callback to re-claim anything in. A bare
      * `forget()` on the leaving screen would therefore wipe the bar the screen
-     * that is actually being looked at has just pointed at itself — after which
-     * `askChat` returns at its `guard let sessionID` and the conversation is
-     * empty for as long as that screen is up, however many times the toggle is
-     * pressed. That is the defect he reported: *"when we switch in terminal we
-     * can see the whole chat; when we switch on chat mode we don't see the
-     * chat… this happens a lot, on all the versions."*
+     * that is actually being looked at has just pointed at itself, and every
+     * chip on it would sit empty for as long as that screen was up.
      */
     func release(_ id: String) {
         guard sessionID == id else { return }
         forget()
-    }
-
-    /**
-     * The conversation is no longer on screen.
-     *
-     * The pending tail read goes with it. `chatting = false` alone stops the
-     * *next* one being scheduled and does nothing about the one already waiting
-     * out its debounce, which then spends a round trip reading a transcript
-     * nobody is looking at — and lands, if the bar has moved on in the meantime,
-     * on an id guard that drops it.
-     */
-    func stopChatting() {
-        chatting = false
-        chatTail?.cancel()
-        chatTail = nil
     }
 
     /// The screen closed, or the socket went. Timers stop and nothing stale is
@@ -204,8 +144,6 @@ final class SessionBarLink {
     func forget() {
         quiet?.cancel()
         quiet = nil
-        chatTail?.cancel()
-        chatTail = nil
         pending.removeAll()
         sessionID = nil
         plan = nil
@@ -213,10 +151,6 @@ final class SessionBarLink {
         account = nil
         accounts = []
         busy = false
-        chat = []
-        transcript = nil
-        atCap = false
-        chatting = false
         askedPlanAt = nil
     }
 
@@ -224,16 +158,13 @@ final class SessionBarLink {
      * The socket went.
      *
      * The figures go with it — a ring is a claim about now, and nothing over a
-     * dead channel will correct it — and the conversation stays, because a
-     * bubble is something that was said and a drop does not unsay it. Pending
-     * questions are dropped so that an answer arriving on the next connection
-     * cannot land against a request id minted on the last one.
+     * dead channel will correct it. Pending questions are dropped so that an
+     * answer arriving on the next connection cannot land against a request id
+     * minted on the last one.
      */
     func dropped() {
         quiet?.cancel()
         quiet = nil
-        chatTail?.cancel()
-        chatTail = nil
         pending.removeAll()
         plan = nil
         context = nil
@@ -256,13 +187,6 @@ final class SessionBarLink {
             self.askUsage(.context)
             self.askPlan()
         }
-        guard chatting else { return }
-        chatTail?.cancel()
-        chatTail = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 900_000_000)
-            guard !Task.isCancelled, let self else { return }
-            self.askChat(tail: true)
-        }
     }
 
     // MARK: - Asking
@@ -284,14 +208,6 @@ final class SessionBarLink {
         let rid = nextRid()
         busy = true
         send(.accountSwitch(rid: rid, id: sessionID, accountId: accountId), rid: rid, as: .accountSwitch)
-    }
-
-    /// `tail` false is what opening the view asks; true is what a quiet session
-    /// asks. Nothing is asked while the conversation is not on screen.
-    func askChat(tail: Bool) {
-        guard let sessionID, canReadChat else { return }
-        let rid = nextRid()
-        send(.chatRead(rid: rid, id: sessionID, tail: tail), rid: rid, as: .chat)
     }
 
     @discardableResult
@@ -379,42 +295,8 @@ final class SessionBarLink {
             askAccount()
             return true
 
-        case let .chatRows(rid, id, rows, reset, found):
-            guard pending.removeValue(forKey: rid) != nil, id == sessionID else { return false }
-            chat = SessionBarLink.merge(held: chat, incoming: rows, reset: reset)
-            transcript = found
-            // Only a whole-conversation answer can be at the cap in the sense
-            // that matters. A tail read carrying two hundred rows is two hundred
-            // things that happened since the last read, not the front of the
-            // file being dropped.
-            if reset { atCap = rows.count >= Copilot.maxChatRows }
-            return true
-
         default:
             return false
         }
-    }
-
-    /**
-     * Fold an answer into what is already held.
-     *
-     * By id: a match is replaced, anything else is appended. That is what makes
-     * a growing answer redraw in place instead of stacking a paragraph at a
-     * time. `reset` cannot be ignored — it means the far side's document is not
-     * the one this view holds a prefix of, and appending through one draws the
-     * conversation twice.
-     */
-    static func merge(held: [CopilotChatMessage],
-                      incoming: [CopilotChatMessage],
-                      reset: Bool) -> [CopilotChatMessage] {
-        var rows = reset ? [] : held
-        for row in incoming {
-            if let at = rows.firstIndex(where: { $0.id == row.id }) {
-                rows[at] = row
-            } else {
-                rows.append(row)
-            }
-        }
-        return rows
     }
 }

@@ -377,7 +377,7 @@ declare module 'ssh2' {
      * The three calls that read a *range* of a file on the far end, rather than
      * a whole one.
      *
-     * Declared for one caller — `ServerConnections.readFileRange`, which the
+     * Declared for one caller — `ServerConnections.readFileRange`, which
      * chat view over a server shell tails a transcript with — and declared as a
      * range read rather than as `createReadStream` on purpose. A transcript is
      * appended to while it is being read, so what this app wants is *the bytes

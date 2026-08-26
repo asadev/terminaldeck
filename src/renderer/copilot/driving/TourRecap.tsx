@@ -364,7 +364,6 @@ export function TourRecap({ read, limit = 5, watch }: Props) {
           nav.selectTab(stop.sessionId)
           nav.showPanel('git')
         } else {
-          nav.setSessionMode(stop.sessionId, stop.kind === 'message' ? 'chat' : 'terminal')
           nav.selectTab(stop.sessionId)
         }
       }

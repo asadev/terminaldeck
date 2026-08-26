@@ -124,16 +124,13 @@ final class SessionBarTests: XCTestCase {
 
     // MARK: - Frames
 
-    func testTheThreeVerbsEncodeAsTheDesktopParsesThem() {
+    func testTheTwoVerbsEncodeAsTheDesktopParsesThem() {
         XCTAssertEqual(
             WireCodec.encode(.usageRead(rid: "r1", id: "s1", want: .context, force: false)).sortedJSON(),
             #"{"force":false,"id":"s1","rid":"r1","t":"usage.read","want":"context"}"#)
         XCTAssertEqual(
             WireCodec.encode(.accountSwitch(rid: "r2", id: "s1", accountId: "second")).sortedJSON(),
             #"{"accountId":"second","id":"s1","rid":"r2","t":"account.switch"}"#)
-        XCTAssertEqual(
-            WireCodec.encode(.chatRead(rid: "r3", id: "s1", tail: true)).sortedJSON(),
-            #"{"id":"s1","rid":"r3","t":"chat.read","tail":true}"#)
     }
 
     func testAUsageReadingIsNarrowedOnArrival() {
@@ -171,51 +168,6 @@ final class SessionBarTests: XCTestCase {
         XCTAssertEqual(accounts.count, 1)
     }
 
-    func testAnEmptyChatReadIsARealAnswer() {
-        // What a session with a transcript and no turns in it yet returns.
-        // Refusing it would leave the last conversation on screen under it.
-        let raw = #"{"t":"chat.rows","rid":"r1","id":"s1","rows":[],"reset":true,"found":true}"#
-        guard case let .ok(message, _) = WireCodec.decode(raw),
-              case let .chatRows(_, _, rows, reset, found) = message else {
-            return XCTFail("expected chat.rows")
-        }
-        XCTAssertTrue(rows.isEmpty)
-        XCTAssertTrue(reset)
-        XCTAssertTrue(found)
-    }
-
-    func testARoleThisBuildHasNeverHeardOfIsDrawnAsTheAgent() {
-        // A bubble on the right of the screen is a claim about who said
-        // something. Nothing on a wire may put words in the person's mouth.
-        let raw = #"""
-        {"t":"chat.rows","rid":"r1","id":"s1","found":true,"reset":false,
-         "rows":[{"id":"m1","role":"system","text":"hello","at":1}]}
-        """#
-        guard case let .ok(message, _) = WireCodec.decode(raw),
-              case let .chatRows(_, _, rows, _, _) = message else {
-            return XCTFail("expected chat.rows")
-        }
-        XCTAssertEqual(rows.first?.role, .agent)
-    }
-
-    // MARK: - Folding
-
-    @MainActor
-    func testAGrowingAnswerRedrawsInPlaceAndAResetStartsOver() {
-        let first = CopilotChatMessage(id: "m1", role: .agent, text: "think", at: 1, truncated: false)
-        let grown = CopilotChatMessage(id: "m1", role: .agent, text: "thinking about it", at: 1, truncated: false)
-        let second = CopilotChatMessage(id: "m2", role: .you, text: "thanks", at: 2, truncated: false)
-
-        let held = SessionBarLink.merge(held: [first], incoming: [grown, second], reset: false)
-        XCTAssertEqual(held.map(\.id), ["m1", "m2"])
-        XCTAssertEqual(held[0].text, "thinking about it")
-
-        // A rolled-over transcript, an account switch, a compaction. Appending
-        // through one of those draws the conversation twice.
-        let after = SessionBarLink.merge(held: held, incoming: [second], reset: true)
-        XCTAssertEqual(after.map(\.id), ["m2"])
-    }
-
     // MARK: - The model
 
     @MainActor
@@ -226,7 +178,7 @@ final class SessionBarTests: XCTestCase {
         bar.follow("s1")
         XCTAssertTrue(wire.sent.isEmpty)
 
-        bar.welcomed(capabilities: [WireCapability.usage, WireCapability.account, WireCapability.chat])
+        bar.welcomed(capabilities: [WireCapability.usage, WireCapability.account])
         bar.follow("s1")
         XCTAssertEqual(wire.sent.count, 3)
     }
@@ -260,26 +212,19 @@ final class SessionBarTests: XCTestCase {
     }
 
     @MainActor
-    func testADroppedSocketTakesTheFiguresAndLeavesTheConversation() {
+    func testADroppedSocketTakesTheFigures() {
         let wire = RecordingWire()
         let bar = SessionBarLink(wire: wire)
-        bar.welcomed(capabilities: [WireCapability.usage, WireCapability.chat])
+        bar.welcomed(capabilities: [WireCapability.usage])
         bar.follow("s1")
         guard case let .usageRead(rid, _, _, _) = wire.sent[0] else { return XCTFail("expected a usage.read") }
         _ = bar.receive(.usageReading(rid: rid, id: "s1", want: .context,
                                       figures: UsageFigures(plan: nil, context: 0.5)))
-        bar.askChat(tail: false)
-        guard case let .chatRead(chatRid, _, _) = wire.sent.last else { return XCTFail("expected a chat.read") }
-        _ = bar.receive(.chatRows(rid: chatRid, id: "s1",
-                                  rows: [CopilotChatMessage(id: "m1", role: .you, text: "hi", at: 1, truncated: false)],
-                                  reset: true, found: true))
 
         bar.dropped()
         // A ring is a claim about now and nothing over a dead socket will
-        // correct it; a bubble is something that was said, which a drop does not
-        // unsay.
+        // correct it.
         XCTAssertNil(bar.context)
-        XCTAssertEqual(bar.chat.count, 1)
     }
 
     @MainActor

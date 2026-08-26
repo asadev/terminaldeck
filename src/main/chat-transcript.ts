@@ -345,7 +345,7 @@ const MAX_LINE_BYTES = 8 * 1024 * 1024
  * Two methods, and the only reason they are a seam rather than `node:fs` calls
  * inline is that the same file is read from two computers now. A transcript on
  * **this** machine is a path and a file handle; a transcript belonging to a
- * shell on a **server** is a byte range over SFTP (`servers/chat.ts`), and the
+ * shell on a **server** is a byte range over SFTP (the server chat reader that was removed with chat mode), and the
  * whole of what makes those the same reading is that everything else in this
  * class — the dedupe set, the collapser, the `StringDecoder` held across chunk
  * boundaries, the rewind when a file gets shorter — is identical and must stay
@@ -461,7 +461,7 @@ export class ChatReader {
     startAt = 0,
     /**
      * Which computer the bytes come from. This one, unless a caller says
-     * otherwise — see {@link ChatBytes}, and `servers/chat.ts` for the caller
+     * otherwise — see {@link ChatBytes}, and the server chat reader that was removed with chat mode for the caller
      * that does.
      */
     private readonly bytes: ChatBytes = LOCAL_BYTES,

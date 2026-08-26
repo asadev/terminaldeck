@@ -493,23 +493,6 @@ describe('what a public host offers', () => {
        */
       CAPABILITY.devices,
       /*
-       * `chat` is withheld, and it is the plainest one on this list.
-       *
-       * It hands over **what the owner said to their agent**, in words, read off
-       * the transcripts on that machine's disk. Every other entry above is a
-       * capability, a figure or a name; this one is prose somebody wrote in
-       * private. On a box handed to a stranger for an App Store review there is
-       * nothing to weigh: a demo needs a terminal that works, and it does not
-       * need to read anybody's conversations.
-       *
-       * Load-bearing rather than belt-and-braces, like `controls` and `usage`
-       * and for the same mechanical reason: the demo builds its session layer
-       * through `createHostCore`, which wires `createChatServe`, so the object
-       * behind this capability genuinely exists on that box and it is this line
-       * that stops it being advertised.
-       */
-      CAPABILITY.chat,
-      /*
        * `settings` is withheld: it changes the two settings this machine owns
        * — the default agent and whether sessions restore. On a box handed to a
        * stranger for review, letting a guest rewrite the host's own behaviour

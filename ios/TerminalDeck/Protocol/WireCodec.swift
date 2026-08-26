@@ -613,21 +613,6 @@ enum WireCodec {
             // one piece of prose on a bar that has none.
             return .ok(.accountSwitched(rid: rid, id: id, ok: object["ok"] as? Bool == true), activity: [:])
 
-        case "chat.rows":
-            guard let rid = string(object["rid"]), let id = string(object["id"]),
-                  let rows = object["rows"] as? [Any] else {
-                return .failed(reason: "chat.rows without a request, session and rows")
-            }
-            // An empty answer is a real frame — it is what a session with a
-            // transcript and no turns in it yet returns — so it is not refused.
-            // One malformed bubble is dropped rather than taking the read with
-            // it, for the reason one bad session row does not discard a list.
-            return .ok(.chatRows(rid: rid, id: id,
-                                 rows: rows.compactMap { copilotMessage($0) },
-                                 reset: object["reset"] as? Bool == true,
-                                 found: object["found"] as? Bool == true),
-                       activity: [:])
-
         case "enrolled":
             guard let deviceId = string(object["deviceId"]),
                   let deviceName = string(object["deviceName"]),
@@ -1130,9 +1115,6 @@ enum WireCodec {
             object = ["t": "account.read", "rid": rid, "id": id]
         case let .accountSwitch(rid, id, accountId):
             object = ["t": "account.switch", "rid": rid, "id": id, "accountId": accountId]
-        case let .chatRead(rid, id, tail):
-            object = ["t": "chat.read", "rid": rid, "id": id, "tail": tail]
-
         case let .enroll(version, device, username, secret, method, capabilities):
             object = [
                 "t": "enroll",

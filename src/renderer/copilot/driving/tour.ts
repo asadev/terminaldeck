@@ -288,31 +288,6 @@ export function focusOfRecord(stop: TourStopRecord): FocusTarget | null {
   }
 }
 
-/**
- * Which pane this stop needs in front.
- *
- * A `message` stop is a bubble in the chat view and a `screen` stop is a
- * passage of terminal output; there is no mapping between the two and there
- * cannot be one — the JSONL is written by the CLI, the pty carries the CLI's
- * *rendering* of it, and `session-transcript.ts` records that a transcript line
- * says "nothing whatsoever about the terminal that produced it". So a stop is
- * either one or the other, which is why the plan has two variants rather than
- * one with an optional field, and why this function is total.
- *
- * An anchor stop asks for nothing: the sidebar row, the alerts panel and the
- * git panel are not inside a session's pane, and switching the pane under a
- * reader for a stop that does not need it is the app twitching.
- */
-export function paneFor(stop: TourStop): 'terminal' | 'chat' | null {
-  switch (stop.kind) {
-    case 'screen':
-      return 'terminal'
-    case 'message':
-      return 'chat'
-    case 'anchor':
-      return null
-  }
-}
 
 /* ---------------------------------------------------------------- wording -- */
 

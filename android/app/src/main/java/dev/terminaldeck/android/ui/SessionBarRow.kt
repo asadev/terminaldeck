@@ -70,13 +70,12 @@ fun SessionBarRow(
     view: SessionBarView,
     onRefresh: () -> Unit,
     onSwitchAccount: (String) -> Unit,
-    onOpenChat: () -> Unit,
 ) {
     var picking by remember { mutableStateOf(false) }
 
     // Nothing known and nothing to press is a bar with nothing in it. Absent rather than an empty
     // strip that spends a row of a phone screen saying nothing.
-    val empty = view.plan == null && view.context == null && view.account == null && !view.hasTranscript
+    val empty = view.plan == null && view.context == null && view.account == null
     if (empty) return
 
     Row(
@@ -105,17 +104,6 @@ fun SessionBarRow(
                 account = account,
                 enabled = view.canSwitchAccount && !view.busy,
                 onClick = { picking = true },
-            )
-        }
-
-        if (view.hasTranscript) {
-            Icon(
-                Icons.AutoMirrored.Filled.Chat,
-                contentDescription = "Read this session as a conversation",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier
-                    .size(20.dp)
-                    .clickable(onClick = onOpenChat),
             )
         }
     }

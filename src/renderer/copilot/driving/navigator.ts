@@ -25,7 +25,7 @@
  * command. That is the same mistake as a CSS-selector anchor and it is worse: a
  * tour's arguments were composed by a model out of *other sessions' transcripts*
  * (`COPILOT-CAPABILITIES.md` §3.2 item 8), and a dispatcher takes ids like
- * `session.close`. A closed set of four functions cannot be talked into closing
+ * `session.close`. A closed set of three functions cannot be talked into closing
  * a tab, and the reason it cannot is structural rather than a check somebody has
  * to remember to write.
  */
@@ -35,8 +35,6 @@ export interface DriveNavigator {
   selectTab(id: string): void
   /** Open one of the sidebar's views, optionally focused on part of it. */
   showPanel(id: string, focus?: string | null): void
-  /** Show a session as its terminal or as its conversation. */
-  setSessionMode(sessionId: string, mode: 'terminal' | 'chat'): void
   /** The folder a session is running in, for a `git-file` anchor. */
   cwdOf(sessionId: string): string | null
 }

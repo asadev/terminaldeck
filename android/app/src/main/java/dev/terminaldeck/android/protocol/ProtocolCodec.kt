@@ -167,12 +167,6 @@ object ServerFrames {
         if (message is ServerMessage.AccountState && message.accounts.size > Protocol.MAX_ACCOUNTS_REPORTED) {
             return Result.Ok(message.copy(accounts = message.accounts.take(Protocol.MAX_ACCOUNTS_REPORTED)))
         }
-        // Kept from the **end**, matching `rows.slice(-MAX_CHAT_ROWS)` over there: a chat view shows
-        // the newest of a conversation, and trimming the head of an over-long answer would keep the
-        // oldest bubbles and drop the reply somebody is waiting to read.
-        if (message is ServerMessage.ChatRows && message.rows.size > Protocol.MAX_CHAT_ROWS) {
-            return Result.Ok(message.copy(rows = message.rows.takeLast(Protocol.MAX_CHAT_ROWS)))
-        }
         // A tunnelled chunk is validated as base64 before an allocator is handed it, exactly as
         // `net.data` is on the desktop: the alphabet, and a length that is a multiple of four.
         // Refused rather than repaired — invented bytes in the middle of somebody's HTTP response

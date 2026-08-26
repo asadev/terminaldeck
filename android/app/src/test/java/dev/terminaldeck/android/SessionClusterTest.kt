@@ -2,8 +2,6 @@ package dev.terminaldeck.android
 
 import dev.terminaldeck.android.credential.Expiry
 import dev.terminaldeck.android.protocol.AccountWire
-import dev.terminaldeck.android.protocol.ChatMessageWire
-import dev.terminaldeck.android.protocol.ChatRole
 import dev.terminaldeck.android.protocol.ClientMessage
 import dev.terminaldeck.android.protocol.ControlAgentWire
 import dev.terminaldeck.android.protocol.ControlGateWire
@@ -286,9 +284,6 @@ class SessionClusterTest {
             rec.only<ClientMessage.UsageRead>().map { it.want },
         )
         assertEquals(1, rec.only<ClientMessage.AccountRead>().size)
-        // The conversation is not read until the screen that shows it is up: a terminal somebody is
-        // typing into must not send a file read across a relay after every burst of output.
-        assertTrue(rec.only<ClientMessage.ChatRead>().isEmpty())
     }
 
     @Test
@@ -427,150 +422,6 @@ class SessionClusterTest {
             Protocol.MAX_ACCOUNT_ID_LENGTH,
             rec.only<ClientMessage.AccountSwitch>().single().accountId.length,
         )
-    }
-
-    @Test
-    fun `the conversation is read when the screen opens and tailed when it goes quiet`() {
-        val rec = Recorder()
-        val expiry = FakeExpiry()
-        val b = bar(rec, expiry)
-        b.follow("s1")
-        rec.sent.clear()
-
-        b.chatting(true)
-        // Opening asks for the whole bounded tail.
-        assertFalse(rec.only<ClientMessage.ChatRead>().single().tail)
-
-        rec.sent.clear()
-        b.noteOutput()
-        expiry.fireAll()
-        // A quiet session asks the cheap follow-up.
-        assertTrue(rec.only<ClientMessage.ChatRead>().single().tail)
-
-        rec.sent.clear()
-        b.chatting(false)
-        b.noteOutput()
-        expiry.fireAll()
-        assertTrue(rec.only<ClientMessage.ChatRead>().isEmpty())
-    }
-
-    @Test
-    fun `no transcript is a different empty from no messages`() {
-        val rec = Recorder()
-        val b = bar(rec, FakeExpiry())
-        b.follow("s1")
-        b.chatting(true)
-        val ask = rec.only<ClientMessage.ChatRead>().single()
-
-        // Not asked yet.
-        assertNull(b.chatView()!!.transcript)
-
-        b.receive(ServerMessage.ChatRows(ask.rid, "s1", rows = emptyList(), reset = true, found = false))
-        // A folder with no transcript at all, which is the state that says something rather than
-        // drawing an empty list — and the reason the way in is withdrawn rather than opening onto
-        // nothing.
-        assertEquals(false, b.chatView()!!.transcript)
-        assertFalse(b.view()!!.hasTranscript)
-    }
-
-    @Test
-    fun `the way into the conversation is open before the machine has answered`() {
-        val rec = Recorder()
-        val b = bar(rec, FakeExpiry())
-        b.follow("s1")
-        // Nothing asks for a transcript until the chat screen is up, so requiring a `found` answer
-        // here would mean the way in appears only after it has been used — a door locked from the
-        // inside. Offered while unknown, withdrawn once the machine says there is none.
-        assertNull(b.chatView()!!.transcript)
-        assertTrue(b.view()!!.hasTranscript)
-
-        val ask = rec.only<ClientMessage.ChatRead>().firstOrNull()
-        assertNull("nothing is read until the screen is up", ask)
-    }
-
-    @Test
-    fun `a machine that cannot read a transcript offers no way in at all`() {
-        val rec = Recorder()
-        val b = bar(rec, FakeExpiry(), caps = { setOf("usage", "account") })
-        b.follow("s1")
-        assertFalse(b.view()!!.hasTranscript)
-        // …and the screen behind it is unreachable rather than empty.
-        assertNull(b.chatView())
-    }
-
-    @Test
-    fun `a send keeps its draft on a refusal and clears it on the way out`() {
-        val rec = Recorder()
-        val b = bar(rec, FakeExpiry())
-        b.follow("s1")
-
-        // Accepted onto the socket: the caller may clear the box.
-        assertTrue(b.sendMessage("ship it"))
-        assertTrue(b.chatView()!!.sending)
-        val sent = rec.only<ClientMessage.SessionSend>().single()
-        assertEquals("ship it", sent.data)
-
-        b.receive(
-            ServerMessage.SessionSent(sent.rid, "s1", ok = false, message = "That session is not accepting input.")
-        )
-        assertFalse(b.chatView()!!.sending)
-        assertEquals("That session is not accepting input.", b.chatView()!!.notice!!.text)
-    }
-
-    @Test
-    fun `a send while the socket is down is refused and the draft is kept`() {
-        val rec = Recorder()
-        val b = bar(rec, FakeExpiry())
-        b.follow("s1")
-        rec.online = false
-        // False is what keeps it in the box, which is the whole reason this rides `session.send`
-        // rather than `input`.
-        assertFalse(b.sendMessage("ship it"))
-        assertEquals(SessionBarController.NOT_CONNECTED, b.chatView()!!.notice!!.text)
-    }
-
-    @Test
-    fun `a message past the paste cap is refused here rather than closing the socket`() {
-        val rec = Recorder()
-        val b = bar(rec, FakeExpiry())
-        b.follow("s1")
-        rec.sent.clear()
-        assertFalse(b.sendMessage("x".repeat(Protocol.MAX_INPUT_BYTES + 1)))
-        // Refused, not split: a message cut in half is two messages to an agent. And refused here,
-        // because the desktop answers an over-cap frame by closing the socket — a message too long
-        // would otherwise fail as the connection dying.
-        assertTrue(rec.only<ClientMessage.SessionSend>().isEmpty())
-        assertEquals(SessionBarController.TOO_LONG, b.chatView()!!.notice!!.text)
-    }
-
-    @Test
-    fun `a dropped socket takes the figures and keeps the conversation`() {
-        val rec = Recorder()
-        val b = bar(rec, FakeExpiry())
-        b.follow("s1")
-        b.chatting(true)
-        val chatAsk = rec.only<ClientMessage.ChatRead>().single()
-        b.receive(
-            ServerMessage.ChatRows(
-                chatAsk.rid, "s1",
-                rows = listOf(ChatMessageWire("m1", ChatRole.Agent, "done")),
-                reset = true, found = true,
-            )
-        )
-        val usageAsk = rec.only<ClientMessage.UsageRead>().first { it.want == UsageWant.Context }
-        b.receive(
-            ServerMessage.UsageReading(
-                usageAsk.rid, "s1", UsageWant.Context,
-                UsageAnswerWire(json("""{"state":"read","percent":40}""")),
-            )
-        )
-        assertEquals(0.4, b.view()!!.context!!, 1e-9)
-
-        b.dropped()
-        // A ring is a claim about now and nothing over a dead channel will correct it…
-        assertNull(b.view()!!.context)
-        // …and a bubble is something that was said, which a drop does not unsay.
-        assertEquals(1, b.chatView()!!.rows.size)
     }
 
     /* ============================================================== the claim == */

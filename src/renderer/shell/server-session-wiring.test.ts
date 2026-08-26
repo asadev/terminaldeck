@@ -134,12 +134,15 @@ describe('the pane is mounted for as long as its tab exists', () => {
      * is always the one nobody has open.
      */
     /*
-     * `!chatting` since the conversation existed. The terminal and the chat view
-     * are the same session in two views drawn in one rectangle, so exactly one
-     * of them is shown — and the terminal is *hidden* rather than unmounted
-     * while the other is up, for the reason the whole block is here.
+     * `visible={onScreen}` and nothing else. It read `onScreen && !chatting`
+     * while a server terminal could also be drawn as a conversation in the same
+     * rectangle; chat mode went on 2026-08-26 and the second view with it, so
+     * there is one pane and one question about it. The terminal is still
+     * *hidden* rather than unmounted when it is not in front, for the reason the
+     * whole block is here.
      */
-    expect(panes).toContain('visible={onScreen && !chatting}')
+    expect(panes).toContain('visible={onScreen}')
+    expect(panes, 'a second view of a server terminal is back').not.toContain('chatting')
     expect(panes).toContain('const onScreen = remoteOnScreen(entry.tabId)')
     const onScreen = /const remoteOnScreen = [\s\S]*?\n\n/.exec(APP)?.[0] ?? ''
     expect(onScreen, 'remoteOnScreen has changed shape').not.toBe('')
@@ -154,33 +157,19 @@ describe('the pane is mounted for as long as its tab exists', () => {
     expect(panes).toContain('key={entry.tabId}')
   })
 
-  it('mounts the conversation beside the terminal, not instead of it', () => {
+  it('mounts one pane per server terminal and no conversation beside it', () => {
     /*
-     * Chat mode over a server terminal is a second pane in the same rectangle,
-     * and both of these matter:
-     *
-     *  - It is in the always-mounted list rather than in `mainView`, so a trip
-     *    to Files does not unmount it. Locally that would cost a re-read off
-     *    disk; here it is the whole conversation across an SSH link again.
-     *  - It is drawn only once the server has answered with an id for the shell.
-     *    `shellId` is the handle the main process holds both the SSH channel and
-     *    the transcript reader under, and `shellKey` — this window's own — names
-     *    nothing over there. Before there is one, the mode switch refuses with a
-     *    sentence rather than opening an empty pane.
+     * Chat mode over a server terminal used to be a second pane in the same
+     * rectangle, fed by `servers/chat.ts` finding the agent's transcript on the
+     * far disk and `connection.ts` reading byte ranges out of it over SFTP. All
+     * of it is deleted, so what this pins is the absence: no second mount, no
+     * `shellId` handed to a reader, and nothing in the panes block that would
+     * draw a conversation.
      */
     const panes = /<div className="panes" ref=\{panesHostRef\}>([\s\S]*?)\n {8}<\/div>/.exec(APP)?.[0] ?? ''
     expect(panes, 'the panes block has changed shape').not.toBe('')
-    expect(panes).toContain('<ServerChatPane')
-    expect(panes).toContain('shellId={shellId}')
-    expect(panes).toMatch(/\{chatting && shellId !== undefined \? \(/)
-    /*
-     * `visible={onScreen}` and not `visible={onScreen && chatting}`: it is only
-     * mounted while the session is in chat mode, so `chatting` is already true
-     * here — and the pane has to be told whether it is being *looked at*
-     * separately, because that is what switches its timer off. A background tab
-     * in chat mode keeps everything it has read and asks the server nothing.
-     */
-    expect(panes).toContain('visible={onScreen}')
+    expect(panes).not.toContain('ServerChatPane')
+    expect(panes).not.toContain('shellId={shellId}')
   })
 
   it('draws nothing at all from `mainView` while one fills the window', () => {
@@ -261,7 +250,7 @@ describe('the controls a shell can reach, and the ones it cannot', () => {
     expect(branch).toContain('provider: undefined')
   })
 
-  it('offers chat, and refuses it only when something is genuinely missing', () => {
+  it('draws the switch over a server terminal and refuses nothing', () => {
     /*
      * Terminal is exactly what a server terminal is already showing, so
      * withdrawing the whole switch took a working segment with it and left an
@@ -276,39 +265,17 @@ describe('the controls a shell can reach, and the ones it cannot', () => {
      * nothing about the scrollback changed. *"Like I cannot even split"*,
      * 2026-08-21.
      *
-     * **Chat was refused and is not any more either.** Its sentence read: *"Chat
-     * reads the agent's own transcript file, which is on that server's disk.
-     * This app opens a terminal there, not a filesystem it reads conversations
-     * out of."* Every clause of that was true and it described a hole rather
-     * than a reason — the transcript is a file on a machine this app holds an
-     * SSH connection to. `servers/chat.ts` finds which file belongs to this
-     * shell and `connection.ts` reads byte ranges out of it over SFTP.
-     *
-     * What is left are two refusals about things that are actually absent, and
-     * this test's job is that neither of them is a mode:
-     *
-     *  - a preload with no such channel, which is a question about *this build*
-     *    and is asked of the bridge rather than assumed;
-     *  - a terminal the server has not answered with an id for yet, which has
-     *    nothing to read a transcript out of.
-     *
-     * Keyed on `shownTabId` rather than on the window's `openServerSession`, so
-     * the sentence and the `view` beside it come from the same place — they used
-     * not to, and the switch could be live over a session it was refusing to act
-     * on.
+     * **Chat was refused, then offered, and is now gone.** It read a transcript
+     * off the far disk over SFTP, and the whole mode was removed on 2026-08-26.
+     * So there is no refusal table left at all: the one control here arranges
+     * this window's own panes and can always do it.
      */
-    const table = /const modesBlocked:[\s\S]*?\n {8}: undefined\n/.exec(APP)?.[0] ?? ''
-    expect(table, 'modesBlocked has changed shape').not.toBe('')
-    expect(table).toContain('shownIsServer')
-    // The build, asked rather than believed.
-    expect(table).toContain('!serverChatWired(serversBridge)')
-    // And the shell, which has to exist before there is anything to read.
-    expect(table).toContain('shownServerShellId === null')
-    // Neither refusal may be the old one: a sentence that says chat cannot read
-    // a file on a server is now false about this app.
-    expect(table).not.toMatch(/not a filesystem it reads conversations out of/)
-    expect(table, 'split is refused again').not.toContain('split:')
-    // And the switch is drawn for one, or the sentences reach nobody.
+    expect(APP, 'a refusal table is back').not.toContain('modesBlocked')
+    const mount = /<ModeSwitch[\s\S]*?\/>/.exec(APP)?.[0] ?? ''
+    expect(mount, 'the mode switch mount has changed shape').not.toBe('')
+    expect(mount).not.toContain('unavailable')
+    // And the switch is drawn over a server terminal at all, or none of this
+    // reaches anybody.
     const guard = /\{\(activeSession \|\| splitting[\s\S]*?\? \(/.exec(APP)?.[0] ?? ''
     expect(guard, 'the ModeSwitch guard has changed shape').not.toBe('')
     expect(guard).toContain('openServerSession !== null')

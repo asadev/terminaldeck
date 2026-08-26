@@ -101,7 +101,6 @@ class WebAndPortsWireTest {
         assertEquals("usage", Capability.USAGE)
         assertEquals("account", Capability.ACCOUNT)
         assertEquals("send", Capability.SEND)
-        assertEquals("chat", Capability.CHAT)
         assertEquals("copilot", Capability.COPILOT)
     }
 }

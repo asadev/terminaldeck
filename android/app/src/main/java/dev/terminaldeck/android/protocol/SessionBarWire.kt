@@ -136,25 +136,6 @@ fun foreignAccount(current: AccountWire?, account: AccountWire): Boolean {
     return mine != theirs
 }
 
-/**
- * One bubble of the conversation.
- *
- * [id] is stable across reads, so an extended message replaces rather than duplicates — a bubble
- * without one would arrive again on every extension and stack up a paragraph at a time.
- * [truncated] is carried through rather than recomputed: it is the desktop saying *there is more of
- * this, go and look on the machine*, and a reader that decided for itself would be saying it about
- * something else.
- */
-@Serializable
-data class ChatMessageWire(
-    val id: String,
-    val role: ChatRole,
-    val text: String = "",
-    /** Epoch ms of the line that started it, or 0 when the line carried no date. */
-    val at: Long = 0,
-    val truncated: Boolean = false,
-)
-
 @Serializable
 enum class ChatRole {
     @SerialName("you")
@@ -255,23 +236,3 @@ object UsageReadings {
     }
 }
 
-/**
- * Fold an answer into the bubbles already held.
- *
- * By id: a match is replaced, anything else is appended. That is what makes a growing answer redraw
- * in place instead of stacking a paragraph at a time. [reset] cannot be ignored — it means the far
- * side's document is not the one this view holds a prefix of, and appending through one draws the
- * conversation twice.
- */
-fun mergeChat(
-    held: List<ChatMessageWire>,
-    incoming: List<ChatMessageWire>,
-    reset: Boolean,
-): List<ChatMessageWire> {
-    val rows = if (reset) mutableListOf() else held.toMutableList()
-    for (row in incoming) {
-        val at = rows.indexOfFirst { it.id == row.id }
-        if (at >= 0) rows[at] = row else rows.add(row)
-    }
-    return rows
-}

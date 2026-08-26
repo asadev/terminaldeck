@@ -165,14 +165,6 @@ import { DEFAULT_GRANT_MS, MAX_GRANT_MS, GrantRefused, ServerGrants, type GrantS
  * hopeful reuse, and `ControlScope` for the one thing that has to change.
  */
 import { applyControl, readControls, type ApplyResult, type ControlsReading } from '../agent-controls'
-/*
- * The conversation a shell on a server is writing, found and tailed over the
- * same connection the terminal is on. Its own module because the two questions
- * it answers — *which file is this shell's* and *what has been appended* — are
- * both rules rather than plumbing, and rules are the part worth pinning
- * exactly. See `servers/chat.ts`.
- */
-import { ServerChatSession, type ChatFeed, type ServerChatUpdate } from './chat'
 // The shadow terminal every local session already keeps. A server shell is a
 // real pty — `client.shell({ term: 'xterm-256color' })` — so the same emulator
 // reads it, which is the whole of what makes the controls reach one.
@@ -187,17 +179,6 @@ import { byteSize } from '../../shared/byte-size'
 
 export const SERVERS_SHELL_OUTPUT_CHANNEL = 'servers:shell:output'
 export const SERVERS_SHELL_CLOSED_CHANNEL = 'servers:shell:closed'
-/**
- * A conversation on a server moved — pushed, because the server is the only
- * thing that knows when.
- *
- * The payload is *"something changed on this shell, and here is how this pane is
- * being kept current"* and deliberately not the conversation itself: the window
- * then asks over `servers:chat:tail`, which is the same path a timer used, so
- * there is one reader and one place a `/clear` is noticed. See
- * `ServerChatSession.watch`.
- */
-export const SERVERS_CHAT_CHANGED_CHANNEL = 'servers:chat:changed'
 /** Where a server's setup has got to. Pushed, because it changes without a press. */
 export const SERVERS_SETUP_CHANNEL = 'servers:setup:changed'
 /**
@@ -515,42 +496,6 @@ export interface ServersIpcDeps {
    * a person who is looking straight at it on their own screen.
    */
   putFile?: PutFileOnServer
-  /**
-   * A range of bytes out of one file on the server, over the same SFTP channel.
-   *
-   * Optional, and its absence is answered rather than hidden: the chat view over
-   * a server terminal is what reads a transcript with it, and a build without it
-   * refuses chat for a server with the sentence it always had instead of drawing
-   * an empty conversation. A server whose sign-in has no SFTP subsystem is the
-   * same case and gets the same answer.
-   *
-   * A range and not a file. A transcript reaches 154 MB on this machine and is
-   * appended to while it is read; `connection.ts` carries the whole argument.
-   */
-  readFileRange?(
-    serverId: string,
-    path: string,
-    from: number,
-    length: number,
-  ): Promise<{ bytes: Buffer; size: number }>
-  /**
-   * A command handed over still running, whose output arrives as it is produced.
-   * `ServerConnections.follow`.
-   *
-   * Optional, and its absence is the difference between a chat pane that is told
-   * when a conversation moves and one that asks every three seconds — his
-   * standing rule is *"events, not polling; they make the system heavier"*, and
-   * this is the seam that lets a server obey it. A build without it keeps the
-   * timer and the pane says which it is on; nothing silently goes stale.
-   */
-  follow?(
-    serverId: string,
-    argv: readonly string[],
-  ): Promise<{
-    onBytes(listener: (chunk: Buffer) => void): () => void
-    onEnd(listener: (why: { code: number | null; stderr: string }) => void): () => void
-    close(): void
-  }>
   /**
    * The headless-host package this build carries, or null when it carries none.
    *
@@ -908,8 +853,7 @@ export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDep
    * terminal in front of you rather than to whichever `claude` on the box typed
    * most recently. A transcript that began before this shell opened cannot be
    * this shell's, and one that began before the *next* shell on the same server
-   * opened could not have been written by that one — which is the whole of the
-   * rule in `servers/chat.ts`, and the same rule
+   * opened could not have been written by that one — the same rule
    * `renderer/session-transcript.ts` applies to a local tab.
    *
    * Kept here rather than asked of the far end because the far end has no idea
@@ -917,18 +861,6 @@ export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDep
    * only witness is this side, at the moment it opened one.
    */
   const shellOpenedAt = new Map<string, number>()
-  /**
-   * One reader per shell whose conversation somebody is looking at.
-   *
-   * Held rather than rebuilt per poll for the reason `chat-transcript.ts` holds
-   * its own: a reader carries a byte offset and the set of lines it has already
-   * folded in, and throwing that away every two seconds means re-reading the
-   * transcript from the beginning — over SSH — to answer "anything new?".
-   *
-   * Dropped on `servers:chat:close`, and by {@link dropShell}, because a shell
-   * that has gone has no conversation to keep reading.
-   */
-  const shellChats = new Map<string, ServerChatSession>()
   /**
    * One shadow terminal per open server shell, keyed the same way.
    *
@@ -1207,20 +1139,7 @@ export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDep
      * half a session, so the reader stays and the transcript is still readable
      * — the server wrote it and it is still lying there.
      */
-    /*
-     * The stream goes either way, and only the stream.
-     *
-     * A shell whose far end went away is a shell nothing will append to again,
-     * so a `tail -f` still running over there is a process on somebody's server
-     * and a channel on a connection this app promises not to hold. The reader
-     * survives it — see above — and answers from a timer, which is honest for a
-     * conversation that has finished.
-     */
-    shellChats.get(shellId)?.close()
-    if (close) {
-      shellOpenedAt.delete(shellId)
-      shellChats.delete(shellId)
-    }
+    if (close) shellOpenedAt.delete(shellId)
     /*
      * A setup runs its sign-in *in* one of these terminals, so the terminal
      * going away is the sign-in going away — and the listener on this Mac and
@@ -1858,21 +1777,6 @@ export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDep
           // instead of being written into a disposed emulator.
           screens.get(shellId)?.push(chunk)
           deps.broadcast(SERVERS_SHELL_OUTPUT_CHANNEL, { shellId, data: chunk })
-          /*
-           * And a third place, which is the only event there is for *which*
-           * conversation this terminal owns.
-           *
-           * `/clear` starts a new transcript under a new name; the old file
-           * simply stops growing, so the `tail -f` on it would sit there
-           * quietly while the pane showed a finished conversation for the rest
-           * of the session's life. Anything that changes the answer is
-           * something somebody typed into this shell, and it prints — so the
-           * bytes already arriving here are the signal, and an idle terminal
-           * asks that server nothing at all. `ServerChatSession.nudge` holds
-           * the rate limit; this line must stay free of one, or there would be
-           * two.
-           */
-          shellChats.get(shellId)?.nudge()
         })
         shell.onClose(() => {
           dropShell(shellId, false)
@@ -2182,162 +2086,6 @@ export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDep
     const space = shellId.indexOf(' ')
     return space > 0 ? shellId.slice(0, space) : null
   }
-
-  /**
-   * The reader for one shell's conversation, made on first ask.
-   *
-   * Null when this build cannot read a file on a server — `readFileRange` is
-   * optional on the deps, and a build without it is a build whose chat view for
-   * a server terminal must say so rather than draw an empty conversation — or
-   * when the shell is not one this process ever opened.
-   */
-  const chatFor = (shellId: string): ServerChatSession | null => {
-    const existing = shellChats.get(shellId)
-    if (existing !== undefined) return existing
-    const readFileRange = deps.readFileRange
-    if (readFileRange === undefined) return null
-    const serverId = serverOf(shellId)
-    const openedAt = shellOpenedAt.get(shellId)
-    if (serverId === null || openedAt === undefined) return null
-    const session = new ServerChatSession(
-      {
-        runScript: (id, script) => deps.runScript(id, script),
-        readFileRange,
-        /*
-         * Passed through only when this build has it. `ServerChatSession` reads
-         * its absence as "this pane is on a timer" and says so, rather than
-         * quietly showing a conversation that stopped updating — which is the
-         * one failure a live view is not allowed to have.
-         */
-        ...(deps.follow === undefined ? {} : { follow: deps.follow.bind(deps) }),
-      },
-      serverId,
-      openedAt,
-      /*
-       * The other terminals this window has open on the *same* server, read at
-       * the moment the question is asked rather than captured when the reader
-       * was made.
-       *
-       * Captured, this list would be whatever was open when somebody first
-       * pressed Chat, and a second terminal opened afterwards would be invisible
-       * to the attribution — so both panes would claim the conversation that
-       * started next. That is the two-tabs-in-one-folder bug
-       * `session-transcript.ts` was rewritten for, with a server underneath it.
-       */
-      () => {
-        const siblings: number[] = []
-        for (const [otherId, at] of shellOpenedAt) {
-          if (otherId !== shellId && serverOf(otherId) === serverId) siblings.push(at)
-        }
-        return siblings
-      },
-      now,
-    )
-    /*
-     * And it pushes from here on.
-     *
-     * The window is told *that* the conversation moved and asks for it over the
-     * channel it already asks on. What ends the three-second timer this pane
-     * used to run is this line and the `refreshMs` the pane reads off the feed —
-     * `SERVERS_CHAT_CHANGED_CHANNEL` says which of the two is in use, so a
-     * server that cannot stream is still current and still says so.
-     */
-    session.watch((feed: ChatFeed) => {
-      deps.broadcast(SERVERS_CHAT_CHANGED_CHANNEL, { shellId, feed })
-    })
-    shellChats.set(shellId, session)
-    return session
-  }
-
-  /**
-   * The conversation a shell on a server is writing, read from that server.
-   *
-   * ## Why this exists, given a server does not run this app
-   *
-   * The mode switch refused chat for a server terminal, and the sentence was
-   * accurate: *"Chat reads the agent's own transcript file, which is on that
-   * server's disk. This app opens a terminal there, not a filesystem it reads
-   * conversations out of."* Accurate, and still a hole — a `claude` running in
-   * that terminal writes a transcript the whole time, on a machine this app
-   * holds an SSH connection to, and the app was declining to look.
-   *
-   * It looks now, over the connection the terminal is already on: one `sh`
-   * script to find the file (`servers/chat.ts`), then byte ranges over SFTP as
-   * it grows. Nothing about how a transcript becomes bubbles is written twice —
-   * it is `ChatReader`, the class the local chat view uses, with its bytes
-   * coming from somewhere else.
-   *
-   * ## What it will not do
-   *
-   * Guess. When several conversations on that server could be this shell's and
-   * nothing can say which — two terminals opened on one box within a second of
-   * each other — the answer carries `unattributable` and the pane says it cannot
-   * tell, rather than showing whichever one started first to both of them.
-   *
-   * `load` re-reads from the beginning; `tail` answers only what was appended.
-   * The pair matches `chat:load` / `chat:tail` deliberately: the renderer folds
-   * them into the same `ChatView` through the same `ChatBridge`, so there is one
-   * conversation renderer in this app rather than a second one for servers.
-   */
-  ipcMain.handle(
-    'servers:chat:load',
-    async (_event, shellId: unknown): Promise<ServerChatUpdate | null> => {
-      if (typeof shellId !== 'string') return null
-      return (await chatFor(shellId)?.load()) ?? null
-    },
-  )
-
-  ipcMain.handle(
-    'servers:chat:tail',
-    async (_event, shellId: unknown): Promise<ServerChatUpdate | null> => {
-      if (typeof shellId !== 'string') return null
-      return (await chatFor(shellId)?.tail()) ?? null
-    },
-  )
-
-  /**
-   * Let go of one shell's reader.
-   *
-   * The pane sends this on unmount, and it matters more here than it does
-   * locally: a reader holds the set of every line it has folded in, and a window
-   * that opened chat on eight server terminals over an afternoon would keep
-   * eight of them. The shell itself is untouched — this is the *reading* being
-   * closed, not the terminal.
-   */
-  /**
-   * Somebody is looking at this conversation, or has stopped.
-   *
-   * ## Why the far end has to be told, and not just ignored here
-   *
-   * Because the far end can talk first now. A pane that is mounted but off
-   * screen used to cost exactly nothing — its timer was zero and it asked
-   * nothing — and a `tail -f` left running would quietly break that promise: it
-   * sends a transcript's appends whether or not this side reads them, and a long
-   * tool result on a background tab is real traffic on somebody's server for
-   * something nobody can see.
-   *
-   * The reader is kept through it, which is why this is not a close. A pane that
-   * dropped its reader on every tab switch would re-read the tail window across
-   * an SSH link every time somebody looked away and back.
-   */
-  ipcMain.handle(
-    'servers:chat:watch',
-    (_event, shellId: unknown, watching: unknown): { watching: boolean } => {
-      if (typeof shellId !== 'string') return { watching: false }
-      const on = watching === true
-      chatFor(shellId)?.setWatched(on)
-      return { watching: on }
-    },
-  )
-
-  ipcMain.handle('servers:chat:close', (_event, shellId: unknown): { closed: boolean } => {
-    if (typeof shellId !== 'string') return { closed: false }
-    // Before the delete, not instead of it: the reader is this map's to drop,
-    // and the `tail -f` on somebody's server is the session's to hang up. A
-    // forgotten session cannot close its own channel.
-    shellChats.get(shellId)?.close()
-    return { closed: shellChats.delete(shellId) }
-  })
 
   /**
    * Which coding logins a terminal on a server has under it.

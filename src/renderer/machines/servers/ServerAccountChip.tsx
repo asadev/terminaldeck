@@ -4,7 +4,7 @@ import { ProviderBadge } from '../../components/ProviderBadge'
 import { HoverNote } from '../../components/HoverNote'
 import { isProviderId } from '../../preferences'
 import { useChipMenu } from '../../shell/chip-menu'
-import { agentLabel, signInLine, type ServerSignIn } from './server-chat'
+import { agentLabel, signInLine, type ServerSignIn } from './server-signin'
 import '../../shell/AccountChip.css'
 
 /**

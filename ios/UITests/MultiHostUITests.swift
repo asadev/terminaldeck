@@ -490,7 +490,7 @@ final class MultiHostUITests: XCTestCase {
                 // away, so the two trailing items are excluded by name and
                 // whatever is left is the leading one.
                 let back = app.navigationBars.firstMatch.buttons.matching(
-                    NSPredicate(format: "identifier != 'terminal.actions' AND identifier != 'terminal.mode'")).firstMatch
+                    NSPredicate(format: "identifier != 'terminal.actions'")).firstMatch
                 if back.exists { back.tap() }
             case 1:
                 // The gesture a person would use. Not first, because a right

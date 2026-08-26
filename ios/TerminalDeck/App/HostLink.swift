@@ -1957,7 +1957,7 @@ final class HostLink: Identifiable {
         case let .copilotSettled(settled):
             copilot.apply(settled: settled)
 
-        case .usageReading, .accountState, .accountSwitched, .chatRows:
+        case .usageReading, .accountState, .accountSwitched:
             // Everything about which answer belongs to which question is the
             // bar's, because `rid` is minted there. It drops an answer to a
             // question it did not ask, and an answer about a session that is no

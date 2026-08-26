@@ -132,16 +132,10 @@ describe('the pinned sidebar entry', () => {
 /* ------------------------------------------------------------- the view -- */
 
 describe('a signed-out account', () => {
-  // `mode="terminal"`, because that is what a first run actually opens on:
-  // `defaultPane` says so and `App.tsx` seeds it into the window's own
-  // `sessionView`. The pane is a prop now rather than this component's own
-  // state — there is one mode switch in the window and it is the toolbar's.
+  // There is one pane and it is the terminal. Chat mode was removed on
+  // 2026-08-26, so this component is no longer told which half to draw.
   const html = renderToStaticMarkup(
-    <CopilotView
-      copilot={copilot('first-run')}
-      mode="terminal"
-      activity={{ deckControlActivity: async () => [] }}
-    />,
+    <CopilotView copilot={copilot('first-run')} activity={{ deckControlActivity: async () => [] }} />,
   )
 
   it('says it is an ordinary account rather than a login of the copilot’s own', () => {
@@ -170,28 +164,17 @@ describe('a signed-out account', () => {
 
   it('points at the pane the login can actually happen in', () => {
     /*
-     * The window opens on the terminal for a first run — `defaultPane` decides
-     * that and `App.tsx` seeds it into the same `sessionView` every session's
-     * mode lives in — so this component is *told* which pane is in front and has
-     * to describe the right one. A sentence pointing at something not on the
-     * screen is a small lie that makes a reader doubt the rest of the paragraph,
-     * which is the paragraph explaining why a signed-out assistant is not a
-     * broken one.
+     * There is one pane, so the sentence can name it without a branch. It used
+     * to have two spellings — *below* while the terminal was drawn, *press
+     * Terminal in the bar above* while the conversation was — and the second is
+     * gone with the mode it described. A sentence pointing at something not on
+     * the screen is a small lie that makes a reader doubt the rest of the
+     * paragraph, which is the paragraph explaining why a signed-out assistant
+     * is not a broken one.
      */
     expect(html).toContain('data-shown="true"')
     expect(html).toContain('Its terminal is below')
-    // And the other way round, where the terminal is one press away rather than
-    // below — the press being the window's own mode switch, not a control this
-    // component draws any more.
-    const onChat = renderToStaticMarkup(
-      <CopilotView
-        copilot={copilot('first-run')}
-        mode="chat"
-        activity={{ deckControlActivity: async () => [] }}
-      />,
-    )
-    expect(onChat).toContain('press Terminal in the bar above')
-    expect(onChat).not.toContain('Its terminal is below')
+    expect(html).not.toContain('press Terminal in the bar above')
   })
 })
 

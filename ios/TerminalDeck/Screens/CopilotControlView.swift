@@ -273,8 +273,6 @@ struct CopilotControlView: View {
                     line
                 }
                 startOnOpenRow
-                line
-                opensInRow
                 if reading.setUp {
                     line
                     forgetRow
@@ -348,59 +346,6 @@ struct CopilotControlView: View {
      * money on this machine when I open this tab*, and the decision is written
      * down so it survives the next visit.
      */
-    /**
-     * Which of the two the tab opens in.
-     *
-     * > *"It should directly land in terminal or chat mode, and user can set its
-     * > default from settings."*
-     *
-     * A segmented control rather than a switch, because neither of the two is
-     * *off*: a terminal is not the absence of a chat. Two positions read at a
-     * glance and the words are the two things the toggle on the conversation
-     * itself already says, so nobody has to learn a second vocabulary for the
-     * same pair.
-     *
-     * It sets the **default**, not the current mode. Somebody who switches to
-     * the terminal inside a conversation has changed that conversation and not
-     * this — which is why the toggle up there does not write here, and why this
-     * row says *opens in* rather than *is*.
-     *
-     * Drawn on every machine. A desktop's copilot lands in a session too, and
-     * the preference is about how a conversation opens rather than about what
-     * kind of machine is holding it.
-     */
-    private var opensInRow: some View {
-        let chat = book.opensInChat(host: hostID)
-        return HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Opens in")
-                    .font(.system(size: 16))
-                    .foregroundStyle(Theme.primary)
-                Text("The conversation still switches either way")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.faint)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 8)
-            Picker("Opens in", selection: Binding(
-                get: { chat },
-                set: { wanted in
-                    book.setOpensInChat(wanted, host: hostID)
-                    notice = nil
-                },
-            )) {
-                Text("Chat").tag(true)
-                Text("Terminal").tag(false)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(width: 168)
-            .accessibilityIdentifier("copilot.controls.opensIn")
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-    }
-
     private var startOnOpenRow: some View {
         let on = book.isArmed(host: hostID)
         let what = reading.kind == .headless ? "a session" : "a run"

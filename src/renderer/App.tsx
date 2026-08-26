@@ -21,7 +21,6 @@ import { SessionInspector } from './components/SessionInspector'
 import { AlertsWindow, withInsights } from './components/AlertsPanel'
 import { useProjectAlerts } from './alerts-feed'
 import { openLinkExternally } from './link'
-import { sendToTerminal } from './chat/attach/mentions'
 import { markSeen, readSeen, unreadCount, writeSeen, type SeenAlerts } from './alerts-unread'
 import {
   canResumeProvider,
@@ -33,13 +32,12 @@ import {
 import { CommandPalette, type PaletteCommand } from './components/CommandPalette'
 import { ShortcutsSheet } from './components/ShortcutsSheet'
 import { Onboarding } from './components/Onboarding'
-import { ChatView } from './components/ChatView'
 import { PageEmpty } from './components/PageEmpty'
 import { BRAND } from '@shared/brand'
 import { setBindings } from './browser/binding-view'
 import { UpdateBanner } from './updates/UpdateBanner'
 import { HooksOffer } from './components/HooksOffer'
-import { ModeSwitch, type SessionViewMode, type WorkspaceMode } from './shell/ModeSwitch'
+import { ModeSwitch, type WorkspaceMode } from './shell/ModeSwitch'
 import { BrowserWorkspace } from './browser/BrowserWorkspace'
 import { SwarmGrid } from './layout/SwarmGrid'
 import { SplitView } from './layout/SplitView'
@@ -66,7 +64,6 @@ import { CopilotConsent } from './copilot/CopilotConsent'
 import { CopilotSetup } from './copilot/CopilotSetup'
 import { CopilotRestart } from './copilot/CopilotRestart'
 import { CopilotView } from './copilot/CopilotView'
-import { defaultPane } from './copilot/copilot-model'
 import { useConsent } from './copilot/useConsent'
 import { useCopilot } from './copilot/useCopilot'
 import { useCopilotSetup } from './copilot/useCopilotSetup'
@@ -109,8 +106,7 @@ import {
   type WorkspaceTab,
 } from './shell/workspace-tabs'
 import { ServerSessionPane } from './machines/servers/ServerSessionPane'
-import { ServerChatPane } from './machines/servers/ServerChatPane'
-import { serverChatWired, useServerSignIn } from './machines/servers/server-chat'
+import { useServerSignIn } from './machines/servers/server-signin'
 import { agentCommand, ServerAccountChip } from './machines/servers/ServerAccountChip'
 import { MachineSessions } from './machines/new-session-context'
 import { MachineSessionViews } from './machines/session-view-context'
@@ -618,7 +614,6 @@ function Workspace() {
     })
   }, [])
   const [swarm, setSwarm] = useState(false)
-  const [sessionView, setSessionView] = useState<Record<string, SessionViewMode>>({})
   /**
    * The split layout, and the only record of whether the window is split.
    *
@@ -1570,15 +1565,12 @@ function Workspace() {
    *
    * `focusedId` above is the local answer: the focused pane's tab while split,
    * the selected tab otherwise. It was also the only answer, and everything
-   * about how the window is *drawn* was keyed on it — `sessionView[focusedId]`,
-   * `setSessionView({[focusedId]: next})`, the rail's highlight. With a session
-   * on a paired machine or a terminal on a server filling the pane, that is the
-   * id of a session **that is not on screen**, so pressing Terminal/Chat read
-   * and wrote the mode of a different session entirely: the switch could show
-   * Chat over a remote terminal because some local tab was in chat mode, and
-   * pressing it turned that local tab back into a terminal while the remote
-   * pane carried on unchanged. Nothing on screen moved, which is the worst
-   * shape a control can have.
+   * about how the window is *drawn* was keyed on it — the mode switch, the
+   * rail's highlight. With a session on a paired machine or a terminal on a
+   * server filling the pane, that is the id of a session **that is not on
+   * screen**, so a control in the bar read and wrote the state of a different
+   * session entirely and nothing on screen moved, which is the worst shape a
+   * control can have.
    *
    * So the window has one answer for "what am I looking at" and it is this one.
    * `focusedId` keeps its own meaning — the *local* session the app acts on,
@@ -3637,57 +3629,12 @@ function Workspace() {
   /**
    * Whether the copilot's own window is the thing on screen.
    *
-   * The same expression the pane is mounted with further down — deliberately,
-   * because the effect under this one turns on it and a second opinion about
-   * "is the copilot in front" is how the seeding would come to fire while he is
-   * looking at the pane it re-seeds.
+   * The same expression the pane is mounted with further down — one answer to
+   * "is the copilot in front", written once, so nothing downstream can hold a
+   * second opinion about it.
    */
   const copilotOnScreen =
     copilotSession !== null && activeTab?.id === copilotSession.id && !showingPanel
-
-  /**
-   * Which half of the copilot the window opens on — the terminal, every time
-   * it is opened.
-   *
-   * `defaultPane` says the terminal, always — *"and always terminal should be
-   * the default view"* — and it says so without being told anything, which is
-   * why this effect no longer watches the copilot's stage. It used to: the
-   * seeded pane depended on whether the sign-in probe had come back yet, so the
-   * window opened on whichever half a race had settled on.
-   *
-   * It goes into the same `sessionView` map every other session's mode lives in
-   * — so the window's own mode switch reads and writes it, and there is one
-   * answer to "how is this drawn" rather than two.
-   *
-   * ## Why leaving the page forgets the switch
-   *
-   * This used to seed once per app launch and never again, which made *always*
-   * mean *on every cold start*. Press Chat, go to Overview, come back to the
-   * copilot and it opened on Chat — and opening the copilot again is exactly
-   * what that is, from where he is sitting. **"Always"** was filmed as a rule
-   * about opening it, not about launching the app.
-   *
-   * So the entry is dropped the moment the page is left, and the seeding below
-   * puts the terminal back on the next entry. Pressing Chat still stands for as
-   * long as he is on the page — the switch is not being taken away from him,
-   * only the memory of it between visits, which is the thing he called a
-   * default.
-   */
-  useEffect(() => {
-    if (copilotSessionId === null) return
-    if (!copilotOnScreen) {
-      setSessionView((views) => {
-        if (!(copilotSessionId in views)) return views
-        const next = { ...views }
-        delete next[copilotSessionId]
-        return next
-      })
-      return
-    }
-    setSessionView((views) =>
-      copilotSessionId in views ? views : { ...views, [copilotSessionId]: defaultPane() },
-    )
-  }, [copilotSessionId, copilotOnScreen])
 
   /** Source control hands a file here; the Files page is what can show it. */
   const showFile = useCallback(
@@ -3735,7 +3682,7 @@ function Workspace() {
      *
      * They are not a *second* place a remote session can be — they are the
      * unsplit window's way of saying "this fills the frame", and a split frame
-     * has no such thing. Leaving them set meant `heading`, `modesBlocked` and
+     * has no such thing. Leaving them set meant `heading` and
      * every pane's visibility disagreeing about whether the server terminal was
      * the whole window or one of two panes. `seedSplit` has already been handed
      * `shownTabId`, so whatever was on screen is in the first pane before this
@@ -3785,13 +3732,12 @@ function Workspace() {
   }, [shownTabId, setActiveSession])
 
   /**
-   * Terminal, Chat, Split — what the window is doing.
+   * Split, or not — what the window is doing.
    *
-   * The first two are per session and the third is per window, and joining them
-   * in one control is a deliberate simplification rather than a shortcut: they
-   * are three answers to one question the user is actually asking, which is
-   * "what am I looking at". The state stays split — `sessionView` per session,
-   * `panes` for the window — so nothing downstream has to unpick the join.
+   * It used to be three answers (Terminal, Chat, Split) folded into one control,
+   * and the first two are gone with chat mode: a session is a terminal, so the
+   * only question left about a window is how many of them it holds. `panes` is
+   * the whole of that state and there is nothing per-session to keep beside it.
    */
   const setMode = useCallback(
     (next: WorkspaceMode) => {
@@ -3812,16 +3758,8 @@ function Workspace() {
       // `closeSplit`'s job — see there for why it moved.
       closeSplit()
       setSwarm(false)
-      /*
-       * `shownTabId`, not `focusedId`: the mode belongs to the session that is
-       * on screen, and with a remote or server terminal filling the pane those
-       * two are different ids. Writing `focusedId` there set the view of a
-       * local tab nobody was looking at — see `shownTabId`.
-       */
-      if (shownTabId === null) return
-      setSessionView((views) => ({ ...views, [shownTabId]: next }))
     },
-    [splitPanes, closeSplit, shownTabId, features],
+    [splitPanes, closeSplit, features],
   )
 
   /** Arrow-key travel between panes, geometric rather than by tree order. */
@@ -3877,7 +3815,7 @@ function Workspace() {
   }, [panes.focusedPaneId, closePaneAt])
 
   /**
-   * The four things a tour is allowed to do to this window, handed over once.
+   * The three things a tour is allowed to do to this window, handed over once.
    *
    * Driving mode is mounted in `main.tsx` as a sibling of this component — it
    * has to be, because a panel inside `.app`'s flex row would push `.main`
@@ -3885,11 +3823,12 @@ function Workspace() {
    * anchored to. Being a sibling means it cannot be passed a callback down a
    * tree it is not in, so it asks a registry instead, and this is the answer.
    *
-   * The surface is deliberately four functions rather than this component's
-   * command dispatcher. A tour's arguments were composed by a model out of other
-   * sessions' transcripts, and a dispatcher takes ids like `session.close`; four
-   * named functions cannot be talked into closing a tab, and the reason they
-   * cannot is structural rather than a check somebody has to remember to write.
+   * The surface is deliberately three named functions rather than this
+   * component's command dispatcher. A tour's arguments were composed by a model
+   * out of other sessions' transcripts, and a dispatcher takes ids like
+   * `session.close`; three named functions cannot be talked into closing a tab,
+   * and the reason they cannot is structural rather than a check somebody has to
+   * remember to write.
    * See `copilot/driving/navigator.ts`.
    */
   useEffect(
@@ -3897,9 +3836,6 @@ function Workspace() {
       registerNavigator({
         selectTab,
         showPanel: (id, focus) => showPanel(id as PanelId, focus ?? null),
-        setSessionMode: (sessionId, mode) => {
-          setSessionView((views) => (views[sessionId] === mode ? views : { ...views, [sessionId]: mode }))
-        },
         cwdOf: (sessionId) => sessionsRef.current.find((s) => s.id === sessionId)?.projectPath ?? null,
       }),
     [selectTab, showPanel],
@@ -4416,24 +4352,15 @@ function Workspace() {
    * be two places for a prop to go missing, which is precisely the seam
    * `wiring.test.ts` exists to watch.
    *
-   * `mode` is its entry in the same `sessionView` map every other session's mode
-   * lives in, written by the same segmented control in the same bar — the whole
-   * of what "a window like the others" means here.
-   *
-   * The fallback is the **terminal**, in both branches, and it used to be the
-   * conversation in both. That was visible: press the pinned row and the window
-   * opened on an empty chat pane, then swapped to a terminal a second later when
-   * `defaultPane` seeded the map. Two panes for one press. `defaultPane` is the
-   * one rule now — always the terminal — and this agrees with it before there is
-   * a session to seed for, so nothing on screen moves when the seeding lands.
+   * It is a terminal, always. There is no second view of a session left to
+   * choose between — chat mode is gone — so this window has nothing to be told
+   * about how to draw itself, and the copilot's own conversation lives where it
+   * always did, in the rail (`CopilotRailPanel`).
    */
-  const copilotMode: SessionViewMode =
-    copilotSessionId === null ? 'terminal' : sessionView[copilotSessionId] ?? 'terminal'
   const copilotWindow = (visible: boolean) => (
     <CopilotView
       copilot={copilot}
       visible={visible}
-      mode={copilotMode}
       focus={copilotTurn}
       startedSessions={copilotStarted}
       onOpenSession={selectTab}
@@ -5141,62 +5068,17 @@ function Workspace() {
       <>
         {sessions.map((session) => {
           const active = session.id === activeTab.id
-          const mode = sessionView[session.id] ?? 'terminal'
           return (
             <Fragment key={session.id}>
-              {/* The terminal stays mounted in chat mode — only hidden — so
-                  scrollback and cursor survive a trip through Chat. */}
               <TerminalView
                 sessionId={session.id}
-                visible={active && mode === 'terminal'}
+                visible={active}
                 fontSize={terminalFontSize}
                 fontFamily={terminalFontFamily}
                 copyOnSelect={copyOnSelect}
                 end={localSessionEnd(session.id)}
                 onReopen={() => openNewSessionDialog(localSessionFolder(session.id))}
               />
-              {active && mode === 'chat' ? (
-                <ChatView
-                  cwd={session.projectPath ?? null}
-                  // Which conversation this pane is a view of. Without it the
-                  // pane reads the folder's newest transcript, which is any
-                  // `claude` running here — including ones this app did not
-                  // start.
-                  session={{
-                    startedAt: session.createdAt,
-                    resumed: session.resumed,
-                    // And, where this app named the conversation itself, the
-                    // name — which turns the attribution from a deduction about
-                    // clocks into a file lookup. See `SessionScope`.
-                    ...(session.agentSessionId === undefined
-                      ? {}
-                      : { agentSessionId: session.agentSessionId }),
-                  }}
-                  // Without this the controls row and the usage strip both
-                  // render in their "no session focused" state: model, effort
-                  // and permission mode are read off this session's screen.
-                  sessionId={session.id}
-                  // What is actually in the pty. Without it the pane writes
-                  // agent copy over a plain shell — see `ChatViewProps`.
-                  provider={session.provider}
-                  onSend={(text) => {
-                    // Written to the session's own terminal: chat mode is a
-                    // different view of the same session, not a second channel,
-                    // so a reply typed here also appears in the terminal view.
-                    //
-                    // Through `sendToTerminal`, and never as one write with a
-                    // `\r` on the end. The CLI classifies a stdin chunk of 64
-                    // bytes or more as pasted text, where a carriage return is a
-                    // newline rather than submit — so the single-write form put
-                    // every message longer than half a line into the agent's
-                    // input box and left it there. Measured in the packed app on
-                    // 2026-08-22 and photographed; see `mentions.ts`.
-                    void sendToTerminal(text, (data) =>
-                      window.deck.writeToSession(session.id, data),
-                    )
-                  }}
-                />
-              ) : null}
             </Fragment>
           )
         })}
@@ -5215,10 +5097,8 @@ function Workspace() {
           main process's scrollback, and a login prompt somebody is halfway
           through would scroll away under them.
 
-          `mode` is its entry in the same `sessionView` map, written by the same
-          segmented control in the same bar. That is the whole of what "a window
-          like the others" means here — there is no second switch and no second
-          piece of state.
+          It is a terminal like every other pane here. That is the whole of what
+          "a window like the others" means, now that a session has one view.
         */}
         {copilotSession && copilotWindow(copilotOnScreen)}
       </>
@@ -5695,65 +5575,16 @@ function Workspace() {
    * `layout/pane-slots.ts`. Nothing about the scrollback changed; what changed
    * is that the pane tree stopped being the only thing allowed to say where a
    * rectangle is.
-   *
-   * ## Chat is no longer one of them either
-   *
-   * Chat renders a conversation out of the agent's own transcript file. For a
-   * session on a **paired machine** that file is read by the machine it is on
-   * and the collapsed bubbles travel — `chat.read` / `chat.rows`, the same wire
-   * the phone client already uses.
-   *
-   * For a terminal on a **server** the sentence here used to say that there was
-   * a pty over SSH and nothing that read the far filesystem, *"so the transcript
-   * would have to be found and tailed over that channel."* That was an accurate
-   * description of a hole rather than a reason, and it is what has been done:
-   * `servers/chat.ts` finds the file — by matching each transcript's own first
-   * line against the moment this window opened the shell, which is the same
-   * deduction `session-transcript.ts` makes locally out of birth times — and
-   * `connection.ts` reads byte ranges out of it over SFTP as the agent appends.
-   *
-   * Two things still refuse, and both name what is missing rather than a mode:
-   * a preload with no such channel, and a terminal the server has not answered
-   * for yet. Neither is a wording choice — `serverChatWired` is a question about
-   * *this build*, and a shell with no far id has nothing to read from.
-   *
-   * ## Keyed on what is on screen
-   *
-   * `shownTabId`, like the `view` beside it. These two used to come from
-   * different places — the sentence from the window's `openMachineSession`, the
-   * view from the local focused tab — so the switch could be live over a session
-   * it was refusing to act on and refuse over one it was not showing.
    */
-  const shownIsServer = shownTabId !== null && readServerTabId(shownTabId) !== null
-  /** The far end's id for the terminal on screen, once the server has answered. */
-  const shownServerShellId = shownIsServer && shownTabId !== null ? serverShellIds[shownTabId] ?? null : null
-  const modesBlocked: Partial<Record<WorkspaceMode, string>> | undefined = !shownIsServer
-    ? undefined
-    : !serverChatWired(serversBridge)
-      ? {
-          chat: 'Chat reads the agent’s own transcript file off that server, and this build has no channel for reading one. Updating the app brings it back.',
-        }
-      : shownServerShellId === null
-        ? { chat: 'This terminal is still opening on the server, so there is nothing to read a conversation out of yet.' }
-        : undefined
 
   /**
    * What the mode switch is showing, and what it will not offer.
    *
-   * Read rather than stored: `panes` already knows whether the window is split
-   * and `sessionView` already knows how the focused session is drawn, so a
-   * third piece of state saying the same thing could only ever be the one that
-   * is wrong.
-   *
-   * Both halves are handed over, because `mode` collapses to `split` the moment
-   * there are panes and the switch still has to name the view underneath — it
-   * labels its toggle with it, and it hands it back when the split is closed so
-   * that splitting while reading a chat does not quietly turn the session into a
-   * terminal. `sessionMode` is the same expression `mode` falls through to, not
-   * a second reading of anything.
+   * Read rather than stored: `panes` already knows whether the window is split,
+   * so a second piece of state saying the same thing could only ever be the one
+   * that is wrong.
    */
-  const sessionMode: SessionViewMode = shownTabId ? sessionView[shownTabId] ?? 'terminal' : 'terminal'
-  const mode: WorkspaceMode = splitting ? 'split' : sessionMode
+  const mode: WorkspaceMode = splitting ? 'split' : 'terminal'
 
   /**
    * Whether there is a tab strip, and therefore which bar is the window's top
@@ -6600,28 +6431,20 @@ function Workspace() {
               `controls-target.ts`.
             */}
             {/*
-              And the mode switch, which is now drawn over a remote session too —
-              with whichever of its two buttons cannot act on one saying why.
+              And the split switch, which is drawn over a remote session too.
 
               It used to be withdrawn entirely, on the argument that Chat reads a
               transcript on this machine's disk and Split arranges this window's
-              panes. Both of those are still true and neither was ever true of
-              **Terminal**, which is exactly what a remote session and a server
-              terminal are already showing — so the whole control was being taken
-              away because two of its three answers were unreachable, leaving a
-              gap that reads as unbuilt. `modesBlocked` carries the sentences;
-              see its note for what would have to travel for either to work.
+              panes. Chat is gone; Split is a window's own arrangement and works
+              over whatever a pane is holding, so there is nothing left here to
+              refuse.
 
               Still absent in swarm and behind a panel, for the original reason:
-              every terminal is drawn at once, or none is, so there is no session
-              for a mode to be a mode of.
+              every terminal is drawn at once, or none is, so there is no window
+              arrangement for the control to be about.
 
-              And absent over another machine's copilot, where all three of its
-              answers are unreachable rather than two: that pane is a parsed
-              conversation and there is no second view of it to switch to —
-              `remote/hidden-sessions.ts` will not put a copilot's pty on the
-              network for anybody. A control with nothing left to offer is
-              withdrawn rather than drawn with three reasons hanging off it.
+              And absent over another machine's copilot, whose pane is a parsed
+              conversation this window cannot split.
             */}
             {(activeSession || splitting || openMachineSession !== null || openServerSession !== null) &&
             !(headingTab?.isCopilot && copilotMachine !== null) &&
@@ -6629,10 +6452,8 @@ function Workspace() {
             !swarm ? (
               <ModeSwitch
                 mode={mode}
-                view={sessionMode}
                 onChange={setMode}
                 splitOffer={!features.on('split')}
-                unavailable={modesBlocked}
               />
             ) : null}
             {/*
@@ -6782,26 +6603,15 @@ function Workspace() {
           {serversBridge !== null &&
             serverSessions.map((entry) => {
               /*
-               * The same session in two views, in one rectangle, and only one of
-               * them on screen at a time.
-               *
-               * `sessionView` is the same map and the same segmented control
-               * every local session is switched with — there is no second piece
-               * of state for a server, which is the whole of what "a session
-               * like the others" means here. The terminal is *hidden* rather
-               * than unmounted while the conversation is up, because its
-               * scrollback exists nowhere else: nothing at the far end is
-               * keeping it and nothing on this side is recording it.
-               *
-               * The conversation is drawn only once the server has answered
-               * with an id for the shell. Before that there is nothing to read a
-               * transcript out of, and the mode switch says so rather than
-               * opening an empty pane — see `modesBlocked`.
+               * One view of the session, in one rectangle. It used to be two —
+               * the terminal and a conversation read off the far machine's
+               * transcript over SFTP — and the second went with chat mode. The
+               * terminal is *hidden* rather than unmounted when it is not in
+               * front, because its scrollback exists nowhere else: nothing at
+               * the far end is keeping it and nothing on this side is recording
+               * it.
                */
               const onScreen = remoteOnScreen(entry.tabId)
-              const shellId = serverShellIds[entry.tabId]
-              const chatting =
-                (sessionView[entry.tabId] ?? 'terminal') === 'chat' && shellId !== undefined
               const box = slotStyle(paneSlots[entry.tabId])
               return (
                 <Fragment key={entry.tabId}>
@@ -6815,7 +6625,7 @@ function Workspace() {
                        `layout/pane-slots.ts`; `undefined` leaves the stylesheet's
                        `inset: 0`, which is the unsplit window. */
                     box={box}
-                    visible={onScreen && !chatting}
+                    visible={onScreen}
                     onEnded={() => serverShellEnded(entry.tabId)}
                     /* The one thing this pane knows that the bar above it needs.
                        See `serverShellIds`. */
@@ -6833,20 +6643,6 @@ function Workspace() {
                       openServerShell(entry.serverId, entry.serverName, entry.startIn, entry.run)
                     }
                   />
-                  {chatting && shellId !== undefined ? (
-                    <ServerChatPane
-                      shellId={shellId}
-                      bridge={serversBridge}
-                      box={box}
-                      /* Mounted for as long as this session is *in* chat mode,
-                         on screen or not, and told whether it is being looked
-                         at. Unmounting it would drop the reader the main
-                         process holds and make coming back to the tab the whole
-                         tail window over SSH again; being hidden costs a DOM
-                         node and switches its timer off. */
-                      visible={onScreen}
-                    />
-                  ) : null}
                 </Fragment>
               )
             })}

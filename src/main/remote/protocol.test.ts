@@ -124,7 +124,6 @@ const CLIENT_TYPES: Record<ClientMessage['t'], true> = {
   'logins.signin': true,
   'settings.read': true,
   'settings.apply': true,
-  'chat.read': true,
   'devices.list': true,
   'devices.revoke': true,
   'window.result': true,
@@ -217,7 +216,6 @@ const SERVER_TYPES: Record<ServerMessage['t'], true> = {
   'devices.rows': true,
   'devices.revoked': true,
   'devices.changed': true,
-  'chat.rows': true,
   'window.call': true,
   'window.holds': true,
   'window.result': true,
@@ -378,9 +376,6 @@ const VALID_CLIENT: ClientMessage[] = [
   { t: 'settings.read', rid: 'set-1' },
   { t: 'settings.apply', rid: 'set-2', key: 'agents.defaultProvider', value: 'codex' },
   { t: 'settings.apply', rid: 'set-3', key: 'general.restoreSessions', value: 'false' },
-  // The conversation, and the same view asking what has changed since.
-  { t: 'chat.read', rid: 'cht-1', id: SESSION_ID, tail: false },
-  { t: 'chat.read', rid: 'cht-2', id: SESSION_ID, tail: true },
   { t: 'devices.list', rid: 'dev-1' },
   { t: 'devices.revoke', rid: 'dev-2', device: DEVICE_ID },
   { t: 'window.result', id: 'win-1', ok: true, body: '{"url":"https://example.com"}' },
@@ -574,20 +569,6 @@ const VALID_SERVER: ServerMessage[] = [
   { t: 'devices.revoked', rid: 'dev-3', ok: true, message: 'That device was removed.', devices: [] },
   { t: 'devices.revoked', rid: 'dev-4', ok: false, message: 'That device is not signed in here.', devices: [] },
   { t: 'devices.changed', devices: [] },
-  {
-    t: 'chat.rows',
-    rid: 'cht-1',
-    id: SESSION_ID,
-    rows: [
-      { id: 'm-1', role: 'you', text: 'what does this repo do', at: 1_787_000_000_000 },
-      { id: 'm-2', role: 'agent', text: 'It is an Electron app.', at: 1_787_000_001_000 },
-    ],
-    reset: true,
-    found: true,
-  },
-  // A folder with no transcript at all, which is not the same empty as a
-  // session that has not spoken yet.
-  { t: 'chat.rows', rid: 'cht-2', id: SESSION_ID, rows: [], reset: true, found: false },
   { t: 'window.call', id: 'win-1', session: SESSION_ID, tool: 'browser.read', args: '{}' },
   // The other direction of the same three frames: a host that holds the window
   // saying which of this client's sessions it holds one for, and answering the

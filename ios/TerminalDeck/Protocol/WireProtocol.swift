@@ -445,9 +445,6 @@ enum WireCapability {
     /// answer one and not the other and the chip is drawn per answer.
     static let account = "account"
 
-    /// The desktop will read a session's transcript back as a conversation.
-    static let chat = "chat"
-
     /**
      * The desktop will read and set a session's model, effort, fast mode and
      * permission — `controls.read` / `controls.apply`.
@@ -558,7 +555,7 @@ enum WireCapability {
      * otherwise miss (`devices` / `settings` — the `*.changed` frames), or as
      * the client half of a dual-listed name (`watch` — "I render frames and I
      * send input"). The names this phone merely *asks for* — `create`,
-     * `localhost`, `upload`, `devserver`, `usage`, `account`, `chat`,
+     * `localhost`, `upload`, `devserver`, `usage`, `account`,
      * `controls` — are gated by what the desktop advertised, so claiming them
      * would say nothing. This is the same list `CLAIMED_CAPABILITIES` carries in
      * `pwa/src/protocol-client.ts`.
@@ -1260,14 +1257,6 @@ enum ClientMessage: Equatable {
      * `foreignAccount`.
      */
     case accountSwitch(rid: String, id: String, accountId: String)
-    /**
-     * The session as a conversation.
-     *
-     * `tail` false is what opening the view asks for; true is what a session
-     * going quiet asks for. One verb with a flag rather than two, because both
-     * are the same read of the same file the agent is already writing.
-     */
-    case chatRead(rid: String, id: String, tail: Bool)
 
     /* ---- sign-in. The one frame a connection may send before a `hello`. ----- */
     /**
@@ -1749,18 +1738,6 @@ enum ServerMessage: Equatable {
      * bar that has none.
      */
     case accountSwitched(rid: String, id: String, ok: Bool)
-    /**
-     * The answer to one `chat.read`.
-     *
-     * `reset` means the far side's document is not the one this view holds a
-     * prefix of — a rolled-over transcript, an account switch, a compaction —
-     * and a client that appended through one would draw the conversation twice.
-     *
-     * `found` is a *different* empty from a session that has not spoken yet: it
-     * means the folder has no transcript at all, and it is why the toggle that
-     * opens the view is simply absent rather than opening an empty screen.
-     */
-    case chatRows(rid: String, id: String, rows: [CopilotChatMessage], reset: Bool, found: Bool)
 
     /* ---- sign-in ---------------------------------------------------------- */
     /**

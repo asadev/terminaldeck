@@ -607,7 +607,7 @@ describe('running things', () => {
  * then fails on somebody's server, once, in the middle of a path. Splitting the
  * bytes deliberately is the only way to visit the boundary on purpose.
  *
- * The example is not decorative either. `servers/chat.ts` asks a server for a
+ * The example is not decorative either. the server chat reader that was removed with chat mode asks a server for a
  * **list of file paths**, one per line, and then opens them. A folder named
  * `~/Projekte/Café` on somebody's box comes back with two replacement
  * characters where the `é` was, SFTP is handed a path that does not exist, and

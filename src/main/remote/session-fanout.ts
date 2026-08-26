@@ -5,7 +5,6 @@ import type {
   CreateRequest,
   RemoteControlsAccess,
   RemoteAccountAccess,
-  RemoteChatAccess,
   RemoteLoginsAccess,
   RemoteUsageAccess,
   SessionAccess,
@@ -154,17 +153,6 @@ export interface PtySource {
    * bypasses excess-property checking, which is how the drop was silent.
    */
   logins?: RemoteLoginsAccess
-  /**
-   * That session's conversation, as bubbles. Absent when this host has no
-   * transcript reader to ask.
-   *
-   * Its absence is what stops the desktop advertising the `chat` capability —
-   * see `SessionAccess.chat` — so it is optional here for the reason
-   * {@link controls} is. A stub host with a pipe and no agent transcripts
-   * genuinely cannot answer, and a client told otherwise draws a chat toggle
-   * whose every press comes back empty.
-   */
-  chat?: RemoteChatAccess
   /**
    * Is this session none of the network's business?
    *
@@ -395,18 +383,6 @@ export class SessionFanout implements SessionAccess {
    */
   readonly logins?: RemoteLoginsAccess
 
-  /**
-   * Present exactly when the source can read a session's conversation, assigned
-   * for the reason {@link create} is.
-   *
-   * It refuses a hidden session outright, and here the refusal is guarding the
-   * plainest thing in the whole file: a copilot run's transcript is *what the
-   * owner said to their assistant*, in words, and a device that could read it
-   * would be reading a conversation the network is never even told exists.
-   * Refused with the same "there is no such session" a hidden `attach` gets.
-   */
-  readonly chat?: RemoteChatAccess
-
   constructor(private readonly ptys: PtySource) {
     const start = ptys.create
     if (start) {
@@ -509,20 +485,6 @@ export class SessionFanout implements SessionAccess {
      * which is the door that owns that question.
      */
     this.logins = ptys.logins
-
-    const chat = ptys.chat
-    if (chat) {
-      this.chat = {
-        // A hidden session reads as one that is not there, the answer every
-        // other door here gives it. `found: false` rather than an empty
-        // conversation, because "there is no transcript" is the shape a client
-        // draws for a folder it may look at and has nothing in.
-        read: (id, tail, viewer) =>
-          this.isHidden(id)
-            ? Promise.resolve({ rows: [], reset: true, found: false })
-            : chat.read(id, tail, viewer),
-      }
-    }
 
     const offer = ptys.folders
     /*

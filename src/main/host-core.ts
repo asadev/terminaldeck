@@ -48,10 +48,6 @@ import { applyControl, readControls, type SessionAccess } from './agent-controls
 // And the three usage readings that bar is drawn from, for the same reason and
 // through the same seam. See the `usage` entry on the `SessionFanout` below.
 import { createUsageServe } from './remote/usage-serve'
-import { accountFor } from './usage-ipc'
-// And the conversation that bar sits above, through the same kind of seam. See
-// the `chat` entry on the `SessionFanout` below.
-import { createChatServe } from './remote/chat-serve'
 // And the account chip beside them, through the same kind of seam. See the
 // `account` entry on the `SessionFanout` below.
 import { createAccountServe, createLoginsServe } from './remote/account-serve'
@@ -2168,38 +2164,6 @@ export function createHostCore(options: HostCoreOptions): HostCore {
     usage: createUsageServe({
       describeSession: (id) => ptys.list().find((session) => session.id === id) ?? null,
       accounts: storedAccountLimits(),
-    }),
-    /*
-     * The conversation, for a chat view that is not on this machine.
-     *
-     * The fourth seam, and the one that had nothing at all: `controls`, `usage`
-     * and `account` each closed a chip that was drawn-but-wrong over a remote
-     * session, and this closes a whole *view* that only ever existed at the
-     * desk. The chat view reads a transcript on this disk through
-     * `chat:load`/`chat:tail`, so a phone — which has neither the file nor a
-     * filesystem to find it in — could see a terminal and nothing else. Asad,
-     * about the phone client: *"app needs enrichment"*.
-     *
-     * Delegated exactly as the three above are: `createChatServe` uses the same
-     * `ChatReader` and the same `ChatCollapser` the window at this desk uses, so
-     * the bubbles are the same bubbles rather than a second reading of the same
-     * file that can disagree with it.
-     *
-     * `configDirFor` is the same question `usage` asks one line up and is asked
-     * the same way. An account is a config directory, so a session running as a
-     * second login files its conversation under that login's `projects/` — and
-     * without this a phone would be shown the *default* account's conversation
-     * in the same folder, which is words rather than a number and therefore the
-     * worse version of the mistake `usage-serve.ts` names.
-     *
-     * Here at assembly for the reason the others are: the headless build serves
-     * the same protocol from the same fanout, and a capability a shell had to
-     * remember to install is one the other shell forgets.
-     */
-    chat: createChatServe({
-      describeSession: (id) => ptys.list().find((session) => session.id === id) ?? null,
-      configDirFor: (session) =>
-        session.provider === 'codex' ? null : accountFor('claude', session).configDir,
     }),
     /*
      * Whose login a session is on, and running it as another one, for a chip on

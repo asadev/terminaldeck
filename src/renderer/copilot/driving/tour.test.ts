@@ -3,7 +3,6 @@ import {
   droppedSentence,
   focusOf,
   focusOfRecord,
-  paneFor,
   readTour,
   reasonLabel,
   stoppedSentence,
@@ -104,19 +103,6 @@ describe('where a stop points', () => {
   it('degrades an anchor this build does not know, which is the mirror’s one risk', () => {
     const stop = { ...SCREEN, kind: 'anchor', at: 'from-the-future' } as unknown as TourStop
     expect(focusOf(stop, '/work/api')).toBeNull()
-  })
-})
-
-describe('which pane a stop needs', () => {
-  it('sends a screen stop to the terminal and a message stop to the conversation', () => {
-    // There is no mapping between the two and there cannot be one: the JSONL is
-    // written by the CLI and the pty carries the CLI's *rendering* of it.
-    expect(paneFor(SCREEN)).toBe('terminal')
-    expect(paneFor({ ...SCREEN, kind: 'message', messageId: 'm' })).toBe('chat')
-  })
-
-  it('asks for no pane at all for an anchor, so the tour does not twitch', () => {
-    expect(paneFor({ ...SCREEN, kind: 'anchor', at: 'git-file', path: 'a.ts' })).toBeNull()
   })
 })
 

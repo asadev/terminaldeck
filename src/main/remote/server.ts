@@ -113,7 +113,6 @@ import {
   CAPABILITIES,
   CAPABILITY,
   CLOSE,
-  MAX_CHAT_ROWS,
   MAX_COPILOT_LOG_ROWS,
   MAX_MESSAGE_BYTES,
   MAX_WATCH_WINDOWS,
@@ -124,7 +123,6 @@ import {
   type BrowserFrameFrame,
   type BrowserInputFrame,
   type ClientMessage,
-  type CopilotChatMessage,
   type CopilotLinkWire,
   type ControlName,
   type ControlReadingWire,
@@ -441,16 +439,6 @@ export interface SessionAccess {
    */
   usage?: RemoteUsageAccess
   /**
-   * That session's conversation, as bubbles.
-   *
-   * **Optional, and its absence is the switch**, exactly as {@link controls}'s
-   * and {@link usage}'s are: a host with no transcript reader — the demo box,
-   * the stub — simply does not have this, `CAPABILITY.chat` is never advertised,
-   * and a client draws a terminal and no chat toggle rather than a toggle whose
-   * every press comes back empty.
-   */
-  chat?: RemoteChatAccess
-  /**
    * Whose login a session is on, which logins this machine has, and running a
    * session as a different one. **Optional, and its absence is the switch**,
    * exactly as {@link controls}'s and {@link usage}'s are.
@@ -578,45 +566,6 @@ export interface RemoteAccountAccess {
  * are readings with sentences in them, and `server.ts` turns a rejected promise
  * into a bare `unavailable` that says nothing useful.
  */
-/**
- * The far end of `chat.read`.
- *
- * A courier's interface like {@link RemoteControlsAccess} and, like it, a
- * *second caller* of an existing reader rather than a second implementation:
- * `chat-transcript.ts` collapses the JSONL an agent is already writing into
- * bubbles, and `chat:load`/`chat:tail` is the window at this desk asking the
- * same two questions. What is new here is only that the questions can be asked
- * from somewhere else.
- *
- * It may not throw for an ordinary absence — a session that is gone, a folder
- * with no transcript, a conversation nothing has written to yet. `server.ts`
- * turns a rejected promise into a bare `unavailable` that says nothing useful,
- * and "there is no transcript" is a state a chat view knows how to draw.
- */
-export interface RemoteChatAccess {
-  /**
-   * That session's conversation, or what has changed since the last read.
-   *
-   * `tail` false is the whole conversation and answers `reset: true`; true is
-   * the difference since *this viewer's* last read.
-   *
-   * `viewer` is the device id, and it is here rather than left implicit because
-   * a cursor is per reader and a shared one loses messages silently. The local
-   * `chat:tail` keys its readers by transcript path, which is right for one
-   * process drawing its own windows; over a wire it would mean two phones on one
-   * session, or a phone and the Mac's own chat view, consuming each other's new
-   * bubbles — each seeing half a conversation with nothing on screen to say so.
-   *
-   * `found` is false when there is no transcript for the folder at all, which is
-   * a different empty state from a session that has not spoken yet.
-   */
-  read(
-    sessionId: string,
-    tail: boolean,
-    viewer: string,
-  ): Promise<{ rows: CopilotChatMessage[]; reset: boolean; found: boolean }>
-}
-
 export interface RemoteUsageAccess {
   /**
    * What this machine already knows about that session's subscription windows.
@@ -2413,15 +2362,8 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
      */
     if (name === CAPABILITY.logins) return options.sessions.logins !== undefined
     /*
-     * And once more for the chat view. Its own member for the same reason the
-     * account chip has one: reading a transcript and reading a *screen* are
-     * different acts against different files, and the headless build has one and
-     * not the other.
-     */
-    if (name === CAPABILITY.chat) return options.sessions.chat !== undefined
-    /*
      * And once more for the two server-owned settings, gated on the object that
-     * makes them possible — the same rule as `logins` and `chat`. A host built
+     * makes them possible — the same rule as `logins`. A host built
      * without it does not advertise the capability, so a phone draws no "This
      * server" section rather than one that is refused after the tap. Who among
      * the owner's devices may reach it is `ownDevice`, stripped per device in
@@ -5179,24 +5121,6 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
   }
 
   /**
-   * Serve one `chat.read`.
-   *
-   * The same two doors as everything above it: the capability decides whether
-   * this host speaks the frame at all, and {@link mayTouch} decides whether
-   * *this device* may ask about *this session* — the same reach every keystroke
-   * goes through, and deliberately not a weaker one. "What was said in that
-   * session" is not a smaller question than "may I type at it"; it is a larger
-   * one, and a chat view is the surface on which reading somebody else's
-   * conversation would be easiest to do by accident.
-   *
-   * Clipped to {@link MAX_CHAT_ROWS} here as well as on the way in, keeping the
-   * **end**: a conversation is read from the bottom, and a client that asked for
-   * the whole of a thousand-turn session must not make this machine serialise it
-   * onto a relay. The client's own parser clips too, and both are deliberate —
-   * this one bounds what leaves the machine, that one bounds what a hostile
-   * frame can make a phone hold.
-   */
-  /**
    * Serve one `logins.read` or `logins.signin`.
    *
    * ## A different door from `accountServe`, and that is the point of the file
@@ -5375,41 +5299,6 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
       // The machine's own sentence about its own store, passed through as written.
       message: result.message,
       setting: result.setting,
-    })
-  }
-
-  async function chatServe(
-    connection: LiveConnection,
-    deviceId: string,
-    message: Extract<ClientMessage, { t: 'chat.read' }>,
-  ): Promise<void> {
-    const chat = options.sessions.chat
-    if (!chat || !advertised.includes(CAPABILITY.chat)) {
-      // Refused here as well as withheld from the advertisement, for the reason
-      // `controlsServe` gives: the advertisement decides what a client of ours
-      // draws, and this decides what *any* client gets.
-      send(connection, {
-        t: 'error',
-        code: 'unavailable',
-        message: `This ${machineNoun(currentPlatform())} cannot read a session’s conversation.`,
-      })
-      return
-    }
-    if (!mayTouch(deviceId, message.id)) {
-      send(connection, { t: 'error', code: 'unknown-session', message: `No session ${message.id} is running.` })
-      return
-    }
-    const answer = await chat.read(message.id, message.tail, deviceId)
-    // The device can be gone by now: this is a file read, which is milliseconds
-    // and is not nothing.
-    if (!live.has(connection.id)) return
-    send(connection, {
-      t: 'chat.rows',
-      rid: message.rid,
-      id: message.id,
-      rows: answer.rows.slice(-MAX_CHAT_ROWS),
-      reset: answer.reset,
-      found: answer.found,
     })
   }
 
@@ -6159,20 +6048,6 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
             t: 'error',
             code: 'unavailable',
             message: 'This machine’s settings could not be reached.',
-          })
-        })
-        return
-      case 'chat.read':
-        // Not awaited, for the reason the readings above are not: this is a file
-        // read on this machine and a socket that stopped reading would freeze
-        // every session on the connection while one view loaded a conversation.
-        void chatServe(connection, connection.deviceId, message).catch((error) => {
-          console.error('[remote] a chat request failed:', error)
-          if (!live.has(connection.id)) return
-          send(connection, {
-            t: 'error',
-            code: 'unavailable',
-            message: 'That session’s conversation could not be read.',
           })
         })
         return

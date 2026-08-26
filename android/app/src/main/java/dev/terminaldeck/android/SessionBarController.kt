@@ -3,19 +3,17 @@ package dev.terminaldeck.android
 import dev.terminaldeck.android.credential.Expiry
 import dev.terminaldeck.android.protocol.AccountWire
 import dev.terminaldeck.android.protocol.Capability
-import dev.terminaldeck.android.protocol.ChatMessageWire
 import dev.terminaldeck.android.protocol.ClientMessage
 import dev.terminaldeck.android.protocol.Protocol
 import dev.terminaldeck.android.protocol.ServerMessage
 import dev.terminaldeck.android.protocol.UsageReadings
 import dev.terminaldeck.android.protocol.UsageWant
-import dev.terminaldeck.android.protocol.mergeChat
 
 /**
  * What one session's bar knows, and the conversation behind it.
  *
  * The client half of [Capability.USAGE], [Capability.ACCOUNT], [Capability.CHAT] and
- * [Capability.SEND] — a transcription of `pwa/src/session-bar.ts` and `pwa/src/chat-view.ts`, by way
+ * [Capability.SEND] — a transcription of `pwa/src/session-bar.ts`, by way
  * of `ios/TerminalDeck/App/SessionBarLink.swift`. The browser client has had all of it since
  * 2026-08-18 and this app had none of it: on a phone the app was a session list and a terminal, with
  * no ring, no context, no account and no conversation. Everything drawn from here is the far
@@ -76,42 +74,16 @@ class SessionBarController(
     private var accounts: List<AccountWire> = emptyList()
     private var busy = false
 
-    private var chat: List<ChatMessageWire> = emptyList()
-
-    /**
-     * Null until the far machine has answered once. False means the folder has no transcript at all
-     * — a different empty from a session that has not spoken yet, and the reason the chat toggle is
-     * absent rather than opening an empty screen.
-     */
-    private var transcript: Boolean? = null
-
-    /**
-     * Whether the conversation is the thing on screen.
-     *
-     * Set by the screen, read here, because it decides one thing only: whether a session going quiet
-     * is worth a transcript read. A terminal somebody is typing into must not send a file read
-     * across a relay after every burst of output.
-     */
-    private var chatting = false
-
-    /** A composed message on its way, so the composer can lock and keep its draft. */
-    private var sending = false
-    private var sendNotice: ActionNotice? = null
-
     private sealed interface Ask {
         data class Usage(val want: UsageWant) : Ask
         data object Account : Ask
         data object AccountSwitch : Ask
-        data object Chat : Ask
-        data object Send : Ask
     }
 
     private class Pending(val ask: Ask, val session: String, val cancel: () -> Unit)
 
     private val pending = HashMap<String, Pending>()
     private var quietCancel: (() -> Unit)? = null
-    private var chatTailCancel: (() -> Unit)? = null
-    private var confirmCancel: (() -> Unit)? = null
     private var counter = 0
     private var askedPlanAt: Long? = null
 
@@ -130,10 +102,6 @@ class SessionBarController(
 
     fun canReadAccount(): Boolean = capabilities().contains(Capability.ACCOUNT)
 
-    fun canReadChat(): Boolean = capabilities().contains(Capability.CHAT)
-
-    fun canSend(): Boolean = capabilities().contains(Capability.SEND)
-
     /**
      * A snapshot the bar draws from, or null when this machine offers none of it.
      *
@@ -142,7 +110,7 @@ class SessionBarController(
      */
     fun view(): SessionBarView? {
         if (sessionId == null) return null
-        if (!canReadUsage() && !canReadAccount() && !canReadChat() && !canSend()) return null
+        if (!canReadUsage() && !canReadAccount()) return null
         return SessionBarView(
             plan = plan,
             context = context,
@@ -151,30 +119,6 @@ class SessionBarController(
             busy = busy,
             canRefresh = canReadUsage(),
             canSwitchAccount = canReadAccount() && accounts.size > 1,
-            // `!= false`, not `== true`, and the difference is the whole reachability of the chat.
-            //
-            // Nothing asks for a transcript until the chat screen is up — a terminal somebody is
-            // typing into must not send a file read across a relay after every burst of output — so
-            // `transcript` is null until somebody opens it. Requiring `true` here would mean the way
-            // in appears only after it has been used, which is a door locked from the inside.
-            //
-            // So the way in is offered while the answer is unknown and withdrawn once the machine
-            // has looked and found no transcript for this folder. Both of those are real states,
-            // and the alternative is a button that opens an empty screen with nothing on it to say
-            // why. This is the rule `showsModeButton` keeps on iOS.
-            hasTranscript = canReadChat() && transcript != false,
-        )
-    }
-
-    /** A snapshot the chat screen draws from, or null when this machine has no transcript to show. */
-    fun chatView(): SessionChatView? {
-        if (sessionId == null || !canReadChat()) return null
-        return SessionChatView(
-            rows = chat,
-            transcript = transcript,
-            canSend = canSend(),
-            sending = sending,
-            notice = sendNotice,
         )
     }
 
@@ -209,11 +153,6 @@ class SessionBarController(
         account = null
         accounts = emptyList()
         busy = false
-        chat = emptyList()
-        transcript = null
-        chatting = false
-        sending = false
-        sendNotice = null
         askedPlanAt = null
         onChange()
     }
@@ -231,15 +170,8 @@ class SessionBarController(
         plan = null
         context = null
         busy = false
-        sending = false
         askedPlanAt = null
         onChange()
-    }
-
-    /** The chat screen opened or closed. Only a screen that is up asks for a transcript. */
-    fun chatting(on: Boolean) {
-        chatting = on
-        if (on) askChat(tail = false)
     }
 
     /**
@@ -257,12 +189,6 @@ class SessionBarController(
             askUsage(UsageWant.Context)
             askPlan()
             onChange()
-        }
-        if (!chatting) return
-        chatTailCancel?.invoke()
-        chatTailCancel = expiry.after(CHAT_TAIL_MS) {
-            chatTailCancel = null
-            askChat(tail = true)
         }
     }
 
@@ -295,52 +221,6 @@ class SessionBarController(
         onChange()
     }
 
-    /** `tail` false is what opening the view asks; true is what a quiet session asks. */
-    fun askChat(tail: Boolean) {
-        val id = sessionId ?: return
-        if (!canReadChat()) return
-        val key = rid()
-        dispatch(ClientMessage.ChatRead(key, id, tail), key, Ask.Chat, id)
-    }
-
-    /**
-     * Send a whole message at the session.
-     *
-     * Refused here rather than over there when it is over the paste cap, for the reason
-     * [dev.terminaldeck.android.protocol.pasteRefusal] refuses one: the desktop answers an over-cap
-     * frame by closing the socket, so a message too long would fail as *the connection dying*. And
-     * it is refused rather than split — a message cut in half is two messages to an agent, which is
-     * not what anybody typed.
-     *
-     * Returns whether the draft may be cleared. False keeps it in the box, which is the whole reason
-     * this rides `session.send` rather than `input`.
-     */
-    fun sendMessage(text: String): Boolean {
-        val id = sessionId ?: return false
-        if (!canSend() || sending) return false
-        if (text.isEmpty()) return false
-        if (Protocol.overBytes(text, Protocol.MAX_INPUT_BYTES)) {
-            say(ActionNotice(false, TOO_LONG))
-            onChange()
-            return false
-        }
-        val key = rid()
-        sending = true
-        sendNotice = null
-        if (!dispatch(ClientMessage.SessionSend(key, id, text), key, Ask.Send, id)) {
-            sending = false
-            say(ActionNotice(false, NOT_CONNECTED))
-            onChange()
-            return false
-        }
-        onChange()
-        return true
-    }
-
-    fun dismissNotice() {
-        say(null)
-        onChange()
-    }
 
     private fun askUsage(want: UsageWant): Boolean {
         val id = sessionId ?: return false
@@ -400,11 +280,6 @@ class SessionBarController(
                     busy = false
                     onChange()
                 }
-                is Ask.Send -> {
-                    sending = false
-                    say(ActionNotice(false, NO_ANSWER))
-                    onChange()
-                }
                 else -> Unit
             }
         }
@@ -415,21 +290,7 @@ class SessionBarController(
     private fun timeoutFor(ask: Ask): Long = when (ask) {
         is Ask.Usage -> if (ask.want == UsageWant.Refresh) REFRESH_TIMEOUT_MS else READ_TIMEOUT_MS
         Ask.AccountSwitch -> SWITCH_TIMEOUT_MS
-        Ask.Send -> SEND_TIMEOUT_MS
         else -> READ_TIMEOUT_MS
-    }
-
-    private fun say(next: ActionNotice?) {
-        sendNotice = next
-        confirmCancel?.invoke()
-        confirmCancel = null
-        if (next != null && next.ok) {
-            confirmCancel = expiry.after(CONFIRM_MS) {
-                confirmCancel = null
-                sendNotice = null
-                onChange()
-            }
-        }
     }
 
     /** True when this frame was one of ours, so the router can stop. */
@@ -476,28 +337,6 @@ class SessionBarController(
                 onChange()
                 return true
             }
-            is ServerMessage.ChatRows -> {
-                val asked = pending[message.rid] ?: return false
-                settle(message.rid, asked)
-                if (message.id != sessionId) return true
-                chat = mergeChat(chat, message.rows, message.reset)
-                transcript = message.found
-                onChange()
-                return true
-            }
-            is ServerMessage.SessionSent -> {
-                val asked = pending[message.rid] ?: return false
-                settle(message.rid, asked)
-                if (message.id != sessionId) return true
-                sending = false
-                say(ActionNotice(message.ok, message.message))
-                // A message that landed is a message the transcript will grow by, so the
-                // conversation is re-read rather than having the sent text drawn optimistically —
-                // the bubble that appears is the one the agent's own transcript holds.
-                if (message.ok && chatting) askChat(tail = true)
-                onChange()
-                return true
-            }
             else -> return false
         }
     }
@@ -512,26 +351,14 @@ class SessionBarController(
         pending.clear()
         quietCancel?.invoke()
         quietCancel = null
-        chatTailCancel?.invoke()
-        chatTailCancel = null
-        confirmCancel?.invoke()
-        confirmCancel = null
     }
 
     companion object {
         const val READ_TIMEOUT_MS = 20_000L
         const val REFRESH_TIMEOUT_MS = 120_000L
         const val SWITCH_TIMEOUT_MS = 60_000L
-        const val SEND_TIMEOUT_MS = 30_000L
         const val PLAN_THROTTLE_MS = 60_000L
         private const val QUIET_MS = 1_200L
-        private const val CHAT_TAIL_MS = 900L
-        private const val CONFIRM_MS = 4_000L
-
-        const val NO_ANSWER =
-            "That machine did not answer, so it is not known whether the message was delivered."
-        const val NOT_CONNECTED = "Not connected right now, so nothing was sent."
-        const val TOO_LONG = "That message is longer than one send can carry. Shorten it, or send a file."
     }
 }
 
@@ -549,19 +376,5 @@ data class SessionBarView(
     val busy: Boolean,
     val canRefresh: Boolean,
     val canSwitchAccount: Boolean,
-    val hasTranscript: Boolean,
 )
 
-/**
- * What the chat screen reads.
- *
- * [transcript] null is "not asked yet"; false is a folder with no transcript at all, which is the
- * one state that says something rather than drawing an empty list.
- */
-data class SessionChatView(
-    val rows: List<ChatMessageWire>,
-    val transcript: Boolean?,
-    val canSend: Boolean,
-    val sending: Boolean,
-    val notice: ActionNotice?,
-)

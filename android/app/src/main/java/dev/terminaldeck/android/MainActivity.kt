@@ -72,7 +72,6 @@ import dev.terminaldeck.android.ui.TerminalSchemeScreen
 import dev.terminaldeck.android.ui.ArchivedSessionsSheet
 import dev.terminaldeck.android.ui.LocalhostBrowser
 import dev.terminaldeck.android.ui.LocalhostScreen
-import dev.terminaldeck.android.ui.SessionChatScreen
 import dev.terminaldeck.android.ui.SessionDetailSheet
 import dev.terminaldeck.android.ui.CredentialPromptSheet
 import dev.terminaldeck.android.ui.DevicesScreen
@@ -297,9 +296,6 @@ private const val ARG_SCHEME_ID = "schemeId"
 private const val ROUTE_LOCALHOST = "localhost"
 private const val ROUTE_LOCALHOST_PAGE = "localhost/page"
 
-/** The conversation of the session a terminal is showing, as bubbles rather than as a pty. */
-private const val ROUTE_CHAT = "chat/{hostId}/{sessionId}"
-
 /** The machine's own agent. The leftmost pill, drawn only while the machine offers one. */
 private const val ROUTE_COPILOT = "copilot"
 
@@ -470,8 +466,8 @@ fun TerminalDeckApp(
     // page being served from the machine. A pill sitting over the bottom rows of any of them points
     // somewhere else while the thing you are using needs the height.
     val bar = route != ROUTE_TERMINAL && route != ROUTE_WATCH_VIEW &&
-        route != ROUTE_LOCALHOST_PAGE && route != ROUTE_CHAT && route != ROUTE_COPILOT
-    val onSessions = route == ROUTE_SESSIONS || route == ROUTE_TERMINAL || route == ROUTE_CHAT
+        route != ROUTE_LOCALHOST_PAGE && route != ROUTE_COPILOT
+    val onSessions = route == ROUTE_SESSIONS || route == ROUTE_TERMINAL
     val onLocalhost = route == ROUTE_LOCALHOST || route == ROUTE_LOCALHOST_PAGE
     val onCopilot = route == ROUTE_COPILOT
     /*
@@ -621,81 +617,6 @@ fun TerminalDeckApp(
                 photoPicker = photoPicker,
                 documentPicker = documentPicker,
                 onDetails = { detailFor = it },
-            )
-        }
-
-        /*
-         * The conversation, as bubbles rather than as a pty.
-         *
-         * Its own route rather than a mode of the terminal, because the two are different screens
-         * with different chrome — one has a key bar and a pty, the other has a composer — and a flag
-         * that swapped half a screen would leave the emulator alive underneath something that is not
-         * showing it. The route names its machine for the reason the terminal route does.
-         */
-        composable(
-            route = ROUTE_CHAT,
-            arguments = listOf(
-                navArgument(ARG_HOST_ID) { type = NavType.StringType },
-                navArgument(ARG_SESSION_ID) { type = NavType.StringType },
-            ),
-        ) { entry ->
-            val hostId = entry.arguments?.getString(ARG_HOST_ID)
-            val sessionId = entry.arguments?.getString(ARG_SESSION_ID)
-            val known = state.hosts.firstOrNull { it.hostId == hostId }
-                ?.sessions?.firstOrNull { it.id == sessionId }
-            // The session went, or the machine was forgotten. The pop is in an effect for the reason
-            // the terminal route's is: navigating during composition leaves a black rectangle.
-            if (hostId == null || sessionId == null || known == null) {
-                LaunchedEffect(hostId, sessionId) { navController.popBackStack() }
-                return@composable
-            }
-
-            /*
-             * **This screen follows the session too, and that is not a duplicate of the terminal's.**
-             *
-             * Pushing this destination *disposes* the terminal underneath it, and the terminal's own
-             * `onDispose` forgets the cluster — so without this, opening the conversation cleared the
-             * very session it is about, `state.chat` went null on the next frame, and the route
-             * popped itself straight back to the terminal. Which is exactly what it did: the chat
-             * button did nothing at all, three times a second, and looked like a dead control.
-             *
-             * Found by driving it against a live host on 2026-08-22 rather than by reading it, which
-             * is the only way this one shows up: every unit test in the suite passes either way.
-             */
-            DisposableEffect(hostId, sessionId) {
-                val claim = viewModel.followControls(hostId, sessionId)
-                // Only a screen that is up asks for a transcript: a terminal somebody is typing into
-                // must not send a file read across a relay after every burst of output.
-                viewModel.chatting(true)
-                onDispose {
-                    viewModel.chatting(false)
-                    viewModel.releaseSession(hostId, claim)
-                }
-            }
-
-            val chat = state.chat
-            if (chat == null) {
-                /*
-                 * The moment between opening this and the far end answering, said rather than popped.
-                 *
-                 * It is one frame in the ordinary case — the effect above runs immediately after the
-                 * first composition — and it is longer over a relay to a machine on another
-                 * continent. Popping instead would be the screen refusing to open for a reason
-                 * nobody could see.
-                 */
-                Waiting("Reading the conversation on the ${state.machineNoun}\u2026")
-                return@composable
-            }
-
-            SessionChatScreen(
-                view = chat,
-                title = known.title,
-                onBack = { navController.popBackStack() },
-                onOpened = {},
-                onClosed = {},
-                onSend = viewModel::sendMessage,
-                onCopy = viewModel::copyText,
-                onDismissNotice = viewModel::dismissChatNotice,
             )
         }
 
@@ -1349,7 +1270,6 @@ private fun TerminalRoute(
             bar = state.bar,
             onRefreshUsage = viewModel::refreshUsage,
             onSwitchAccount = viewModel::switchAccount,
-            onOpenChat = { navController.navigate("chat/$hostId/$liveSession") },
             onDetails = { onDetails(known) },
         )
 

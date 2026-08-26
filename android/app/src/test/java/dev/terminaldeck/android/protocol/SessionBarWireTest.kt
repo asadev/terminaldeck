@@ -25,7 +25,7 @@ class SessionBarWireTest {
     /* ------------------------------------------------------------- outbound -- */
 
     @Test
-    fun `the four client frames encode the shapes the desktop parses`() {
+    fun `the three client frames encode the shapes the desktop parses`() {
         assertEquals(
             """{"t":"usage.read","rid":"bar-1","id":"s1","want":"context","force":false}""",
             ClientFrames.encode(ClientMessage.UsageRead("bar-1", "s1", UsageWant.Context, false)),
@@ -33,10 +33,6 @@ class SessionBarWireTest {
         assertEquals(
             """{"t":"account.switch","rid":"bar-2","id":"s1","accountId":"acc-9"}""",
             ClientFrames.encode(ClientMessage.AccountSwitch("bar-2", "s1", "acc-9")),
-        )
-        assertEquals(
-            """{"t":"chat.read","rid":"bar-3","id":"s1","tail":true}""",
-            ClientFrames.encode(ClientMessage.ChatRead("bar-3", "s1", true)),
         )
         assertEquals(
             """{"t":"session.send","rid":"bar-4","id":"s1","data":"ship it"}""",
@@ -191,66 +187,6 @@ class SessionBarWireTest {
         val frame = ok("""{"t":"account.state","rid":"r","id":"s1","accounts":[$rows]}""")
             as ServerMessage.AccountState
         assertEquals(Protocol.MAX_ACCOUNTS_REPORTED, frame.accounts.size)
-    }
-
-    /* ----------------------------------------------------------------- chat -- */
-
-    @Test
-    fun `chat rows narrow both roles and carry truncation through`() {
-        val frame = ok(
-            """
-            {"t":"chat.rows","rid":"r","id":"s1","reset":true,"found":true,"rows":[
-              {"id":"m1","role":"you","text":"do it","at":1755000000000},
-              {"id":"m2","role":"agent","text":"done","at":0,"truncated":true}
-            ]}
-            """.trimIndent()
-        ) as ServerMessage.ChatRows
-        assertTrue(frame.reset)
-        assertTrue(frame.found)
-        assertEquals(ChatRole.You, frame.rows[0].role)
-        assertEquals(ChatRole.Agent, frame.rows[1].role)
-        assertTrue(frame.rows[1].truncated)
-        // 0 is "the line carried no date", not midnight on the first of January.
-        assertEquals(0L, frame.rows[1].at)
-    }
-
-    @Test
-    fun `an over-long answer keeps the newest bubbles`() {
-        val rows = (1..260).joinToString(",") { """{"id":"m$it","role":"agent","text":"$it"}""" }
-        val frame = ok("""{"t":"chat.rows","rid":"r","id":"s1","rows":[$rows]}""") as ServerMessage.ChatRows
-        assertEquals(Protocol.MAX_CHAT_ROWS, frame.rows.size)
-        // From the **end**, matching `rows.slice(-MAX_CHAT_ROWS)`: trimming the head would keep the
-        // oldest bubbles and drop the reply somebody is waiting to read.
-        assertEquals("m260", frame.rows.last().id)
-    }
-
-    @Test
-    fun `merge replaces a growing bubble in place and appends the rest`() {
-        val held = listOf(
-            ChatMessageWire("m1", ChatRole.You, "do it"),
-            ChatMessageWire("m2", ChatRole.Agent, "wor"),
-        )
-        val grown = mergeChat(
-            held,
-            listOf(
-                ChatMessageWire("m2", ChatRole.Agent, "working on it"),
-                ChatMessageWire("m3", ChatRole.Agent, "done"),
-            ),
-            reset = false,
-        )
-        assertEquals(3, grown.size)
-        // In place, or the conversation stacks a paragraph at a time.
-        assertEquals("working on it", grown[1].text)
-        assertEquals("m3", grown[2].id)
-    }
-
-    @Test
-    fun `reset cannot be ignored`() {
-        val held = listOf(ChatMessageWire("m1", ChatRole.You, "old"))
-        // Reset means the far side's document is not the one this view holds a prefix of; appending
-        // through one draws the conversation twice.
-        val fresh = mergeChat(held, listOf(ChatMessageWire("m9", ChatRole.Agent, "new")), reset = true)
-        assertEquals(listOf("m9"), fresh.map { it.id })
     }
 
     @Test

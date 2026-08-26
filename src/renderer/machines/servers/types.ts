@@ -498,25 +498,6 @@ export interface ServersBridge {
   /** `servers:shell:close` */
   closeServerShell(shellId: string): Promise<unknown>
   /**
-   * `servers:chat:load` / `servers:chat:tail` / `servers:chat:close` — the
-   * conversation the agent in that shell is writing, read from that server.
-   *
-   * Keyed on the shell, never on a path. Which transcript belongs to a terminal
-   * is decided in the main process out of the moment the shell was opened
-   * against each transcript's own first line — see `servers/chat.ts` — so this
-   * side holds a handle for the session and never names a file on somebody
-   * else's disk.
-   *
-   * Optional, and **not** in `BRIDGE_METHODS` below, for the reason that list
-   * exists: a preload older than these channels must lose the chat view for a
-   * server terminal, not the whole servers area. Absent means the mode switch
-   * refuses chat with the sentence it always had, which is a smaller screen
-   * rather than a broken one.
-   */
-  loadServerChat?(shellId: string): Promise<unknown>
-  tailServerChat?(shellId: string): Promise<unknown>
-  closeServerChat?(shellId: string): Promise<unknown>
-  /**
    * `servers:shell:account` — which login the coding agent in that server
    * account's home is signed in as.
    *
@@ -557,24 +538,6 @@ export interface ServersBridge {
   pickServerKey?(): Promise<unknown>
   /** `servers:key-read` — the bytes of one key this process itself offered. */
   readServerKey?(path: string): Promise<unknown>
-  /**
-   * `servers:chat:watch` — is anybody looking at this conversation?
-   *
-   * Optional, and absent means the far end keeps streaming to a pane that is off
-   * screen: the build this app had before the push existed, which is slower and
-   * chattier rather than broken.
-   */
-  watchServerChat?(shellId: string, watching: boolean): Promise<unknown>
-  /**
-   * `servers:chat:changed` — a conversation on a server moved, pushed.
-   *
-   * Optional and out of `BRIDGE_METHODS` for the reason every channel added
-   * after the first is: a preload older than this one must lose the *push*, not
-   * the whole servers area. Absent means the chat pane keeps the timer it always
-   * had, which is a slower pane rather than a broken one — and it says which it
-   * is on either way.
-   */
-  onServerChatChanged?(cb: (payload: unknown) => void): () => void
   /** `servers:shell:output` */
   onServerShellOutput(cb: (chunk: unknown) => void): () => void
   /** `servers:shell:closed` */
