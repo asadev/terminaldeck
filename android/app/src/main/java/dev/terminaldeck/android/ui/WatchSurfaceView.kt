@@ -7,8 +7,14 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
+import android.text.InputType
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
+import android.view.inputmethod.BaseInputConnection
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputConnection
+import android.view.inputmethod.InputMethodManager
 import dev.terminaldeck.android.WatchController
 import dev.terminaldeck.android.protocol.ServerMessage
 import dev.terminaldeck.android.protocol.TAP_SLOP_PX
@@ -95,7 +101,12 @@ class WatchSurfaceView(
     init {
         setBackgroundColor(CURTAIN_PAPER)
         isClickable = true
-        isFocusable = false
+        // Focusable in touch mode, so a tap can take the responder and raise the system keyboard —
+        // the whole of *"if we just click inside and type from our keyboard, it should work… I should
+        // not have to have this separate button of keyboard."* There is no field any more; the canvas
+        // itself is what the keyboard types into, and every key becomes a `browser.input`.
+        isFocusable = true
+        isFocusableInTouchMode = true
         watch.frameHandler = { frame ->
             if (frame.window == target) post { onFrame(frame) }
         }
@@ -103,6 +114,109 @@ class WatchSurfaceView(
 
     /** The frame a typed line should be aimed at, or null while nothing has been drawn. */
     fun currentSeq(): Int? = lastFrame?.takeIf { !it.masked }?.seq
+
+    /* ------------------------------------------------------------------ keyboard -- */
+
+    /**
+     * The canvas is the text editor now.
+     *
+     * `TYPE_NULL` tells the IME this is not an ordinary field and to send raw key events rather than
+     * edit a buffer it thinks it owns — which is exactly what a remote page wants, because there is no
+     * local text to edit, only keystrokes to forward. A soft keyboard that insists on committing text
+     * anyway (gesture typing) is caught by [commitText]; the rest arrive as key events through
+     * [streamKey]. `IME_ACTION_GO` puts *Go* on the return key, and pressing it becomes an Enter.
+     */
+    override fun onCheckIsTextEditor(): Boolean = true
+
+    override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
+        outAttrs.inputType = InputType.TYPE_NULL
+        outAttrs.imeOptions = EditorInfo.IME_ACTION_GO or
+            EditorInfo.IME_FLAG_NO_FULLSCREEN or EditorInfo.IME_FLAG_NO_EXTRACT_UI
+        return object : BaseInputConnection(this, false) {
+            override fun sendKeyEvent(event: KeyEvent): Boolean = streamKey(event)
+
+            override fun commitText(text: CharSequence, newCursorPosition: Int): Boolean {
+                lastFrame?.takeIf { !it.masked }?.let { watch.insert(target, it.seq, text.toString()) }
+                return true
+            }
+
+            override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
+                lastFrame?.takeIf { !it.masked }?.let { frame ->
+                    repeat(beforeLength.coerceAtLeast(0)) { watch.backspace(target, frame.seq) }
+                }
+                return true
+            }
+        }
+    }
+
+    private fun showKeyboard() {
+        if (!isFocused) requestFocus()
+        val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+        imm?.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT)
+    }
+
+    private fun hideKeyboard() {
+        val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+        imm?.hideSoftInputFromWindow(windowToken, 0)
+        clearFocus()
+    }
+
+    /**
+     * One key event, forwarded to the page against the frame it was measured on.
+     *
+     * Acted on the way **down** only, and each verb sends its own down-and-up on the wire — a page
+     * listening on `keyup` needs the release, and doing it here rather than waiting for the physical
+     * up keeps a held key from stalling. Enter, Backspace and Tab are named keys; everything else is
+     * the character it produced. `ACTION_MULTIPLE` with `KEYCODE_UNKNOWN` carries a whole string (some
+     * IMEs deliver a word this way), so it is forwarded as one paste. The navigation keys — Back, Home,
+     * volume — are left alone, or the system back gesture would type into the page instead of leaving.
+     */
+    private fun streamKey(event: KeyEvent): Boolean {
+        val frame = lastFrame ?: return false
+        if (frame.masked) return false
+        if (event.action != KeyEvent.ACTION_DOWN && event.action != KeyEvent.ACTION_MULTIPLE) {
+            return event.action == KeyEvent.ACTION_UP && handledKey(event.keyCode)
+        }
+        when (event.keyCode) {
+            KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> watch.enter(target, frame.seq)
+            KeyEvent.KEYCODE_DEL -> watch.backspace(target, frame.seq)
+            KeyEvent.KEYCODE_TAB -> watch.key(target, frame.seq, "Tab", "Tab")
+            KeyEvent.KEYCODE_UNKNOWN -> {
+                val chars = event.characters ?: return false
+                watch.insert(target, frame.seq, chars)
+            }
+            else -> {
+                val code = event.unicodeChar
+                if (code == 0) return false
+                watch.insert(target, frame.seq, String(Character.toChars(code)))
+            }
+        }
+        return true
+    }
+
+    /** Which keys this view forwards to the page, so their release is consumed too and does not bubble
+     *  to the activity. Deliberately not the navigation keys — those belong to the system. */
+    private fun handledKey(keyCode: Int): Boolean = when (keyCode) {
+        KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_HOME, KeyEvent.KEYCODE_MENU,
+        KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN, KeyEvent.KEYCODE_VOLUME_MUTE,
+        -> false
+        else -> lastFrame?.masked == false
+    }
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        if (handledKey(keyCode) && streamKey(event)) return true
+        return super.onKeyDown(keyCode, event)
+    }
+
+    override fun onKeyMultiple(keyCode: Int, repeatCount: Int, event: KeyEvent): Boolean {
+        if (streamKey(event)) return true
+        return super.onKeyMultiple(keyCode, repeatCount, event)
+    }
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
+        if (handledKey(keyCode)) return true
+        return super.onKeyUp(keyCode, event)
+    }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
@@ -133,6 +247,9 @@ class WatchSurfaceView(
         // noise, so the flag makes the second call a no-op rather than a duplicate.
         if (torndown) return
         torndown = true
+        // The keyboard goes with the cast — a system keyboard left up over a page that is no longer
+        // being driven is half a phone screen offering to type into nothing.
+        hideKeyboard()
         watch.frameHandler = null
         watch.unwatch(target)
         decoder.shutdownNow()
@@ -299,6 +416,11 @@ class WatchSurfaceView(
                 // A touch that never travelled: a tap, synthesised as a click so a page with no
                 // touch handlers still responds.
                 watch.tap(target, frame.seq, at.first, at.second)
+                // And the keyboard comes up — a tap on a field is how a person asks to type into it,
+                // exactly as it is in any browser. It rises whatever was tapped, because this side
+                // cannot know a field from a heading, and a keyboard raised over a heading is a swipe
+                // away; a field that could not raise one would be a field that cannot be filled.
+                showKeyboard()
                 performClick()
                 return true
             }

@@ -169,6 +169,15 @@ class HostLink(
     /** What is listening on this machine, and the verb that opens one of them over there. */
     var localhost: LocalhostController? = null
 
+    /**
+     * The machine's **own** browser — its open windows, the sessions one could be bound to, and the
+     * profiles it keeps — as this phone drives it. Created once per link; draws nothing until the
+     * machine advertises [dev.terminaldeck.android.protocol.Capability.BROWSER_CONTROL], which a host
+     * offers to one of the owner's own devices and never to a guest. The pictures of those windows are
+     * [watch]'s; this owns the list and the verbs.
+     */
+    var machineBrowser: MachineBrowserController? = null
+
     /** One dev server per folder this machine has granted this device. */
     var devServer: DevServerController? = null
 
@@ -235,6 +244,7 @@ class HostLink(
         devServer?.stop()
         tunnels?.stop()
         copilot?.stop()
+        machineBrowser?.stop()
         sessions = emptyList()
         live = false
         loaded = false

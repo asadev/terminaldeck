@@ -434,6 +434,12 @@ class DeckViewModel(
             expiry = coroutineExpiry(viewModelScope),
             onChange = { publish() },
         )
+        link.machineBrowser = MachineBrowserController(
+            send = { link.transport.send(it) },
+            capabilities = { link.capabilities },
+            expiry = coroutineExpiry(viewModelScope),
+            onChange = { publish() },
+        )
         // Collected per machine, with the link captured, so a frame cannot arrive without the
         // answer to "which computer said this" already in hand.
         viewModelScope.launch { link.transport.state.collect { onState(link, it) } }
@@ -485,6 +491,7 @@ class DeckViewModel(
             link.watch?.renew()
             link.localhost?.renew()
             link.devServer?.renew()
+            link.machineBrowser?.renew()
             // A tunnel cannot survive the connection carrying its bytes, and a page left spinning
             // against a socket that will never answer is exactly the lie this client is written not
             // to tell.
@@ -597,6 +604,7 @@ class DeckViewModel(
                 link.localhost?.renew()
                 link.devServer?.renew()
                 link.copilot?.renew()
+                link.machineBrowser?.renew()
                 link.loaded = message.sessions.isNotEmpty() || link.loaded
                 link.live = true
                 // The first list after a connection came back. What is in it happened while this
@@ -811,8 +819,21 @@ class DeckViewModel(
                 link.copilot?.receive(message)
             }
 
+            // The machine's own browser: the window list, a screenshot, an inspected element, a
+            // recorder's steps and the profile list. Routed together the way the copilot family is —
+            // the controller keeps the bookkeeping, and a frame about a window this device no longer
+            // has open is dropped there rather than in a `when` that would have to know about windows.
+            is MachineBrowserState,
+            is MachineShot,
+            is ServerMessage.BrowserWindowPicked,
+            is ServerMessage.BrowserRecordRows,
+            is MachineProfileList,
+            -> {
+                link.machineBrowser?.receive(message)
+            }
+
             /*
-             * The wire foundation for the machine's files, git, panels, folder picker, own browser,
+             * The wire foundation for the machine's files, git, panels, folder picker,
              * copilot files and routines — decodable and routed here, but not yet consumed.
              *
              * Each of these answers a verb a later screen will send, and each will be handed to the
@@ -830,11 +851,6 @@ class DeckViewModel(
             is ServerMessage.GitPatch,
             is PanelData,
             is ServerMessage.FolderEntries,
-            is MachineBrowserState,
-            is MachineShot,
-            is ServerMessage.BrowserWindowPicked,
-            is ServerMessage.BrowserRecordRows,
-            is MachineProfileList,
             is ServerMessage.CopilotFilesRows,
             is ServerMessage.CopilotFileText,
             is ServerMessage.RoutinesRows,
@@ -1681,6 +1697,59 @@ class DeckViewModel(
      */
     fun watcher(): WatchController? = selected?.watch?.takeIf { it.offered() }
 
+    /* --------------------------------------------------------- machine browser -- */
+
+    /** Ask the machine on screen for its open browser windows, once, when the home opens. */
+    fun openMachineBrowser() {
+        selected?.machineBrowser?.ensureRead()
+    }
+
+    /** The user pulled to refresh the window list. */
+    fun refreshMachineBrowser() {
+        selected?.machineBrowser?.refresh()
+    }
+
+    /** Read the machine's browser profiles — sent on every appearance, because this family has no
+     *  push. */
+    fun readMachineProfiles() {
+        selected?.machineBrowser?.readProfiles()
+    }
+
+    /**
+     * The controller for the machine on screen, or null when it offers no browser driving.
+     *
+     * Handed to the driven-window and overlay screens rather than a copy of its state, because they
+     * send verbs — go, act, size, bind, screenshot, pick — through the same object whose answers
+     * redraw them. The same shape as [watcher], and the same test: null when the machine on screen
+     * stopped offering `browser.control`, which is what makes the screen pop rather than draw dead.
+     */
+    fun machineBrowser(): MachineBrowserController? = selected?.machineBrowser?.takeIf { it.offered() }
+
+    /** Open a window on the machine — the home's `+` sheet. */
+    fun openMachineWindow(url: String?, isolated: Boolean, session: String?) {
+        selected?.machineBrowser?.openWindow(url, isolated, session)
+    }
+
+    /** Attach a window to a session, or detach with a null session — the home's row menu. */
+    fun bindMachineWindow(id: String, session: String?) {
+        selected?.machineBrowser?.bind(id, session)
+    }
+
+    /** Close a window on the machine — the home's swipe and its row menu. */
+    fun closeMachineWindow(id: String) {
+        selected?.machineBrowser?.act(id, dev.terminaldeck.android.protocol.BrowserWindowAction.Close)
+    }
+
+    /** Switch the machine's browser to a profile. */
+    fun useMachineProfile(id: String) {
+        selected?.machineBrowser?.useProfile(id)
+    }
+
+    /** Empty a profile's jar on the machine. */
+    fun clearMachineProfile(id: String) {
+        selected?.machineBrowser?.clearProfile(id)
+    }
+
     /** Type text into the session open on one machine: the key bar, and paste. */
     fun type(hostId: String, text: String) {
         val link = links[hostId] ?: return
@@ -1930,6 +1999,8 @@ class DeckViewModel(
             // paired need not be the machine the switcher is pointing at.
             bar = following()?.view(),
             watch = current?.watch?.view(),
+            machineBrowser = current?.machineBrowser?.view(),
+            machineProfiles = current?.machineBrowser?.profilesView(),
             localhost = current?.localhost?.view(),
             devServers = current?.devServer?.view(),
             tunnel = current?.tunnels?.view(),
@@ -2160,6 +2231,11 @@ data class DeckUiState(
     val awayReport: String? = null,
     /** The watchable browser windows of the machine on screen, or null when it does not offer any. */
     val watch: WatchView? = null,
+    /** The machine's own open browser windows and the sessions one could be bound to, or null when
+     *  the machine does not offer its browser for driving. */
+    val machineBrowser: MachineBrowserView? = null,
+    /** The machine's browser profiles, or null when it does not offer them. */
+    val machineProfiles: MachineProfilesUiView? = null,
     /**
      * The Add-a-server screen, or null when it is not up. Null is the normal state.
      *
