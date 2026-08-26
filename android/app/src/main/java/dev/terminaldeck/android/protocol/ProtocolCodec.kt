@@ -199,6 +199,25 @@ object ServerFrames {
         if (message is ServerMessage.TunnelClosed && message.id.isEmpty()) {
             return Result.Bad("tunnel.closed without an id")
         }
+        // The list-bearing frames a newer or hostile host could make long, bounded rather than
+        // refused — a list one row too long is a machine with a lot of routines, not an attack, so the
+        // honest answer is the rows this client will draw. Each cap is the one the host holds itself
+        // to, so against a well-behaved machine none of these ever fires. `browser.window.rows` is
+        // deliberately absent: its own [MachineBrowserState.notDrawn] reports the overflow off the
+        // full list, so trimming here would make that count lie.
+        if (message is ServerMessage.CopilotFilesRows && message.files.size > CopilotFiles.MAX_FILE_ROWS) {
+            return Result.Ok(message.copy(files = message.files.take(CopilotFiles.MAX_FILE_ROWS)))
+        }
+        if (message is ServerMessage.RoutinesRows && message.routines.size > RoutinesWire.MAX_ROUTINE_ROWS) {
+            return Result.Ok(message.copy(routines = message.routines.take(RoutinesWire.MAX_ROUTINE_ROWS)))
+        }
+        if (message is ServerMessage.BrowserRecordRows && message.steps.size > MachineBrowserWire.MAX_STEPS) {
+            return Result.Ok(message.copy(steps = message.steps.take(MachineBrowserWire.MAX_STEPS)))
+        }
+        if (message is MachineProfileList && message.profiles.size > MachineProfilesWire.MAX_PROFILES) {
+            return Result.Ok(message.copy(profiles = message.profiles.take(MachineProfilesWire.MAX_PROFILES)))
+        }
+
         if (message !is ServerMessage.CredentialRequest) return Result.Ok(message)
         if (message.id.isEmpty()) return Result.Bad("credential.request without an id")
         if (message.host.isEmpty() || message.host.length > Protocol.MAX_CREDENTIAL_HOST_LENGTH) {

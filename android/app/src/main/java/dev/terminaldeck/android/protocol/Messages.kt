@@ -852,6 +852,280 @@ sealed interface ClientMessage {
     @SerialName("copilot.answer")
     data class CopilotAnswer(val id: String, val approved: Boolean) : ClientMessage
 
+    /* ---- capability `rename`. Never sent unless the machine offered it. ------------------- */
+
+    /**
+     * Give a session a name of this person's choosing.
+     *
+     * An **empty** title is not a mistake and is not refused: it means *take my name off it*, and the
+     * machine answers by deriving its own from the folder again — the only way back from a rename, and
+     * a phone should not have to know what the machine would have called it to undo one. The answer is
+     * the ordinary session list, not a frame of its own.
+     */
+    @Serializable
+    @SerialName("rename")
+    data class Rename(val id: String, val title: String) : ClientMessage
+
+    /* ---- capability `folders.pick`. Walking the machine's folders. ----------------------- */
+
+    /**
+     * List the sub-folders of [path], so somebody can walk to the one they want.
+     *
+     * Null means *somewhere sensible*, which the machine answers as the folder this device already
+     * works in. The phone deliberately does not guess a starting path — it does not know whether this
+     * machine's home is `/Users/apple`, `/root` or `C:\Users\asad`, and a wrong guess opens the picker
+     * on an error. Answered with [ServerMessage.FolderEntries].
+     */
+    @Serializable
+    @SerialName("folders.browse")
+    data class BrowseFolders(val path: String? = null) : ClientMessage
+
+    /* ---- capabilities `files`, `git`, `panels`. Read-only, all of it. -------------------- */
+
+    /** What is in this folder — files as well as directories. Answered with [FileListing]. */
+    @Serializable
+    @SerialName("files.list")
+    data class FilesList(val path: String) : ClientMessage
+
+    /**
+     * One file's bytes, as text, capped. [at]/[max] let a phone read the start of a large file rather
+     * than be refused it; the next screen is a second read from the offset the host returned
+     * ([FileText.nextOffset]), never a bigger one. Answered with [FileText].
+     */
+    @Serializable
+    @SerialName("files.read")
+    data class FilesRead(val path: String, val at: Int? = null, val max: Int? = null) : ClientMessage
+
+    /** What git says about this folder. Both answers — a repository, and a folder that is not one —
+     *  are answers. Answered with [ServerMessage.GitStateFrame]. */
+    @Serializable
+    @SerialName("git.status")
+    data class GitStatus(val path: String) : ClientMessage
+
+    /**
+     * One file's diff. [file] is a path git itself reported, so it is repository-root-relative.
+     *
+     * [staged] carries no default so it is always on the wire: the staged and unstaged diffs of one
+     * file are two different answers, and a client that let the field go missing would ask for one and
+     * not know which it got. Answered with [ServerMessage.GitPatch].
+     */
+    @Serializable
+    @SerialName("git.diff")
+    data class GitDiff(val path: String, val file: String, val staged: Boolean) : ClientMessage
+
+    /** One of the four read-only panels. [path] null means *somewhere sensible*, which the host
+     *  answers as this device's first granted folder. Answered with [PanelData]. */
+    @Serializable
+    @SerialName("panel.read")
+    data class PanelRead(
+        val panel: String,
+        val path: String? = null,
+        val scope: String? = null,
+        val query: String? = null,
+    ) : ClientMessage
+
+    /**
+     * Do the thing a panel offered.
+     *
+     * [action] is a string this build never interprets — it came off a [PanelAction] the host itself
+     * sent in the last [PanelData], and it goes straight back. That is what lets a panel grow a button
+     * with no change here, and it is safe for exactly that reason: the phone can only send an action it
+     * was handed. [id] names a row for a row's action and is null for the panel's own; [fields] is one
+     * action's form filled in. Answered with a fresh [PanelData].
+     */
+    @Serializable
+    @SerialName("panel.act")
+    data class PanelAct(
+        val panel: String,
+        val action: String,
+        val path: String? = null,
+        val id: String? = null,
+        val scope: String? = null,
+        val query: String? = null,
+        val fields: Map<String, String>? = null,
+    ) : ClientMessage
+
+    /* ---- capability `browser.control`. The machine's own browser. ------------------------ */
+
+    /** What the machine's browser has open, and which sessions could own one. Answered with
+     *  [MachineBrowserState]. */
+    @Serializable
+    @SerialName("browser.windows")
+    data object BrowserWindows : ClientMessage
+
+    /**
+     * Open one there. [isolated] gives it a partition of its own, thrown away when the window closes.
+     *
+     * [session] opens it **and attaches it in one move**, which is the honest way to grant *Attach to a
+     * session* for a page a phone opened over a tunnel — that page lives in no machine window and has
+     * no id to bind, so the same address is re-opened in the machine's own browser and *that* window
+     * attached. The host keeps the new id inside itself and does the attach while it still holds it,
+     * because picking the new row back out of the list is a race two opens can both lose. Answered with
+     * [MachineBrowserState].
+     */
+    @Serializable
+    @SerialName("browser.window.open")
+    data class BrowserWindowOpen(
+        val url: String? = null,
+        val profile: String? = null,
+        val isolated: Boolean = false,
+        val session: String? = null,
+    ) : ClientMessage
+
+    /** Send an open window somewhere. */
+    @Serializable
+    @SerialName("browser.window.go")
+    data class BrowserWindowGo(val id: String, val url: String) : ClientMessage
+
+    /** Back, forward, reload, close, record on or off, share or isolate. The verb is a closed set —
+     *  see [BrowserWindowAction] — because the host refuses a word it does not know. */
+    @Serializable
+    @SerialName("browser.window.act")
+    data class BrowserWindowAct(val id: String, val action: BrowserWindowAction) : ClientMessage
+
+    /**
+     * Lay that window's page out in a rectangle of this size, in **CSS pixels**.
+     *
+     * Sent on a change, never on a frame — when a window is first shown in a pane and when that pane's
+     * width actually moves — because it is a reconfiguration of the machine's browser, not a per-frame
+     * negotiation. Both numbers are clamped host-side rather than refused so a rotation cannot drop the
+     * socket; clamp on the way out with [MachineBrowserWire.clampPageWidth]/`clampPageHeight` so what a
+     * screen believes it asked for is what the machine was asked for.
+     */
+    @Serializable
+    @SerialName("browser.window.size")
+    data class BrowserWindowSize(val id: String, val width: Int, val height: Int) : ClientMessage
+
+    /** Bind a window to a session so the agent in it knows which window is its own. A null [session]
+     *  unbinds — the same frame, deliberately: a client that meant to unbind and one whose field went
+     *  missing are one message, and unbinding is the harmless half. */
+    @Serializable
+    @SerialName("browser.window.bind")
+    data class BrowserWindowBind(val id: String, val session: String? = null) : ClientMessage
+
+    /** Photograph it. With a [session], the picture is handed to that session rather than coming back
+     *  as a [MachineShot]. */
+    @Serializable
+    @SerialName("browser.window.shot")
+    data class BrowserWindowShot(
+        val id: String,
+        val session: String? = null,
+        val note: String? = null,
+    ) : ClientMessage
+
+    /** What the recorder has collected on that window so far. Answered with [ServerMessage.BrowserRecordRows]. */
+    @Serializable
+    @SerialName("browser.window.steps")
+    data class BrowserWindowSteps(val id: String) : ClientMessage
+
+    /**
+     * What is at one point on that window's page — the tap that says *change this*.
+     *
+     * [x]/[y] are **document** coordinates: the same space `browser.frame`'s scroll is in, so a viewer
+     * turns a tap on a picture into a point on the page by adding the scroll of the frame it drew.
+     * [up] is how many ancestors to walk up and is the whole of Wider/Narrower — it **must never
+     * exceed** [MachineBrowserWire.MAX_PICK_UP], because the host checks that range in its *parser* and
+     * a parse failure closes the socket, so clamp with [MachineBrowserWire.clampPickUp]. Null is zero,
+     * the element the point actually hit. Answered with [ServerMessage.BrowserWindowPicked].
+     */
+    @Serializable
+    @SerialName("browser.window.pick")
+    data class BrowserWindowPick(
+        val id: String,
+        val x: Double,
+        val y: Double,
+        val up: Int? = null,
+    ) : ClientMessage
+
+    /* ---- capability `browser.profiles`. The machine's browser profiles. ------------------ */
+
+    /** List the machine's browser profiles and which it is using. No `rid`: all three verbs answer
+     *  with the whole [MachineProfileList], which is what lets the screen confirm itself. */
+    @Serializable
+    @SerialName("browser.profiles")
+    data object BrowserProfiles : ClientMessage
+
+    /** Switch the machine's browser to this profile — it decides which jar the **next** page opens into. */
+    @Serializable
+    @SerialName("browser.profile.use")
+    data class BrowserProfileUse(val id: String) : ClientMessage
+
+    /** Empty one profile's jar on the machine. Signs that machine's browser out of everything in it,
+     *  and touches nothing this phone holds. */
+    @Serializable
+    @SerialName("browser.profile.clear")
+    data class BrowserProfileClear(val id: String) : ClientMessage
+
+    /* ---- capability `copilot.files`. The copilot's own files. ----------------------------- */
+
+    /** What files are there — a listing, nothing opened. Answered with [ServerMessage.CopilotFilesRows],
+     *  which also comes back after every write, restore and delete. */
+    @Serializable
+    @SerialName("copilot.files")
+    data object CopilotFilesList : ClientMessage
+
+    /** One file, whole. Answered with [ServerMessage.CopilotFileText] on **every** branch, refusals
+     *  included — silence is not an answer to a box somebody presses Save on. */
+    @Serializable
+    @SerialName("copilot.file.read")
+    data class CopilotFileRead(val id: String) : ClientMessage
+
+    /** Save one file. Only sent for a row whose [CopilotFileRow.writable] is true; the host refuses the
+     *  two generated files and anything already too large to have been sent whole. */
+    @Serializable
+    @SerialName("copilot.file.write")
+    data class CopilotFileWrite(val id: String, val text: String) : ClientMessage
+
+    /** Put the instructions this build ships back. [id] is carried even though only `yours` is served,
+     *  so the refusal for any other file is a sentence rather than a frame that quietly did nothing. */
+    @Serializable
+    @SerialName("copilot.file.reset")
+    data class CopilotFileReset(val id: String) : ClientMessage
+
+    /** Forget one memory. By **name**, not by id — memory files are the only deletable thing here, and
+     *  a delete verb keyed by name means no id can ever be pointed at an unlink. */
+    @Serializable
+    @SerialName("copilot.memory.delete")
+    data class CopilotMemoryDelete(val name: String) : ClientMessage
+
+    /* ---- capability `routines`. The machine's saved instructions. ------------------------- */
+
+    /** Every routine on that machine. Carries nothing — one folder per machine — and it is the answer
+     *  to each of the four verbs below as well as to itself. Answered with [ServerMessage.RoutinesRows]. */
+    @Serializable
+    @SerialName("routines")
+    data object Routines : ClientMessage
+
+    /** One routine's file, **to read**. There is no frame that writes one back and this enum must not
+     *  grow one — see [RoutinesWire]. Answered with [RoutineFile]. */
+    @Serializable
+    @SerialName("routine.text")
+    data class RoutineText(val id: String) : ClientMessage
+
+    /** Run this one now, whatever its triggers say. **Starts an agent turn on that machine.** The
+     *  engine has the last word; a row's [RoutineRow.canRun] covers only the refusals certain before
+     *  the press. */
+    @Serializable
+    @SerialName("routine.run")
+    data class RoutineRun(val id: String) : ClientMessage
+
+    /** Hold it. **Its file is not touched** — a hold is engine state beside the file. [reason] is what
+     *  a person reads later; null lets the machine write its own rather than leaving a blank. */
+    @Serializable
+    @SerialName("routine.pause")
+    data class RoutinePause(val id: String, val reason: String? = null) : ClientMessage
+
+    /** Let it go again. Clears the hold and the failure count with it. */
+    @Serializable
+    @SerialName("routine.resume")
+    data class RoutineResume(val id: String) : ClientMessage
+
+    /** Delete it. **Its file is removed from disk.** There is no confirmation on the wire — a
+     *  confirmation is a thing a person sees, which makes it the screen's rather than the protocol's. */
+    @Serializable
+    @SerialName("routine.delete")
+    data class RoutineDelete(val id: String) : ClientMessage
+
     companion object {
         /**
          * Attach with a size when there is one, without when there is not.
@@ -1609,6 +1883,144 @@ sealed interface ServerMessage {
     @Serializable
     @SerialName("copilot.settled")
     data class CopilotSettled(val settled: CopilotSettledRow) : ServerMessage
+
+    /* ---- capability `folders.pick` --------------------------------------------------------- */
+
+    /**
+     * One folder's sub-folders, in answer to a [ClientMessage.BrowseFolders].
+     *
+     * [path] is echoed by the machine rather than remembered here, because two asks can be in flight
+     * after a fast double-tap and the second answer must not be drawn under the first heading. [parent]
+     * is null at the very top, which is what the "up" row is drawn from — working it out on the phone
+     * would mean a phone that knows where the root is on Windows.
+     */
+    @Serializable
+    @SerialName("folders.entries")
+    data class FolderEntries(
+        val path: String,
+        val parent: String? = null,
+        val entries: kotlin.collections.List<FolderEntry> = emptyList(),
+    ) : ServerMessage
+
+    /* ---- capabilities `files`, `git`, `panels` --------------------------------------------- */
+    // `files.rows` decodes to [FileListing], `files.text` to [FileText] and `panel.rows` to
+    // [PanelData] — each is its own frame, declared beside its model in FilesGitWire.kt / PanelsWire.kt.
+
+    /**
+     * What git said about a folder — the answer to [ClientMessage.GitStatus].
+     *
+     * A folder that is **not a repository** is a true thing about that folder, not an error: [status]
+     * is a [GitState] union, and both of its cases are drawn. [path] travels beside the answer because
+     * one connection can have two of these in flight for different folders.
+     */
+    @Serializable
+    @SerialName("git.state")
+    data class GitStateFrame(val path: String, val status: GitState) : ServerMessage
+
+    /**
+     * One file's diff as git printed it — the answer to [ClientMessage.GitDiff].
+     *
+     * [patch] is empty when there was nothing to show, which is an **answer** rather than a failure:
+     * `readFileDiff` returns `""` rather than throwing, so a tap on a vanished file cannot take the
+     * panel down. All four fields travel because the staged and unstaged patches of one file are two
+     * different answers and only one belongs on a given screen.
+     */
+    @Serializable
+    @SerialName("git.patch")
+    data class GitPatch(
+        val path: String,
+        val file: String,
+        val staged: Boolean = false,
+        val patch: String = "",
+    ) : ServerMessage
+
+    /* ---- capability `browser.control` ------------------------------------------------------ */
+    // `browser.window.rows` decodes to [MachineBrowserState], `browser.shot` to [MachineShot] and
+    // `browser.profile.rows` to [MachineProfileList] — declared beside their models in MachineBrowserWire.kt.
+
+    /**
+     * One element on a machine window's page — the answer to [ClientMessage.BrowserWindowPick].
+     *
+     * The wire is flat: the window [id] and the element's facts side by side. [element] groups those
+     * facts into the [InspectedElement] a screen draws. Every *failure* comes back as a
+     * [MachineBrowserState] with one sentence on it instead — nothing to point at, a page that has
+     * scrolled — which is what stops a sheet spinning on a promise that will never be kept.
+     */
+    @Serializable
+    @SerialName("browser.window.picked")
+    data class BrowserWindowPicked(
+        val id: String,
+        val tag: String = "",
+        val selector: String = "",
+        val label: String = "",
+        val labelSource: String = "",
+        val url: String = "",
+        val rect: PickedRect? = null,
+        val depth: Int = 0,
+        val maxUp: Int = 0,
+    ) : ServerMessage {
+        /** The element's facts as one value, for a screen that draws them together. */
+        val element: InspectedElement
+            get() = InspectedElement(tag, selector, label, labelSource, url, depth, maxUp, rect)
+    }
+
+    /** What the recorder collected on one window — the answer to [ClientMessage.BrowserWindowSteps]. */
+    @Serializable
+    @SerialName("browser.record.rows")
+    data class BrowserRecordRows(
+        val id: String,
+        val steps: kotlin.collections.List<RecordedStep> = emptyList(),
+    ) : ServerMessage
+
+    /* ---- capability `copilot.files` -------------------------------------------------------- */
+
+    /**
+     * The copilot's files as they are on disk right now.
+     *
+     * An answer, never a push — sent for [ClientMessage.CopilotFilesList], and again after every write,
+     * restore and delete, so a screen that changed something never has to guess what it produced. Read
+     * off the disk on every call, because the interesting case is the one where somebody just edited a
+     * file at the machine and wants to see it landed.
+     */
+    @Serializable
+    @SerialName("copilot.files.rows")
+    data class CopilotFilesRows(
+        val files: kotlin.collections.List<CopilotFileRow> = emptyList(),
+    ) : ServerMessage
+
+    /**
+     * One file's text, or the sentence saying why there is none.
+     *
+     * [id] is echoed back untouched, so a screen with two reads in flight tells them apart without
+     * matching on order. [text] is always present and empty whenever [error] is set — one shape to
+     * read, one spelling for *there is nothing*. [error] covers a file not written yet, one the host
+     * could not read, and one too large for this wire; none quotes a path.
+     */
+    @Serializable
+    @SerialName("copilot.file.text")
+    data class CopilotFileText(
+        val id: String,
+        val text: String = "",
+        val error: String? = null,
+    ) : ServerMessage
+
+    /* ---- capability `routines` ------------------------------------------------------------- */
+    // `routine.text.rows` decodes to [RoutineFile], declared beside its model in RoutinesWire.kt.
+
+    /**
+     * Every routine on that machine, and one line about what just happened.
+     *
+     * The answer to [ClientMessage.Routines] **and** to each of run, pause, resume and delete — the
+     * redraw is the confirmation and [notice] says what the press did, carrying the engine's own
+     * sentence when a run refused to start, so *"it did not start"* and *"it did not start because the
+     * hourly budget is spent until 14:20"* are not the same answer.
+     */
+    @Serializable
+    @SerialName("routines.rows")
+    data class RoutinesRows(
+        val routines: kotlin.collections.List<RoutineRow> = emptyList(),
+        val notice: String? = null,
+    ) : ServerMessage
 }
 
 /**

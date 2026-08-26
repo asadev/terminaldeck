@@ -454,6 +454,112 @@ object Capability {
     const val COPILOT = "copilot"
 
     /**
+     * Give a session a name of your own — `rename { id, title }`.
+     *
+     * Its own capability rather than a corner of [CLOSE], because the two are genuinely separable at
+     * the far end: a host that hands out shells and refuses to end them (the public demo box) can
+     * still let somebody label one, and a host whose session layer has no writable title cannot
+     * however freely it closes. An older host never advertises it, so the Rename row is absent rather
+     * than a press that closes the channel.
+     */
+    const val RENAME = "rename"
+
+    /**
+     * The copilot's own files — its instructions, its memory, its contract — read and edited.
+     *
+     * A **separate** name from [COPILOT], and the separation is about age rather than permission:
+     * every desktop that speaks `copilot` today was built before these frames existed and answers one
+     * by closing the channel, so the Files card waits for this name even on a machine whose Copilot
+     * tab is fully alive. The gate is the same `copilotFor` door — stripped from a guest beside
+     * `copilot` itself — so there is no arrangement of grants in which a guest reaches an instruction
+     * file. See [CopilotFiles].
+     */
+    const val COPILOT_FILES = "copilot.files"
+
+    /**
+     * The machine's routines — the saved instructions it runs on its own. See [RoutinesWire].
+     *
+     * Its own name rather than a corner of [COPILOT] because the two are separable: a routine engine
+     * is a folder, a scheduler and a budget, and a machine can hold one without holding a copilot a
+     * phone may talk to. Withheld from a guest, on the same line and by the same question as `copilot`
+     * — a routine is a prompt this machine runs with this machine's tools, and *"the copilot is never
+     * shared"* covers what starts one as squarely as the conversation.
+     */
+    const val ROUTINES = "routines"
+
+    /**
+     * List this machine's files, and open one — `files.list` / `files.read`. See [FileListing].
+     *
+     * Read-only, and that is the whole capability: there is no write verb and there will not be one,
+     * because editing a file on a machine you cannot see from a phone keyboard breaks a repository
+     * slowly and a session is the better door. Owner devices only, and more sharply than [FOLDER_PICK]
+     * — this reads *file contents*, so a guest that held it could read a private key out of a folder
+     * it was never lent.
+     */
+    const val FILES = "files"
+
+    /**
+     * What git says about a folder, and what one file changed — `git.status` / `git.diff`. See
+     * [GitState]. Read-only, like [FILES] beside it: status and a diff, never a commit, which is a
+     * decision made where the agent that wrote the change is standing. Owner devices only; a diff is
+     * file contents by another name.
+     */
+    const val GIT = "git"
+
+    /**
+     * The four read-only panels the desktop has and a phone did not — **artifacts, store, AI
+     * readiness, MCP servers** — over one `panel.read` / `panel.rows`. See [PanelData]. One capability
+     * for four because each is a list of rows a person reads and does not act on, and the differences
+     * are in the words rather than the structure. Owner devices only: a transcript is a session's
+     * contents and an MCP config names credentials.
+     */
+    const val PANELS = "panels"
+
+    /**
+     * Walk this machine's folders, so a device can name one it cannot see — `folders.browse` /
+     * `folders.entries`. See [FoldersWire]. It reads directory names and grants nothing. Advertised to
+     * one of the owner's own devices only; its absence means an older host *or* a guest, and the
+     * picker draws the same either way.
+     */
+    const val FOLDER_PICK = "folders.pick"
+
+    /** The machine's own browser profiles — which one it is using, and its cookies. See
+     *  [MachineProfileList]. Owner devices only: a profile *is* somebody's signed-in cookie jar. */
+    const val BROWSER_PROFILES = "browser.profiles"
+
+    /** Driving the machine's own browser — its windows, not this phone's. See [MachineBrowserState].
+     *  Owner-only, and not a close call: a bound window can be told to navigate anywhere and
+     *  photographed, and its output is handed to a session running commands. */
+    const val BROWSER_CONTROL = "browser.control"
+
+    /**
+     * A GitHub login the desktop connected, listed so a device can see whose account a session runs as.
+     *
+     * Named here because the host advertises it; this build sends no `logins.*` verb yet, so it is
+     * carried for completeness of the vocabulary rather than for a screen. Withheld from a guest at
+     * the source, like [DEVICES] and [SETTINGS].
+     */
+    const val LOGINS = "logins"
+
+    /**
+     * A session on **this** machine driving a browser window in the app of the device that started it.
+     *
+     * Runs the other way round from most names here, so the string means two things by which side
+     * sent it: a host lists it to say *"I may ask you to act on a window for one of my sessions"*, a
+     * client to say *"I hold windows and I will serve those asks"*. This build advertises neither
+     * direction yet; the constant exists so the vocabulary matches the host's.
+     */
+    const val WINDOWS = "windows"
+
+    /**
+     * The mirror of [WINDOWS]: a session on **that** machine driving a browser window in the app of the
+     * machine it is talking to. A build shipped before this string existed advertises only `windows`
+     * and means the old half, so this is a second capability rather than a wider reading of the first.
+     * The wire string is lowercase — `hostwindows` — transcribed from `CAPABILITY.hostWindows`.
+     */
+    const val HOST_WINDOWS = "hostwindows"
+
+    /**
      * What this build tells a desktop it can do, in `hello.capabilities`.
      *
      * Only names that run desktop→phone belong here. [CREATE], [LOCALHOST] and [UPLOAD] are things

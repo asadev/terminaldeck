@@ -31,6 +31,13 @@ import dev.terminaldeck.android.protocol.pasteRefusal
 import dev.terminaldeck.android.protocol.RemoteSessionView
 import dev.terminaldeck.android.protocol.ServerMessage
 import dev.terminaldeck.android.protocol.EnrollMethod
+import dev.terminaldeck.android.protocol.FileListing
+import dev.terminaldeck.android.protocol.FileText
+import dev.terminaldeck.android.protocol.PanelData
+import dev.terminaldeck.android.protocol.MachineBrowserState
+import dev.terminaldeck.android.protocol.MachineShot
+import dev.terminaldeck.android.protocol.MachineProfileList
+import dev.terminaldeck.android.protocol.RoutineFile
 import dev.terminaldeck.android.session.RemoteSessionBinding
 import dev.terminaldeck.android.servers.AssetScriptLibrary
 import dev.terminaldeck.android.servers.FileServerStore
@@ -803,6 +810,36 @@ class DeckViewModel(
             -> {
                 link.copilot?.receive(message)
             }
+
+            /*
+             * The wire foundation for the machine's files, git, panels, folder picker, own browser,
+             * copilot files and routines — decodable and routed here, but not yet consumed.
+             *
+             * Each of these answers a verb a later screen will send, and each will be handed to the
+             * controller that owns that screen the way the copilot family above is handed to
+             * [link.copilot]. Until those screens exist there is nothing holding the answer, so the
+             * honest thing is to drop it rather than refold the world for a frame no view reads —
+             * the same reasoning the tunnel and cast frames give for returning early. A misdelivered
+             * one — an answer to a request this phone has already forgotten — lands here too, and the
+             * outcome is identical, which is why it is safe to widen this branch into real routing
+             * one controller at a time without touching anything else.
+             */
+            is FileListing,
+            is FileText,
+            is ServerMessage.GitStateFrame,
+            is ServerMessage.GitPatch,
+            is PanelData,
+            is ServerMessage.FolderEntries,
+            is MachineBrowserState,
+            is MachineShot,
+            is ServerMessage.BrowserWindowPicked,
+            is ServerMessage.BrowserRecordRows,
+            is MachineProfileList,
+            is ServerMessage.CopilotFilesRows,
+            is ServerMessage.CopilotFileText,
+            is ServerMessage.RoutinesRows,
+            is RoutineFile,
+            -> return
         }
         publish()
     }
@@ -2272,6 +2309,55 @@ data class DeckUiState(
      * that the tab has something behind it, and the grant decides what the tab may do.
      */
     val copilotOffered: Boolean get() = live && capabilities.contains(Capability.COPILOT)
+
+    /**
+     * Whether a session on this machine may be given a name — the Rename row's gate.
+     *
+     * Its own capability rather than a corner of [canCloseSessions]: a host that hands out shells and
+     * will not end one can still let somebody label it. Gated on [live] like every other verb the phone
+     * sends, so a row drawn off a dead socket is never a tap that cannot land.
+     */
+    val canRenameSessions: Boolean get() = live && capabilities.contains(Capability.RENAME)
+
+    /** Whether this machine will list a folder's files and open one — the Files panel's gate. */
+    val canReadFiles: Boolean get() = live && capabilities.contains(Capability.FILES)
+
+    /** Whether this machine will report git status and print a diff — the Source-control panel's gate. */
+    val canReadGit: Boolean get() = live && capabilities.contains(Capability.GIT)
+
+    /** Whether this machine serves the four read-only panels — artifacts, store, AI readiness, MCP. */
+    val canReadPanels: Boolean get() = live && capabilities.contains(Capability.PANELS)
+
+    /**
+     * Whether the copilot's own files may be read and edited on this machine.
+     *
+     * A **separate** gate from [copilotOffered]: every desktop that speaks `copilot` today was built
+     * before these frames existed, so the Files card waits for [Capability.COPILOT_FILES] even on a
+     * machine whose Copilot tab is fully alive. The name of a phone reading a flag is
+     * [filesCapability]; [canEditCopilotFiles] is the same flag under the name the write side reads it.
+     */
+    val filesCapability: Boolean get() = live && capabilities.contains(Capability.COPILOT_FILES)
+
+    /** The copilot-files gate again, under the name the Save button reads. See [filesCapability]. */
+    val canEditCopilotFiles: Boolean get() = filesCapability
+
+    /** Whether this machine holds a routine engine this device may drive — the Routines screen's gate. */
+    val canUseRoutines: Boolean get() = live && capabilities.contains(Capability.ROUTINES)
+
+    /** Whether this device may drive the machine's own browser — its windows, its recordings, its shots. */
+    val browserControl: Boolean get() = live && capabilities.contains(Capability.BROWSER_CONTROL)
+
+    /** Whether this device may read and switch the machine's browser profiles. */
+    val browserProfiles: Boolean get() = live && capabilities.contains(Capability.BROWSER_PROFILES)
+
+    /**
+     * Whether this machine will walk its folders so a picker can offer one it cannot see.
+     *
+     * Its absence has two meanings this phone cannot tell apart and does not need to — an older host,
+     * or a device paired as a guest — and both draw the picker without the *Choose a folder* row, which
+     * is what the app looked like before this existed.
+     */
+    val canPickFolders: Boolean get() = live && capabilities.contains(Capability.FOLDER_PICK)
 
     /**
      * The machine said which folders this phone may use, and the answer was **none**.
