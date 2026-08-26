@@ -1237,7 +1237,10 @@ final class SessionPageUITests: XCTestCase {
     /// matched by prefix below rather than listed here.
     private static let sessionMenuItems: Set<String> = [
         "Find in output", "Session details", "Model & effort",
-        "Copy Screen", "Paste", "Share output",
+        // *"copy screen and share output I think little bit of confusing."*
+        // The two rows now differ by the one word that decides which is which —
+        // *the screen* against *all the output*. See `TerminalScreen`.
+        "Copy the screen", "Paste", "Share all the output",
         "Send Photo or Video", "Send File", "Re-attach",
         newWindow,
     ]

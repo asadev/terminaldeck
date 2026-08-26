@@ -201,7 +201,31 @@ final class TerminalBridge: NSObject, @preconcurrency TerminalViewDelegate, Term
             // Tapping into the terminal means "I want to type", so a grid
             // standing where the keyboard should be is the wrong answer to it.
             self?.closeGrid()
+            // And it is the person changing the selection, which is the one
+            // thing a held selection gives way to. Stated here rather than left
+            // to SwiftTerm's own `singleTap`, whose clearing branch is gated on
+            // the very flag the hold turns off. See `dropSelection`.
+            self?.dropSelection()
             self?.onTapped?()
+        }
+        /*
+         * A new selection is starting, so the last one stops being held before
+         * the new one exists. Without this, a resize arriving between the two
+         * would put the *old* range back over whatever the finger had just
+         * chosen — the restore is a repair, and a repair with a stale target is
+         * a bug that looks like the selection jumping.
+         */
+        gestures.onSelectionBegan = { [weak self] in
+            self?.forgetHeldSelection()
+        }
+        /*
+         * And it has ended, with something selected. This is the moment the
+         * whole of `holdSelection` is about: from here until the person changes
+         * it, neither a line of output nor the keyboard coming up may take it
+         * off the screen.
+         */
+        gestures.onSelectionEnded = { [weak self] in
+            self?.holdSelection()
         }
         // Pinching is the gesture people already try on a terminal they cannot
         // read. It is two fingers, so it cannot be confused with the one-finger
@@ -419,6 +443,11 @@ final class TerminalBridge: NSObject, @preconcurrency TerminalViewDelegate, Term
      * is the only visible confirmation that the copy happened at all.
      */
     func clearSelection() {
+        // The hold goes with it. A copy is the person finishing with a selection,
+        // and a hold left standing over nothing would keep mouse reporting off —
+        // a finger that had stopped driving vim for no reason anybody could see.
+        heldSelection = nil
+        hold(.selection, false)
         view.selectNone()
     }
 
@@ -667,9 +696,174 @@ final class TerminalBridge: NSObject, @preconcurrency TerminalViewDelegate, Term
      * Turned off only while the find bar is open, and turned back on when it
      * closes, because the same flag is how a finger drives vim and htop. Reading
      * is a mode; it ends.
+     *
+     * **Routed through `hold(_:_:)` and not written straight at the flag.**
+     * There are two readers of that one boolean now — the find bar and a
+     * finger's own selection — and a second writer setting it back to `true` on
+     * its way out is how one of them silently cancels the other. See
+     * `HighlightHold`.
      */
     func holdHighlight(_ hold: Bool) {
-        view.allowMouseReporting = !hold
+        self.hold(.find, hold)
+    }
+
+    // MARK: - Keeping a selection on the screen
+
+    /**
+     * Who is asking for output to stop wiping the highlight.
+     *
+     * One flag, two reasons, and neither of them may turn the other off.
+     * `find` is the bar; `selection` is a finger that has just selected
+     * something. A set rather than a counter because each reason is asked for
+     * once and released once, and a counter that got out of step would be a
+     * terminal a finger could never drive again.
+     */
+    private enum HighlightHold: Hashable {
+        case find
+        case selection
+    }
+
+    private var highlightHolds: Set<HighlightHold> = []
+
+    private func hold(_ reason: HighlightHold, _ on: Bool) {
+        if on { highlightHolds.insert(reason) } else { highlightHolds.remove(reason) }
+        view.allowMouseReporting = highlightHolds.isEmpty
+    }
+
+    /**
+     * Where the selection was, so it can be put back if something takes it away.
+     *
+     * Buffer coordinates, which is what makes putting it back honest: SwiftTerm's
+     * positions are absolute rows in the buffer rather than rows on the screen,
+     * so they still name the same characters after the screen has grown or shrunk
+     * — which is the one thing that happens here. See `restoreSelection`.
+     */
+    private var heldSelection: (start: Position, end: Position)?
+
+    /**
+     * **A finger has selected something. Keep it there.**
+     *
+     * > *"usually when we just do like this with the finger on phone it is not,
+     * > it goes away, it does not stays as much as we selected. It is very
+     * > difficult to copy the part we want to copy with fingers when we are on
+     * > touch screen on phone side… Then just make it more easier or stay as
+     * > much as we click on we want to copy."*
+     *
+     * Two different things were taking it away, both of them inside SwiftTerm,
+     * and either one on its own is enough to produce exactly what he filmed: the
+     * blue appears under the finger and is gone about a quarter of a second after
+     * it lifts.
+     *
+     * **1. Output.** `iOSTerminalView.linefeed` calls `selection.selectNone()` on
+     * every line the session prints — guarded, and this is the lever, on
+     * `allowMouseReporting`, which is `true` by default. So on a session with an
+     * agent working in it, a selection made at one moment is destroyed by the
+     * next line of output, which on a busy session is within a few milliseconds.
+     * This is the same mechanism the find bar already worked around for the
+     * search highlight — *"a match found at 12:00:01 is gone at 12:00:02"* — and
+     * the same lever fixes it, which is why the two now share one hold.
+     *
+     * **2. The keyboard coming up to show the Copy callout.** `offerCopy` has to
+     * make the terminal first responder for `UIMenuController` to draw anything,
+     * and on this screen becoming first responder raises the keyboard. SwiftUI's
+     * keyboard avoidance then shrinks `TerminalContainerView`, which shrinks the
+     * terminal, which changes the row count — and `AppleTerminalView.
+     * processSizeChange` opens with `selection.active = false` whenever the rows
+     * or columns move. So the callout appears, the keyboard slides up behind it,
+     * and the selection *and* the callout both vanish, because
+     * `selectionChanged` hides the menu when nothing is selected any more. That
+     * one is repaired rather than prevented: the range is remembered here and put
+     * back in `sizeChanged`, and the callout is offered again over it.
+     *
+     * **What is deliberately still allowed to end a selection** is the person —
+     * a tap on the terminal, a copy, or selecting something else. That is the
+     * whole of *"stay as much as we click on we want to copy"*: it holds until
+     * they change it, and not one moment past that.
+     *
+     * The cost of the first half, stated plainly: while a selection is on screen
+     * a finger cannot drive `vim` or `htop`, because mouse reporting is what
+     * carries a tap into a program and it is off for as long as the hold is. It
+     * comes straight back on the tap that clears the selection, which is the
+     * first thing a finger does. Reading is a mode; it ends.
+     */
+    func holdSelection() {
+        guard view.selection.active, view.selection.hasSelectionRange else { return }
+        heldSelection = (view.selection.start, view.selection.end)
+        hold(.selection, true)
+    }
+
+    /**
+     * The person is changing the selection, so stop holding the old one.
+     *
+     * Called at the start of a new selection gesture rather than at the end of
+     * the last one: a press that begins is the only signal that says *this
+     * selection is being replaced* before the replacement exists, and forgetting
+     * the range there is what stops `restoreSelection` putting yesterday's
+     * highlight back over today's.
+     */
+    func forgetHeldSelection() {
+        guard heldSelection != nil else { return }
+        heldSelection = nil
+        hold(.selection, false)
+    }
+
+    /**
+     * The person ended it: drop the selection *and* the hold.
+     *
+     * Separate from `forgetHeldSelection` because this one is about the screen
+     * and that one is about the bookkeeping. A tap into the terminal means *stop
+     * showing me that* — and it is also what has to hand mouse reporting back
+     * before the next tap, which is why the app states it here instead of
+     * leaving it to SwiftTerm's own `singleTap`: that branch is itself gated on
+     * `allowMouseReporting`, so with a hold in flight it is not reliably the
+     * thing that runs.
+     */
+    func dropSelection() {
+        guard heldSelection != nil || view.selection.active else { return }
+        heldSelection = nil
+        hold(.selection, false)
+        view.selectNone()
+    }
+
+    /**
+     * Put a held selection back after the emulator threw it away for a resize.
+     *
+     * Only when the **width** has not changed, and that condition is the honest
+     * half of this. A change of columns makes the far end rewrap every line it
+     * has printed, so the characters those two positions named are no longer the
+     * characters at those two positions; restoring there would draw a blue block
+     * over the wrong text, which is worse than losing it. A change of *rows* — a
+     * keyboard, the key grid, a rotation that keeps the width — moves nothing
+     * horizontally, and the buffer rows a selection is stored in still name what
+     * they named.
+     *
+     * Nothing happens when the selection survived, which is the ordinary case:
+     * `processSizeChange` only clears it when the grid really did change shape.
+     */
+    private func restoreSelection(sameWidth: Bool) {
+        guard let held = heldSelection else { return }
+        guard sameWidth else {
+            forgetHeldSelection()
+            return
+        }
+        guard !view.selection.active else { return }
+        view.selection.setSelection(start: held.start, end: held.end)
+        /*
+         * And the callout with it. `selectionChanged` hid the menu the instant
+         * the selection went, so without this the blue comes back under a
+         * person's finger with nothing to press.
+         *
+         * **Only while the terminal still holds the keyboard**, and that guard
+         * is a loop rather than a nicety. The keyboard going *away* is a resize
+         * too: pressing Dismiss on the key bar resigns first responder, the
+         * container grows back, the rows change, and this method runs — and
+         * `offerCopy` opens by calling `becomeFirstResponder()`, which would put
+         * the keyboard straight back up over a screen somebody has just asked to
+         * see. The selection is still restored there, because a selection
+         * surviving the keyboard leaving is exactly as right as it surviving the
+         * keyboard arriving; it is only the offer that has to stay behind.
+         */
+        if view.isFirstResponder { gestures?.offerCopyAgain() }
     }
 
     // MARK: - Text size
@@ -754,8 +948,21 @@ final class TerminalBridge: NSObject, @preconcurrency TerminalViewDelegate, Term
      * exists for: at eleven point the same phone carries 59.
      */
     func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
+        // Read before it is overwritten: whether the *width* moved is the one
+        // fact that decides if a held selection still names the characters it
+        // named. See `restoreSelection`.
+        let wasCols = size?.cols
         size = TerminalSize(cols: newCols, rows: newRows)
         onResize?(newCols, newRows)
+        /*
+         * This callback is fired from inside `processSizeChange`, which opens by
+         * setting `selection.active = false`. So a selection a finger made a
+         * moment ago is *already gone* by the time this line runs, and this is
+         * the first place in this app that can know it — and can put it back.
+         * The commonest way to get here is the keyboard rising to carry the Copy
+         * callout, which is a resize the person never asked for.
+         */
+        restoreSelection(sameWidth: wasCols == nil || wasCols == newCols)
     }
 
     func setTerminalTitle(source: TerminalView, title: String) {

@@ -227,6 +227,62 @@ final class SessionBarTests: XCTestCase {
         XCTAssertNil(bar.context)
     }
 
+    /**
+     * **Leaving the screen stops the asking and leaves the row alone.**
+     *
+     * > *"coming back it refreshing the page every time I am coming, it should
+     * > stay as it is. If I go back, if I come back, it should not do this
+     * > refresh thing, it should stay. The visuals, the UI is refreshing kind of
+     * > thing."*
+     *
+     * `release` used to be `forget`, which nils the three figures — and
+     * `SessionBarView` draws nothing at all when all three are nil, so the whole
+     * strip above the terminal vanished on the way out and reappeared on the way
+     * back in, shoving the emulator up and then down again. The reading is
+     * re-asked on `follow` either way; what this stops is the row blinking out
+     * of existence in between.
+     */
+    @MainActor
+    func testLeavingAScreenKeepsTheFiguresForThatSession() {
+        let wire = RecordingWire()
+        let bar = SessionBarLink(wire: wire)
+        bar.welcomed(capabilities: [WireCapability.usage])
+        bar.follow("s1")
+        guard case let .usageRead(rid, _, _, _) = wire.sent[0] else { return XCTFail("expected a usage.read") }
+        _ = bar.receive(.usageReading(rid: rid, id: "s1", want: .context,
+                                      figures: UsageFigures(plan: nil, context: 0.5)))
+
+        bar.release("s1")
+
+        // Nobody is being followed any more — a session nobody is looking at must
+        // not go on being re-read every time it prints.
+        XCTAssertNil(bar.sessionID)
+        // And the row he comes back to is the row he left.
+        XCTAssertEqual(bar.context, 0.5)
+
+        bar.follow("s1")
+        XCTAssertEqual(bar.context, 0.5, "returning to the same session must not blank the row first")
+    }
+
+    /// A *different* session still gets a clean bar, which is what the rule this
+    /// replaces was really about: *"a ring from another session is worse than no
+    /// ring."*
+    @MainActor
+    func testAnotherSessionStillClearsTheFigures() {
+        let wire = RecordingWire()
+        let bar = SessionBarLink(wire: wire)
+        bar.welcomed(capabilities: [WireCapability.usage])
+        bar.follow("s1")
+        guard case let .usageRead(rid, _, _, _) = wire.sent[0] else { return XCTFail("expected a usage.read") }
+        _ = bar.receive(.usageReading(rid: rid, id: "s1", want: .context,
+                                      figures: UsageFigures(plan: nil, context: 0.5)))
+
+        bar.release("s1")
+        bar.follow("s2")
+
+        XCTAssertNil(bar.context)
+    }
+
     @MainActor
     func testASwitchThatNeverLeftDoesNotLeaveTheBarSpinning() {
         let wire = RecordingWire()

@@ -106,8 +106,15 @@ final class SessionBarLink {
      * screen finds itself back in front — see `TerminalScreen.reclaimBar`.
      */
     func follow(_ id: String) {
-        if sessionID != id { forget() }
+        // **`figuresFor` and not `sessionID`.** `release` leaves the figures on
+        // screen with nobody following them, so `sessionID` is nil at exactly the
+        // moment this has to decide whether they are worth keeping — and nil is
+        // not "another session". Asking whose the numbers *are* is the question
+        // this line means; asking who is being followed was the question that
+        // blanked the row on every return. See `release`.
+        if figuresFor != id { forget() }
         sessionID = id
+        figuresFor = id
         askUsage(.context)
         askPlan()
         askAccount()
@@ -136,16 +143,64 @@ final class SessionBarLink {
      */
     func release(_ id: String) {
         guard sessionID == id else { return }
-        forget()
+        /*
+         * **Stops following. Does not blank the row.**
+         *
+         * > *"coming back it refreshing the page every time I am coming, it
+         * > should stay as it is… The visuals, the UI is refreshing kind of
+         * > thing."*
+         *
+         * This used to be `forget()`, and `forget()` sets the three figures to
+         * nil — at which point `SessionBarView` draws `EmptyView`, because *"a
+         * chip whose figure is unknown is absent"*. That is right for a row with
+         * nothing behind it and it is what made every return to a session a
+         * visible jolt: the whole strip above the terminal disappeared, the
+         * emulator slid up into the space it left, the three answers landed a
+         * moment later and it all slid back down. Two layout changes and a
+         * repaint of the session, for a session whose figures had not moved.
+         *
+         * So the two halves of `forget` are separated. What must stop when a
+         * screen goes is the **asking** — the quiet-timer that re-reads a
+         * printing session, and the questions in flight whose answers nobody is
+         * going to look at. What is worth keeping is the **last answer**, held
+         * against the session it was about, so somebody coming back sees the row
+         * they left and watches the numbers correct themselves in place.
+         *
+         * The original argument for wiping was *"a ring from a session nobody is
+         * looking at is a ring that will be wrong by the time anybody does"*, and
+         * it is answered rather than overruled: `follow` re-asks all three the
+         * instant the screen is back, so the stale reading is on screen for the
+         * length of one round trip and is never what a person is left reading. A
+         * *different* session still gets a clean bar — `follow` forgets when the
+         * figures belong to somebody else, which is the case that argument was
+         * really about.
+         */
+        quiet?.cancel()
+        quiet = nil
+        pending.removeAll()
+        sessionID = nil
+        busy = false
+        askedPlanAt = nil
     }
 
-    /// The screen closed, or the socket went. Timers stop and nothing stale is
-    /// left on a bar that may be drawn again in a second.
+    /**
+     * Whose the figures currently on the row are.
+     *
+     * Distinct from `sessionID`, which is *who is being followed*, and the two
+     * genuinely differ for as long as a session's screen is off the stack: after
+     * `release` there is nobody to follow and there are still three numbers
+     * drawn. This is what tells a return from a switch.
+     */
+    private(set) var figuresFor: String?
+
+    /// The screen closed for good, or the socket went. Timers stop and nothing
+    /// stale is left on a bar that may be drawn again in a second.
     func forget() {
         quiet?.cancel()
         quiet = nil
         pending.removeAll()
         sessionID = nil
+        figuresFor = nil
         plan = nil
         context = nil
         account = nil

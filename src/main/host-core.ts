@@ -90,6 +90,14 @@ import {
 import { forgetBoundary, noteBoundary } from './session-boundary'
 import { forgetNoVerbs, noteNoVerbs, type NoVerbsReason } from './session-verbs'
 import { forgetWindowOwner, noteWindowOwner } from './window-owner'
+/*
+ * The browser bindings, for one edge only — see the exit callback below.
+ *
+ * `browser-binding.ts` is deliberately dependency-free (it imports nothing from
+ * Electron and nothing from this file), so the wiring has to be a call *into*
+ * it from here, exactly as `forgetNoVerbs` and `forgetWindowOwner` already are.
+ */
+import { sessionExited } from './browser-binding'
 import { currentOpenShim, prependShim } from './open-shim'
 import { currentAppContext } from './app-context'
 import { installDeviceHomes, installHomeScopes } from './transcript'
@@ -2475,6 +2483,28 @@ export function createHostCore(options: HostCoreOptions): HostCore {
       // entry outliving its session would be an id that could be asked about
       // for as long as this app runs.
       forgetWindowOwner(id)
+      /*
+       * And the browser windows this session was holding.
+       *
+       * > *"why does this comes attached to that session before typing into it —
+       * > see this thing is still there if I close the session."*
+       *
+       * They are not closed — the page stays open with whatever is on it, which
+       * is the whole reason a window survives its session — but they stop
+       * belonging to a session that has ended. Without this the claim was
+       * permanent: a pty that exits by itself is left in the registry with an
+       * exit code, so `onRemoved` never fires and `sessionRemoved` is never
+       * called for it, and the phone's window list went on naming a dead session
+       * as the holder of a live window.
+       *
+       * **Here rather than in either shell**, and that is the point of the line.
+       * `src/main/index.ts` already calls this on its own `onExit`, and it is the
+       * *only* caller — `src/headless/host.ts` passes no `onExit` at all, so on
+       * the host his phone actually talks to nothing released anything, ever.
+       * This callback is the one seam both shells share. The desktop now calls it
+       * twice; `sessionExited` is idempotent through its `ended` guard.
+       */
+      sessionExited(id)
       sessions.noteExit(id, exitCode)
       // The key that let this session ask a phone for a GitHub login stops
       // working the moment the session does. A key that outlived its session

@@ -597,6 +597,50 @@ final class HostLink: Identifiable {
     /// two windows can be recording at once and their steps are unrelated.
     private(set) var machineSteps: [String: [RecordedStep]] = [:]
 
+    /**
+     * **The window each session last let go of, by session id.**
+     *
+     * > *"One [close button] which will just remove this from this page but
+     * > window will not die. Window will stay there in the window side here… As
+     * > soon as we talk about it and want to bring it back we can bring it from
+     * > here back to the page from the three dots."*
+     *
+     * The strip's Disconnect is the first half of that sentence and it already
+     * works: the window is unbound, it stays open on the machine with whatever
+     * is on it, and it comes straight back into *Attach a browser window* in the
+     * `…` because that section lists every window the machine has, bound or not.
+     * What was missing is the second half — **finding it there.** He said *"we
+     * can bring it back"* about a specific window, the one he had just been
+     * looking at, and in that list it is one name among however many the machine
+     * happens to have open, in the machine's own order, with nothing marking it.
+     * On a laptop with eight tabs that is a search rather than a return.
+     *
+     * So the one fact the list cannot work out for itself is remembered here:
+     * which window this session was holding a moment ago. `SessionWindowPicker`
+     * sorts it to the top of the section and draws it with a *come back* arrow
+     * instead of a window frame, and both menus read the same answer so they
+     * cannot disagree about which window a session is missing.
+     *
+     * **Held here rather than in a screen's `@State`**, and that is the whole
+     * reason it is on this object: the strip you press Disconnect on is inside a
+     * session screen, and the menu you press to get it back is on that screen
+     * *and* on the session row two screens away. A memory that lived in either
+     * view would be gone by the time the other one was drawn — the session
+     * screen is destroyed on the way back to the list.
+     *
+     * Nothing here can go stale into a wrong answer. It is a window **id**, and
+     * every reader matches it against the machine's live list: a window that has
+     * since been closed, or handed to another session, is simply not found, or
+     * is found and already says whose it is. Nothing is drawn from this on its
+     * own.
+     */
+    private(set) var releasedWindows: [String: String] = [:]
+
+    /// Which window this session was holding until it let go, if the machine
+    /// still has it open. Nil is the ordinary answer — most sessions have never
+    /// held a window at all.
+    func releasedWindow(for session: String) -> String? { releasedWindows[session] }
+
     /// Ask what is open. Re-read on every visit: this family has no push, and
     /// what it answers moves for reasons this phone never hears about — somebody
     /// at the machine opening a tab, a session binding a window of its own.
@@ -641,9 +685,34 @@ final class HostLink: Identifiable {
         transport?.send(.machineWindowAct(id: id, action: act))
     }
 
-    /// Bind a window to a session, or unbind it by passing nil.
+    /**
+     * Bind a window to a session, or unbind it by passing nil.
+     *
+     * The two lines under the guard are the memory behind *"we can bring it back
+     * from the three dots"* — see `releasedWindows`. They are written **here**
+     * rather than at the four places that press this verb, because the strip's
+     * Disconnect, the Browser tab's row, the window's own settings screen and
+     * the desktop-style unbind are all the same act and a memory written at one
+     * of them would be a menu that only remembers windows let go one particular
+     * way.
+     *
+     * Who was holding it is read off the list this phone already has rather than
+     * passed in, for the same reason: the callers know the window, and only one
+     * of them knows the session. `machineBrowser` is the answer the machine gave
+     * to the last `browser.window.rows`, which is what every one of those screens
+     * is drawing from at the moment the finger lands, so it is the same fact they
+     * are looking at.
+     */
     func bindMachineWindow(_ id: String, to session: String?) {
         guard canDriveBrowser else { return }
+        if let session {
+            // It is holding a window again, so there is nothing to come back to.
+            // Left in place, the section would go on offering a *return* to a
+            // window this session has already replaced.
+            releasedWindows.removeValue(forKey: session)
+        } else if let letGo = machineBrowser?.windows.first(where: { $0.id == id })?.session {
+            releasedWindows[letGo] = id
+        }
         transport?.send(.machineWindowBind(id: id, session: session))
     }
 
@@ -913,6 +982,12 @@ final class HostLink: Identifiable {
     /// Called when a terminal screen appears. Records the intent first, so a
     /// reconnect knows to re-attach even if the socket is down right now.
     func attach(_ id: String) {
+        // Back inside the grace, which is the whole of *"if I go back, if I come
+        // back, it should stay"*. Cancelling here means the `detach` never left,
+        // so there is no `attach` to answer, no `attached` frame, no reset and no
+        // replay — the guard below returns on the very next line. See
+        // `leaveSession`.
+        leaving.removeValue(forKey: id)?.cancel()
         wanted.insert(id)
         rememberLastOpened(id)
         guard !attached.contains(id) else { return }
@@ -921,7 +996,92 @@ final class HostLink: Identifiable {
         }
     }
 
+    /**
+     * **The screen went away. Do not tell the machine yet.**
+     *
+     * > *"coming back it refreshing the page every time I am coming, it should
+     * > stay as it is. If I go back, if I come back, it should not do this
+     * > refresh thing, it should stay. The visuals, the UI is refreshing kind of
+     * > thing."*
+     *
+     * That refresh is a real, whole repaint and this method is where it started.
+     * The old sequence, every single time somebody went back to the session list
+     * and returned:
+     *
+     *   1. `onDisappear` → `detach` → the machine stops fanning output here.
+     *   2. `onAppear` → `attach` → the machine answers `attached`.
+     *   3. `attached` → `bridge.clear()`, which is **RIS** — a full terminal
+     *      reset, the whole screen wiped — followed by `holdForBacklog()`, which
+     *      takes the emulator's alpha to zero.
+     *   4. The machine replays the entire scrollback in `output` frames, the
+     *      terminal repaints from nothing and scrolls to the bottom.
+     *
+     * Every one of those four steps is correct for what it was written for:
+     * arriving at a session for the first time, or after a reconnect, where the
+     * screen genuinely is out of date and the reset is what stops the replay
+     * being appended under a stale copy of itself. None of them is correct for a
+     * screen that was on this exact session four seconds ago and has not missed
+     * a byte.
+     *
+     * So the detach is **deferred rather than removed**. The reason it exists is
+     * unchanged and is still honoured — *"the desktop fans output out to every
+     * attached client, and a phone that never says it has gone keeps a session
+     * pushing bytes at a socket nobody is reading"* — it simply waits long enough
+     * to find out whether the person actually left. Come back inside the window
+     * and nothing ever happened: no frame left this phone, the emulator was never
+     * touched, and the screen he returns to is the screen he left, scrolled where
+     * he left it. Stay away and the machine is told, exactly as before.
+     *
+     * `endBacklogHold` is **not** deferred with it. A hold in flight belongs to a
+     * terminal that is on screen; deferring it would leave an invisible terminal
+     * behind for as long as the grace lasts, and the person who came straight
+     * back would find a blank one.
+     */
+    func leaveSession(_ id: String) {
+        bridges[id]?.endBacklogHold()
+        leaving[id]?.cancel()
+        leaving[id] = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(Self.leaveGrace))
+            guard !Task.isCancelled, let self else { return }
+            leaving.removeValue(forKey: id)
+            detach(id)
+        }
+    }
+
+    /**
+     * How long a session stays attached after its screen has gone.
+     *
+     * Half a minute, which is the same number `BackgroundGrace` is built around
+     * and for the same reason: it is the length of an ordinary glance away. Going
+     * to the list to check on another session, reading a notification, answering
+     * somebody — those are seconds, and all of them used to cost a full wipe and
+     * replay on the way back.
+     *
+     * The other end of the trade is what it costs to be wrong: one session's
+     * output fanned to a phone that is looking at a list, for up to thirty
+     * seconds. That is a handful of frames on a relay, and it stops the moment
+     * the grace expires. A wipe-and-replay of a full scrollback is a bigger
+     * transfer than thirty seconds of live output on almost any session, so the
+     * cheap case is also the correct one.
+     */
+    static let leaveGrace: TimeInterval = 30
+
+    /// Sessions whose screen has gone but whose attach is being kept warm, by
+    /// session id. Cancelled by `attach`, which is what makes coming straight
+    /// back cost nothing at all.
+    private var leaving: [String: Task<Void, Never>] = [:]
+
+    /**
+     * Tell the machine now.
+     *
+     * The wire verb, and after `leaveSession` it is no longer what a screen
+     * calls: a screen says it has *gone*, and how long this phone keeps
+     * listening afterwards is this object's decision rather than a view's. It is
+     * still called directly when the whole machine is being let go — see the
+     * teardown below — because there is nothing left to come back to.
+     */
     func detach(_ id: String) {
+        leaving.removeValue(forKey: id)?.cancel()
         wanted.remove(id)
         // Before the guard: the screen is being left whether or not this phone
         // was attached, and a hold left in flight belongs to a terminal nobody
@@ -1474,6 +1634,12 @@ final class HostLink: Identifiable {
             onConnectionChange?(state)
             if !state.isLive && wasLive {
                 attached.removeAll()
+                // Nothing is attached any more, so there is nothing left to be
+                // politely let go of. A timer left running would fire a `detach`
+                // across the *next* connection for a session this phone might by
+                // then be sitting in. See `leaveSession`.
+                for (_, task) in leaving { task.cancel() }
+                leaving.removeAll()
                 for id in bridges.keys { bridges[id]?.note(state.detail) }
                 for held in tunnels.values { held.connectionLost(state.detail) }
                 tunnels.removeAll()

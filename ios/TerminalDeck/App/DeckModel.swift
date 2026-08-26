@@ -1623,6 +1623,10 @@ final class DeckModel {
         current?.actOnMachineWindow(id, act)
     }
     func bindMachineWindow(_ id: String, to session: String?) { current?.bindMachineWindow(id, to: session) }
+    /// Which window a session let go of, so the attach section can put it back
+    /// at the top rather than leaving it among eight. See
+    /// `HostLink.releasedWindows`.
+    func releasedWindow(for session: String) -> String? { current?.releasedWindow(for: session) }
     func shotMachineWindow(_ id: String, to session: String? = nil, note: String? = nil) {
         current?.shotMachineWindow(id, to: session, note: note)
     }

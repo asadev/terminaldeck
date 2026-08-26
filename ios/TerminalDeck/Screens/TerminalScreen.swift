@@ -570,7 +570,24 @@ struct TerminalScreen: View {
             // Leaving the session without closing the find bar would leave it
             // held, and a finger would stop driving vim in that session.
             find?.close()
-            host?.detach(sessionID)
+            // The same rule for the other holder of that flag. A selection made
+            // with a finger holds the highlight against output for as long as it
+            // is on screen — and this screen is not on screen. See
+            // `TerminalBridge.holdSelection`.
+            bridge.dropSelection()
+            /*
+             * **Left, not detached.** *"If I go back, if I come back, it should
+             * not do this refresh thing, it should stay."*
+             *
+             * A detach here is what made coming back a full wipe and replay: the
+             * machine answers the next `attach` with `attached`, and that frame
+             * is what resets the emulator and re-sends the whole scrollback.
+             * `HostLink.leaveSession` defers the detach by half a minute and
+             * `attach` cancels it, so a trip to the session list and back costs
+             * nothing on the wire and nothing on the screen. Somebody who really
+             * has gone is let go exactly as before.
+             */
+            host?.leaveSession(sessionID)
             /*
              * Nothing about this session is worth holding once its screen has
              * gone: a ring from a session nobody is looking at is a ring that
@@ -737,7 +754,38 @@ struct TerminalScreen: View {
                     }
 
                     /*
-                     * Copy Screen, and deliberately *only* Copy Screen.
+                     * **Copy the screen** and **Share all the output**, which is
+                     * one rename of two rows because the two rows are one
+                     * question.
+                     *
+                     * > *"copy screen and share output I think little bit of
+                     * > confusing."*
+                     *
+                     * They were *Copy Screen* and *Share output*, and read one
+                     * under the other neither of them says the thing that tells
+                     * them apart. Both name a verb and then a noun that could
+                     * mean either amount: *screen* is nearly *output* and
+                     * *output* is nearly *screen*, so what a person is actually
+                     * choosing between — **what I can see now** and
+                     * **everything since this session started** — is on neither
+                     * row. The verbs were never the confusion: one puts text on
+                     * the clipboard and the other opens the share sheet, which
+                     * the words Copy and Share and the two icons already carry.
+                     *
+                     * So the scope goes into the words and nothing else does.
+                     * *the screen* against *all the output*: one word of
+                     * difference between them, in the same slot, and it is the
+                     * word that decides. Nothing was added under either row —
+                     * *"don't put any single statement anywhere"* — and the
+                     * identifiers are untouched, because a test that finds this
+                     * item is finding the same item.
+                     *
+                     * *all the output* rather than *the scrollback*: scrollback
+                     * is what this code calls it and nobody else does, and
+                     * *output* is already the word two rows up in *Find in
+                     * output*, so the menu says one thing one way.
+                     *
+                     * ## And it is Copy Screen and deliberately *only* Copy Screen
                      *
                      * There was a "Copy Selection" item here and it had to go,
                      * because it could never do what it said. SwiftTerm clears
@@ -753,12 +801,14 @@ struct TerminalScreen: View {
                      * terminal: the system callout that a long press puts over
                      * the selection itself, and the `copy` key in the key grid,
                      * which is the terminal's own `inputView`. Both are
-                     * exercised in `ClipboardAndTransferUITests`.
+                     * exercised in `ClipboardAndTransferUITests`. What holds
+                     * that selection still while output arrives is
+                     * `TerminalBridge.holdSelection`.
                      */
                     Button {
                         show(host?.copyScreen(from: sessionID) ?? "Nothing to copy.")
                     } label: {
-                        Label("Copy Screen", systemImage: "doc.on.doc")
+                        Label("Copy the screen", systemImage: "doc.on.doc")
                     }
                     .accessibilityIdentifier("terminal.copyScreen")
                     Button {
@@ -773,12 +823,13 @@ struct TerminalScreen: View {
                      * Share, which is the other half of Copy rather than a
                      * second one: Copy takes the screen, this takes the whole
                      * scrollback as a file. See `ShareOutput` for why a file and
-                     * not a string.
+                     * not a string, and the block above for why the two labels
+                     * now differ by the one word that matters.
                      */
                     Button {
                         DispatchQueue.main.async { shareOutput() }
                     } label: {
-                        Label("Share output", systemImage: "square.and.arrow.up")
+                        Label("Share all the output", systemImage: "square.and.arrow.up")
                     }
                     .accessibilityIdentifier("terminal.share")
 
@@ -947,6 +998,24 @@ struct TerminalScreen: View {
      *    it and moves it silently. `SessionWindowPicker.row` is that half of the
      *    name, and it is the same one the session row's menu says.
      *
+     * ## And this is the way back from Disconnect
+     *
+     * > *"One [close button] which will just remove this from this page but
+     * > window will not die. Window will stay there in the window side here… As
+     * > soon as we talk about it and want to bring it back we can bring it from
+     * > here back to the page from the three dots."*
+     *
+     * The strip's Disconnect is the first half and this section is the second,
+     * and it already worked in the sense that the window really does come back
+     * into this list — it lists every window the machine has and asks nothing
+     * about who owns them. What it did not do is make the window he means easy
+     * to see: it came back as one name among however many, in the machine's own
+     * order, wearing the same frame as the rest. So the window this session let
+     * go of is **first**, with a *come back* arrow instead of a frame, and
+     * `HostLink.releasedWindows` is the one fact that makes that possible.
+     * `SessionWindowPicker.attachable` owns the rule and the session row's menu
+     * reads the same one.
+     *
      * A bind is also what pops `SessionPageView` open over the terminal, because
      * the answer to a bind is the window list and that pane opens the moment it
      * finds a window that is this session's. That is the point of pressing this,
@@ -965,9 +1034,13 @@ struct TerminalScreen: View {
                         host?.bindMachineWindow(window.id, to: sessionID)
                     } label: {
                         Label(SessionWindowPicker.row(window, among: windows, session: sessionID),
-                              systemImage: SessionWindowPicker.holds(window, session: sessionID)
-                                  ? "checkmark" : "macwindow")
+                              systemImage: icon(for: window))
                     }
+                    // Nothing on the hint for an ordinary window — its name is
+                    // the whole of it. The one this session let go of gets the
+                    // one sentence, where it is read on request rather than
+                    // drawn over a list of names.
+                    .accessibilityHint(returning(window) ? SessionWindowPicker.justLeftMeaning : "")
                 }
 
                 // In the same flat list and under its own name — no header over
@@ -1017,10 +1090,31 @@ struct TerminalScreen: View {
 
     /// The machine's open windows, or nothing at all where nothing may be
     /// offered. `SessionWindowPicker` owns the rule so this screen and the
-    /// session row cannot come to disagree about it.
+    /// session row cannot come to disagree about it — including the order, now
+    /// that one of them can be lifted to the top. See `justLeftWindow`.
     private var attachableWindows: [MachineWindow] {
         SessionWindowPicker.attachable(host?.machineBrowser?.windows,
-                                       canDrive: canDriveBrowser)
+                                       canDrive: canDriveBrowser,
+                                       justLeft: justLeftWindow)
+    }
+
+    /// The window this session was holding until Disconnect was pressed on the
+    /// strip, if the machine still has it. The way back from *"window will stay
+    /// there in the window side"* to *"we can bring it back… from the three
+    /// dots"*; `HostLink.releasedWindows` carries the whole argument.
+    private var justLeftWindow: String? { host?.releasedWindow(for: sessionID) }
+
+    /// Whether this row is that window.
+    private func returning(_ window: MachineWindow) -> Bool {
+        SessionWindowPicker.justLeft(window, justLeft: justLeftWindow, session: sessionID)
+    }
+
+    /// Three states, three glyphs, and no words: the one this session holds
+    /// wears a checkmark, the one it just let go wears a *come back* arrow, and
+    /// every other window wears a window frame.
+    private func icon(for window: MachineWindow) -> String {
+        if SessionWindowPicker.holds(window, session: sessionID) { return "checkmark" }
+        return returning(window) ? "arrow.uturn.backward" : "macwindow"
     }
 
     /**
