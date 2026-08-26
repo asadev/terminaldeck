@@ -1,61 +1,61 @@
-What to test — 0.10.3
+# What to test — 0.11.0
 
-**Start here: start a session on a server that has nothing open on it.** Last
-build this was impossible. Every first session on a fresh Linux host came back
-"This machine could not keep a session inside that folder, so it did not start
-one. Check it on the machine itself." Nothing was wrong with the folder and
-nothing was wrong with the server.
+Two screen recordings and three rounds of your review, all about the browser.
 
-The cause was the safety check itself. Before every session the host puts two
-marker files *outside* the boundary it is about to build, then proves neither
-can be read from inside it. One of those markers goes in the account's home
-directory — and on a server with nothing open, the folder you are given **is**
-the home. So the marker landed inside the boundary, the check decided it could
-not prove anything, and refused. It now refuses only when *both* markers are
-inside; one inside is fine, because the other is still outside and still doing
-the job. Measured on a real rented Ubuntu box, both ways round.
+## The browser windows are one thing now
 
-**Then: choose a folder.** The other half of the same complaint — the phone
-offered exactly one folder on a bare server, the account's home, and no way to
-reach a project three directories down.
+There used to be three different browsers depending on where the page lived —
+different header, different buttons, different settings screen, different name.
+They are one now.
 
-It turns out the phone could always *start* a session anywhere; it had no way to
-*look*. Tap **+ → Choose a folder…** and walk the machine's directories. Tapping
-a folder goes into it, the button at the bottom starts a session in the one you
-are standing in, and it names it. Folders your account cannot open are shown
-dimmed with a lock rather than hidden — a folder you know is there and cannot
-see reads as a broken picker.
+- **Same header everywhere**: back, the page's name, and the `…`. Nothing else.
+  The address and the connection count are gone from the top; they were
+  information, not controls.
+- **Same bottom bar everywhere**: an address you can type in, then Back, Forward,
+  Reload, Find, Inspect and Size.
+- **One settings screen**, called Window settings whether the page is on your
+  phone or on your machine. Same cards, same order.
+- **One vocabulary**, the one every browser uses: a window with no page in it is
+  *Untitled*, a throwaway one is *Private*.
 
-This is offered only to a device paired as one of your own, never to a guest.
+## The page can be looked at as other devices
 
-**The server page is back.** Sign in to a server and it appeared in Machines
-having apparently never connected: no details, and no way to disconnect. The
-line that recorded which machine your server had become was attached to a piece
-of the screen that gets replaced at the exact moment the connection succeeds, so
-it never ran. It is on the screen itself now. While it was open: the server can
-be **renamed** — the app could always do it and offered it nowhere — and a
-headless box draws as a server rather than as an iMac.
+On a page your phone is showing: **Size** on the bar. Seven real devices — small
+phone through to desktop — each drawn at its own proportions, so a laptop is wide
+and short with room above and below it, not a tall column. The page genuinely
+re-lays-out, so its own mobile and desktop layouts appear. Pinch works on all of
+them, and Rotate turns one on its side.
 
-**Localhost and Watch browser are now one tab: Browser.** They were two places
-to look at a page living on your machine, one of them three rows deep in
-Settings. There is one pill now, with the address bar **on the screen** instead
-of behind a `+`. Type a port and it opens through a tunnel exactly as before;
-type a real site and it opens in the machine's own browser and appears under
-**Windows** further down the same screen, which you can watch and drive.
+## Tap one thing and send it to the agent
 
-**It stops calling your Linux server a Mac.** Twenty-one sentences across
-transport, tunnels, uploads, the browser and the session list said "the Mac"
-whatever was actually at the other end. The app knows the difference now and
-says server, Mac or PC accordingly.
+The dashed-box **Inspect** button now works on every kind of window, not only the
+one your phone draws. Tap an element, widen or narrow the selection, say what you
+want done, and send it to a session.
 
-**And it looks like itself.** The app wore white paper with grey cards, which is
-iOS's own default grouped-list look and therefore no character at all. It is
-warm paper with white cards floating on it now, with larger corner radii and
-lighter, larger row icons throughout. Worth a look in both light and dark, and
-worth telling us if any screen reads worse than it did.
+## Recording a click flow works on your phone's browser too
 
-Also fixed: the last row of the Terminal appearance screen and the scheme editor
-sat behind the floating tab bar.
+It used to be your machine's browser only.
 
-Known: the six desktop panels — Files, Source control, Artifacts, Store, AI
-readiness, MCP servers — are still desktop-only. They are the next release.
+## Your own login pages are not blacked out any more
+
+A page with a password box on it used to come through as a padlock and a
+sentence. On a device paired to your own machine it now comes through as the
+page, and you can type into it. A guest device still gets the padlock, and what
+the **agent** photographs still has the password blacked out.
+
+## Sessions
+
+- The `>` on a session row is a `…` — attach a browser window, details, pin,
+  archive, close.
+- A session with no browser attached shows **nothing** above the terminal. It used
+  to offer to attach one on every screen, including Copilot.
+- When a page is open in a session it now **floats over** the terminal instead of
+  pushing it down.
+- **Folding the page away and opening it again works.** It did not, twice.
+
+## Worth poking at
+
+- Fold the page and open it again, a few times, on a window that has no page in
+  it yet.
+- Open a page at Laptop, then Desktop, then rotate a Tablet.
+- Attach a browser window from inside a session when your machine has none open.
