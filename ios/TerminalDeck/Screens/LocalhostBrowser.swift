@@ -1807,14 +1807,15 @@ private struct WebSurface: UIViewRepresentable {
  *
  * ## The height is the device's now, and that is the whole change
  *
- * This used to keep the phone's own height and divide it by the scale:
+ * This used to take the chosen width but keep the **phone's** own height,
+ * divided by the scale — so a laptop came out 1280 CSS pixels wide and as tall
+ * as an iPhone, a column of laptop-width text that answers nothing about how the
+ * page behaves on a laptop. That is the defect he reported.
  *
- * ```
- * web.bounds = CGRect(x: 0, y: 0, width: wanted, height: box.height / scale)
- * ```
- *
- * which drew a laptop as a 1280-wide column as tall as an iPhone — the defect he
- * reported. The web view is now laid out at the device's real width **and**
+ * The old expression is deliberately not quoted here. `LocalhostChromeTests`
+ * proves it has not come back by grepping this file for it, and a grep cannot
+ * tell a quotation from the real thing — three tests were failed by their own
+ * comments on the night this was written. The web view is now laid out at the device's real width **and**
  * height, so `100vh` in a laptop frame is 800 CSS px, and the container it sits
  * in has already been sized to the same rectangle by `DeviceFrame`.
  *
