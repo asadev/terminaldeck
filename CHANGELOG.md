@@ -10,6 +10,26 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+### Added
+
+- **Rename a session.** From the phone, from the desktop for a session on a
+  machine you are paired with, and from the browser client. Every device signed
+  in to that machine sees the new name. Leave the name empty to go back to the
+  folder's own name.
+- **The copilot's files and routines, on the phone.** Its Copilot settings page
+  now carries what the Mac's has: its instructions and the folder's own
+  instructions (editable), the app's half of the prompt and the prompt as it was
+  assembled at start (read-only, and it says so), its memory files (forget one),
+  and its routines — what runs overnight, weekly, when work is left uncommitted,
+  when something is waiting on you — each with Run now, Hold, Read and Delete.
+  A routine's file is read-only from a phone, and the page says why. Only your
+  own devices see any of this; a guest never does.
+- **The copilot keeps its own shape.** Inside it there is no Rename and no
+  Session details — its name is the one thing that is the same on every machine,
+  and those screens answer questions about a session somebody chose to start.
+  **Restart** lives only there: it ends the conversation and starts a fresh one
+  in the same folder.
+
 ### Removed
 
 - **Chat mode is gone, on the Mac, on Windows and on the phone.** A session could
@@ -28,12 +48,51 @@ A release with nothing under Unreleased is refused rather than shipped blank.
   also listed on the Sessions tab — the same conversation in two places.
   Sessions the copilot *starts* are still listed, which is the point of listing
   them.
-- **The browser window a session is holding now has a real browser bar.** Inside
-  the session, under the page: the address, which you can tap and edit, and Back,
-  Forward and Reload — the same bar every other browsing window in the app
-  carries. The strip above it gained two controls beside the fold: **Disconnect**,
-  which lets the session go of the window and leaves the window open, and
-  **Close**, which closes the window on the machine.
+- **The browser window a session is holding is a window now.** It floats over
+  the terminal instead of sitting above it: one bar with the address you can tap
+  and edit, a red **Delete** that closes the window on the machine, and a fold.
+  Folded, it is a single round button in the corner and the terminal gets its
+  room back. Both can be dragged — the button along either edge, the open window
+  up and down — and neither can be pushed off the screen. The page inside is laid
+  out at desktop width, so it looks like a browser and not like a phone.
+- **"Close" is "Delete" wherever it destroys something.** Sessions and browser
+  windows, in menus, swipes and confirmations, on the phone, the desktop and the
+  browser client. *Close* read as a soft close; *Delete* says what happens. A
+  button that only puts a panel away still says Close. On the desktop the
+  confirmation names the sessions rather than the project or the machine,
+  because those are left exactly as they were.
+- **Three-dot menus that opened a whole page now come up from the bottom**, the
+  way a phone browser's do, leaving the screen you came from visible behind. The
+  short drop-downs stay drop-downs.
+- **New window** in a session's menu is two words in the same list as the
+  windows, with the same plus-on-a-window mark the Sessions list uses, and it
+  opens the session so you see the window it made. The New window sheet is more
+  compact and its ports are one list.
+- **Accounts are per machine, not per folder.** The drop-down shows the machine
+  and its logins under it; one login serves every folder; adding an account that
+  is already there is refused.
+- **Session details no longer shows Git logins** — it is one account for the
+  whole phone and lives in Settings.
+- **Photo and File stay in the session's menu.** They were tried on the keyboard
+  bar for an evening and were harder to understand there.
+### Fixed
+
+- **One finger scrolls the terminal again.** Under Claude Code every drag was
+  starting a text selection, because Claude Code turns mouse tracking on and the
+  app let the terminal's own drag through whenever any program had. It is now
+  only for full-screen programs that own the whole screen; everywhere else a drag
+  scrolls and a long press selects.
+- **Session details on the copilot opened the wrong project's transcript** on the
+  desktop, and a name typed into the copilot's heading was accepted and then
+  overwritten a frame later. Both controls are withdrawn there.
+- **On Windows, removing a project could leave its sessions running with no
+  heading to reach them from**, because two spellings of the same folder were
+  treated as two folders. The device's private key is also written with the same
+  retry against a virus scanner that every other file already had.
+- **The browser client's rename field ate what you typed** — the list rebuilt
+  under it on every status change — and a row menu could run off the screen edge.
+- **An account no longer appears twice.** Two sign-in folders holding the same
+  login were listed as two accounts; the list is one row per login now.
 
 - **Your own phone now sees your own sign-in pages.** Watching a machine's browser used to hide any page with a password, one-time code or card field behind a black card with a padlock — on every device, including your own phone paired to your own machine. That meant the one thing you could not do from the phone was sign in to anything. A device you paired as your own now sees those pages and can type into them, which is what watching a browser was for. **A guest device still gets the card** and still cannot type into the page behind it — a guest is someone else on your machine, and this is the case that rule was written for. What the **agent** is allowed to read has not changed: password and code fields are still blacked out of every screenshot an agent takes. When an agent explicitly asks you to sign in to something, the page is still handed to one device at a time, exactly as before.
   This corrects the 0.10.0 note below, which said the password never crosses the wire. On a device of your own, it does now — to your own eyes, on your own screen.
