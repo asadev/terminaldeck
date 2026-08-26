@@ -91,13 +91,39 @@ class ServerScriptsTest {
      * shows it, because the host somebody pressed the button for is running perfectly.
      */
     @Test
-    fun `the unit stops the running host before it enables itself`() {
+    fun `the unit stops the running host before it restarts under systemd`() {
         val script = ServerScripts.service("/root/.local/bin/terminaldeck")
 
         val stop = script.indexOf("\"\$b\" stop")
-        val enable = script.indexOf("systemctl --user enable --now")
-        assertTrue("both are there", stop >= 0 && enable >= 0)
-        assertTrue("and the stop comes first", stop < enable)
+        val restart = script.indexOf("systemctl --user restart")
+        assertTrue("both are there", stop >= 0 && restart >= 0)
+        assertTrue("the unit is started while another host still holds the socket otherwise", stop < restart)
+    }
+
+    /**
+     * **`restart` and a proof, not `enable --now` and a hope.**
+     *
+     * On a real WSL box on 2026-08-27 the stop landed and the start did not — the process just
+     * killed was still releasing its pid lock — and the in-app Update finished having replaced the
+     * files and left the host **down**, while the card said *"is a machine of its own now"*. That
+     * is Asad's report in his own words: *"after updating server app it keeps reconnecting… server
+     * is still connected but not the sessions"*. So `enable` is split off `--now`, `restart` cannot
+     * be raced by a CLI stop that already happened, and the script waits and checks `is-active`
+     * before it exits 0 — failing loudly if the unit never came up rather than claiming success
+     * over a dead host.
+     */
+    @Test
+    fun `the unit restarts and proves it came up rather than assuming`() {
+        val script = ServerScripts.service("/root/.local/bin/terminaldeck")
+
+        assertTrue("enable sets the boot symlink, split off --now",
+            script.contains("systemctl --user enable terminaldeck.service"))
+        assertFalse("--now is gone, because restart is what brings it up",
+            script.contains("systemctl --user enable --now"))
+        assertTrue(script.contains("systemctl --user restart terminaldeck.service"))
+        assertTrue("it proves the unit came up, not assumes it", script.contains("is-active --quiet"))
+        assertTrue("and fails loudly if it did not, so the card cannot claim success over a dead host",
+            script.contains("did not come up"))
     }
 
     /**
@@ -182,6 +208,53 @@ class ServerScriptsTest {
         val own = script.indexOf("\"\$b\" stop")
         assertTrue(unit in 0 until own)
         assertTrue("neither is treated as fatal", script.contains("|| true"))
+    }
+
+    /* -------------------------------------------------------- address & remove -- */
+
+    /**
+     * Asking for the address is really **waiting for the relay dial**, on the far side where the
+     * answer lives. Its own output is thrown away — the address a screen shows is read out of the
+     * next `status` by [HostProbe.serverAddress]; what this buys is the seconds. A host too old to
+     * have the verb exits non-zero, which is why the failure is swallowed.
+     */
+    @Test
+    fun `asking for the address waits and never treats a missing verb as failure`() {
+        val script = ServerScripts.address("/usr/bin/terminaldeck")
+
+        assertTrue(script.contains("\"\$b\" address"))
+        assertTrue("its output is not what is read; the survey after it is", script.contains(">/dev/null"))
+        assertTrue("an older host has no such verb and that is one of the states, not an error",
+            script.contains("|| true"))
+    }
+
+    /**
+     * Remove refuses anything outside `$HOME`, and takes the service down before the files.
+     *
+     * Every path came off the server through `command -v`, so a system-wide copy installed for
+     * everyone is one the honest answer is to refuse rather than start deleting on a phone user's
+     * behalf. The unit goes first because a unit left enabled would keep restarting a program that
+     * has gone.
+     */
+    @Test
+    fun `remove refuses outside home and takes the service down first`() {
+        val script = ServerScripts.remove("/root/.local/bin/terminaldeck", "/root/.local/share/terminaldeck", alsoData = false)
+
+        assertTrue("the guard that refuses a system-wide copy", script.contains("not ours to remove"))
+        assertTrue(script.contains("case \"\$b\" in \"\$HOME\"/*)"))
+        val disable = script.indexOf("systemctl --user disable --now")
+        val stop = script.indexOf("\"\$b\" stop")
+        assertTrue("the unit is disabled before the daemon is stopped", disable in 0 until stop)
+    }
+
+    @Test
+    fun `remove leaves the data folder alone unless it was asked for`() {
+        val kept = ServerScripts.remove("/root/.local/bin/terminaldeck", "/root/.local/share/terminaldeck", alsoData = false)
+        val taken = ServerScripts.remove("/root/.local/bin/terminaldeck", "/root/.local/share/terminaldeck", alsoData = true)
+
+        assertFalse("the folder is somebody's own; untouched unless named", kept.contains("rm -rf \"\$dd\""))
+        assertTrue(taken.contains("dd="))
+        assertTrue("and the same home guard applies to it", taken.contains("rm -rf \"\$dd\""))
     }
 
     /* ------------------------------------------------------------- quoting -- */

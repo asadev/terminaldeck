@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.MoreVert
@@ -47,7 +48,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.terminaldeck.android.HostSummary
 import dev.terminaldeck.android.protocol.HostVersion
+import dev.terminaldeck.android.servers.StoredServer
 import dev.terminaldeck.android.transport.detail
+import dev.terminaldeck.android.ui.theme.DeckTheme
 
 /**
  * Every machine this phone is paired with, on a screen instead of in a sheet.
@@ -77,12 +80,17 @@ import dev.terminaldeck.android.transport.detail
 @Composable
 fun MachinesScreen(
     hosts: List<HostSummary>,
+    /** The servers this phone can log in to and manage, whether or not it has connected as one. */
+    servers: List<StoredServer>,
+    /** The machines this phone is paired with, so a connected server can say which of them it is. */
+    pairedHostIds: Set<String>,
     onBack: () -> Unit,
     onSelect: (String) -> Unit,
     onRename: (String, String?) -> Unit,
     onForget: (String) -> Unit,
     onAddHost: () -> Unit,
     onAddServer: () -> Unit,
+    onOpenServer: (String) -> Unit,
 ) {
     var renaming by remember { mutableStateOf<HostSummary?>(null) }
     var forgetting by remember { mutableStateOf<HostSummary?>(null) }
@@ -123,6 +131,32 @@ fun MachinesScreen(
                     onRename = { renaming = host },
                     onForget = { forgetting = host },
                 )
+            }
+
+            /*
+             * Servers, their own section under the machines.
+             *
+             * A server that has been *connected* is in both places at once — as a machine above,
+             * because the host on it became one, and as a server here, because the SSH login that
+             * manages it is still what installs, starts, updates and stops it. That is not a
+             * duplicate: the two rows do different jobs and lead to different screens. Its own page
+             * is where install, update, start, stop and remove live, so a row is a door to that page
+             * rather than a menu of its own.
+             */
+            if (servers.isNotEmpty()) {
+                Text(
+                    text = "SERVERS",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 4.dp, top = 10.dp, bottom = 2.dp),
+                )
+                for (server in servers) {
+                    ServerListRow(
+                        server = server,
+                        connected = server.linkedHostId?.let { it in pairedHostIds } == true,
+                        onOpen = { onOpenServer(server.id) },
+                    )
+                }
             }
 
             Spacer(Modifier.height(6.dp))
@@ -269,6 +303,82 @@ private fun MachineRow(
                 )
             }
         }
+    }
+}
+
+/**
+ * One server on the list — a door to its own page, where install, update, start, stop and remove
+ * live.
+ *
+ * The name leads because it is what somebody is looking for; the address under it is monospaced and
+ * dimmed because it is data, and it is also the answer to *"I don't know where it belongs to"*. The
+ * status line says the one thing that separates a server from a machine here: whether this phone is
+ * *connected* to the host on it, as opposed to merely being able to log in and manage it. Both are
+ * true of a connected server and they are not the same fact.
+ */
+@Composable
+private fun ServerListRow(
+    server: StoredServer,
+    connected: Boolean,
+    onOpen: () -> Unit,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp))
+            .clickable(onClick = onOpen)
+            .padding(start = 14.dp, top = 12.dp, end = 8.dp, bottom = 12.dp),
+    ) {
+        Icon(
+            Icons.Filled.Dns,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp),
+        )
+        Spacer(Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = server.name,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            // Not the address twice: a server nobody has renamed is called by its address, and
+            // printing `user@<the same address>` under it is one fact on two lines. When they
+            // differ, the line is the thing somebody would type.
+            Text(
+                text = if (server.name == server.where) {
+                    "as ${server.username}"
+                } else {
+                    "${server.username}@${server.where}"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = if (connected) {
+                    "Connected — its sessions are on the Sessions tab."
+                } else {
+                    "Signed in over SSH. Not connected as a machine."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = if (connected) DeckTheme.colors.positive else MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Icon(
+            Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

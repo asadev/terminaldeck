@@ -18,8 +18,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Inventory2
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -31,11 +33,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
+import dev.terminaldeck.android.servers.HostOnServer
 import dev.terminaldeck.android.servers.HostProbe
 import dev.terminaldeck.android.servers.HostRunning
 import dev.terminaldeck.android.servers.ServerInstallState
 import dev.terminaldeck.android.servers.ServersState
 import dev.terminaldeck.android.servers.StoredServer
+import dev.terminaldeck.android.ui.kit.DeckDestructiveText
 import dev.terminaldeck.android.ui.kit.DeckPrimaryButton
 import dev.terminaldeck.android.ui.kit.DeckQuietButton
 import dev.terminaldeck.android.ui.theme.DeckTheme
@@ -82,15 +86,29 @@ fun HostStepCard(
     linked: Boolean = false,
     onCheck: () -> Unit,
     onInstall: () -> Unit,
+    /**
+     * Put this app's own build on a server that is behind it. The same verb Install is — it stages
+     * the release tarball over the open session and re-surveys — so update and install cannot drift
+     * into two answers about what version a server ends up on.
+     */
+    onUpdate: () -> Unit,
     onStartAndConnect: () -> Unit,
     onConnect: () -> Unit,
     onStop: () -> Unit,
     onDisconnect: () -> Unit,
+    /**
+     * Take the host off that server. The boolean is the second of the two answers the confirmation
+     * offers — whether what the host stored on that server (the devices paired to it) goes too. Only
+     * ever called from a server's own page, never the fresh-login step; see the gate below.
+     */
+    onRemove: (alsoData: Boolean) -> Unit = {},
 ) {
     val colors = DeckTheme.colors
     val look = state.views[server.id]?.host
     val install = state.installs[server.id] ?: ServerInstallState()
     val isWorking = state.working.contains(server.id)
+    // The remove sheet. `false` is the only state anything else can put it in.
+    var confirmingRemove by remember { mutableStateOf(false) }
 
     SectionCard {
         /* ----------------------------------------------------------- head -- */
@@ -159,6 +177,39 @@ fun HostStepCard(
         if (look != null) {
             val host = look.host
             Spacer(Modifier.height(Space.x4))
+
+            /*
+             * **Update**, wherever the host is installed and behind.
+             *
+             * > *"whenever there is a new update for headless… it should show the update button also
+             * > next to where we install and we can see we installed it… so we can just directly
+             * > update anytime directly from the connected device."*
+             *
+             * Drawn above the branch below rather than inside one of its arms, and that placement is
+             * the requirement rather than a layout choice: a host can be behind while stopped, while
+             * running, while connected and while refusing, and an Update that only appeared in one of
+             * those is the dead end this replaces. It runs the same verb Install does — silent when
+             * level or ahead, see [HostProbe.updateAvailable].
+             */
+            val updateTo = HostProbe.updateAvailable(host, state.appVersion)
+            if (updateTo != null) {
+                DeckPrimaryButton(
+                    label = "Update it to $updateTo",
+                    onClick = onUpdate,
+                    enabled = !install.isBusy && !isWorking,
+                )
+                Spacer(Modifier.height(Space.x2))
+                // The number it is on now, because "update" without it is a button that cannot be
+                // judged. Its own version is on the line above this card; this is the other half.
+                Text(
+                    text = "This server is on ${host.version}. Restarting it is part of the update, " +
+                        "so any session it is running ends.",
+                    style = DeckType.caption,
+                    color = colors.faint,
+                )
+                Spacer(Modifier.height(Space.x3))
+            }
+
             when {
                 !host.isInstalled -> {
                     val refusal = HostProbe.whyNot(look.room)
@@ -254,6 +305,31 @@ fun HostStepCard(
                      * them to close the app.
                      */
                     HostProbe.connectRefusal(host)?.let { Stated(it) }
+                    /*
+                     * **The one refusal that has a button.**
+                     *
+                     * A host too old to print a server address is an *installed* host nothing can
+                     * reach — so Install, which lives in the `!isInstalled` arm above, never drew
+                     * for it, and the sentence used to send somebody to a desktop. [HostProbe
+                     * .hostPackage] fetches this app's own release now, so the phone carries the
+                     * newer build in the only sense that matters. `whyNot` is asked first, so a box
+                     * that has since lost its compiler gets its reason rather than a button that
+                     * would fail two minutes in. A relay that is off or still dialling gets no
+                     * button here — installing repairs neither.
+                     */
+                    if (HostProbe.needsNewerBuild(host)) {
+                        Spacer(Modifier.height(Space.x3))
+                        val why = HostProbe.whyNot(look.room)
+                        if (why != null) {
+                            Stated(why)
+                        } else {
+                            DeckPrimaryButton(
+                                label = "Install ${state.appVersion} on this server",
+                                onClick = onInstall,
+                                enabled = !install.isBusy && !isWorking,
+                            )
+                        }
+                    }
                     Spacer(Modifier.height(Space.x3))
                     Row(horizontalArrangement = Arrangement.spacedBy(Space.x3)) {
                         DeckQuietButton(
@@ -271,6 +347,26 @@ fun HostStepCard(
                     }
                 }
             }
+        }
+
+        /*
+         * The way back, and it is one row rather than a branch of the chain above, because "take it
+         * off this server" is true of an installed host in every one of those states — running,
+         * stopped, connected, or too old to dial.
+         *
+         * Not on the login screen. `justLoggedIn` is somebody two seconds into arriving, who asked
+         * to *use* this server; a destructive control is not what that moment is for, and the
+         * server's own page is one tap away and is where the desktop keeps it too.
+         */
+        if (look != null && look.host.isInstalled && !justLoggedIn) {
+            Spacer(Modifier.height(Space.x3))
+            DeckDestructiveText(
+                label = HostProbe.removeLabel,
+                // Faint rather than gone while something else is in flight — a removal that started
+                // at the same moment as an install would be two scripts racing over one server.
+                enabled = !install.isBusy && !isWorking,
+                onClick = { confirmingRemove = true },
+            )
         }
 
         /* ----------------------------------------------------- connecting -- */
@@ -302,6 +398,60 @@ fun HostStepCard(
             }
         }
     }
+
+    if (confirmingRemove && look != null) {
+        RemoveHostDialog(
+            host = look.host,
+            onRemove = { alsoData ->
+                confirmingRemove = false
+                onRemove(alsoData)
+            },
+            onCancel = { confirmingRemove = false },
+        )
+    }
+}
+
+/**
+ * The confirmation before a host is taken off a server, stating the consequence as the two answers
+ * it actually has.
+ *
+ * The desktop asks this with a tick box beside a button. A phone dialog is a list of verbs, so the
+ * box becomes the second verb: what the host stored on that server — the devices paired to it, the
+ * folders each of them may use — is kept by one and taken by the other, and
+ * [HostProbe.removeConsequence] names both before anything is pressed.
+ */
+@Composable
+private fun RemoveHostDialog(
+    host: HostOnServer,
+    onRemove: (alsoData: Boolean) -> Unit,
+    onCancel: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onCancel,
+        containerColor = MaterialTheme.colorScheme.surface,
+        title = { Text(HostProbe.removeLabel) },
+        text = {
+            Text(
+                text = HostProbe.removeConsequence(host, alsoData = false),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        },
+        // Two destructive answers, stacked, with Keep as the dismiss — the phone shape of the
+        // desktop's button-and-tickbox. The plain removal leads, because keeping what was paired is
+        // what somebody replacing the host with a newer one expects.
+        confirmButton = {
+            Column(horizontalAlignment = Alignment.End) {
+                TextButton(onClick = { onRemove(false) }) {
+                    Text("Remove it", color = MaterialTheme.colorScheme.error)
+                }
+                TextButton(onClick = { onRemove(true) }) {
+                    Text("Remove it and everything it stored", color = MaterialTheme.colorScheme.error)
+                }
+            }
+        },
+        dismissButton = { TextButton(onClick = onCancel) { Text("Keep it") } },
+    )
 }
 
 /**

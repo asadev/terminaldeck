@@ -183,7 +183,45 @@ object ServerScripts {
         "WantedBy=default.target",
         "UNIT",
         "systemctl --user daemon-reload || exit 1",
-        "systemctl --user enable --now $ID.service || exit 1",
+        /*
+         * **`restart` and then a proof, not `enable --now` and a hope.**
+         *
+         * `enable --now` starts a stopped unit — but only if the daemon it runs can take the socket
+         * the instant it is asked, and after `"$b" stop` the process it just killed may still be
+         * releasing its pid lock and its relay slot. On a real WSL box on 2026-08-27 that race lost:
+         * the stop landed, the start did not, and the in-app Update finished having replaced the
+         * files and left the host **down** — while the card said *"is a machine of its own now"*.
+         * That is the bug Asad reported in his own words: *"after updating server app it keeps
+         * reconnecting… server is still connected but not the sessions"* — the host somebody had
+         * been reaching from a phone in another place simply stopped answering, with nothing on
+         * either end saying why.
+         *
+         * So the unit is enabled for next boot, then **restarted** — which from systemd's own view
+         * is stop-if-running-then-start and cannot be raced by a CLI stop that already happened —
+         * and then this waits for the daemon to actually take the socket and **checks that it did**.
+         * A daemon that lost the lock race gets a moment and one more restart; only then is failure
+         * real, and it is reported as failure rather than swallowed. `enable` is split off `--now`
+         * so a box where the symlink already exists does not turn a benign second enable into the
+         * thing that fails the whole step.
+         */
+        "systemctl --user enable $ID.service >/dev/null 2>&1 || true",
+        "systemctl --user restart $ID.service || exit 1",
+        "up=",
+        "for _ in 1 2 3 4 5 6; do",
+        "  if systemctl --user is-active --quiet $ID.service; then up=1; break; fi",
+        "  sleep 1",
+        "done",
+        "if [ -z \"\$up\" ]; then",
+        // One deliberate retry: the daemon's own "already running" refusal clears once the killed
+        // process finishes letting go, which is exactly the window a second restart a few seconds
+        // later steps past.
+        "  systemctl --user restart $ID.service || exit 1",
+        "  for _ in 1 2 3 4 5 6; do",
+        "    if systemctl --user is-active --quiet $ID.service; then up=1; break; fi",
+        "    sleep 1",
+        "  done",
+        "fi",
+        "[ -n \"\$up\" ] || { echo \"the unit was written but did not come up\" >&2; exit 1; }",
         // Lingering needs root. Asked for without sudo, so it succeeds where policy allows it and
         // fails harmlessly everywhere else — the caller reads the answer back rather than assuming
         // either way.
@@ -238,6 +276,88 @@ object ServerScripts {
         } else {
             startDirect(command)
         }
+
+    /**
+     * Ask the host for its address — which is really a way of **waiting for the relay dial to
+     * finish**, on the far side, where the answer lives.
+     *
+     * ## The gap this closes
+     *
+     * [start] returns the instant systemd or `nohup` has forked; the relay dial is a WebSocket
+     * across the internet and is still in flight. So the probe that ran a moment later read a
+     * `status` with no address block, and the card that said *"start it and connect"* started it
+     * and then connected to nothing at all. Measured by the host's own author on a real server:
+     * *"the address was there when asked again fourteen seconds later. Same code, same machine,
+     * different luck."*
+     *
+     * ## Why this command rather than a timer on the phone
+     *
+     * Because the wait already exists and it is already correct. `terminaldeck address` polls its
+     * own daemon every 400 ms for up to ten seconds, and — the part a phone-side loop could not
+     * copy — it only waits for a host **young enough that the relay could still be dialling**,
+     * measured from the host's own `startedAt`. Re-running the survey on a timer from here would be
+     * the phone asking the same question over and over, which is the standing rule about polling,
+     * and it would still be a worse answer than the one the host already has.
+     *
+     * Its output is deliberately thrown away. The address that reaches a screen is the one
+     * [HostProbe.serverAddress] reads out of the following `status`; having two sources for one
+     * string is how they come to disagree. What is wanted here is the *time*. Failure is not a
+     * failure: an older host has no `address` verb and exits non-zero, which is one of the two
+     * states the card is about, and the survey after it is what says so.
+     */
+    fun address(command: String): String = listOf(
+        "b=${quote(command)}",
+        // `>/dev/null` on both: `address` writes a pasteable line to stdout and a note to stderr,
+        // and neither is read here.
+        "\"\$b\" address >/dev/null 2>&1 || true",
+        "exit 0",
+    ).joinToString("\n")
+
+    /**
+     * The way back, and it removes exactly what was added.
+     *
+     * `removeScript` from the desktop, line for line, including the guard that matters most:
+     * **nothing outside `$HOME`**. Every path this is handed came off the server itself through
+     * `command -v`, so a machine whose PATH turns up a system-wide copy — installed by somebody
+     * else, by a package manager, for everyone — is a machine where the honest answer is to refuse
+     * rather than to start deleting on a phone user's behalf.
+     *
+     * The data folder is never touched unless it was asked for. That is the same argument `setup.ts`
+     * makes about `~/.claude`: *"those folders are the person's own … removing one would be deleting
+     * somebody's work under the heading of undoing our own."*
+     */
+    fun remove(command: String, dataDir: String, alsoData: Boolean): String {
+        val lines = mutableListOf(
+            "b=${quote(command)}",
+            "case \"\$b\" in \"\$HOME\"/*) ;; *) echo \"not ours to remove\" >&2; exit 1 ;; esac",
+            // The service first: stopping it is what releases the files below, and a unit left
+            // enabled would keep trying to start a program that has gone — every five seconds, for
+            // as long as that server is up.
+            "if [ -f \"\$HOME/.config/systemd/user/$ID.service\" ]; then",
+            "  systemctl --user disable --now $ID.service >/dev/null 2>&1 || true",
+            "  rm -f \"\$HOME/.config/systemd/user/$ID.service\"",
+            "  systemctl --user daemon-reload >/dev/null 2>&1 || true",
+            "fi",
+            // Then the daemon itself, in case it was started by hand rather than by the unit. Its
+            // own command is the one thing that knows how to stop it cleanly.
+            "\"\$b\" stop >/dev/null 2>&1 || true",
+            "if grep -q $ID-launcher \"\$b\" 2>/dev/null; then",
+            "  rm -rf \"\$HOME/.$ID/runtime\"",
+            "  rm -f \"\$b\"",
+            "  rmdir \"\$HOME/.$ID\" 2>/dev/null || true",
+            "else",
+            "  d=\$(dirname \"\$b\")",
+            "  rm -f \"\$d/$ID\" \"\$d/$ID-host\"",
+            "  rm -rf \"\$d/../lib/node_modules/$ID\"",
+            "fi",
+        )
+        if (alsoData) {
+            lines += "dd=${quote(dataDir)}"
+            lines += "case \"\$dd\" in \"\$HOME\"/*) rm -rf \"\$dd\" ;; *) echo \"not ours to remove\" >&2 ;; esac"
+        }
+        lines += "exit 0"
+        return lines.joinToString("\n")
+    }
 
     /**
      * Stop it, and mean it.
