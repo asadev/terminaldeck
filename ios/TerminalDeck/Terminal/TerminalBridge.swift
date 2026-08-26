@@ -99,9 +99,11 @@ final class TerminalBridge: NSObject, @preconcurrency TerminalViewDelegate, Term
     /// nobody can see any more.
     var onTapped: (() -> Void)?
 
-    /// The point size the terminal is drawn at. Changed by pinching; see
-    /// `TextSize` for why it is a phone-wide setting rather than a per-session
-    /// one, and what it costs on the wire.
+    /// The point size the terminal is drawn at. Changed by pinching, or from
+    /// Settings → Appearance, which reaches this object through
+    /// `Notification.Name.terminalTextSizeChanged` rather than through SwiftUI.
+    /// See `TextSize` for why it is a phone-wide setting rather than a
+    /// per-session one, and what it costs on the wire.
     private(set) var textSize: CGFloat
 
     /// Which colours this session is drawn in. The phone's own choice rather
@@ -116,6 +118,9 @@ final class TerminalBridge: NSObject, @preconcurrency TerminalViewDelegate, Term
     private var keyboardObservers: [NSObjectProtocol] = []
     /// The scheme observer, kept only so it can be handed back. See `deinit`.
     private var colorObserver: NSObjectProtocol?
+    /// The text-size observer, kept for the same reason and handed back in the
+    /// same place. See `TextSize` for what it is answering.
+    private var sizeObserver: NSObjectProtocol?
 
     init(themes: TerminalThemeStore = .shared) {
         self.themes = themes
@@ -176,6 +181,39 @@ final class TerminalBridge: NSObject, @preconcurrency TerminalViewDelegate, Term
             forName: .terminalSchemeChanged, object: nil, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.applyColors() }
+        }
+        /*
+         * And the size, which is the same problem with a different setting and
+         * was the half of it that did not work.
+         *
+         * > *"this bigger and smaller should be going to inside the settings
+         * > page for the all of the terminals with one setting we can just
+         * > change this for overall appearance page."*
+         *
+         * *One setting for all of them* is two claims, and only the first was
+         * ever true: the size was stored per phone, but a terminal already built
+         * kept the font it was given until `applyStoredTextSize` was called on
+         * it — which happened when the session was next opened. Move the stepper
+         * to Settings without this and the reading is worse than before: you
+         * change the size, you go back to the session you were reading, and it
+         * is the size it always was.
+         *
+         * `.main` because `applyStoredTextSize` sets `font` on a `UIView`, and
+         * the token is kept so `deinit` hands it back.
+         *
+         * **This fires on every open session, not only the visible one**, which
+         * is what he asked for and what it costs: a session in the background
+         * gets a soft reset now rather than the next time it is opened. That
+         * reset was always going to happen — `applyStoredTextSize` on appear is
+         * where it used to land — so nothing new is paid, it is only paid
+         * earlier. A session whose view has never been laid out reports no
+         * usable column count and `HostLink.sendResize` declines it, so the far
+         * end hears nothing until there is something honest to tell it.
+         */
+        sizeObserver = NotificationCenter.default.addObserver(
+            forName: .terminalTextSizeChanged, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.applyStoredTextSize() }
         }
         // Nothing here is a shell running locally, so there is no bell worth
         // ringing on a phone in someone's pocket.
@@ -291,6 +329,7 @@ final class TerminalBridge: NSObject, @preconcurrency TerminalViewDelegate, Term
         // accumulate one dead observer per terminal ever opened.
         for token in keyboardObservers { NotificationCenter.default.removeObserver(token) }
         if let colorObserver { NotificationCenter.default.removeObserver(colorObserver) }
+        if let sizeObserver { NotificationCenter.default.removeObserver(sizeObserver) }
     }
 
     /// The bar, the grid, and the single place a key press turns into an effect.
@@ -705,8 +744,11 @@ final class TerminalBridge: NSObject, @preconcurrency TerminalViewDelegate, Term
         onTextSizeChanged?(clamped)
     }
 
-    /// Adopt the stored size. Called when a session appears, so a terminal
-    /// created before the person changed the setting catches up.
+    /// Adopt the stored size. Called the moment somebody changes it in Settings
+    /// — see the observer in `init` — and again when a session appears, which is
+    /// the belt to that braces: a bridge built while the app was in the
+    /// background, or one whose notification arrived before it existed, still
+    /// comes up right.
     func applyStoredTextSize() {
         setTextSize(TextSize.stored)
     }

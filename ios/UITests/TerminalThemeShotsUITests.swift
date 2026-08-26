@@ -1,10 +1,17 @@
 /**
- * The colour picker, on a phone, with a real session behind it.
+ * The Appearance page, on a phone, with a real session behind it.
  *
  * Asad asked for the terminal's colour to be choosable everywhere — *"phone
  * also, for Windows, for MacBook, all of them"* — and named **pure black**,
  * which on a phone is the one that matters: an OLED panel switches a `#000000`
  * pixel off rather than lighting it.
+ *
+ * The page it is on has since taken in the other two appearance settings —
+ * *"overall appearance page should be there in the settings and from there we
+ * can change colors text size and everything for all of them"* — so this walk
+ * also photographs the app's light/dark picker and steps the terminal text size.
+ * The class keeps its name because the colours are still the bulk of it and
+ * because a suite name is a thing scripts and CI invocations hold.
  *
  * ## Why this is a walk and not an assertion suite
  *
@@ -79,17 +86,25 @@ final class TerminalThemeShotsUITests: XCTestCase {
         }
 
         // ---------------------------------------------------------------- 1 --
-        // The picker, with the text size at the top of it — the two settings
-        // that used to be a screen apart.
-        try openTheTerminalScreen()
+        // The whole Appearance page: the app's light/dark, the text size, and
+        // the colours — the three settings that used to be in three places.
+        try openTheAppearancePage()
         capture("01-picker-top")
-        XCTAssertTrue(app.otherElements["terminalTheme.scopeNote"].exists
+        XCTAssertTrue(app.otherElements["appearance.scopeNote"].exists
                       || app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'stands alone'"))
                           .firstMatch.exists,
                       "the screen has to say whose choice this is")
         XCTAssertTrue(app.buttons["settings.textSize"].exists
                       || app.steppers["settings.textSize"].exists,
                       "the text size belongs on this screen now")
+        // > *"overall appearance page should be there in the settings and from
+        // > there we can change colors text size and everything for all of
+        // > them."*
+        //
+        // The light/dark picker is the *and everything*. It was inline on the
+        // Settings screen and it is the first group here.
+        XCTAssertTrue(app.segmentedControls["appearance.theme"].exists,
+                      "the app's light/dark belongs on the Appearance page too")
 
         app.swipeUp()
         capture("02-picker-scrolled")
@@ -114,7 +129,7 @@ final class TerminalThemeShotsUITests: XCTestCase {
         // ---------------------------------------------------------------- 4 --
         // The same session, the same output, a different scheme — chosen while
         // it was open. This is *applies live* photographed rather than asserted.
-        try openTheTerminalScreen()
+        try openTheAppearancePage()
         try scrollTo(app.buttons["scheme.solarized-light"])
         app.buttons["scheme.solarized-light"].tap()
         capture("06-solarized-chosen")
@@ -128,7 +143,7 @@ final class TerminalThemeShotsUITests: XCTestCase {
 
         // ---------------------------------------------------------------- 5 --
         // Editing. Tapping Edit on a shipped palette copies it first.
-        try openTheTerminalScreen()
+        try openTheAppearancePage()
         try scrollTo(app.buttons["scheme.dracula.edit"])
         app.buttons["scheme.dracula.edit"].tap()
         XCTAssertTrue(app.otherElements["editor.preview"].waitForExistence(timeout: 10)
@@ -184,7 +199,7 @@ final class TerminalThemeShotsUITests: XCTestCase {
             NSPredicate(format: "label CONTAINS 'stands alone'")).firstMatch.isHittable,
                       "the note saying whose choice this is ends up under the tab pill")
 
-        try openTheTerminalScreen()
+        try openTheAppearancePage()
         capture("13-text-size-in-its-new-home")
         let stepper = app.steppers["settings.textSize"]
         if stepper.exists {
@@ -198,7 +213,7 @@ final class TerminalThemeShotsUITests: XCTestCase {
 
     // MARK: - Getting about
 
-    private func openTheTerminalScreen() throws {
+    private func openTheAppearancePage() throws {
         // Leave the session first if one is open. Inside a terminal the tab bar
         // is deliberately not drawn — *"inside the session we don't need the
         // pill"* — so `openSettingsTab()` has no bar to tap and its own fallback
@@ -214,15 +229,16 @@ final class TerminalThemeShotsUITests: XCTestCase {
             _ = app.tabBars.firstMatch.waitForExistence(timeout: 10)
         }
         XCTAssertTrue(app.openSettingsTab(), "Settings should be reachable")
-        let row = app.buttons["settings.terminalTheme"]
-        XCTAssertTrue(row.waitForExistence(timeout: 10), "Settings should have a Terminal row")
+        let row = app.buttons["settings.appearance"]
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "Settings should have an Appearance row")
         // Settings itself, once, so the row's summary and the group it joined
-        // are looked at rather than assumed. The Terminal *section* that used to
-        // sit three groups below — one row, its own caption — is gone from this
-        // screen, and a photograph is the only way to see that the hole closed.
+        // are looked at rather than assumed. There is no Appearance *section* on
+        // this screen any more — the light/dark picker that used to sit inline
+        // in it is the first group on the page this row pushes — and a
+        // photograph is the only way to see that the hole closed.
         if !settingsSeen {
             settingsSeen = true
-            capture("15-settings-with-the-terminal-row")
+            capture("15-settings-with-the-appearance-row")
         }
         row.tap()
         XCTAssertTrue(app.buttons["scheme.follow-app"].waitForExistence(timeout: 10),

@@ -222,19 +222,29 @@ final class AppearanceShotsUITests: XCTestCase {
     // MARK: - The stops
 
     /**
-     * Choose an appearance the way a person does — the picker in Settings — and
-     * prove the choice landed before photographing anything by it.
+     * Choose an appearance the way a person does — Settings → **Appearance** →
+     * the picker — and prove the choice landed before photographing anything by
+     * it.
      *
      * Not a launch argument and not `overrideUserInterfaceStyle` from the test
      * process. Both would prove that the palette can render light and neither
      * would prove that the *setting* does anything, which is the whole of what
      * was asked for.
+     *
+     * **It is a push now, and it walks back out.** The picker used to sit inline
+     * on the Settings screen; it is the first group on the Appearance page, with
+     * the terminal text size and colours under it — *"overall appearance page
+     * should be there in the settings and from there we can change colors text
+     * size and everything for all of them."* Coming back out matters: every
+     * caller expects to be handed the Settings root, and the frames taken after
+     * this are of screens reached from there.
      */
     private func choose(_ scheme: Scheme) throws {
         XCTAssertTrue(app.openSettingsTab(), "Settings should be reachable")
-        let picker = app.segmentedControls["settings.appearance"]
+        try openTheAppearancePage()
+        let picker = app.segmentedControls["appearance.theme"]
         XCTAssertTrue(picker.waitForExistence(timeout: 10),
-                      "Settings should hold the appearance picker")
+                      "the Appearance page should hold the appearance picker")
         let segment = picker.buttons[scheme.segment]
         XCTAssertTrue(segment.waitForExistence(timeout: 5),
                       "the picker should offer \(scheme.segment)")
@@ -246,6 +256,24 @@ final class AppearanceShotsUITests: XCTestCase {
         // catches the previous appearance — which would fail `capture`'s own
         // measurement and blame the wrong thing.
         sleep(1)
+        leaveTheAppearancePage()
+    }
+
+    /// Settings → Appearance, from the Settings root this suite always leaves
+    /// itself on.
+    private func openTheAppearancePage() throws {
+        let row = app.buttons["settings.appearance"]
+        XCTAssertTrue(row.waitForExistence(timeout: 10),
+                      "Settings should have an Appearance row")
+        row.tap()
+    }
+
+    /// Back to the Settings root, and waits for it — a screenshot taken during
+    /// the pop catches the page sliding off and measures the wrong frame.
+    private func leaveTheAppearancePage() {
+        let back = app.navigationBars.buttons.element(boundBy: 0)
+        if back.exists { back.tap() }
+        _ = app.buttons["settings.appearance"].waitForExistence(timeout: 10)
     }
 
     /**
@@ -533,17 +561,24 @@ final class AppearanceShotsUITests: XCTestCase {
         capture("relaunch-01-light-on-launch")
 
         XCTAssertTrue(app.openSettingsTab(), "Settings should be reachable after a relaunch")
-        let picker = app.segmentedControls["settings.appearance"]
+        try openTheAppearancePage()
+        let picker = app.segmentedControls["appearance.theme"]
         XCTAssertTrue(picker.waitForExistence(timeout: 10))
         XCTAssertTrue(picker.buttons["Light"].isSelected,
                       "the stored choice should still be the chosen segment")
         capture("relaunch-02-settings-still-light")
+        // Back to the Settings root before `choose`, which starts from there.
+        leaveTheAppearancePage()
 
         // And back to System, which is what a fresh install has and what the
-        // next run should start from.
+        // next run should start from. `choose` walks in and back out again, so
+        // the last leg opens the page one more time rather than reaching for a
+        // picker that is no longer on screen.
         try choose(.dark)
-        let system = picker.buttons["System"]
-        if system.exists { system.tap() }
+        try openTheAppearancePage()
+        let system = app.segmentedControls["appearance.theme"].buttons["System"]
+        if system.waitForExistence(timeout: 5) { system.tap() }
+        leaveTheAppearancePage()
     }
 
     // MARK: - Arriving

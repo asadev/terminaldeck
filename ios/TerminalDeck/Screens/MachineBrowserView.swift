@@ -2311,7 +2311,7 @@ private struct NewWindowSheet: View {
      * So it is a card of its own, above the field, with a caption naming what is
      * being chosen and one line under each option saying what that choice means.
      * Three rows, one tap each, the selected one obvious. It is the same shape
-     * `TerminalThemeView` uses to choose a colour scheme, which is this app's
+     * `AppearanceView` uses to choose a colour scheme, which is this app's
      * pattern for *pick exactly one of these, and here is what each one is*.
      *
      * ## Each row is a plain Button, and that is load-bearing rather than a style

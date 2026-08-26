@@ -20,7 +20,7 @@
  * here: both live on this phone and neither has ever touched the wire. Splitting
  * them would produce a screen with one row on it and a second screen with one
  * row on it, reachable from a tab whose spare toolbar slot is a single button.
- * `TerminalThemeView` made the same call for the same reason and wrote it down —
+ * `AppearanceView` made the same call for the same reason and wrote it down —
  * the terminal's size sits with the terminal's colours because *"the two
  * settings answer the same question."* So does this pair: what does a page do on
  * this phone.
@@ -45,7 +45,7 @@
  *
  * A row that clears on tap sounds wrong and is not, because nothing is cleared
  * by the tap: it raises a confirmation naming the host, which is the same shape
- * `TerminalThemeView` deletes a colour scheme with. The alternative — a small
+ * `AppearanceView` deletes a colour scheme with. The alternative — a small
  * trash glyph at the trailing edge as the only target — is a fifteen-point
  * target on a screen where every other row is tappable across its whole width,
  * and a row that looks tappable and is not is the dead click his rule book names.
@@ -66,7 +66,7 @@ struct BrowserDataView: View {
     @State private var data = BrowserDataStore()
 
     /// The zoom, mirrored into `@State` because `PageZoom` is a `UserDefaults`
-    /// façade with no observation on it — the shape `TerminalThemeView` uses for
+    /// façade with no observation on it — the shape `AppearanceView` uses for
     /// the terminal's size, and for the same reason: the stepper answers the
     /// finger rather than a store round trip.
     @State private var zoom = PageZoom.stored

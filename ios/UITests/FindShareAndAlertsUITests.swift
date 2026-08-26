@@ -1,7 +1,12 @@
 /**
  * The three things this phone could not do, on a real screen against a real
- * shell: **find a line in the scrollback**, **change the text size**, and **be
- * told when a machine needs you**.
+ * shell: **find a line in the scrollback**, **change the text size by pinching
+ * it**, and **be told when a machine needs you**.
+ *
+ * The size's *controls* left this screen — Settings → Appearance owns them now,
+ * for every terminal at once — and what is left here is the gesture, plus the
+ * guard that says the two menu rows have not crept back. See
+ * `testTheTextSizeIsNotInTheSessionMenu`.
  *
  * The unit tests prove the rules — that typing searches backwards, that a
  * transition into `waiting` is an alert and starting work is not, that a smaller
@@ -164,82 +169,67 @@ final class FindShareAndAlertsUITests: XCTestCase {
     // MARK: - Text size
 
     /**
-     * The menu says what size the terminal is at, and a step really changes it.
+     * The size is **not** in this menu any more, and this is the guard that says so.
      *
-     * ## Why the direction is worked out rather than fixed
+     * ## What this case used to be
      *
-     * The size is a **persisted** setting, so this test is not idempotent by
-     * nature: a version that always pressed Smaller walked the size down one
-     * point per run, reached the nine-point floor on the fourth, and then
-     * pressed a control that is correctly disabled there — reporting a failure
-     * for a size change that had not happened. The bug was in the test, and the
-     * shape of it is worth keeping in mind: any test that presses a stepper has
-     * to know where the stepper already is.
+     * It pressed *Bigger text — 12 pt* and *Smaller text — 12 pt*, which lived
+     * in the session's `…` and carried the current size in their own labels. He
+     * read those two rows out, on the recording, with this exact menu open:
      *
-     * ## Why there is no toast assertion here
+     * > *"this bigger and smaller should be going to inside the settings page
+     * > for the all of the terminals with one setting we can just change this
+     * > for overall appearance page should be there in the settings and from
+     * > there we can change colors text size and everything for all of them."*
      *
-     * There is no toast on this path, and that is deliberate rather than a gap.
-     * A `Button` inside a menu `Section` runs its action — the size really
-     * changes, and the header below proves it — but any **view-state** change
-     * the same action makes does not reach the screen on iOS 26.5. That was
-     * measured twice, first with a `@State` and then with an `@Observable`
-     * object, and once with the action doing nothing but raise the message.
+     * So the assertion is inverted rather than deleted. A menu is the easiest
+     * place in this app for a control to come back — every one of them is a flat
+     * list of `Button`s and a merge that resurrects two of them looks like
+     * nothing in a diff — and *the thing he asked to be removed reappeared* is
+     * the fastest way to lose a round.
      *
-     * It costs nothing here, which is why the fight was abandoned rather than
-     * won: the confirmation for a size change *is the size changing*, in front
-     * of you, on the whole screen. The toast earns its place on the pinch —
-     * where the number and the end of the range are worth saying — and the case
-     * below is the one that proves it appears.
+     * ## Where the coverage went
+     *
+     * The setting itself is exercised where it now lives:
+     * `TerminalThemeShotsUITests` steps the stepper on Settings → Appearance and
+     * photographs the scheme previews redrawing at the new size, and
+     * `TextSizeTests` asserts against a real `TerminalBridge` that a change
+     * reaches a terminal that already exists. What stays here is the gesture,
+     * below, which is still on this screen and is still the fast path.
      */
-    func testTheTextSizeIsInTheMenuAndSaysWhatItIs() throws {
+    func testTheTextSizeIsNotInTheSessionMenu() throws {
         try openSession()
 
         app.buttons["terminal.actions"].tap()
-        // The size is in the item's own label — "Bigger text — 12 pt" — because
-        // a menu can say it there without offering a row that does nothing.
-        let bigger = app.buttons["terminal.textLarger"]
-        XCTAssertTrue(bigger.waitForExistence(timeout: 5), "the menu should offer the text size")
-        XCTAssertTrue(bigger.label.contains("pt"), "it should say the size: \(bigger.label)")
-        save("size-01-menu")
+        // Something from the menu, so this is a check on an *open* menu rather
+        // than one that quietly passes because the menu never came up — which is
+        // the shape every "it is not there" test fails in.
+        XCTAssertTrue(app.buttons["terminal.share"].waitForExistence(timeout: 5),
+                      "the actions menu should be open")
+        save("size-01-menu-without-the-steps")
 
-        let before = try points(in: bigger.label)
-        // The bounds are `TextSize.minimum` and `.maximum` in the app; a UI test
-        // target cannot import them, so they are written out and named here.
-        let step = before > 9 ? "terminal.textSmaller" : "terminal.textLarger"
-        let back = before > 9 ? "terminal.textLarger" : "terminal.textSmaller"
+        XCTAssertFalse(app.buttons["terminal.textLarger"].exists,
+                       "Bigger text is back in the session menu — it belongs to "
+                       + "Settings → Appearance, for every terminal at once")
+        XCTAssertFalse(app.buttons["terminal.textSmaller"].exists,
+                       "Smaller text is back in the session menu — it belongs to "
+                       + "Settings → Appearance, for every terminal at once")
+        // Nothing in the menu should be talking about points any more either: a
+        // row relabelled rather than removed would slip past the two identifier
+        // checks above.
+        let sizes = app.buttons.allElementsBoundByIndex
+            .map(\.label)
+            .filter { $0.contains(" pt") }
+        XCTAssertTrue(sizes.isEmpty, "the menu still names a text size: \(sizes)")
 
-        let stepButton = app.buttons[step]
-        XCTAssertTrue(stepButton.isEnabled, "\(step) should be available at \(before) pt")
-        // Tapping an item closes the menu; every step below opens it again.
-        stepButton.tap()
-        /*
-         * A picture rather than an assertion, and the reason is worth writing
-         * down because it cost hours.
-         *
-         * The message this raises — "10 pt" — **is on screen**; the screenshot
-         * below shows it every run. `XCUIApplication` cannot see it: for a
-         * short while after a menu is dismissed, an element that appears in
-         * that same turn is missing from the accessibility tree the runner
-         * queries, while a screenshot taken at the same instant has it. That
-         * looked exactly like a state update being swallowed, and two tidy
-         * refactors were done and undone chasing it. The toast **is** asserted
-         * in the pinch case below, where no menu was involved.
-         */
-        usleep(600_000)
-        save("size-02-stepped-and-said")
+        // Put the menu away without pressing anything in it — every row here
+        // does something, so the only safe dismissal is a tap on the dimmed
+        // ground outside. The menu is anchored to `terminal.actions` at the top
+        // right and is about two thirds of the width, so the left margin is
+        // outside it whatever its height.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.06, dy: 0.5)).tap()
         sleep(1)
-
-
-        // It stuck: the menu now says the size it is drawing at, which is the
-        // difference between a setting and a message.
-        app.buttons["terminal.actions"].tap()
-        XCTAssertTrue(bigger.waitForExistence(timeout: 5))
-        let after = try points(in: bigger.label)
-        XCTAssertNotEqual(after, before, "the menu should report the size it is now drawing at")
-
-        // Put it back, from the menu that is already open.
-        app.buttons[back].tap()
-        sleep(1)
+        XCTAssertFalse(app.buttons["terminal.share"].exists, "the menu should have closed")
     }
 
     /**
@@ -291,11 +281,14 @@ final class FindShareAndAlertsUITests: XCTestCase {
         }
     }
 
-    /// "Bigger text — 11 pt" → 11.
-    private func points(in label: String) throws -> Int {
-        let digits = label.split(separator: " ").compactMap { Int($0) }
-        return try XCTUnwrap(digits.first, "no size in the menu label: \(label)")
-    }
+    /*
+     * **There is no `points(in:)` helper here any more.**
+     *
+     * It read the size out of a menu label — *"Bigger text — 11 pt"* → 11 — and
+     * it went with the two rows that carried one. The pinch case above needs no
+     * such thing: it asserts on the toast, which is a whole message rather than
+     * a label with a number buried in it.
+     */
 
     // MARK: - Share
 

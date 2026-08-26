@@ -8,6 +8,16 @@
  * what makes an agent's table stop wrapping. Everything else is the arithmetic
  * around it, which is worth pinning because it is what stops a pinch putting a
  * one-point terminal on somebody's screen.
+ *
+ * ## And the second thing that matters, added 2026-08-26
+ *
+ * > *"this bigger and smaller should be going to inside the settings page for
+ * > the all of the terminals with one setting we can just change this for
+ * > overall appearance page."*
+ *
+ * The controls moved to Settings → Appearance, which turned a claim that had
+ * always been half true into one this file has to hold up: **one setting, every
+ * terminal, including the ones already open.** See the last two cases.
  */
 
 import UIKit
@@ -170,5 +180,82 @@ final class TextSizeTests: XCTestCase {
         bridge.applyStoredTextSize()
 
         XCTAssertEqual(bridge.textSize, 10)
+    }
+
+    // MARK: - One setting, every terminal
+
+    /**
+     * *"one setting we can just change this for … all of them"* — and *all of
+     * them* includes the sessions that are already open.
+     *
+     * This is the assertion that would have failed against what shipped before
+     * the Appearance page. The size was stored per phone and always had been, so
+     * a *new* terminal came up right; a terminal that already existed kept the
+     * font it was handed until `applyStoredTextSize` was called on it, which
+     * happened when the session was next opened. With the controls inside the
+     * session's own menu that was invisible — you were looking at the terminal
+     * you had just changed. With the controls in Settings it is the whole of the
+     * experience: you set the size, you go back to what you were reading, and it
+     * is the size it always was.
+     *
+     * **Two bridges, not one.** One would pass on the bridge that made the
+     * change, which is exactly the case that never needed fixing. The claim is
+     * that a phone with several sessions open has one size across all of them.
+     */
+    func testChangingTheSizeReachesEveryTerminalAlreadyOpen() {
+        let one = bridge()
+        let two = bridge()
+        XCTAssertEqual(one.textSize, TextSize.standard)
+        XCTAssertEqual(two.textSize, TextSize.standard)
+
+        TextSize.save(16)
+
+        // The observers are registered against the main queue, so the change may
+        // land on this turn of the run loop or the next one depending on how
+        // Foundation dispatches it. Spun rather than assumed — a fixed
+        // `DispatchQueue.main.async` fence is ordered against one of those two
+        // and not the other.
+        settle { one.textSize == 16 && two.textSize == 16 }
+
+        XCTAssertEqual(one.textSize, 16, "the first terminal did not follow the setting")
+        XCTAssertEqual(two.textSize, 16, "the second terminal did not follow the setting")
+        XCTAssertEqual(one.view.font.pointSize, 16)
+        XCTAssertEqual(two.view.font.pointSize, 16)
+    }
+
+    /**
+     * Saving the size it already has must not reach the terminals at all.
+     *
+     * The same reason `testSettingTheSameSizeIsNotAReset` exists, one layer up.
+     * Assigning `font` soft-resets SwiftTerm's emulator and drops
+     * application-cursor mode, so a broadcast on a write that changed nothing
+     * would break the arrow keys in **every other open session** — a session
+     * nobody was touching, from a stepper press that did nothing. `TextSize.save`
+     * only announces a real change.
+     */
+    func testSavingTheSameSizeDoesNotResetOtherTerminals() {
+        let bridge = bridge()
+        // DECCKM, which every full-screen program sets.
+        bridge.feed("\u{1b}[?1h")
+        XCTAssertTrue(bridge.view.getTerminal().applicationCursor)
+
+        TextSize.save(bridge.textSize)
+        // Nothing to wait *for* — the point is that nothing arrives — so this is
+        // long enough for a notification that was going to be delivered to have
+        // been, and no longer.
+        settle(0.2) { false }
+
+        XCTAssertTrue(bridge.view.getTerminal().applicationCursor,
+                      "a save that changed nothing still reset a terminal")
+    }
+
+    /// Turn the run loop until `done` or `timeout` has gone by. A fixed sleep
+    /// would be either flaky or slow, and this suite has both a notification and
+    /// SwiftTerm's own next-turn delegate call to wait on.
+    private func settle(_ timeout: TimeInterval = 1, _ done: () -> Bool) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !done() && Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        }
     }
 }
