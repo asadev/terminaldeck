@@ -1341,8 +1341,15 @@ struct SessionPageView<Session: View>: View {
              * ⓘ beside them to carry a sentence.
              */
             if drivable {
+                /* `rectangle.badge.minus` and not `link.badge.minus`, which is
+                   what shipped this afternoon and **does not exist**: SF Symbols
+                   has `link.badge.plus` and no minus, so SwiftUI drew nothing at
+                   all and the strip came back with one button on it. He found it
+                   in the next review — *"I wanted to have two close buttons not
+                   just this one."* Every symbol name on this strip is one
+                   `plutil -p CoreGlyphs…/symbol_order.plist` can find. */
                 button("Disconnect this window from the session",
-                       "link.badge.minus",
+                       "rectangle.badge.minus",
                        id: "session.page.unbind") {
                     host?.bindMachineWindow(window.id, to: nil)
                 }
