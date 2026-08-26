@@ -1167,20 +1167,24 @@ struct SessionPageView<Session: View>: View {
          * window, and the terminal underneath keeps its own edges. There is no
          * rule at the foot: a browser window does not draw a line under itself.
          */
-        .background(TerminalChrome.paper(themes.selected))
+        .background(pane == .minimised ? Color.clear : TerminalChrome.paper(themes.selected))
         .clipShape(
             UnevenRoundedRectangle(topLeadingRadius: 0,
                                    bottomLeadingRadius: paneCorner,
                                    bottomTrailingRadius: paneCorner,
                                    topTrailingRadius: 0,
                                    style: .continuous))
+        // Stroke width zero rather than a conditional overlay: this stays in the
+        // tree while folded — `canvasHeight` is 0, the cast is kept — and a half
+        // point stroke round a zero-height rectangle is still a half-point line
+        // drawn across the terminal under the button.
         .overlay(
             UnevenRoundedRectangle(topLeadingRadius: 0,
                                    bottomLeadingRadius: paneCorner,
                                    bottomTrailingRadius: paneCorner,
                                    topTrailingRadius: 0,
                                    style: .continuous)
-                .stroke(windowInk, lineWidth: 0.5))
+                .stroke(windowInk, lineWidth: pane == .minimised ? 0 : 0.5))
         .padding(.horizontal, 6)
     }
 
@@ -1681,7 +1685,7 @@ struct SessionPageView<Session: View>: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
         /*
-         * **The window's top — or the whole of it, folded.**
+         * **The window's top.**
          *
          * > *"there is still window border till the typing bar."*
          *
@@ -1690,12 +1694,8 @@ struct SessionPageView<Session: View>: View {
          * — a browser window drawn around a whole screen. It is on the two halves
          * of the browser instead: this bar takes the top corners and the stage
          * below takes the bottom, and because they are adjacent with nothing
-         * between them they read as one window.
-         *
-         * > *"closed window will be a pill with round corners."*
-         *
-         * Folded, this bar **is** the window, so every corner is rounded and it
-         * becomes the pill he asked for.
+         * between them they read as one window. Folded, this bar is not drawn at
+         * all — `foldedButton` stands in for the whole window.
          *
          * > *"when the window is open let's keep it white pill."*
          *
@@ -1728,7 +1728,15 @@ struct SessionPageView<Session: View>: View {
                 .stroke(windowInk, lineWidth: 0.5))
         .padding(.horizontal, 6)
         .padding(.top, 4)
-        .simultaneousGesture(windowDrag)
+        /*
+         * Off while the address is being edited. A finger moving across a
+         * focused text field is placing a cursor or stretching a selection, and
+         * a window that slides away under that finger is a window that cannot be
+         * typed into. `.subviews` is the mask that leaves this view's own gesture
+         * out and the field's alive; the moment the keyboard goes the bar is a
+         * handle again.
+         */
+        .simultaneousGesture(windowDrag, including: addressFocused ? .subviews : .all)
     }
 
     /**

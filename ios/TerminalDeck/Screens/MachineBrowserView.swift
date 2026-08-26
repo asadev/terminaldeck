@@ -625,8 +625,6 @@ struct MachineBrowserView: View {
             switch destination {
             case let .window(id):
                 MachineWindowView(model: model, windowID: id)
-            case let .phonePage(id):
-                MachineWindowSettingsView(model: model, windowID: "", pushed: true, phoneTab: id)
             }
         }
         /*
@@ -3104,15 +3102,13 @@ private enum MachineBrowserDestination: Hashable, Identifiable {
     /// everything else.
     case window(String)
 
-    /// The settings of a page this phone is holding over a tunnel, by the tab's
-    /// own id. Not a window on the machine — which is one mark on that screen's
-    /// first card, and no longer a different screen with a different name.
-    case phonePage(String)
+    // `phonePage` used to be a second case here — the settings of a page this
+    // phone holds over a tunnel. Those settings come up as a sheet now, from
+    // `sheeted`, so nothing pushes them and the case went with the push.
 
     var id: String {
         switch self {
         case let .window(id): return "window:\(id)"
-        case let .phonePage(id): return "page:\(id)"
         }
     }
 }

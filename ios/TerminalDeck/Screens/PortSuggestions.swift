@@ -519,139 +519,13 @@ struct PortSuggestions: View {
 /* Rows                                                                        */
 /* -------------------------------------------------------------------------- */
 
-/**
- * A section header that is also the fold control.
- *
- * The whole header is the hit target rather than the chevron beside it, because
- * a 13pt chevron is not a touch target and the row is already the shape of one.
- * The count is on it for the same reason the switcher carries a session count: a
- * folded group has to be worth opening before anybody opens it, and *"Other
- * services · 9"* answers that where *"Other services ›"* does not.
- *
- * ## It is a chip now, and not a grey line across the sheet
- *
- * > *"these buttons down there are also like old type of styling I think this
- * > styling can be much better."*
- *
- * He said it about the foot of the New window sheet, in the same twelve minutes
- * as the same complaint in more words about the bar under a page: *"this bar
- * looks like very classic style and old and not according to the overall design
- * system… maybe a smooth cool beautiful box maybe round corners or something
- * which looks like latest shapes and overall applications design system."* The
- * bar became one inset card in that round. These were left as they were, and they
- * were the last thing on this sheet still drawn in the platform's plain-list
- * register: a grey uppercase label stretched from margin to margin with a bare
- * chevron pinned to the far end — the shape iOS gives a `Section` header, which
- * is a **caption**, over a stack of them that are **controls**.
- *
- * That mismatch is the whole defect and it is not only a matter of taste. A
- * label that folds a group is a control, and nothing about the old drawing said
- * so: no fill, no edge, nothing that moves under a thumb, and the one glyph that
- * hinted at it sitting 300 points away from the words it belonged to. Three of
- * these groups **start folded**, so on most machines the first thing this sheet
- * asks somebody to find is a control it had drawn as a caption.
- *
- * So it hugs its own words instead of spanning the sheet, it sits on a raised
- * surface with a 14-point corner and a hairline, and it presses. That is the
- * app's own character everywhere else — *tinted ground, floating cards, 20pt
- * radii, monoline icons* — at the size a header can carry: the rows under it are
- * 20-point cards on the same ground, and a chip a third of their width cannot be
- * mistaken for one of them.
- *
- * ## What was kept exactly, and why each one had to be
- *
- *  - **The identifier.** `localhost.section.<category>` is pressed by name in
- *    `LocalhostGroupingUITests`, tapped by the three suites that photograph this
- *    sheet (`ReviewScreensUITests`, `AppearanceShotsUITests`,
- *    `ReleaseShotsUITests` all open every folded group before the shutter), and
- *    asserted **absent** from the Browser tab's home by `MachineBrowserUITests`.
- *    A renamed identifier is a case that skips instead of failing.
- *  - **A `Button`.** Those suites ask for `app.buttons["localhost.section.other"]`
- *    and tap it; anything XCUITest does not classify as a button is a query that
- *    matches nothing and a fold that is never exercised. `SectionChipButtonStyle`
- *    is a `ButtonStyle` — it changes what a button looks like when pressed and
- *    nothing about what it is — which is why the press state could be added
- *    without touching that.
- *  - **The spoken label,** *"Other services, 9. Folded."* — `LocalhostGroupingUITests`
- *    asserts the word **Open** appears in it after a tap, which is how it knows
- *    the fold landed rather than merely that a tap was accepted.
- *  - **The words and the count.** Nothing is said differently; this is the round
- *    where *"simplify" means reorganize, never delete* is about pixels.
- *
- * The count moved inside a tinted capsule — `MachineWindowMark`'s shape, the same
- * word-in-a-capsule the Browser tab's rows wear — rather than being given a
- * second grey to be told apart by, and it keeps its monospace, which is where
- * this app's terminal character comes from and the reason `9` and `12` line up
- * down a column of headers.
+/*
+ * There is no section header any more — `list` above says why in his words —
+ * so the chip that folded a group, and the press style it wore, are gone with
+ * it. The identifiers those chips carried (`localhost.section.<category>`) are
+ * the ones `LocalhostGroupingUITests` pressed; that suite is retired with the
+ * folding it exercised.
  */
-private struct SectionToggle: View {
-    let category: PortCategory
-    let count: Int
-    let folded: Bool
-    let toggle: () -> Void
-
-    var body: some View {
-        Button(action: toggle) {
-            HStack(spacing: 8) {
-                // Monoline, and one weight lighter than the words beside it: a
-                // filled 11-point glyph at semibold is a blob at this size. The
-                // same treatment the row glyphs in this file were given.
-                Image(systemName: category.glyph)
-                    .font(.system(size: 12, weight: .regular))
-                    .foregroundStyle(Theme.secondary)
-                // Exactly `SchemeSectionCaption`'s type — 11, semibold, kerned
-                // 0.6 — because that caption is drawn twice on this same sheet,
-                // over **Open in** and over **Address**, and a third heading
-                // family a hundred points below them is how one sheet comes to
-                // look like two.
-                Text(category.title.uppercased())
-                    .font(.system(size: 11, weight: .semibold))
-                    .kerning(0.6)
-                    .foregroundStyle(Theme.secondary)
-                // `MachineWindowMark`'s shape — 11 semibold in a tinted capsule
-                // at radius 5 — drawn here rather than reused, for the one
-                // difference that matters: the digits stay **monospaced**, so a
-                // column of headers reading 5, 9 and 12 lines up instead of
-                // drifting a point per glyph. `String(count)` and never the `Int`
-                // interpolated: a number dropped into a Swift string is formatted
-                // with the locale's grouping separator, and a machine with a
-                // thousand ports open would say `1,000`.
-                Text(String(count))
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(Theme.secondary)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Theme.secondary.opacity(0.14),
-                                in: RoundedRectangle(cornerRadius: 5, style: .continuous))
-                Image(systemName: folded ? "chevron.right" : "chevron.down")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(Theme.faint)
-                    // Held to the width of the wider of the two glyphs, so the
-                    // chip does not change size by a point and a half each time
-                    // somebody folds it.
-                    .frame(width: 12)
-            }
-            .padding(.leading, 12)
-            .padding(.trailing, 10)
-            .padding(.vertical, 8)
-            .background(Theme.surfaceHigh,
-                        in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(Theme.hairline, lineWidth: 0.5))
-            .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        }
-        .buttonStyle(SectionChipButtonStyle())
-        // Leading rather than filling the row: the chip is the control and the
-        // space beside it is the sheet's ground, which is what stops a header
-        // from reading as one more card in the list under it.
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .textCase(nil)
-        .listRowBackground(Theme.background)
-        .listRowInsets(EdgeInsets(top: 10, leading: 20, bottom: 4, trailing: 20))
-        .accessibilityIdentifier("localhost.section.\(category.rawValue)")
-        .accessibilityLabel("\(category.title), \(count). \(folded ? "Folded" : "Open").")
-    }
-}
 
 /**
  * A row whose body is one action and whose trailing corner is another.
@@ -764,29 +638,6 @@ private struct PortRow: View {
             return entry.guessed ? address : "\(address)  ·  \(entry.process)"
         }
         return entry.guessed ? nil : entry.process
-    }
-}
-
-/**
- * The chip's press state, at the chip's own radius.
- *
- * `.plain` is what the header wore, and a `.plain` button is one that looks
- * identical before, during and after a press — which on a control that had no
- * fill and no edge either meant nothing on this sheet ever said *this word is a
- * button*. It is `PortRowButtonStyle`'s trade at 14 points instead of 20: the
- * ink tint rather than a white wash, because a white wash over a near-white
- * surface is invisible on paper, and a scale small enough to feel rather than
- * see. See `RowButtonStyle`.
- */
-private struct SectionChipButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .overlay {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(configuration.isPressed ? Theme.pressed : .clear)
-            }
-            .scaleEffect(configuration.isPressed ? 0.97 : 1)
-            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }
 

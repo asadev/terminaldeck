@@ -314,23 +314,14 @@ final class AppearanceShotsUITests: XCTestCase {
     private func localhost(_ scheme: Scheme) throws {
         XCTAssertTrue(app.openLocalhostList(),
                       "the localhost list is one row down the Browser tab's menu — see TabNavigation")
-        let headers = app.buttons.matching(
-            NSPredicate(format: "identifier BEGINSWITH 'localhost.section.'"))
-        XCTAssertTrue(headers.firstMatch.waitForExistence(timeout: 30),
-                      "the machine's ports should arrive and be grouped")
-        capture("\(scheme.rawValue)-03-localhost-grouped")
-
-        // Every folded group opened, because a folded header and an open one are
-        // two different rows to look at and the light theme's problem in this app
-        // has always been in the bands *between* things. It is also the only way
-        // to reach the page below: three of the six groups start folded and a
-        // plain HTTP server on a high port lands in one of them, so the row does
-        // not exist until its header is tapped — which is why the first run of
-        // this looked for `port.4399` on a screen that could not have had it.
-        for index in 0 ..< headers.count where headers.element(boundBy: index).label.contains("Folded") {
-            headers.element(boundBy: index).tap()
-        }
-        capture("\(scheme.rawValue)-04-localhost-unfolded")
+        // One list, no groups: *"this other services and web services should not
+        // be like separate lists, it should be one list."* What is waited for is
+        // the first port row, which is the thing that used to be behind a header.
+        let firstPort = app.buttons
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'port.' AND NOT identifier CONTAINS 'more'"))
+            .firstMatch
+        XCTAssertTrue(firstPort.waitForExistence(timeout: 30), "the machine's ports should arrive")
+        capture("\(scheme.rawValue)-03-localhost")
 
         // A page from the machine. The port is whatever the runner told us to
         // open — a page this repository serves rather than somebody else's dev

@@ -180,13 +180,13 @@ final class ReviewScreensUITests: XCTestCase {
         try connectToTheLiveHost()
 
         XCTAssertTrue(app.openLocalhostList())
-        let headers = app.buttons.matching(
-            NSPredicate(format: "identifier BEGINSWITH 'localhost.section.'"))
-        XCTAssertTrue(headers.firstMatch.waitForExistence(timeout: 30),
-                      "the machine's ports should arrive and be grouped")
-        for index in 0 ..< headers.count where headers.element(boundBy: index).label.contains("Folded") {
-            headers.element(boundBy: index).tap()
-        }
+        // One list, no groups: *"this other services and web services should not
+        // be like separate lists, it should be one list."* What is waited for is
+        // the first port row, which is the thing that used to be behind a header.
+        let firstPort = app.buttons
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'port.' AND NOT identifier CONTAINS 'more'"))
+            .firstMatch
+        XCTAssertTrue(firstPort.waitForExistence(timeout: 30), "the machine's ports should arrive")
         expecting = .dark
         capture("control-01-localhost-list", measured: false)
 

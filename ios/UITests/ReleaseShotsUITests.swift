@@ -102,7 +102,7 @@ final class ReleaseShotsUITests: XCTestCase {
     func testTheReleaseGateOnARealDesktop() throws {
         try fourTabsAndMachinesIsNotOneOfThem()
         try machinesPushesFromSettings()
-        try localhostGroupsAndFolds()
+        try localhostList()
         try theBackButtonIsLiveAfterAPushState()
         try aSessionHasNoPillOverItsOutput()
     }
@@ -156,34 +156,24 @@ final class ReleaseShotsUITests: XCTestCase {
     }
 
     /**
-     * The localhost list is grouped, and the noise starts folded.
+     * The localhost list, as one list.
      *
-     * Both halves are asserted because either alone is satisfiable by an accident:
-     * a screen with one section is "grouped" and a screen with everything folded
-     * is not a list. What is checked is that there is more than one section and
-     * that at least one of them opens on a tap and says so afterwards — the header
-     * carries its own state in its label, which is what makes the fold readable
-     * from outside the app at all.
+     * It was *grouped, and the noise starts folded*, and both halves were asserted
+     * here. Neither exists now — *"it should be one list, we can just see here
+     * they are, inside the pill, like it is SSH, Python, whatever it is"* — so
+     * what is photographed is the list with its first port on it.
      */
-    private func localhostGroupsAndFolds() throws {
+    private func localhostList() throws {
         XCTAssertTrue(app.openLocalhostList(),
                       "the localhost list is one row down the Browser tab's menu — see TabNavigation")
-
-        let headers = app.buttons.matching(
-            NSPredicate(format: "identifier BEGINSWITH 'localhost.section.'"))
-        XCTAssertTrue(headers.firstMatch.waitForExistence(timeout: 30),
-                      "the machine's ports should arrive and be grouped")
-        XCTAssertGreaterThan(headers.count, 1, "one section is not a grouping")
-        capture("03-localhost-grouped")
-
-        let folded = (0 ..< headers.count)
-            .map { headers.element(boundBy: $0) }
-            .first { $0.label.contains("Folded") }
-        let header = try XCTUnwrap(folded, "nothing on this machine landed in a folded group")
-        header.tap()
-        XCTAssertTrue(header.label.contains("Open"), "tapping a folded header should open it")
-        capture("04-localhost-unfolded")
-        header.tap()
+        // One list, no groups: *"this other services and web services should not
+        // be like separate lists, it should be one list."* What is waited for is
+        // the first port row, which is the thing that used to be behind a header.
+        let firstPort = app.buttons
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'port.' AND NOT identifier CONTAINS 'more'"))
+            .firstMatch
+        XCTAssertTrue(firstPort.waitForExistence(timeout: 30), "the machine's ports should arrive")
+        capture("03-localhost")
     }
 
     /**

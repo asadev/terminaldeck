@@ -50,10 +50,6 @@ final class KeyboardAccessory: UIInputView, UIInputViewAudioFeedback {
     var onBytes: (([UInt8]) -> Void)?
     var onCopy: (() -> Void)?
     var onPaste: (() -> Void)?
-    /// Open the photo picker, and the file picker. Both are sheets the screen
-    /// owns; this only says which one was asked for.
-    var onSendMedia: (() -> Void)?
-    var onSendFile: (() -> Void)?
     /// Put the keyboard away. Also closes the grid — dismiss means "give me the
     /// screen back", and leaving a grid up would be answering half of that.
     var onDismiss: (() -> Void)?
@@ -224,12 +220,6 @@ final class KeyboardAccessory: UIInputView, UIInputViewAudioFeedback {
         case .paste:
             UIDevice.current.playInputClick()
             onPaste?()
-        case .sendMedia:
-            UIDevice.current.playInputClick()
-            onSendMedia?()
-        case .sendFile:
-            UIDevice.current.playInputClick()
-            onSendFile?()
         }
     }
 

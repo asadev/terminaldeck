@@ -1,5 +1,10 @@
 /**
- * Naming a port and folding a group, with a finger.
+ * Naming a port, with a finger.
+ *
+ * It used to fold a group as well. There are no groups now — *"this other
+ * services and web services should not be like separate lists, it should be one
+ * list"* — so the case that pressed `localhost.section.other` is gone with the
+ * header it pressed.
  *
  * `PortCatalogTests` and `PortBookTests` pin the rules and the storage without a
  * simulator. What they cannot reach is the half that only exists on a screen:
@@ -107,10 +112,9 @@ final class LocalhostGroupingUITests: XCTestCase {
         let named = app.staticTexts["Harness page"]
         XCTAssertTrue(named.waitForExistence(timeout: 10),
                       "the row should be drawn under its new name")
-        // And it is in the group that naming promotes it to, which is the other
-        // half of the feature — the name is also the pin.
-        XCTAssertTrue(app.buttons["localhost.section.named"].waitForExistence(timeout: 5),
-                      "a named port should open the 'Named by you' group")
+        // Naming still lifts a port to the top of the list — the name is the pin
+        // — but there is no *Named by you* header to look for any more, so the
+        // row under its new name is the whole of what can be asserted here.
 
         app.terminate()
         app.launch()
@@ -124,38 +128,6 @@ final class LocalhostGroupingUITests: XCTestCase {
     }
 
     // MARK: - Folding
-
-    /**
-     * A folded group opens on a tap and stays open.
-     *
-     * The header is the control — *"we can keep some in the list and we can keep
-     * some folded"* — and the state is remembered per machine, so a WSL box where
-     * `wslrelay` is the whole point does not have to be unfolded every morning.
-     *
-     * Skipped rather than failed on a machine with nothing in the folded groups:
-     * there is no honest way to prove a fold against a group that does not exist,
-     * and a stock harness has only the one dev server listening.
-     */
-    func testAFoldedGroupOpensOnATapAndIsRemembered() throws {
-        let header = app.buttons["localhost.section.other"]
-        try XCTSkipUnless(header.waitForExistence(timeout: 15),
-                          "nothing on this machine landed in the folded group")
-        XCTAssertTrue(header.label.contains("Folded"), "it should start folded: \(header.label)")
-
-        header.tap()
-        XCTAssertTrue(app.buttons["localhost.section.other"].label.contains("Open"),
-                      "tapping the header should open the group")
-
-        app.terminate()
-        app.launch()
-        XCTAssertTrue(app.openLocalhostList(),
-                      "the localhost list is one row down the Browser tab's menu — see TabNavigation, and it should survive a relaunch")
-        XCTAssertTrue(app.buttons["localhost.section.other"].waitForExistence(timeout: 20))
-        XCTAssertTrue(app.buttons["localhost.section.other"].label.contains("Open"),
-                      "the choice should have outlived the app")
-
-        app.buttons["localhost.section.other"].tap()
-    }
 
     // MARK: - Helpers
 
