@@ -438,6 +438,75 @@ enum SessionPagePane: Equatable {
     case split
 }
 
+/**
+ * **What the pane was doing when its screen was last left, by session.**
+ *
+ * > *"coming back it refreshing the page every time I am coming, it should stay
+ * > as it is. If I go back, if I come back, it should not do this refresh thing,
+ * > it should stay."*
+ *
+ * A session screen is *destroyed* when somebody goes back to the list — the
+ * `NavigationStack` pops it, and every `@State` on it goes with the view. That is
+ * ordinary SwiftUI and it is right for almost everything on this pane, which is
+ * either derived from the machine's answers or is about a canvas that no longer
+ * exists. Three of them it is wrong for, because all three are decisions the
+ * **person** made:
+ *
+ *  - `shown` — which window has already been offered. Lost, `offer` runs again on
+ *    the way back in and re-plays the opening animation for a page that was
+ *    already open, and resets `pageHeight` for a picture nothing has replaced.
+ *  - `folded` — the window they deliberately put away. Lost, it comes back
+ *    uninvited over the terminal they folded it to read, which is not a refresh
+ *    so much as an undo of the last thing they did.
+ *  - `pane` — open or folded, which follows from the two above.
+ *
+ * So those three are kept here, outside the view, keyed by machine and session.
+ * Deliberately **not** persisted to disk and deliberately not cleaned up on a
+ * timer: it is three small values per session ever opened on this phone, it is
+ * meaningless the moment the app restarts (a window id does not survive the
+ * machine's browser), and everything read out of it is checked against the live
+ * window list before anything is drawn from it — `offer` compares `shown` to the
+ * window the machine actually reports, so a remembered id that no longer names a
+ * window simply loses the comparison.
+ *
+ * A `static` store rather than something handed down the view tree, because the
+ * two things that have to agree — the screen being destroyed and the screen
+ * being built again a second later — never exist at the same time and so have
+ * nothing to pass between them.
+ */
+/// The three decisions worth keeping. One value rather than three, so a
+/// remembered pane can never be half of one session's and half of another's.
+/// At file scope rather than nested inside the store, because the view builds
+/// one in an ordinary computed property and a type nested in a `@MainActor` enum
+/// inherits that isolation.
+struct SessionPaneState: Equatable {
+    var shown: String?
+    var folded: String?
+    var pane: SessionPagePane
+}
+
+@MainActor
+enum SessionPaneMemory {
+
+    private static var bySession: [String: SessionPaneState] = [:]
+
+    /// Machine **and** session, because session ids are not unique across
+    /// machines — the same reason `TerminalScreen` is opened for a named host.
+    static func key(host: String, session: String) -> String { "\(host)\u{0}\(session)" }
+
+    static func remembered(host: String, session: String) -> SessionPaneState? {
+        bySession[key(host: host, session: session)]
+    }
+
+    static func remember(host: String, session: String, _ state: SessionPaneState) {
+        bySession[key(host: host, session: session)] = state
+    }
+
+    /// Only for the tests, which would otherwise carry one case's answer into
+    /// the next.
+    static func forgetEverything() { bySession.removeAll() }
+}
+
 struct SessionPageView<Session: View>: View {
     let model: DeckModel
     let hostID: String
@@ -617,6 +686,13 @@ struct SessionPageView<Session: View>: View {
     /// Why the last thing typed was not sent, or nil — a `file:` URL, a port out
     /// of range. This phone's own refusal; the machine's arrive on the host.
     @State private var refused: String?
+
+    /// The three pieces of the pane's state that are a person's decision rather
+    /// than the machine's answer, gathered into the one value that outlives this
+    /// screen. See `SessionPaneMemory` for why they must.
+    private var keeping: SessionPaneState {
+        SessionPaneState(shown: shown, folded: folded, pane: pane)
+    }
 
     /**
      * Written out rather than left to the memberwise one, because the session is
@@ -855,13 +931,47 @@ struct SessionPageView<Session: View>: View {
             }
         }
         .onAppear {
+            /*
+             * **Before anything else, and before `offer` in particular.**
+             *
+             * This screen is built from nothing every time somebody comes back
+             * to the session, so these three arrive at their defaults — no window
+             * offered, nothing folded, open — and `offer` below then treats a
+             * window this pane has been showing for ten minutes as a window that
+             * has just arrived: it animates the pane open again and clears
+             * `pageHeight`. That is one of the two halves of *"it should not do
+             * this refresh thing"* on a session holding a page; the other half is
+             * the terminal underneath, and `HostLink.leaveSession` is that one.
+             *
+             * Restored here rather than in an initialiser because `@State` may
+             * not be written before the view has been installed.
+             */
+            if let kept = SessionPaneMemory.remembered(host: hostID, session: sessionID) {
+                shown = kept.shown
+                folded = kept.folded
+                pane = kept.pane
+            }
             reread()
             // The list may already be here — `HostLink` keeps the last answer for
             // the machine — and `onChange` does not fire for a value that was
             // already set. Without this, arriving at a session that has held a
             // window all along would show the strip and never offer the page.
+            //
+            // A no-op now when the window is the one this pane was already
+            // showing, which is exactly what the restore above is for.
             offer(window?.id)
             seedAddress()
+        }
+        /*
+         * Written on every change rather than on the way out, because there is
+         * very often no way out to write it in: a tab swap fires the arriving
+         * screen's `onAppear` and never the leaving screen's `onDisappear` —
+         * measured, and `SessionBarLink.release` carries the trace. A memory that
+         * only saved itself on `onDisappear` would be right for the back button
+         * and silently wrong for the tab bar.
+         */
+        .onChange(of: keeping) { _, now in
+            SessionPaneMemory.remember(host: hostID, session: sessionID, now)
         }
         /*
          * The page moved, so the field follows it — unless a thumb is in the
@@ -1431,6 +1541,15 @@ struct SessionPageView<Session: View>: View {
              *    with a nil session is that verb — the same one the Browser
              *    tab's own row uses, so a window let go from here and one let go
              *    from there end in the same state.
+             *
+             *    **And the way back is the `…`.** *"As soon as we talk about it
+             *    and want to bring it back we can bring it from here back to the
+             *    page from the three dots."* Pressing this records the window
+             *    against this session — `HostLink.bindMachineWindow` — so
+             *    *Attach a browser window* draws it first, with a *come back*
+             *    arrow. Nothing is said here about that: the strip is about to
+             *    disappear, and a sentence on a control that is leaving the
+             *    screen is a sentence nobody reads.
              *  - **Close** ends the window in the machine's browser, everywhere.
              *    Drawn in the critical colour, because it is the one control
              *    here that loses something a person would not expect to get
@@ -2156,16 +2275,81 @@ enum WindowNames {
 enum SessionWindowPicker {
 
     /**
-     * The windows this session could be given.
+     * The windows this session could be given, **the one it just let go of
+     * first**.
      *
      * `windows` is nil until a `browser.window.rows` has landed — *not asked
      * yet*, which reads the same here as *nothing open*, because in both cases
      * there is nothing honest to offer.
+     *
+     * ## Why one of them is moved to the top
+     *
+     * > *"One [close button] which will just remove this from this page but
+     * > window will not die. Window will stay there in the window side here… As
+     * > soon as we talk about it and want to bring it back we can bring it from
+     * > here back to the page from the three dots."*
+     *
+     * The round trip he is describing is two halves and only the first one was
+     * finished. Disconnect on the strip unbinds the window and leaves it open on
+     * the machine — `SessionPageView.strip` — and this section then lists it
+     * again, because it lists **every** window the machine has and asks nothing
+     * about who owns them. So the way back exists. What it did not do is stand
+     * out: the window he had been reading a second ago came back as one name in
+     * the machine's own order, between windows he has never opened, with the
+     * same frame icon on it as all of them. On a laptop with eight tabs that is
+     * a search, and *"we can bring it back"* is a sentence about **that**
+     * window, not about the list.
+     *
+     * So the one window a person is most likely to be looking for goes where
+     * they are already looking. `justLeft` is the id `HostLink.releasedWindows`
+     * wrote at the moment Disconnect was pressed, and it is matched against this
+     * list rather than trusted: a window closed since, or one another session has
+     * taken in the meantime, simply is not found here and the order is the
+     * machine's again.
+     *
+     * **Only moved, never duplicated and never removed.** The list is still
+     * every window, in the machine's order, with one of them lifted out and put
+     * back on top — so nothing a person could see a moment ago has gone, which
+     * is the failure mode a *recent* section would have had.
      */
-    static func attachable(_ windows: [MachineWindow]?, canDrive: Bool) -> [MachineWindow] {
+    static func attachable(_ windows: [MachineWindow]?, canDrive: Bool,
+                           justLeft: String? = nil) -> [MachineWindow] {
         guard canDrive else { return [] }
-        return windows ?? []
+        let open = windows ?? []
+        guard let justLeft, let index = open.firstIndex(where: { $0.id == justLeft }) else {
+            return open
+        }
+        var ordered = open
+        ordered.insert(ordered.remove(at: index), at: 0)
+        return ordered
     }
+
+    /**
+     * Whether this row is the window the session let go of.
+     *
+     * Drawn with a *come back* arrow instead of a window frame — `arrow.uturn.
+     * backward`, which is one of the names `plutil -p CoreGlyphs…/name_
+     * availability.plist` answers to. That is the whole of the marking and it is
+     * deliberately not a word: *"don't put any single statement anywhere"*, and
+     * a row in this section is a name. The icon says *return*, the position says
+     * *this one*, and a person who wants the sentence gets it from the hint.
+     *
+     * False for a window this session is holding **now**, because the checkmark
+     * is the truer thing to say about that one and a returning arrow beside a
+     * window you already have is a control offering to do what has been done.
+     * That case is reachable: attach the window back and the memory is dropped
+     * (`HostLink.bindMachineWindow`), but the machine's answer and this phone's
+     * next redraw are not the same frame.
+     */
+    static func justLeft(_ window: MachineWindow, justLeft: String?, session: String) -> Bool {
+        guard let justLeft, window.id == justLeft else { return false }
+        return !holds(window, session: session)
+    }
+
+    /// What that row means, on the hint, for a screen reader and for anybody who
+    /// holds it down. One line, read on request, never drawn.
+    static let justLeftMeaning =
+        "The window this session was holding until it was disconnected. It is still open; this hands it back."
 
     /// Whether this is the window the session already holds. It is drawn with a
     /// checkmark rather than left out: a picker that hides the current answer is
@@ -2201,6 +2385,13 @@ enum SessionWindowPicker {
      * and nothing to choose between them. The number goes on the name rather
      * than at the end, so a numbered row still reads as a name followed by its
      * holder.
+     *
+     * The number is a place in **the list as it is drawn**, which is what
+     * `windows` is and is why it is passed in rather than fetched. That used to
+     * be the same thing as the machine's own order and is not any more — see
+     * `attachable`, which lifts the window this session let go of to the top —
+     * so two `about:blank`s are still `1` and `2` down the menu a person is
+     * reading, which is the only order that could ever have told them apart.
      */
     static func row(_ window: MachineWindow, among windows: [MachineWindow],
                     session: String) -> String {

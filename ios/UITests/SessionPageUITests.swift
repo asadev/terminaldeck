@@ -1221,7 +1221,7 @@ final class SessionPageUITests: XCTestCase {
      * Browser tab's `+` offers *Machine* and *Isolated* on the New window sheet,
      * and `openAWindow` below presses that very control.
      */
-    private static let newWindow = "New window"
+    private static let newWindow = "New browser window"
 
     /// What the session row's `…` always carries, whatever machine it is against.
     /// Anything else that appears with it is a window — see `assertOffersAWindow`.
@@ -1249,8 +1249,11 @@ final class SessionPageUITests: XCTestCase {
      */
     private static let sessionMenuItems: Set<String> = [
         "Find in output", "Session details", "Model & effort",
-        "Copy Screen", "Paste", "Share output",
-        "Send Photo or Video", "Send File", "Re-attach",
+        // *"copy screen and share output I think little bit of confusing."*
+        // The two rows now differ by the one word that decides which is which —
+        // *the screen* against *all the output*. See `TerminalScreen`.
+        "Copy the screen", "Paste", "Share all the output",
+        "Send Photo or Video", "Send File", "Restart session",
         newWindow,
     ]
 

@@ -543,6 +543,16 @@ describe('the CDP tables screen the pipe transport', () => {
     'Network.getCookies': { urls: ['https://example.com/'] },
     'Page.startScreencast': { format: 'jpeg', quality: 50, maxWidth: 800 },
     'Input.dispatchTouchEvent': { type: 'touchStart', touchPoints: [{ x: 10, y: 20 }] },
+    // A pane on a phone, which is the only caller: a whole width and height in
+    // CSS pixels, no mobile emulation, and one image pixel per CSS pixel. This
+    // is the server table — the desktop refuses this method outright, and the
+    // assertion for that is further down.
+    'Emulation.setDeviceMetricsOverride': {
+      width: 393,
+      height: 440,
+      deviceScaleFactor: 1,
+      mobile: false,
+    },
   }
 
   it('allows exactly the methods the server driver needs, given arguments it would send', () => {

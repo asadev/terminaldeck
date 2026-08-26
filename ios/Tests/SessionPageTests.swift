@@ -720,6 +720,50 @@ final class SessionPageTests: XCTestCase {
         XCTAssertTrue(SessionWindowPicker.attachable([], canDrive: true).isEmpty)
     }
 
+    /**
+     * **The way back from Disconnect.**
+     *
+     * > *"One [close button] which will just remove this from this page but
+     * > window will not die. Window will stay there in the window side here… As
+     * > soon as we talk about it and want to bring it back we can bring it from
+     * > here back to the page from the three dots."*
+     *
+     * The window this session let go of goes to the top, so *"bring it back"* is
+     * the first row rather than a search through however many the machine has.
+     * Nothing is removed and nothing is duplicated — the same list, one of them
+     * lifted.
+     */
+    func testTheWindowThisSessionLetGoIsOfferedFirst() {
+        let open = [window("w1"), window("w2"), window("w3")]
+        let offered = SessionWindowPicker.attachable(open, canDrive: true, justLeft: "w3")
+        XCTAssertEqual(offered.map(\.id), ["w3", "w1", "w2"])
+    }
+
+    /// A window closed since, or one this phone was never told about, changes
+    /// nothing: the id is matched against the machine's live list rather than
+    /// trusted, so a stale memory is simply not found.
+    func testAWindowThatIsNoLongerOpenLeavesTheOrderAlone() {
+        let open = [window("w1"), window("w2")]
+        XCTAssertEqual(SessionWindowPicker.attachable(open, canDrive: true, justLeft: "gone").map(\.id),
+                       ["w1", "w2"])
+        XCTAssertEqual(SessionWindowPicker.attachable(open, canDrive: true).map(\.id), ["w1", "w2"])
+    }
+
+    /// The row is marked, and only while it is a way *back*. A window this
+    /// session is holding again wears the checkmark instead — a returning arrow
+    /// beside a window you already have is a control offering to do what has
+    /// been done.
+    func testOnlyTheReleasedWindowIsMarkedAndOnlyWhileItIsFree() {
+        let free = window("w3")
+        XCTAssertTrue(SessionWindowPicker.justLeft(free, justLeft: "w3", session: "s-mine"))
+        XCTAssertFalse(SessionWindowPicker.justLeft(free, justLeft: "w1", session: "s-mine"))
+        XCTAssertFalse(SessionWindowPicker.justLeft(free, justLeft: nil, session: "s-mine"))
+
+        let heldAgain = blank("w3", session: "s-mine")
+        XCTAssertFalse(SessionWindowPicker.justLeft(heldAgain, justLeft: "w3", session: "s-mine"),
+                       "the checkmark is the truer thing to say about a window this session holds")
+    }
+
     // MARK: - What a window is called
 
     /**

@@ -6,6 +6,7 @@ import {
   detach,
   hookContext,
   hostReset,
+  ownerOf,
   reserve,
   resetForTests,
   resolve,
@@ -226,11 +227,42 @@ describe('what the agent is told', () => {
 })
 
 describe('lifecycle', () => {
-  it('keeps a dead session’s rows and marks them', () => {
+  /*
+   * This used to read *"keeps a dead session's rows and marks them"* and assert
+   * one window still on the row. It was written for the desktop, where the chip
+   * on the window is right there to explain itself, and it is what he filmed
+   * from the other end:
+   *
+   * > *"why does this comes attached to that session before typing into it — see
+   * > this thing is still there if I close the session."*
+   *
+   * A pty that exits by itself is never removed from the registry, so
+   * `sessionRemoved` is never called for it and the claim was permanent — and on
+   * a phone a claim is all there is: `browser.window.rows` reports `session`, and
+   * every list draws the holder. The window stays open; what ends is who it
+   * belongs to.
+   */
+  it('lets a dead session’s windows go, and keeps the row marked', () => {
     attach({ sessionId: 's1', browserTabId: 'a' })
     sessionExited('s1')
     expect(bindingFor('s1')?.ended).toBe(true)
-    expect(bindingFor('s1')?.windows).toHaveLength(1)
+    expect(bindingFor('s1')?.windows).toHaveLength(0)
+    // Nobody holds it, so nothing says it is anybody's — which is what the phone
+    // reads to decide whether attaching it would take it off somebody.
+    expect(ownerOf('a')).toBeNull()
+    // And it can be handed to a live session without that being a steal.
+    expect(attach({ sessionId: 's2', browserTabId: 'a' }).n).toBe(1)
+  })
+
+  it('is idempotent, because both shells now call it', () => {
+    attach({ sessionId: 's1', browserTabId: 'a' })
+    sessionExited('s1')
+    // The desktop calls it from `host-core`'s exit callback and again from its
+    // own `onExit` a moment later. The second one must not renumber, resurrect
+    // or re-publish anything.
+    sessionExited('s1')
+    expect(bindingFor('s1')?.windows).toHaveLength(0)
+    expect(bindingFor('s1')?.ended).toBe(true)
   })
 
   it('drops everything when the session is removed', () => {

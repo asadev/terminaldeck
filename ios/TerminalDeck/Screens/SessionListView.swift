@@ -905,16 +905,21 @@ struct SessionListView: View {
             // Read once and handed to the rows, because the row text is
             // decided **against the list**: two windows with the same name
             // are told apart by their place in it. See `WindowNames`.
-            let windows = attachableWindows
+            let windows = attachableWindows(for: session)
             Section("Attach a browser window") {
                 ForEach(windows) { window in
                     Button {
                         model.bindMachineWindow(window.id, to: session.id)
                     } label: {
                         Label(SessionWindowPicker.row(window, among: windows, session: session.id),
-                              systemImage: SessionWindowPicker.holds(window, session: session.id)
-                                  ? "checkmark" : "macwindow")
+                              systemImage: icon(window, for: session))
                     }
+                    // Only the window this session let go of carries a sentence,
+                    // and only on the hint. See `SessionWindowPicker.attachable`.
+                    .accessibilityHint(SessionWindowPicker.justLeft(window,
+                                                                    justLeft: justLeftWindow(session),
+                                                                    session: session.id)
+                                        ? SessionWindowPicker.justLeftMeaning : "")
                 }
 
                 // In the same flat list and under its own name. The header that
@@ -950,10 +955,33 @@ struct SessionListView: View {
         .accessibilityHint(SessionWindowPicker.newWindowMeaning(machine: machineName))
     }
 
-    /// The machine's open windows, or nothing where nothing may be offered.
-    private var attachableWindows: [MachineWindow] {
+    /// The machine's open windows, or nothing where nothing may be offered —
+    /// with the one this session let go of lifted to the top. Per session rather
+    /// than per screen now, because that lift is a fact about the row the menu
+    /// belongs to: this list draws a `…` for every session on the machine, and
+    /// each of them is missing a different window.
+    private func attachableWindows(for session: RemoteSession) -> [MachineWindow] {
         SessionWindowPicker.attachable(model.machineBrowser?.windows,
-                                       canDrive: model.canDriveBrowser)
+                                       canDrive: model.canDriveBrowser,
+                                       justLeft: justLeftWindow(session))
+    }
+
+    /// The window this session was holding until something unbound it. See
+    /// `HostLink.releasedWindows`; the session screen's own `…` reads the same
+    /// answer, which is what stops the two menus ordering the same list two
+    /// different ways.
+    private func justLeftWindow(_ session: RemoteSession) -> String? {
+        model.releasedWindow(for: session.id)
+    }
+
+    /// Three states, three glyphs, no words: held now, just let go, or one of
+    /// the machine's other windows.
+    private func icon(_ window: MachineWindow, for session: RemoteSession) -> String {
+        if SessionWindowPicker.holds(window, session: session.id) { return "checkmark" }
+        return SessionWindowPicker.justLeft(window,
+                                            justLeft: justLeftWindow(session),
+                                            session: session.id)
+            ? "arrow.uturn.backward" : "macwindow"
     }
 
     /// The pages this phone has open on the machine these rows belong to. The

@@ -177,11 +177,40 @@ export interface SessionBinding {
   /**
    * True once the pty is gone.
    *
-   * The rows are **kept**. `renderer/browser/agent-target.ts` makes the same
-   * argument about a dead session in its picker: the stale entry is what lets
-   * the window say *why* instead of going quietly blank. Nothing can arrive
-   * from a dead pty, so keeping the row costs nothing and explains the page
-   * still on screen.
+   * **The row is kept and its windows are not.** That is a change, and the
+   * argument it replaces was: *"the stale entry is what lets the window say why
+   * instead of going quietly blank. Nothing can arrive from a dead pty, so
+   * keeping the row costs nothing and explains the page still on screen."* Every
+   * clause of that is true on the desktop, where the chip on the window is right
+   * there to read. It is not true anywhere else, and it cost this:
+   *
+   * > *"why does this comes attached to that session before typing into it — see
+   * > this thing is still there if I close the session. Okay, why this is doing
+   * > like this."*
+   *
+   * A phone has no chip and no tooltip. What it has is
+   * `browser.window.rows`, where a kept window is reported with `slot: 'B1'` and
+   * `session: <the dead id>` — so the window reads as **held**, by name, in every
+   * list that draws it: the Browser tab's rows, the strip over a session, and
+   * *Attach a browser window* in both `…` menus, where a window somebody else
+   * holds is drawn *"Name · other session"* because attaching **moves** it. So
+   * after an agent finished, the page it left open went on claiming to belong to
+   * it, and the next session's menu offered to take it off a session that no
+   * longer existed.
+   *
+   * A pty that has exited is not going to steer anything again, so there is
+   * nothing left for the ownership to protect — and *free* is the true thing to
+   * say about that window. `sessionExited` therefore lets the windows go while
+   * keeping the row and this flag, which is what the numbering and the colour
+   * hang off.
+   *
+   * **What that costs, stated rather than hidden:** `WindowBindChip`'s tooltip
+   * has a branch reading *"…has exited. This is what it was looking at."* and it
+   * is reached through `useWindowBinding`, which finds a window by walking the
+   * bindings' `windows` arrays. With the windows released that branch no longer
+   * fires — the chip simply goes, which is the honest drawing of a window that
+   * belongs to nobody. It is left standing rather than deleted because it is a
+   * true sentence about a state this module can still be asked to describe.
    */
   ended: boolean
 }
@@ -608,17 +637,62 @@ export function windowMoved(
 /* -------------------------------------------------------------- lifecycle -- */
 
 /**
- * The session's process ended. Its windows stay, marked.
+ * The session's process ended. Its windows are let go; the row stays, marked.
  *
  * Deliberately not the same event as removal, and the app already tells them
  * apart everywhere else: a process that ends by itself keeps its tab and its
  * scrollback because reading what it printed is the reason that tab is still
- * worth having, and the page it left open is part of what it printed.
+ * worth having, and the page it left open is part of what it printed. **The page
+ * stays open. What goes is the claim that it belongs to anybody** — the same
+ * verb the ✕ in the bind menu presses and the same one the phone's Disconnect
+ * presses, arriving from a third direction.
+ *
+ * ## Why the windows go now, when they used to stay
+ *
+ * > *"why does this comes attached to that session before typing into it — see
+ * > this thing is still there if I close the session. Okay, why this is doing
+ * > like this."*
+ *
+ * Two things had to be true at once for that, and both were. **A binding
+ * outlived its session:** a pty that exits by itself is *not* removed from the
+ * registry — `PtyManager`'s exit path leaves the session in `this.sessions` with
+ * an `exitCode`, so `onRemoved` never fires and `sessionRemoved` below is never
+ * called. Nothing else released anything. So for a session that simply finished,
+ * the binding was permanent for the life of the process. **And a bound window
+ * says whose it is,** everywhere: `browser.window.rows` carries `slot` and
+ * `session`, and every list that draws a window draws the holder — which is
+ * exactly what makes *Attach a browser window* read *"Stripe · agent-2"* about a
+ * session that ended an hour ago.
+ *
+ * Releasing costs nothing that was being protected. The no-reuse rule on
+ * {@link SessionBinding.next} exists so a stale `B1` in a **live** agent's head
+ * cannot come to mean a different page; there is no live agent here, and `next`
+ * is left alone anyway so a session somehow restarted against this row still
+ * numbers from where it was. `ended` stays true, the row stays, the colour is
+ * not released — that is {@link sessionRemoved}'s job and this is not a removal.
+ *
+ * Idempotent through the `ended` guard, which matters: it is called from
+ * `host-core`'s exit callback (which every shell shares) *and* from the desktop
+ * shell's own `onExit` a moment later.
  */
 export function sessionExited(sessionId: string, machineId = ''): void {
-  const binding = bindings.get(keyOf(sessionId, machineId))
+  const key = keyOf(sessionId, machineId)
+  const binding = bindings.get(key)
   if (!binding || binding.ended) return
   binding.ended = true
+  // Both halves, and both are needed: `windowOwner` is what `ownerOf` reads —
+  // and therefore what the wire's `row.session` and every "attached elsewhere"
+  // row are drawn from — while `windows` is what the desktop's view and
+  // `windowsOf` walk. Leaving either behind would be a window that is free
+  // according to one screen and held according to another.
+  for (const window of binding.windows) windowOwner.delete(window.browserTabId)
+  if (binding.windows.length > 0) {
+    binding.windows = []
+    // The same flag a detach sets. Nobody is going to read this session's next
+    // hook answer — the pty is gone — but the store's own bookkeeping should say
+    // what happened rather than quietly disagree with `detachFrom`.
+    unannounced.add(key)
+  }
   publish()
 }
 

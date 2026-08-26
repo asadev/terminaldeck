@@ -66,6 +66,26 @@
  * the terminal's own `inputView` — both are inside, which is why `copy` is
  * allowed to live there.
  *
+ * ## And a selection now survives everything except the person
+ *
+ * > *"usually when we just do like this with the finger on phone it is not, it
+ * > goes away, it does not stays as much as we selected… just make it more
+ * > easier or stay as much as we click on we want to copy."*
+ *
+ * Two things inside SwiftTerm were taking it away and neither of them is a
+ * touch: **a line of output** (`linefeed` calls `selectNone()` whenever mouse
+ * reporting is allowed, which is the default) and **the keyboard rising to carry
+ * the callout above** (`becomeFirstResponder` → keyboard → the container shrinks
+ * → `processSizeChange` opens with `selection.active = false`). On a session
+ * with an agent working in it the first one lands within milliseconds, and the
+ * second lands about a quarter of a second after the finger lifts — which is
+ * the second thing he filmed, the blue and the callout going together.
+ *
+ * Both are answered in `TerminalBridge`, because both need the emulator's flags
+ * and its size callback, and this file has neither. What this file does is say
+ * **when** — `onSelectionBegan` and `onSelectionEnded` below — and offer the
+ * callout a second time when a selection has had to be put back.
+ *
  * ## Why the geometry is recomputed rather than read
  *
  * A touch has to become a row and a column. SwiftTerm computes that from
@@ -132,6 +152,28 @@ final class TerminalGestures: NSObject, UIGestureRecognizerDelegate {
     /// bring the keyboard back. Tapping into the terminal means "I want to
     /// type", and a grid covering the keyboard is the wrong answer to that.
     var onTapped: (() -> Void)?
+
+    /**
+     * A selection is being made, and has been made.
+     *
+     * > *"it goes away, it does not stays as much as we selected… just make it
+     * > more easier or stay as much as we click on we want to copy."*
+     *
+     * The two ends of every selection gesture — the press that starts one and
+     * the drag that adjusts one both raise both — because keeping a selection on
+     * screen is not something this file can do on its own. What takes it away is
+     * inside SwiftTerm: a line of output, and the resize that the keyboard
+     * causes when the Copy callout below makes the terminal first responder.
+     * Both are answered by `TerminalBridge`, which owns the emulator's flags and
+     * is the only thing told when the terminal changes size.
+     *
+     * Two callbacks and not one, because the *beginning* carries a fact the end
+     * cannot: the selection that was being held is being replaced, and it has to
+     * stop being held **before** the new one exists or a repair in flight would
+     * restore the wrong range. See `TerminalBridge.holdSelection`.
+     */
+    var onSelectionBegan: (() -> Void)?
+    var onSelectionEnded: (() -> Void)?
 
     /**
      * A two-finger pinch, reported as the scale since the gesture began.
@@ -224,6 +266,10 @@ final class TerminalGestures: NSObject, UIGestureRecognizerDelegate {
     @objc private func longPress(_ recognizer: UILongPressGestureRecognizer) {
         switch recognizer.state {
         case .began:
+            // Before a character of the new selection exists, and that order is
+            // the whole reason this is a separate callback. See
+            // `onSelectionBegan`.
+            onSelectionBegan?()
             /*
              * The **word** under the finger, then character-precise from there.
              *
@@ -255,7 +301,14 @@ final class TerminalGestures: NSObject, UIGestureRecognizerDelegate {
             selection.dragExtend(bufferPosition: position(of: recognizer))
         case .ended, .cancelled, .failed:
             terminal.isSelecting = false
-            if recognizer.state == .ended { offerCopy() }
+            // Held before the callout is offered, because offering it is what
+            // raises the keyboard and the keyboard is one of the two things that
+            // used to destroy the selection. The bridge has to be holding the
+            // range before the resize arrives, or there is nothing to put back.
+            if recognizer.state == .ended {
+                onSelectionEnded?()
+                offerCopy()
+            }
         default:
             break
         }
@@ -265,6 +318,9 @@ final class TerminalGestures: NSObject, UIGestureRecognizerDelegate {
         switch recognizer.state {
         case .began:
             guard let anchor else { return }
+            // Adjusting one is replacing it: the range about to be held is not
+            // the range currently held. Same order as the long press above.
+            onSelectionBegan?()
             selection.pivot = anchor
             terminal.isSelecting = true
         case .changed:
@@ -273,7 +329,10 @@ final class TerminalGestures: NSObject, UIGestureRecognizerDelegate {
         case .ended, .cancelled, .failed:
             terminal.isSelecting = false
             anchor = nil
-            if recognizer.state == .ended { offerCopy() }
+            if recognizer.state == .ended {
+                onSelectionEnded?()
+                offerCopy()
+            }
         default:
             break
         }
@@ -419,6 +478,23 @@ final class TerminalGestures: NSObject, UIGestureRecognizerDelegate {
         guard selection.active, selection.hasSelectionRange else { return }
         _ = terminal.becomeFirstResponder()
         UIMenuController.shared.showMenu(from: terminal, rect: selectionRect())
+    }
+
+    /**
+     * The same callout again, over a selection that had to be put back.
+     *
+     * `becomeFirstResponder` above raises the keyboard, the keyboard shrinks the
+     * terminal, and `processSizeChange` clears the selection on the way through —
+     * which fires `selectionChanged`, which hides the menu. So the honest
+     * sequence on a phone with the keyboard down is: callout, then nothing.
+     * `TerminalBridge.restoreSelection` puts the range back the moment it is told
+     * the size changed, and calls this so the offer comes back with it.
+     *
+     * Not merged into `offerCopy` and not made public in general: this is the
+     * one caller that is a repair rather than a gesture, and naming it says so.
+     */
+    func offerCopyAgain() {
+        offerCopy()
     }
 
     /// The rectangle the callout must not cover — the selection itself, in the

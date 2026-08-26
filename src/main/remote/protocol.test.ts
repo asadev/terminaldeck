@@ -475,6 +475,11 @@ const VALID_CLIENT: ClientMessage[] = [
   // yet, which is the whole reason this cannot be two frames.
   { t: 'browser.window.open', url: 'http://localhost:3000/admin', session: SESSION_ID },
   { t: 'browser.window.go', id: 'browser:1', url: 'https://example.test/' },
+  // The page laid out at the pane's own size, so a cast arrives at 100% rather
+  // than at whatever fraction the machine's own window happens to be. Both
+  // numbers are required — fitting scales by the smaller ratio, so a width alone
+  // delivers 100% on one axis and something else on the other.
+  { t: 'browser.window.size', id: 'browser:1', width: 393, height: 440 },
   // One per verb of the closed list, because `WINDOW_ACTIONS` is the parser's
   // whole check on this frame and a word dropped from it is a refused press.
   ...(['back', 'forward', 'reload', 'close', 'record.on', 'record.off', 'share', 'isolate'] as const).map(
