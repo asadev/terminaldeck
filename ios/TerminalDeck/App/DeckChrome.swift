@@ -174,3 +174,132 @@ extension PortTunnel: Hashable {
         hasher.combine(ObjectIdentifier(self))
     }
 }
+
+/**
+ * **A `…` that comes up from the bottom, the way a phone browser's does.**
+ *
+ * > *"all the three dot things should bring a page from up to down instead of
+ * > right to left, and it will be like a pop-up kind of window which is coming
+ * > from down to up. It will not completely 100% go up but will leave some space
+ * > — just like the other browsers generally have, like Chrome has in phone."*
+ *
+ * A drop-in for `Menu { … } label: { … }`: same two builders in the same order,
+ * so a call site changes by one word. What it changes is the *presentation*. A
+ * `Menu` hangs a small card off the button it was pressed from — near the top
+ * right of the screen, which is the far corner from the thumb that pressed it,
+ * and it truncates rather than scrolls, so *Attach a browser window* with eleven
+ * windows under it was a list that could not be reached. A sheet arrives under
+ * the thumb, scrolls, and stops short of the top so the screen it came from is
+ * still visible behind it — which is the whole of *"leave some space"*, and how
+ * a person keeps track of what the menu belongs to.
+ *
+ * `.medium` first and `.large` available: a three-row menu does not need the
+ * screen, and a long one is one drag away from all of it.
+ *
+ * ## Why the rows carry a style rather than the caller doing it
+ *
+ * The buttons inside are written as menu items — `Button(role:) { } label: {
+ * Label(…) }` — and a `Button` in a `List` does not dismiss anything on its own,
+ * so every one of them would leave the sheet standing after it had acted. A
+ * `ButtonStyle` reaches every button in the content through the environment
+ * without the call site knowing, and `configuration.role` is still readable
+ * inside it, so a destructive row stays red rather than being flattened to the
+ * ordinary ink by the style that was added to close the sheet.
+ *
+ * The close is deferred by one run loop turn. The action and the end of the
+ * press land together, and tearing the sheet down out from under a button that
+ * is still delivering its own tap is how a menu item silently does nothing.
+ */
+struct SheetMenu<Label: View, Content: View>: View {
+    @ViewBuilder var content: () -> Content
+    @ViewBuilder var label: () -> Label
+
+    @State private var open = false
+
+    var body: some View {
+        Button { open = true } label: { label() }
+            .sheet(isPresented: $open) {
+                List { content() }
+                    .listStyle(.insetGrouped)
+                    .buttonStyle(SheetMenuRowStyle { open = false })
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
+                    .presentationCornerRadius(28)
+            }
+    }
+}
+
+private struct SheetMenuRowStyle: ButtonStyle {
+    let close: () -> Void
+
+    func makeBody(configuration: Configuration) -> some View {
+        SheetMenuRow(configuration: configuration, close: close)
+    }
+}
+
+private struct SheetMenuRow: View {
+    let configuration: ButtonStyleConfiguration
+    let close: () -> Void
+
+    @Environment(\.isEnabled) private var enabled
+    @State private var held = false
+
+    var body: some View {
+        configuration.label
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .foregroundStyle(tint)
+            .opacity(enabled ? (configuration.isPressed ? 0.55 : 1) : 0.4)
+            .onChange(of: configuration.isPressed) { _, pressing in
+                if pressing {
+                    held = true
+                } else if held {
+                    held = false
+                    // One turn later — see the header. The button's own action is
+                    // delivered on the same touch-up this observes.
+                    DispatchQueue.main.async { close() }
+                }
+            }
+    }
+
+    private var tint: AnyShapeStyle {
+        configuration.role == .destructive
+            ? AnyShapeStyle(Theme.critical)
+            : AnyShapeStyle(Theme.primary)
+    }
+}
+
+/**
+ * **Where a floating window is standing** — held apart from the view that draws
+ * it, and that is the whole point.
+ *
+ * > *"movement is not smooth when dragging."*
+ *
+ * A `@State` or a `@GestureState` invalidates the view that declares it, so a
+ * drag written the ordinary way rebuilds the whole screen on every frame — text
+ * fields, buttons, and in `SessionPageView`'s case a live picture of a machine's
+ * screen — to move one rectangle a few points. This is a reference the view
+ * merely holds, so writing to it invalidates nothing. `CarriedBy` is the only
+ * thing observing it, and all it does is set an `.offset`, which SwiftUI applies
+ * at draw time without laying anything out again.
+ *
+ * `placed` is deliberately **not** published: it is where the window was let go,
+ * read only when the next drag starts, and publishing it would put a second
+ * invalidation on the same gesture.
+ */
+@MainActor
+final class WindowCarriage: ObservableObject {
+    /// Live position, including whatever the finger is doing right now.
+    @Published var offset: CGSize = .zero
+
+    /// Where it settled after the last drag.
+    var placed: CGSize = .zero
+}
+
+struct CarriedBy: ViewModifier {
+    @ObservedObject var carriage: WindowCarriage
+
+    func body(content: Content) -> some View {
+        content.offset(x: carriage.offset.width, y: carriage.offset.height)
+    }
+}

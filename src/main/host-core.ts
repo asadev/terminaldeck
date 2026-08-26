@@ -2241,6 +2241,27 @@ export function createHostCore(options: HostCoreOptions): HostCore {
       return true
     },
     /*
+     * **The name on a session, writable from a phone.**
+     *
+     * > *"I said before, for being able to rename sessions."*
+     *
+     * `PtyManager.rename` is the same title the window at this desk renames with
+     * a double-click, so a session named from a phone and one named at the desk
+     * end up in the same field — one behaviour rather than two that can drift.
+     * Its presence here is what makes this desktop advertise `rename` at all,
+     * exactly as `close` above does for closing.
+     *
+     * Said plainly about what this does **not** do: the window at this desk keeps
+     * its own copy of the row and is not pushed at from here, so a session
+     * renamed from a phone reads the new name on this machine at its next list
+     * rather than the same instant. Every *device* is told at once — `server.ts`
+     * resends each connection's list — which is the half a phone can see. The
+     * desk half is a push channel this verb does not have and is not worth
+     * inventing one for while the name it would carry is already correct in the
+     * only place both sides read it from.
+     */
+    rename: (id, title) => ptys.rename(id, title),
+    /*
      * The copilot's own terminal is not the network's business.
      *
      * `SessionFanout` grew the predicate for this and then nothing answered it,

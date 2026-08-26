@@ -608,6 +608,24 @@ struct SessionPageView<Session: View>: View {
     @State private var canvasWidth: CGFloat = 0
 
     /**
+     * **Where he has put the window**, and where his finger has it right now.
+     *
+     * > *"make this button and overall window drag and moveable on the screen."*
+     *
+     * `placed` is kept across a fold and an unfold — a window moved out of the
+     * way stays out of the way — and `held` is the live translation, which is a
+     * `@GestureState` so it snaps back to zero on its own if the gesture is
+     * interrupted by a call or a rotation, rather than leaving the window stuck
+     * half-dragged.
+     */
+    @State private var carriage = WindowCarriage()
+
+    /// The room the window is allowed to move in — the pane's own bounds, read
+    /// off the screen rather than guessed, because the clamp is only as honest as
+    /// the frame it measures against.
+    @State private var paneSize: CGSize = .zero
+
+    /**
      * The window and the width the machine was last asked to lay out at, so it is
      * asked once per real change and never per frame.
      *
@@ -686,6 +704,12 @@ struct SessionPageView<Session: View>: View {
     /// Why the last thing typed was not sent, or nil — a `file:` URL, a port out
     /// of range. This phone's own refusal; the machine's arrive on the host.
     @State private var refused: String?
+    /// The chosen terminal scheme, for this window's ground and border — held as
+    /// a property rather than reached for inside `body`, the way `SessionBarView`
+    /// holds it, because `@Observable` only re-runs a body that read the object.
+    var themes: TerminalThemeStore = .shared
+    /// The link field's focus, so the keyboard's Go can submit it.
+    @FocusState private var addressFocused: Bool
 
     /// The three pieces of the pane's state that are a person's decision rather
     /// than the machine's answer, gathered into the one value that outlives this
@@ -910,24 +934,60 @@ struct SessionPageView<Session: View>: View {
      * stack had the same ceiling and spent it on the terminal instead.
      */
     var body: some View {
-        VStack(spacing: 0) {
+        /*
+         * **The window floats over the session; it does not sit on top of it.**
+         *
+         * > *"why after folding rest of the text from behind is still not
+         * > visible?"*
+         *
+         * The bar was a **row** in a stack the terminal was the second row of, so
+         * folding the page swapped a wide bar for a small button and the terminal
+         * still began underneath where the bar had been — a band of empty paper
+         * across the top with nothing in it, hiding the same lines the open bar
+         * had been hiding. A window that is put away should give its room back.
+         *
+         * So the session fills the screen and the browser is laid over it: folded,
+         * that is one circle with the session running under it; open, the bar and
+         * the page cover the top of the terminal the way a window covers what is
+         * behind it, and the lines underneath come back the moment it is folded or
+         * closed. The page half already worked this way — this puts the bar with
+         * it, which is also what makes the two of them one thing that can be
+         * picked up and moved.
+         */
+        ZStack(alignment: .top) {
+            sessionBelow
+                .background(
+                    GeometryReader { room in
+                        Color.clear.onAppear { paneSize = room.size }
+                            .onChange(of: room.size) { _, now in paneSize = now }
+                    })
             if let window {
-                strip(window)
-                // The strip's own bottom edge, drawn whatever is beneath it — the
-                // page when it is open, the terminal when it is not.
-                Rectangle()
-                    .fill(Theme.hairline)
-                    .frame(height: 0.5)
-            }
-            ZStack(alignment: .top) {
-                sessionBelow
-                // Gated on the window and not left to draw nothing on its own: a
-                // session with no window has no surface either, and the stage
-                // would answer *this window is not being cast* about a window
-                // that does not exist.
-                if window != nil {
-                    floatingPage
+                VStack(spacing: 0) {
+                /*
+                 * **Put away, it is one round button rather than a bar.**
+                 *
+                 * > *"when it is folded, instead of pill it can be a round button
+                 * > under three dots."*
+                 *
+                 * A folded page has nothing to say — the link is not worth a full
+                 * width of the screen for a page nobody is looking at, and a bar
+                 * across the top is a bar the terminal has to live under. One
+                 * mark in the corner under the `…` is the whole of *there is a
+                 * page here, press to see it*, and it gives every point it was
+                 * spending back to his session.
+                 */
+                if pane == .minimised {
+                    foldedButton(window)
+                } else {
+                    strip(window)
                 }
+                // Mounted whether or not it is showing — it collapses to nothing
+                // when the pane is folded rather than leaving the tree. Taking
+                // `stage` out would drop the cast and put a reconnect between the
+                // button and the page every time he opened it again.
+                floatingPage
+                }
+                .modifier(CarriedBy(carriage: carriage))
             }
         }
         .onAppear {
@@ -1076,56 +1136,52 @@ struct SessionPageView<Session: View>: View {
             }
             stage
             /*
-             * **The browser's own bar, under the page, inside the session.**
+             * **There is no bar under the page any more.**
              *
-             * > *"and the link directly we should be able to click and edit
-             * > there, basic features I mean of the browser window should be
-             * > there in the bar."*
+             * > *"let's remove this bottom pill completely. No need for reload,
+             * > forward, back and overall this pill."*
              *
-             * It is `BrowserPageBar` — the same two rows under a machine window,
-             * a watched surface and a page this phone is holding — rather than a
-             * fourth arrangement of the same verbs. *"Top, header and footer, tab
-             * bar should be same in all type of browsing windows"*, and a page
-             * inside a session is one of them.
-             *
-             * Drawn only while the page is open. Folded, the pane is meant to
-             * come to **nothing** — see `stageHasHeight` — and a bar left under a
-             * folded page would be a browser's chrome lying across the top rows
-             * of a terminal with no page above it.
-             *
-             * The refusal on a page nobody has typed into is one line rather than
-             * an absence: `whyBarIsLimited` is the whole-bar sentence, so a
-             * machine that will not take `browser.control` still draws the
-             * address it last reported and every verb in its own slot, greyed,
-             * with the reason on the ⓘ.
+             * It was `BrowserPageBar` — the address and the page verbs, the same
+             * two rows every other browsing window carries. The address moved up
+             * into the strip and the three verbs went, so a page inside a session
+             * is the page and one line above it. The full bar is still what the
+             * Browser tab's own window screen draws; this pane is the one place
+             * it is not, because this pane is a page **over a terminal** and
+             * every row it spends is a row of his session.
              */
-            if pane != .minimised, let window {
-                browserBar(window)
-                /*
-                 * Why the last thing typed did not go — a `file:` URL, a port
-                 * out of range. This phone's own refusal rather than the
-                 * machine's, which arrive on the host's own notice, and it is
-                 * drawn rather than swallowed for the reason every refusal in
-                 * this app is: a field that quietly does nothing is the control
-                 * that teaches people the app is broken.
-                 */
-                if let refused {
-                    Text(refused)
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.critical)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 14)
-                        .padding(.bottom, 8)
-                        .background(Theme.surface)
-                        .accessibilityIdentifier("session.page.refused")
-                }
-            }
-            if handover != nil || stageHasHeight {
-                Rectangle()
-                    .fill(Theme.hairline)
-                    .frame(height: 0.5)
+            if pane != .minimised, refused != nil {
+                Text(refused ?? "")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.critical)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 8)
+                    .accessibilityIdentifier("session.page.refused")
             }
         }
+        /*
+         * **The window's bottom half.**
+         *
+         * The same ground and the same hairline as the bar above it, with the
+         * bottom corners rounded — so the bar, the page and nothing else form one
+         * window, and the terminal underneath keeps its own edges. There is no
+         * rule at the foot: a browser window does not draw a line under itself.
+         */
+        .background(TerminalChrome.paper(themes.selected))
+        .clipShape(
+            UnevenRoundedRectangle(topLeadingRadius: 0,
+                                   bottomLeadingRadius: paneCorner,
+                                   bottomTrailingRadius: paneCorner,
+                                   topTrailingRadius: 0,
+                                   style: .continuous))
+        .overlay(
+            UnevenRoundedRectangle(topLeadingRadius: 0,
+                                   bottomLeadingRadius: paneCorner,
+                                   bottomTrailingRadius: paneCorner,
+                                   topTrailingRadius: 0,
+                                   style: .continuous)
+                .stroke(windowInk, lineWidth: 0.5))
+        .padding(.horizontal, 6)
     }
 
     /**
@@ -1237,9 +1293,29 @@ struct SessionPageView<Session: View>: View {
         guard id != sizedWindow || abs(paneWidth - sizedWidth) > 0.5 else { return }
         sizedWindow = id
         sizedWidth = paneWidth
+        /*
+         * **A desktop window's dimensions, not the pane's.**
+         *
+         * > *"the inner window page will be exactly like a desktop size 100%.
+         * > Last time when I said it, I meant that like a Windows, like a desktop
+         * > window dimension — not like a 100% on phone side."*
+         *
+         * The round before this sent the pane's own width, which laid the page
+         * out at 393 points and delivered a *phone* rendering — correct about
+         * "100%" and wrong about what he meant by it. A page laid out at
+         * `SessionPageRoom.desktop` and fitted to the pane is the shape he asked
+         * for twice over: it is what the site looks like on a computer, and at
+         * 1280×800 into 393 points it comes out about 246 points tall — short,
+         * landscape, and with nothing hanging off the side to scroll to.
+         *
+         * `paneWidth` is still what decides *whether* to send: the pane moving is
+         * the event, even though its width is no longer the payload. A rotation
+         * changes how much of the desktop page is on screen and is worth one
+         * frame; nothing else is.
+         */
         host?.sizeMachineWindow(id,
-                                width: Int(paneWidth.rounded()),
-                                height: Int(SessionPageRoom.splitCap.rounded()))
+                                width: SessionPageRoom.desktop.width,
+                                height: SessionPageRoom.desktop.height)
     }
 
     /// Fill the field from the page, unless a thumb is in it. One writer, so a
@@ -1409,9 +1485,9 @@ struct SessionPageView<Session: View>: View {
          * above handles a line drawn over a picture, and a folded pane has
          * nothing at all here and must keep having nothing.
          */
-        .background {
-            if canvasHeight == 0 { Theme.surface }
-        }
+        // Nothing here either. The window's ground is painted once, in `body`,
+        // out of the terminal's own scheme — see the note over the strip.
+
     }
 
     /**
@@ -1433,10 +1509,35 @@ struct SessionPageView<Session: View>: View {
      * points taken off it — see `body`. The cap is what stops a tall page
      * from covering the terminal rather than what stops it from squeezing it.
      */
+    /**
+     * How tall the canvas is drawn — and it does not jump once it is up.
+     *
+     * > *"it still opens big then becomes smaller, and the later size is the fix
+     * > maximum size for it."*
+     *
+     * It used to open at `SessionPageRoom.splitCap` — 440 points of generous box
+     * — wait for a frame, measure it and settle. That is the jump he filmed: one
+     * open, two layouts, and the terminal shoved twice.
+     *
+     * The settled height was never a discovery. The page is laid out at
+     * `SessionPageRoom.desktop` and fitted to the pane, so its height is
+     * arithmetic this side can do **before** a frame arrives:
+     * `paneWidth × 800 ÷ 1280`. So the canvas opens at that and stays there, and
+     * it is the ceiling too — a measured `pageHeight` may only make it shorter,
+     * never taller, which is the *"fix maximum size"* half of the sentence.
+     */
     private var canvasHeight: CGFloat {
         guard pane != .minimised, showing else { return 0 }
-        return pageHeight > 0 ? min(pageHeight, SessionPageRoom.splitCap) : SessionPageRoom.splitCap
+        let desktop = SessionPageRoom.deskHeight(paneWidth: canvasWidth)
+        return pageHeight > 0 ? min(pageHeight, desktop) : desktop
     }
+
+    /// A pill when the pane is put away, a window when it is open. See `body`.
+    private var paneCorner: CGFloat { 14 }
+
+    /// The window's ground and its hairline, taken from the chosen terminal
+    /// scheme so the browser and the terminal under it are one colour.
+    private var windowInk: Color { TerminalChrome.ink(themes.selected).opacity(0.18) }
 
     // MARK: - The strip
 
@@ -1463,120 +1564,73 @@ struct SessionPageView<Session: View>: View {
      * than an act; `SessionPageVerb` decides which of the three acts is true
      * here, and draws nothing when none of them is.
      */
+    /**
+     * **One bar, and the only thing on it is the link.**
+     *
+     * > *"let's keep use only the header bar, only one bar. Inside there you can
+     * > give one pill to put the text inside whatever we want to browse, like
+     * > google.com or whatever link is, on the left side of close window… and
+     * > from there we have still an icon of browser, Google and all of these
+     * > things, name of the page — will all go. Only link. Then close window
+     * > from this window, and that completely close red button, and drop-down
+     * > button. That's all we will keep here."*
+     *
+     * So the globe, the window's name and the site line are gone, and the bar
+     * this pane owns is the address itself with the three acts to the right of
+     * it. The bottom bar went with them — see `floatingPage`.
+     */
     private func strip(_ window: MachineWindow) -> some View {
-        // Six points rather than ten. Three controls sit here now where one did,
-        // and the row is measured on a 393-point phone: the name is what gives
-        // the space up, and it is the one thing on the strip that can be
-        // truncated without losing a verb.
         HStack(spacing: 6) {
-            Image(systemName: pane == .minimised ? "macwindow" : "globe")
-                .font(.system(size: 15))
-                .foregroundStyle(Theme.accent)
-                .frame(width: 20)
-
-            VStack(alignment: .leading, spacing: 1) {
-                // Named by the one rule that names windows anywhere in this
-                // app, so the strip and the menu that attached it cannot come to
-                // call the same window two different things. See `WindowNames`.
-                Text(WindowNames.name(window))
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(Theme.primary)
-                    .lineLimit(1)
-                /*
-                 * The site, and **only where the name above is not already
-                 * saying it.**
-                 *
-                 * This is the one second line in this file that stays, and it
-                 * stays because it is not a description of the feature — it is
-                 * the line somebody reads before deciding whether to type a
-                 * password into a page an agent brought them, which is why
-                 * `MachineBrowserText.site` names the host and nothing else.
-                 *
-                 * What it does drop is the case where it was the same fact
-                 * twice: a window with no title of its own is *named* by its
-                 * address, so drawing the host underneath it was a strip two
-                 * lines tall to say one thing — *"you should compact all the
-                 * features or buttons and without losing any of them."*
-                 */
-                if let site = MachineBrowserText.site(window.url),
-                   !WindowNames.name(window).lowercased().contains(site.lowercased()) {
-                    Text(site)
-                        .font(.system(size: 11))
-                        .foregroundStyle(Theme.faint)
-                        .lineLimit(1)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            // The whole label is the way back up, which is what a minimised
-            // thing on every desktop does. It is not the only way — the button is
-            // a real one beside it — so this is a bigger target for the same act
-            // rather than a control hidden in a label. It carries whichever of
-            // the two *bring the page back* verbs is on offer and never the fold:
-            // a page is put away deliberately, with the button.
-            .contentShape(Rectangle())
-            .onTapGesture {
-                switch verb {
-                case .show: show()
-                case .askAgain: askForThePage()
-                case .fold: break
-                }
-            }
-            .accessibilityIdentifier("session.page.title")
-
             /*
-             * **Two more, and both of them end something.**
-             *
-             * > *"there we should have two more buttons to either disconnect
-             * > directly from that bar of browser, or close this window
-             * > completely from everywhere, or disconnect — and the drop-down
-             * > that we already have. These three things should be there."*
-             *
-             * Three controls on this strip now, in the order he read them out,
-             * and they are three different acts on three different things:
-             *
-             *  - **Disconnect** unbinds the window from *this session*. The
-             *    window stays open on the machine with whatever is on it, the
-             *    agent simply stops owning it, and this strip goes because there
-             *    is no longer a window bound here. `bindMachineWindow(_:to:)`
-             *    with a nil session is that verb — the same one the Browser
-             *    tab's own row uses, so a window let go from here and one let go
-             *    from there end in the same state.
-             *
-             *    **And the way back is the `…`.** *"As soon as we talk about it
-             *    and want to bring it back we can bring it from here back to the
-             *    page from the three dots."* Pressing this records the window
-             *    against this session — `HostLink.bindMachineWindow` — so
-             *    *Attach a browser window* draws it first, with a *come back*
-             *    arrow. Nothing is said here about that: the strip is about to
-             *    disappear, and a sentence on a control that is leaving the
-             *    screen is a sentence nobody reads.
-             *  - **Close** ends the window in the machine's browser, everywhere.
-             *    Drawn in the critical colour, because it is the one control
-             *    here that loses something a person would not expect to get
-             *    back: anything unsaved on that page goes with it.
-             *  - **The chevron**, which is unchanged.
-             *
-             * Neither of the first two is drawn on a machine that will not take
-             * the verb. That is the narrower half of this app's rule about dead
-             * controls — a control that could *only ever* be refused is not
-             * offered — and it is the right half here: unlike the page verbs on
-             * the bar below, there is no row for these to keep a slot in and no
-             * ⓘ beside them to carry a sentence.
+             * The link, typed into directly. No globe beside it and no **Go**
+             * after it: *"let's remove Go button because on Enter it will be
+             * already go"* — which is what every phone browser does and what
+             * `submitLabel(.go)` already puts on the keyboard.
              */
+            TextField("Address or search", text: $address)
+                .textFieldStyle(.plain)
+                .keyboardType(.URL)
+                .textContentType(.URL)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .submitLabel(.go)
+                .onSubmit { sendAddress(address, from: window) }
+                .focused($addressFocused)
+                .font(.system(size: 13, design: .monospaced))
+                .foregroundStyle(Theme.primary)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityIdentifier("session.page.address")
+
             if drivable {
-                /* `rectangle.badge.minus` and not `link.badge.minus`, which is
-                   what shipped this afternoon and **does not exist**: SF Symbols
-                   has `link.badge.plus` and no minus, so SwiftUI drew nothing at
-                   all and the strip came back with one button on it. He found it
-                   in the next review — *"I wanted to have two close buttons not
-                   just this one."* Every symbol name on this strip is one
-                   `plutil -p CoreGlyphs…/symbol_order.plist` can find. */
-                button("Disconnect this window from the session",
-                       "rectangle.badge.minus",
-                       id: "session.page.unbind") {
-                    host?.bindMachineWindow(window.id, to: nil)
-                }
-                button("Close this window on the machine",
+                /* Every symbol name on this strip is one `plutil -p
+                   CoreGlyphs…/symbol_order.plist` can find, checked rather than
+                   guessed: the detach button that used to stand here shipped as
+                   `link.badge.minus`, which **does not exist** — SF Symbols has
+                   `link.badge.plus` and no minus — so SwiftUI drew nothing at all
+                   and the strip came back with one button on it. Nothing in the
+                   build says a name is wrong; the space is simply empty. */
+                /*
+                 * **There is no detach any more.**
+                 *
+                 * > *"let's remove this detach button completely, I think it's
+                 * > not needed in any situation. Direct close is better, which
+                 * > will also close it from server side too, not just here."*
+                 *
+                 * It was built two rounds ago from *"I wanted to have two close
+                 * buttons not just this one"*, and it did exactly what he asked
+                 * then: let the session go of the window while the page stayed
+                 * open on the machine. Looking at it, he found the distinction
+                 * costs more than it buys — two ✕-shaped controls side by side,
+                 * one of which leaves something behind that has to be found
+                 * again. One close, and it closes everywhere.
+                 *
+                 * The way *back* survives it: `HostLink.releasedWindows` still
+                 * lifts a window let go from anywhere else — the Browser tab's
+                 * row, the window's own settings — to the top of *Attach a
+                 * browser window*.
+                 */
+                button("Delete this window on the machine",
                        "xmark.circle",
                        id: "session.page.close",
                        tint: Theme.critical) {
@@ -1591,11 +1645,33 @@ struct SessionPageView<Session: View>: View {
              * beside it is what says which act it is, which is also how a test
              * tells them apart.
              */
+            /*
+             * **Two windows, not two arrows.**
+             *
+             * > *"give a better icon to collapse and expand window button… when it
+             * > is folded it is showing arrow up, when it is open it is showing a
+             * > down arrow. Instead we can have something representing a window —
+             * > when the window is open it is a little bit different, when the
+             * > window is closed it is a little bit different, but both are windows
+             * > instead of arrow."*
+             *
+             * A chevron says *which way this is about to move*, which is a fact
+             * about the animation rather than about the thing. These two say what
+             * the thing is: a rectangle drawn tall, and the same rectangle squeezed
+             * flat. One glyph, two heights — so the pair reads as one window in two
+             * states, which is what it is, and either one on its own still says
+             * *window* rather than *scroll*.
+             *
+             * `macwindow` and `inset.filled.topthird.rectangle` are both real
+             * names in `symbol_order.plist`, checked rather than assumed — a
+             * symbol that does not exist draws nothing and says nothing about it,
+             * which is how the detach button spent an afternoon invisible.
+             */
             switch verb {
             case .show:
-                button(SessionPageVerb.showLabel, "chevron.up", id: "session.page.fold") { show() }
+                button(SessionPageVerb.showLabel, SessionPageVerb.openGlyph, id: "session.page.fold") { show() }
             case .fold:
-                button(SessionPageVerb.hideLabel, "chevron.down", id: "session.page.fold") { fold() }
+                button(SessionPageVerb.hideLabel, SessionPageVerb.foldGlyph, id: "session.page.fold") { fold() }
             case .askAgain:
                 button(SessionPageVerb.askLabel, "arrow.clockwise", id: "session.page.fold") {
                     askForThePage()
@@ -1604,7 +1680,226 @@ struct SessionPageView<Session: View>: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
+        /*
+         * **The window's top — or the whole of it, folded.**
+         *
+         * > *"there is still window border till the typing bar."*
+         *
+         * The chrome was on the pane's outer stack, which holds the **session**
+         * as well, so the border ran round the terminal and down to the composer
+         * — a browser window drawn around a whole screen. It is on the two halves
+         * of the browser instead: this bar takes the top corners and the stage
+         * below takes the bottom, and because they are adjacent with nothing
+         * between them they read as one window.
+         *
+         * > *"closed window will be a pill with round corners."*
+         *
+         * Folded, this bar **is** the window, so every corner is rounded and it
+         * becomes the pill he asked for.
+         *
+         * > *"when the window is open let's keep it white pill."*
+         *
+         * `Theme.surface` is that white — the card colour, the same paper the
+         * `…` and the back button in the navigation bar are drawn on, so the
+         * address sits on the app rather than on the session. The **border**
+         * stays the terminal's — *"the colour of the borders and things should
+         * be exactly like the same as terminal colour"* — which is the pairing
+         * he described across the two rounds: a white pill outlined in the
+         * colour of the terminal it is standing over.
+         *
+         * The grey he filmed before this — *"it has a gray big border"* — was
+         * `Theme.background`, a step down from this one and the app's *ground*
+         * rather than its card. On a light phone the difference is `#f5f5f5`
+         * against `#ffffff`: a slab, versus a pill.
+         */
         .background(Theme.surface)
+        .clipShape(
+            UnevenRoundedRectangle(topLeadingRadius: paneCorner,
+                                   bottomLeadingRadius: 0,
+                                   bottomTrailingRadius: 0,
+                                   topTrailingRadius: paneCorner,
+                                   style: .continuous))
+        .overlay(
+            UnevenRoundedRectangle(topLeadingRadius: paneCorner,
+                                   bottomLeadingRadius: 0,
+                                   bottomTrailingRadius: 0,
+                                   topTrailingRadius: paneCorner,
+                                   style: .continuous)
+                .stroke(windowInk, lineWidth: 0.5))
+        .padding(.horizontal, 6)
+        .padding(.top, 4)
+        .simultaneousGesture(windowDrag)
+    }
+
+    /**
+     * **Folded: one round button, standing exactly where the chevron stood.**
+     *
+     * > *"when it is folded, instead of pill it can be a round button under three
+     * > dots."* — *"after folding, button's position will stay exactly where it
+     * > is before folding."*
+     *
+     * Both halves of that are one measurement. The chevron on the open bar sits
+     * `6 + 14 + 17 = 37` points in from the right edge of the screen: six of
+     * outer padding, fourteen of the bar's own, and half of the button's
+     * thirty-four. This circle is forty across, so seventeen of trailing padding
+     * puts its centre on that same 37 — the bar collapses **into** the button
+     * rather than the button appearing somewhere else, and there is nothing to
+     * re-find after a fold. Vertically the same: four of top padding and a forty
+     * tall circle centre on 24, against the open bar's 28.
+     *
+     * It keeps the chevron too, and the same `session.page.fold` identifier. It
+     * is not a new control — it is the only control the strip has ever had, with
+     * the address taken away from beside it.
+     */
+    private func foldedButton(_ window: MachineWindow) -> some View {
+        HStack(spacing: 0) {
+            Spacer(minLength: 0)
+            Button {
+                switch verb {
+                case .show, .fold: show()
+                case .askAgain: askForThePage()
+                }
+            } label: {
+                /*
+                 * **Glass, like the two it sits under.**
+                 *
+                 * > *"make this button also liquid glass like others."*
+                 *
+                 * The back chevron and the `…` above it are navigation-bar items,
+                 * which iOS 26 puts in glass capsules on its own — so a flat white
+                 * circle in the same column was the one control on the screen that
+                 * had opted out. `.interactive()` is the half that matters under a
+                 * finger: the glass responds to the press rather than sitting
+                 * still while a separate opacity does the work.
+                 *
+                 * Guarded, because this app still runs back to iOS 17, where the
+                 * white circle it used to be is the fallback and is fine.
+                 */
+                if #available(iOS 26.0, *) {
+                    foldedGlyph
+                        .frame(width: 40, height: 40)
+                        .glassEffect(.regular.interactive(), in: Circle())
+                        .contentShape(Circle())
+                } else {
+                    foldedGlyph
+                        .frame(width: 40, height: 40)
+                        .background(Theme.surface, in: Circle())
+                        .overlay(Circle().stroke(windowInk, lineWidth: 0.5))
+                        .contentShape(Circle())
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(verb == .askAgain ? SessionPageVerb.askLabel : SessionPageVerb.showLabel)
+            .accessibilityIdentifier("session.page.fold")
+        }
+        .padding(.trailing, 17)
+        .padding(.top, 4)
+        .simultaneousGesture(windowDrag)
+    }
+
+    private var foldedGlyph: some View {
+        Image(systemName: verb == .askAgain ? "arrow.clockwise" : SessionPageVerb.openGlyph)
+            .font(.system(size: 15, weight: .medium))
+            .foregroundStyle(Theme.accent)
+    }
+
+    /**
+     * **Pick the window up by its bar** — or by the button, folded.
+     *
+     * On the bar and on the button only, never on the page: the page is a live
+     * surface that takes taps and swipes of its own, and a window that moves when
+     * you try to scroll what is inside it is a window that cannot be used. Every
+     * desktop draws the same line in the same place, which is why a title bar
+     * exists at all.
+     *
+     * `minimumDistance: 10` is what keeps the folded button a button. Ten points
+     * is past the slop `Button` allows before it cancels its own tap, so a press
+     * is a press and a drag is a drag and neither can be mistaken for the other.
+     *
+     * Landing is clamped rather than free. A window dragged off the edge is a
+     * window that has to be found again with a gesture nobody was told about, so
+     * at least ninety points of it stay on screen sideways, it cannot be pushed
+     * above where it started — that is the navigation bar's room — and it cannot
+     * go further down than most of a screen.
+     */
+    /**
+     * **Why the drag does not live in `@State`.**
+     *
+     * > *"movement is not smooth when dragging."*
+     *
+     * It was a `@GestureState` on this view, and a `@GestureState` invalidates
+     * the view that declares it — so every frame of a drag rebuilt this whole
+     * pane: the address `TextField`, the buttons, and `stage`, which is a live
+     * picture of somebody's screen. Sixty rebuilds a second of all of that to
+     * move one rectangle a few points, and it stuttered exactly as he says.
+     *
+     * The position lives in a reference the view merely holds — mutating it
+     * invalidates nothing here — and `CarriedBy` is the only thing watching it.
+     * So a drag now re-renders one `offset` modifier and nothing else: the
+     * content is a value that was already built and is simply drawn somewhere
+     * else. `.offset` is a draw-time modifier, so nothing re-lays out either.
+     *
+     * The clamp is applied on every change rather than at the end, which is the
+     * other half of what he reported: the window is held inside the frame while
+     * the finger is still down instead of being let out and pulled back.
+     */
+    private var windowDrag: some Gesture {
+        DragGesture(minimumDistance: 6)
+            .onChanged { value in
+                carriage.offset = allowed(CGSize(width: carriage.placed.width + value.translation.width,
+                                                 height: carriage.placed.height + value.translation.height))
+            }
+            .onEnded { value in
+                var landing = allowed(CGSize(width: carriage.placed.width + value.translation.width,
+                                             height: carriage.placed.height + value.translation.height))
+                // Folded, it takes a side rather than staying where the finger
+                // left it — see `allowed`. Whichever edge it is nearer to.
+                if pane == .minimised {
+                    landing.width = abs(landing.width - leftEdge) < abs(landing.width) ? leftEdge : 0
+                }
+                carriage.placed = landing
+                withAnimation(.snappy(duration: 0.22)) { carriage.offset = landing }
+            }
+    }
+
+    /// How far left the folded button may go: far enough to sit against the left
+    /// edge with the same margin it keeps on the right, and no further.
+    private var leftEdge: CGFloat {
+        let width = paneSize.width > 0 ? paneSize.width : 393
+        return min(-(width - 74), 0)
+    }
+
+    /**
+     * **The frame is a wall, and the edges are the only places to stand.**
+     *
+     * > *"it doesn't mean I can drag it anywhere… currently I dragged it outside
+     * > of the frame and it is lost somewhere outside of the frame. When I am
+     * > dragging it inside the frame it should not be anywhere inside the frame —
+     * > it should just stay in the corners of the frame, like I can move up and
+     * > down, or from the left side also up and down, instead of just having it
+     * > in the center. When it is open it is already taking the full width, so it
+     * > can move up and down also."*
+     *
+     * Two rules, one for each shape:
+     *
+     *  - **Open**, the window is the width of the pane, so sideways means nothing
+     *    — `x` is pinned at zero and only the height moves.
+     *  - **Folded**, the button rides an edge. It travels freely up and down and
+     *    is only ever at the left margin or the right one; `windowDrag` picks
+     *    whichever it was let go nearer to. A small round control parked in the
+     *    middle of a terminal is over the text; on an edge it is beside it.
+     *
+     * Both are held to the pane in both directions, and the hold is applied while
+     * the finger is still down — which is what stops a window being dragged off
+     * the screen and having to be found again.
+     */
+    private func allowed(_ proposed: CGSize) -> CGSize {
+        let height = paneSize.height > 0 ? paneSize.height : 640
+        let tall: CGFloat = pane == .minimised ? 48 : 56
+        let down = max(height - tall - 8, 0)
+        return CGSize(
+            width: pane == .minimised ? min(max(proposed.width, leftEdge), 0) : 0,
+            height: min(max(proposed.height, 0), down))
     }
 
     private func button(_ label: String, _ icon: String,
@@ -2450,7 +2745,7 @@ enum SessionWindowPicker {
     ///
     /// The menu it sits in is a **session's** menu, so *New window* next to Find
     /// and Paste reads as a second terminal. Two words settle it.
-    static let newWindow = "New browser window"
+    static let newWindow = "New window"
 
     /// What the row means, in one line, for a screen reader and for anybody who
     /// holds the row down. A hint is read on request and is not drawn, which is
@@ -2581,6 +2876,21 @@ enum SessionPageVerb: Equatable {
     static let showLabel = "Show the page"
     static let hideLabel = "Hide the page"
     static let askLabel = "Ask for the page again"
+
+    /**
+     * **The two glyphs, spelled once.**
+     *
+     * > *"the icon can be better."*
+     *
+     * `rectangle.expand.vertical` and its compressed twin were a pair of thin
+     * outlines with arrowheads in them — closer to *stretch this* than to *a
+     * window*. These two are a window and the same window put away: `macwindow`
+     * draws the frame with its title bar and a body under it; the inset symbol
+     * draws the bar with the body gone. Same object, two states, no arrows —
+     * which is what he described.
+     */
+    static let openGlyph = "macwindow"
+    static let foldGlyph = "inset.filled.topthird.rectangle"
 
     static func verb(folded: Bool, showing: Bool, castable: Bool) -> SessionPageVerb {
         /*
@@ -2754,6 +3064,32 @@ enum SessionPageStage: Equatable {
  */
 private enum SessionPageRoom {
     static let splitCap: CGFloat = 440
+
+    /**
+     * The shape a page is laid out in — a desktop window, in CSS pixels.
+     *
+     * > *"the inner window page will be exactly like a desktop size 100%… like a
+     * > Windows, like a desktop window dimension."*
+     *
+     * 1280×800 is the ordinary laptop viewport every responsive site is designed
+     * against, and it is landscape, which is the other half of what he asked for:
+     * *"just make it landscape, not like the phone size — this much height I'm
+     * not looking for."* Fitted to a 393-point phone it is 246 points tall.
+     */
+    static let desktop = (width: 1280, height: 800)
+
+    /**
+     * How tall a desktop page comes out, fitted to a pane this wide.
+     *
+     * The arithmetic `WatchMath.fit` is about to do, done one step early so the
+     * canvas opens at the height it will settle at instead of opening generous
+     * and jumping. Capped at `splitCap`, and floored on a pane nobody has
+     * measured yet so an unmeasured pane still has a shape.
+     */
+    static func deskHeight(paneWidth: CGFloat) -> CGFloat {
+        let width = paneWidth > 0 ? paneWidth : 393
+        return min(width * CGFloat(desktop.height) / CGFloat(desktop.width), splitCap)
+    }
 
     /// Pointing at one thing on the page needs a sheet to answer into, and this
     /// pane is a strip over a terminal. The window's own screen has one.

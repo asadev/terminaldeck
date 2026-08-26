@@ -78,6 +78,25 @@ final class KeyGridView: UIInputView {
     static let fallbackHeight: CGFloat = 291
 
     private var modifierButtons: [KeyAction.Modifier: KeyCapButton] = [:]
+
+    /// The *Send* group's own view, kept so it can be taken away.
+    private var sendSection: UIView?
+
+    /**
+     * Whether this machine will accept a photo or a file.
+     *
+     * Hidden rather than dead when it will not: *"a control that can only
+     * produce a refusal is not a control"* — the same reasoning that kept these
+     * two out of the session's `…` on a machine that cannot receive them, moved
+     * here with them. A stack view drops a hidden arranged subview out of the
+     * layout entirely, so the panel closes over the gap and *Edit* is first.
+     */
+    var canSendFiles = true {
+        didSet {
+            guard canSendFiles != oldValue else { return }
+            sendSection?.isHidden = !canSendFiles
+        }
+    }
     private let scroll = UIScrollView()
 
     /// Six across. The number is a consequence rather than a taste: at 375
@@ -117,7 +136,12 @@ final class KeyGridView: UIInputView {
         column.translatesAutoresizingMaskIntoConstraints = false
 
         for group in KeyPlan.grid {
-            column.addArrangedSubview(section(group))
+            let view = section(group)
+            if group.title == KeyPlan.sendGroupTitle {
+                sendSection = view
+                view.isHidden = !canSendFiles
+            }
+            column.addArrangedSubview(view)
         }
 
         scroll.translatesAutoresizingMaskIntoConstraints = false

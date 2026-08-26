@@ -68,6 +68,10 @@ enum KeyAction: Equatable {
     case modifier(Modifier)
     case copy
     case paste
+    /// Open the photo picker. Raised to the screen, which owns the sheet.
+    case sendMedia
+    /// Open the file picker. Same.
+    case sendFile
 
     enum Modifier: Equatable {
         case control
@@ -128,6 +132,32 @@ enum KeyPlan {
      * function keys are the ones nobody presses twice a week.
      */
     static let grid: [KeyGroup] = [
+        /*
+         * **Sending is a keyboard act, so it is on the keyboard.**
+         *
+         * > *"can we give media and file button in the bar that comes with
+         * > keyboard for special buttons instead of dropdown?"*
+         *
+         * They were two rows in the session's `…`, which is where a screen keeps
+         * the things it does *about* a session — details, model, windows. Handing
+         * a photo to an agent is not one of those; it is a thing you do **while
+         * typing to it**, in the same breath as the sentence you are writing. So
+         * it belongs to the keyboard, and this is the keyboard's own surface.
+         *
+         * On this panel and not on the fixed bar, and that is arithmetic rather
+         * than taste: `minimumBarWidth` already comes to 366 points against a
+         * narrowest phone of 375, so five keys and two pinned
+         * buttons is what fits at Apple's 44-point touch target. A sixth and
+         * seventh would put the bar at 416 and something would have to scroll,
+         * which is the exact defect this whole layout was written to remove. The
+         * rule at `minimumBarWidth` says what to do instead — *move a key into
+         * the grid* — so a key that was never on the bar starts there, first
+         * group, one press from the bar.
+         */
+        KeyGroup(title: sendGroupTitle, keys: [
+            KeyCap(label: "photo", title: "Send a photo or video", action: .sendMedia),
+            KeyCap(label: "file", title: "Send a file", action: .sendFile),
+        ]),
         KeyGroup(title: "Edit", keys: [
             KeyCap(label: "copy", title: "Copy the selection, or the screen", action: .copy),
             KeyCap(label: "paste", title: "Paste", action: .paste),
@@ -236,6 +266,12 @@ enum KeyPlan {
      * is checking a stated rule rather than a number somebody remembered.
      */
     static let narrowestPhoneWidth: CGFloat = 375
+
+    /// The *Send* group's name, spelled once: `KeyGridView` finds that group by
+    /// it to hide it on a machine that cannot receive a file, and a heading
+    /// matched against a literal in another file is a heading that gets renamed
+    /// and silently stops being found.
+    static let sendGroupTitle = "Send"
 
     /// The smallest a key may be and still be a touch target. Apple's own
     /// minimum, and the reason the bar cannot simply grow another key.

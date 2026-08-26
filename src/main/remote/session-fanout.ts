@@ -85,6 +85,14 @@ export interface PtySource {
    * see `SessionAccess.create` — so it is optional here too rather than a
    * method that exists and always refuses.
    */
+  /**
+   * Give a session a name. Absent when this host has no writable title.
+   *
+   * Optional for the reason {@link create} and {@link close} are: its absence is
+   * what stops the host advertising the `rename` capability, so a client draws
+   * no Rename row rather than sending a frame that can only be refused.
+   */
+  rename?(id: string, title: string): boolean
   create?(request: CreateRequest): Promise<CreateOutcome>
   /**
    * End a session. Absent when this host will not let a device end one.
@@ -309,6 +317,16 @@ export class SessionFanout implements SessionAccess {
   readonly close?: (id: string) => boolean
 
   /**
+   * Give a session a name, present exactly when the pty layer can take one.
+   *
+   * Hidden sessions are refused here for the same reason {@link close} refuses
+   * them: the copilot's own terminal is hidden from every device including the
+   * owner's, and a rename is a write to it. `false` rather than a distinct
+   * refusal, so the answer cannot confirm that an id names something real.
+   */
+  readonly rename?: (id: string, title: string) => boolean
+
+  /**
    * Present exactly when {@link create} is, and assigned the same way for the
    * same reason: `server.ts` reads whether these methods exist to decide what to
    * advertise, and a prototype method always exists.
@@ -416,6 +434,13 @@ export class SessionFanout implements SessionAccess {
       this.close = (id) => {
         if (this.isHidden(id)) return false
         return end(id)
+      }
+    }
+    const label = ptys.rename
+    if (label) {
+      this.rename = (id, title) => {
+        if (this.isHidden(id)) return false
+        return label(id, title)
       }
     }
     const controls = ptys.controls

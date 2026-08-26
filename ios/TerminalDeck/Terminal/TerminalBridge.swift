@@ -376,6 +376,24 @@ final class TerminalBridge: NSObject, @preconcurrency TerminalViewDelegate, Term
         }
         accessory.onCopy = { [weak self] in self?.onCopy?() }
         accessory.onPaste = { [weak self] in self?.onPaste?() }
+        /*
+         * The keyboard goes down with the ask, and the grid with it.
+         *
+         * Both raise a sheet, and a sheet coming up over a raised keyboard is a
+         * sheet the keyboard shoves half off the screen and then fights on the
+         * way out. Putting the keyboard away first is also what a person means:
+         * they have stopped typing and are choosing a file.
+         */
+        accessory.onSendMedia = { [weak self] in
+            self?.closeGrid()
+            self?.blur()
+            self?.onSendMedia?()
+        }
+        accessory.onSendFile = { [weak self] in
+            self?.closeGrid()
+            self?.blur()
+            self?.onSendFile?()
+        }
         accessory.onDismiss = { [weak self] in
             // The grid goes with the keyboard. Dismiss means "give me the screen
             // back", and leaving a grid standing would answer half of that.
@@ -465,6 +483,17 @@ final class TerminalBridge: NSObject, @preconcurrency TerminalViewDelegate, Term
     /// pasteboard and the wire, rather than here.
     var onCopy: (() -> Void)?
     var onPaste: (() -> Void)?
+    /// Raised by the *photo* and *file* keys on the grid. The screen owns the
+    /// pickers, so this only carries the ask.
+    var onSendMedia: (() -> Void)?
+    var onSendFile: (() -> Void)?
+
+    /// Whether this machine accepts a photo or a file, which decides whether the
+    /// grid draws the two keys at all. See `KeyGridView.canSendFiles`.
+    var canSendFiles: Bool {
+        get { grid.canSendFiles }
+        set { grid.canSendFiles = newValue }
+    }
 
     /// What the user has selected with a long press, or nil when nothing is.
     func selectedText() -> String? {

@@ -108,6 +108,22 @@ struct SessionListView: View {
     @State private var closingSession: RemoteSession?
 
     /**
+     * The session being renamed, and the name being typed for it.
+     *
+     * > *"I said before, for being able to rename sessions."*
+     *
+     * Two pieces of state rather than one, because the field has to survive the
+     * session being re-read from the machine underneath it: the list refreshes
+     * every few seconds and a draft held on the value would be thrown away with
+     * it. The whole session and not an id for the same reason `closingSession`
+     * holds one — the alert's title is drawn from the value that was pressed,
+     * not from a lookup against a list the machine may have reordered.
+     */
+    @State private var renamingSession: RemoteSession?
+    @State private var typedName = ""
+
+
+    /**
      * Whether the model cluster is up, for the session the machine's cluster is
      * currently following.
      *
@@ -229,11 +245,11 @@ struct SessionListView: View {
          * the value that was swiped and not from a lookup that could resolve
          * against a list the machine has reordered in between.
          */
-        .alert("Close \(closingSession?.title ?? "this session")?",
+        .alert("Delete \(closingSession?.title ?? "this session")?",
                isPresented: Binding(get: { closingSession != nil },
                                     set: { if !$0 { closingSession = nil } }),
                presenting: closingSession) { session in
-            Button("Close session", role: .destructive) {
+            Button("Delete session", role: .destructive) {
                 model.closeSession(session.id)
                 closingSession = nil
             }
@@ -242,6 +258,37 @@ struct SessionListView: View {
         } message: { _ in
             Text("The session stops on \(model.current?.label ?? "the machine") and does not come back. "
                  + "Anything it was part-way through stops there.")
+        }
+        /*
+         * **Renaming, in the one shape iOS has for a short piece of typed text.**
+         *
+         * A `TextField` inside an alert rather than a sheet of its own: it is one
+         * line, it has one answer, and a screen for it would be a screen to get
+         * out of. *Save* is not destructive and is the default, so Return commits
+         * it.
+         *
+         * The empty field is allowed through deliberately — it is how the machine
+         * is told to go back to the name it derives from the folder, which is the
+         * only way to undo a rename without knowing what that folder is called.
+         * The message under the field says so, because an empty box that means
+         * something is a thing nobody guesses.
+         */
+        .alert("Rename \(renamingSession?.title ?? "this session")",
+               isPresented: Binding(get: { renamingSession != nil },
+                                    set: { if !$0 { renamingSession = nil } }),
+               presenting: renamingSession) { session in
+            TextField("Name", text: $typedName)
+                .textInputAutocapitalization(.words)
+                .accessibilityIdentifier("sessions.rename.field")
+            Button("Save") {
+                model.renameSession(session.id, to: typedName)
+                renamingSession = nil
+            }
+            .accessibilityIdentifier("sessions.rename.save")
+            Button("Cancel", role: .cancel) { renamingSession = nil }
+        } message: { _ in
+            Text("Every device signed in here sees the new name. "
+                 + "Leave it empty to go back to the folder's own name.")
         }
         .navigationTitle(Brand.name)
         .navigationBarTitleDisplayMode(.inline)
@@ -772,6 +819,33 @@ struct SessionListView: View {
 
             Divider()
 
+            /*
+             * **A name of his own on a session.**
+             *
+             * > *"I said before, for being able to rename sessions."*
+             *
+             * Absent rather than greyed on a machine that never advertised the
+             * verb — the rule every row on this menu follows. Above the shelf
+             * verbs because it is about *this* session rather than about where
+             * this phone keeps it: Pin and Archive are the phone's bookkeeping
+             * and never leave it; a name goes to the machine and every other
+             * device sees it.
+             */
+            if model.canRenameSessions {
+                Button {
+                    // Deferred for the reason the delete confirm is: presenting
+                    // from inside a menu that is still dismissing leaves the
+                    // alert with no presenter and the press does nothing at all.
+                    DispatchQueue.main.async {
+                        typedName = session.title
+                        renamingSession = session
+                    }
+                } label: {
+                    Label("Rename", systemImage: "pencil")
+                }
+                .accessibilityIdentifier("sessions.rename")
+            }
+
             Button {
                 shelf.setPinned(!pinned, host: hostId, session: session.id)
             } label: {
@@ -791,7 +865,7 @@ struct SessionListView: View {
                 Button(role: .destructive) {
                     DispatchQueue.main.async { closingSession = session }
                 } label: {
-                    Label("Close", systemImage: "xmark.circle")
+                    Label("Delete", systemImage: "xmark.circle")
                 }
             }
         } label: {
@@ -937,18 +1011,42 @@ struct SessionListView: View {
                     .accessibilityHint(SessionWindowPicker.phoneMeaning(machine: machineName))
                 }
 
-                Divider()
+                // No rule above it. *"See this New window here — it's separated,
+                // so it's confusing."* The section is already named *Attach a
+                // browser window*; a line inside it splits one list of windows
+                // into two lists of windows, and the row that makes one is the
+                // same kind of thing as the rows that borrow one.
                 newWindowRow(for: session)
             }
         }
     }
 
-    /// The row that makes a window rather than borrowing one — one row, at the
-    /// end, after the divider. Two words on it, and everything it means on the
-    /// hint: a menu row is a name, not an explanation of itself.
+    /**
+     * The row that makes a window rather than borrowing one — last in the same
+     * list, no rule above it. Two words on it, and everything it means on the
+     * hint: a menu row is a name, not an explanation of itself.
+     *
+     * ## It opens the session, and that is the fix for *"it's not working too"*
+     *
+     * It always did make a window — he pressed it four times and the machine
+     * grew `about:blank 1` through `4`, three of them bound to this session.
+     * What it never did was **show** him one: the ask goes out, the menu closes,
+     * and the list looks exactly as it did, because the window it made lives on
+     * the session's own screen and he was standing on the list. A control whose
+     * whole result is somewhere else, with nothing said and nothing moved, is a
+     * control that has not worked as far as anyone can tell.
+     *
+     * So it goes there. `model.open(session:)` is the same push the row itself
+     * does, and it lands on the screen where the new window is about to appear —
+     * `SessionPageView` opens its pane the moment it sees a window that is this
+     * session's. No toast is invented for this list: the arrival **is** the
+     * confirmation, which is what the note over `attachSection` argues for and
+     * is now finally true.
+     */
     private func newWindowRow(for session: RemoteSession) -> some View {
         Button {
             model.openMachineWindow(isolated: false, session: session.id)
+            model.open(session: session.id)
         } label: {
             Label(SessionWindowPicker.newWindow, systemImage: "macwindow.badge.plus")
         }
@@ -1122,7 +1220,7 @@ struct SessionListView: View {
                 // press does nothing at all.
                 DispatchQueue.main.async { closingSession = session }
             } label: {
-                Label("Close", systemImage: "xmark.circle.fill")
+                Label("Delete", systemImage: "xmark.circle.fill")
             }
             /*
              * Tinted explicitly, and it took a screenshot to find out why it has

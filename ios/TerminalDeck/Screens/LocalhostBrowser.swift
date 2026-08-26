@@ -960,7 +960,7 @@ struct LocalhostBrowser: View {
             items: [
                 BrowserPageMenu.Item(
                     id: "localhost.close",
-                    title: "Close this window",
+                    title: "Delete this window",
                     icon: "xmark.circle",
                     // Closing the view is the whole of the teardown: the listener
                     // goes, the Mac's socket goes, and the port is unreachable

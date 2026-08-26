@@ -71,7 +71,6 @@ struct SessionDetailView: View {
                             where_(session, host: host)
                             about(session, host: host)
                             machine(host)
-                            gitLogins(host)
                         }
                         .padding(.horizontal, 16)
                         .padding(.top, 4)
@@ -292,62 +291,24 @@ struct SessionDetailView: View {
         }
     }
 
-    /**
-     * The account question this phone can actually answer.
+    /*
+     * **There is no Git logins card here any more.**
      *
-     * Deliberately not labelled as the session's account, because it is not one:
-     * the agent's login lives in a config directory on that machine and nothing
-     * on this wire reports it. What *is* true, and worth knowing on the screen
-     * where somebody is looking at a session that is about to push, is which
-     * GitHub this phone would hand over when git on that machine asks — which is
-     * the whole of the `credential` capability, running the other way round.
+     * > *"there is one option called Git login… I think it is for settings, it's
+     * > not for per session, so let's not show the GitHub also in that page —
+     * > inside the session details, in the normal sessions too, in the copilot
+     * > too, because it is the same everywhere anyway."*
      *
-     * Shown only when the machine advertised that it may ask. A machine that
-     * never will is one where this sentence would be a promise about nothing.
+     * He is right about the fact, and that is what settles it: the GitHub this
+     * phone would hand over when git asks is **one account for the whole phone**.
+     * It was drawn per session because a session is where somebody is standing
+     * when a push is about to happen — but that is an argument about *timing*,
+     * not about ownership, and a setting shown on twenty session sheets reads as
+     * twenty settings. It is one row on the Settings tab, which is where it
+     * always really lived; see `DeckTabs`, which draws it there and opens the
+     * same screen this used to.
      */
-    @ViewBuilder
-    private func gitLogins(_ host: HostLink) -> some View {
-        if host.canAskForGitLogins {
-            DetailCaption("Git logins")
-            DetailCard {
-                Button {
-                    dismiss()
-                    model.showingGitHub = true
-                } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: "person.crop.circle")
-                            .font(.system(size: 15))
-                            .foregroundStyle(Theme.secondary)
-                            .frame(width: 18)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(model.gitHubAccount.map { "@\($0.login)" } ?? "Not connected")
-                                .font(.system(size: 16))
-                                .foregroundStyle(Theme.primary)
-                            Text(model.gitHubAccount == nil
-                                 ? "A push from \(host.label) will not be answered from this phone."
-                                 : "Used when git on \(host.label) asks for one.")
-                                .font(.system(size: 12))
-                                .foregroundStyle(Theme.faint)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        Spacer(minLength: 8)
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(Theme.faint)
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 13)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("detail.github")
-            }
-        }
-    }
 
-    /// Copy is silent by nature; without this the row feels broken even when it
-    /// worked. The same two and a half seconds `TerminalScreen` settled on.
     private func show(_ message: String) {
         withAnimation { copied = message }
         Task {

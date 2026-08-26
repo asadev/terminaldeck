@@ -384,6 +384,19 @@ export interface SessionAccess {
    * has to remember not to leave unhandled on a socket's data handler.
    */
   close?(id: string): boolean
+
+  /**
+   * Give a session a name of somebody's choosing, or take one off.
+   *
+   * Optional, and its absence is what stops this host advertising the `rename`
+   * capability — the same rule {@link create} and {@link close} follow, so a
+   * phone draws no Rename row rather than sending a frame that can only be
+   * refused. An empty title means *use your own name for it again*, which the
+   * session layer answers by deriving one from the folder.
+   *
+   * Returns whether a session by that id was there to rename.
+   */
+  rename?(id: string, title: string): boolean
   /**
    * The folders one device may start a session in, most relevant first.
    *
@@ -2224,6 +2237,11 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     // box is exactly that — so the two are two methods and two capabilities
     // rather than one flag read twice.
     if (name === CAPABILITY.close) return typeof options.sessions.close === 'function'
+    // And once more for the name. Separate from both of the above: a host that
+    // hands out shells and refuses to end them can still let somebody label the
+    // one they are looking at, and a host whose session layer has no writable
+    // title cannot, however freely it closes things.
+    if (name === CAPABILITY.rename) return typeof options.sessions.rename === 'function'
     // Same rule, same reason: the thing that makes the feature possible is the
     // thing that decides whether it is offered. A host with nowhere to put a file
     // must not draw a Send File button on somebody's phone.
@@ -5660,6 +5678,68 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     announce()
   }
 
+  /**
+   * Give a session the name somebody typed for it.
+   *
+   * > *"I said before, for being able to rename sessions."*
+   *
+   * The shape of `closeSession` above, one door at a time and for the same
+   * reasons: the capability has to be advertised *and* the method has to be
+   * there, `mayTouch` decides whether this device is entitled to the session at
+   * all, and an id it may not see gets the sentence an unknown id gets rather
+   * than a refusal that would confirm the id is real.
+   *
+   * The answer is a **list**, not a `renamed` frame. There is nothing about a
+   * rename that a fresh `sessions` does not say — the row simply reads
+   * differently — and `sessions` is v1, so a client too old to know the verb
+   * still watches the name change. Every connection gets its own list for the
+   * same reason `closeSession` sends one each: two devices watching the same
+   * machine are entitled to two different lists.
+   */
+  function renameSession(
+    connection: LiveConnection,
+    deviceId: string,
+    id: string,
+    title: string,
+  ): void {
+    const label = options.sessions.rename
+    if (!label || !advertised.includes(CAPABILITY.rename)) {
+      send(connection, {
+        t: 'error',
+        code: 'unauthorized',
+        message: 'Sessions cannot be renamed from a device here.',
+      })
+      return
+    }
+    if (!mayTouch(deviceId, id)) {
+      send(connection, { t: 'error', code: 'unknown-session', message: `No session ${id} is running.` })
+      return
+    }
+    let renamed = false
+    try {
+      renamed = label.call(options.sessions, id, title) === true
+    } catch (error) {
+      // The session layer threw while writing a title. This machine's problem,
+      // not the device's, and it must not take the socket down.
+      console.error('[remote] could not rename a session for a device:', error)
+      send(connection, {
+        t: 'error',
+        code: 'unavailable',
+        message: 'That session could not be renamed.',
+      })
+      return
+    }
+    if (!renamed) {
+      send(connection, { t: 'error', code: 'unknown-session', message: `No session ${id} is running.` })
+      return
+    }
+    for (const other of live.values()) {
+      if (!other.deviceId) continue
+      send(other, { t: 'sessions', sessions: sessionsFor(other.deviceId) })
+    }
+    announce()
+  }
+
   function onMessage(connection: LiveConnection, raw: string): void {
     const parsed = parseClientMessage(raw)
     if (!parsed.ok) {
@@ -5800,6 +5880,9 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
         return
       case 'close':
         closeSession(connection, connection.deviceId, message.id)
+        return
+      case 'rename':
+        renameSession(connection, connection.deviceId, message.id, message.title)
         return
       /*
        * **These four are reads of the machine, not of its browser.**

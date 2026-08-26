@@ -146,24 +146,32 @@ struct PortSuggestions: View {
         if sections.isEmpty { empty } else { list }
     }
 
+    /**
+     * **One list, no headings.**
+     *
+     * > *"this other services and web services should not be like separate lists,
+     * > it should be one list — we can just see here they are, inside the pill,
+     * > like it is SSH, Python, whatever it is, node or what."*
+     *
+     * The grouping was answering a question the rows already answer. Every row
+     * carries the process that is holding the port under its address — `node`,
+     * `python3`, `ssh` — so *Web servers 5 ›* above four `node` rows and *Other
+     * services 1 ›* above one `ssh` row was the same fact printed twice, once as
+     * a heading and once per row, and it cost two chips, two counts, two
+     * chevrons and a fold state per machine to print it the second time.
+     *
+     * The **order** is what the categories are still for, and that survives:
+     * `PortCatalog.sections` hands them back most-interesting first — named,
+     * dev servers, web servers, the app itself, other, unidentified — so the
+     * flattening keeps that ranking and simply stops drawing a line between the
+     * bands. Noise sinks rather than hides, which is the better half of what the
+     * folding was doing anyway.
+     */
     private var list: some View {
         List {
-            ForEach(sections) { section in
-                Section {
-                    if !book.isFolded(host: hostId, category: section.category) {
-                        ForEach(section.rows) { row in
-                            rowView(row)
-                        }
-                    }
-                } header: {
-                    SectionToggle(category: section.category,
-                                  count: section.rows.count,
-                                  folded: book.isFolded(host: hostId, category: section.category)) {
-                        guard !hostId.isEmpty else { return }
-                        book.setFolded(!book.isFolded(host: hostId, category: section.category),
-                                       host: hostId,
-                                       category: section.category)
-                    }
+            Section {
+                ForEach(sections.flatMap(\.rows)) { row in
+                    rowView(row)
                 }
             }
 

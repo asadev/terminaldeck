@@ -1018,6 +1018,8 @@ enum WireCodec {
             object = ask
         case let .close(id):
             object = ["t": "close", "id": id]
+        case let .rename(id, title):
+            object = ["t": "rename", "id": id, "title": title]
         case let .attach(id, size):
             if let size {
                 object = ["t": "attach", "id": id, "cols": size.cols, "rows": size.rows]

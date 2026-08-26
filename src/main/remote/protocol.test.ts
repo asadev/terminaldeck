@@ -84,6 +84,7 @@ const CLIENT_TYPES: Record<ClientMessage['t'], true> = {
   ping: true,
   create: true,
   close: true,
+  rename: true,
   ports: true,
   'tunnel.open': true,
   'tunnel.close': true,
@@ -269,6 +270,7 @@ const VALID_CLIENT: ClientMessage[] = [
   // `create`'s opposite number. An id and nothing else — no signal, no force
   // flag, no reason string — because none of those are a phone's to choose.
   { t: 'close', id: SESSION_ID },
+  { t: 'rename', id: SESSION_ID, title: 'The review branch' },
   { t: 'ports' },
   { t: 'tunnel.open', id: 'tun-1', port: 3000 },
   // The verb behind "open it on the machine" — the thing a browser tab cannot do

@@ -314,6 +314,30 @@ struct MachineBrowserView: View {
      */
     @State private var pushing: MachineBrowserDestination?
 
+    /**
+     * **What the `…` opens, which comes up from the bottom rather than in from
+     * the side.**
+     *
+     * > *"all the three-dot things should bring a page from up to down instead of
+     * > right to left… a pop-up kind of window coming from down to up. It will not
+     * > completely 100% go up but will leave some space, just like the other
+     * > browsers generally have, like Chrome has in phone."* — *"only the ones
+     * > coming from three dots as full page, not the ones in the settings page."*
+     *
+     * Four rows of this menu were `NavigationLink`s, so pressing one slid the
+     * whole screen away sideways and put a Back chevron where the list had been.
+     * They are side trips off a screen he is in the middle of using — his site
+     * data, his saved logins, the archive, the machine's profiles — and a side
+     * trip that replaces the screen makes him navigate back to where he already
+     * was. A sheet is laid over it: the list is still behind, the way out is a
+     * swipe down or the grabber, and nothing about the screen underneath moved.
+     *
+     * Only these. The `…` menus that are already short drop-downs stay
+     * drop-downs, and nothing inside the Settings tab changes — a page that is
+     * *meant* to be a page is still pushed.
+     */
+    @State private var sheeted: MachineBrowserSheet?
+
     /// Whether the sheet that opens a window is up. See `NewWindowSheet`.
     @State private var opening = false
 
@@ -604,6 +628,32 @@ struct MachineBrowserView: View {
             case let .phonePage(id):
                 MachineWindowSettingsView(model: model, windowID: "", pushed: true, phoneTab: id)
             }
+        }
+        /*
+         * Everything the `…` opens, in one place and in one shape — see `sheeted`.
+         * `.large` and not `.medium`: each of these is a screen's worth of rows,
+         * and a sheet that opens half-height on a list of saved logins is a list
+         * he has to drag before he can read it. Large still stops short of the
+         * top, which is the space he asked to be left.
+         */
+        .sheet(item: $sheeted) { which in
+            NavigationStack {
+                switch which {
+                case .data:
+                    BrowserDataView()
+                case .logins:
+                    SavedLoginsView(host: hostId, machine: model.theMachine)
+                case .archived:
+                    ArchivedWindowsView(model: model, shelf: shelf)
+                case .profiles:
+                    MachineProfilesView(model: model)
+                case let .phonePage(id):
+                    MachineWindowSettingsView(model: model, windowID: "", pushed: true, phoneTab: id)
+                }
+            }
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
+            .presentationCornerRadius(28)
         }
     }
 
@@ -996,8 +1046,8 @@ struct MachineBrowserView: View {
                 }
                 .accessibilityIdentifier("browser.history")
 
-                NavigationLink {
-                    BrowserDataView()
+                Button {
+                    sheeted = .data
                 } label: {
                     Label("Site data and zoom", systemImage: "slider.horizontal.3")
                 }
@@ -1011,8 +1061,8 @@ struct MachineBrowserView: View {
                  * cannot be pushed into the machine's browser and should not be,
                  * so it lives in this phone's Keychain, keyed per machine.
                  */
-                NavigationLink {
-                    SavedLoginsView(host: hostId, machine: model.theMachine)
+                Button {
+                    sheeted = .logins
                 } label: {
                     Label("Saved logins", systemImage: "key")
                 }
@@ -1029,8 +1079,8 @@ struct MachineBrowserView: View {
                  * only kind of row the archive applies to — see `WindowShelf`.
                  */
                 if canDrive {
-                    NavigationLink {
-                        ArchivedWindowsView(model: model, shelf: shelf)
+                    Button {
+                        sheeted = .archived
                     } label: {
                         Label(archivedCount == 0 ? "Archived" : "Archived (\(String(archivedCount)))",
                               systemImage: "archivebox")
@@ -1050,8 +1100,8 @@ struct MachineBrowserView: View {
                  * its own, so the row is absent rather than empty.
                  */
                 if model.canUseMachineProfiles {
-                    NavigationLink {
-                        MachineProfilesView(model: model)
+                    Button {
+                        sheeted = .profiles
                     } label: {
                         Label("Browser profiles", systemImage: "person.2")
                     }
@@ -1805,7 +1855,7 @@ struct MachineBrowserView: View {
         Button(role: .destructive) {
             host?.actOnMachineWindow(window.id, .close)
         } label: {
-            Label("Close window", systemImage: "xmark")
+            Label("Delete window", systemImage: "xmark")
         }
     }
 
@@ -1864,7 +1914,7 @@ struct MachineBrowserView: View {
 
         Section(whyNoWindowVerbs(surface)) {
             deadItem("Archive", "archivebox")
-            deadItem("Close window", "xmark")
+            deadItem("Delete window", "xmark")
         }
     }
 
@@ -1993,7 +2043,7 @@ struct MachineBrowserView: View {
          * behind both.
          */
         Button {
-            pushing = .phonePage(tab.id)
+            sheeted = .phonePage(tab.id)
         } label: {
             Label("Window settings", systemImage: "slider.horizontal.3")
         }
@@ -2005,7 +2055,7 @@ struct MachineBrowserView: View {
         Button(role: .destructive) {
             closeTab(tab)
         } label: {
-            Label("Close window", systemImage: "xmark")
+            Label("Delete window", systemImage: "xmark")
         }
     }
 
@@ -2134,10 +2184,10 @@ struct MachineBrowserView: View {
             Button(role: .destructive) {
                 host?.actOnMachineWindow(window.id, .close)
             } label: {
-                Label("Close", systemImage: "xmark.circle.fill")
+                Label("Delete", systemImage: "xmark.circle.fill")
             }
             .tint(Theme.critical)
-            .accessibilityLabel("Close \(WindowNames.name(window))")
+            .accessibilityLabel("Delete \(WindowNames.name(window))")
             .accessibilityIdentifier("browser.machine.swipe.close.\(window.id)")
 
             Button {
@@ -2178,10 +2228,10 @@ struct MachineBrowserView: View {
             Button(role: .destructive) {
                 closeTab(tab)
             } label: {
-                Label("Close", systemImage: "xmark.circle.fill")
+                Label("Delete", systemImage: "xmark.circle.fill")
             }
             .tint(Theme.critical)
-            .accessibilityLabel("Close \(tab.label)")
+            .accessibilityLabel("Delete \(tab.label)")
             .accessibilityIdentifier("browser.machine.swipe.closePage.\(tab.id)")
         }
     }
@@ -2567,18 +2617,34 @@ private struct NewWindowSheet: View {
             // on Machine would be a warning about a state nobody is in any more.
             notice = nil
         } label: {
-            VStack(spacing: 6) {
+            /*
+             * **Small.**
+             *
+             * > *"we give very big icon for this phone versus machine thing. It
+             * > can be compact, small, nice simple thing… not so much big. We are
+             * > giving separate 'Open in' also and 'Address' title also, which
+             * > people can easily understand. Just keep things easy and simple."*
+             *
+             * A twenty-point glyph over its own word, with fourteen of padding
+             * above and below, made each answer a card the size of a tile on a
+             * home screen — for a choice between two words. It reads across
+             * instead: the glyph at thirteen beside the name, one line, eight
+             * points of padding. Half the height, and the sheet gives the room
+             * to the list of ports, which is the part nobody can predict the
+             * length of.
+             */
+            HStack(spacing: 6) {
                 Image(systemName: glyph(of: option))
-                    .font(.system(size: 20, weight: .medium))
+                    .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(chosen ? Theme.accent : Theme.faint)
                 Text(name(of: option))
-                    .font(.system(size: 15, weight: chosen ? .semibold : .regular))
+                    .font(.system(size: 14, weight: chosen ? .semibold : .regular))
                     .foregroundStyle(Theme.primary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.85)
             }
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 14)
+            .padding(.vertical, 8)
             /*
              * The tile *is* the tick. A checkmark inside a two-across choice
              * would be a third mark competing with the fill and the weight for
@@ -2589,11 +2655,11 @@ private struct NewWindowSheet: View {
              * not one).
              */
             .background(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
                     .fill(chosen ? Theme.accent.opacity(0.14) : Theme.surface)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
                     .stroke(chosen ? Theme.accent : Theme.hairline, lineWidth: chosen ? 1.5 : 0.5)
             )
             .contentShape(Rectangle())
@@ -3007,6 +3073,31 @@ private enum MachineBrowserRow: Identifiable {
  * should be same everything"*: the fork here is which **window** is being
  * configured, never which screen configures it.
  */
+/**
+ * What the `…` lays over this screen. Separate from `MachineBrowserDestination`
+ * on purpose: that one is what a **row** pushes, and a row pushing a page is
+ * exactly the navigation he kept — *"only the ones coming from three dots as
+ * full page"*. Two different gestures with two different outcomes, so two types
+ * rather than one type with a flag on it.
+ */
+private enum MachineBrowserSheet: Hashable, Identifiable {
+    case data
+    case logins
+    case archived
+    case profiles
+    case phonePage(String)
+
+    var id: String {
+        switch self {
+        case .data: return "data"
+        case .logins: return "logins"
+        case .archived: return "archived"
+        case .profiles: return "profiles"
+        case let .phonePage(tab): return "phonePage:\(tab)"
+        }
+    }
+}
+
 private enum MachineBrowserDestination: Hashable, Identifiable {
     /// A page on the machine, by the name both lists call it: the live picture
     /// where there is one, the address, the page verbs, and the `…` that carries

@@ -396,7 +396,11 @@ private struct CopilotTabScreen: View {
                 TerminalScreen(model: model,
                                hostID: host.id,
                                sessionID: session.id,
-                               leaveTab: { model.leaveCopilot() })
+                               leaveTab: { model.leaveCopilot() },
+                               // The one screen that is the copilot's own
+                               // conversation, which is where Restart lives —
+                               // see `TerminalScreen.isCopilot`.
+                               isCopilot: true)
                     .copilotFolderFromItsSession(model: model,
                                                  hostID: host.id,
                                                  sessionID: session.id)

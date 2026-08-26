@@ -533,8 +533,29 @@ struct MachineWindowView: View {
             stopInspecting()
             dismiss()
         }
-        .navigationDestination(isPresented: $showingSettings) {
-            MachineWindowSettingsView(model: model, windowID: windowID, pushed: true)
+        /*
+         * **Up from the bottom, not in from the side.**
+         *
+         * > *"all the three-dot things should bring a page from up to down instead
+         * > of right to left… it will not completely 100% go up but will leave
+         * > some space, just like Chrome has in phone."*
+         *
+         * This is the window's `…`, and it used to push: the live page slid away
+         * and came back only via Back. The page is the thing being configured —
+         * every switch on this sheet is about what is on screen behind it — so
+         * covering it and leaving its top edge showing is both the shape he asked
+         * for and the one that keeps the subject in view.
+         *
+         * `.large`, because it is a screen's worth of cards, and `NavigationStack`
+         * so `navigationTitle` still has a bar to write *Window settings* into.
+         */
+        .sheet(isPresented: $showingSettings) {
+            NavigationStack {
+                MachineWindowSettingsView(model: model, windowID: windowID, pushed: true)
+            }
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
+            .presentationCornerRadius(28)
         }
         /*
          * The element that was pointed at, in the sheet both browsers share.

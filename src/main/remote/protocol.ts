@@ -460,6 +460,23 @@ export const CAPABILITY = {
   localhost: 'localhost',
   create: 'create',
   close: 'close',
+  /**
+   * Give a session a name of your own.
+   *
+   * > *"I said before, for being able to rename sessions."*
+   *
+   * Its own capability rather than a corner of `close`, and for the reason every
+   * split in this object exists: the two are genuinely separable. A host that
+   * hands out shells and will not let a device end one — the public demo box is
+   * exactly that — can perfectly well let somebody label the shell they are
+   * looking at, and a host whose session layer has no writable title cannot,
+   * however freely it closes things. The method behind it is what decides, and
+   * `capabilitiesFor` reads that method rather than a flag.
+   *
+   * An older host never advertises it, so the phone draws no Rename row rather
+   * than sending a frame that would close the channel.
+   */
+  rename: 'rename',
   upload: 'upload',
   credential: 'credential',
   devserver: 'devserver',
@@ -912,6 +929,7 @@ export const CAPABILITIES: string[] = [
   CAPABILITY.localhost,
   CAPABILITY.create,
   CAPABILITY.close,
+  CAPABILITY.rename,
   CAPABILITY.upload,
   CAPABILITY.credential,
   CAPABILITY.devserver,
@@ -1554,6 +1572,16 @@ export const MAX_SURFACES_REPORTED = 64
  * sixty-four of them still leave room in a frame.
  */
 export const MAX_SURFACE_TITLE_LENGTH = 512
+
+/**
+ * Longest name a person may give a session.
+ *
+ * Typed by a person rather than set by a page, so this is not a defence against
+ * a hostile title the way {@link MAX_SURFACE_TITLE_LENGTH} is — it is a bound on
+ * a list row. Eighty is a generous line of text and small enough that a hundred
+ * sessions still fit in one `sessions` frame.
+ */
+export const MAX_SESSION_TITLE = 80
 
 /**
  * Longest handover sentence carried under a masked frame.
@@ -3231,6 +3259,22 @@ export type ClientMessage =
    * which pins it against a real socket.
    */
   | { t: 'close'; id: string }
+  /* ---- capability `rename` -------------------------------------------- */
+  /**
+   * Rename one session.
+   *
+   * The same door as `close`, asked again here and for the same reason: this is
+   * a write to somebody's work, so a device that may not *see* a session may not
+   * label it either and is told the sentence an unknown id gets. The new name is
+   * display text a person typed, so it is bounded and stripped here the way every
+   * other piece of typed text on this wire is — see `MAX_SESSION_TITLE`.
+   *
+   * An empty title is not a refusal: it means *take my name off it*, and the
+   * host falls back to the one it derives from the folder. That is the only way
+   * back from a rename, and a client should not have to know the folder's name
+   * to undo one.
+   */
+  | { t: 'rename'; id: string; title: string }
   /* ---- capability `localhost`. Refused outright when it is not advertised. -- */
   /** What is listening on the Mac right now. */
   | { t: 'ports' }
@@ -6337,6 +6381,25 @@ export function parseClientMessage(raw: unknown): ParseResult {
       return sessionId
         ? { ok: true, message: { t: 'close', id: sessionId } }
         : bad('close without a session id')
+    }
+
+    /* ---- capability `rename` -------------------------------------------- */
+    // An id and a name. The name is bounded and stripped of controls here — it
+    // is text a person typed and it is going to be drawn in a list — and
+    // *emptied* rather than refused when nothing survives that, because an empty
+    // title is the way back to the host's own name for the session.
+    case 'rename': {
+      const sessionId = id(parsed.id)
+      if (!sessionId) return bad('rename without a session id')
+      if (typeof parsed.title !== 'string') return bad('rename without a title')
+      return {
+        ok: true,
+        message: {
+          t: 'rename',
+          id: sessionId,
+          title: parsed.title.replace(DISPLAY_STRIP, '').trim().slice(0, MAX_SESSION_TITLE),
+        },
+      }
     }
 
     /* ---- capability `localhost` ----------------------------------------- */

@@ -114,10 +114,32 @@ class DeckTerminalView: TerminalView {
             return super.gestureRecognizerShouldBegin(gestureRecognizer)
         }
         if gestureRecognizer is UIPanGestureRecognizer {
-            // SwiftTerm's selection pan, or its mouse-reporting pan. See the
-            // header: the only one worth letting through is the one a program
-            // has actually asked for.
-            return getTerminal().mouseMode != .off
+            /*
+             * SwiftTerm's selection pan, or its mouse-reporting pan.
+             *
+             * > *"scrolling with one finger in terminal is still not working
+             * > btw — it starts copying instead. It should copy on long press
+             * > only."*
+             *
+             * `mouseMode != .off` on its own was not the test it looked like.
+             * **Claude Code turns mouse reporting on** for its own composer, and
+             * so does anything else that wants a click — so on the one screen he
+             * uses this app for, the condition was true the whole time and
+             * SwiftTerm's pan took every one-finger drag. The scroll never got a
+             * chance and the drag came out as a selection.
+             *
+             * The buffer is the honest half of the question. On the **alternate**
+             * screen a full-screen program owns the viewport, there is no
+             * scrollback for a drag to move, and a program that asked for the
+             * mouse should get it. On the **normal** screen — a shell, an agent
+             * printing as it goes — there is scrollback, scrolling it is what a
+             * drag means on a phone, and a mouse drag is worth nothing. So the
+             * pan is allowed only where it is the better answer, and everywhere
+             * else one finger scrolls and a long press selects, which is what
+             * this whole file was written to do.
+             */
+            let terminal = getTerminal()
+            return terminal.mouseMode != .off && terminal.isCurrentBufferAlternate
         }
         if gestureRecognizer is UILongPressGestureRecognizer {
             // SwiftTerm's, which only opens a menu. This app's long press is

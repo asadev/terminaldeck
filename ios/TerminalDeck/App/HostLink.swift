@@ -310,6 +310,13 @@ final class HostLink: Identifiable {
         connection.isLive && (transport?.capabilities.contains(WireCapability.close) ?? false)
     }
 
+    /// Whether this machine will take a name for one of its sessions. Read the
+    /// same way `canCloseSessions` is and separately from it — see
+    /// `WireCapability.rename` for why the two are not one answer.
+    var canRenameSessions: Bool {
+        connection.isLive && (transport?.capabilities.contains(WireCapability.rename) ?? false)
+    }
+
     var canBrowseLocalhost: Bool {
         connection.isLive && (transport?.capabilities.contains(WireCapability.localhost) ?? false)
     }
@@ -1153,6 +1160,26 @@ final class HostLink: Identifiable {
             return
         }
         transport?.send(.close(id: id))
+    }
+
+    /**
+     * Give a session a name.
+     *
+     * No optimistic rename, for the reason `closeSession` does not optimistically
+     * remove a row: the machine is entitled to refuse — a folder taken back, a
+     * session that has already exited — and a list that had already changed would
+     * leave somebody reading a name the machine does not have. The answer is a
+     * fresh `sessions` frame, so the row changes when the machine says so.
+     *
+     * An empty name is passed through rather than treated as a cancel: it is how
+     * the machine is told to go back to its own name for the session.
+     */
+    func renameSession(_ id: String, to title: String) {
+        guard canRenameSessions else {
+            lastError = "\(label) cannot rename sessions from the phone."
+            return
+        }
+        transport?.send(.rename(id: id, title: title))
     }
 
     /**

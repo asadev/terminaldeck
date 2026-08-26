@@ -1534,6 +1534,8 @@ final class DeckModel {
     /// capability, not implied by `canCreateSessions` — see
     /// `HostLink.canCloseSessions` for the host that has one and not the other.
     var canCloseSessions: Bool { current?.canCloseSessions ?? false }
+    /// Whether the current machine will take a name for one of its sessions.
+    var canRenameSessions: Bool { current?.canRenameSessions ?? false }
     /// Whether there is anywhere to start one. See `HostLink.canStartSomewhere`:
     /// a machine can be perfectly able to start a session and still have granted
     /// this phone no folder to start it in.
@@ -1771,6 +1773,7 @@ final class DeckModel {
     /// **Not undoable.** Every caller confirms first; see
     /// `SessionListView.closeAction`.
     func closeSession(_ id: String) { current?.closeSession(id) }
+    func renameSession(_ id: String, to title: String) { current?.renameSession(id, to: title) }
     /// Open a page in the browser on the machine, rather than in this app.
     func openOnMachine(_ url: String) { current?.openOnMachine(url) }
     func openLocalhost(port: Int) -> PortTunnel? { current?.openLocalhost(port: port) }

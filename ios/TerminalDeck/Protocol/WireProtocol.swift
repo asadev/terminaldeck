@@ -327,6 +327,20 @@ enum WireCapability {
      */
     static let close = "close"
 
+    /**
+     * The machine will let a device give a session a name.
+     *
+     * > *"I said before, for being able to rename sessions."*
+     *
+     * Its own capability and not a corner of `close`, because the two are
+     * genuinely separable at the far end: a host that hands out shells and
+     * refuses to end them can still let somebody label one, and a host whose
+     * session layer has no writable title cannot however freely it closes. A
+     * build that has never heard of the verb never advertises it, so the row is
+     * absent rather than a press that closes the channel.
+     */
+    static let rename = "rename"
+
     /// The desktop can say what is listening on its own loopback, and tunnel a
     /// byte stream to one of those ports. One name for the whole feature: a
     /// desktop that could list ports but not open one would have nothing to
@@ -981,6 +995,19 @@ enum ClientMessage: Equatable {
      * chrome, for nothing.
      */
     case close(id: String)
+
+    /**
+     * Give a session a name of this person's choosing.
+     *
+     * An **empty** title is not a mistake and is not refused: it means *take my
+     * name off it*, and the machine answers by deriving its own from the folder
+     * again. That is the only way back from a rename, and a phone should not
+     * have to know what the machine would have called it in order to undo one.
+     *
+     * The answer is the ordinary session list, not a frame of its own — there is
+     * nothing about a rename that a fresh list does not say.
+     */
+    case rename(id: String, title: String)
 
     /// The size travels with the attach so the first screen arrives already the
     /// right shape; it is optional because a client that has not measured its

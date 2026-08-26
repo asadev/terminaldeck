@@ -376,6 +376,28 @@ export class PtyManager {
     return meta
   }
 
+  /**
+   * Give a session a name, or take the given name off it.
+   *
+   * > *"I said before, for being able to rename sessions."*
+   *
+   * An empty name is not a refusal — it restores the one derived from the folder,
+   * which is the only way back from a rename and the reason this takes a string
+   * rather than a `string | null`. The derived name is recomputed here rather
+   * than remembered, so a session that has been renamed and un-renamed ends up
+   * with exactly the title it was born with.
+   *
+   * Returns whether there was a session to rename, which is what the wire turns
+   * into *no session by that name* rather than a silent success.
+   */
+  rename(id: string, title: string): boolean {
+    const session = this.sessions.get(id)
+    if (!session) return false
+    const given = title.trim()
+    session.meta.title = given === '' ? basename(session.meta.cwd) || session.meta.cwd : given
+    return true
+  }
+
   write(id: string, data: string): void {
     this.sessions.get(id)?.proc.write(data)
   }

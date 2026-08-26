@@ -1750,7 +1750,7 @@ struct MachineWindowSettingsView: View {
      */
     @ViewBuilder
     private var closeCard: some View {
-        SchemeSectionCaption("Close", about: "closing this window", info: closeInfo)
+        SchemeSectionCaption("Delete", about: "deleting this window", info: closeInfo)
 
         SchemeGroup {
             switch windowShape {
@@ -1769,7 +1769,7 @@ struct MachineWindowSettingsView: View {
                     if pushed { dismiss() }
                 }
             case .cast:
-                deadRow("Close window", icon: "xmark.circle",
+                deadRow("Delete window", icon: "xmark.circle",
                         id: "browser.machine.window.close", why: closeInfo)
             case .gone, .unknown:
                 EmptyView()
@@ -1788,7 +1788,7 @@ struct MachineWindowSettingsView: View {
                 // places and a browser has exactly one name for it. It read
                 // *Close this window* here, which is one more of the small
                 // second names this round is taking out.
-                Text("Close window")
+                Text("Delete window")
                     .font(.system(size: 16))
                 Spacer(minLength: 0)
             }

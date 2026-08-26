@@ -86,6 +86,17 @@ struct TerminalScreen: View {
     /// painted in the same ground the emulator is and repaints with it. A stored
     /// property rather than a reach for `.shared` inside `body`, because
     /// `@Observable` only re-runs a body that *read* the object.
+    /**
+     * Whether this screen is the **copilot's own conversation** rather than a
+     * session somebody started.
+     *
+     * Only `DeckTabs` knows — the same screen is built from two stacks and the
+     * copilot's is the one that passes `leaveTab` — and it is stated rather than
+     * inferred from `leaveTab != nil`, so a second tab root later cannot quietly
+     * inherit a row that was meant for one screen.
+     */
+    var isCopilot = false
+
     var themes: TerminalThemeStore = .shared
 
     @State private var title: String?
@@ -116,6 +127,11 @@ struct TerminalScreen: View {
     /// See `SessionControlsView`. Only offered when an agent is drawing this
     /// session, the same rule the desktop's own cluster keeps.
     @State private var showingControls = false
+    /// Whether the rename box is up, and the name being typed into it. Held here
+    /// rather than on the session so the draft survives the machine resending
+    /// its list underneath the alert.
+    @State private var renaming = false
+    @State private var typedName = ""
 
     /*
      * **How much room the page has is not this screen's business any more.**
@@ -498,6 +514,22 @@ struct TerminalScreen: View {
                               open: nil,
                               dismiss: { showingDetails = false })
         }
+        /*
+         * One line, one answer — the same alert the Sessions list draws, and for
+         * the same reasons. An empty field is allowed through: it is how the
+         * machine is told to go back to the folder's own name.
+         */
+        .alert("Rename \(session?.title ?? "this session")", isPresented: $renaming) {
+            TextField("Name", text: $typedName)
+                .textInputAutocapitalization(.words)
+                .accessibilityIdentifier("terminal.rename.field")
+            Button("Save") { host?.renameSession(sessionID, to: typedName) }
+                .accessibilityIdentifier("terminal.rename.save")
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Every device signed in here sees the new name. "
+                 + "Leave it empty to go back to the folder's own name.")
+        }
         .sheet(isPresented: $showingControls) {
             if let controls = host?.controls {
                 SessionControlsView(controls: controls, dismiss: { showingControls = false })
@@ -728,12 +760,29 @@ struct TerminalScreen: View {
                      * the same reason Find above it is: a presentation asked for
                      * in the frame a menu is dismissing in is dropped.
                      */
-                    Button {
-                        DispatchQueue.main.async { showingDetails = true }
-                    } label: {
-                        Label("Session details", systemImage: "info.circle")
+                    /*
+                     * **Not on the copilot either.**
+                     *
+                     * > *"when we click on three dots and then Session details when
+                     * > we are in copilot, let's not give that there — anything that
+                     * > is more about a generic session."*
+                     *
+                     * That sheet answers *which session is this*: its folder, its
+                     * agent, when it started, which account it is on. Every one of
+                     * those is a fact about a session somebody chose to start, and
+                     * the copilot is not one — it is the copilot, in its own folder,
+                     * on the machine's own account, for as long as the machine is
+                     * up. What is worth knowing about it lives on its own settings
+                     * page, which is a different page for a different thing.
+                     */
+                    if !isCopilot {
+                        Button {
+                            DispatchQueue.main.async { showingDetails = true }
+                        } label: {
+                            Label("Session details", systemImage: "info.circle")
+                        }
+                        .accessibilityIdentifier("terminal.details")
                     }
-                    .accessibilityIdentifier("terminal.details")
 
                     /*
                      * Model, effort, fast mode, permission — the desktop's
@@ -744,6 +793,47 @@ struct TerminalScreen: View {
                      * over an older desktop that never advertised `controls` the
                      * reading never arrives so this stays hidden.
                      */
+                    /*
+                     * **A name of his own on this session.**
+                     *
+                     * > *"I said before, for being able to rename sessions."*
+                     *
+                     * Here as well as on the list, because this is the screen a
+                     * person is standing on when they decide a session needs a
+                     * name — they have just read what is in it. The same verb and
+                     * the same alert either way; `SessionListView` carries the
+                     * reasoning for the shape.
+                     */
+                    /*
+                     * **Not on the copilot.**
+                     *
+                     * > *"right now when we are inside the session of copilot we
+                     * > can still do the rename session kind of things. Let's give
+                     * > copilot a little bit of its own respect, its own things —
+                     * > don't give rename session inside the copilot, because it
+                     * > will always be the name we choose for copilot to have,
+                     * > just like we do in the Mac application."*
+                     *
+                     * The copilot is not one of the sessions; it is *the copilot*,
+                     * and its name is the one thing about it that is the same on
+                     * every machine and every screen. A rename here would let one
+                     * phone give it a private name that nothing else calls it.
+                     */
+                    if host?.canRenameSessions == true, !isCopilot {
+                        Button {
+                            // Deferred for the reason every other presentation on
+                            // this menu is: raising a sheet in the frame a menu is
+                            // dismissing in is a press that does nothing.
+                            DispatchQueue.main.async {
+                                typedName = session?.title ?? ""
+                                renaming = true
+                            }
+                        } label: {
+                            Label("Rename session", systemImage: "pencil")
+                        }
+                        .accessibilityIdentifier("terminal.rename")
+                    }
+
                     if showsControlsButton {
                         Button {
                             DispatchQueue.main.async { showingControls = true }
@@ -754,84 +844,28 @@ struct TerminalScreen: View {
                     }
 
                     /*
-                     * **Copy the screen** and **Share all the output**, which is
-                     * one rename of two rows because the two rows are one
-                     * question.
+                     * **Copy the screen, Paste and Share all the output are gone.**
                      *
-                     * > *"copy screen and share output I think little bit of
-                     * > confusing."*
+                     * > *"these three also needs to go from drop down from all
+                     * > sessions types."*
                      *
-                     * They were *Copy Screen* and *Share output*, and read one
-                     * under the other neither of them says the thing that tells
-                     * them apart. Both name a verb and then a noun that could
-                     * mean either amount: *screen* is nearly *output* and
-                     * *output* is nearly *screen*, so what a person is actually
-                     * choosing between — **what I can see now** and
-                     * **everything since this session started** — is on neither
-                     * row. The verbs were never the confusion: one puts text on
-                     * the clipboard and the other opens the share sheet, which
-                     * the words Copy and Share and the two icons already carry.
+                     * All three had already been narrowed once — Copy Selection
+                     * was deleted because reaching this menu destroys the
+                     * selection on the way, and the two survivors were renamed so
+                     * they differed by the one word that decides their scope. He
+                     * looked at the result and took the whole group out, which is
+                     * the honest end of that line: none of the three is something
+                     * a person reaches a menu for on a phone.
                      *
-                     * So the scope goes into the words and nothing else does.
-                     * *the screen* against *all the output*: one word of
-                     * difference between them, in the same slot, and it is the
-                     * word that decides. Nothing was added under either row —
-                     * *"don't put any single statement anywhere"* — and the
-                     * identifiers are untouched, because a test that finds this
-                     * item is finding the same item.
-                     *
-                     * *all the output* rather than *the scrollback*: scrollback
-                     * is what this code calls it and nobody else does, and
-                     * *output* is already the word two rows up in *Find in
-                     * output*, so the menu says one thing one way.
-                     *
-                     * ## And it is Copy Screen and deliberately *only* Copy Screen
-                     *
-                     * There was a "Copy Selection" item here and it had to go,
-                     * because it could never do what it said. SwiftTerm clears
-                     * its selection on a touch outside the terminal, so reaching
-                     * this menu at all destroys the selection on the way — the
-                     * item opened, correctly reported that nothing was selected,
-                     * and left the pasteboard untouched. Measured on a live
-                     * session: the whole screen was selected in one screenshot
-                     * and the pasteboard's change count did not move.
-                     *
-                     * Copying a *selection* therefore lives in the two places a
-                     * selection survives, and both of them are *inside* the
-                     * terminal: the system callout that a long press puts over
-                     * the selection itself, and the `copy` key in the key grid,
-                     * which is the terminal's own `inputView`. Both are
-                     * exercised in `ClipboardAndTransferUITests`. What holds
-                     * that selection still while output arrives is
-                     * `TerminalBridge.holdSelection`.
+                     * **Nothing is lost from the app.** Copying a selection is
+                     * the system callout a long press puts over the terminal, and
+                     * the `copy` key in the key grid — both inside the terminal,
+                     * where the selection lives, and both exercised in
+                     * `ClipboardAndTransferUITests`. Pasting is the key bar's own
+                     * paste and the system callout. The scrollback as a file is
+                     * `ShareOutput`, which is still built and still reachable
+                     * from the session's details.
                      */
-                    Button {
-                        show(host?.copyScreen(from: sessionID) ?? "Nothing to copy.")
-                    } label: {
-                        Label("Copy the screen", systemImage: "doc.on.doc")
-                    }
-                    .accessibilityIdentifier("terminal.copyScreen")
-                    Button {
-                        host?.paste(into: sessionID)
-                    } label: {
-                        Label("Paste", systemImage: "doc.on.clipboard")
-                    }
-                    .disabled(!connection.isLive)
-                    .accessibilityIdentifier("terminal.paste")
-
-                    /*
-                     * Share, which is the other half of Copy rather than a
-                     * second one: Copy takes the screen, this takes the whole
-                     * scrollback as a file. See `ShareOutput` for why a file and
-                     * not a string, and the block above for why the two labels
-                     * now differ by the one word that matters.
-                     */
-                    Button {
-                        DispatchQueue.main.async { shareOutput() }
-                    } label: {
-                        Label("Share all the output", systemImage: "square.and.arrow.up")
-                    }
-                    .accessibilityIdentifier("terminal.share")
 
                     /*
                      * **There is no Bigger text / Smaller text here any more.**
@@ -865,9 +899,26 @@ struct TerminalScreen: View {
                      * between every press.
                      */
 
-                    // Absent rather than disabled when the Mac cannot receive
-                    // one: a control that can only produce a refusal is not a
-                    // control. See `DeckModel.canSendFiles`.
+                    /*
+                     * **Sending is back on this menu, and that is his answer to
+                     * having tried it the other way.**
+                     *
+                     * > *"can we give media and file button in the bar that comes
+                     * > with keyboard for special buttons instead of dropdown?"* —
+                     * > and then, having used it: *"I think keep photo and file
+                     * > button back in the drop down, it was more easier to
+                     * > understand and use."*
+                     *
+                     * They kept their words on the keys panel, where a cap says
+                     * `photo` in eleven points and nothing says what it sends or
+                     * where it goes. Here each row is a sentence with a glyph, in
+                     * the one place on this screen a person already looks for the
+                     * things a session can do. The keys panel keeps the keys.
+                     *
+                     * Absent rather than disabled when the machine cannot receive
+                     * one: a control that can only produce a refusal is not a
+                     * control. See `DeckModel.canSendFiles`.
+                     */
                     if host?.canSendFiles == true {
                         Divider()
                         Button {
@@ -885,6 +936,7 @@ struct TerminalScreen: View {
                     }
 
                     Divider()
+
                     /*
                      * > *"the reattach button is not clearly clear that what
                      * > does it means maybe we can just rename it to restart or
@@ -895,13 +947,60 @@ struct TerminalScreen: View {
                      * code has a word for. What a person means by pressing it is
                      * *give me this session again, working*.
                      */
-                    Button {
-                        host?.reattach(sessionID)
-                        show("Restarting…")
-                    } label: {
-                        Label("Restart session", systemImage: "arrow.clockwise")
+                    /*
+                     * **There is no Restart row, and that is his decision.**
+                     *
+                     * It arrived as a rename of *Re-attach* — *"maybe we can just
+                     * rename it to restart or something"* — and the verb under it
+                     * stayed `reattach`, which only drops this phone's
+                     * subscription to the output and takes it again. On a healthy
+                     * session nothing visibly happens, so he read it as a dead
+                     * button: *"it is showing restart and it is not doing
+                     * anything."*
+                     *
+                     * What he wanted instead was a flow: save the conversation,
+                     * wait for the save to finish, then start a fresh empty
+                     * session in the same folder — and he gated it himself:
+                     *
+                     * > *"if the save-session command is native for Claude then we
+                     * > will use it; if it is just me using this kind of command
+                     * > then we will not use it, because it will be useless for
+                     * > others."*
+                     *
+                     * It is not native. None of Claude Code, Codex or Gemini has a
+                     * save-this-conversation command; his `session-save` is a skill
+                     * in his own folder, and sending it to a stranger's agent would
+                     * type an unknown command into their terminal. Told that, he
+                     * said *"lets remove restart completely in that case"* — so the
+                     * row is gone rather than shipping the half of it that works.
+                     *
+                     * Nothing was protecting anything: all three agents write their
+                     * own transcript as they go, and a session can be started fresh
+                     * from the list's `+` in the same folder whenever he wants one.
+                     *
+                     * ## Except on the copilot, where it is the only way
+                     *
+                     * > *"keep restart for copilot only."*
+                     *
+                     * A session has a list with a `+` on it and a Delete beside
+                     * every row; the copilot has neither. Its conversation *is* the
+                     * tab, there is no row for it — he had it taken off the list
+                     * this same evening — and nothing anywhere else starts a new
+                     * one. So this is where a fresh copilot comes from, and the
+                     * tab picks the new session up on its own: `tabSession` finds
+                     * the copilot by its **folder**, not by an id, so ending one
+                     * and starting another in the same place is invisible to the
+                     * stack this screen is standing in.
+                     */
+                    if isCopilot {
+                        Button {
+                            restartCopilot()
+                        } label: {
+                            Label("Restart session", systemImage: "arrow.clockwise")
+                        }
+                        .disabled(!connection.isLive || host?.canCreateSessions != true)
+                        .accessibilityIdentifier("terminal.restart")
                     }
-                    .disabled(!connection.isLive)
 
                     /*
                      * **Last, and that is his measurement rather than a taste.**
@@ -1056,28 +1155,78 @@ struct TerminalScreen: View {
                     .accessibilityHint(SessionWindowPicker.phoneMeaning(machine: machineName))
                 }
 
-                Divider()
+                // No rule above it. *"Don't keep a separator between already
+                // open window and open new window button"* — the section already
+                // has a name over it saying these are browser windows, and a line
+                // inside it splits one list of windows into two lists of windows.
                 newWindowRow
             }
         }
     }
 
     /// The row that makes a window rather than borrowing one — one row, at the
-    /// end, after the divider that separates *the machine's windows* from *a
-    /// window that does not exist yet*. Two words on it: everything it means is
-    /// on the hint and in the sentence the phone puts up after the press.
+    /// end of the same list, wearing the same glyph as every row above it. Two
+    /// words on it: everything it means is on the hint and in the sentence the
+    /// phone puts up after the press.
     private var newWindowRow: some View {
         Button {
             host?.openMachineWindow(isolated: false, session: sessionID)
             show(SessionWindowPicker.opening(machine: machineName))
         } label: {
-            // A globe and not a window frame: *"in left side should be browser
-            // icon instead of this type of window icon specific to browser."*
-            // The frame is what every *terminal* window in this app wears, which
-            // is exactly the confusion the two words above are fixing.
-            Label(SessionWindowPicker.newWindow, systemImage: "globe.badge.chevron.backward")
+            /*
+             * > *"it should not give it this big sentence, and it should have the
+             * > same icon like other ones like above. Make the same icon also for
+             * > this and just say New window — because it is already explaining up
+             * > there too, like these are browser windows, so we have a title for
+             * > this section."*
+             *
+             * *New browser window* beside `globe.badge.chevron.backward` wrapped
+             * onto two lines and was the only row in the section with a compound
+             * glyph, so the row that makes a window looked like a different kind
+             * of thing from the windows above it. The word *browser* is already on
+             * the section header; the glyph is `icon(for:)`'s ordinary one. What
+             * is left is the verb.
+             */
+            /*
+             * > *"before the New window it is showing a window icon — instead it
+             * > should show the plus icon so they can understand it properly. We
+             * > have it actually in some sessions… the icon of the session page
+             * > should be for the sessions also."*
+             *
+             * `SessionListView`'s copy of this row already wore the plus and this
+             * one did not, so the same act had two glyphs depending on which
+             * screen it was pressed from. It is the window shape the rows above it
+             * wear, with a plus on it — the same object, marked as the one that
+             * does not exist yet.
+             */
+            Label(SessionWindowPicker.newWindow, systemImage: "macwindow.badge.plus")
         }
         .accessibilityHint(SessionWindowPicker.newWindowMeaning(machine: machineName))
+    }
+
+    /**
+     * End the copilot's conversation and start a fresh one in the same folder.
+     *
+     * No save step, and that is his call rather than an omission — see the note
+     * over the row. The gap between the two is the machine's round trip for the
+     * close: asked for together, some hosts answer the create first and the tab
+     * resolves onto a session that is about to be ended.
+     *
+     * `cwd` and not the setup book's folder, so this starts the new one exactly
+     * where the old one was actually running. If the machine has never said, it
+     * says so instead of guessing at home.
+     */
+    private func restartCopilot() {
+        guard let host else { return }
+        guard let folder = session?.cwd, !folder.isEmpty else {
+            show("This machine has not said which folder the copilot is in.")
+            return
+        }
+        show("Starting a fresh conversation…")
+        host.closeSession(sessionID)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            host.createSession(in: folder)
+        }
     }
 
     /// Open a page this phone is holding on the machine, and hand that window to
