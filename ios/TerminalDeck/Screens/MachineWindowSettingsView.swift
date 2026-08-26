@@ -36,19 +36,59 @@
  * shape a browser window can come in:
  *
  *  1. **Window** — what it is, where it is drawn, and what state it is in.
- *  2. **Isolation** — whose cookies it gets.
+ *  2. **Privacy** — whose cookies it gets: Shared, or Private.
  *  3. **Session** — which agent can drive it.
  *  4. **Screenshot** — photograph it, and hand the picture to a session.
  *  5. **Click flow** — record what is clicked on it.
  *  6. **Close** — end it.
  *
- * Every card is drawn for every shape. A card that cannot act on this particular
- * window is **greyed in its place**, with the reason on its section's ⓘ — never
- * missing, and never a paragraph on the screen. `cards` is six calls in a fixed
- * order and each of those six switches inside itself, which is the structural
- * guarantee: there is no branch of this file that can draw a differently shaped
- * screen from another branch, because there is no branch that decides which
- * cards exist.
+ * A card that cannot act on this particular window is **greyed in its place**,
+ * with the reason on its section's ⓘ — never missing, and never a paragraph on
+ * the screen. `cards` is six calls in a fixed order and each of those six
+ * switches inside itself, which is the structural guarantee: there is no branch
+ * of this file that can draw a differently shaped screen from another branch,
+ * because there is no branch that decides which cards exist.
+ *
+ * **Privacy is the one card with a shape it is not drawn on**, and that
+ * exception is argued where it is made — see `privacyCard`. In one line: a page
+ * this phone is drawing is not in the machine's browser, so there is no jar to
+ * move it between, and everything that card used to hold on that shape was two
+ * rows that opened a *new* window somewhere else.
+ *
+ * ## The words are the ones every browser already uses
+ *
+ * > *"lets make only one name as browser and window identical to normal
+ * > standards for browser everything else too"*
+ *
+ * *Isolated* was this codebase's word for a throwaway profile and it was never
+ * anybody else's: Safari and Firefox both say **Private**. So does this screen
+ * now — the state, the button, the marks and every sentence on an ⓘ. A window
+ * with no page in it is **Untitled** rather than the literal `about:blank`, the
+ * screen is **Window settings** whatever it is showing, and attaching is
+ * **Attach to a session**.
+ *
+ * **The wire is untouched.** `MachineWindow.isolated` is a `Bool` on the frame,
+ * `Act.isolate` is a verb the host parses, and the identifiers under these
+ * controls keep the names the suites already ask for. Renaming any of those to
+ * fix an English word would be a protocol change and a suite that skips instead
+ * of failing. What changed is what he reads.
+ *
+ * ## Nothing on this screen opens a window somewhere else any more
+ *
+ * > *"we also dont need extra options of openinig new window like this way like
+ * > open islolated and other from inside a window"*
+ *
+ * His screenshot of this screen, on a page this phone was drawing, had four rows
+ * on it that all did the same thing: *Open on DESKTOP-DDGMNCV*, *Open isolated*,
+ * *Attach a window*, *Attach an isolated window*. Every one of them made a
+ * **new** window somewhere else, on a screen that is about **this** window. The
+ * two openers are gone, the two attaches are one row — **Attach to a session** —
+ * and the honest thing still happens underneath it, said once on the Session
+ * card's ⓘ rather than spelled out as a second row.
+ *
+ * Nothing he can do disappeared with them. Making a new window is the `+` on the
+ * Browser tab, which offers all three destinations including a private one, and
+ * the row menus out on that list still attach.
  *
  * ## Where the page really is, is one line rather than a different screen
  *
@@ -91,9 +131,10 @@
  *  - **A window on the machine.** Everything works.
  *  - **A page this phone is drawing** over a tunnel — `phoneTab` carries the
  *    tab's id and `windowID` is empty, because there is no window on the machine
- *    to name. Isolation cannot convert it (it is not in that browser) so the
- *    card offers the move that puts it there; everything else is real, including
- *    the recorder — see below.
+ *    to name. It is the one shape with no Privacy card: it is not in that
+ *    browser, so it is neither shared nor private and there is nothing to
+ *    convert. Everything else is real on it, including the recorder — see below
+ *    — and Attach opens the same address over there and binds that window.
  *  - **A page the machine is casting that its window list does not name** — the
  *    machine's own front tab, which `openTab` mints no shell id for. Most
  *    `browser.window.*` verbs are addressed by a window id and
@@ -483,6 +524,13 @@ struct MachineWindowSettingsView: View {
      * where it cannot, it draws itself greyed with the reason on its own ⓘ
      * rather than disappearing.
      *
+     * One card takes itself off one shape and does it **inside itself**, which
+     * is the same guarantee read from the other side: `privacyCard` is still
+     * called here, unconditionally, in second place. What it draws for a page on
+     * this phone is nothing, for the reason its own header gives. The order
+     * cannot be rearranged from here and a card cannot be added from here, which
+     * is what stops the two screens drifting apart again.
+     *
      * The two states that are not a window at all are the exceptions and they
      * are exceptions to *there being a window*, not to the order: a page that
      * has been closed has nothing to configure, and a list that has not landed
@@ -513,7 +561,7 @@ struct MachineWindowSettingsView: View {
                 .accessibilityIdentifier("browser.machine.window.settingsLoading")
         default:
             windowCard
-            isolationCard
+            privacyCard
             sessionCard
             screenshotCard
             clickFlowCard
@@ -612,7 +660,14 @@ struct MachineWindowSettingsView: View {
     /// which of their windows they are looking at.
     private var windowTitle: String {
         switch windowShape {
-        case let .machine(window): return window.label
+        // `WindowNames`, never `window.label`. `label` answers the literal
+        // `about:blank` for a window with no page in it — jargon, and the same
+        // six characters for every blank window, so the title of these settings
+        // would not say which window they are the settings of. `WindowNames` is
+        // the one rule for that name in this app and the Browser tab's row calls
+        // the same function, so a window is not `about:blank` on one screen and
+        // Untitled on the next.
+        case let .machine(window): return WindowNames.name(window)
         case let .phone(tab): return tab.label
         case let .cast(surface): return MachineBrowserText.surfaceLabel(surface)
         case .gone, .unknown: return ""
@@ -624,6 +679,12 @@ struct MachineWindowSettingsView: View {
     /// in the line that says *where you are*.
     private var windowAddress: String {
         switch windowShape {
+        // `label` rather than the title drawn above, deliberately: `label` is
+        // `title.isEmpty ? url : title`, so this is empty exactly when the
+        // window has no title of its own — which is the case a blank window is.
+        // Comparing against `WindowNames.name` instead would draw `about:blank`
+        // under *Untitled*, because the name differs from the url by
+        // construction. The Browser tab's row makes the same comparison.
         case let .machine(window): return window.url == window.label ? "" : window.url
         case let .phone(tab): return phoneAddress(tab)
         case let .cast(surface): return surface.url
@@ -655,7 +716,10 @@ struct MachineWindowSettingsView: View {
                                         id: "browser.machine.window.live"))
             }
             if window.isolated {
-                marks.append(WindowMark(text: "Isolated", tone: Theme.secondary,
+                // **Private**, and the identifier stays `isolatedMark`. The word
+                // is what he reads; the identifier is what a suite asks for, and
+                // a renamed identifier is a case that skips rather than fails.
+                marks.append(WindowMark(text: "Private", tone: Theme.secondary,
                                         id: "browser.machine.window.isolatedMark"))
             }
             if window.recording {
@@ -704,7 +768,7 @@ struct MachineWindowSettingsView: View {
         switch windowShape {
         case .machine:
             var text = "A window in \(machineName)'s browser. It uses \(machineName)'s cookies "
-                + "and whatever it is signed into, unless it is isolated."
+                + "and whatever it is signed into, unless it is private."
             if !pushed && canWatch && surface == nil {
                 text += "\n\n\(machineName) is not offering this window for watching, which is why "
                     + "these settings are the screen rather than a live picture. It is a real "
@@ -734,8 +798,8 @@ struct MachineWindowSettingsView: View {
                 ? "Watching it and typing an address are what it does take."
                 : "Watching it is what it does take."
             return which + " The machine names each of its windows with an id, and closing, "
-                + "isolating, photographing and recording one are all addressed by that id — so "
-                + "none of those can be sent for this page.\n\n" + takes
+                + "photographing, recording and making one private are all addressed by that id — "
+                + "so none of those can be sent for this page.\n\n" + takes
                 + " Its address can still be opened on \(machineName) as a new window, and that "
                 + "window has an id and can be attached to a session."
         case .gone, .unknown:
@@ -752,51 +816,80 @@ struct MachineWindowSettingsView: View {
         return "browser.machine.window"
     }
 
-    /* ---- 2. whose cookies it gets ------------------------------------------ */
+    /* ---- 2. shared or private ---------------------------------------------- */
 
     /**
-     * **Which jar this window's cookies land in — the same card on every shape.**
+     * **Whose cookies this window gets: Shared, or Private.**
      *
      * *"Making a browsing session into an isolated or shared one."*
      *
-     * On a window in the machine's browser it is convertible in both directions,
-     * and the word on the button is the **destination** rather than the state,
-     * because the state is already the label beside it — a button saying
-     * *Isolated* next to a label saying *Shared* is two readings of the same word
-     * and somebody will press it to find out.
+     * ## The word is Private, because that is the word browsers use
      *
-     * ## On a page this phone draws, the honest analogue is where it can go
+     * > *"lets make only one name as browser and window identical to normal
+     * > standards for browser everything else too"*
      *
-     * There is no shared-or-isolated to convert, because the page is not in that
-     * browser at all. What there *is* is the move that puts it there, in either
-     * jar — and that used to be a card called *Open somewhere else* that existed
-     * on one shape of this screen and nowhere else, which is precisely the
-     * *"different versions of the browser settings"* he read. It is this card
-     * now: same position, same caption, same two-row shape, and the rows are the
-     * two places a window can go.
+     * *Isolated* is this codebase's word for a profile signed into nothing and
+     * thrown away afterwards, and it was never anybody else's. Safari says
+     * Private, Firefox says Private, Chrome says Incognito — not one of them says
+     * isolated. So somebody who has used a browser already knows what a private
+     * window is, and had to be taught what an isolated one was. The caption is
+     * **Privacy**, the two states are **Shared** and **Private**, and the button
+     * is **Make private** or **Make shared**.
      *
-     * Both rows, because it is his choice and it was being made for him: the
-     * isolated window is the one signed into nothing, and one row that quietly
-     * opened a shared one decided whose cookies the page an agent is about to
-     * drive gets.
+     * The `Bool` on the wire is still `isolated` and the verb the host parses is
+     * still `Act.isolate`, deliberately: renaming those would be a protocol
+     * change to fix an English word, and it would land in a build where the
+     * desktop is not being rebuilt in the same batch. The identifier under the
+     * button is still `browser.machine.window.isolation` for the same class of
+     * reason — a renamed identifier is a suite that skips instead of failing.
      *
-     * ## And the rows are names now, not sentences
+     * ## And this card is drawn only where it is a real toggle
      *
-     * They were *"Open in DESKTOP-DDGMNCV's browser"* over *"Signed in the way
-     * DESKTOP-DDGMNCV is."* and *"Open an isolated window on DESKTOP-DDGMNCV"*
-     * over *"Signed into nothing, and forgotten when the window closes."* — four
-     * lines of grey for two controls, and he could not tell them apart. Two
-     * names now; the difference between them is on the ⓘ above, once.
+     * > *"we also dont need extra options of openinig new window like this way
+     * > like open islolated and other from inside a window"*
+     *
+     * On a page **this phone** is drawing, this card used to hold two rows —
+     * *Open on DESKTOP-DDGMNCV* and *Open isolated* — and neither was about the
+     * window in front of him. Both made a **new** window somewhere else, from a
+     * screen whose entire subject is this one. He counted them together with the
+     * two on the Session card that did the same thing and asked for all four to
+     * go.
+     *
+     * Taking them out leaves this card with nothing to draw on that shape, and
+     * that is not a gap to be filled: a page on this phone is not in the
+     * machine's browser at all, so there is no jar to move it between and no
+     * state here to report. So on that one shape the card is **absent** rather
+     * than greyed.
+     *
+     * That is a deliberate departure from this screen's own rule — *a card that
+     * cannot act is greyed in its place, never missing* — and it is made here and
+     * nowhere else. The rule exists so that a control somebody is hunting for is
+     * never silently gone. There is no control here to hunt for: a greyed *Make
+     * private* over a page that was never in that browser would be a control
+     * invented so that a card could keep its slot, which is the same dishonesty
+     * the rule was written against, pointing the other way.
+     *
+     * A cast the machine's window list does not name keeps the card, greyed.
+     * That page really **is** in the machine's browser — it is that browser's own
+     * front tab — and the only thing between it and this verb is a window id the
+     * host refuses when it is empty. A control that exists and cannot be sent is
+     * exactly what greying is for.
+     *
+     * ## The word on the button is the destination, not the state
+     *
+     * A button saying *Private* beside a label saying *Shared* is two readings of
+     * one word and somebody presses it to find out which. So the label is where
+     * this window is and the button is where it goes.
      */
     @ViewBuilder
-    private var isolationCard: some View {
-        SchemeSectionCaption("Isolation", about: "isolated windows", info: isolationInfo)
+    private var privacyCard: some View {
+        switch windowShape {
+        case let .machine(window):
+            privacyCaption
 
-        SchemeGroup {
-            switch windowShape {
-            case let .machine(window):
+            SchemeGroup {
                 HStack(spacing: 10) {
-                    Text(window.isolated ? "Isolated" : "Shared")
+                    Text(window.isolated ? "Private" : "Shared")
                         .font(.system(size: 16))
                         .foregroundStyle(Theme.primary)
                     /*
@@ -813,7 +906,7 @@ struct MachineWindowSettingsView: View {
                     Button {
                         host?.actOnMachineWindow(windowID, window.isolated ? .share : .isolate)
                     } label: {
-                        Text(window.isolated ? "Make shared" : "Make isolated")
+                        Text(window.isolated ? "Make shared" : "Make private")
                             .font(.system(size: 14, weight: .medium))
                             .foregroundStyle(Theme.accent)
                             .padding(.vertical, 4)
@@ -824,79 +917,56 @@ struct MachineWindowSettingsView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 13)
-
-            case let .phone(tab):
-                if canDrive {
-                    actionRow("Open on \(machineName)", icon: "globe",
-                              id: "browser.phone.page.otherWay",
-                              hint: "Opens this address in \(machineName)'s browser, in its own "
-                                  + "profile. The page here is left as it is.") {
-                        host?.openMachineWindow(url: phoneAddress(tab), isolated: false)
-                    }
-
-                    rowDivider(inset: 16)
-
-                    actionRow("Open isolated", icon: "eye.slash",
-                              id: "browser.phone.page.otherWayIsolated",
-                              hint: "Opens this address in \(machineName)'s browser in a partition "
-                                  + "of its own, signed into nothing.") {
-                        host?.openMachineWindow(url: phoneAddress(tab), isolated: true)
-                    }
-                } else {
-                    deadRow("Open on \(machineName)", icon: "globe",
-                            id: "browser.phone.page.otherWay", why: isolationInfo)
-
-                    rowDivider(inset: 16)
-
-                    deadRow("Open isolated", icon: "eye.slash",
-                            id: "browser.phone.page.otherWayIsolated", why: isolationInfo)
-                }
-
-            case .cast:
-                /*
-                 * Greyed rather than absent, and that is the round's rule
-                 * winning over an argument this file used to make. The old code
-                 * left this card out entirely, on the reasoning that a card
-                 * labelled *Shared* about a page the machine never said that of
-                 * would be invented data. The reasoning is right and it only
-                 * ever applied to the **state**: a greyed *Make isolated* claims
-                 * nothing about which jar this page is in, and its absence was
-                 * one more way this shape drew a different screen.
-                 */
-                deadRow("Make isolated", icon: "eye.slash",
-                        id: "browser.machine.window.isolation",
-                        why: "This page has no window id for the machine to isolate.")
-
-            case .gone, .unknown:
-                EmptyView()
             }
+
+        case .cast:
+            /*
+             * Greyed rather than absent, which is the opposite call from the
+             * one the next case makes for a page on this phone. The difference
+             * is not a preference, it is whether the control exists at all: this
+             * page **is** in the machine's browser and could be made private if
+             * the machine had given it an id, so the control is real and cannot
+             * be sent. A page on this phone is not in that browser, so there is
+             * nothing there to grey.
+             */
+            privacyCaption
+
+            SchemeGroup {
+                deadRow("Make private", icon: "eye.slash",
+                        id: "browser.machine.window.isolation",
+                        why: "This page has no window id for the machine to address.")
+            }
+
+        case .phone, .gone, .unknown:
+            EmptyView()
         }
     }
 
-    /// The ⓘ on Isolation: the difference between the two jars, and — where the
+    /// The caption, written once so the two shapes that draw this card cannot
+    /// come to head it differently. `about:` is what the ⓘ answers to —
+    /// `info.private-windows` — and it changed with the word, because the dot is
+    /// read by its label and there is no suite outside this file asking for it.
+    private var privacyCaption: some View {
+        SchemeSectionCaption("Privacy", about: "private windows", info: privacyInfo)
+    }
+
+    /// The ⓘ on Privacy: the difference between the two jars, and — where the
     /// card is greyed — why. One string, because a control's reason and a
     /// section's explanation are the same sentence read from two directions.
-    private var isolationInfo: String {
+    ///
+    /// There is no `.phone` branch, and its absence is the point: that shape
+    /// draws no card, so a sentence written for it would be an explanation
+    /// nobody can reach. The two shapes left are the two that draw it.
+    private var privacyInfo: String {
         let jars = "A shared window uses \(machineName)'s own profile — its cookies and whatever "
-            + "it is signed into. An isolated one gets a partition of its own, and that partition "
+            + "it is signed into. A private one gets a partition of its own, and that partition "
             + "is thrown away when the window closes."
         switch windowShape {
-        case .machine:
-            return jars
-        case .phone:
-            let head = "This page is not in \(machineName)'s browser, so there is no jar here to "
-                + "move it between. What this card offers is the move that puts the same address "
-                + "there, in either jar. The page on this phone stays exactly as it is — you end "
-                + "up with both.\n\n"
-            return canDrive
-                ? head + jars
-                : head + "\(machineName) is not offering its browser to this phone, so no window "
-                    + "can be opened there.\n\n" + jars
         case .cast:
-            return "The machine names each of its windows with an id and addresses isolation by "
-                + "it. This page is one the machine's window list does not name, so it cannot be "
+            return "The machine names each of its windows with an id and addresses this by it. "
+                + "This page is one the machine's window list does not name, so it cannot be "
                 + "moved between jars from here.\n\n" + jars
-        case .gone, .unknown:
+        case .machine, .phone, .gone, .unknown:
             return jars
         }
     }
@@ -915,26 +985,42 @@ struct MachineWindowSettingsView: View {
      * rather than as a status: it is the word appearing in that agent's
      * transcript.
      *
-     * ## The same card for a page the machine is not holding, because there is a
-     * real move
+     * ## One row, called Attach to a session, on every shape
      *
-     * > *"there is no way to attach this one too. So it should be the same case,
-     * > or all the options should be available at least."*
+     * > *"lets make only one name as browser and window identical to normal
+     * > standards for browser everything else too"*
      *
-     * An agent cannot reach this app's own web view and never will, and it
-     * cannot address a page the machine's window list does not name. Neither of
-     * those is a reason for an empty card: `browser.window.open` takes an
-     * **address** and carries a session, so this page's own address opens a new
-     * window over there and the host binds *that* one before it answers. One
-     * ask, and the row lands already wearing its slot.
+     * > *"we also dont need extra options of openinig new window like this way
+     * > like open islolated and other from inside a window"*
      *
-     * ## Rows are names; what actually happens is on the ⓘ
+     * This card carried **two** attach rows on the two shapes that cannot bind
+     * the page they are about — *Attach a window* and *Attach an isolated
+     * window* — and they were two of the four rows he counted on one screen that
+     * each made a new window somewhere else. They were built a round earlier for
+     * a good reason: choosing the shared window silently was this screen deciding
+     * whose cookies the page an agent is about to drive gets.
      *
-     * These were the worst offenders on the screen — two menu rows, each with a
-     * grey sentence under it, and a third row underneath that was a whole
-     * paragraph of prose explaining that the page does not move. Three lines of
-     * explanation for two controls. The paragraph is on the ⓘ now, where it is
-     * read once by whoever wants it, and the rows are the two things they do.
+     * The reason was right and the shape was wrong. A settings screen for **this**
+     * window is not where a person picks what kind of window to make; the `+` on
+     * the Browser tab is, and it still offers all three destinations including a
+     * private one. So there is one row here, it is called **Attach to a session**
+     * on every shape of this screen and on every row menu out on the list, and it
+     * hands over an ordinary window in the machine's own browser.
+     *
+     * ## What happens underneath it is said once, on the ⓘ
+     *
+     * An agent cannot reach this app's own web view and never will, and it cannot
+     * address a page the machine's window list does not name. So on those two
+     * shapes the row does the honest thing: `browser.window.open` takes an
+     * **address** and carries a session, so this page's own address opens a
+     * window over there and the host binds *that* one before it answers. One ask,
+     * and the row lands already wearing its slot.
+     *
+     * That is a real difference from binding the page in front of him and it is
+     * not hidden — it is the first paragraph of this card's ⓘ, which is where the
+     * whole explanation of the act lives. It is **not** a second row. A row that
+     * has to describe itself is a row with the wrong name, and *"the page here
+     * does not move"* is a fact about one act rather than a choice between two.
      */
     @ViewBuilder
     private var sessionCard: some View {
@@ -970,12 +1056,22 @@ struct MachineWindowSettingsView: View {
                     rowDivider(inset: 16)
                 }
 
+                /*
+                 * **Attach to a session**, whether or not one already holds it.
+                 *
+                 * It read *Attach to another session* on a bound window, which is
+                 * a second name for one control decided by a state — the same
+                 * shape of thing as *Page settings* beside *Window settings*, one
+                 * size down. The row above already says which session holds it
+                 * and offers Detach, so *another* was carrying nothing this card
+                 * had not already said, at the cost of a word that has to be
+                 * read.
+                 */
                 if sessions.isEmpty {
-                    deadRow(window.isBound ? "Attach to another session" : "Attach to a session",
-                            icon: "link", id: "browser.machine.window.attach", why: sessionInfo)
+                    deadRow("Attach to a session", icon: "link",
+                            id: "browser.machine.window.attach", why: sessionInfo)
                 } else {
-                    sessionMenuRow(window.isBound ? "Attach to another session"
-                                                  : "Attach to a session",
+                    sessionMenuRow("Attach to a session",
                                    icon: "link",
                                    id: "browser.machine.window.attach",
                                    hint: "Hands this window to a session. It gets a slot name — "
@@ -987,14 +1083,11 @@ struct MachineWindowSettingsView: View {
                 }
 
             case let .phone(tab):
-                attachPair(id: "browser.phone.page.attach",
-                           isolatedID: "browser.phone.page.attachIsolated",
-                           address: phoneAddress(tab))
+                attachRow(id: "browser.phone.page.attach", address: phoneAddress(tab))
 
             case let .cast(surface):
-                attachPair(id: "browser.machine.window.attach",
-                           isolatedID: "browser.machine.window.attachIsolated",
-                           address: MachineBrowserText.reopenable(surface.url))
+                attachRow(id: "browser.machine.window.attach",
+                          address: MachineBrowserText.reopenable(surface.url))
 
             case .gone, .unknown:
                 EmptyView()
@@ -1003,54 +1096,55 @@ struct MachineWindowSettingsView: View {
     }
 
     /**
-     * The two rows that hand a **new** window on the machine to a session, for
-     * the two shapes that cannot bind the page they are about.
+     * The one row that hands a session a window at this page's address, for the
+     * two shapes that cannot bind the page they are about.
      *
      * One builder rather than two copies, because the two shapes reached it a
-     * round apart and the copies had already drifted into describing the same
-     * act with different words. `address` is optional for the one case that
-     * really has nothing to re-open — a blank tab, `about:blank`, or one of
-     * Chromium's own `chrome://` screens, none of which the machine's
-     * `normalizeUrl` will take (`src/main/browser-url.ts` keeps
-     * `ALLOWED_PROTOCOLS` at `http` and `https`).
+     * round apart and the copies had already drifted into describing the same act
+     * with different words.
+     *
+     * `address` is optional for the one case that really has nothing to re-open —
+     * a blank tab, `about:blank`, or one of Chromium's own `chrome://` screens,
+     * none of which the machine's `normalizeUrl` will take
+     * (`src/main/browser-url.ts` keeps `ALLOWED_PROTOCOLS` at `http` and
+     * `https`).
+     *
+     * `isolated: false`, and that is now a decision made once rather than a
+     * choice taken away. The window this makes is an ordinary one in the
+     * machine's own browser, which is what somebody standing at that machine
+     * would get; a private one is still one tap away on the `+`, which is where
+     * a person chooses what kind of window to make.
      */
     @ViewBuilder
-    private func attachPair(id: String, isolatedID: String, address: String?) -> some View {
+    private func attachRow(id: String, address: String?) -> some View {
         if canDrive, !sessions.isEmpty, let address {
-            sessionMenuRow("Attach a window", icon: "link", id: id,
-                           hint: "Opens this address on \(machineName) as a new window and hands "
-                               + "that window to the session. The page here does not move.",
+            sessionMenuRow("Attach to a session", icon: "link", id: id,
+                           hint: "Opens this address on \(machineName) as a window and hands that "
+                               + "window to the session. The page here does not move.",
                            chosen: nil) { session in
                 host?.openMachineWindow(url: address, isolated: false, session: session)
             }
-
-            rowDivider(inset: 16)
-
-            sessionMenuRow("Attach an isolated window", icon: "eye.slash", id: isolatedID,
-                           hint: "The same, in a window signed into nothing that is thrown away "
-                               + "when it closes.",
-                           chosen: nil) { session in
-                host?.openMachineWindow(url: address, isolated: true, session: session)
-            }
         } else {
-            deadRow("Attach a window", icon: "link", id: id, why: sessionInfo)
-
-            rowDivider(inset: 16)
-
-            deadRow("Attach an isolated window", icon: "eye.slash", id: isolatedID, why: sessionInfo)
+            deadRow("Attach to a session", icon: "link", id: id, why: sessionInfo)
         }
     }
 
     /**
      * The ⓘ on Session: what a binding is, what the attach really does on a page
-     * the machine is not holding, and — where the rows are greyed — which of the
+     * the machine is not holding, and — where the row is greyed — which of the
      * three things it needs is missing.
      *
      * The three reasons are asked in the order they stop the move, so the answer
      * is the one that is actually true of this machine and this page rather than
-     * a general apology. That ordering is the correction from the round before
-     * last: one sentence about window ids used to head a greyed attach, and it
-     * was the reason an attach that was perfectly possible never got built.
+     * a general apology. That ordering is the correction from two rounds ago: one
+     * sentence about window ids used to head a greyed attach, and it was the
+     * reason an attach that was perfectly possible never got built.
+     *
+     * The first paragraph is where the second row went. *Attach an isolated
+     * window* is gone from the glass, and what it was really telling him — that
+     * this is a **new** window in the machine's browser, with the machine's
+     * cookies, and that the page in front of him is untouched — is said here
+     * once, in full, instead of being implied by the existence of two rows.
      */
     private var sessionInfo: String {
         let slots = "A bound window gets a slot name — B1, B2 — and the session's tools address "
@@ -1255,8 +1349,8 @@ struct MachineWindowSettingsView: View {
         case .cast:
             return "The machine photographs a window by its id, and this page is one the "
                 + "machine's window list does not name — so there is no window for it to "
-                + "photograph. Opening this address on \(machineName) as a window, above, gives "
-                + "you one that can be."
+                + "photograph. Attaching to a session, above, opens this address on "
+                + "\(machineName) as a window, and that window has an id and can be photographed."
         case .gone, .unknown:
             return ""
         }
@@ -1608,8 +1702,8 @@ struct MachineWindowSettingsView: View {
         case .cast:
             return "The machine's recorder is addressed by a window id, and this page is one the "
                 + "machine's window list does not name — so a recording cannot be started for it. "
-                + "Opening this address on \(machineName) as a window, above, gives you one that "
-                + "can be recorded.\n\n" + what
+                + "Attaching to a session, above, opens this address on \(machineName) as a "
+                + "window, and that window can be recorded.\n\n" + what
         case .gone, .unknown:
             return what
         }
@@ -1625,7 +1719,8 @@ struct MachineWindowSettingsView: View {
      * It is also on the home's row — on the `…` and on the swipe — which is not
      * a duplicate: closing a window you are looking at and closing one from a
      * list are two different moments, and the list's whole point is not having
-     * to open a window to deal with it.
+     * to open a window to deal with it. It is the **same words** in both places
+     * — *Close window* — for the same reason the settings screen has one title.
      *
      * ## One of these dismisses and the rest do not, and that took a failure
      *
@@ -1650,8 +1745,11 @@ struct MachineWindowSettingsView: View {
         SchemeGroup {
             switch windowShape {
             case let .machine(window):
+                // `WindowNames.name`, never the raw label: a hint that says
+                // *Closes about:blank* is the jargon this round took off the
+                // glass, spoken out loud where nobody proof-reads it.
                 closeRow(id: "browser.machine.window.close",
-                         hint: "Closes \(window.label) in \(machineName)'s browser") {
+                         hint: "Closes \(WindowNames.name(window)) in \(machineName)'s browser") {
                     host?.actOnMachineWindow(windowID, .close)
                 }
             case let .phone(tab):
@@ -1661,7 +1759,7 @@ struct MachineWindowSettingsView: View {
                     if pushed { dismiss() }
                 }
             case .cast:
-                deadRow("Close this window", icon: "xmark.circle",
+                deadRow("Close window", icon: "xmark.circle",
                         id: "browser.machine.window.close", why: closeInfo)
             case .gone, .unknown:
                 EmptyView()
@@ -1675,7 +1773,12 @@ struct MachineWindowSettingsView: View {
                 Image(systemName: "xmark.circle")
                     .font(.system(size: 19, weight: .light))
                     .frame(width: 24)
-                Text("Close this window")
+                // **Close window**, word for word what the row's `…` out on the
+                // Browser tab says, because they are the same act from two
+                // places and a browser has exactly one name for it. It read
+                // *Close this window* here, which is one more of the small
+                // second names this round is taking out.
+                Text("Close window")
                     .font(.system(size: 16))
                 Spacer(minLength: 0)
             }

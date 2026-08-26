@@ -145,17 +145,41 @@
  * own `chrome://` screens, none of which `normalizeUrl` will open — keeps a dead
  * attach, under a reason that says *that* rather than the old one.
  *
- * ## And every one of those offers Machine **or** Isolated
+ * ## And attaching is one row, called the one thing it is called
  *
- * > *"all of them should be identical, and all of them should have all the
- * > options."*
+ * > *"lets make only one name as browser and window identical to normal
+ * > standards for browser everything else too"*
  *
- * Both moves above were hard-wired to a shared window. That is a real choice he
- * makes on the `+` — the isolated one is how he gets a throwaway profile that is
- * signed into nothing — and it was silently made for him everywhere else the
- * same act is offered. Both are offered now, as two plain lines using the New
- * window sheet's own words, on the row menus here and on the page's settings
- * screen. See `attachSections`.
+ * For one round both of those moves were offered twice — *Attach a window* and
+ * *Attach an isolated window* — because the round before that had hard-wired
+ * them to a shared window and choosing silently is this menu deciding whose
+ * cookies his page gets. The reason was right and the shape was wrong: a row
+ * menu on a list of windows is not where somebody picks what **kind** of window
+ * to make, and offering the pick there put two rows saying nearly the same
+ * sentence on every menu on this screen.
+ *
+ * So there is one row, **Attach to a session**, and it is that on all three
+ * kinds of row here, on the window's own settings screen, and in the section
+ * header of the picker. The kind of window is chosen where a window is made —
+ * the `+`, which offers Machine, Private and This phone. See `attachSection`.
+ *
+ * ## Private, Untitled, Window settings — the words a browser already uses
+ *
+ * > *"lets make only one name as browser and window identical to normal
+ * > standards for browser everything else too"*
+ *
+ * *Isolated* was this codebase's word for a throwaway profile and no browser has
+ * ever used it: Safari and Firefox both say **Private**. So the mark on a row is
+ * Private, the destination on the `+` is Private, and the settings screen says
+ * Private. A window with no page in it is **Untitled** rather than the literal
+ * `about:blank` — `WindowNames` is the one rule for that name and this list
+ * calls it. The screen behind a row's settings row is **Window settings**,
+ * whichever machine draws the page.
+ *
+ * The wire is untouched. `browser.window.open` still takes `isolated: Bool`,
+ * `Act.isolate` is still the verb, and every `accessibilityIdentifier` on this
+ * screen keeps the name the suites already ask for — a renamed identifier is a
+ * case that skips instead of failing.
  *
  * ## Every row on this screen is a title, and that is all of it
  *
@@ -176,12 +200,11 @@
  * *"Open on DESKTOP-DDGMNCV and attach — signed in the way DESKTOP-DDGMNCV
  * is"*, over session rows that are themselves two clauses long.
  *
- * Both are names now — **Machine**, **Isolated**, **This phone**; **Attach a
- * window**, **Attach an isolated window** — and every sentence that came off is
- * on an ⓘ, none of it deleted. The test of a row is whether he can point at it
- * and know what it does without reading a sentence; a row that cannot be named
- * in three or four words is a row with the wrong name, not a row that needs a
- * caption.
+ * Both are names now — **Machine**, **Private**, **This phone**; **Attach to a
+ * session** — and every sentence that came off is on an ⓘ, none of it deleted.
+ * The test of a row is whether he can point at it and know what it does without
+ * reading a sentence; a row that cannot be named in three or four words is a row
+ * with the wrong name, not a row that needs a caption.
  *
  * The URL under a row's title stays, and it is not the same thing: an address is
  * what the row **is**, not an explanation of what pressing it does.
@@ -678,20 +701,24 @@ struct MachineBrowserView: View {
      * the machine's own answer replaces it — `browser.window.rows` comes back
      * carrying the bind notice, which is the confirmation that counts.
      *
-     * ## And the window it makes is shared **or** isolated, because he chooses
+     * ## And the window it makes is an ordinary one, which is a decision made
+     * once rather than a choice taken away
      *
-     * `isolated` used to be hard-wired to false here. The `+` on this very
-     * screen offers that choice and he uses it — an isolated window is the one
-     * signed into nothing — so making it silently for him was this screen
-     * deciding whose cookies his page gets. It is a parameter now, and both are
-     * on the menu.
+     * `isolated` was hard-wired false here, then became a parameter with two menu
+     * sections behind it, and is hard-wired false again — deliberately, and not
+     * back where it started. The middle version was right that choosing silently
+     * is this menu deciding whose cookies his page gets; it was wrong that a row
+     * menu on a list of windows is where that is chosen. *"We also dont need
+     * extra options of openinig new window like this way."* The kind of window is
+     * picked where a window is made — the `+`, which offers Machine, Private and
+     * This phone — and what this row does is attach.
      */
-    private func attachOnMachine(_ tab: BrowserTab, to session: String, isolated: Bool) {
+    private func attachOnMachine(_ tab: BrowserTab, to session: String) {
         host?.openMachineWindow(url: "http://localhost:\(String(tab.port))\(tab.path)",
-                                isolated: isolated,
+                                isolated: false,
                                 session: session)
-        say("Opening localhost:\(String(tab.port)) \(newWindowPhrase(isolated)) and attaching that "
-            + "window to the session. The page open here does not move.")
+        say("Opening localhost:\(String(tab.port)) in a new window in \(machineName)'s browser "
+            + "and attaching that window to the session. The page open here does not move.")
     }
 
     /**
@@ -727,19 +754,10 @@ struct MachineBrowserView: View {
      * else, so a `chrome://` screen or a blank tab is not offered here at all.
      * See `reopenable`.
      */
-    private func attachSurfaceOnMachine(_ address: String, to session: String, isolated: Bool) {
-        host?.openMachineWindow(url: address, isolated: isolated, session: session)
-        say("Opening \(shortened(address)) \(newWindowPhrase(isolated)) and attaching that window "
-            + "to the session. The tab you were looking at stays as it is.")
-    }
-
-    /// Where the new window lands, in the middle of a sentence. One phrase
-    /// rather than two whole banners, so the two attaches above cannot drift
-    /// into describing the same act differently.
-    private func newWindowPhrase(_ isolated: Bool) -> String {
-        isolated
-            ? "in a new isolated window on \(machineName), signed into nothing,"
-            : "in a new window in \(machineName)'s browser"
+    private func attachSurfaceOnMachine(_ address: String, to session: String) {
+        host?.openMachineWindow(url: address, isolated: false, session: session)
+        say("Opening \(shortened(address)) in a new window in \(machineName)'s browser and "
+            + "attaching that window to the session. The tab you were looking at stays as it is.")
     }
 
     /**
@@ -885,7 +903,12 @@ struct MachineBrowserView: View {
                 } label: {
                     Image(systemName: "plus")
                 }
-                .accessibilityLabel("Open a window")
+                // **New window** — the same three words the sheet it raises is
+                // titled with, and the words every browser puts on this act.
+                // It was *Open a window* here and *New window* one tap later,
+                // which is two names for one thing said a quarter of a second
+                // apart, and the one nobody proof-reads is the spoken one.
+                .accessibilityLabel("New window")
                 .accessibilityIdentifier("browser.new")
             }
 
@@ -1074,7 +1097,11 @@ struct MachineBrowserView: View {
                  : "\(model.current?.label ?? model.theMachine) is not offering a window to watch.")
         } actions: {
             if canDrive {
-                Button("Open a window") { opening = true }
+                // The same three words as the `+` above it and as the sheet
+                // both of them raise. This is the only way in for somebody who
+                // has not found the glyph, so it is the one place the act has to
+                // be named the way the rest of the app names it.
+                Button("New window") { opening = true }
                     .buttonStyle(.borderedProminent)
                     .tint(Theme.accent)
                     .accessibilityIdentifier("browser.windows.empty.open")
@@ -1238,7 +1265,23 @@ struct MachineBrowserView: View {
                             .font(.system(size: 16))
                             .foregroundStyle(Theme.primary)
                             .lineLimit(1)
-                        if !window.url.isEmpty && window.url != WindowNames.name(window) {
+                        /*
+                         * The address, and only where it is not already the
+                         * title. `window.label` and **not** `WindowNames.name`,
+                         * which is what this compared against and is the one
+                         * comparison that puts `about:blank` back on the screen.
+                         *
+                         * `label` is `title.isEmpty ? url : title`, so `url ==
+                         * label` means exactly *this window has no title of its
+                         * own* — and a window with no page in it is precisely
+                         * that case. `WindowNames.name` renames those to a word,
+                         * so it differs from the url by construction and the row
+                         * drew the word over the six characters it was written
+                         * to replace: *Untitled* with `about:blank` underneath
+                         * it. Compared against the label, a blank window is a
+                         * name and nothing else.
+                         */
+                        if !window.url.isEmpty && window.url != window.label {
                             Text(window.url)
                                 .font(.system(size: 12, design: .monospaced))
                                 .foregroundStyle(Theme.faint)
@@ -1488,7 +1531,11 @@ struct MachineBrowserView: View {
                     MachineWindowMark(text: "Live", tone: Theme.positive)
                 }
                 if window.isolated {
-                    MachineWindowMark(text: "Isolated", tone: Theme.secondary)
+                    // **Private**, the word Safari and Firefox both use. The
+                    // `isolated` flag on the wire keeps its own name — see the
+                    // header — because this is what he reads, not what the
+                    // machine is sent.
+                    MachineWindowMark(text: "Private", tone: Theme.secondary)
                 }
                 if window.recording {
                     MachineWindowMark(text: "Recording", tone: Theme.critical)
@@ -1664,16 +1711,20 @@ struct MachineBrowserView: View {
      *  - no sessions — nothing to hand the new window to.
      *
      * Archive and Close keep the id reason, which is the whole truth about them.
+     *
+     * And the attach is **one** row now, called *Attach to a session* — see
+     * `attachSection` for why the isolated twin it briefly had went back to the
+     * `+`, which is where a person picks what kind of window to make.
      */
     @ViewBuilder
     private func surfaceItems(_ surface: BrowserSurfaceRow, sessions: [WindowSession]) -> some View {
         if canDrive, !sessions.isEmpty, let address = MachineBrowserText.reopenable(surface.url) {
-            attachSections(sessions) { session, isolated in
-                attachSurfaceOnMachine(address, to: session, isolated: isolated)
+            attachSection(sessions) { session in
+                attachSurfaceOnMachine(address, to: session)
             }
         } else {
             Section(whyNoSurfaceAttach(surface)) {
-                deadItem("Attach a window", "terminal")
+                deadItem("Attach to a session", "terminal")
             }
         }
 
@@ -1684,76 +1735,53 @@ struct MachineBrowserView: View {
     }
 
     /**
-     * **The one attach, offered as the two places a window can go.**
+     * **The one attach, and it is one row.**
      *
-     * > *"all of them should be identical, and all of them should have all the
-     * > options."*
+     * > *"lets make only one name as browser and window identical to normal
+     * > standards for browser everything else too"*
      *
-     * Both callers were hard-wired to a shared window. Isolation is a choice he
-     * makes deliberately on the `+` — an isolated window is the one signed into
-     * nothing, thrown away when it closes — so choosing it for him here was this
-     * menu deciding whose cookies his page gets, silently, in the one act that
-     * hands a page to an agent.
+     * > *"we also dont need extra options of openinig new window like this way
+     * > like open islolated and other from inside a window"*
      *
-     * ## Two sections rather than a control inside a menu
+     * This was two sections a round ago — *Attach a window* and *Attach an
+     * isolated window* — with the same list of sessions repeated under each. It
+     * was built that way for a reason that still holds on its own terms: the
+     * move had been hard-wired to a shared window, and choosing that silently is
+     * this menu deciding whose cookies the page an agent is about to drive gets.
      *
-     * Two plain lines, each saying what it means in the words the New window
-     * sheet already uses, and the sessions under whichever one is meant. Two
-     * taps either way, which is what the shared case already cost.
+     * What the fix got wrong is where the choice belongs. Picking the **kind** of
+     * window is part of making one, and making one is the `+` — which offers
+     * Machine, Private and This phone, and always has. Offering it again here put
+     * two headers and two identical session lists on every row menu on this
+     * screen, and he read the result and asked for the extra ways of opening a
+     * new window to go.
      *
-     * The alternatives were both worse. A `Picker` inside a menu is the
-     * segmented control he threw out of this screen once already —
-     * *"this feels like a filter, not like a selection of this specific one"* —
-     * and it would sit above a list it does not filter. A session row that opens
-     * a submenu of two makes the ordinary case three taps and hides the choice
-     * he asked to be given.
+     * So it is one section, named for the act rather than for the window it
+     * makes, and the window it makes is an ordinary one in the machine's own
+     * browser — what somebody standing at that machine would get. A private one
+     * is still one tap away, on the `+`.
      *
-     * The two sections carry the same session labels, deliberately: a session is
-     * called what the machine calls it, and appending *isolated* to a title that
-     * already reads `Claude · 2 windows` is a fourth clause on a menu row. The
-     * section header above is what separates them, which is what a section
-     * header is for, and it is also the string a test can ask for — an
-     * `accessibilityIdentifier` on a `Button` inside a `Menu` does not reach the
-     * presented row, so words are all there is either way.
+     * The section header is a name and not a sentence. It read *"Open on
+     * DESKTOP-DDGMNCV and attach — signed in the way DESKTOP-DDGMNCV is"*: two
+     * clauses, an em dash and a machine name, wrapping to three lines over a list
+     * of session rows that are themselves two clauses long. What that sentence
+     * carried is on the window settings screen's Session ⓘ, which is the one
+     * place in the app that explains this act in full.
      *
-     * ## And the headers are names now, because they were sentences
-     *
-     * > *"many of the even buttons. Are so much of confusing I can't understand
-     * > what they mean"*
-     *
-     * They read *"Open on DESKTOP-DDGMNCV and attach — signed in the way
-     * DESKTOP-DDGMNCV is"* and *"Open isolated and attach — signed into nothing,
-     * forgotten when it closes"*: two clauses, an em dash and a machine name
-     * apiece, wrapping to three lines each on his phone, over a list of session
-     * rows that are themselves two clauses long. A menu that has to be *read*
-     * before it can be used is one he stops opening.
-     *
-     * **Attach a window** and **Attach an isolated window** are the same two
-     * things named rather than described, and they are word-for-word the rows on
-     * the window's own settings screen — the two places this act is offered
-     * cannot come to call it different things. What the sentences carried is on
-     * that screen's Session ⓘ, which is the one place in the app that explains
-     * the difference in full.
+     * It is also the string a test can ask for — an `accessibilityIdentifier` on
+     * a `Button` inside a `Menu` does not reach the presented row, so words are
+     * all there is either way, and these are word-for-word the row on the
+     * window's own settings screen.
      */
     @ViewBuilder
-    private func attachSections(_ sessions: [WindowSession],
-                                open: @escaping (String, Bool) -> Void) -> some View {
-        Section("Attach a window") {
+    private func attachSection(_ sessions: [WindowSession],
+                               open: @escaping (String) -> Void) -> some View {
+        Section("Attach to a session") {
             ForEach(sessions) { session in
                 Button {
-                    open(session.id, false)
+                    open(session.id)
                 } label: {
                     Label(MachineBrowserText.sessionRow(session), systemImage: "terminal")
-                }
-            }
-        }
-
-        Section("Attach an isolated window") {
-            ForEach(sessions) { session in
-                Button {
-                    open(session.id, true)
-                } label: {
-                    Label(MachineBrowserText.sessionRow(session), systemImage: "eye.slash")
                 }
             }
         }
@@ -1779,9 +1807,9 @@ struct MachineBrowserView: View {
      * which is the move that was impossible before, because the old open threw
      * the new window's id away and there was nothing left to bind.
      *
-     * And it is offered as the two places a window can go, because that is a
-     * choice he makes on the `+` and it was being made for him here. See
-     * `attachSections`.
+     * And it is one row, because picking the **kind** of window belongs to making
+     * one and making one is the `+`. See `attachSection`, which holds the whole
+     * of that reversal.
      *
      * ## And the wording says what really happens, because it is not the same page
      *
@@ -1805,12 +1833,12 @@ struct MachineBrowserView: View {
     @ViewBuilder
     private func pageItems(_ tab: BrowserTab, sessions: [WindowSession]) -> some View {
         if canDrive && !sessions.isEmpty {
-            attachSections(sessions) { session, isolated in
-                attachOnMachine(tab, to: session, isolated: isolated)
+            attachSection(sessions) { session in
+                attachOnMachine(tab, to: session)
             }
         } else {
             Section(whyNoAttach) {
-                deadItem("Attach a window", "terminal")
+                deadItem("Attach to a session", "terminal")
             }
         }
 
@@ -1975,7 +2003,7 @@ struct MachineBrowserView: View {
                 Label("Close", systemImage: "xmark.circle.fill")
             }
             .tint(Theme.critical)
-            .accessibilityLabel("Close \(window.label)")
+            .accessibilityLabel("Close \(WindowNames.name(window))")
             .accessibilityIdentifier("browser.machine.swipe.close.\(window.id)")
 
             Button {
@@ -1984,7 +2012,7 @@ struct MachineBrowserView: View {
                 Label("Archive", systemImage: "archivebox.fill")
             }
             .tint(Theme.warning)
-            .accessibilityLabel("Archive \(window.label)")
+            .accessibilityLabel("Archive \(WindowNames.name(window))")
             .accessibilityHint("Takes the row off this list. The window stays open on the machine.")
             .accessibilityIdentifier("browser.machine.swipe.archive.\(window.id)")
 
@@ -1995,7 +2023,7 @@ struct MachineBrowserView: View {
                     Label("Detach", systemImage: "minus.circle")
                 }
                 .tint(Theme.neutralAction)
-                .accessibilityLabel("Detach \(window.label) from its session")
+                .accessibilityLabel("Detach \(WindowNames.name(window)) from its session")
                 .accessibilityIdentifier("browser.machine.swipe.detach.\(window.id)")
             }
         }
@@ -2058,11 +2086,13 @@ struct MachineBrowserView: View {
  *  - **Machine** — the machine's own browser, in its own profile, with its
  *    cookies and whatever it is signed into. Watchable and drivable from the
  *    phone.
- *  - **Isolated** — the machine's browser with a partition of its own, thrown
- *    away when the window closes. A login typed into a window that turned out to
- *    be shared is already in the machine's cookie jar by the time anybody thinks
- *    to convert it, so the choice has to exist before the window does. It is
- *    still convertible afterwards, on the window's own settings.
+ *  - **Private** — the machine's browser with a partition of its own, thrown
+ *    away when the window closes. The word every browser uses for it, and this
+ *    app used to be the only one saying *isolated*. A login typed into a window
+ *    that turned out to be shared is already in the machine's cookie jar by the
+ *    time anybody thinks to convert it, so the choice has to exist before the
+ *    window does. It is still convertible afterwards, on the window's own
+ *    settings, where the same two words are on the same card.
  *  - **This phone** — a tunnel, and the page loads in this phone's own web view
  *    on a real loopback origin, so it gets cookies, a service worker and the
  *    WebSocket a dev server's hot reload runs on. Only the machine's own ports
@@ -2284,13 +2314,18 @@ private struct NewWindowSheet: View {
      * ## Each row is a plain Button, and that is load-bearing rather than a style
      *
      * `TabNavigation.openLocalhostList` taps `buttons["This phone"]` and
-     * `SessionPageUITests` taps `buttons["Isolated"]`, both with **no** second
+     * `SessionPageUITests` taps the private destination, both with **no** second
      * tap, and both checks were soft. Built as a `Menu`, the first tap would open
      * a menu instead of choosing, nothing would fail, and fifteen suites later
      * windows would quietly be opening in his **real** Chromium profile instead
      * of a throwaway one. So each destination stays a one-tap `Button` carrying
      * exactly the label those suites press, the selected one wears
      * `.isSelected`, and both helpers now assert that the selection landed.
+     *
+     * That label is **Private** as of this round, and the rename walks straight
+     * into the same trap from the other side: `SessionPageUITests` still asks for
+     * `Isolated`, and a soft tap that finds nothing is a suite that opens its
+     * window in his real profile without a single red mark. See `name(of:)`.
      *
      * ## The identifier is on the card, and the card has to say it contains things
      *
@@ -2340,12 +2375,13 @@ private struct NewWindowSheet: View {
             "Open in",
             about: "where a window opens",
             info: "Machine — a window in \(machine)'s own browser, in its own profile: its "
-                + "cookies and whatever it is signed into.\n\nIsolated — a window in "
+                + "cookies and whatever it is signed into.\n\nPrivate — a window in "
                 + "\(machine)'s browser with a partition of its own, signed into nothing, and "
-                + "that partition is thrown away when the window closes.\n\nThis phone — a "
-                + "tunnel. The page loads here, in this app's own web view, on a real loopback "
-                + "origin, so it keeps cookies and a dev server's hot reload works. Only "
-                + "\(machine)'s own ports can be reached that way.")
+                + "that partition is thrown away when the window closes. The same thing every "
+                + "browser calls a private window.\n\nThis phone — a tunnel. The page loads "
+                + "here, in this app's own web view, on a real loopback origin, so it keeps "
+                + "cookies and a dev server's hot reload works. Only \(machine)'s own ports can "
+                + "be reached that way.")
 
         SchemeGroup {
             ForEach(places, id: \.self) { option in
@@ -2368,7 +2404,8 @@ private struct NewWindowSheet: View {
      * **One `Text`, which is what the compacting bought.** It held two — the name
      * and its `meaning` — and a button holding two `Text`s is read by VoiceOver
      * as both of them joined, *"Isolated, opens in the machine's browser signed
-     * into nothing…"*, so `buttons["Isolated"]` stopped matching and two suites
+     * into nothing…"*, so `buttons["Isolated"]` — the row's word at the time,
+     * `Private` now — stopped matching and two suites
      * that press these rows by name would have skipped in silence. The explicit
      * `accessibilityLabel` was the guard against that and it **stays**, even
      * though there is only one `Text` now: it costs nothing, and it means a
@@ -2525,16 +2562,40 @@ private struct NewWindowSheet: View {
     }
 
     /**
-     * The word on the row, and it is the word the suites press.
+     * **The word on the row, and it is the word every browser uses.**
      *
-     * `Machine`, `Isolated`, `This phone` — unchanged from the segmented control
-     * these rows replaced, deliberately. Two UI suites reach for two of them by
-     * name, and a tidier word here would make both of those skip in silence.
+     * > *"lets make only one name as browser and window identical to normal
+     * > standards for browser everything else too"*
+     *
+     * `Isolated` was this app's word for a window signed into nothing, and no
+     * browser has ever used it. Safari's menu says *New Private Window*,
+     * Firefox's says *New Private Window*, Chrome's says Incognito — the one word
+     * all of them share is **Private**, and somebody who has used any of them
+     * knows what it means before this sheet says anything. So the middle row is
+     * Private.
+     *
+     * `Machine` and `This phone` are not on that list and do not move: no browser
+     * has a word for *the computer in the other room* or *the phone in your
+     * hand*, because no browser does this. They are also what two suites outside
+     * this file press by name — `TabNavigation.openLocalhostList` taps `This
+     * phone` — so a tidier word for either would make a case skip in silence
+     * rather than fail.
+     *
+     * **`Isolated` was one of those too**, and renaming it is a real change with
+     * a real cost that had to be paid deliberately: `SessionPageUITests` taps
+     * `buttons["Isolated"]` before pressing Open, soft, so that its run leaves
+     * nothing behind in his machine's own Chromium profile. That tap has to
+     * become `Private` in the same batch as this rename or that suite quietly
+     * opens its window in his real profile instead.
+     *
+     * The machine's own name goes in the sentences rather than in the row —
+     * `meaning(of:)` and the caption's ⓘ both say `DESKTOP-DDGMNCV` in full,
+     * which is where it helps and where it has room.
      */
     private func name(of place: Place) -> String {
         switch place {
         case .machine: return "Machine"
-        case .isolated: return "Isolated"
+        case .isolated: return "Private"
         case .phone: return "This phone"
         }
     }
@@ -2557,7 +2618,7 @@ private struct NewWindowSheet: View {
             return "Opens in \(machine)'s own browser, signed in the way \(machine) is."
         case .isolated:
             return "Opens in \(machine)'s browser signed into nothing, and forgets everything "
-                + "when the window closes."
+                + "when the window closes — a private window."
         case .phone:
             return "Opens here on this phone, over a tunnel to \(machine). Only \(machine)'s own "
                 + "ports."
@@ -2892,7 +2953,12 @@ enum MachineBrowserText {
     static func surfaceLabel(_ surface: BrowserSurfaceRow) -> String {
         if !surface.title.isEmpty { return surface.title }
         if !surface.url.isEmpty { return surface.url }
-        return surface.window.isEmpty ? "Front tab" : surface.window
+        // **Untitled** for a cast with no title and no address — a window with no
+        // page in it, which is what every browser calls that. It used to fall
+        // back to the shell tab id, a string like `w-4f2a`, which names the row
+        // to nobody. The front tab keeps its own name: *Front tab* says which
+        // window it is, which Untitled cannot.
+        return surface.window.isEmpty ? "Front tab" : "Untitled"
     }
 
     /**
@@ -2921,15 +2987,24 @@ enum MachineBrowserText {
         return trimmed
     }
 
-    /// The whole row as one sentence, for VoiceOver. The marks are read as words
-    /// rather than as four unexplained badges after the title.
+    /**
+     * The whole row as one sentence, for VoiceOver. The marks are read as words
+     * rather than as four unexplained badges after the title.
+     *
+     * `WindowNames.name` and not `window.label`, which is what this said and is
+     * the literal `about:blank` for a window with no page in it. A row that
+     * *reads* Untitled and is *spoken* as "about colon blank, B1, recording" is
+     * the same window under two names, and the one nobody can see is the one
+     * with the jargon in it. Everything else on the Browser tab already went
+     * through `WindowNames`; this was the last caller left holding the raw label.
+     */
     static func spoken(_ window: MachineWindow, streaming: Bool = false) -> String {
-        var parts = [window.label]
+        var parts = [WindowNames.name(window)]
         if let slot = window.slot {
             parts.append(owner(window).map { "\(slot), \($0)" } ?? slot)
         }
         if streaming { parts.append("being watched") }
-        if window.isolated { parts.append("isolated") }
+        if window.isolated { parts.append("private") }
         if window.recording { parts.append("recording") }
         return parts.joined(separator: ", ")
     }
