@@ -65,6 +65,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.navigation
 import dev.terminaldeck.android.protocol.BrowserSurfaceWire
 import dev.terminaldeck.android.protocol.HostPlatform
+import dev.terminaldeck.android.protocol.ServerSettingKey
 import dev.terminaldeck.android.protocol.SessionControls
 import dev.terminaldeck.android.ui.AppLockOverlay
 import dev.terminaldeck.android.ui.appLock
@@ -77,7 +78,13 @@ import dev.terminaldeck.android.transfer.PickedFile
 import dev.terminaldeck.android.ui.HostStepCard
 import dev.terminaldeck.android.ui.ServerDetailScreen
 import dev.terminaldeck.android.ui.AlertsScreen
+import dev.terminaldeck.android.ui.CopilotAboutScreen
 import dev.terminaldeck.android.ui.CopilotConsentSheet
+import dev.terminaldeck.android.ui.CopilotControlScreen
+import dev.terminaldeck.android.ui.CopilotFileEditorScreen
+import dev.terminaldeck.android.ui.CopilotFilesScreen
+import dev.terminaldeck.android.ui.CopilotRoutineFileScreen
+import dev.terminaldeck.android.ui.CopilotRoutinesScreen
 import dev.terminaldeck.android.ui.CopilotScreen
 import dev.terminaldeck.android.ui.CopilotSessionsSheet
 import dev.terminaldeck.android.ui.AppearanceScreen
@@ -206,6 +213,11 @@ class MainActivity : ComponentActivity() {
         val appearance = AppearanceStore.prime(this)
         val dark = appearance.isDark(resources.configuration)
         window.setBackgroundDrawable(ColorDrawable(deckWindowColor(dark)))
+
+        // The copilot's per-machine setup, read off disk before the first frame so the control
+        // screen's folder and switch have their value on the frame they draw rather than flickering
+        // in from a default. Same reason and same seam as AppearanceStore above.
+        CopilotSetupBook.prime(this)
 
         /*
          * The terminal's palette, installed before the first session can be attached.
@@ -499,6 +511,26 @@ private const val ROUTE_LOCALHOST_PAGE = "localhost/page"
 private const val ROUTE_COPILOT = "copilot"
 
 /**
+ * The copilot's controls and the screens they push, all on the Copilot graph's stack.
+ *
+ * Reached from the gear in the conversation's top bar — *"all the control about copilot, all the
+ * settings of the copilot."* Each is a pushed settings-shaped screen with its own back affordance;
+ * the files and routines cards are a screen's worth on a phone rather than a card, so they get one.
+ */
+private const val ROUTE_COPILOT_CONTROL = "copilot/control"
+private const val ROUTE_COPILOT_FILES = "copilot/files"
+private const val ROUTE_COPILOT_FILE = "copilot/file/{fileId}"
+private const val ARG_FILE_ID = "fileId"
+private const val ROUTE_COPILOT_ROUTINES = "copilot/routines"
+private const val ROUTE_COPILOT_ROUTINE = "copilot/routine/{routineId}/{routineName}"
+private const val ARG_ROUTINE_ID = "routineId"
+private const val ARG_ROUTINE_NAME = "routineName"
+private const val ROUTE_COPILOT_ABOUT = "copilot/about"
+
+/** The route another lane registers for the setup working-folder picker. Navigated to by name. */
+private const val ROUTE_FOLDER_PICK = "folderpick"
+
+/**
  * One watched surface, full screen.
  *
  * The window name is in the route because it is what the cast is aimed at, and it is URL-encoded on
@@ -668,10 +700,14 @@ fun TerminalDeckApp(
     // page being served from the machine. A pill sitting over the bottom rows of any of them points
     // somewhere else while the thing you are using needs the height.
     val bar = route != ROUTE_TERMINAL && route != ROUTE_WATCH_VIEW &&
-        route != ROUTE_LOCALHOST_PAGE && route != ROUTE_COPILOT
+        route != ROUTE_LOCALHOST_PAGE && route != ROUTE_COPILOT &&
+        // The copilot's pushed control screens keep the tab's own chrome — no bar, like the
+        // conversation they were reached from — so the gear does not summon a bar that then
+        // highlights the wrong tab. They carry their own back affordance and the system gesture.
+        route?.startsWith("copilot/") != true
     val onSessions = route == ROUTE_SESSIONS || route == ROUTE_TERMINAL
     val onLocalhost = route == ROUTE_LOCALHOST || route == ROUTE_LOCALHOST_PAGE
-    val onCopilot = route == ROUTE_COPILOT
+    val onCopilot = route == ROUTE_COPILOT || route?.startsWith("copilot/") == true
     /*
      * The pill follows the machine — except while somebody is standing on it.
      *
@@ -860,6 +896,7 @@ fun TerminalDeckApp(
                     sessionsOpen = true
                 },
                 onLog = { viewModel.readCopilotLog() },
+                onControls = { navController.navigate(ROUTE_COPILOT_CONTROL) },
                 onDismissNotice = viewModel::dismissCopilotNotice,
             )
 
@@ -917,6 +954,160 @@ fun TerminalDeckApp(
                 photoPicker = photoPicker,
                 documentPicker = documentPicker,
                 onDetails = { detailFor = it },
+            )
+        }
+
+        // The copilot's controls, and the screens they push. All on this graph's stack, so the
+        // system back gesture and the bar's own back walk them the way iOS's NavigationStack does.
+        composable(ROUTE_COPILOT_CONTROL) {
+            val view = state.copilot
+            val host = state.host
+            // The machine stopped offering a copilot, or the selection moved to one that has none —
+            // there is nothing to draw controls for, so this pops rather than shows an empty shell.
+            if (view == null || host == null) {
+                LaunchedEffect(Unit) { navController.popBackStack() }
+                return@composable
+            }
+            CopilotControlScreen(
+                view = view,
+                hostId = host.hostId,
+                machineLabel = state.hostLabel,
+                hostKind = state.hostKind,
+                serverSettings = state.serverSettings,
+                sessions = state.sessions,
+                settingsOffered = state.serverSettingsOffered,
+                devicesOffered = state.devicesOffered,
+                filesOffered = state.canEditCopilotFiles,
+                routinesOffered = state.canUseRoutines,
+                canPickFolders = state.canPickFolders,
+                canCreateSessions = state.canCreateSessions,
+                canCloseSessions = state.canCloseSessions,
+                onBack = { navController.popBackStack() },
+                // The folder picker is another lane's screen; this navigates to it by name and that
+                // lane writes the chosen folder back through CopilotSetupBook.
+                onPickFolder = { navController.navigate(ROUTE_FOLDER_PICK) },
+                onFiles = { navController.navigate(ROUTE_COPILOT_FILES) },
+                onRoutines = { navController.navigate(ROUTE_COPILOT_ROUTINES) },
+                onDevices = {
+                    viewModel.openDevices()
+                    navController.navigate(ROUTE_DEVICES)
+                },
+                onAbout = { navController.navigate(ROUTE_COPILOT_ABOUT) },
+                onOpenSession = { sessionId -> navController.navigate("terminal/${host.hostId}/$sessionId") },
+                onEndSession = viewModel::endSession,
+                onStartSession = { folder -> viewModel.newSession(folder) },
+                onStart = viewModel::startCopilot,
+                onCancel = viewModel::cancelCopilotTurn,
+                onStopRun = viewModel::stopCopilotRun,
+                onApplyProvider = { viewModel.applyServerSetting(ServerSettingKey.DefaultProvider, it) },
+                onEnsureServerSettings = viewModel::openServerSettings,
+                onEnsureDevices = viewModel::openDevices,
+                onLoadFiles = viewModel::loadCopilotFiles,
+                onLoadRoutines = viewModel::loadRoutines,
+            )
+        }
+
+        composable(ROUTE_COPILOT_FILES) {
+            val view = state.copilotFiles
+            if (view == null) {
+                LaunchedEffect(Unit) { navController.popBackStack() }
+                return@composable
+            }
+            CopilotFilesScreen(
+                view = view,
+                machineLabel = state.hostLabel,
+                onBack = { navController.popBackStack() },
+                onLoad = viewModel::loadCopilotFiles,
+                // Encoded because a memory id is `memory:<name>` — the colon rides in a path segment
+                // but a name a newer host grows could carry a slash, which would split the route.
+                onOpenFile = { fileId -> navController.navigate("copilot/file/${Uri.encode(fileId)}") },
+            )
+        }
+
+        composable(
+            route = ROUTE_COPILOT_FILE,
+            arguments = listOf(navArgument(ARG_FILE_ID) { type = NavType.StringType }),
+        ) { entry ->
+            val fileId = Uri.decode(entry.arguments?.getString(ARG_FILE_ID) ?: "")
+            val view = state.copilotFiles
+            if (view == null || fileId.isEmpty()) {
+                LaunchedEffect(Unit) { navController.popBackStack() }
+                return@composable
+            }
+            CopilotFileEditorScreen(
+                view = view,
+                machineLabel = state.hostLabel,
+                fileId = fileId,
+                onBack = { navController.popBackStack() },
+                onOpen = viewModel::openCopilotFile,
+                onClose = viewModel::closeCopilotFile,
+                onSave = viewModel::saveCopilotFile,
+                onRestore = viewModel::restoreCopilotInstructions,
+                onForget = viewModel::forgetCopilotMemory,
+            )
+        }
+
+        composable(ROUTE_COPILOT_ROUTINES) {
+            val view = state.routines
+            if (view == null) {
+                LaunchedEffect(Unit) { navController.popBackStack() }
+                return@composable
+            }
+            CopilotRoutinesScreen(
+                view = view,
+                machineLabel = state.hostLabel,
+                live = state.live,
+                onBack = { navController.popBackStack() },
+                onLoad = viewModel::loadRoutines,
+                onRun = viewModel::runRoutine,
+                onHold = viewModel::holdRoutine,
+                onArm = viewModel::armRoutine,
+                onDelete = viewModel::deleteRoutine,
+                onRead = { routine ->
+                    val name = routine.name.ifEmpty { routine.id }
+                    navController.navigate("copilot/routine/${Uri.encode(routine.id)}/${Uri.encode(name)}")
+                },
+                onDismissNotice = viewModel::dismissRoutineNotice,
+            )
+        }
+
+        composable(
+            route = ROUTE_COPILOT_ROUTINE,
+            arguments = listOf(
+                navArgument(ARG_ROUTINE_ID) { type = NavType.StringType },
+                navArgument(ARG_ROUTINE_NAME) { type = NavType.StringType },
+            ),
+        ) { entry ->
+            val routineId = Uri.decode(entry.arguments?.getString(ARG_ROUTINE_ID) ?: "")
+            val routineName = Uri.decode(entry.arguments?.getString(ARG_ROUTINE_NAME) ?: "")
+            val view = state.routines
+            if (view == null || routineId.isEmpty()) {
+                LaunchedEffect(Unit) { navController.popBackStack() }
+                return@composable
+            }
+            CopilotRoutineFileScreen(
+                view = view,
+                routineId = routineId,
+                routineName = routineName,
+                machineLabel = state.hostLabel,
+                onBack = { navController.popBackStack() },
+                onOpen = viewModel::openRoutine,
+                onClose = viewModel::closeRoutine,
+            )
+        }
+
+        composable(ROUTE_COPILOT_ABOUT) {
+            val view = state.copilot
+            if (view == null) {
+                LaunchedEffect(Unit) { navController.popBackStack() }
+                return@composable
+            }
+            CopilotAboutScreen(
+                view = view,
+                machineLabel = state.hostLabel,
+                machineNoun = state.machineNoun,
+                hostKind = state.hostKind,
+                onBack = { navController.popBackStack() },
             )
         }
     }

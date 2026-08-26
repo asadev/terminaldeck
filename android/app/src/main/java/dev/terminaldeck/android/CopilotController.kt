@@ -7,6 +7,7 @@ import dev.terminaldeck.android.protocol.CopilotActionRow
 import dev.terminaldeck.android.credential.Expiry
 import dev.terminaldeck.android.protocol.CopilotConsentQuestion
 import dev.terminaldeck.android.protocol.CopilotEntry
+import dev.terminaldeck.android.protocol.CopilotGrantWire
 import dev.terminaldeck.android.protocol.CopilotLinkWire
 import dev.terminaldeck.android.protocol.CopilotPendingRow
 import dev.terminaldeck.android.protocol.CopilotSendState
@@ -105,6 +106,10 @@ class CopilotController(
         if (access == CopilotAccess.NotOffered) return null
         return CopilotView(
             access = access,
+            // The grant the machine handed this device, so the control screen's permission panel can
+            // draw the three tiers as *readings*. Kept from whichever of the grant frame and the
+            // state frame arrived last — see [receive] — so it is the same one [access] was read off.
+            grant = link?.grant ?: CopilotGrantWire(),
             state = state,
             entries = entries,
             sessions = sessions,
@@ -491,6 +496,10 @@ class CopilotController(
  */
 data class CopilotView(
     val access: CopilotAccess,
+    /** The three tiers the machine granted this device, drawn as readings on the control screen's
+     *  permission panel. Not switches — pairing as one of the owner's own devices *is* the grant,
+     *  and nothing on this phone can widen it. */
+    val grant: CopilotGrantWire = CopilotGrantWire(),
     val state: CopilotStateReport?,
     val entries: List<CopilotEntry>,
     val sessions: List<CopilotSessionRow>,

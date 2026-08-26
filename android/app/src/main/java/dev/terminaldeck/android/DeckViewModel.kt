@@ -448,6 +448,16 @@ class DeckViewModel(
             expiry = coroutineExpiry(viewModelScope),
             onChange = { publish() },
         )
+        link.copilotFiles = CopilotFilesController(
+            send = { link.transport.send(it) },
+            capabilities = { link.capabilities },
+            onChange = { publish() },
+        )
+        link.routines = CopilotRoutinesController(
+            send = { link.transport.send(it) },
+            capabilities = { link.capabilities },
+            onChange = { publish() },
+        )
         // Collected per machine, with the link captured, so a frame cannot arrive without the
         // answer to "which computer said this" already in hand.
         viewModelScope.launch { link.transport.state.collect { onState(link, it) } }
@@ -825,18 +835,38 @@ class DeckViewModel(
                 link.copilot?.receive(message)
             }
 
+            // The copilot's own files, routed to the controller that owns the Files card and its
+            // editor. Handed off the same way the copilot family above is — the controller keeps the
+            // bookkeeping, and a `copilot.file.text` for a file this phone has navigated away from is
+            // dropped there rather than in a `when` that would have to know which file is open.
+            is ServerMessage.CopilotFilesRows,
+            is ServerMessage.CopilotFileText,
+            -> {
+                link.copilotFiles?.receive(message)
+            }
+
+            // The routines family, to the controller that owns the Routines screen and its file
+            // viewer. `routines.rows` is the answer to every one of run, hold, let-run and delete as
+            // well as to the listing, and `routine.text.rows` decodes to [RoutineFile].
+            is ServerMessage.RoutinesRows,
+            is RoutineFile,
+            -> {
+                link.routines?.receive(message)
+            }
+
             /*
-             * The folder picker's answer — the first of the group below to grow a screen that reads
-             * it. Handed to [folderBrowse], which drops it when no picker is open, the same harmless
-             * outcome the group's comment describes for an answer nobody is holding.
+             * The folder picker's answer — handed to [folderBrowse], which drops it when no picker
+             * is open, the same harmless outcome the group below describes for an answer nobody is
+             * holding.
              */
             is ServerMessage.FolderEntries -> {
                 folderBrowse.receive(message)
             }
 
             /*
-             * The wire foundation for the machine's files, git, panels, own browser, copilot files
-             * and routines — decodable and routed here, but not yet consumed.
+             * The wire foundation for the machine's files, git, panels and own browser — decodable
+             * and routed here, but not yet consumed. (The copilot's files and routines are consumed
+             * now — see the two branches just above.)
              *
              * Each of these answers a verb a later screen will send, and each will be handed to the
              * controller that owns that screen the way the copilot family above is handed to
@@ -857,10 +887,6 @@ class DeckViewModel(
             is ServerMessage.BrowserWindowPicked,
             is ServerMessage.BrowserRecordRows,
             is MachineProfileList,
-            is ServerMessage.CopilotFilesRows,
-            is ServerMessage.CopilotFileText,
-            is ServerMessage.RoutinesRows,
-            is RoutineFile,
             -> return
         }
         publish()
@@ -1626,6 +1652,74 @@ class DeckViewModel(
         selected?.copilot?.dismissNotice()
     }
 
+    /* ------------------------------------------------------------- the copilot's files -- */
+
+    /** Ask what files the copilot reads — a listing, nothing opened. `read` tier; spends nothing.
+     *  Asked by the Files card on the control screen, and again when the capability turns up. */
+    fun loadCopilotFiles() {
+        selected?.copilotFiles?.loadFiles()
+    }
+
+    fun openCopilotFile(id: String) {
+        selected?.copilotFiles?.openFile(id)
+    }
+
+    fun closeCopilotFile() {
+        selected?.copilotFiles?.closeFile()
+    }
+
+    /** Returns whether the frame went. False keeps the draft in the box. */
+    fun saveCopilotFile(id: String, text: String): Boolean =
+        selected?.copilotFiles?.saveFile(id, text) ?: false
+
+    /** Put the instructions this build ships back. Returns whether the frame went. */
+    fun restoreCopilotInstructions(): Boolean =
+        selected?.copilotFiles?.restoreInstructions() ?: false
+
+    /** Forget one memory, by name. Returns whether the frame went. */
+    fun forgetCopilotMemory(name: String): Boolean =
+        selected?.copilotFiles?.forgetMemory(name) ?: false
+
+    /* ----------------------------------------------------------------- the routines -- */
+
+    /** Every routine on the machine. The answer to each of the four verbs below as well as itself. */
+    fun loadRoutines() {
+        selected?.routines?.load()
+    }
+
+    /** Run one now. Starts an agent turn on that machine. */
+    fun runRoutine(id: String) {
+        selected?.routines?.run(id)
+    }
+
+    /** Hold one. Its file is not touched. */
+    fun holdRoutine(id: String) {
+        selected?.routines?.hold(id)
+    }
+
+    /** Let one run again. Clears the hold and the failure count with it. */
+    fun armRoutine(id: String) {
+        selected?.routines?.arm(id)
+    }
+
+    /** Delete one. Its file is removed from the machine's disk — the screen confirms first. */
+    fun deleteRoutine(id: String) {
+        selected?.routines?.delete(id)
+    }
+
+    /** Read one routine's file. There is no verb that writes one back. */
+    fun openRoutine(id: String) {
+        selected?.routines?.openRoutine(id)
+    }
+
+    fun closeRoutine() {
+        selected?.routines?.closeRoutine()
+    }
+
+    fun dismissRoutineNotice() {
+        selected?.routines?.dismissNotice()
+    }
+
     /* ---------------------------------------------------------------- the dev server -- */
 
     /**
@@ -1975,6 +2069,8 @@ class DeckViewModel(
             devServers = current?.devServer?.view(),
             tunnel = current?.tunnels?.view(),
             copilot = current?.copilot?.view(),
+            copilotFiles = current?.copilotFiles?.view(),
+            routines = current?.routines?.view(),
             awayReport = awayReport,
             addServer = if (addingServer) {
                 AddServerView(
@@ -2192,6 +2288,15 @@ data class DeckUiState(
      * Null is what makes the fourth pill *absent* rather than empty — iOS's own rule for that tab.
      */
     val copilot: CopilotView? = null,
+    /**
+     * The copilot's own files on the machine, or null when it offers none to this phone.
+     *
+     * A separate reading from [copilot] on purpose: the Files card waits for its own capability even
+     * over a machine whose Copilot conversation is fully alive — see [filesCapability].
+     */
+    val copilotFiles: CopilotFilesView? = null,
+    /** The machine's saved instructions, or null when it serves no routine engine to this phone. */
+    val routines: CopilotRoutinesView? = null,
     /**
      * What changed while the app was away, as one line at the top of the session list.
      *

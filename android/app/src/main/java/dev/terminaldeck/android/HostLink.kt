@@ -188,6 +188,22 @@ class HostLink(
      */
     var copilot: CopilotController? = null
 
+    /**
+     * The copilot's own files on this machine — its instructions, its memory, its contract — as this
+     * phone reads and edits them. Created once per link; the card is drawn only when the machine
+     * advertises [dev.terminaldeck.android.protocol.Capability.COPILOT_FILES], which every desktop
+     * speaking `copilot` today predates, so it waits on its own capability even where the Copilot tab
+     * is fully alive.
+     */
+    var copilotFiles: CopilotFilesController? = null
+
+    /**
+     * The machine's saved instructions — its routines. Created once per link; drawn only when the
+     * machine advertises [dev.terminaldeck.android.protocol.RoutinesWire.CAPABILITY], a capability of
+     * its own precisely because a machine can run routines without serving a copilot conversation.
+     */
+    var routines: CopilotRoutinesController? = null
+
     /** The user's name for this machine, or enough of its id to tell it apart. */
     val label: String get() = record.label
 
@@ -235,6 +251,8 @@ class HostLink(
         devServer?.stop()
         tunnels?.stop()
         copilot?.stop()
+        copilotFiles?.stop()
+        routines?.stop()
         sessions = emptyList()
         live = false
         loaded = false
