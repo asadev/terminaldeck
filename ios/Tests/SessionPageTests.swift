@@ -999,16 +999,19 @@ final class SessionPageTests: XCTestCase {
      * *Machine* and *Isolated* as a two-button picker on the New window sheet,
      * which is where somebody choosing a partition already is.
      */
-    func testTheRowThatMakesAWindowSaysWhichKind() {
-        // > *"this new window thing should be like clear like which type of
-        // > window… maybe we can say new browser window or new browser."*
+    func testTheRowThatMakesAWindowIsTwoWords() {
+        // It was *New browser window* for a round — *"maybe we can say new
+        // browser window or new browser"* — and then he saw it in the list:
         //
-        // *New window* in a **session's** menu, beside Find and Paste, reads as
-        // a second terminal. The row is three words now and one of them is the
-        // one that settles it.
-        XCTAssertEqual(SessionWindowPicker.newWindow, "New browser window")
-        XCTAssertTrue(SessionWindowPicker.newWindow.lowercased().contains("browser"),
-                      "the row has to name the kind of window it makes")
+        // > *"it should not give it this big sentence… just say New window,
+        // > because it is already explaining up there too, like these are
+        // > browser windows. So we have a title for this section."*
+        //
+        // The section header carries the word *browser*; the row carries the
+        // verb. Three words wrapped onto two lines beside rows that are names.
+        XCTAssertEqual(SessionWindowPicker.newWindow, "New window")
+        XCTAssertFalse(SessionWindowPicker.newWindow.lowercased().contains("browser"),
+                       "the section header already says browser — the row must not say it twice")
         XCTAssertFalse(SessionWindowPicker.newWindow.contains("session"),
                        "a row in *Attach a browser window* does not have to say it is for this "
                        + "session — the section it is in says so")

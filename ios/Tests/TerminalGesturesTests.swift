@@ -104,18 +104,44 @@ final class TerminalGesturesTests: XCTestCase {
         XCTAssertFalse(view.gestureRecognizerShouldBegin(foreign))
     }
 
-    /// …but not when a program has actually asked for mouse events. That is the
-    /// same recogniser class doing a completely different job — a finger driving
-    /// vim or htop — and refusing it would break mouse reporting to fix
-    /// scrolling.
-    func testAForeignPanIsAllowedWhenTheProgramAskedForTheMouse() {
+    /**
+     * …and still not when a program has merely asked for the mouse on the
+     * **normal** screen.
+     *
+     * This is the case he hit. Claude Code turns mouse reporting on for its
+     * composer, so on the one screen he uses the old rule — *any* mouse mode
+     * lets the library's pan through — was true the whole time, and every
+     * one-finger drag came out as a selection: *"scrolling with one finger in
+     * terminal is still not working btw, it starts copying instead."* On the
+     * normal screen there is scrollback, a drag means scroll, and a mouse drag
+     * is worth nothing to a program that only wanted clicks.
+     */
+    func testAForeignPanIsStillRefusedWhenTheMouseIsOnButTheScreenIsNormal() {
         let view = terminal()
         let foreign = UIPanGestureRecognizer()
         view.addGestureRecognizer(foreign)
 
-        // DECSET 1000: send mouse press and release. This is the program on the
-        // other end asking, which is the only thing that changes the answer.
+        // DECSET 1000: send mouse press and release — the composer's ask.
         view.feed(text: "\u{1b}[?1000h")
+        XCTAssertNotEqual(view.getTerminal().mouseMode, .off, "the terminal did not take the mode")
+        XCTAssertFalse(view.getTerminal().isCurrentBufferAlternate)
+        XCTAssertFalse(view.gestureRecognizerShouldBegin(foreign))
+    }
+
+    /// …but yes when a full-screen program has both asked for the mouse and
+    /// taken the alternate screen. That is the same recogniser class doing a
+    /// completely different job — a finger driving vim or htop, where there is
+    /// no scrollback for a drag to move — and refusing it would break mouse
+    /// reporting to fix scrolling.
+    func testAForeignPanIsAllowedWhenAFullScreenProgramAskedForTheMouse() {
+        let view = terminal()
+        let foreign = UIPanGestureRecognizer()
+        view.addGestureRecognizer(foreign)
+
+        // DECSET 1049 switches to the alternate screen; 1000 asks for the mouse.
+        // Both, because either alone is not a program that owns the viewport.
+        view.feed(text: "\u{1b}[?1049h\u{1b}[?1000h")
+        XCTAssertTrue(view.getTerminal().isCurrentBufferAlternate, "the terminal did not switch screens")
         XCTAssertNotEqual(view.getTerminal().mouseMode, .off, "the terminal did not take the mode")
         XCTAssertTrue(view.gestureRecognizerShouldBegin(foreign))
     }
