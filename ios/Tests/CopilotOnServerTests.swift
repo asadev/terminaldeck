@@ -1315,8 +1315,52 @@ final class CopilotOnServerTests: XCTestCase {
                                               retryAt: nil,
                                               attempts: 0)
 
+    /**
+     * **The Copilot tab's own session is not a row on the Sessions tab, and
+     * everything the copilot starts still is.**
+     *
+     * > *"the copilot session, the main session we start with to chat with
+     * > co-pilot, should not be in the sessions list in the session page also.
+     * > But whatever the new sessions that copilot will create can stay."*
+     *
+     * Both halves in one case, because they are one rule read twice: the id
+     * removed is exactly the one `copilotSession` names, so a second agent
+     * session in the same folder — which is what an agent that starts work looks
+     * like — is untouched. A predicate written as *"any agent in the copilot's
+     * folder"* would pass the first assertion and fail the second, silently, and
+     * would take the copilot's own work off the one screen that lists it.
+     */
+    func testTheTabsOwnSessionLeavesTheListAndTheOnesItStartsDoNot() {
+        let sessions = [
+            Self.session(id: Self.first, provider: "claude", status: "idle"),
+            Self.session(id: Self.second, provider: "claude", status: "working"),
+            Self.session(id: Self.third, provider: "shell", status: "idle"),
+        ]
+
+        XCTAssertEqual(CopilotOnServer.copilotSession(in: sessions, folder: "/srv/app")?.id, Self.first,
+                       "the tab is the first agent session in the copilot's folder")
+        XCTAssertEqual(CopilotOnServer.listable(sessions, folder: "/srv/app").map(\.id),
+                       [Self.second, Self.third],
+                       "the tab's own session goes; a second agent in the same folder stays")
+    }
+
+    /**
+     * A machine with nothing for the tab to be takes nothing off the list.
+     *
+     * The state every desktop is in — its copilot is not a session on this wire
+     * at all — and the state a server is in before anything has been started.
+     * Filtering on a nil answer would be a list that quietly loses its first
+     * row.
+     */
+    func testAMachineWithNoCopilotSessionListsEverything() {
+        let sessions = [Self.session(id: Self.first, provider: "shell", status: "idle")]
+        XCTAssertEqual(CopilotOnServer.listable(sessions, folder: "/srv/app").map(\.id), [Self.first])
+        XCTAssertEqual(CopilotOnServer.listable([], folder: nil).count, 0)
+    }
+
     private static let first = "01J8ZC4T9K5Q2V7XW3NHRF6MBD"
     private static let second = "01J8ZC4T9K5Q2V7XW3NHRF6MBE"
+    private static let third = "01J8ZC4T9K5Q2V7XW3NHRF6MBF"
 
     private static func session(id: String = first,
                                 provider: String,

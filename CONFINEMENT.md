@@ -86,8 +86,8 @@ Measure before choosing:
    reachable — read-only and executable, without opening a path back out.
 4. **The transcript problem is part of this.** A confined session gets its own
    HOME, so the agent CLI writes transcripts somewhere the app's readers do not
-   look, and chat mode and cost go blank. Confinement is not finished until that
-   is solved.
+   look, and cost, alerts and the session inspector go blank. Confinement is not
+   finished until that is solved.
 5. **Uniform model.** Asad was explicit: no two-tier trust. Every connected
    device is treated the same regardless of type or owner, so confinement is how
    the feature works for everyone — not a special mode for outsiders.
@@ -193,8 +193,8 @@ CLI (2.1.233):
       → /tmp/homeprobe/.claude.json          (config, one level up)
       → /tmp/homeprobe/.claude/projects/…    (transcripts, here)
 
-Chat mode, the cost pane, alerts, the agent controls and the session inspector
-all read every store now. See `src/main/transcript.ts`.
+The cost pane, alerts, the agent controls and the session inspector all read
+every store now. See `src/main/transcript.ts`.
 
 ---
 

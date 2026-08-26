@@ -557,6 +557,32 @@ struct SessionPageView<Session: View>: View {
     @State private var recastToken = 0
 
     /**
+     * What is in the address field of the bar under the page.
+     *
+     * > *"and the link directly we should be able to click and edit there, basic
+     * > features I mean of the browser window should be there in the bar."*
+     *
+     * Seeded from the window's own URL and never bound to it, exactly as
+     * `MachineWindowView` does: a field bound to the page would rewrite itself
+     * under a thumb every time the agent navigated. `seedAddress` is the one
+     * writer and it refuses while somebody is typing.
+     */
+    @State private var address = ""
+    /// Whether the field has been filled from the window at least once. A window
+    /// whose row has not landed yet has no URL to seed with, and seeding from the
+    /// empty string would look like an address bar that cleared itself.
+    @State private var addressSeeded = false
+    /// Whether somebody is in the address field. Owned by `BrowserPageBar` and
+    /// mirrored here so a navigation does not overwrite a half-typed address.
+    @State private var editing = false
+    /// Whether the canvas is holding the system keyboard, which is also which top
+    /// row the bar draws. Written from the canvas's own announcement.
+    @State private var typing = false
+    /// Why the last thing typed was not sent, or nil — a `file:` URL, a port out
+    /// of range. This phone's own refusal; the machine's arrive on the host.
+    @State private var refused: String?
+
+    /**
      * Written out rather than left to the memberwise one, because the session is
      * handed over as a `@ViewBuilder` and the four `@State` properties above must
      * not appear in the signature. `session:` is a trailing closure at every call
@@ -658,6 +684,32 @@ struct SessionPageView<Session: View>: View {
     /// See `SessionPageVerb`.
     private var verb: SessionPageVerb {
         SessionPageVerb.verb(folded: pane == .minimised, showing: showing, castable: castable)
+    }
+
+    /// Whether this machine will take `browser.window.*` verbs from this phone,
+    /// which is what decides whether the bar's address and page verbs can act.
+    /// Asked of the connection as well as of the welcome, the way
+    /// `HostLink.canDriveBrowser` is: a capability from the welcome of a socket
+    /// that has since gone is a permission nobody can use.
+    private var drivable: Bool {
+        model.connection.isLive && host?.canDriveBrowser == true && window?.id.isEmpty == false
+    }
+
+    /**
+     * Why the bar's controls are dead, or nil when none of them are.
+     *
+     * One sentence for the whole bar rather than one per glyph, which is the
+     * rule `MachineWindowView` keeps and the reason is the same: the answer is a
+     * fact about the machine, and three copies of it are three places for it to
+     * drift. Present, `BrowserPageBar` draws every refused verb in its own slot
+     * with this on the ⓘ rather than leaving a gap — *"it should be the same
+     * case, or all the options should be available at least."*
+     */
+    private var whyBarIsLimited: String? {
+        guard !drivable else { return nil }
+        let name = model.current?.label ?? model.theMachine
+        return "\(name) is not offering its browser to this phone, so nothing on this bar can be "
+            + "sent to it. The address is what the machine last reported for this page."
     }
 
     /**
@@ -773,7 +825,20 @@ struct SessionPageView<Session: View>: View {
             // already set. Without this, arriving at a session that has held a
             // window all along would show the strip and never offer the page.
             offer(window?.id)
+            seedAddress()
         }
+        /*
+         * The page moved, so the field follows it — unless a thumb is in the
+         * field, which `seedAddress` is the one place that decides.
+         *
+         * Two sources and both are needed. `window?.url` is what
+         * `browser.window.rows` reports and is the only one that exists on a
+         * machine that will not cast; `surface?.url` is what the watch strip
+         * reports and is the one that moves when an agent navigates a window
+         * nothing has re-asked the list for.
+         */
+        .onChange(of: window?.url) { _, _ in seedAddress() }
+        .onChange(of: surface?.url) { _, _ in seedAddress() }
         // The socket coming back. The window list is not replayed on reconnect,
         // so this is the only thing that would notice a window bound while the
         // phone was away.
@@ -856,12 +921,130 @@ struct SessionPageView<Session: View>: View {
                 handoverBar(handover, page: page)
             }
             stage
+            /*
+             * **The browser's own bar, under the page, inside the session.**
+             *
+             * > *"and the link directly we should be able to click and edit
+             * > there, basic features I mean of the browser window should be
+             * > there in the bar."*
+             *
+             * It is `BrowserPageBar` — the same two rows under a machine window,
+             * a watched surface and a page this phone is holding — rather than a
+             * fourth arrangement of the same verbs. *"Top, header and footer, tab
+             * bar should be same in all type of browsing windows"*, and a page
+             * inside a session is one of them.
+             *
+             * Drawn only while the page is open. Folded, the pane is meant to
+             * come to **nothing** — see `stageHasHeight` — and a bar left under a
+             * folded page would be a browser's chrome lying across the top rows
+             * of a terminal with no page above it.
+             *
+             * The refusal on a page nobody has typed into is one line rather than
+             * an absence: `whyBarIsLimited` is the whole-bar sentence, so a
+             * machine that will not take `browser.control` still draws the
+             * address it last reported and every verb in its own slot, greyed,
+             * with the reason on the ⓘ.
+             */
+            if pane != .minimised, let window {
+                browserBar(window)
+                /*
+                 * Why the last thing typed did not go — a `file:` URL, a port
+                 * out of range. This phone's own refusal rather than the
+                 * machine's, which arrive on the host's own notice, and it is
+                 * drawn rather than swallowed for the reason every refusal in
+                 * this app is: a field that quietly does nothing is the control
+                 * that teaches people the app is broken.
+                 */
+                if let refused {
+                    Text(refused)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.critical)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 14)
+                        .padding(.bottom, 8)
+                        .background(Theme.surface)
+                        .accessibilityIdentifier("session.page.refused")
+                }
+            }
             if handover != nil || stageHasHeight {
                 Rectangle()
                     .fill(Theme.hairline)
                     .frame(height: 0.5)
             }
         }
+    }
+
+    /**
+     * The address and the page verbs, for the window this session is holding.
+     *
+     * Find, Inspect and Size are `nil` here and each carries its own sentence,
+     * which is what draws them dead in their slots rather than leaving three
+     * gaps. Every one of them is honest about a page that is a **picture** on
+     * this screen: Find reads a document this phone has loaded, Inspect and Size
+     * both belong to the window's own screen on the Browser tab, where there is
+     * room for a sheet to answer into.
+     */
+    private func browserBar(_ window: MachineWindow) -> some View {
+        BrowserPageBar(
+            id: "session.page.bar",
+            address: $address,
+            editing: $editing,
+            typing: $typing,
+            placeholder: "Address or search",
+            go: drivable ? { typed in sendAddress(typed, from: window) } : nil,
+            back: drivable ? { host?.actOnMachineWindow(window.id, .back) } : nil,
+            forward: drivable ? { host?.actOnMachineWindow(window.id, .forward) } : nil,
+            reload: drivable ? { host?.actOnMachineWindow(window.id, .reload) } : nil,
+            page: surface?.window,
+            unavailable: whyBarIsLimited,
+            /* No history state, and deliberately not a `false`: the desktop's
+               back-forward list never comes over this wire, so nil is the only
+               honest answer and the bar reads it as *do not grey these*. */
+            canGoBack: nil,
+            canGoForward: nil,
+            loading: window.loading,
+            /* There is no stop verb in `MachineBrowserWire.Act`, so a Stop drawn
+               here would be a glyph with no frame to send. Reload stays live,
+               which is the useful half of it. */
+            stop: nil,
+            whyNoFind: BrowserChrome.findIsLocal,
+            whyNoInspect: SessionPageRoom.inspectIsOnTheWindowsScreen,
+            whyNoSize: BrowserChrome.sizeIsLocal
+        )
+        .accessibilityIdentifier("session.page.browserbar")
+    }
+
+    /**
+     * Send what was typed, having first worked out what it is.
+     *
+     * `LocalhostAddress.classify` is the same pure function every other address
+     * field in this app calls, so `google.com`, `https://…`, `3000` and `what is
+     * my ip` mean the same thing here as they do on the Browser tab.
+     */
+    private func sendAddress(_ typed: String, from window: MachineWindow) {
+        switch LocalhostAddress.classify(typed) {
+        case let .tunnel(port, path):
+            refused = nil
+            host?.goMachineWindow(window.id, to: "http://localhost:\(String(port))\(path)")
+        case let .page(url):
+            refused = nil
+            host?.goMachineWindow(window.id, to: url)
+        case let .search(_, url):
+            refused = nil
+            host?.goMachineWindow(window.id, to: url)
+        case let .refused(why):
+            refused = why
+        }
+    }
+
+    /// Fill the field from the page, unless a thumb is in it. One writer, so a
+    /// navigation cannot rewrite a half-typed address.
+    private func seedAddress() {
+        guard !editing else { return }
+        guard let url = window?.url ?? surface?.url, !url.isEmpty else { return }
+        guard !addressSeeded || url != address else { return }
+        address = url
+        addressSeeded = true
     }
 
     /// Whether the stage is drawing anything — a canvas with room in it, or the
@@ -1067,7 +1250,11 @@ struct SessionPageView<Session: View>: View {
      * here, and draws nothing when none of them is.
      */
     private func strip(_ window: MachineWindow) -> some View {
-        HStack(spacing: 10) {
+        // Six points rather than ten. Three controls sit here now where one did,
+        // and the row is measured on a 393-point phone: the name is what gives
+        // the space up, and it is the one thing on the strip that can be
+        // truncated without losing a verb.
+        HStack(spacing: 6) {
             Image(systemName: pane == .minimised ? "macwindow" : "globe")
                 .font(.system(size: 15))
                 .foregroundStyle(Theme.accent)
@@ -1123,6 +1310,51 @@ struct SessionPageView<Session: View>: View {
             .accessibilityIdentifier("session.page.title")
 
             /*
+             * **Two more, and both of them end something.**
+             *
+             * > *"there we should have two more buttons to either disconnect
+             * > directly from that bar of browser, or close this window
+             * > completely from everywhere, or disconnect — and the drop-down
+             * > that we already have. These three things should be there."*
+             *
+             * Three controls on this strip now, in the order he read them out,
+             * and they are three different acts on three different things:
+             *
+             *  - **Disconnect** unbinds the window from *this session*. The
+             *    window stays open on the machine with whatever is on it, the
+             *    agent simply stops owning it, and this strip goes because there
+             *    is no longer a window bound here. `bindMachineWindow(_:to:)`
+             *    with a nil session is that verb — the same one the Browser
+             *    tab's own row uses, so a window let go from here and one let go
+             *    from there end in the same state.
+             *  - **Close** ends the window in the machine's browser, everywhere.
+             *    Drawn in the critical colour, because it is the one control
+             *    here that loses something a person would not expect to get
+             *    back: anything unsaved on that page goes with it.
+             *  - **The chevron**, which is unchanged.
+             *
+             * Neither of the first two is drawn on a machine that will not take
+             * the verb. That is the narrower half of this app's rule about dead
+             * controls — a control that could *only ever* be refused is not
+             * offered — and it is the right half here: unlike the page verbs on
+             * the bar below, there is no row for these to keep a slot in and no
+             * ⓘ beside them to carry a sentence.
+             */
+            if drivable {
+                button("Disconnect this window from the session",
+                       "link.badge.minus",
+                       id: "session.page.unbind") {
+                    host?.bindMachineWindow(window.id, to: nil)
+                }
+                button("Close this window on the machine",
+                       "xmark.circle",
+                       id: "session.page.close",
+                       tint: Theme.critical) {
+                    host?.actOnMachineWindow(window.id, .close)
+                }
+            }
+
+            /*
              * One identifier for one control, whichever verb it is carrying.
              * `session.page.fold` names the place on the strip rather than the
              * act — it is the only control there has ever been — and the label
@@ -1146,11 +1378,12 @@ struct SessionPageView<Session: View>: View {
     }
 
     private func button(_ label: String, _ icon: String,
-                        id: String, act: @escaping () -> Void) -> some View {
+                        id: String, tint: Color = Theme.accent,
+                        act: @escaping () -> Void) -> some View {
         Button(action: act) {
             Image(systemName: icon)
                 .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(Theme.accent)
+                .foregroundStyle(tint)
                 .frame(width: 34, height: 30)
                 .contentShape(Rectangle())
         }
@@ -2213,4 +2446,10 @@ enum SessionPageStage: Equatable {
  */
 private enum SessionPageRoom {
     static let splitCap: CGFloat = 440
+
+    /// Pointing at one thing on the page needs a sheet to answer into, and this
+    /// pane is a strip over a terminal. The window's own screen has one.
+    static let inspectIsOnTheWindowsScreen =
+        "Pointing at one thing on this page is on the window's own screen. Open it from the "
+        + "Browser tab, where there is room for the answer."
 }

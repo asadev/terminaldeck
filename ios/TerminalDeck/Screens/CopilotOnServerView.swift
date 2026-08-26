@@ -1206,6 +1206,27 @@ enum CopilotOnServer {
         return copilotSession(in: host.sessions, folder: book.folder(host: host.id))
     }
 
+    /**
+     * The same list with the Copilot tab's own session taken out of it.
+     *
+     * > *"the copilot session, the main session we start with to chat with
+     * > co-pilot, should not be in the sessions list in the session page also.
+     * > But whatever the new sessions that copilot will create can stay."*
+     *
+     * Pure, and taking the same two arguments {@link copilotSession} does, so
+     * the row that disappears is decided by the one rule that also decides what
+     * the tab draws. A second predicate here — "any agent session in the
+     * copilot's folder", say — would take the copilot's *own* work off the list
+     * as well, which is the half he asked to keep.
+     *
+     * On a desktop nothing is removed because nothing is there: the copilot's
+     * pty never reaches this wire at all.
+     */
+    static func listable(_ sessions: [RemoteSession], folder: String?) -> [RemoteSession] {
+        guard let tab = copilotSession(in: sessions, folder: folder) else { return sessions }
+        return sessions.filter { $0.id != tab.id }
+    }
+
     /// What the Copilot tab should do with somebody who has just opened it.
     enum Landing: Equatable {
         /**

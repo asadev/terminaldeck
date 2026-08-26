@@ -10,7 +10,30 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+### Removed
+
+- **Chat mode is gone, on the Mac, on Windows and on the phone.** A session could
+  be drawn as a conversation instead of as a terminal — the same session, read
+  out of the agent's own transcript file. It never worked smoothly: switching
+  into it often showed nothing, and it went on doing that across versions. Rather
+  than keep patching it, the whole thing is removed: the toggle, the pane, the
+  reading over the wire, and the SFTP reader that found an agent's transcript on
+  a server. **A session is a terminal.** Talking to the copilot is unchanged — it
+  has its own conversation, on its own screen, which is a different thing.
+
 ### Changed
+
+- **The Copilot's own session is no longer a row in your Sessions list.** On a
+  server the Copilot tab opens a real session to talk to, and that session was
+  also listed on the Sessions tab — the same conversation in two places.
+  Sessions the copilot *starts* are still listed, which is the point of listing
+  them.
+- **The browser window a session is holding now has a real browser bar.** Inside
+  the session, under the page: the address, which you can tap and edit, and Back,
+  Forward and Reload — the same bar every other browsing window in the app
+  carries. The strip above it gained two controls beside the fold: **Disconnect**,
+  which lets the session go of the window and leaves the window open, and
+  **Close**, which closes the window on the machine.
 
 - **Your own phone now sees your own sign-in pages.** Watching a machine's browser used to hide any page with a password, one-time code or card field behind a black card with a padlock — on every device, including your own phone paired to your own machine. That meant the one thing you could not do from the phone was sign in to anything. A device you paired as your own now sees those pages and can type into them, which is what watching a browser was for. **A guest device still gets the card** and still cannot type into the page behind it — a guest is someone else on your machine, and this is the case that rule was written for. What the **agent** is allowed to read has not changed: password and code fields are still blacked out of every screenshot an agent takes. When an agent explicitly asks you to sign in to something, the page is still handed to one device at a time, exactly as before.
   This corrects the 0.10.0 note below, which said the password never crosses the wire. On a device of your own, it does now — to your own eyes, on your own screen.

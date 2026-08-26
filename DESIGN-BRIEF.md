@@ -101,8 +101,9 @@ Not a dumping ground — the few things you switch between while working.
 
 ## 7. iOS simulator pane
 
-Claude's app embeds an iOS simulator; he wants the same, available in **both**
-terminal mode and chat mode.
+Claude's app embeds an iOS simulator; he wants the same. (It was written as
+*both terminal mode and chat mode*; chat mode was removed on 2026-08-26, so
+there is one place for it to be.)
 
 - If building a native pane is not hard, build it.
 - If it is hard, **embed the simulator already installed on the machine** rather

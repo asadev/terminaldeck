@@ -510,7 +510,7 @@ struct SessionListView: View {
     /// — see `SessionShelf.split`, which is where the ordering rule lives and
     /// where it is tested without a simulator.
     private var shelved: (listed: [RemoteSession], archived: [RemoteSession]) {
-        shelf.split(model.sessions, host: hostId)
+        shelf.split(model.listedSessions, host: hostId)
     }
 
     private var listed: [RemoteSession] { shelved.listed }
@@ -1188,7 +1188,7 @@ struct SessionListView: View {
      */
     @ViewBuilder
     private var alertsOffer: some View {
-        if model.alertPermission == .notAsked && !model.sessions.isEmpty {
+        if model.alertPermission == .notAsked && !model.listedSessions.isEmpty {
             Button {
                 model.showingAlerts = true
             } label: {
@@ -1323,7 +1323,7 @@ struct SessionListView: View {
     /// the machine. Read by all three halves of the empty state, so they cannot
     /// disagree about which situation they are describing.
     private var everythingIsArchived: Bool {
-        model.connection.isLive && !model.sessions.isEmpty && listed.isEmpty
+        model.connection.isLive && !model.listedSessions.isEmpty && listed.isEmpty
     }
 
     private var emptyTitle: String {

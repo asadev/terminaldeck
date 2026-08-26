@@ -1486,6 +1486,37 @@ final class DeckModel {
     /// rather than `connection.isLive`.
     var showsConnectionNotice: Bool { current?.notice.isShowing ?? false }
     var sessions: [RemoteSession] { current?.sessions ?? [] }
+    /**
+     * The sessions the **Sessions tab** lists — every one on the machine except
+     * the one the Copilot tab is itself.
+     *
+     * > *"the copilot session, the main session we start with to chat with
+     * > co-pilot, should not be in the sessions list in the session page also.
+     * > But whatever the new sessions that copilot will create can stay."*
+     *
+     * On a desktop this costs nothing and does nothing: the copilot's pty is
+     * never put on the wire at all (`remote/hidden-sessions.ts`), so it was
+     * never in this list. On a **server** the Copilot tab has no copilot to
+     * connect to and lands in a real session in the copilot's folder instead —
+     * an ordinary session by every measure the wire has — so it arrived in the
+     * list twice over: once as the tab, once as a row.
+     *
+     * Exactly one id, and it is the one `CopilotOnServer.tabSession` names, so
+     * the row that disappears is always the conversation the pill opens and
+     * never a session that merely looks like it. Anything the copilot *starts*
+     * is a different session in the same folder and stays listed, which is the
+     * second half of what he asked for.
+     *
+     * Filtered here rather than in `SessionShelf`, which is about what a person
+     * has archived or pinned: this is not a preference, and a swipe must never
+     * be able to bring it back.
+     */
+    var listedSessions: [RemoteSession] {
+        guard let host = current, host.hostKind == .headless, host.copilotAccess == .notOffered else {
+            return sessions
+        }
+        return CopilotOnServer.listable(sessions, folder: CopilotSetupBook.shared.folder(host: host.id))
+    }
     var lastActivity: [String: Double] { current?.lastActivity ?? [:] }
     var ports: [LocalPort] { current?.ports ?? [] }
     var upload: FileUpload? { current?.upload }

@@ -167,8 +167,6 @@ you switch on first — see [Choosing what the app is](#choosing-what-the-app-is
 - Titles derived from the task rather than the folder name
 - Unread markers when output arrives on a background tab
 - Desktop notifications and sounds when a session finishes or needs you
-- **Chat mode** — a message view over the same session, if you would rather type
-  into a composer than a terminal
 
 ### Cost and context
 
