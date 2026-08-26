@@ -2169,7 +2169,10 @@ private struct NewWindowSheet: View {
     private enum Place: Hashable { case machine, isolated, phone }
 
     @State private var address = ""
-    @State private var place: Place = .machine
+    /// Where a new window goes unless somebody says otherwise. **This phone** —
+    /// see `places` — settled onto a destination the machine actually offers by
+    /// `settleDestination` the moment the sheet knows which those are.
+    @State private var place: Place = .phone
     /// Why the last press did not open anything, or nil. Drawn under the field,
     /// which is the only place it is shown.
     @State private var notice: String?
@@ -2383,15 +2386,21 @@ private struct NewWindowSheet: View {
                 + "cookies and a dev server's hot reload works. Only \(machine)'s own ports can "
                 + "be reached that way.")
 
-        SchemeGroup {
+        /*
+         * **Side by side, not stacked.**
+         *
+         * > *"it should be like horizontal options not vertical options, it is
+         * > making the page bigger and difficult to choose."*
+         *
+         * Two choices in a column cost three rows of a sheet that already has an
+         * address field and a list of web servers under it, and a column of two
+         * is the shape a *list* has rather than the shape a *choice* has. Two
+         * tiles across put both answers in one glance and give the list below
+         * back the room.
+         */
+        HStack(spacing: 10) {
             ForEach(places, id: \.self) { option in
-                if option != places.first {
-                    Rectangle()
-                        .fill(Theme.hairline)
-                        .frame(height: 0.5)
-                        .padding(.leading, 52)
-                }
-                destinationRow(option)
+                destinationTile(option)
             }
         }
         .accessibilityElement(children: .contain)
@@ -2415,7 +2424,7 @@ private struct NewWindowSheet: View {
      * of a control, and it is also on the caption's ⓘ, which is where it is read
      * on screen.
      */
-    private func destinationRow(_ option: Place) -> some View {
+    private func destinationTile(_ option: Place) -> some View {
         let chosen = place == option
         return Button {
             place = option
@@ -2424,27 +2433,41 @@ private struct NewWindowSheet: View {
             // on Machine would be a warning about a state nobody is in any more.
             notice = nil
         } label: {
-            HStack(spacing: 12) {
+            VStack(spacing: 6) {
                 Image(systemName: glyph(of: option))
-                    .font(.system(size: 19, weight: .light))
+                    .font(.system(size: 20, weight: .medium))
                     .foregroundStyle(chosen ? Theme.accent : Theme.faint)
-                    .frame(width: 24, height: 28)
                 Text(name(of: option))
-                    .font(.system(size: 16, weight: chosen ? .semibold : .regular))
+                    .font(.system(size: 15, weight: chosen ? .semibold : .regular))
                     .foregroundStyle(Theme.primary)
-                Spacer(minLength: 8)
-                Image(systemName: chosen ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 17))
-                    .foregroundStyle(chosen ? Theme.accent : Theme.faint)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 13)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 14)
+            /*
+             * The tile *is* the tick. A checkmark inside a two-across choice
+             * would be a third mark competing with the fill and the weight for
+             * the same one job, and at this width there is no room for it — the
+             * chosen tile is filled and its word is bold, which is what a
+             * segmented choice on this platform looks like without being a
+             * segmented control (see the note over `destination` for why this is
+             * not one).
+             */
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(chosen ? Theme.accent.opacity(0.14) : Theme.surface)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(chosen ? Theme.accent : Theme.hairline, lineWidth: chosen ? 1.5 : 0.5)
+            )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         /*
-         * Live even when it is the only row, rather than disabled. A tap that
-         * re-selects what is already selected costs nothing, and a disabled row
+         * Live even when it is the only tile, rather than disabled. A tap that
+         * re-selects what is already selected costs nothing, and a disabled one
          * is a control two suites press by name —
          * `TabNavigation.openLocalhostList` taps *This phone* and then asserts
          * the selection landed, which is exactly the machine that offers only
@@ -2554,10 +2577,36 @@ private struct NewWindowSheet: View {
     /// The destinations this machine actually offers, in the order they are
     /// drawn. Never fewer than one — the tab draws no `+` at all on a machine
     /// that offers neither door.
+    /**
+     * **Two destinations, and this phone leads.**
+     *
+     * > *"what does private means, this is again a new confusion, private means
+     * > nothing… isolated doesn't mean the destination it just means isolated,
+     * > so either we need to remove it — I think we just need to remove it, just
+     * > remove this isolated or private thing, just two options."*
+     *
+     * He is right about the category error and it is worth writing down: the
+     * other two rows answer *which computer draws this page*, and Private
+     * answered *what is it signed into* — a second question wearing the first
+     * one's shape, which is why it never read as a destination and why nobody
+     * could say whether a private window lived on the machine or on the phone.
+     * It lived on the machine. The mark on a window's row and the window's own
+     * settings screen still say **Private** for a window that has a partition of
+     * its own, so nothing is lost about a window that already exists; what is
+     * gone is being asked the question here.
+     *
+     * > *"by default should be always this phone and it should be the first
+     * > option and machine should be the second option."*
+     *
+     * And the order is his reasoning as well as his instruction: *"all the
+     * manual settings are mostly for our phone; when the AI will open some
+     * windows for scrapping it will be mostly automatically for the other."*
+     * A person opening this sheet by hand almost always wants the page here.
+     */
     private var places: [Place] {
         var out: [Place] = []
-        if canOpenThere { out.append(.machine); out.append(.isolated) }
         if canTunnel { out.append(.phone) }
+        if canOpenThere { out.append(.machine) }
         return out.isEmpty ? [.machine] : out
     }
 

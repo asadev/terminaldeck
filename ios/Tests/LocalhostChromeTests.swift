@@ -776,37 +776,33 @@ final class LocalhostChromeTests: XCTestCase {
     }
 
     /**
-     * **Size is drawn dead, with a reason, on a screen that only has a picture.**
+     * **A verb that cannot act on this page is not drawn at all.**
      *
-     * > *"it should be the same case, or all the options should be available at
-     * > least."*
+     * The rule used to be the opposite — greyed, in its slot, with the reason on
+     * an ⓘ — and it was his, from the round that made every browsing window wear
+     * the same six. He reversed it on 2026-08-26 looking at the bar inside a
+     * session:
      *
-     * The bar's default for `whyNoSize` is what puts the greyed glyph under a
-     * machine window without that screen having to say anything, which is the
-     * arrangement Find and Inspect already use — one fact about one wire, written
-     * once, rather than four paraphrases that drift. The page on this phone passes
-     * nil instead, because the default sentence says *this page is on the machine*
-     * and that would be a lie printed over a closed tunnel.
+     * > *"if the browsers cannot have this options like find, inspect and size…
+     * > it should be first of all possible and useful here also. But if not then
+     * > I think here we can just make it more simplified, remove find, inspect
+     * > and size."*
+     *
+     * So there is no `whyNoSize`, no `whyNoFind`, no `whyNoInspect` and no
+     * `unavailable` left to write a sentence into, and the ⓘ that carried them
+     * went with them — *"this icon is not required here, i information button, it
+     * can go."* What this pins is that none of them came back: a bar that grew a
+     * reason string again is a bar drawing dead controls again.
      */
-    func testSizeIsGreyedWhereThereIsNoLayoutToChange() throws {
+    func testAVerbThatCannotActIsNotDrawn() throws {
         let bar = try Self.barSource()
-        XCTAssertTrue(bar.contains("var whyNoSize: String? = BrowserChrome.sizeIsLocal"),
-                      "a machine window should get the greyed Size glyph and its sentence from "
-                      + "the bar's own default — every screen writing its own is how one control "
-                      + "comes to mean four different things")
-
-        let sentence = BrowserChrome.sizeIsLocal
-        XCTAssertTrue(sentence.contains("machine"),
-                      "the sentence has to name where the page actually is; \"this is off\" "
-                      + "without the reason is the dead control it is trying not to be")
-
-        let screen = try Self.browserSource()
-        XCTAssertTrue(screen.contains("size: isLive ? pageSize : nil"),
-                      "the page this phone holds is the one screen that can honour it, so it is "
-                      + "the one screen that passes it")
-        XCTAssertTrue(screen.contains("whyNoSize: nil"),
-                      "and it passes nil for the sentence, which otherwise says the page is on "
-                      + "the machine over a tunnel that has closed")
+        for gone in ["whyNoSize", "whyNoFind", "whyNoInspect", "var unavailable"] {
+            XCTAssertFalse(bar.contains(gone),
+                           "\(gone) is back, which means dead controls are back with it")
+        }
+        XCTAssertFalse(bar.contains("InfoDot"),
+                       "the ⓘ carried the sentences behind the greyed verbs and has nothing left "
+                       + "to explain")
     }
 
     /**

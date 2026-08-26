@@ -996,7 +996,6 @@ struct SessionPageView<Session: View>: View {
             forward: drivable ? { host?.actOnMachineWindow(window.id, .forward) } : nil,
             reload: drivable ? { host?.actOnMachineWindow(window.id, .reload) } : nil,
             page: surface?.window,
-            unavailable: whyBarIsLimited,
             /* No history state, and deliberately not a `false`: the desktop's
                back-forward list never comes over this wire, so nil is the only
                honest answer and the bar reads it as *do not grey these*. */
@@ -1007,9 +1006,6 @@ struct SessionPageView<Session: View>: View {
                here would be a glyph with no frame to send. Reload stays live,
                which is the useful half of it. */
             stop: nil,
-            whyNoFind: BrowserChrome.findIsLocal,
-            whyNoInspect: SessionPageRoom.inspectIsOnTheWindowsScreen,
-            whyNoSize: BrowserChrome.sizeIsLocal
         )
         .accessibilityIdentifier("session.page.browserbar")
     }
@@ -2149,7 +2145,13 @@ enum SessionWindowPicker {
      * waiting, on the machine, already belonging to this session. Wherever the
      * agent sends it next is one `go` away.
      */
-    static let newWindow = "New window"
+    /// > *"this new window thing should be like clear like which type of
+    /// > window it people can think like this is terminal window not browser
+    /// > window. So it can be… new browser window or new browser."*
+    ///
+    /// The menu it sits in is a **session's** menu, so *New window* next to Find
+    /// and Paste reads as a second terminal. Two words settle it.
+    static let newWindow = "New browser window"
 
     /// What the row means, in one line, for a screen reader and for anybody who
     /// holds the row down. A hint is read on request and is not drawn, which is

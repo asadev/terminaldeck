@@ -764,7 +764,6 @@ struct MachineWindowView: View {
                 forward: drivable ? { host?.actOnMachineWindow(windowID, .forward) } : nil,
                 reload: reloadVerb,
                 page: liveSurface?.window,
-                unavailable: whyLimited,
                 /*
                  * **No history state, and that is deliberately not a `false`.**
                  *
@@ -811,10 +810,7 @@ struct MachineWindowView: View {
                  */
                 find: nil,
                 inspect: (drivable && liveSurface != nil) ? toggleInspecting : nil,
-                inspecting: inspecting,
-                whyNoInspect: (drivable && liveSurface == nil)
-                    ? BrowserChrome.inspectNeedsThePicture
-                    : nil)
+                inspecting: inspecting)
         }
     }
 

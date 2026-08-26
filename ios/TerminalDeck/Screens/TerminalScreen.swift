@@ -736,10 +736,6 @@ struct TerminalScreen: View {
                         .accessibilityIdentifier("terminal.controls")
                     }
 
-                    attachSection
-
-                    Divider()
-
                     /*
                      * Copy Screen, and deliberately *only* Copy Screen.
                      *
@@ -837,13 +833,40 @@ struct TerminalScreen: View {
                     }
 
                     Divider()
+                    /*
+                     * > *"the reattach button is not clearly clear that what
+                     * > does it means maybe we can just rename it to restart or
+                     * > something or restart session."*
+                     *
+                     * *Re-attach* names the wire — this phone re-subscribing to a
+                     * session's output — which is a thing nobody outside this
+                     * code has a word for. What a person means by pressing it is
+                     * *give me this session again, working*.
+                     */
                     Button {
                         host?.reattach(sessionID)
-                        show("Re-attaching…")
+                        show("Restarting…")
                     } label: {
-                        Label("Re-attach", systemImage: "arrow.clockwise")
+                        Label("Restart session", systemImage: "arrow.clockwise")
                     }
                     .disabled(!connection.isLive)
+
+                    /*
+                     * **Last, and that is his measurement rather than a taste.**
+                     *
+                     * > *"attach a browser window should be last thing in the
+                     * > drop down because they can be too many so they can just
+                     * > keep scrolling but they will not have to scroll all the
+                     * > way for the all the browser windows to reach the basic
+                     * > options."*
+                     *
+                     * It is the one section here whose length is not this app's
+                     * to decide — it is however many windows the machine's
+                     * browser has open — so anything under it is however far
+                     * down that list happens to reach today. Everything above it
+                     * is a fixed number of rows.
+                     */
+                    attachSection
                 } label: {
                     // `ellipsis` and not `ellipsis.circle`, which is what it
                     // wore while it stood in the leading group. *"Exactly
@@ -974,7 +997,11 @@ struct TerminalScreen: View {
             host?.openMachineWindow(isolated: false, session: sessionID)
             show(SessionWindowPicker.opening(machine: machineName))
         } label: {
-            Label(SessionWindowPicker.newWindow, systemImage: "macwindow.badge.plus")
+            // A globe and not a window frame: *"in left side should be browser
+            // icon instead of this type of window icon specific to browser."*
+            // The frame is what every *terminal* window in this app wears, which
+            // is exactly the confusion the two words above are fixing.
+            Label(SessionWindowPicker.newWindow, systemImage: "globe.badge.chevron.backward")
         }
         .accessibilityHint(SessionWindowPicker.newWindowMeaning(machine: machineName))
     }

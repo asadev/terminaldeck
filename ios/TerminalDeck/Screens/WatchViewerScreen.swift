@@ -429,7 +429,6 @@ struct WatchViewerScreen: View {
             forward: nil,
             reload: canNavigate && !surface.url.isEmpty ? reload : nil,
             page: surface.window,
-            unavailable: whyLimited,
             // Find and Inspect are deliberately left at `BrowserPageBar`'s
             // defaults. Those say the page is on the machine and there is nothing
             // on this phone to search or tap into, which is exactly the case

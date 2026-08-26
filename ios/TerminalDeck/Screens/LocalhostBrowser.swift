@@ -683,19 +683,16 @@ struct LocalhostBrowser: View {
             // No canvas on this screen: the keyboard belongs to a real web view
             // and comes up when a field in the page is tapped.
             page: nil,
-            unavailable: whyLimited,
             canGoBack: browser.canGoBack,
             canGoForward: browser.canGoForward,
             loading: browser.loading,
             stop: isLive ? { browser.reload() } : nil,
             find: isLive ? toggleFind : nil,
             finding: find?.isOpen == true,
-            whyNoFind: nil,
             inspect: isLive ? { browser.setInspecting(!browser.inspecting) } : nil,
             inspecting: browser.inspecting,
-            whyNoInspect: nil,
             size: isLive ? pageSize : nil,
-            whyNoSize: nil)
+            )
     }
 
     /**

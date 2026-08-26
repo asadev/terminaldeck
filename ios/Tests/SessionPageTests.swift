@@ -885,8 +885,16 @@ final class SessionPageTests: XCTestCase {
      * *Machine* and *Isolated* as a two-button picker on the New window sheet,
      * which is where somebody choosing a partition already is.
      */
-    func testTheRowThatMakesAWindowIsTwoWords() {
-        XCTAssertEqual(SessionWindowPicker.newWindow, "New window")
+    func testTheRowThatMakesAWindowSaysWhichKind() {
+        // > *"this new window thing should be like clear like which type of
+        // > window… maybe we can say new browser window or new browser."*
+        //
+        // *New window* in a **session's** menu, beside Find and Paste, reads as
+        // a second terminal. The row is three words now and one of them is the
+        // one that settles it.
+        XCTAssertEqual(SessionWindowPicker.newWindow, "New browser window")
+        XCTAssertTrue(SessionWindowPicker.newWindow.lowercased().contains("browser"),
+                      "the row has to name the kind of window it makes")
         XCTAssertFalse(SessionWindowPicker.newWindow.contains("session"),
                        "a row in *Attach a browser window* does not have to say it is for this "
                        + "session — the section it is in says so")

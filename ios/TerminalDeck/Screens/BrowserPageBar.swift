@@ -211,31 +211,6 @@ struct BrowserPageBar: View {
     /// page verbs, and has nothing to send a keystroke to.
     let page: String?
 
-    /**
-     * Why this page cannot be asked for the verbs it is not being given — or nil
-     * on a page that can be asked for everything.
-     *
-     * Present, it turns every `nil` verb above into a **dead** button in its own
-     * slot and the address field into a read-only line, with this sentence on the
-     * ⓘ beside it. Absent, a `nil` verb is left out and a page with no `go` draws
-     * no address at all, which is what a screen with no model behind it wants.
-     *
-     * A sentence rather than a flag, because the answer is different every time —
-     * a page with no window id, a machine that has stopped offering its browser,
-     * a cast with no `web` behind it — and *this control is off* without the
-     * reason is the dead control it is trying not to be.
-     *
-     * It is the **page-wide** reason. Two controls can also be refused on their
-     * own terms — Find and Inspect both need the page to be on this phone rather
-     * than a picture of it — so each of those carries a sentence of its own and
-     * every one of them ends up in the same popover. See `why`.
-     *
-     * The `…` used to be a third and is not one any more: it left this bar for
-     * the header, and it is drawn there only where it opens something. A control
-     * that is not on the screen owes no explanation, so there is no `whyNoMore`
-     * here to collect.
-     */
-    var unavailable: String?
 
     /**
      * Whether there is anywhere to go back to — or **nil where this page does not
@@ -271,12 +246,11 @@ struct BrowserPageBar: View {
     var stop: (() -> Void)? = nil
 
     /// Search the words on this page, or nil where the page is not on this
-    /// phone. `whyNoFind` is the sentence for that case.
+    /// phone — in which case the slot is simply not drawn. See `slot`.
     var find: (() -> Void)? = nil
     /// Whether the find bar is up, which fills the glyph the way Inspect's is
     /// filled — the page gets shorter and something visible has to explain it.
     var finding: Bool = false
-    var whyNoFind: String? = BrowserChrome.findIsLocal
 
     /**
      * Describe whatever is tapped on the page, or nil where this phone cannot
@@ -290,11 +264,11 @@ struct BrowserPageBar: View {
      *
      * What is left `nil` is the one screen that has no way to ask at all: the
      * surface viewer reached from Settings, which holds a `WatchLink` and no
-     * model, so `whyNoInspect` stands there and the glyph is greyed with it.
+     * model — and a nil slot is not drawn at all now rather than greyed. See
+     * `slot`.
      */
     var inspect: (() -> Void)? = nil
     var inspecting: Bool = false
-    var whyNoInspect: String? = BrowserChrome.inspectIsLocal
 
     /**
      * Look at the page at another width, and zoom into it — or nil where this
@@ -312,27 +286,44 @@ struct BrowserPageBar: View {
      * be available at least."*
      */
     var size: BrowserPageSize? = nil
-    var whyNoSize: String? = BrowserChrome.sizeIsLocal
 
     @FocusState private var focused: Bool
 
+    /**
+     * **One box, with rounded corners, and nothing drawn dead in it.**
+     *
+     * > *"this bar looks like very classic style and old and not according to
+     * > the overall design system. So maybe we can give it a nice box instead of
+     * > this type, like this type of so much of separation and difference —
+     * > maybe a smooth cool beautiful box maybe round corners or something which
+     * > looks like latest shapes."*
+     *
+     * > *"maybe we can have all of it in one pill instead of two different upper
+     * > and bottom."*
+     *
+     * It was two full-width bands separated by hairlines that ran edge to edge —
+     * the shape a browser toolbar had in 2012, and the one thing on these
+     * screens that did not look like the rest of the app. It is one card now,
+     * inset from the edges, `Theme.surface` on the screen's own ground, with the
+     * address and the verbs inside it and a short rule between them that stops
+     * before the corners. The rest of this app is *"tinted ground, floating
+     * cards, 20pt radii"* and this is now the same thing.
+     */
     var body: some View {
         VStack(spacing: 0) {
-            Rectangle()
-                .fill(Theme.hairline)
-                .frame(height: 0.5)
-
             if typing {
                 keyRow
-                topDivider
-            } else if go != nil || why != nil {
+                if hasVerbs { insetDivider }
+            } else if go != nil || address != "" {
                 addressRow
-                topDivider
+                if hasVerbs { insetDivider }
             }
 
             if hasVerbs { verbRow }
         }
-        .background(Theme.background)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .padding(.horizontal, 10)
+        .padding(.bottom, 8)
         .onChange(of: focused) { _, now in editing = now }
         /*
          * **The canvas has taken the keyboard, or given it up.**
@@ -351,11 +342,13 @@ struct BrowserPageBar: View {
         }
     }
 
-    private var topDivider: some View {
+    /// The one rule left, and it stops short of the card's corners — a hairline
+    /// run edge to edge is the "so much of separation" the box replaced.
+    private var insetDivider: some View {
         Rectangle()
             .fill(Theme.hairline)
             .frame(height: 0.5)
-            .padding(.leading, 16)
+            .padding(.horizontal, 14)
     }
 
     // MARK: - The address
@@ -451,16 +444,23 @@ struct BrowserPageBar: View {
 
     /// The globe, or the ⓘ that replaces it on a page with something to explain.
     @ViewBuilder
+    /**
+     * The globe, and nothing else in this slot.
+     *
+     * > *"this icon is not required here, i information button, it can go so it
+     * > will be more simple."*
+     *
+     * There was an ⓘ here on any page some verb could not act on, and it carried
+     * the sentences saying why each greyed control was greyed. Those controls are
+     * not drawn any more — see `slot` — so there is nothing left for it to
+     * explain, and a dot that opens onto an empty explanation is worse than the
+     * greyed row it replaced.
+     */
     private var leadingGlyph: some View {
-        if let why {
-            InfoDot(about: "this page", text: why)
-                .frame(width: 24, height: 28)
-        } else {
-            Image(systemName: "globe")
-                .font(.system(size: 19, weight: .light))
-                .foregroundStyle(Theme.faint)
-                .frame(width: 24, height: 28)
-        }
+        Image(systemName: "globe")
+            .font(.system(size: 17, weight: .medium))
+            .foregroundStyle(Theme.faint)
+            .frame(width: 24, height: 28)
     }
 
     /**
@@ -556,7 +556,7 @@ struct BrowserPageBar: View {
      */
     private var hasVerbs: Bool {
         back != nil || forward != nil || reload != nil || find != nil || inspect != nil
-            || size != nil || why != nil
+            || size != nil
     }
 
     /**
@@ -581,9 +581,9 @@ struct BrowserPageBar: View {
                  act: forward, enabled: canGoForward ?? true)
             reloadSlot(id: "\(id).reload")
             slot("Find", finding ? "magnifyingglass.circle.fill" : "magnifyingglass",
-                 id: "\(id).find", act: find, why: whyNoFind)
+                 id: "\(id).find", act: find)
             slot("Inspect", inspecting ? "square.dashed.inset.filled" : "square.dashed",
-                 id: "\(id).inspect", act: inspect, why: whyNoInspect)
+                 id: "\(id).inspect", act: inspect)
             sizeSlot(id: "\(id).size")
         }
         .padding(.vertical, 10)
@@ -615,8 +615,6 @@ struct BrowserPageBar: View {
             }
             .accessibilityLabel("Size")
             .accessibilityIdentifier(id)
-        } else if let sentence = whyNoSize ?? unavailable {
-            dead("Size", "macbook.and.iphone", id: id, why: sentence)
         }
     }
 
@@ -750,24 +748,35 @@ struct BrowserPageBar: View {
     }
 
     /**
-     * One place in the row: the verb where it can act, the same glyph dead where
-     * the page cannot be asked for it and there is a sentence saying why, and
-     * nothing at all where there is neither.
+     * A verb, or nothing at all.
      *
-     * `enabled` is the *other* kind of off and it never reaches `dead`: a live
-     * verb with nowhere to go is disabled and silent, because the grey chevron at
-     * the start of a site explains itself and a sentence about it would be noise
-     * on every first page anybody opens.
+     * ## This used to draw a dead one, and he reversed it
+     *
+     * The rule was *a control that could only ever be refused is still drawn,
+     * greyed, in its own place in the row, so the bar under one page is the same
+     * bar as under any other* — his own words, from the round that put Find,
+     * Inspect and Size in every row with a sentence on the ⓘ saying why two of
+     * them were grey. It is reversed by his own words too:
+     *
+     * > *"if the browsers cannot have this options like find, inspect and size…
+     * > it should be first of all possible and useful here also. But if not then
+     * > I think here we can just make it more simplified, remove find, inspect
+     * > and size."*
+     *
+     * Possible, or gone. Find reads a document *this phone* has loaded and there
+     * is no verb on the wire that asks a machine to search one; Size needs a
+     * layout width this wire cannot ask for; Inspect needs a sheet to answer
+     * into. So on a machine's window those three are simply not there, and the
+     * row under a page this phone holds is the full six — which is the honest
+     * version of *the same bar everywhere*: the same bar, showing what it can
+     * actually do here.
      */
     @ViewBuilder
     private func slot(_ title: String, _ icon: String,
                       id: String, act: (() -> Void)?,
-                      enabled: Bool = true,
-                      why: String? = nil) -> some View {
+                      enabled: Bool = true) -> some View {
         if let act {
             verb(title, icon, id: id, act: act, enabled: enabled)
-        } else if let sentence = why ?? unavailable {
-            dead(title, icon, id: id, why: sentence)
         }
     }
 
@@ -808,60 +817,7 @@ struct BrowserPageBar: View {
         .frame(maxWidth: .infinity)
     }
 
-    /**
-     * The same glyph, in the same place, and it does nothing.
-     *
-     * `.disabled(true)` rather than a button that opens an explanation: a control
-     * that answers a tap with a sentence is still a control that did not do what
-     * it says, and the sentence is already one tap away on the ⓘ beside the
-     * address. The hint carries it as well, because a greyed glyph is the one
-     * thing on this bar VoiceOver would otherwise read as a plain button.
-     */
-    private func dead(_ title: String, _ icon: String,
-                      id: String, why: String) -> some View {
-        Button {} label: {
-            verbLabel(title, icon, tint: Theme.faint)
-        }
-        .buttonStyle(.plain)
-        .disabled(true)
-        .accessibilityLabel(title)
-        .accessibilityHint(why)
-        .accessibilityIdentifier(id)
-    }
 
-    /**
-     * Everything this bar has to explain, in one popover.
-     *
-     * There is one ⓘ and it holds every sentence, rather than an ⓘ per greyed
-     * glyph. Two arguments, and the second is the one that settled it:
-     *
-     *  - A dot beside every glyph is a bar about itself. His standing
-     *    rule is *"I don't want any kind of long descriptions anywhere. Just if
-     *    somewhere it's very required, give the i icon"* — one, where the globe
-     *    would be, is what every other screen in this app does.
-     *  - The sentences are not independent. A page nothing can be sent to has one
-     *    reason for all of it, and reading it once beats reading three
-     *    paraphrases of it; a page that can be driven but not searched has one
-     *    line and nothing else to say.
-     *
-     * `unavailable` leads because it is the fact about the whole page. A per-verb
-     * sentence is named so that a reader can tell which grey glyph it is about,
-     * and it is skipped when it would only repeat the bar-wide one.
-     */
-    private var why: String? {
-        var lines: [String] = []
-        if let unavailable, !unavailable.isEmpty { lines.append(unavailable) }
-        if find == nil, let whyNoFind, whyNoFind != unavailable {
-            lines.append("Find — \(whyNoFind)")
-        }
-        if inspect == nil, let whyNoInspect, whyNoInspect != unavailable {
-            lines.append("Inspect — \(whyNoInspect)")
-        }
-        if size == nil, let whyNoSize, whyNoSize != unavailable {
-            lines.append("Size — \(whyNoSize)")
-        }
-        return lines.isEmpty ? nil : lines.joined(separator: "\n\n")
-    }
 
     // MARK: - Actions
 
