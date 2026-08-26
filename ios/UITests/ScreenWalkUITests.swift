@@ -309,9 +309,12 @@ final class ScreenWalkUITests: XCTestCase {
             _ = app.buttons["settings.machines"].waitForExistence(timeout: 4)
         }
 
-        if app.buttons["settings.terminalTheme"].waitForExistence(timeout: 10) {
-            app.buttons["settings.terminalTheme"].tap()
-            capture("15-terminal-appearance")
+        // The Appearance page — the app's light/dark, the terminal text size and
+        // the terminal colours, which were three controls in three places until
+        // *"overall appearance page should be there in the settings."*
+        if app.buttons["settings.appearance"].waitForExistence(timeout: 10) {
+            app.buttons["settings.appearance"].tap()
+            capture("15-appearance")
             app.navigationBars.buttons.firstMatch.tap()
         }
 

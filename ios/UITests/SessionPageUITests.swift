@@ -1143,9 +1143,7 @@ final class SessionPageUITests: XCTestCase {
      * because they are the only ones whose words are known in advance.
      */
     private func assertOffersAWindow(_ appeared: Set<String>, fixed: Set<String>, where_: String) {
-        let windows = appeared.filter { label in
-            !fixed.contains(label) && !Self.fixedPrefixes.contains { label.hasPrefix($0) }
-        }
+        let windows = appeared.filter { !fixed.contains($0) }
         XCTAssertFalse(windows.isEmpty,
                        "this suite has a window open on the machine, so \(where_) must offer it — "
                        + "what appeared was \(appeared.sorted())")
@@ -1232,17 +1230,29 @@ final class SessionPageUITests: XCTestCase {
         newWindow,
     ]
 
-    /// And the terminal's own menu, verbatim from `TerminalScreen`. The two
-    /// text-size items carry the current size in their labels, so they are
-    /// matched by prefix below rather than listed here.
+    /**
+     * And the terminal's own menu, verbatim from `TerminalScreen`.
+     *
+     * **Every row in it is now a whole label**, which is why there is no longer
+     * a list of prefixes beside this one. There were two: *"Bigger text — 12
+     * pt"* and *"Smaller text — 12 pt"*, whose labels carried the current size
+     * and so could only be matched by their opening words. They were taken out
+     * of this menu — *"this bigger and smaller should be going to inside the
+     * settings page for the all of the terminals with one setting"* — and the
+     * size is Settings → Appearance now. `TerminalScreen` keeps the note where
+     * they stood.
+     *
+     * Their absence is asserted in `FindShareAndAlertsUITests`, which is the
+     * suite that used to press them; here they are simply not expected, and
+     * `assertOffersAWindow` calls anything it does not recognise a window — so
+     * leaving them listed would have hidden a regression rather than caught one.
+     */
     private static let sessionMenuItems: Set<String> = [
         "Find in output", "Session details", "Model & effort",
         "Copy Screen", "Paste", "Share output",
         "Send Photo or Video", "Send File", "Re-attach",
         newWindow,
     ]
-
-    private static let fixedPrefixes = ["Bigger text", "Smaller text"]
 
     /// Every window row currently on the Browser home, by window id.
     private func rowIDs() -> Set<String> {

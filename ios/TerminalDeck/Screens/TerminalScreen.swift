@@ -782,36 +782,37 @@ struct TerminalScreen: View {
                     }
                     .accessibilityIdentifier("terminal.share")
 
-                    Divider()
-
                     /*
-                     * Text size: two ordinary items with the size in their
-                     * labels, rather than a submenu or a section.
+                     * **There is no Bigger text / Smaller text here any more.**
                      *
-                     * The tidier shapes were tried — "Text size ▸" with two
-                     * steps inside it, and a `Section` whose header carried the
-                     * size — and both cost a tap for nothing: a step is a thing
-                     * people do two or three times in a row while deciding, and
-                     * a submenu doubles every one of them. The size reads fine
-                     * in the label, which is where the eye already is.
+                     * They were two ordinary items with the size in their
+                     * labels — *"Bigger text — 12 pt"* — and he read them out of
+                     * this menu, on this screen, and said where they go:
+                     *
+                     * > *"this bigger and smaller should be going to inside the
+                     * > settings page for the all of the terminals with one
+                     * > setting we can just change this for overall appearance
+                     * > page should be there in the settings and from there we
+                     * > can change colors text size and everything for all of
+                     * > them."*
+                     *
+                     * The size was **already** one setting for the whole phone
+                     * rather than one per session — `TextSize` is a single
+                     * defaults key and always was. That is not what he was
+                     * reading. A control that lives inside one session's menu
+                     * says *this session*, whatever the storage does, and there
+                     * is no way to say otherwise inside a menu row. So the rows
+                     * are gone rather than relabelled, and Settings →
+                     * Appearance is the one place the size is set, next to the
+                     * colours, for every terminal on the phone.
+                     *
+                     * **Nothing here got slower.** The gesture is still on this
+                     * screen: pinching the terminal changes the same setting,
+                     * which is the fast path people already try, and the toast
+                     * that names the new size is still wired to it below. What
+                     * went is a menu of controls that had to be re-opened
+                     * between every press.
                      */
-                    Button {
-                        step(TextSize.larger(bridge.textSize))
-                    } label: {
-                        Label("Bigger text — \(TextSize.label(bridge.textSize))",
-                              systemImage: "textformat.size.larger")
-                    }
-                    .disabled(!TextSize.canGoLarger(bridge.textSize))
-                    .accessibilityIdentifier("terminal.textLarger")
-
-                    Button {
-                        step(TextSize.smaller(bridge.textSize))
-                    } label: {
-                        Label("Smaller text — \(TextSize.label(bridge.textSize))",
-                              systemImage: "textformat.size.smaller")
-                    }
-                    .disabled(!TextSize.canGoSmaller(bridge.textSize))
-                    .accessibilityIdentifier("terminal.textSmaller")
 
                     // Absent rather than disabled when the Mac cannot receive
                     // one: a control that can only produce a refusal is not a
@@ -1183,12 +1184,16 @@ struct TerminalScreen: View {
         sharing = SharedFile(url: url, subject: title ?? session?.title ?? "Session output")
     }
 
-    /// One step of the text size, applied and remembered. The toast comes from
-    /// the bridge's own callback, so a pinch and this button say the same thing.
-    private func step(_ size: CGFloat) {
-        bridge.setTextSize(size)
-        TextSize.save(bridge.textSize)
-    }
+    /*
+     * **There is no `step` here any more.**
+     *
+     * It applied one press of the menu's Bigger/Smaller text and saved the
+     * result, and it went with them — see the note in the `…` menu above. The
+     * pinch does not need it: `TerminalGestures` drives `setTextSize` directly
+     * while the fingers are moving and calls `TextSize.save` once when they
+     * lift, which is also the one post that tells every other terminal on the
+     * phone. See `TextSize`.
+     */
 
     /**
      * The session's name, and what it is doing under it.

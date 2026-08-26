@@ -240,8 +240,8 @@ struct DeckTabs: View {
                             if let host = model.current {
                                 CopilotControlView(model: model, hostID: host.id)
                             }
-                        case .terminalTheme:
-                            TerminalThemeView()
+                        case .appearance:
+                            AppearanceView()
                         }
                     }
             }
@@ -1121,28 +1121,30 @@ private struct MachineRow: View {
 struct DeckSettingsView: View {
     let model: DeckModel
 
-    /// The terminal's point size. Mirrored into `@State` because `TextSize` is a
-    /// `UserDefaults` façade rather than an observable object — the same shape
-    /// the alert switches use, and for the same reason: the control responds to
-    /// the finger rather than to a store round trip.
-    /// The phone's terminal colour scheme, read for the row's value. Held as a
-    /// property rather than reached for inside `body`, because `@Observable`
-    /// only re-runs a body that read the object — and the row has to say the new
-    /// name the moment somebody comes back from the picker.
+    /// The phone's terminal colour scheme, read for the Appearance row's value.
+    /// Held as a property rather than reached for inside `body`, because
+    /// `@Observable` only re-runs a body that read the object — and the row has
+    /// to say the new name the moment somebody comes back from the page.
     var themes: TerminalThemeStore = .shared
 
     /**
-     * Light, dark, or the phone's own setting.
+     * The terminal text size, read for the same row and by the same rule.
      *
-     * `@AppStorage` rather than the `@State`-mirror shape the row above uses,
-     * and the difference is which way the value has to travel. Text size is read
-     * by the terminal when a session opens, so a store write is enough. This one
-     * has to reach `RootView` — three screens up, above the `TabView` — on the
-     * same frame as the tap, and `@AppStorage` on both ends is a live view of
-     * the same defaults key rather than a binding threaded through four screens
-     * that do not care.
+     * `@AppStorage` on `TextSize.key` rather than a read of `TextSize.stored`,
+     * and the difference is invalidation rather than value. `TextSize` is a
+     * `UserDefaults` façade with nothing observable on it, so a body that read
+     * `stored` would be drawn once and never again — the row would go on saying
+     * "12 pt" after somebody came back from having changed it, which is the
+     * exact class of defect a summary row exists to avoid. Binding the key makes
+     * the row a live view of the setting.
+     *
+     * **The light/dark picker is not here any more.** It was a segmented control
+     * inline on this screen, under a caption that said *Appearance*, and it is
+     * now the first group on the Appearance page with the size and the colours —
+     * *"overall appearance page should be there in the settings and from there we
+     * can change colors text size and everything."* See `AppearanceView`.
      */
-    @AppStorage(Appearance.key) private var appearance: Appearance = .system
+    @AppStorage(TextSize.key) private var storedTextSize: Double = Double(TextSize.standard)
 
     /**
      * Bumped when the alerts sheet closes, and read by nothing.
@@ -1323,6 +1325,59 @@ struct DeckSettingsView: View {
                             DispatchQueue.main.async { model.showingAlerts = true }
                         }
                         .accessibilityIdentifier("settings.alerts")
+
+                        SettingsDivider()
+
+                        /*
+                         * **Appearance — one row, and everything about how this
+                         * app and its terminals look is behind it.**
+                         *
+                         * > *"this bigger and smaller should be going to inside
+                         * > the settings page for the all of the terminals with
+                         * > one setting we can just change this for overall
+                         * > appearance page should be there in the settings and
+                         * > from there we can change colors text size and
+                         * > everything for all of them."*
+                         *
+                         * He was reading *Bigger text* and *Smaller text* out of
+                         * one session's `…` menu. What he asked for was a page,
+                         * so this is a row rather than the section of inline
+                         * controls that used to sit lower down: the light/dark
+                         * picker was here, the terminal colours were one push
+                         * away, and the size was in a menu inside a session.
+                         * Three places for one question. `AppearanceView` is the
+                         * one place now.
+                         *
+                         * **In *This phone*, and that is not filing convenience.**
+                         * Every setting on that page belongs to this handset and
+                         * to nothing on the other end of the wire — the app's
+                         * light/dark, the terminal's colours, the point size.
+                         * Change any of them and the Mac in the other room is
+                         * exactly as it was, which is what the note at the foot
+                         * of the page says out loud.
+                         *
+                         * The value is both answers — the same rule Machines and
+                         * Alerts follow, a row that pushes says what it would
+                         * find — and the **size is first**, which is a
+                         * measurement rather than a preference.
+                         *
+                         * On a 375-point phone, the narrowest this app supports,
+                         * the row has about one point to spare against
+                         * *"Solarized Light · 22 pt"* and none at all against a
+                         * copy of it called *"Solarized Light (yours)"*. So the
+                         * order is chosen for what happens when it does not fit:
+                         * `SettingsRowBody` clips the tail, and the tail should
+                         * be a scheme name that is spelt out in full one tap
+                         * away rather than the number he came to this row to
+                         * read.
+                         */
+                        NavigationLink(value: DeckModel.SettingsRoute.appearance) {
+                            SettingsRowBody(title: "Appearance",
+                                            value: appearanceValue,
+                                            icon: "paintbrush")
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("settings.appearance")
                     }
 
                     // The two settings the current machine owns rather than this
@@ -1344,100 +1399,36 @@ struct DeckSettingsView: View {
                      * *"On the main page of settings just give it there, as
                      * optional for the overall application."* Here it is, and
                      * this is the only place in the app that mentions it: one
-                     * switch, off until somebody moves it, above Appearance
-                     * because it is a fact about getting in rather than a fact
-                     * about looking at it. See `AppLockSection` — it draws its
-                     * own caption and card so it can sit here as one line.
+                     * switch, off until somebody moves it, below the rows about
+                     * this phone because it is a fact about getting in rather
+                     * than a fact about looking at it. See `AppLockSection` — it
+                     * draws its own caption and card so it can sit here as one
+                     * line.
                      */
                     AppLockSection(lock: lock)
 
-                    SectionCaption("Appearance")
-
-                    SettingsGroup {
-                        /*
-                         * Three segments rather than a switch, because there are
-                         * three answers and one of them is the important one:
-                         * *System*, which is the default and the only choice
-                         * that keeps tracking the phone after it is made. A
-                         * two-state control would have had to drop it, and an
-                         * app that cannot follow the phone's own setting is an
-                         * app that comes up white at midnight.
-                         *
-                         * The picker takes the whole width on its own line
-                         * rather than sitting beside a title. Rendered the other
-                         * way at 375 points — the narrowest phone this app
-                         * supports — the three segments were 190 points between
-                         * them and "System" was clipped to "Syste".
-                         *
-                         * Writing to it writes the defaults key, which is the
-                         * same key `RootView` reads, so the window repaints on
-                         * the same frame and the choice is already saved. There
-                         * is no Apply and nothing to confirm.
-                         */
-                        VStack(alignment: .leading, spacing: 10) {
-                            HStack(spacing: 12) {
-                                Image(systemName: "circle.lefthalf.filled")
-                                    .font(.system(size: 19, weight: .light))
-                                    .foregroundStyle(Theme.secondary)
-                                    .frame(width: 24)
-                                Text("Theme")
-                                    .font(.system(size: 16))
-                                    .foregroundStyle(Theme.primary)
-                                Spacer(minLength: 8)
-                            }
-
-                            Picker("Theme", selection: $appearance) {
-                                ForEach(Appearance.allCases) { choice in
-                                    Text(choice.label).tag(choice)
-                                }
-                            }
-                            .pickerStyle(.segmented)
-                            .labelsHidden()
-                            .accessibilityIdentifier("settings.appearance")
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
-
-                        SettingsDivider()
-
-                        /*
-                         * The terminal's own colours and its text size, one
-                         * screen down.
-                         *
-                         * Here and not in a section of its own because it
-                         * answers the same question the control above it does —
-                         * what this phone looks like — and because the text size
-                         * used to sit three groups below in a caption called
-                         * "Terminal" with one row under it. Asad asked for the
-                         * colour choice on every surface; the size was already
-                         * on this screen, and the two of them apart was two
-                         * places to look for one answer. `TerminalThemeView`
-                         * holds them both.
-                         *
-                         * The value is the scheme's name, which is the thing
-                         * this row is being asked — the same rule Machines and
-                         * Alerts follow.
-                         */
-                        NavigationLink(value: DeckModel.SettingsRoute.terminalTheme) {
-                            SettingsRowBody(title: "Terminal",
-                                            value: themes.selectedName,
-                                            icon: "paintpalette")
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier("settings.terminalTheme")
-                    }
-
                     /*
-                     * **There is no Terminal section here any more.**
+                     * **There is no Appearance section here any more, and no
+                     * Terminal row under it.**
                      *
-                     * It held one row — the text size — under a caption of its
-                     * own, three groups below Appearance. Both of those settings
-                     * describe what a terminal looks like on this phone, and
-                     * splitting them across a screen meant two places to look
-                     * for one answer. They are together now, one push down from
-                     * the Terminal row above, where the size is drawn *into* the
-                     * scheme previews rather than described by a number. See
-                     * `TerminalThemeView`.
+                     * It was a caption with two controls: the app's own
+                     * light/dark as a segmented picker, and a *Terminal* row
+                     * that pushed the colours and the size. That was already one
+                     * consolidation — the size had been a section of its own
+                     * three groups further down — and it was still not what he
+                     * asked for, because the size was *also* still in every
+                     * session's `…` menu:
+                     *
+                     * > *"overall appearance page should be there in the
+                     * > settings and from there we can change colors text size
+                     * > and everything for all of them."*
+                     *
+                     * A page. So all three controls are on one, `AppearanceView`,
+                     * reached by the Appearance row in *This phone* above. A
+                     * section called Appearance sitting beside a row called
+                     * Appearance would have been the two-places-for-one-answer
+                     * fault a third time, and this app has now made that mistake
+                     * twice in the same corner of the same screen.
                      */
 
                     SectionCaption("About")
@@ -1557,6 +1548,28 @@ struct DeckSettingsView: View {
     /// screen is being asked.
     private var machinesValue: String {
         model.hosts.count == 1 ? "1 paired" : "\(model.hosts.count) paired"
+    }
+
+    /**
+     * What the Appearance row says without being opened: the terminal text size
+     * and the colour scheme, in that order.
+     *
+     * *"12 pt · Follow the app"* on a fresh install, *"11 pt · Pure Black"* once
+     * somebody has chosen. Both, because the row now stands for a page holding
+     * both and a summary that named only one of them would be an invitation to
+     * open the page to find out about the other — which is the tap this row
+     * exists to save. Size first for what happens when the pair is too wide;
+     * the reasoning is on the row itself.
+     *
+     * The size comes from `storedTextSize`, which is the `@AppStorage` binding
+     * rather than `TextSize.stored`, and is put back through `clamp` for the
+     * same reason `stored` does it: a value written by a build with different
+     * bounds must not be read out raw. `@AppStorage` hands back the declared
+     * default when the key is absent, so a fresh install lands on `standard`
+     * without a special case.
+     */
+    private var appearanceValue: String {
+        "\(TextSize.label(TextSize.clamp(CGFloat(storedTextSize)))) · \(themes.selectedName)"
     }
 
     /// The Devices row's summary before it is opened. The count once the roster

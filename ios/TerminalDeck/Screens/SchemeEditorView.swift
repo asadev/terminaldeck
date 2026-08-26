@@ -3,7 +3,7 @@
  *
  * ## It is always a copy, and the copy is already the one in use
  *
- * There is no way to reach this screen on a built-in: `TerminalThemeView.edit`
+ * There is no way to reach this screen on a built-in: `AppearanceView.edit`
  * duplicates first and selects the duplicate, so from the first tap the person
  * is changing their own scheme and the terminal behind this screen is following
  * them. The alternative — let them edit Dracula for a minute and then either
@@ -58,7 +58,7 @@ struct SchemeEditorView: View {
     }
 
     /// False only if this screen is somehow standing on a shipped palette. It
-    /// cannot be reached that way — `TerminalThemeView.edit` copies first — but
+    /// cannot be reached that way — `AppearanceView.edit` copies first — but
     /// a screen that would silently write into a built-in if it ever were is a
     /// screen that eventually does.
     private var isEditable: Bool { !scheme.isBuiltIn }

@@ -248,11 +248,22 @@ on the next connection and shown as one line at the top of the session list
 banners about things that are already over. `SessionAlerts.swift`,
 `AlertCenter.swift`, `BackgroundGrace.swift`, `AlertsView.swift`.
 
-**Text size.** Pinch the terminal, or the two items in the actions menu. It is
-not a zoom: the column count *is* the font, so a smaller face means more columns
-and a `resize` the far end reflows to — which is the point, because an agent's
+**Text size.** Settings → **Appearance**, or pinch the terminal. It is not a
+zoom: the column count *is* the font, so a smaller face means more columns and a
+`resize` the far end reflows to — which is the point, because an agent's
 eighty-column table wraps into nonsense at fifty. Nine to twenty-two points,
-whole points, one setting for the phone. `TextSize.swift`.
+whole points, one setting for the phone — and every terminal already open
+follows it the moment it changes, over
+`Notification.Name.terminalTextSizeChanged`. `TextSize.swift`,
+`AppearanceView.swift`.
+
+Asad, 2026-08-26: *"this bigger and smaller should be going to inside the
+settings page for the all of the terminals with one setting … overall appearance
+page should be there in the settings and from there we can change colors text
+size and everything for all of them."* It used to be two items in each session's
+actions menu — *Bigger text — 12 pt* and *Smaller text — 12 pt* — which read as a
+control over that one session even though the storage was always phone-wide.
+They are gone; the page is the one place.
 
 **Share the output.** The actions menu → *Share output* writes the **whole
 buffer** — scrollback included — to a `.txt` named after the session and hands it
@@ -263,10 +274,12 @@ error that has already scrolled off the top. `ShareOutput.swift`.
 ## Light and dark
 
 Asad, 2026-08-17: *"mobile iOS is only dark mode — it should have both, in
-settings."* Settings → Appearance → **System / Light / Dark**, System by default,
-stored in `UserDefaults` and stated **once**, by `RootView`, for the whole window
-including its sheets. `Appearance.swift` holds the choice; `Theme.swift` holds
-both halves of the palette.
+settings."* Settings → **Appearance** → *The app* → **System / Light / Dark**,
+System by default, stored in `UserDefaults` and stated **once**, by `RootView`,
+for the whole window including its sheets. `Appearance.swift` holds the choice;
+`Theme.swift` holds both halves of the palette; `AppearanceView.swift` is the
+page it sits on, above the terminal text size and the terminal colour schemes —
+one page for every question of the form *how does this look*.
 
 ### It was pinned in three places, and only one of them was visible
 

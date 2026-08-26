@@ -230,14 +230,23 @@ final class DeckModel {
         /// See `WatchSurfacesView`.
         case watch
         /**
-         * How a terminal looks on this phone — its colour scheme and its text
-         * size. See `TerminalThemeView`.
+         * How this app and every terminal in it look on this phone — light or
+         * dark, the terminal's text size, and its colour scheme. See
+         * `AppearanceView`.
+         *
+         * > *"overall appearance page should be there in the settings and from
+         * > there we can change colors text size and everything for all of
+         * > them."*
+         *
+         * It was `terminalTheme` and it held two of the three; the light/dark
+         * picker was inline on the Settings screen and the size was in each
+         * session's `…` menu. One page, one route, one name.
          *
          * No machine gates it, unlike the two above. The choice belongs to this
          * phone and nothing on the wire is involved, so it is reachable with
          * every machine offline and with none paired at all.
          */
-        case terminalTheme
+        case appearance
     }
 
     /**

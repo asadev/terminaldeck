@@ -1,46 +1,76 @@
 /**
- * How a terminal looks on this phone: its colours and its size, on one screen.
+ * **Appearance** — the one page that says how this app and every terminal in it
+ * look. Light or dark, how big the text is, and what colours a session is drawn
+ * in.
  *
- * Asad asked for the colour choice on every surface — *"phone also, for Windows,
- * for MacBook, all of them"* — and named the one he wanted: pure black. On a
- * phone that is not a preference like the others. An OLED panel switches a
- * `#000000` pixel off rather than lighting it, so the black scheme is the only
- * one that is actually black in a dark room, and the phone is where somebody
- * sits looking at a terminal in the dark.
+ * ## Why it is a page, and why it is called this
  *
- * ## The first row is not a scheme
+ * He was on a session, with the `…` menu open, reading two rows out of it:
+ *
+ * > *"this bigger and smaller should be going to inside the settings page for
+ * > the all of the terminals with one setting we can just change this for
+ * > overall appearance page should be there in the settings and from there we
+ * > can change colors text size and everything for all of them."*
+ *
+ * Four things in one sentence and all four are here. The size comes **out** of
+ * the session menu — see the note where it used to be in `TerminalScreen`. It
+ * is **one setting for all of the terminals**, and now genuinely so: changing it
+ * reaches sessions that are already open, through
+ * `Notification.Name.terminalTextSizeChanged`. There is an **overall appearance
+ * page in the settings**, which is this file. And **colours, text size and
+ * everything** are on it, together, rather than a picker here and a stepper
+ * three screens away.
+ *
+ * The light/dark control came with them. It was a segmented picker sitting
+ * inline on the Settings screen under a caption that already said *Appearance*,
+ * which would have left this app with an Appearance section and an Appearance
+ * row next to each other, arguing about which one was the appearance. It is one
+ * page, it is the whole answer, and Settings has one row.
+ *
+ * ## The three groups, in that order
+ *
+ * **The app** first, because it is the coarsest: it decides the paper every
+ * other screen is drawn on, and — through *Follow the app* below — the terminal's
+ * own colours by default. **Every terminal** second, because the size is the one
+ * he came here to change. **Colours** last, because it is the longest and
+ * because scrolling past a list of cards to reach a stepper is how the size got
+ * lost in the first place.
+ *
+ * ## Colours: Asad asked for them everywhere, and named one
+ *
+ * *"phone also, for Windows, for MacBook, all of them"* — and the one he wanted
+ * was pure black. On a phone that is not a preference like the others. An OLED
+ * panel switches a `#000000` pixel off rather than lighting it, so the black
+ * scheme is the only one that is actually black in a dark room, and the phone is
+ * where somebody sits looking at a terminal in the dark.
+ *
+ * ### The first row is not a scheme
  *
  * **Follow the app** is what every install has been on since this app existed:
  * the terminal takes its ground and its ink from the phone's light/dark, so a
- * phone that crosses into dark at sunset takes its terminal with it. It is the
- * default and it stays the default; picking anything below it cuts that link on
- * purpose, because somebody who picks Solarized Light has picked Solarized
- * Light. See `TerminalScheme.followAppID`.
+ * phone that crosses into dark at sunset takes its terminal with it — and so the
+ * control at the top of this very page moves it. It is the default and it stays
+ * the default; picking anything below it cuts that link on purpose, because
+ * somebody who picks Solarized Light has picked Solarized Light. See
+ * `TerminalScheme.followAppID`.
  *
- * ## Why the text size is here and not where it was
- *
- * It was one row in Settings under a caption of its own, three groups below the
- * appearance controls. The two settings answer the same question — *what does a
- * terminal look like on this phone* — and somebody who has just gone looking for
- * the colours is exactly the person who wants the size. They are also the same
- * kind of setting in the same store, belonging to this phone rather than to a
- * machine. So there is one screen, and every preview on it is drawn at the
- * chosen size, which turns the stepper from a number into a thing you can see.
- *
- * ## Every row is the scheme, not a swatch of it
+ * ### Every row is the scheme, not a swatch of it
  *
  * A picker made of coloured dots tells you a scheme has a green in it. It does
  * not tell you whether an agent's failing test is readable, which is the only
  * question that matters and the reason Solarized Light and Campbell are not
  * interchangeable. So each row renders the same six lines of terminal output —
  * a prompt, a branch, a pass, a warning, a failure with a run of selected text,
- * and the block cursor — in that scheme's own colours at the terminal's own
- * size. `SchemePreview` is the same view the editor puts at the top of itself.
+ * and the block cursor — in that scheme's own colours **at the chosen text
+ * size**. That is what makes the stepper worth having on this page rather than
+ * anywhere else: every card on the screen redraws as it moves, so the number
+ * turns into a thing you can see before you go back to a session.
+ * `SchemePreview` is the same view the editor puts at the top of itself.
  */
 
 import SwiftUI
 
-struct TerminalThemeView: View {
+struct AppearanceView: View {
 
     var themes: TerminalThemeStore = .shared
 
@@ -49,6 +79,20 @@ struct TerminalThemeView: View {
     /// Settings used, kept so the stepper answers the finger rather than a store
     /// round trip.
     @State private var textSize = TextSize.stored
+
+    /**
+     * Light, dark, or the phone's own setting — moved here from the Settings
+     * screen with the rest of the appearance.
+     *
+     * `@AppStorage` rather than the `@State`-mirror above it, and the difference
+     * is which way the value has to travel. The text size is read by
+     * `TerminalBridge`, which is told about a change by notification. This one
+     * has to reach `RootView` — above the `TabView`, above this whole stack — on
+     * the same frame as the tap, and `@AppStorage` on both ends is a live view
+     * of the same defaults key rather than a binding threaded through four
+     * screens that do not care.
+     */
+    @AppStorage(Appearance.key) private var appearance: Appearance = .system
 
     /// Which scheme the editor is open on, if any. Pushed rather than presented,
     /// because the rest of this app pushes and because the editor is a long
@@ -68,6 +112,7 @@ struct TerminalThemeView: View {
             Theme.background.ignoresSafeArea()
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
+                    appTheme
                     size
                     schemes
                     footer
@@ -86,7 +131,7 @@ struct TerminalThemeView: View {
             }
             .scrollBounceBehavior(.basedOnSize)
         }
-        .navigationTitle("Terminal")
+        .navigationTitle("Appearance")
         .navigationBarTitleDisplayMode(.inline)
         .navigationDestination(item: $editing) { scheme in
             SchemeEditorView(themes: themes, schemeID: scheme.id)
@@ -111,11 +156,86 @@ struct TerminalThemeView: View {
         }
     }
 
+    // MARK: - The app
+
+    /**
+     * Light, dark, or the phone's own — the whole app, not the terminal.
+     *
+     * Three segments rather than a switch, because there are three answers and
+     * one of them is the important one: *System*, which is the default and the
+     * only choice that keeps tracking the phone after it is made. A two-state
+     * control would have had to drop it, and an app that cannot follow the
+     * phone's own setting is an app that comes up white at midnight.
+     *
+     * The picker takes the whole width on its own line rather than sitting
+     * beside a title. Rendered the other way at 375 points — the narrowest phone
+     * this app supports — the three segments were 190 points between them and
+     * "System" was clipped to "Syste".
+     *
+     * Writing to it writes the defaults key, which is the same key `RootView`
+     * reads, so the window repaints on the same frame and the choice is already
+     * saved. There is no Apply and nothing to confirm — including on this
+     * screen, whose own paper and whose *Follow the app* card below change under
+     * the finger that moved it.
+     */
+    private var appTheme: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SchemeSectionCaption("The app")
+
+            SchemeGroup {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 12) {
+                        Image(systemName: "circle.lefthalf.filled")
+                            .font(.system(size: 19, weight: .light))
+                            .foregroundStyle(Theme.secondary)
+                            .frame(width: 24)
+                        Text("Theme")
+                            .font(.system(size: 16))
+                            .foregroundStyle(Theme.primary)
+                        Spacer(minLength: 8)
+                    }
+
+                    Picker("Theme", selection: $appearance) {
+                        ForEach(Appearance.allCases) { choice in
+                            Text(choice.label).tag(choice)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .accessibilityIdentifier("appearance.theme")
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+            }
+        }
+    }
+
     // MARK: - Size
 
+    /**
+     * The size, and the caption says who it is for.
+     *
+     * **"Every terminal"** rather than "Text size", because that is the half of
+     * his sentence a stepper cannot say for itself — *"for the all of the
+     * terminals with one setting"*. Somebody arriving here from a session they
+     * could not read needs to know, before they touch it, that this is not a
+     * setting about the session they came from. The row underneath is still
+     * called Text size, because that is what it is.
+     *
+     * The caption covers **the colours below it as well**, which is why the
+     * dot's sentence says so and why *Colours* is a plainer caption under it
+     * rather than a second scope. Both settings answer to the same sentence and
+     * a reader who has been told the scope once does not need it twice.
+     */
     private var size: some View {
         VStack(alignment: .leading, spacing: 0) {
-            SchemeSectionCaption("Text size")
+            SchemeSectionCaption("Every terminal",
+                                 about: "one setting for every terminal",
+                                 info: "The size and the colours below are one choice, for every "
+                                     + "session on every machine this phone is paired with — not "
+                                     + "per session and not per machine. A session that is already "
+                                     + "open follows as soon as you change it; there is nothing to "
+                                     + "reopen.")
 
             SchemeGroup {
                 HStack(spacing: 12) {
@@ -133,8 +253,9 @@ struct TerminalThemeView: View {
                         .foregroundStyle(Theme.primary)
                     InfoDot(about: "text size",
                             text: "The column count is the font, so this resizes the session on "
-                                + "the machine — a session already open picks it up the next time "
-                                + "you open it. Pinching inside a terminal changes the same setting.")
+                                + "the machine rather than magnifying it — which is what stops an "
+                                + "agent's tables wrapping. Pinching inside a terminal changes the "
+                                + "same setting.")
                     Spacer(minLength: 8)
                     Text(TextSize.label(textSize))
                         .font(.system(size: 14, design: .monospaced))
@@ -143,6 +264,9 @@ struct TerminalThemeView: View {
                             in: TextSize.minimum...TextSize.maximum,
                             step: TextSize.step)
                         .labelsHidden()
+                        // `save` is what tells every open terminal, so the
+                        // stepper is wired straight at it rather than at a
+                        // commit on the way out of this screen. See `TextSize`.
                         .onChange(of: textSize) { _, size in TextSize.save(size) }
                         .accessibilityIdentifier("settings.textSize")
                 }
@@ -206,7 +330,7 @@ struct TerminalThemeView: View {
                 .font(.system(size: 12))
                 .foregroundStyle(Theme.faint)
                 .fixedSize(horizontal: false, vertical: true)
-                .accessibilityIdentifier("terminalTheme.scopeNote")
+                .accessibilityIdentifier("appearance.scopeNote")
 
             InfoDot(about: "where this choice applies",
                     text: "Every machine keeps the scheme chosen in the app running on it, and "

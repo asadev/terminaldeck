@@ -778,10 +778,30 @@ final class ReviewScreensUITests: XCTestCase {
         XCTFail("never connected to the machine")
     }
 
+    /**
+     * Choose light or dark the way a person does — and that is now two taps.
+     *
+     * The picker was inline on the Settings screen; it is the first group on
+     * Settings → **Appearance**, with the terminal text size and the terminal
+     * colours under it — *"overall appearance page should be there in the
+     * settings and from there we can change colors text size and everything for
+     * all of them."* See `AppearanceView`.
+     *
+     * **It walks back out again**, which is not tidiness. Every caller of this
+     * expects to be handed an app sitting on the Settings root, because that is
+     * where it was left before, and the frames taken after it are of screens
+     * reached from there. Leaving the Appearance page pushed would have quietly
+     * changed what the rest of this suite photographs.
+     */
     private func choose(_ scheme: Scheme) throws {
         XCTAssertTrue(app.openSettingsTab(), "Settings should be reachable")
-        let picker = app.segmentedControls["settings.appearance"]
-        XCTAssertTrue(picker.waitForExistence(timeout: 10))
+        let row = app.buttons["settings.appearance"]
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "Settings should have an Appearance row")
+        row.tap()
+
+        let picker = app.segmentedControls["appearance.theme"]
+        XCTAssertTrue(picker.waitForExistence(timeout: 10),
+                      "the Appearance page should hold the light/dark picker")
         let segment = picker.buttons[scheme.segment]
         XCTAssertTrue(segment.waitForExistence(timeout: 5))
         segment.tap()
@@ -790,6 +810,10 @@ final class ReviewScreensUITests: XCTestCase {
         // the next run loop pass, and a screenshot taken inside the same one
         // catches the previous appearance and blames the wrong thing.
         sleep(1)
+
+        let back = app.navigationBars.buttons.element(boundBy: 0)
+        if back.exists { back.tap() }
+        _ = app.buttons["settings.appearance"].waitForExistence(timeout: 10)
     }
 
     /**
