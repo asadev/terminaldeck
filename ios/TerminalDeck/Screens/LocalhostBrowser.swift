@@ -257,6 +257,33 @@ struct LocalhostBrowser: View {
      * makes a pill read *"admin"* instead of *"localhost:3000"* forever.
      */
     var tabID: String?
+    /**
+     * **One line to say when this page arrives, or nil.**
+     *
+     * > *"when it is automatically opening in this phone, I am not sure now if
+     * > this opens in this phone or it is open in the other device in the server
+     * > side. There is no clarity."*
+     *
+     * A window opened from the Browser tab's `+` on the **machine** leaves a
+     * banner on the list, because that is the screen the sheet dismisses back
+     * onto. This destination has no such moment: the page is pushed in the same
+     * turn as the press, so a sentence left on the list behind it is one nobody
+     * will ever look at. The screen that has to say it is this one, and it says
+     * it in the toast it already draws for the acts that are silent by nature —
+     * a copy, a picture sent to an agent.
+     *
+     * A **value handed in**, rather than this screen working it out. Every page
+     * here is on this phone, so a line derived locally would fire on every
+     * arrival including a tab somebody is simply going back to — and telling
+     * somebody what they just pressed is noise, not clarity.
+     * `MachineBrowserView.landing` is the one place that decides, and it decides
+     * by which door was used: `openHere` sets it, `resume` clears it.
+     *
+     * Nil for the one caller that pushes this screen straight at a tunnel with no
+     * tab behind it — `ArtifactView` — which is the same caller `tabID` is nil
+     * for, and for the same reason: it is a preview, not a window somebody opened.
+     */
+    var announce: String?
     let dismiss: () -> Void
 
     @State private var browser = BrowserBridge()
@@ -575,6 +602,11 @@ struct LocalhostBrowser: View {
             seed()
             browser.setPageSize(chosenSize)
             browser.setRecording(recording)
+            // Last, and only when there is one: whose browser drew this page. See
+            // `announce` — it is set by the act of opening and not by coming
+            // back, so this fires on the arrival he could not read and on no
+            // other.
+            if let announce { show(announce) }
         }
         .onDisappear {
             // The handler holds the page's only way back into this app, and the

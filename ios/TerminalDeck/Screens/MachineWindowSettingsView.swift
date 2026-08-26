@@ -700,12 +700,20 @@ struct MachineWindowSettingsView: View {
      * states somebody can be left in without meaning to — a recording running, a
      * window signed into nothing, a page being watched — which is exactly what
      * the row on the Browser tab marks and for the same reason.
+     *
+     * **And the first capsule's words are `MachineBrowserText`'s now**, not two
+     * literals here. That list had only ever drawn one half of the pair — *On
+     * this phone* on a tunnel row, nothing at all on a machine's — and the round
+     * that gave it the other half (*"there is no clarity"*) is the round that
+     * made a drift between this screen and the row that opens it possible for the
+     * first time. See `MachineBrowserText.onMachine`.
      */
     private var windowMarks: [WindowMark] {
         var marks: [WindowMark] = []
         switch windowShape {
         case let .machine(window):
-            marks.append(WindowMark(text: "On \(machineName)", tone: Theme.secondary,
+            marks.append(WindowMark(text: MachineBrowserText.onMachine(machineName),
+                                    tone: Theme.secondary,
                                     id: "browser.machine.window.where"))
             if let slot = window.slot {
                 marks.append(WindowMark(text: slot, tone: Theme.accent,
@@ -737,14 +745,16 @@ struct MachineWindowSettingsView: View {
                                         id: "browser.machine.window.notWatchable"))
             }
         case let .phone(tab):
-            marks.append(WindowMark(text: "On this phone", tone: Theme.secondary,
+            marks.append(WindowMark(text: MachineBrowserText.onThisPhone,
+                                    tone: Theme.secondary,
                                     id: "browser.phone.page.where"))
             if phoneFlow.isRecording(tab: tab.id) {
                 marks.append(WindowMark(text: "Recording", tone: Theme.critical,
                                         id: "browser.phone.page.recordingMark"))
             }
         case let .cast(surface):
-            marks.append(WindowMark(text: "On \(machineName)", tone: Theme.secondary,
+            marks.append(WindowMark(text: MachineBrowserText.onMachine(machineName),
+                                    tone: Theme.secondary,
                                     id: "browser.machine.window.where"))
             if surface.live {
                 marks.append(WindowMark(text: "Live", tone: Theme.positive,

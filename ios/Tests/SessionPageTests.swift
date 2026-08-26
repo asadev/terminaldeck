@@ -143,6 +143,76 @@ final class SessionPageTests: XCTestCase {
         XCTAssertNil(MachineBrowserText.site("a window with no page in it yet"))
     }
 
+    // MARK: - The line that says WHOSE it is
+
+    /*
+     * > *"when it is automatically opening in this phone, I am not sure now if
+     * > this opens in this phone or it is open in the other device in the server
+     * > side. There is no clarity."*
+     *
+     * > *"there is no clarity so if I go to again new, if I click on open in this
+     * > phone, I think this one is in this phone… there is no clarity."*
+     *
+     * The Browser tab draws windows from two computers as one list. He had two
+     * rows on it both reading **Paperclip** — one on his machine, one on the
+     * phone in his hand — and only the phone's said so. These pin the words that
+     * fixed it, because the whole feature is that four screens say the same two
+     * things: the row, the window's settings card, the banner after a press, and
+     * the toast the tunnel page puts up when it lands.
+     */
+
+    /// The two capsules, and they are one string each so a row and the settings
+    /// screen it opens cannot come to spell the machine differently.
+    func testTheMarkNamesTheComputerThatDrewThePage() {
+        XCTAssertEqual(MachineBrowserText.onMachine("DESKTOP-DDGMNCV"), "On DESKTOP-DDGMNCV")
+        XCTAssertEqual(MachineBrowserText.onThisPhone, "On this phone")
+        XCTAssertNotEqual(MachineBrowserText.onMachine("Air"), MachineBrowserText.onThisPhone,
+                          "the two destinations must never read the same")
+    }
+
+    /**
+     * The banner after Open, including the one shape that used to say nothing.
+     *
+     * A blank window on the machine is a real thing to ask for — the browser,
+     * waiting — and it was the single case `openWindow` returned early on, so the
+     * destination chosen two taps earlier vanished with the sheet and nothing
+     * replaced it.
+     */
+    func testTheBannerAfterOpeningNamesTheMachineForEveryShape() {
+        XCTAssertEqual(MachineBrowserText.opening(nil, on: "Air"),
+                       "Opening a blank window on Air.")
+        XCTAssertEqual(MachineBrowserText.opening("", on: "Air"),
+                       "Opening a blank window on Air.")
+        XCTAssertEqual(MachineBrowserText.opening("https://news.ycombinator.com/", on: "Air"),
+                       "Opening news.ycombinator.com in a window on Air.")
+    }
+
+    /**
+     * And a port keeps its number.
+     *
+     * `site` answers the host alone, which is right under a live page and wrong
+     * in a banner about a press: half of what is opened from this sheet is
+     * `localhost:3000`, and four dev servers on one machine are four identical
+     * sentences without the port. The old line called `shortened`, which is
+     * `site` under another name, and said *"Opening localhost"* to all four.
+     */
+    func testTheBannerKeepsThePortAPressWasAbout() {
+        XCTAssertEqual(MachineBrowserText.opening("http://localhost:3000/admin", on: "Air"),
+                       "Opening localhost:3000 in a window on Air.")
+        // Never `localhost:3,000` — the locale's grouping separator, caught here
+        // for the same reason `SessionWindowPicker.address` catches it.
+        XCTAssertFalse(MachineBrowserText.opening("http://localhost:3000/", on: "Air")
+            .contains(","))
+    }
+
+    /// The other door says it on the page, because the page is what it pushes —
+    /// a banner left on the list behind it is a sentence nobody looks at.
+    func testTheTunnelPageSaysItIsThisPhoneWhenItLands() {
+        let line = MachineBrowserText.openingHere(port: 3000)
+        XCTAssertEqual(line, "Opening localhost:3000 here on this phone.")
+        XCTAssertFalse(line.contains(","), "a port is never formatted with a grouping separator")
+    }
+
     // MARK: - The handover bar
 
     /*
