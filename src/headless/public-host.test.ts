@@ -350,6 +350,13 @@ describe('what a public host offers', () => {
        * container; ending something is not either of those.
        */
       CAPABILITY.close,
+      /*
+       * `rename` sits with `close` and not with `create`, though it destroys
+       * nothing. It is a write to somebody else's row — the demo box is shared
+       * in the sense that matters, and a visitor who could relabel every
+       * session on it could make the owner's own list lie to the owner.
+       */
+      CAPABILITY.rename,
       CAPABILITY.upload,
       CAPABILITY.credential,
       // `devserver` joined this list the day it was built, and it is exactly the
@@ -378,6 +385,25 @@ describe('what a public host offers', () => {
        * thing it advertises.
        */
       CAPABILITY.copilot,
+      // A routine is a prompt this machine runs with this machine's tools in
+      // this machine's folders. Starting one from a stranger's shell is the
+      // copilot's own refusal, one capability along.
+      CAPABILITY.routines,
+      /*
+       * And its **files**, which is `copilot` one notch sharper still.
+       *
+       * What this surface carries is the copilot's own instructions, the tool
+       * contract it was handed, and the name and description of every fact it
+       * has ever written down about the owner's machines. There is no version of
+       * a demo box on which a stranger reads that.
+       *
+       * Withheld twice over like `copilot` itself, and by the same two
+       * mechanisms: the offer list is the decision, and the demo assembly
+       * constructs neither a run manager nor a files seam — and `serves` in
+       * `server.ts` requires **both** before it advertises this name, precisely
+       * because these frames ride the copilot's own connection ceremony.
+       */
+      CAPABILITY.copilotFiles,
       /*
        * `web` is withheld for the same reason and by the same two mechanisms.
        *

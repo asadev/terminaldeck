@@ -435,6 +435,25 @@ enum WireCapability {
     static let copilot = Copilot.capability
 
     /**
+     * The desktop can speak the five `copilot.file*` frames.
+     *
+     * The name lives on `Copilot.filesCapability` for the reason `copilot` above
+     * lives on `Copilot.capability`, and this alias exists so that every
+     * capability in the product can still be read off one type.
+     *
+     * A **separate** name from `copilot`, and the separation is about age rather
+     * than about permission. Advertising is what tells this phone the far build
+     * has heard of these frames at all; a host that has not answers one by
+     * closing the channel, and the terminals go with it. So the Files card waits
+     * for this name even on a machine whose Copilot tab is fully alive.
+     *
+     * Not in `claimed` below, for the same reason `copilot` is not: these are
+     * answers to frames this phone sends first, so claiming it would tell the
+     * desktop something it has no use for.
+     */
+    static let copilotFiles = Copilot.filesCapability
+
+    /**
      * What this build tells a desktop it can do, in `hello.capabilities`.
      *
      * Only names that run desktop→phone belong here. `create`, `localhost`,
@@ -1314,6 +1333,98 @@ enum ClientMessage: Equatable {
     /// working in would be a phone holding a power its grant does not name.
     case copilotStop
 
+    /* ---- capability `copilot.files`. Its instructions, its memory, its
+       contract — the desktop's "Its files" card, over the wire. ------------- */
+    /**
+     * ## What these five are, in his words
+     *
+     * > *"the copilot has things in the macbook side and the windows side … its
+     * > memory folder which is actually here, the folder's own instruction, what
+     * > it was handed, its tool list, its instructions, its folder … it reads and
+     * > writes two kinds of prompts and only one is ours."*
+     *
+     * The Copilot screen on this phone was a thin version of the desktop's, and
+     * the card it was thin about is the one that answers *why did it say that*.
+     *
+     * ## The rule that makes them safe: **no path is ever on the wire**
+     *
+     * There is no filename in any frame below and no path in any row that comes
+     * back. An `id` is one of four words — `yours`, `contract`, `composed`,
+     * `folder` — or `memory:` and a name held to the memory-file rule, and the
+     * desktop resolves it by *looking it up*, never by joining it onto anything.
+     * See `Copilot.isFileId`, which is this end's copy of the same check, and
+     * `copilotFileTarget` in `protocol.ts`, which is the only function in the app
+     * that turns one of these strings into a file.
+     *
+     * That is the same shape as the rule one capability over: no tool name is on
+     * the copilot wire, so the set of frames this phone can construct contains no
+     * tool at all. Here the set contains no path at all.
+     *
+     * ## Tiers
+     *
+     * Listing and reading are **read** — looking at what your assistant was told
+     * spends nothing and starts nothing. Writing, restoring and forgetting are
+     * **alter**, and that is not about cost: the instruction file *is* the agent,
+     * so a device that could rewrite it while holding only `act` would be a
+     * device that can write itself new standing instructions and then ask the
+     * copilot to follow them.
+     */
+    /**
+     * What files are there? **Tier: read.**
+     *
+     * A listing and not a read: nothing is opened, sizes and stamps come from a
+     * `stat`, and a memory row's purpose is the `description:` line out of its
+     * own front matter. Answered with `copilot.files.rows`, which is also what
+     * comes back after every write, restore and delete — so a screen that changed
+     * something redraws from the disk rather than from what it hoped it wrote.
+     */
+    case copilotFiles
+    /**
+     * One file, whole. **Tier: read.**
+     *
+     * Answered with `copilotFileText` on **every** branch, refusals included:
+     * silence is not an answer to this frame, because a box that never fills is a
+     * box somebody presses Save on.
+     *
+     * Never truncated. A file over `Copilot.maxFileBytes` comes back with no text
+     * and a sentence naming its size — see that constant for why half a file is
+     * the one thing that must not arrive.
+     */
+    case copilotReadFile(id: String)
+    /**
+     * Save one file. **Tier: alter. This puts a person's text on somebody's disk.**
+     *
+     * Only sent for a row whose `writable` is true. The desktop refuses the two
+     * generated files anyway — there is no way to edit the tool contract at the
+     * Mac either, because a hand-edited copy of a generated description drifts
+     * from the thing it describes — and refuses a file already too large to have
+     * been sent whole, because saving a box that was only ever part of a file is
+     * a deletion wearing a Save button.
+     *
+     * It lands in the copilot's action log as *from a paired device*, never as
+     * *from Settings*. An audit log is worth what its rows can be trusted to
+     * mean, and this is the edit hardest to explain a fortnight later.
+     */
+    case copilotWriteFile(id: String, text: String)
+    /**
+     * Put the instructions this build ships back. **Tier: alter.**
+     *
+     * `id` is carried even though only `yours` is served, so the refusal for any
+     * other file is a sentence rather than a frame that quietly did nothing. What
+     * was there is copied to a `.bak` beside it first, which is what makes this
+     * safe behind a single tap with no dialog in front of it.
+     */
+    case copilotResetFile(id: String)
+    /**
+     * Forget one memory. **Tier: alter.**
+     *
+     * By **name**, not by id, and that is the design rather than an
+     * inconsistency: memory files are the only deletable thing on this surface,
+     * and giving deletion its own verb means there is no id — no word, no prefix,
+     * no future fifth fixed file — that can ever be pointed at an unlink.
+     */
+    case copilotForgetMemory(name: String)
+
     /*
      * The session's own bar, and the conversation behind it. See
      * `SessionWire.swift` for what each answer carries and why the reading is
@@ -1860,6 +1971,33 @@ enum ServerMessage: Equatable {
      * things behind their back.
      */
     case copilotSettled(CopilotSettlement)
+
+    /* ---- capability `copilot.files` ---------------------------------------- */
+    /**
+     * The copilot's files as they are on disk right now.
+     *
+     * An answer, never a push — the same footing `copilotLog` is on. Sent for
+     * `copilotFiles`, and again after every write, restore and delete, so a
+     * screen that changed something never has to guess what it produced.
+     *
+     * Read off the disk on every call rather than remembered by the desktop,
+     * because the interesting case is the one where somebody has just edited a
+     * file at the machine and wants to see that it landed.
+     */
+    case copilotFiles([CopilotFileRow])
+    /**
+     * One file's text, or the sentence saying why there is none.
+     *
+     * `id` is echoed back untouched, so a screen with two reads in flight can
+     * tell them apart without matching on order. `text` is always present and is
+     * empty whenever `error` is set: one shape to read, and "there is nothing"
+     * with one spelling rather than two.
+     *
+     * `error` covers a file that has not been written yet, one the desktop could
+     * not read, and one too large for this wire. All three are sentences composed
+     * on that machine for a person, and none of them quotes a path.
+     */
+    case copilotFileText(id: String, text: String, error: String?)
 
     /**
      * The answer to one `usage.read`, and only ever to one.

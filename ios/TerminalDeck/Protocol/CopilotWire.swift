@@ -175,6 +175,94 @@ enum Copilot {
     static let capability = "copilot"
 
     /**
+     * The desktop can speak the five `copilot.file*` frames **to this device**.
+     *
+     * Its own name beside `copilot`, and the separation is about *time* rather
+     * than about permission. Every desktop that speaks `copilot` today was built
+     * before these frames existed, and a host answers a frame it has never heard
+     * of by closing the channel — so a screen that drew a Files card off the
+     * `copilot` name alone would lose the whole connection, terminals included,
+     * the first time somebody tapped a row on an older Mac.
+     *
+     * Permission is *not* separate: the desktop runs these through the same
+     * `copilotFor` door as every other copilot verb, and strips this name from a
+     * guest's welcome beside `copilot` itself. So a phone that sees this name has
+     * already been approved as one of his own.
+     */
+    static let filesCapability = "copilot.files"
+
+    /**
+     * How a memory file is addressed: `memory:` and then its name.
+     *
+     * The whole id space on this surface is four words — `yours`, `contract`,
+     * `composed`, `folder` — and this prefix. **None of them is a path**, and
+     * that is the property the desktop's `copilotFileTarget` exists to hold: an
+     * id is looked up in a fixed list over there, never joined onto anything. A
+     * client that invented an id would simply be refused; a client that sent a
+     * path would be refused in exactly the same way, because a path is not one of
+     * the four words.
+     */
+    static let memoryPrefix = "memory:"
+
+    /**
+     * `MAX_COPILOT_FILE_BYTES`. The largest file this wire carries, either way.
+     *
+     * Not the desktop's own ceiling, which is 256 KB for both the instructions
+     * and a memory file. The whole-message cap on this wire is 64 KiB and a frame
+     * over it is not politely refused — the reader closes the connection — so the
+     * number here is sized to leave the JSON and the sealed envelope room in both
+     * directions.
+     *
+     * **A file over it arrives with no text at all**, and a sentence naming its
+     * size. Nothing is truncated, which is the one place this differs from a chat
+     * bubble: every box on the files screen has a Save under it, and an editor
+     * showing half a file is a delete waiting for somebody to press the button.
+     */
+    static let maxFileBytes = 32 * 1024
+
+    /// `MAX_COPILOT_FILE_ROWS`. Four fixed files and then one row per memory,
+    /// and `memory/` is written by an agent told to record a fact whenever it
+    /// learns one — so the desktop bounds the listing at the same two hundred
+    /// `maxLogRows` and `maxChatRows` are bounded at, against the same wire.
+    static let maxFileRows = 200
+
+    /// The four fixed files, in the order the copilot meets them. The whole id
+    /// space apart from `memoryPrefix`, and the reason a hostile id is a
+    /// non-problem rather than a check: there is nothing to escape.
+    static let fileIds = ["yours", "contract", "composed", "folder"]
+
+    /**
+     * Can this build address the file this id names?
+     *
+     * A transcription of `copilotFileTarget` in `protocol.ts`, and it is here for
+     * the reason that function is called twice over there: a row whose id this
+     * end cannot address is a row whose every button could only produce a refused
+     * frame, so it is dropped on arrival rather than drawn.
+     *
+     * The memory half mirrors `isCopilotMemoryName` — a leading alphanumeric,
+     * then alphanumerics, dots, dashes and underscores, ending in `.md`, with no
+     * `..` anywhere. It is a bound on a frame rather than the authority: the
+     * desktop checks it again, against `isMemoryName`, before anything touches a
+     * disk.
+     */
+    static func isFileId(_ id: String) -> Bool {
+        if fileIds.contains(id) { return true }
+        guard id.hasPrefix(memoryPrefix) else { return false }
+        return isMemoryName(String(id.dropFirst(memoryPrefix.count)))
+    }
+
+    /// A memory file's name, as this build will let one be spelled.
+    static func isMemoryName(_ name: String) -> Bool {
+        guard !name.isEmpty, name.count <= 255, name.hasSuffix(".md") else { return false }
+        guard !name.contains(".."), !name.contains("/"), !name.contains("\\") else { return false }
+        guard let first = name.first, first.isASCII, first.isLetter || first.isNumber else { return false }
+        return name.allSatisfy { character in
+            guard character.isASCII else { return false }
+            return character.isLetter || character.isNumber || character == "." || character == "-" || character == "_"
+        }
+    }
+
+    /**
      * The largest thing this phone will say to the copilot in one frame.
      *
      * `MAX_COPILOT_SAY_BYTES`, and the same number as `MAX_INPUT_BYTES` on
@@ -787,6 +875,86 @@ struct CopilotSessionRow: Equatable, Identifiable {
     var id: String { session.id }
 }
 
+/**
+ * Whose file this is, as the badge beside a row.
+ *
+ * The desktop decides this and sends it; nothing here derives it from an id.
+ * That is deliberate — a client that worked out ownership from a filename would
+ * be keeping a copy of a rule that lives on the machine, which is where the two
+ * eventually disagree.
+ *
+ *  - `app` — under the desktop's own storage, written by the app and rewritten
+ *    on every start. The tool contract and the composed file.
+ *  - `yours` — seeded once by the app and never touched by it again. The
+ *    copilot's instructions.
+ *  - `folder` — in the working folder, which may be a workspace of his own. The
+ *    folder's `CLAUDE.md` and every memory file.
+ *
+ * An unknown word drops the row rather than being folded onto `app`: the badge
+ * is how a person tells *this app wrote it* from *this is yours and nothing will
+ * touch it*, and that is the one thing on a row somebody acts on.
+ */
+enum CopilotFileOwner: String {
+    case app
+    case yours
+    case folder
+}
+
+/**
+ * One of the copilot's files, described without being opened.
+ *
+ * > *"its memory folder which is actually here, the folder's own instruction,
+ * > what it was handed, its tool list … it reads and writes two kinds of prompts
+ * > and only one is ours."*
+ *
+ * `id` is the word to send back, and it is the *only* thing this phone ever says
+ * about a file. **There is no path on this row and there must never be one**: a
+ * phone cannot open an absolute path, the name is what a person recognises, and
+ * a path on a row is a path a client is tempted to send back — which is the one
+ * thing the desktop's fixed id space exists to make impossible.
+ *
+ * `size` and `modifiedAt` are optional rather than zero-when-absent, and that is
+ * not tidiness: a file that is not there is a different thing from a file of
+ * zero bytes last touched at the epoch, and `exists` must not be contradicted by
+ * a plausible-looking number beside it. The folder's own `CLAUDE.md` is normally
+ * exactly this case, and its absence is the most reassuring row on the screen —
+ * it is the proof that nothing in that folder claims to be the copilot.
+ */
+struct CopilotFileRow: Equatable, Identifiable {
+    let id: String
+    /// The file's own name — `instructions.md`, `CLAUDE.md`. Never a path.
+    let name: String
+    /// What it is for, in a phrase to print as-is. For a memory row this is the
+    /// `description:` out of the front matter the copilot itself wrote.
+    let purpose: String
+    let owner: CopilotFileOwner
+    let exists: Bool
+    /// Bytes on disk, or nil when the file is not there.
+    let size: Int?
+    /// Last modified, epoch **milliseconds**, or nil when the file is not there.
+    let modifiedAt: Double?
+    /// Whether a save would be served. False for the two generated files, and
+    /// false for anything already too large to have been sent whole.
+    let writable: Bool
+
+    /// A memory file rather than one of the four fixed ones. Carried as a
+    /// property of the id rather than as a field, because it *is* the id: the
+    /// prefix is the addressing scheme, not a flag the desktop chose to set.
+    var isMemory: Bool { id.hasPrefix(Copilot.memoryPrefix) }
+
+    /// The copilot's own instructions — the one file on this surface that
+    /// changes what the copilot *is*, and the only one this build ships a
+    /// default of. A screen draws its Restore control here and nowhere else;
+    /// every other id is refused with a sentence.
+    var isOwnInstructions: Bool { id == "yours" }
+
+    /// The only file that can be deleted, and by name rather than by id — see
+    /// `ClientMessage.copilotForgetMemory`. Nil for everything else.
+    var memoryName: String? {
+        isMemory ? String(id.dropFirst(Copilot.memoryPrefix.count)) : nil
+    }
+}
+
 /* -------------------------------------------------------------------------- */
 /* Decoding                                                                    */
 /* -------------------------------------------------------------------------- */
@@ -1173,6 +1341,56 @@ extension WireCodec {
         guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return 0 }
         let at = number.doubleValue
         return at.isFinite && at > 0 ? at : 0
+    }
+
+    /**
+     * One row of the copilot's file listing, or nil.
+     *
+     * The id is checked against `Copilot.isFileId` rather than merely required to
+     * be a string, and the owner against the three words this build knows. Both
+     * drop the row, on the rule every list decoder here keeps: one unreadable row
+     * costs a row, never the frame — a memory file with a mangled name is a line
+     * missing from a list, not a listing that fails to open.
+     *
+     * `size` and `modifiedAt` stay nil when the desktop sent nothing, rather than
+     * folding onto zero. See `CopilotFileRow`: a plausible number beside
+     * `exists: false` would contradict the one field the screen draws its "not
+     * there" badge from.
+     */
+    static func copilotFileRow(_ value: Any?) -> CopilotFileRow? {
+        guard let object = value as? [String: Any] else { return nil }
+        guard let id = string(object["id"]), Copilot.isFileId(id) else { return nil }
+        guard let ownership = string(object["owner"]).flatMap({ CopilotFileOwner(rawValue: $0) }) else { return nil }
+        return CopilotFileRow(
+            id: id,
+            name: CopilotText.display(string(object["name"]) ?? ""),
+            // Through the same stripper a chat bubble goes through. For a memory
+            // row this string is the `description:` out of a file the copilot
+            // wrote, which makes it the one value on this screen whose content an
+            // agent chose.
+            purpose: CopilotText.display(string(object["purpose"]) ?? ""),
+            owner: ownership,
+            exists: object["exists"] as? Bool == true,
+            // A negative size is not a smaller file, it is a broken frame — and
+            // a screen drawing "-4 KB" beside somebody's instructions is a screen
+            // that has stopped being believable about the rest of the row.
+            size: whole(object["size"]).flatMap { (bytes: Int) -> Int? in bytes < 0 ? nil : bytes },
+            modifiedAt: optionalEpoch(object["modifiedAt"]),
+            // Only a literal true opens a Save button. A row read out of a
+            // garbled frame must not offer to overwrite a file the desktop would
+            // refuse to write.
+            writable: object["writable"] as? Bool == true
+        )
+    }
+
+    /// Epoch milliseconds, or nil for "there is no time because there is no
+    /// file". The sibling of `epoch` above, which folds absence onto zero
+    /// because a countdown either has a deadline or draws nothing; here absence
+    /// is a state to draw and must survive as itself.
+    private static func optionalEpoch(_ value: Any?) -> Double? {
+        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+        let at = number.doubleValue
+        return at.isFinite && at > 0 ? at : nil
     }
 
     /// One row of the copilot's own session list, or nil.

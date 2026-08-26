@@ -233,6 +233,23 @@ final class CopilotLink {
     private(set) var isOffered = false
 
     /**
+     * Whether the machine's capability list names `copilot.files`.
+     *
+     * A **second** name, and it is not redundant with `isOffered`. Every desktop
+     * that speaks `copilot` today was built before the five file frames existed,
+     * and a host answers a frame it has never heard of by closing the channel —
+     * so a Files card drawn off the first name alone would drop the whole
+     * connection, terminals included, the first time somebody tapped a row on an
+     * older Mac. This is the flag that stops that, and it is the reason the card
+     * has to be able to say *this build cannot answer* rather than to guess.
+     *
+     * Cleared by `forget()` and not by `connectionLost()`, for the reason
+     * `isImplemented` gives about itself: what a build can serve does not change
+     * while a socket blinks.
+     */
+    private(set) var areFilesOffered = false
+
+    /**
      * Whether the machine has actually shown a copilot, rather than advertised
      * one.
      *
@@ -511,6 +528,12 @@ final class CopilotLink {
      */
     func welcomed(capabilities: Set<String>, connection: CopilotConnection) {
         isOffered = capabilities.contains(Copilot.capability)
+        // Read every time rather than latched, unlike `isImplemented`: this one
+        // is a fact about the *build* on the other end, and reconnecting to a
+        // machine that has been updated — or downgraded — is exactly when it
+        // changes. A latched true would leave this phone sending five frames to
+        // a host that would close the channel on the first of them.
+        areFilesOffered = capabilities.contains(Copilot.filesCapability)
         // Latched rather than assigned. A machine that showed a copilot once has
         // one; a later `welcome` that omitted the field would be a host bug, and
         // taking the screen away over it is a worse answer than leaving it up
@@ -556,6 +579,12 @@ final class CopilotLink {
      * conversation. `copilot.sessions` and `copilot.pending` are separate
      * answers, so they are asked for separately — three frames on a connection,
      * once, rather than a timer.
+     *
+     * **`copilot.files` is deliberately not a fourth.** A listing is a `readdir`
+     * of somebody's memory folder on the far machine, and spending one per
+     * connection for a card nobody has opened is the cost this app refuses
+     * everywhere else. The files screen calls `loadFiles()` when it appears; it
+     * is also the only thing that ever needs to.
      */
     private func subscribe() {
         guard isOpen, grant.canWatch else { return }
@@ -604,6 +633,15 @@ final class CopilotLink {
         // would be offering something that has already been decided.
         asked = []
         settlements = [:]
+        // The two spinners, and **not** the box.
+        //
+        // A read that was in flight when the socket went will never be answered,
+        // so a screen left holding either of these says *loading…* for ever. What
+        // is deliberately kept is `openFileText`: somebody may be halfway through
+        // editing their copilot's instructions, and throwing that away because a
+        // relay blinked would be losing a person's writing to a reconnect.
+        isLoadingFiles = false
+        isLoadingFileText = false
     }
 
     /// The machine is being torn down — unpaired, or re-paired. Everything goes:
@@ -614,6 +652,10 @@ final class CopilotLink {
         cancelWaits()
         grant = .none
         isOffered = false
+        areFilesOffered = false
+        files = []
+        closeFile()
+        isLoadingFiles = false
         // And what this machine turned out to be. Unlike `connectionLost`, which
         // keeps it because a build does not change while a socket blinks, an
         // unpair means the next machine behind this object may be a different
@@ -710,6 +752,14 @@ final class CopilotLink {
         log = []
         logHasMore = false
         chatRun = nil
+        // The files go with everything else a device that may no longer watch
+        // must not still be showing — and here the reason is sharper than for the
+        // timeline: these rows are the copilot's instructions and the names of
+        // every fact it remembers, which is the most revealing thing on this
+        // screen and the one a person revoking a device most wants gone.
+        files = []
+        closeFile()
+        isLoadingFiles = false
     }
 
     /**
@@ -989,6 +1039,95 @@ final class CopilotLink {
 
     private var pagingBack = false
 
+    // MARK: - The copilot's files
+
+    /**
+     * Every file the copilot reads, in the order it reads them, as the desktop
+     * last described them.
+     *
+     * > *"its memory folder which is actually here, the folder's own instruction,
+     * > what it was handed, its tool list … it reads and writes two kinds of
+     * > prompts and only one is ours."*
+     *
+     * The screen that draws these is `CopilotFilesView`'s to build — this object
+     * holds the data and nothing about layout. What it will read: `files` for the
+     * list, `openFileRow`/`openFileText`/`openFileError` for whichever box is
+     * open, `isLoadingFiles` and `isLoadingFileText` for the two spinners, and
+     * `canReadCopilotFiles` for whether to draw the card at all. What it will
+     * call: `loadFiles()`, `openFile(_:)`, `closeFile()`, `saveFile(_:text:)`,
+     * `restoreInstructions()` and `forgetMemory(_:)`.
+     *
+     * Replaced wholesale on every `copilot.files.rows` rather than merged. The
+     * desktop reads the disk on every one of them and sends the whole listing —
+     * including after a write, a restore and a delete — so merging would be this
+     * end keeping a row the machine has just said is gone.
+     */
+    private(set) var files: [CopilotFileRow] = []
+
+    /// A `copilot.files` is on the wire and nothing has come back. Cleared by the
+    /// answer, by an error, or by the socket going — never by a timer, for the
+    /// reason `isOpening` gives.
+    private(set) var isLoadingFiles = false
+
+    /// Which file's box is open, or nil. The id, not the row: a listing that
+    /// arrives while a box is open must be allowed to change the row's size and
+    /// stamp underneath it without closing what somebody is typing in.
+    private(set) var openFileId: String?
+
+    /// The open file as it is on the machine. Empty until the read comes back,
+    /// and empty when it failed — see `openFileError`, which is the other half of
+    /// the same answer and is never set at the same time as this is non-empty.
+    private(set) var openFileText = ""
+
+    /// Why the open file has no text: not written yet, unreadable, or too large
+    /// to send. A sentence composed on the machine, to print as it stands.
+    private(set) var openFileError: String?
+
+    /// A `copilot.file.read` is on the wire for `openFileId`.
+    private(set) var isLoadingFileText = false
+
+    /**
+     * Whether to draw the files card at all.
+     *
+     * Three facts, and each of them removes a different way of being wrong: the
+     * copilot is here for this phone (`isAvailable`), the far build has heard of
+     * these five frames (`areFilesOffered`), and this socket has said hello
+     * (`isOpen`), because the desktop refuses every one of them until it has.
+     *
+     * The **grant** is `canWatch` rather than `canDirect`, deliberately. Reading
+     * what your assistant was told is the watching tier — it spends nothing and
+     * starts nothing — and a phone with only that grant should still get the
+     * whole card, with its Save buttons absent. `canEditCopilotFiles` is the
+     * question a Save button asks.
+     */
+    var canReadCopilotFiles: Bool { isAvailable && areFilesOffered && isOpen && grant.canWatch }
+
+    /**
+     * Whether a Save, a Restore or a Delete may be offered.
+     *
+     * `canAnswer` — the alter tier — and not `canDirect`. The instruction file
+     * *is* the agent: a device that could rewrite it while holding only `act`
+     * would be a device that can write itself new standing instructions and then
+     * ask the copilot to follow them, which turns the act tier into a way to
+     * author the rules the alter tier is checked against. The desktop's tier
+     * table says the same thing, and this end agrees with it so that a control is
+     * absent rather than refused.
+     *
+     * A row's own `writable` is the *other* half and is asked separately: this
+     * says whether this phone may write anything, and that says whether this file
+     * can be written by anyone.
+     */
+    var canEditCopilotFiles: Bool { canReadCopilotFiles && grant.canAnswer }
+
+    /// The open file's row, when the listing has one for it. Nil while a read is
+    /// in flight against a listing that has since changed under it — which is a
+    /// state to draw rather than a reason to close the box.
+    ///
+    /// Named `openFileRow` and not `openFile` so it cannot be confused with the
+    /// verb beside it: `openFile(_:)` is what a tap calls, and this is what the
+    /// screen draws once it has.
+    var openFileRow: CopilotFileRow? { files.first { $0.id == openFileId } }
+
     // MARK: - Outbound, read tier
 
     /// Fetch the tail of the action log. Read tier, so a watching phone gets the
@@ -1015,6 +1154,203 @@ final class CopilotLink {
             onError?("Not connected — nothing older was asked for.")
             return
         }
+    }
+
+    // MARK: - The copilot's files, in and out
+
+    /**
+     * The listing, replacing whatever was held.
+     *
+     * Wholesale rather than merged, for the reason `files` gives: the desktop
+     * reads the disk on every one of these and sends all of it — after a save, a
+     * restore and a delete as well as on a plain ask — so merging would be this
+     * end keeping a row the machine has just said is gone.
+     *
+     * The open box is left exactly as it is. A listing arriving while somebody is
+     * typing must be free to change a row's size and stamp underneath them
+     * without closing what they are writing; `openFile` looks the row up by id
+     * each time it is read, so it simply follows.
+     */
+    func apply(files rows: [CopilotFileRow]) {
+        implemented()
+        isLoadingFiles = false
+        files = rows
+    }
+
+    /**
+     * One file's text, or the sentence saying why there is none.
+     *
+     * **Dropped when it is not the file that is open.** A read this phone
+     * cancelled by opening a different row would otherwise land in the box a
+     * moment after the right one did, and the person would be editing one file
+     * believing they were editing another. The id is on the frame for exactly
+     * this, and matching on it is the whole of why it is there.
+     *
+     * `text` and `error` are never both meaningful: the desktop sends the text
+     * with no error, or an empty string with one. Assigning both from the frame
+     * keeps that true here rather than leaving a stale sentence under new text.
+     */
+    func apply(fileText id: String, text: String, error: String?) {
+        implemented()
+        guard id == openFileId else { return }
+        isLoadingFileText = false
+        openFileText = text
+        openFileError = error
+    }
+
+    /**
+     * Ask what files there are. **Read tier.**
+     *
+     * Guarded on `canReadCopilotFiles`, which includes the far build having
+     * advertised `copilot.files` — a frame an older desktop has never heard of
+     * closes the channel and takes the terminals with it, so this is one of the
+     * few places on this object where the guard is protecting the *connection*
+     * rather than tidying a refusal.
+     */
+    func loadFiles() {
+        guard canReadCopilotFiles, !isLoadingFiles else { return }
+        isLoadingFiles = true
+        guard wire.send(.copilotFiles) else {
+            isLoadingFiles = false
+            onError?("Not connected — the copilot's files were not asked for.")
+            return
+        }
+    }
+
+    /**
+     * Open one file and ask for its contents. **Read tier.**
+     *
+     * The box is emptied first, not left holding the previous file while the new
+     * one loads. A screen that showed the old text under a new title for the
+     * length of a round trip is a screen somebody can press Save on, and the
+     * frame that would go is the old file's bytes under the new file's id.
+     */
+    func openFile(_ id: String) {
+        guard canReadCopilotFiles else { return }
+        openFileId = id
+        openFileText = ""
+        openFileError = nil
+        isLoadingFileText = true
+        guard wire.send(.copilotReadFile(id: id)) else {
+            isLoadingFileText = false
+            openFileError = "Not connected — that file was not read."
+            return
+        }
+    }
+
+    /// Close the open box. Sends nothing: there is no verb for it and there is
+    /// nothing on the machine holding anything open.
+    func closeFile() {
+        openFileId = nil
+        openFileText = ""
+        openFileError = nil
+        isLoadingFileText = false
+    }
+
+    /**
+     * Save one file. **Alter tier, and this puts text on somebody's disk.**
+     *
+     * Four guards, and each is a different way of being wrong rather than four
+     * spellings of one:
+     *
+     *  - the grant, checked here as well as by the button being absent, because
+     *    the two answer different failures — a phone that never had it, and a
+     *    phone that lost it between the screen being drawn and the thumb landing;
+     *  - the **row's** own `writable`, which is the machine's answer about the
+     *    file rather than about this device: the two generated files are written
+     *    on every start and a hand-edited copy of them would drift from what they
+     *    describe;
+     *  - the size, refused with the number rather than truncated, because the one
+     *    thing this surface must never do is put part of a file in a box with a
+     *    Save under it;
+     *  - and the empty save, which the desktop refuses in its own words and which
+     *    is stopped here so the round trip is not spent to be told so.
+     *
+     * Returns whether the frame went, so a screen can keep the text when it did
+     * not. Text that vanishes out of an editor because a socket was down is text
+     * somebody has to write again, and they will not know they have to until the
+     * file turns out to be unchanged.
+     */
+    @discardableResult
+    func saveFile(_ id: String, text: String) -> Bool {
+        guard canEditCopilotFiles else {
+            onError?("\(Self.machineRefusal) change the copilot's files.")
+            return false
+        }
+        guard files.first(where: { $0.id == id })?.writable == true else {
+            onError?("That file is written by the app every time the copilot starts, so there is nothing to save.")
+            return false
+        }
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            onError?("An empty file is not a smaller instruction — it is one that says nothing. "
+                     + "Delete it on the computer if that is what you want.")
+            return false
+        }
+        guard text.utf8.count <= Copilot.maxFileBytes else {
+            onError?("That is \(byteSize(text.utf8.count)). The most that can be sent to the copilot's "
+                     + "files is \(byteSize(Copilot.maxFileBytes)).")
+            return false
+        }
+        guard wire.send(.copilotWriteFile(id: id, text: text)) else {
+            onError?("Not connected — nothing was saved.")
+            return false
+        }
+        return true
+    }
+
+    /**
+     * Put the instructions this build ships back. **Alter tier.**
+     *
+     * Only ever sent for the copilot's own instructions: there is exactly one
+     * file this build has a default of, and the desktop refuses every other id
+     * with a sentence. Guarded here as well so the refusal is not a round trip.
+     *
+     * What was there goes to a `.bak` beside it on the machine before anything is
+     * written, which is what makes this safe behind a single tap on a phone —
+     * the person tapping cannot see the file they are replacing.
+     */
+    @discardableResult
+    func restoreInstructions() -> Bool {
+        guard canEditCopilotFiles else {
+            onError?("\(Self.machineRefusal) change the copilot's files.")
+            return false
+        }
+        guard let own = files.first(where: { $0.isOwnInstructions }) else { return false }
+        guard wire.send(.copilotResetFile(id: own.id)) else {
+            onError?("Not connected — the instructions were not restored.")
+            return false
+        }
+        return true
+    }
+
+    /**
+     * Forget one memory. **Alter tier, and it is the only thing here that deletes.**
+     *
+     * By name rather than by id, matching the frame: memory files are the only
+     * deletable thing on this surface, and a verb that takes a name is a verb
+     * with no id — no word, no prefix, no future fifth fixed file — that could
+     * ever be pointed at an unlink.
+     *
+     * There is no confirmation here and there should not be one *here*: whether
+     * to ask twice is the screen's decision and it has the sentence for it. What
+     * this refuses is the frame it cannot honestly send.
+     */
+    @discardableResult
+    func forgetMemory(_ name: String) -> Bool {
+        guard canEditCopilotFiles else {
+            onError?("\(Self.machineRefusal) change the copilot's files.")
+            return false
+        }
+        guard Copilot.isMemoryName(name) else { return false }
+        guard wire.send(.copilotForgetMemory(name: name)) else {
+            onError?("Not connected — that memory was not deleted.")
+            return false
+        }
+        // The box, if it was that memory's. The machine answers with a fresh
+        // listing and the row will be gone from it; a box left open over a file
+        // that no longer exists is a Save button pointed at nothing.
+        if openFileId == "\(Copilot.memoryPrefix)\(name)" { closeFile() }
+        return true
     }
 
     // MARK: - Outbound, act tier

@@ -422,6 +422,11 @@ describe('launching', () => {
         // answers `{ ok, message }` rather than a boolean because there is no
         // terminal on screen to read the outcome off. See `CAPABILITY.send`.
         'machines:send',
+        // A name for a session on the far machine. Its own channel and not a
+        // second meaning for `machines:rename`, which names the *computer* —
+        // and a second `ipcMain.handle` on one channel throws at registration,
+        // which is a desktop that does not start. `contract.test.ts` pins that.
+        'machines:session:rename',
         // A file dropped on a pane showing a session over there, and the one
         // control a person has over it once it is going. Two channels rather
         // than one because a cancel has to reach the far machine even when the

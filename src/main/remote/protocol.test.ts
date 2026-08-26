@@ -121,6 +121,11 @@ const CLIENT_TYPES: Record<ClientMessage['t'], true> = {
   'copilot.say': true,
   'copilot.cancel': true,
   'copilot.stop': true,
+  'copilot.files': true,
+  'copilot.file.read': true,
+  'copilot.file.write': true,
+  'copilot.file.reset': true,
+  'copilot.memory.delete': true,
   'controls.read': true,
   'controls.apply': true,
   'usage.read': true,
@@ -222,6 +227,8 @@ const SERVER_TYPES: Record<ServerMessage['t'], true> = {
   'copilot.grant': true,
   'copilot.ask': true,
   'copilot.settled': true,
+  'copilot.files.rows': true,
+  'copilot.file.text': true,
   'controls.reading': true,
   'controls.applied': true,
   'usage.reading': true,
@@ -356,6 +363,22 @@ const VALID_CLIENT: ClientMessage[] = [
   { t: 'copilot.say', text: 'which of my sessions is stuck?' },
   { t: 'copilot.cancel' },
   { t: 'copilot.stop' },
+  /*
+   * The copilot's own files. Every id here is a **word**, never a path, and that
+   * is the property `copilotFileTarget` exists to hold — see the header on
+   * `COPILOT_FILE_IDS`. The memory sample uses the `memory:` prefix because that
+   * is the only way a name reaches this wire, and a round trip through the
+   * parser is the cheapest proof that the prefix survives it intact.
+   */
+  { t: 'copilot.files' },
+  { t: 'copilot.file.read', id: 'yours' },
+  { t: 'copilot.file.read', id: 'contract' },
+  { t: 'copilot.file.read', id: 'composed' },
+  { t: 'copilot.file.read', id: 'folder' },
+  { t: 'copilot.file.read', id: 'memory:reference_servers.md' },
+  { t: 'copilot.file.write', id: 'yours', text: '# Who you are\n\nAsad’s build partner.\n' },
+  { t: 'copilot.file.reset', id: 'yours' },
+  { t: 'copilot.memory.delete', name: 'feedback_old_rule.md' },
   // The controls a remote session's bar is drawn from. `rid` is the client's
   // own request id and the host echoes it untouched, which is what lets two
   // panes of a split ask about the same session without resolving each other's
@@ -876,6 +899,71 @@ const VALID_SERVER: ServerMessage[] = [
     // loses withdraws its dialog *saying where it went* rather than vanishing.
     t: 'copilot.settled',
     settled: { id: 'q-1', granted: true, by: 'device:dev-1', reason: null },
+  },
+  /*
+   * The files, going back.
+   *
+   * Both shapes of a row are here on purpose: one that exists, with a size and a
+   * stamp, and one that does not — the folder's own `CLAUDE.md`, whose *absence*
+   * is the most reassuring row on this surface, because it is the proof that
+   * nothing in that folder claims to be the copilot. `size` and `modifiedAt`
+   * must survive as `null` rather than as a plausible zero beside `exists:
+   * false`.
+   */
+  {
+    t: 'copilot.files.rows',
+    files: [
+      {
+        id: 'yours',
+        name: 'instructions.md',
+        purpose: 'Yours — the persona and the standing instructions.',
+        owner: 'yours',
+        exists: true,
+        size: 6144,
+        modifiedAt: 1_700_000_000_000,
+        writable: true,
+      },
+      {
+        id: 'contract',
+        name: 'tools.md',
+        purpose: 'The app’s — the tool contract and the permission rules.',
+        owner: 'app',
+        exists: true,
+        size: 12_288,
+        modifiedAt: 1_700_000_000_000,
+        writable: false,
+      },
+      {
+        id: 'folder',
+        name: 'CLAUDE.md',
+        purpose: 'The folder’s own instructions.',
+        owner: 'folder',
+        exists: false,
+        size: null,
+        modifiedAt: null,
+        writable: true,
+      },
+      {
+        id: 'memory:reference_servers.md',
+        name: 'reference_servers.md',
+        purpose: 'The one current map of every server',
+        owner: 'folder',
+        exists: true,
+        size: 2048,
+        modifiedAt: 1_700_000_000_000,
+        writable: true,
+      },
+    ],
+  },
+  // A file that came back, and one that could not. `text` is present in both —
+  // `''` whenever `error` is — so a client has one shape to read rather than
+  // two, and "there is nothing" has one spelling.
+  { t: 'copilot.file.text', id: 'yours', text: '# Who you are\n' },
+  {
+    t: 'copilot.file.text',
+    id: 'composed',
+    text: '',
+    error: 'Nothing has been written yet — these files are composed when the copilot starts.',
   },
   // A `welcome` carrying the per-device copilot grant. Separate from the one at
   // the top of this list because both shapes are on the wire at once: a desktop
@@ -2687,7 +2775,18 @@ describe('the copilot on the way back', () => {
    * call on the far machine must not produce it.
    */
   it('reads every copilot frame the far machine pushes a watching connection', () => {
-    const pushed = VALID_SERVER.filter((message) => message.t.startsWith('copilot.') && message.t !== 'copilot.log')
+    /*
+     * Answers are excluded, pushes are not, and the list of exclusions is spelled
+     * out rather than inferred. `copilot.log`, `copilot.files.rows` and
+     * `copilot.file.text` are only ever sent to the connection that asked — a
+     * desktop acting as another desktop's client never asks — so they are not
+     * part of what a *watching* connection has to survive. Everything else on
+     * this capability arrives unsolicited.
+     */
+    const answers = ['copilot.log', 'copilot.files.rows', 'copilot.file.text']
+    const pushed = VALID_SERVER.filter(
+      (message) => message.t.startsWith('copilot.') && !answers.includes(message.t),
+    )
     // Named rather than counted, and asserted rather than derived: a filter is
     // the kind of thing that passes vacuously when it matches nothing, which is
     // exactly how this parser's blindness survived a suite this size.

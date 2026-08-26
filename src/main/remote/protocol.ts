@@ -519,6 +519,32 @@ export const CAPABILITY = {
    * rather than sending a frame that would close the channel.
    */
   routines: 'routines',
+
+  /**
+   * The copilot's own files, as one of his devices may read and edit them.
+   *
+   * > *"the copilot has things in the macbook side and the windows side … its
+   * > memory folder which is actually here, the folder's own instruction, what it
+   * > was handed, its tool list … it reads and writes two kinds of prompts and
+   * > only one is ours."*
+   *
+   * Its own name rather than a corner of `copilot`, for the reason every split in
+   * this object exists: the two are genuinely separable, and the separation that
+   * matters is *time*. Every desktop that speaks `copilot` today was built before
+   * these frames existed and answers them by closing the channel — so a phone
+   * that drew its Files card off the `copilot` name alone would draw one on every
+   * such machine and lose the whole connection on the first read. That is the
+   * same degrade `controls` and `account` have and it is why nothing may be sent
+   * hopefully.
+   *
+   * What is deliberately **not** separate is the gate. These frames go through
+   * the same `copilotFor` door as every other `copilot.*` verb, and this name is
+   * stripped from a guest's welcome beside `copilot` itself, so there is no
+   * arrangement of grants in which a guest reaches somebody's instruction file.
+   * See `copilot-access.ts`: what decides is the kind chosen when the device was
+   * approved, and it is read on every frame.
+   */
+  copilotFiles: 'copilot.files',
   web: 'web',
   controls: 'controls',
   usage: 'usage',
@@ -981,6 +1007,11 @@ export const CAPABILITIES: string[] = [
    * down, and what left a whole surface dark on a desktop and on a server alike.
    */
   CAPABILITY.routines,
+  // Its files, listed here as well as named above — which is the whole of what
+  // `browserControl` was missing for a wave. `advertised` is built by filtering
+  // *this* list, so a capability that has a name, a rule in `serves` and no line
+  // here is advertised by no host, whatever any of them passes.
+  CAPABILITY.copilotFiles,
   CAPABILITY.web,
   CAPABILITY.controls,
   CAPABILITY.usage,
@@ -2265,7 +2296,34 @@ export const COPILOT_FRAME_TIER: Readonly<Record<string, CopilotTier>> = {
   'copilot.cancel': 'act',
   'copilot.stop': 'act',
   /**
-   * Answering a confirmation is `alter`, and it is the only frame that is.
+   * Reading the copilot's files is `read`, and writing one is `alter`.
+   *
+   * The read half is the easy half and it belongs with `copilot.log`: looking at
+   * what your assistant was told spends nothing, starts nothing, and is exactly
+   * the *watching* grant this tier was carved out to be.
+   *
+   * The write half is the interesting one. `alter` rather than `act`, and the
+   * reason is not that saving a file is expensive — it is that
+   * `<copilot-layer>/instructions.md` **is the agent**. Every future run is
+   * handed it at exec. A device that could rewrite it while holding only `act`
+   * would be a device that can write itself new standing instructions and then
+   * ask the copilot to follow them, which turns the act tier into a way to
+   * author the rules the alter tier is checked against. So the file that decides
+   * what the copilot may be told to do sits behind the tier whose whole property
+   * is *a person deliberately decided this device may*.
+   *
+   * Deleting a memory is `alter` for the same reason one notch along: `memory/`
+   * is read into the model's context at every start, and taking a fact out of it
+   * changes what the copilot believes tomorrow.
+   */
+  'copilot.files': 'read',
+  'copilot.file.read': 'read',
+  'copilot.file.write': 'alter',
+  'copilot.file.reset': 'alter',
+  'copilot.memory.delete': 'alter',
+  /**
+   * Answering a confirmation is `alter`, and it was the only frame that was
+   * until the copilot's own files came onto the wire.
    *
    * Not because answering *is* an alter action — it is not, it is a decision
    * about one — but because the tier is exactly the question being asked. A
@@ -2342,6 +2400,245 @@ export const MAX_COPILOT_MESSAGE_CHARS = 8 * 1024
  * same wire.
  */
 export const MAX_CHAT_ROWS = 200
+
+/* ------------------------------------------- capability `copilot.files` -- */
+
+/**
+ * ## An id from a client never becomes a path. Ever.
+ *
+ * This is the load-bearing sentence of the whole surface and it is worth reading
+ * before anything below it. A phone asking for the copilot's instructions sends
+ * the word `yours`, not a filename and not a path; the desktop looks that word
+ * up in {@link COPILOT_FILE_IDS} and composes the path itself, out of
+ * `copilotPaths()`, from `<userData>` and the folder somebody chose. There is no
+ * branch anywhere in which a string off the wire is handed to `join`, `resolve`
+ * or `readFileSync`.
+ *
+ * That is the same rule `copilot:write-instructions` already keeps on the local
+ * side — *"the renderer names no path"* — held across a wire where the caller is
+ * a phone on a relay rather than a page in this window. It is the strongest
+ * available form of the property, for the reason `protocol.ts` gives about tool
+ * names on the copilot wire: a design that *enumerates and denies* paths works
+ * until somebody adds a path and forgets the list. This one has nothing to
+ * enumerate. Four words and a memory file name are the entire address space.
+ *
+ * The memory half is the one exception and it is bounded by a *name rule*
+ * rather than by a list, because memory files are written by the copilot and
+ * there is no fixed set of them. `copilot-inspect.ts`'s `isMemoryName` is the
+ * authority on what a memory file may be called — it cannot express `..`, a
+ * separator on either platform, or an absolute path, which is why the `join`
+ * behind it cannot leave the memory directory. What is written here is a
+ * transcription of that rule as a **bound on a hostile frame**, in the same
+ * relationship {@link MAX_UPLOAD_NAME_BYTES} has to `uploads.ts`: this file
+ * refuses the shape, and the host checks again against the real rule before it
+ * touches a disk. Two checks, one of which is in the module that owns the
+ * answer.
+ */
+export const COPILOT_FILE_IDS = ['yours', 'contract', 'composed', 'folder'] as const
+
+/**
+ * The four files that are not memory, and what each word means.
+ *
+ *  - `yours` — the copilot's own instructions, `<userData>/copilot-layer/instructions.md`.
+ *    Seeded once by this app and never written over by it. **The only writable
+ *    one that changes what the copilot *is*.**
+ *  - `contract` — the app's half: the tool list and the permission rules,
+ *    generated from the live catalogue on every start. Read-only on this wire
+ *    for the same reason there is no `copilot:write-contract` channel at the
+ *    desk — a hand-edited copy of a generated description drifts from the thing
+ *    it describes, and this project has shipped that defect twice.
+ *  - `composed` — the two of them joined, byte for byte what the running copilot
+ *    was handed. Read-only, and the answer to *what was my assistant actually
+ *    told*.
+ *  - `folder` — the working folder's own `CLAUDE.md`. Theirs, read by the CLI the
+ *    ordinary way, written by this app only when a person presses Save on text
+ *    they can see.
+ *
+ * This is the split he named — *"it reads and writes two kinds of prompts and
+ * only one is ours"* — carried onto the wire as `owner` on every row rather than
+ * left for a client to infer from a filename.
+ */
+export type CopilotFileId = (typeof COPILOT_FILE_IDS)[number]
+
+/**
+ * How a memory file is addressed: the word `memory:` and then its name.
+ *
+ * A prefix rather than a second field on every frame, so that one `id` addresses
+ * the whole surface and a client holds one string per row. It is unambiguous by
+ * construction: a colon cannot appear in a memory file's name — the name rule
+ * allows letters, digits, dot, dash and underscore and nothing else — so the
+ * first colon is always the separator and never part of the name.
+ */
+export const COPILOT_MEMORY_PREFIX = 'memory:'
+
+/**
+ * Longest memory file name this wire will carry, in characters.
+ *
+ * `isMemoryName` has no length of its own, deliberately — it is a shape rule and
+ * the shape is what keeps the path inside the folder. A bound still belongs
+ * here, for the reason {@link MAX_UPLOAD_NAME_BYTES} gives about itself: 255 is
+ * the per-component limit on APFS, ext4 and NTFS alike, so a name past it cannot
+ * be a file on any machine this runs on and can only be a frame worth refusing
+ * before it reaches a `readdir`.
+ */
+export const MAX_COPILOT_MEMORY_NAME = 255
+
+/** One file on the copilot-files surface, resolved from an id by the host. */
+export type CopilotFileTarget =
+  | { kind: 'layer'; id: CopilotFileId }
+  | { kind: 'memory'; name: string }
+
+/**
+ * Read an `id` off the wire as a file this host knows, or refuse it.
+ *
+ * **The one function that turns a client's string into anything**, which is why
+ * it is exported and why both ends call it: the parser calls it so an unusable
+ * id never becomes a `ClientMessage` at all, and `server.ts` calls it again to
+ * destructure the id it has been handed. The second call is unreachable today by
+ * construction and is there anyway, for the reason `copilotFor` states about its
+ * own kind check: a rule that holds only because of what a *different* function
+ * refuses is a rule the next call site does not have.
+ *
+ * Everything it does not do is the point. It composes no path, touches no disk,
+ * and knows nothing about where the copilot lives.
+ */
+export function copilotFileTarget(value: unknown): CopilotFileTarget | null {
+  if (typeof value !== 'string') return null
+  const known = COPILOT_FILE_IDS.find((candidate) => candidate === value)
+  if (known !== undefined) return { kind: 'layer', id: known }
+  if (!value.startsWith(COPILOT_MEMORY_PREFIX)) return null
+  const name = value.slice(COPILOT_MEMORY_PREFIX.length)
+  return isCopilotMemoryName(name) ? { kind: 'memory', name } : null
+}
+
+/**
+ * A memory file's name, as a hostile frame may spell it.
+ *
+ * A transcription of `isMemoryName` in `copilot-inspect.ts`, which is the
+ * authority — see the header on {@link COPILOT_FILE_IDS} for why there are two
+ * of these and why that is not the duplication it looks like. The properties
+ * that matter: a leading alphanumeric, then alphanumerics, dots, dashes and
+ * underscores, ending in `.md`, with no `..` anywhere. It cannot express a
+ * separator on either platform and it cannot express an absolute path.
+ *
+ * Written as a refusal rather than a strip, for the reason `create.cwd` gives:
+ * stripping turns a hostile value into a *different* legal-looking one, and the
+ * thing on the other end of this name is somebody's filesystem.
+ */
+export function isCopilotMemoryName(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length === 0) return false
+  if (value.length > MAX_COPILOT_MEMORY_NAME) return false
+  if (value.includes('..') || value.includes('/') || value.includes('\\') || value.includes('\0')) return false
+  return /^[A-Za-z0-9][A-Za-z0-9._-]*\.md$/.test(value)
+}
+
+/**
+ * Largest file this wire will carry, in UTF-8 bytes, in **either** direction.
+ *
+ * ## Why it is not the desktop's own number
+ *
+ * `MAX_INSTRUCTIONS_BYTES` and `MAX_MEMORY_READ_BYTES` are both 256 KB, and
+ * neither can come over here. {@link MAX_MESSAGE_BYTES} is 64 KiB — the cap the
+ * receive door applies to every frame that is not a `browser.frame` — and a
+ * frame over it is not politely refused: the reader closes the connection with
+ * `CLOSE.messageTooBig`, terminal and all. That has happened once already in
+ * this file's history, when an unbounded page outline went out whole and two
+ * machines lost their link because an agent read a page. A file editor must not
+ * be the second time.
+ *
+ * Thirty-two kilobytes leaves the JSON, the id and the sealed envelope
+ * comfortable room on the way out and the same on the way back, and it is about
+ * five times the instruction file this build ships. Nobody writing instructions
+ * will meet it.
+ *
+ * ## What happens to a file that does not fit: **nothing is truncated**
+ *
+ * The host answers with an `error` on the `copilot.file.text` frame and no text
+ * at all, and the sentence sends the person to the machine. That is deliberate
+ * and it is `readCopilotInstructions`'s argument, which is worth repeating
+ * because the tempting alternative looks generous: *an editor showing a
+ * truncated file is a delete waiting for somebody to press the button.* Every
+ * box on this surface has a Save under it, so half a file is the one thing that
+ * must never arrive. A write is refused on the same measurement, against what is
+ * **on disk** rather than against what was sent — so a file too big to have been
+ * shown whole is a file this wire will not overwrite.
+ */
+export const MAX_COPILOT_FILE_BYTES = 32 * 1024
+
+/**
+ * How many rows one `copilot.files.rows` may carry.
+ *
+ * Four fixed files and then one row per memory, and `memory/` is written by an
+ * agent that is told to record a fact whenever it learns one — so the only
+ * bounded thing about that directory is what this number makes bounded. Two
+ * hundred is the number {@link MAX_COPILOT_LOG_ROWS} and {@link MAX_CHAT_ROWS}
+ * are, against the same wire and for the same reason: more than a phone screen
+ * holds many times over, and small enough that a client reconnecting in a loop
+ * cannot make a Mac serialise a directory listing per attempt.
+ */
+export const MAX_COPILOT_FILE_ROWS = 200
+
+/**
+ * Longest `purpose` and longest `name` on a row.
+ *
+ * `purpose` is a phrase a settings pane prints as-is, and for a memory row it is
+ * the `description:` line **out of a file the copilot wrote**. That makes it the
+ * one string on this surface whose length an agent chooses, which is exactly the
+ * kind of value `MAX_SESSION_TITLE` exists to bound — and it is stripped of
+ * control characters host-side for the same reason a device name is.
+ */
+export const MAX_COPILOT_FILE_PURPOSE = 240
+
+/**
+ * Whose file this is, drawn as a badge and decided on the desktop.
+ *
+ * The same three words `StartupFile.owner` uses, carried rather than recomputed:
+ * `app` is a file under `<userData>` that this app wrote and may rewrite,
+ * `yours` is a file it seeded and will never touch again, and `folder` is a file
+ * in the working directory that it does not write at all. A client that derived
+ * this from an id would be reproducing the rule on the far side of a wire, which
+ * is where the two eventually disagree.
+ */
+export type CopilotFileOwner = 'app' | 'yours' | 'folder'
+
+/**
+ * One file, described without being read.
+ *
+ * Rebuilt field by field on the desktop out of `StartupFile` and `MemoryFact`,
+ * never spread — the rule `copilot-wiring.ts` states about `CopilotActionRow`,
+ * and it applies here for a sharper reason: `MemoryFact` carries `path`, and
+ * `StartupFile` carries `path`, and **`path` is not on this row**.
+ *
+ * That absence is deliberate twice over. A phone has nothing to do with an
+ * absolute path — it cannot open it, and the name is what a person recognises —
+ * and a path on a row is a path a client is tempted to send back, which is the
+ * one thing {@link copilotFileTarget} exists to make impossible. The desktop
+ * shows a basename in exactly this place for the first reason; this wire has the
+ * second as well.
+ */
+export interface CopilotFileRow {
+  /** The word to send back. One of {@link COPILOT_FILE_IDS}, or `memory:<name>`. */
+  id: string
+  /** The file's own name — `instructions.md`, `CLAUDE.md`. Never a path. */
+  name: string
+  /** What it is for, in a phrase a client prints as-is. */
+  purpose: string
+  owner: CopilotFileOwner
+  exists: boolean
+  /** Bytes on disk, or null when it is not there. */
+  size: number | null
+  /** Last modified, epoch milliseconds, or null when it is not there. */
+  modifiedAt: number | null
+  /**
+   * Whether `copilot.file.write` would be served for this row.
+   *
+   * Carried rather than inferred, so a client draws a Save button only where one
+   * can work. False for the two generated files, and false for anything already
+   * larger than {@link MAX_COPILOT_FILE_BYTES} — a file this wire could not have
+   * shown whole is a file it will not let somebody overwrite from a box.
+   */
+  writable: boolean
+}
 
 /** One bubble of a copilot conversation. Parsed text, never terminal bytes. */
 export interface CopilotChatMessage {
@@ -4165,6 +4462,88 @@ export type ClientMessage =
   | { t: 'copilot.cancel' }
   /** End this device's own run. */
   | { t: 'copilot.stop' }
+  /* ---- capability `copilot.files`. Same gate, separate advertisement. ----- */
+  /**
+   * ## The five frames behind *"its memory folder … the folder's own instruction … what it was handed"*
+   *
+   * The iOS Copilot screen was a thin version of the desktop's, and the thing it
+   * was thin about was the one card that answers *why did it say that*. These
+   * carry that card across the wire.
+   *
+   * The rule that makes them safe is stated in full on {@link COPILOT_FILE_IDS}
+   * and is one sentence: **an id from a client never becomes a path.** `id` is a
+   * word out of a fixed list of four, or `memory:` and a name that has been held
+   * to the memory-file rule; the desktop composes every path itself, from its own
+   * `copilotPaths()`. There is no field on any frame below that a filesystem
+   * call ever sees.
+   *
+   * They are advertised under their own capability and gated under `copilot`'s.
+   * The advertisement is separate because an older desktop closes the channel on
+   * a frame it has never heard of; the gate is shared because a guest must not
+   * reach a copilot's files by any route, and `copilotFor` is the door that
+   * already refuses one.
+   */
+  /**
+   * What files are there, and which of them may this device write?
+   *
+   * Answered with `copilot.files.rows`, which is a listing and not a read:
+   * nothing is opened, the sizes and stamps come from a `stat`, and a memory
+   * row's purpose is the `description:` out of the front matter the copilot
+   * itself writes. That split is `copilotStartupFiles`'s and the reason is that a
+   * listing which read every file whole would get slower the more the copilot
+   * remembers.
+   */
+  | { t: 'copilot.files' }
+  /**
+   * One file, whole, or a sentence saying why not.
+   *
+   * Answered with `copilot.file.text` — always, on every branch, including the
+   * refusals. Silence is not an answer to this frame: a box that never fills is
+   * a box somebody presses Save on.
+   *
+   * **Never truncated.** A file over {@link MAX_COPILOT_FILE_BYTES} comes back
+   * with an `error` and no text at all, for the reason that constant carries.
+   */
+  | { t: 'copilot.file.read'; id: string }
+  /**
+   * Save one file. **This is a person's own text landing on somebody's disk.**
+   *
+   * Refused for the two generated files, refused for a file already bigger than
+   * this wire could have shown whole, and refused by the desktop's own three
+   * checks — not a string, empty, over the ceiling — which are `copilot-home.ts`'s
+   * and are not restated over here. Answered with a fresh `copilot.files.rows`,
+   * so the row's size and stamp are the ones the save produced rather than the
+   * ones the phone was holding.
+   *
+   * A save reaches the same two writers the settings pane presses, and it is
+   * written into the action log as *from a paired device* rather than *from
+   * Settings*. An audit log is worth what its rows can be trusted to mean.
+   */
+  | { t: 'copilot.file.write'; id: string; text: string }
+  /**
+   * Put this build's instructions back, keeping what was there.
+   *
+   * `id` is on the frame and only `yours` is served: there is exactly one file
+   * this build ships a default of, and the id is carried so the refusal for any
+   * other one is a sentence rather than a frame that quietly did nothing. The
+   * previous contents go to a `.bak` beside the file first, which is what makes
+   * this safe to put behind a single tap.
+   */
+  | { t: 'copilot.file.reset'; id: string }
+  /**
+   * Forget one memory.
+   *
+   * A separate verb taking a **name** rather than a `copilot.file.delete` taking
+   * an id, and that is the design rather than an inconsistency: memory files are
+   * the only deletable thing on this surface, and giving deletion its own verb
+   * means there is no id — no word, no prefix, no future fifth entry in
+   * {@link COPILOT_FILE_IDS} — that can ever be pointed at `rm`. The name is held
+   * to {@link isCopilotMemoryName} here and to `isMemoryName` again on the
+   * desktop before anything is unlinked.
+   *
+   * Answered with a fresh `copilot.files.rows`.
+   */
+  | { t: 'copilot.memory.delete'; name: string }
   /* ---- capability `controls`. Refused when it is not advertised. ---------- */
   /**
    * What is this session's model, effort and fast mode right now?
@@ -5041,6 +5420,32 @@ export type ServerMessage =
    * person's back.
    */
   | { t: 'copilot.settled'; settled: CopilotSettledRow }
+  /* ---- capability `copilot.files` ---------------------------------------- */
+  /**
+   * The copilot's files, as they are on disk right now.
+   *
+   * An answer, never a push — the same footing `copilot.log` is on. Sent for
+   * `copilot.files` and again after every write, reset and delete, so a client
+   * that changed something redraws from the disk rather than from what it hoped
+   * it had written. Read off the filesystem on every call rather than remembered,
+   * because the interesting case is the one where somebody has just edited a file
+   * at the machine and wants to see that it landed.
+   */
+  | { t: 'copilot.files.rows'; files: CopilotFileRow[] }
+  /**
+   * One file's text, or the sentence saying why there is none.
+   *
+   * `id` is echoed back untouched so a client with two reads in flight — a
+   * screen that opens one box while another is still loading — can tell them
+   * apart without matching on order. `text` is always present and is `''`
+   * whenever `error` is: one shape to read, and "there is nothing" has one
+   * spelling rather than two.
+   *
+   * `error` covers a file that is not there yet, one this build cannot read, and
+   * one too large for this wire. All three are sentences composed on the desktop
+   * for a person to read, and none of them quotes a path.
+   */
+  | { t: 'copilot.file.text'; id: string; text: string; error?: string }
   /* ---- capability `controls` --------------------------------------------- */
   /**
    * The answer to one `controls.read`, and only ever to one.
@@ -7602,6 +8007,80 @@ export function parseClientMessage(raw: unknown): ParseResult {
       return { ok: true, message }
     }
 
+    /* ---- capability `copilot.files` -------------------------------------- */
+    /*
+     * Shape only, and the shape *is* most of the security here.
+     *
+     * Every one of these that carries an `id` runs it through
+     * {@link copilotFileTarget} and refuses the frame outright when it is not a
+     * word this build knows — so an unusable id never becomes a `ClientMessage`,
+     * never reaches `server.ts`, and never gets as far as a function that could
+     * be careless with it. That is a stronger position than validating at the
+     * handler, and it is the one this parser is for.
+     *
+     * The id is kept as the string it arrived as rather than as the parsed
+     * target, because the wire type is a string and the handler resolves it
+     * again. Two resolutions of one value is deliberate; see `copilotFileTarget`.
+     */
+    case 'copilot.files':
+      return { ok: true, message: { t: 'copilot.files' } }
+    case 'copilot.file.read': {
+      const fileId = parsed.id
+      if (typeof fileId !== 'string' || copilotFileTarget(fileId) === null) {
+        return bad('copilot.file.read with an unknown file')
+      }
+      return { ok: true, message: { t: 'copilot.file.read', id: fileId } }
+    }
+    case 'copilot.file.write': {
+      // Read once each, for the reason spelled out on `input.data`: on the
+      // object path a property can be a getter, and the value that is checked
+      // has to be the value that is forwarded. This one ends up on somebody's
+      // disk, which is the same weight `input.data` carries into a pty.
+      const fileId = parsed.id
+      if (typeof fileId !== 'string' || copilotFileTarget(fileId) === null) {
+        return bad('copilot.file.write with an unknown file')
+      }
+      const text = parsed.text
+      if (typeof text !== 'string') return bad('copilot.file.write without text')
+      // Bytes, not characters: one emoji is four of them, and every cap this
+      // value is measured against downstream — the desktop's ceiling, the frame
+      // reader's — is a byte cap.
+      if (overBytes(text, MAX_COPILOT_FILE_BYTES)) {
+        return tooLarge('copilot.file.write larger than the file limit')
+      }
+      /*
+       * Control characters are **not** refused here, and that is the one place
+       * this frame differs from `copilot.say`.
+       *
+       * `copilot.say` refuses them because its text is typed into a live pty,
+       * where a carriage return submits and an escape drives the CLI's own key
+       * handling. This text is written to a file with `writeFileSync` and read
+       * back by a model. A tab is layout, a form feed is somebody's markdown, and
+       * refusing a save over a byte that is inert in this destination would be a
+       * person losing their edit to a rule written for a different one.
+       */
+      return { ok: true, message: { t: 'copilot.file.write', id: fileId, text } }
+    }
+    case 'copilot.file.reset': {
+      const fileId = parsed.id
+      if (typeof fileId !== 'string' || copilotFileTarget(fileId) === null) {
+        return bad('copilot.file.reset with an unknown file')
+      }
+      // Which of the four may actually be reset is the *host's* question and is
+      // answered with a sentence there, not with a refused frame here. A parser
+      // that knew there is exactly one resettable file would be a second copy of
+      // a policy, in the module least able to keep it in step with the first.
+      return { ok: true, message: { t: 'copilot.file.reset', id: fileId } }
+    }
+    case 'copilot.memory.delete': {
+      const name = parsed.name
+      // The strictest gate on this surface, in front of the only verb that
+      // unlinks anything. See `isCopilotMemoryName` — and note that the desktop
+      // asks `isMemoryName` again before `rmSync` sees the name.
+      if (!isCopilotMemoryName(name)) return bad('copilot.memory.delete without a memory file')
+      return { ok: true, message: { t: 'copilot.memory.delete', name } }
+    }
+
     default:
       return bad('unknown message type')
   }
@@ -8306,6 +8785,56 @@ function copilotQuestion(value: unknown): CopilotConsentQuestion | null {
   }
 }
 
+/**
+ * One row of the copilot's file listing, as it comes back.
+ *
+ * The id is the field with teeth and it is checked against
+ * {@link copilotFileTarget} rather than merely required to be a string: this
+ * value is what the client will send back on a read or a write, so a row whose
+ * id this build cannot address is a row whose buttons could only produce a
+ * refused frame. Dropped rather than drawn, on the rule the two validators above
+ * keep — one unreadable row costs a row.
+ *
+ * `size` and `modifiedAt` are null-able on purpose and `counted`/`stamp` are
+ * deliberately **not** used for them: those two fold a missing value onto zero,
+ * and a file that is not there is a different thing from a file of zero bytes
+ * last touched at the epoch. The `exists` flag is what a client draws its "not
+ * there" badge from, and it must not be contradicted by a plausible-looking
+ * size beside it.
+ */
+function copilotFileRow(value: unknown): CopilotFileRow | null {
+  if (!isRecord(value)) return null
+  const rowId = asString(value.id)
+  if (rowId === null || copilotFileTarget(rowId) === null) return null
+  const owner = COPILOT_FILE_OWNERS.find((known) => known === value.owner)
+  // An owner this build has never heard of drops the row rather than being
+  // folded onto `app`. The badge is how a person tells *this app wrote it* from
+  // *this is yours and nothing will touch it*, and guessing that wrong is the
+  // one thing on the row somebody would act on.
+  if (owner === undefined) return null
+  return {
+    id: rowId,
+    name: asString(value.name) ?? '',
+    purpose: (asString(value.purpose) ?? '').slice(0, MAX_COPILOT_FILE_PURPOSE),
+    owner,
+    exists: value.exists === true,
+    size: sized(value.size),
+    modifiedAt: sized(value.modifiedAt),
+    // Only a literal true opens a Save button. A row read out of a garbled frame
+    // must not offer to overwrite a file this host would refuse to write.
+    writable: value.writable === true,
+  }
+}
+
+/** The three badges, as a runtime list so a fourth cannot arrive unread. */
+const COPILOT_FILE_OWNERS: readonly CopilotFileOwner[] = ['app', 'yours', 'folder']
+
+/** A non-negative whole number the far end actually sent, or null for "there is none". */
+function sized(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return null
+  return Math.floor(value)
+}
+
 function copilotSettled(value: unknown): CopilotSettledRow | null {
   if (!isRecord(value)) return null
   const rowId = asString(value.id)
@@ -8826,6 +9355,48 @@ export function parseServerFrame(parsed: unknown): ServerParse {
       return settled === null
         ? { ok: false, reason: 'copilot.settled without a row' }
         : { ok: true, message: { t: 'copilot.settled', settled } }
+    }
+    /* ---- capability `copilot.files` ---------------------------------------- */
+    /*
+     * Read here as well as on the phones, and that is the lesson of the block
+     * above about `welcome.copilot`: this reader advertises itself as the one
+     * door inbound frames come through, and a `copilot.*` frame it has never
+     * heard of is refused by its `default` as *"unknown message type"* — which
+     * `machines/guest.ts` reports as the far machine having *"sent something
+     * unreadable"*, the sentence reserved for a captive portal answering with
+     * HTML. A desktop acting as another desktop's client must not produce that
+     * over a file listing.
+     *
+     * One unreadable row costs a row, never the frame, exactly as `sessions` and
+     * `pending` decided: a memory file with a mangled name is one line missing
+     * from a list, not a listing that fails.
+     */
+    case 'copilot.files.rows': {
+      if (!Array.isArray(parsed.files)) return { ok: false, reason: 'copilot.files.rows without a list' }
+      const files: CopilotFileRow[] = []
+      for (const row of parsed.files) {
+        const file = copilotFileRow(row)
+        if (file !== null) files.push(file)
+      }
+      return { ok: true, message: { t: 'copilot.files.rows', files } }
+    }
+    case 'copilot.file.text': {
+      // The id has to be one this build can address, for the reason the outbound
+      // parser refuses one it cannot: a text frame naming a file nothing asked
+      // for is either a build ahead of this one or something that is not this
+      // app, and drawing it would put unattributed bytes in an editor.
+      const fileId = asString(parsed.id)
+      if (fileId === null || copilotFileTarget(fileId) === null) {
+        return { ok: false, reason: 'copilot.file.text without a known file' }
+      }
+      // Absent text is the empty string rather than a refusal. The frame's own
+      // contract is that `text` is always present and `''` whenever `error` is,
+      // and a peer that sent only the error has still answered the question.
+      const text = asString(parsed.text) ?? ''
+      const frame: Extract<ServerMessage, { t: 'copilot.file.text' }> = { t: 'copilot.file.text', id: fileId, text }
+      const failure = asString(parsed.error)
+      if (failure !== null && failure !== '') frame.error = failure
+      return { ok: true, message: frame }
     }
     /* ---- capability `controls` --------------------------------------------- */
     /*

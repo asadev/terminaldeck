@@ -1035,6 +1035,25 @@ export async function createHeadlessHost(
      * device — the `ConsentRelay` seam exists for exactly that and nothing on
      * this host is wired to it — and a live surface built over *this* core rather
      * than the desktop's. That is an assembly, and it is a different lane's.
+     *
+     * ## And no `copilotFiles` either, which is the same limit stated once more
+     *
+     * The files surface is a separate seam from the run manager — a host can
+     * honestly have a disk and no tools — so it is worth saying why this host
+     * does not pass one anyway rather than leaving the absence to be read as an
+     * oversight.
+     *
+     * Two reasons, and the second is the one that settles it. The files would be
+     * *empty*: the copilot layer is composed by `writeCopilotLayer` when a
+     * copilot starts, no copilot starts here, so `instructions.md`, `tools.md`
+     * and `copilot.md` have never been written and `memory/` has never been
+     * made. A Files card listing four rows that all read *not there* is the
+     * fourth pill whose every button refuses, one surface along. And the frames
+     * could not be reached in any case: they ride the copilot's own connection
+     * ceremony — `copilotFor` refuses every one of them until this socket has
+     * sent `copilot.hello`, which a host with no `copilot` refuses outright — so
+     * passing files here would advertise a capability whose first frame is a
+     * refusal. `serves` in `server.ts` states that pairing explicitly.
      */
     /*
      * **No `routines` either, and it is the copilot's absence wearing a second

@@ -97,6 +97,28 @@ const ALLOWED_FIELDS: Readonly<Record<string, readonly string[]>> = {
   'copilot.say': ['text'],
   'copilot.cancel': [],
   'copilot.stop': [],
+  /*
+   * The copilot's own files, and the reason they do not weaken the property.
+   *
+   * `id` is the field to look at. It is not a path and it cannot become one: it
+   * is a word out of the four-entry `COPILOT_FILE_IDS`, or `memory:` and a name
+   * held to the memory-file rule — and `copilotFileTarget` in `protocol.ts` is
+   * the only thing in the app that turns it into anything, which it does by
+   * looking the word up rather than by joining it. It names no tool for the same
+   * reason `copilot.log`'s `before` names none: the whole vocabulary is four
+   * words this file could enumerate.
+   *
+   * `text` is a file's contents and `name` is a memory file's name. Both are
+   * content, like `copilot.say`'s prose, and neither is a call: the write lands
+   * on a disk through `writeCopilotInstructions`, and what the copilot *does*
+   * with what it reads there is still decided by an agent on that machine
+   * against `DeckControl.call`.
+   */
+  'copilot.files': [],
+  'copilot.file.read': ['id'],
+  'copilot.file.write': ['id', 'text'],
+  'copilot.file.reset': ['id'],
+  'copilot.memory.delete': ['name'],
 }
 
 /** Every copilot client frame a phone can build, as it goes onto the wire. */
@@ -119,6 +141,12 @@ const FRAMES: ClientMessage[] = [
   { t: 'copilot.say', text: 'which of my sessions is stuck?' },
   { t: 'copilot.cancel' },
   { t: 'copilot.stop' },
+  { t: 'copilot.files' },
+  { t: 'copilot.file.read', id: 'yours' },
+  { t: 'copilot.file.read', id: 'memory:reference_servers.md' },
+  { t: 'copilot.file.write', id: 'folder', text: '# This project' },
+  { t: 'copilot.file.reset', id: 'yours' },
+  { t: 'copilot.memory.delete', name: 'feedback_old_rule.md' },
 ]
 
 /** Both spellings of every tool: the dotted id a person reads, the wire name a client calls. */
@@ -181,7 +209,15 @@ describe('a phone cannot name a tool', () => {
     const client = clientUnion(source)
     const seen = new Set<string>()
 
-    for (const match of client.matchAll(/\{\s*t:\s*'(copilot\.[a-z]+)'\s*;?([^}]*)\}/g)) {
+    /*
+     * `[a-z.]+` and not `[a-z]+`, which mattered the moment a verb had two dots
+     * in it. `copilot.file.read` does not match a single-segment pattern, so the
+     * five frames below would have been invisible to the scan while passing the
+     * tier check — a whole family of client frames whose fields nobody had
+     * decided, in the test whose job is that nobody adds one quietly. The
+     * `seen` assertion at the end of this block is what caught it.
+     */
+    for (const match of client.matchAll(/\{\s*t:\s*'(copilot\.[a-z.]+)'\s*;?([^}]*)\}/g)) {
       const verb = match[1]
       seen.add(verb)
       const declared = [...match[2].matchAll(/([a-zA-Z_][a-zA-Z0-9_]*)\??\s*:/g)].map((f) => f[1])
