@@ -142,6 +142,7 @@ import { registerSignInIpc } from './profiles-signin'
 import { copilotState, registerCopilotIpc } from './copilot-session'
 import { appendCopilotAction, copilotPaths } from './copilot-home'
 import { COPILOT_HOME_SETTING, registerCopilotFolderIpc } from './copilot-folder'
+import { copilotFilesHere } from './copilot-files'
 import { registerCopilotInspectIpc } from './copilot-inspect'
 import { registerDeckControlIpc, type DeckControlHandle } from './deck-control'
 import { createSessionTools, type SessionTools } from './deck-control/session-tools'
@@ -2875,6 +2876,25 @@ function registerIpc(): void {
      * approved, and the panel has nothing to set.
      */
     copilot: copilotRuns,
+    /*
+     * And the copilot's own files, which is the *"Its files"* card of the
+     * settings pane reaching a phone.
+     *
+     * > *"its memory folder which is actually here, the folder's own
+     * > instruction, what it was handed, its tool list … it reads and writes two
+     * > kinds of prompts and only one is ours."*
+     *
+     * The folder is resolved on every call rather than captured, exactly as
+     * `copilotRoot` above resolves it: pointing the copilot at a different
+     * workspace is a setting a person can change while a phone is connected, and
+     * a `CopilotPaths` frozen at assembly would be listing a folder that has
+     * since moved. This is also what advertises `copilot.files` — the same
+     * "absent is the switch" negotiation `copilot` itself gets, and the reason
+     * the headless daemon passes none.
+     */
+    copilotFiles: copilotFilesHere(() =>
+      copilotPaths(app.getPath('userData'), storedValue(COPILOT_HOME_SETTING) as string | null),
+    ),
     copilotLinks,
     // Where a photo or a file sent from a phone lands. The user's downloads
     // folder, in a folder named after the app — somewhere a person already looks,

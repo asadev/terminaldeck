@@ -100,6 +100,7 @@ import {
     type CopilotActionRow,
     type CopilotChatMessage,
     type CopilotConsentQuestion,
+    type CopilotFileRow,
     type CopilotGrantWire,
     type CopilotLinkWire,
     type CopilotPendingRow,
@@ -2106,7 +2107,241 @@ class Channel {
                 }
                 return
             }
+
+            /* ---- capability `copilot.files` ---------------------------- */
+            case 'copilot.files':
+            case 'copilot.file.read':
+            case 'copilot.file.write':
+            case 'copilot.file.reset':
+            case 'copilot.memory.delete': {
+                /*
+                 * Served here because this file sends `CAPABILITIES` verbatim.
+                 *
+                 * That is the whole reason this block exists rather than being
+                 * left for the desktop: the moment `copilot.files` joined that
+                 * list, this stand-in began *advertising* the surface — and an
+                 * advertised capability nothing answers is precisely the defect
+                 * `CopilotLink.isImplemented` was written after, where a pass
+                 * over a different feature was reported as verified against an
+                 * empty screen.
+                 *
+                 * The three checks are the desktop's, in the desktop's order:
+                 * this socket has opened the copilot, this device holds the tier
+                 * the verb needs, and only then the verb.
+                 */
+                const device = this.deviceId ?? ''
+                if (!this.copilotOpen) {
+                    return this.send({
+                        t: 'error',
+                        code: 'unauthorized',
+                        message: 'This device is not connected to the copilot. '
+                            + 'Connect it on the machine itself, in Settings → Remote.',
+                    })
+                }
+                if (!copilotAllows(message.t, device)) {
+                    return this.send({
+                        t: 'error',
+                        code: 'unauthorized',
+                        message: 'This device has not been given that much access to the copilot on '
+                            + `this ${hostNoun()}. The boxes are in Settings, under Remote.`,
+                    })
+                }
+                switch (message.t) {
+                    case 'copilot.files':
+                        return this.send({ t: 'copilot.files.rows', files: harnessFileRows() })
+                    case 'copilot.file.read': {
+                        const held = harnessFiles.get(message.id)
+                        // Absent is an *error with no text*, never an empty box —
+                        // the desktop's own distinction, and the one that lets a
+                        // screen tell "nothing has been written yet" from "this
+                        // file is empty".
+                        return this.send({
+                            t: 'copilot.file.text',
+                            id: message.id,
+                            text: held?.text ?? '',
+                            ...(held === undefined
+                                ? { error: 'Nothing has been written yet — these files are composed when the copilot starts.' }
+                                : {}),
+                        })
+                    }
+                    case 'copilot.file.write': {
+                        const held = harnessFiles.get(message.id)
+                        if (held !== undefined && !held.writable) {
+                            this.send({
+                                t: 'error',
+                                code: 'unavailable',
+                                message: 'That file is written by the app every time the copilot starts, '
+                                    + 'so there is nothing to save.',
+                            })
+                            return this.send({ t: 'copilot.files.rows', files: harnessFileRows() })
+                        }
+                        // A file that was not there is *created* only for the
+                        // folder's own instructions, matching the desktop: the
+                        // one file on this surface a person may legitimately be
+                        // the first author of.
+                        if (held === undefined && message.id !== 'folder') {
+                            this.send({ t: 'error', code: 'unavailable', message: 'That is not a file the copilot keeps.' })
+                            return this.send({ t: 'copilot.files.rows', files: harnessFileRows() })
+                        }
+                        harnessFiles.set(message.id, {
+                            name: held?.name ?? 'CLAUDE.md',
+                            purpose: held?.purpose ?? 'The folder’s own instructions.',
+                            owner: held?.owner ?? 'folder',
+                            writable: true,
+                            text: message.text,
+                            modifiedAt: Date.now(),
+                        })
+                        return this.send({ t: 'copilot.files.rows', files: harnessFileRows() })
+                    }
+                    case 'copilot.file.reset': {
+                        if (message.id !== 'yours') {
+                            this.send({
+                                t: 'error',
+                                code: 'unavailable',
+                                message: 'Only the copilot’s own instructions have a version this build can put back.',
+                            })
+                            return this.send({ t: 'copilot.files.rows', files: harnessFileRows() })
+                        }
+                        const own = harnessFiles.get('yours')
+                        if (own) {
+                            own.text = HARNESS_DEFAULT_INSTRUCTIONS
+                            own.modifiedAt = Date.now()
+                        }
+                        return this.send({ t: 'copilot.files.rows', files: harnessFileRows() })
+                    }
+                    case 'copilot.memory.delete': {
+                        harnessFiles.delete(`memory:${message.name}`)
+                        return this.send({ t: 'copilot.files.rows', files: harnessFileRows() })
+                    }
+                }
+                return
+            }
         }
+    }
+}
+
+/* -------------------------------------------------------------------------- */
+/* The copilot's files, in memory                                              */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * What this stand-in keeps instead of a copilot layer on disk.
+ *
+ * Real text rather than lorem, and the four ids are the real four: a screen
+ * driven against this has to draw a persona that reads like a persona, a
+ * generated contract that is visibly generated, and a folder file that is
+ * **absent** — which is the row a person is most often looking at, and the one
+ * whose "not there" badge is the whole point of listing it at all.
+ *
+ * Keyed by wire id, so nothing in this file ever composes a path either. That is
+ * not a coincidence: the desktop's guarantee is that an id from a client never
+ * becomes a path, and a stand-in that joined ids onto a directory would be a
+ * harness that cannot reproduce the thing being tested.
+ */
+interface HarnessFile {
+    name: string
+    purpose: string
+    owner: 'app' | 'yours' | 'folder'
+    writable: boolean
+    text: string
+    modifiedAt: number
+}
+
+const HARNESS_DEFAULT_INSTRUCTIONS = `# Who you are
+
+The copilot for this machine. You answer about the sessions on it, the folders
+it has been given, and what you did — and you say plainly when you cannot.
+`
+
+const harnessFiles = new Map<string, HarnessFile>([
+    ['yours', {
+        name: 'instructions.md',
+        purpose: 'Yours — the persona and the standing instructions. Editable, and never written over.',
+        owner: 'yours',
+        writable: true,
+        text: HARNESS_DEFAULT_INSTRUCTIONS,
+        modifiedAt: Date.now(),
+    }],
+    ['contract', {
+        name: 'tools.md',
+        purpose: 'The app’s — the tool contract and the permission rules. Generated from the live tool '
+            + 'catalogue every time the copilot starts.',
+        owner: 'app',
+        writable: false,
+        text: '## Your tools\n\nsessions.list — read\nsessions.send — act\nsettings.write — alter\n',
+        modifiedAt: Date.now(),
+    }],
+    ['composed', {
+        name: 'copilot.md',
+        purpose: 'The two of them composed — byte for byte what the running copilot was handed.',
+        owner: 'app',
+        writable: false,
+        text: '## Your tools\n\nsessions.list — read\n\n---\n\n# Who you are\n\nThe copilot for this machine.\n',
+        modifiedAt: Date.now(),
+    }],
+    ['memory:MEMORY.md', {
+        name: 'MEMORY.md',
+        purpose: 'Memory index',
+        owner: 'folder',
+        writable: true,
+        text: '# Memory\n\n- [The relay is the network](reference_relay.md)\n',
+        modifiedAt: Date.now(),
+    }],
+    ['memory:reference_relay.md', {
+        name: 'reference_relay.md',
+        purpose: 'The relay is the network — never a tailnet dependency',
+        owner: 'folder',
+        writable: true,
+        text: '---\ndescription: "The relay is the network"\ntype: convention\n---\n\nThe relay is the network.\n',
+        modifiedAt: Date.now(),
+    }],
+])
+
+/**
+ * The listing, with the folder's own file drawn as absent when nobody has
+ * written one.
+ *
+ * `folder` is the only id that can be missing from the map and still be a row,
+ * and that asymmetry is the desktop's: its absence is the visible proof that
+ * nothing in the working folder claims to be the copilot, so it is listed
+ * either way and a screen that dropped the row would leave a person to infer it.
+ */
+function harnessFileRows(): CopilotFileRow[] {
+    const rows: CopilotFileRow[] = []
+    for (const id of ['yours', 'contract', 'composed', 'folder']) {
+        const held = harnessFiles.get(id)
+        if (held === undefined) {
+            rows.push({
+                id,
+                name: 'CLAUDE.md',
+                purpose: 'The folder’s own instructions. This app never writes one here — an empty row '
+                    + 'means nothing in this folder claims to be the copilot',
+                owner: 'folder',
+                exists: false,
+                size: null,
+                modifiedAt: null,
+                writable: true,
+            })
+            continue
+        }
+        rows.push(harnessRow(id, held))
+    }
+    for (const [id, held] of harnessFiles) {
+        if (id.startsWith('memory:')) rows.push(harnessRow(id, held))
+    }
+    return rows
+}
+
+function harnessRow(id: string, held: HarnessFile): CopilotFileRow {
+    return {
+        id,
+        name: held.name,
+        purpose: held.purpose,
+        owner: held.owner,
+        exists: true,
+        size: Buffer.byteLength(held.text, 'utf8'),
+        modifiedAt: held.modifiedAt,
+        writable: held.writable,
     }
 }
 

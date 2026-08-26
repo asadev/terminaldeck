@@ -379,6 +379,21 @@ describe('what a public host offers', () => {
        */
       CAPABILITY.copilot,
       /*
+       * And its **files**, which is `copilot` one notch sharper still.
+       *
+       * What this surface carries is the copilot's own instructions, the tool
+       * contract it was handed, and the name and description of every fact it
+       * has ever written down about the owner's machines. There is no version of
+       * a demo box on which a stranger reads that.
+       *
+       * Withheld twice over like `copilot` itself, and by the same two
+       * mechanisms: the offer list is the decision, and the demo assembly
+       * constructs neither a run manager nor a files seam — and `serves` in
+       * `server.ts` requires **both** before it advertises this name, precisely
+       * because these frames ride the copilot's own connection ceremony.
+       */
+      CAPABILITY.copilotFiles,
+      /*
        * `web` is withheld for the same reason and by the same two mechanisms.
        *
        * It opens a page **on the host's screen**, in a tab of that machine's own

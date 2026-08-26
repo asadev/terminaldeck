@@ -307,6 +307,19 @@ export function writeMemoryFact(
   paths: CopilotPaths,
   name: unknown,
   text: unknown,
+  /**
+   * Where the person who pressed Save was, for the log line below.
+   *
+   * A parameter rather than the hard-coded word it used to be, because the same
+   * edit can now arrive from a phone over the relay — see
+   * `remote/copilot-files.ts`. Defaulted to the only caller that existed before,
+   * so nothing about the settings pane's rows changes. The reason it is worth a
+   * parameter at all is the one the row itself gives: an agent that answers
+   * differently tomorrow because a fact was rewritten under it is exactly the
+   * change somebody will later try to explain, and *which keyboard it came from*
+   * is half of that explanation.
+   */
+  where: string = 'Settings',
 ): MemoryWriteResult {
   const listing = (): MemoryReport => readMemory(paths)
   if (!isMemoryName(name)) {
@@ -352,7 +365,7 @@ export function writeMemoryFact(
   // be read as the copilot editing its own memory would be a row that lies.
   appendCopilotAction(paths, {
     action: 'memory.edited',
-    detail: `you edited memory/${name} from Settings`,
+    detail: `you edited memory/${name} from ${where}`,
   })
   return { ok: true, error: null, memory: listing() }
 }
@@ -379,7 +392,12 @@ export interface MemoryDeleteResult {
  * is off so that deleting something that is not there reports honestly instead
  * of succeeding.
  */
-export function deleteMemoryFact(paths: CopilotPaths, name: unknown): MemoryDeleteResult {
+export function deleteMemoryFact(
+  paths: CopilotPaths,
+  name: unknown,
+  /** Where the delete was pressed. See {@link writeMemoryFact}'s own `where`. */
+  where: string = 'Settings',
+): MemoryDeleteResult {
   if (!isMemoryName(name)) {
     return { ok: false, error: 'That is not a memory file.', memory: readMemory(paths) }
   }
@@ -403,7 +421,7 @@ export function deleteMemoryFact(paths: CopilotPaths, name: unknown): MemoryDele
    */
   appendCopilotAction(paths, {
     action: 'memory.deleted',
-    detail: `you deleted memory/${name} from Settings`,
+    detail: `you deleted memory/${name} from ${where}`,
   })
   return { ok: true, error: null, memory: readMemory(paths) }
 }

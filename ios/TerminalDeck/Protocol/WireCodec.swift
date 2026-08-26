@@ -567,6 +567,41 @@ enum WireCodec {
             }
             return .ok(.copilotAsk(question), activity: [:])
 
+        case "copilot.files.rows":
+            guard let rows = object["files"] as? [Any] else {
+                return .failed(reason: "copilot.files.rows without a list")
+            }
+            /*
+             * One unreadable row costs a row, never the frame — the rule every
+             * list on this wire keeps. A memory file whose name this build cannot
+             * address is a line missing from the list; refusing the whole frame
+             * would take the copilot's instructions off the screen because
+             * something in `memory/` was odd.
+             *
+             * Capped at what the desktop already caps itself at, so a host ahead
+             * of this build cannot make this phone hold an unbounded directory.
+             */
+            return .ok(.copilotFiles(rows.compactMap { copilotFileRow($0) }.prefix(Copilot.maxFileRows).map { $0 }),
+                       activity: [:])
+
+        case "copilot.file.text":
+            // The id has to be one this build can address, for the reason the
+            // rows above drop an unknown one: text arriving for a file nothing
+            // asked about is either a build ahead of this one or something that
+            // is not this app, and putting it in an editor would be putting
+            // unattributed bytes in front of a Save button.
+            guard let id = string(object["id"]), Copilot.isFileId(id) else {
+                return .failed(reason: "copilot.file.text without a known file")
+            }
+            // Absent text is empty rather than a refusal: the frame's contract is
+            // that `text` is always there and empty whenever `error` is, and a
+            // desktop that sent only the error has still answered the question.
+            let failure = string(object["error"]).flatMap { $0.isEmpty ? nil : $0 }
+            return .ok(.copilotFileText(id: id,
+                                        text: string(object["text"]) ?? "",
+                                        error: failure),
+                       activity: [:])
+
         case "copilot.settled":
             guard let settlement = copilotSettlement(object["settled"]) else {
                 return .failed(reason: "copilot.settled without an id")
@@ -1131,6 +1166,28 @@ enum WireCodec {
             object = ["t": "copilot.cancel"]
         case .copilotStop:
             object = ["t": "copilot.stop"]
+
+        /*
+         * The copilot's files. Note what is *not* in any of them, once more: a
+         * path. Every `id` is one of four words or `memory:` and a name, and the
+         * desktop resolves it by looking it up rather than by joining it — see
+         * `ClientMessage.copilotFiles` for the whole argument.
+         *
+         * Nothing here checks the id before sending. `CopilotLink` will not build
+         * one of these except out of a row the desktop itself sent, and the
+         * desktop refuses an id it does not know with a sentence; a check here
+         * would be a third copy of a rule that already has two.
+         */
+        case .copilotFiles:
+            object = ["t": "copilot.files"]
+        case let .copilotReadFile(id):
+            object = ["t": "copilot.file.read", "id": id]
+        case let .copilotWriteFile(id, text):
+            object = ["t": "copilot.file.write", "id": id, "text": text]
+        case let .copilotResetFile(id):
+            object = ["t": "copilot.file.reset", "id": id]
+        case let .copilotForgetMemory(name):
+            object = ["t": "copilot.memory.delete", "name": name]
 
         case let .usageRead(rid, id, want, force):
             object = ["t": "usage.read", "rid": rid, "id": id, "want": want.rawValue, "force": force]

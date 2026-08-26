@@ -2174,6 +2174,16 @@ final class HostLink: Identifiable {
         case let .copilotSettled(settled):
             copilot.apply(settled: settled)
 
+        case let .copilotFiles(rows):
+            copilot.apply(files: rows)
+
+        case let .copilotFileText(id, text, error):
+            // The id is carried through rather than dropped here: `CopilotLink`
+            // uses it to throw away a read for a file that is no longer the one
+            // open, which is the case where a person would otherwise be editing
+            // one file believing they were editing another.
+            copilot.apply(fileText: id, text: text, error: error)
+
         case .usageReading, .accountState, .accountSwitched:
             // Everything about which answer belongs to which question is the
             // bar's, because `rid` is minted there. It drops an answer to a

@@ -109,6 +109,11 @@ import { copilotFrameAllowed, type CopilotRemote, type CopilotSink } from './cop
 // instance of this store, and a class import here would be a second constructor
 // for a file whose whole point is that there is one copy of it in memory.
 import type { CopilotAccess, CopilotReach } from './copilot-access'
+// Type-only for a stronger reason than the two above: the real implementation of
+// this seam is `src/main/copilot-files.ts`, which reaches `copilot-inspect.ts`
+// and therefore reaches `electron` at module scope. A value import here would
+// take the headless daemon down at *import* time. See that file's header.
+import type { CopilotFiles } from './copilot-files'
 import {
   CAPABILITIES,
   CAPABILITY,
@@ -118,6 +123,7 @@ import {
   MAX_WATCH_WINDOWS,
   PROTOCOL_VERSION,
   chunkOutput,
+  copilotFileTarget,
   parseClientMessage,
   serialize,
   type BrowserFrameFrame,
@@ -1090,6 +1096,24 @@ export interface RemoteEndpointOptions {
    * for why the two must not be folded together.
    */
   copilot?: CopilotRemote
+  /**
+   * The copilot's own files, read and edited from one of his devices.
+   * **Absent is the switch**, once more.
+   *
+   * A second seam rather than a corner of {@link copilot}, and the split is a
+   * fact about the hosts rather than a preference. `CopilotRuns` needs a
+   * `deck-control` endpoint, a consent broker and a session starter; this needs a
+   * `<userData>` and a disk. A machine can honestly have the second and not the
+   * first — that is exactly the headless daemon — and folding them would mean
+   * either advertising files on a host whose copilot never ran, or withholding
+   * them from one that has every file and no tools.
+   *
+   * What is **not** split is the gate. These frames go through `copilotFor` like
+   * every other `copilot.*` verb, so a guest is refused by the same three checks
+   * in the same order, and `capabilitiesFor` strips this name from a guest's
+   * welcome beside `copilot` itself. See `remote/copilot-files.ts`.
+   */
+  copilotFiles?: CopilotFiles
   /**
    * May this particular device be offered the copilot at all?
    *
@@ -2325,6 +2349,22 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
      */
     if (name === CAPABILITY.copilot) return options.copilot !== undefined
     /*
+     * And its files, negotiated separately from it for the reason the option's
+     * own note gives: a host can have a copilot and no files worth showing, and
+     * — the case that actually reaches a phone — a build can serve every other
+     * `copilot.*` verb and have never heard of these five. A frame an older host
+     * has never heard of closes the channel, so this name is what a client waits
+     * for before drawing a single row.
+     */
+    if (name === CAPABILITY.copilotFiles) {
+      // **And** a copilot, because these frames ride its connection ceremony:
+      // `copilotFor` refuses every one of them until this socket has sent
+      // `copilot.hello`, and `copilot.hello` is refused on a host with no
+      // copilot. Advertising files a device could never open would be the
+      // failure this function exists to avoid, one capability along.
+      return options.copilotFiles !== undefined && options.copilot !== undefined
+    }
+    /*
      * Same rule as every one above it: the thing that makes the feature possible
      * decides whether it is offered. A host with no window has nowhere to put a
      * page — the headless daemon and the demo box are both in that position —
@@ -2603,7 +2643,13 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     // guest is told the capability exists and is shown the ports its own grant
     // covers, which may be none; the narrowing is in the hub, where the same
     // list decides what is offered and what may be dialled.
-    return narrowed.filter((name) => name !== CAPABILITY.copilot && name !== CAPABILITY.web)
+    // And the copilot's *files* go with the copilot, necessarily: they are the
+    // instructions, the memory and the tool contract of the agent a guest is
+    // never shown at all. One eligibility question behind all three, so a device
+    // cannot be a guest for the copilot and an owner for its instruction file.
+    return narrowed.filter(
+      (name) => name !== CAPABILITY.copilot && name !== CAPABILITY.copilotFiles && name !== CAPABILITY.web,
+    )
   }
 
   /**
@@ -4336,6 +4382,159 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
         return
       }
     }
+  }
+
+  /**
+   * Serve one `copilot.file*` frame, after {@link copilotFor} has allowed it.
+   *
+   * **The same door, deliberately.** These five verbs are checked by
+   * `copilotFor` exactly as the other eleven are — this host has a copilot, this
+   * socket has opened it, this device is one of his, this grant covers this verb
+   * — and there is no second gate anywhere in this function. A surface that
+   * reaches somebody's instruction file is the last place to invent a new way of
+   * asking who is allowed, and `copilot-access.ts` already carries the argument
+   * for the one that exists.
+   *
+   * What it adds is the seam: {@link RemoteEndpointOptions.copilotFiles} is a
+   * separate object from the run manager, so a host can have one and not the
+   * other. Absent here is a refusal rather than a crash, and the sentence is the
+   * one every unadvertised capability gives.
+   *
+   * Every branch ends in a frame. A read answers with `copilot.file.text` on
+   * success *and* on refusal, and a write answers with a fresh
+   * `copilot.files.rows` whether or not it saved — because a client whose save
+   * was refused is holding a row it may no longer be right about, and the cheap
+   * way to be sure is to send the disk.
+   */
+  function copilotFilesServe(
+    connection: LiveConnection,
+    // Listed one by one rather than caught by a template literal, so that a
+    // sixth verb on this capability stops the build here as well as at the
+    // dispatch above — the rule the eleven copilot verbs already keep.
+    message: Extract<
+      ClientMessage,
+      {
+        t:
+          | 'copilot.files'
+          | 'copilot.file.read'
+          | 'copilot.file.write'
+          | 'copilot.file.reset'
+          | 'copilot.memory.delete'
+      }
+    >,
+  ): void {
+    const files = options.copilotFiles
+    if (!files) {
+      send(connection, {
+        t: 'error',
+        code: 'unauthorized',
+        message: 'The copilot’s files cannot be reached on this machine.',
+      })
+      return
+    }
+    switch (message.t) {
+      case 'copilot.files':
+        send(connection, { t: 'copilot.files.rows', files: files.list() })
+        return
+      case 'copilot.file.read': {
+        /*
+         * Resolved a second time, and the second time is the one this function
+         * is entitled to rely on.
+         *
+         * `parseClientMessage` already refused any id that is not one of four
+         * words or a valid memory name, so `null` here is unreachable today. It
+         * is handled anyway, for the reason `copilotFor` gives about its own kind
+         * check: this is the only place a wire id becomes a file, and a rule that
+         * holds because of what a *different* function refuses is a rule the next
+         * caller does not have.
+         */
+        const target = copilotFileTarget(message.id)
+        if (target === null) {
+          send(connection, {
+            t: 'copilot.file.text',
+            id: message.id,
+            text: '',
+            error: 'That is not a file the copilot keeps.',
+          })
+          return
+        }
+        const read = files.read(target)
+        send(connection, {
+          t: 'copilot.file.text',
+          id: message.id,
+          text: read.text,
+          ...(read.error === null ? {} : { error: read.error }),
+        })
+        return
+      }
+      case 'copilot.file.write': {
+        const target = copilotFileTarget(message.id)
+        if (target === null) {
+          refuseFile(connection, 'That is not a file the copilot keeps.')
+          return
+        }
+        const written = files.write(target, message.text)
+        // The sentence, then the disk. Same order `copilot.answer` uses for the
+        // same reason: a refusal a person can read, and immediately after it the
+        // state they should be looking at instead of the one they were.
+        if (!written.ok) refuseFile(connection, written.error ?? 'It could not be saved just now.')
+        send(connection, { t: 'copilot.files.rows', files: files.list() })
+        return
+      }
+      case 'copilot.file.reset': {
+        /*
+         * One file resets, and the other three are refused **in words**.
+         *
+         * The policy lives here rather than in the parser because it is a fact
+         * about this build's files, not about the wire: there is exactly one
+         * file this app ships a default of. A client that asked about another is
+         * told so, rather than having a frame quietly do nothing — which is the
+         * shape in which somebody presses Restore three times and then decides
+         * the feature is broken.
+         */
+        if (message.id !== 'yours') {
+          refuseFile(
+            connection,
+            'Only the copilot’s own instructions have a version this build can put back. ' +
+              'The other files are either generated on every start or yours to write.',
+          )
+          send(connection, { t: 'copilot.files.rows', files: files.list() })
+          return
+        }
+        const reset = files.reset()
+        if (!reset.ok) refuseFile(connection, reset.error ?? 'The instructions could not be restored just now.')
+        send(connection, { t: 'copilot.files.rows', files: files.list() })
+        return
+      }
+      case 'copilot.memory.delete': {
+        // The name has been through `isCopilotMemoryName` on the way in and goes
+        // through `isMemoryName` again inside `deleteMemoryFact` before `rmSync`
+        // sees it. Nothing here composes a path, and nothing here needs to.
+        const forgotten = files.forget(message.name)
+        if (!forgotten.ok) refuseFile(connection, forgotten.error ?? 'That memory could not be deleted just now.')
+        send(connection, { t: 'copilot.files.rows', files: files.list() })
+        return
+      }
+    }
+  }
+
+  /**
+   * A refusal about a *file* rather than about a device.
+   *
+   * `unavailable` and never `unauthorized`, and the distinction is worth keeping
+   * even though both draw the same alert: `unauthorized` on this wire means
+   * *this device may not*, and a client that logs one is logging a permission
+   * event. A generated file with nothing to save, or one too large to send, is
+   * neither the device's fault nor its business.
+   *
+   * The sentence is passed through rather than replaced. Almost all of them are
+   * `copilot-home.ts`'s own wording, written for the box on the settings pane
+   * and correct on a phone because it names the file's problem rather than the
+   * app's — and `remote/copilot-files.ts` is where the rule lives that none of
+   * them may quote a path or an `errno`.
+   */
+  function refuseFile(connection: LiveConnection, reason: string): void {
+    send(connection, { t: 'error', code: 'unavailable', message: reason })
   }
 
   /**
@@ -6671,6 +6870,36 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
         })
         return
       }
+      case 'copilot.files':
+      case 'copilot.file.read':
+      case 'copilot.file.write':
+      case 'copilot.file.reset':
+      case 'copilot.memory.delete': {
+        /*
+         * Listed one by one beside the eleven above, and gated by the same call.
+         *
+         * `copilotFor` is what decides: this host has a copilot, this socket has
+         * opened it, this device is one of his, and this grant covers this verb.
+         * There is deliberately no separate door for the files — a surface that
+         * reaches somebody's instruction file is the last place to grow a second
+         * answer to who is allowed.
+         *
+         * The returned run manager is not used and is not the point; what
+         * matters is that a `null` means a refusal has already been sent. The
+         * seam the handler actually needs is `options.copilotFiles`, which is a
+         * different object and may be absent on a host that has the copilot but
+         * not this surface — read there rather than here, so the "no files"
+         * refusal is one sentence in one place.
+         *
+         * Not awaited and not a promise: unlike `copilot.start`, nothing here
+         * spawns anything. These are a `readdir`, a `readFile` and a
+         * `writeFileSync` on files this process owns, and running them inline
+         * keeps the ordering a client depends on — the refusal, then the listing.
+         */
+        if (!copilotFor(connection, connection.deviceId, message.t)) return
+        copilotFilesServe(connection, message)
+        return
+      }
     }
   }
 
@@ -7951,6 +8180,19 @@ export interface RemoteIpcDeps {
    */
   copilot?: CopilotRemote
   /**
+   * The copilot's own files. Absent is the switch — see
+   * {@link RemoteEndpointOptions.copilotFiles}.
+   *
+   * Named here as well as on the endpoint, and that is not paperwork: this
+   * interface is the *only* road from a shell to those options, so a field that
+   * exists over there and not here is a field no host can ever pass. That is
+   * precisely how `browser.control` came to be wired at every layer and
+   * advertised by nobody — a whole surface green and unreachable. The rule that
+   * catches it is the one `headless/host.test.ts` applies: ask a real endpoint
+   * for its welcome rather than asking `serves` what it would have said.
+   */
+  copilotFiles?: RemoteEndpointOptions['copilotFiles']
+  /**
    * Who reaches the copilot, for the settings panel to *show*.
    *
    * Read-only now, and the change of tense is the whole of 2026-08-19: this used
@@ -8411,6 +8653,10 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
     // Asad's constraint on this feature demands: *"we don't want to give this
     // copilot to others."*
     ...(deps.copilot ? { copilot: deps.copilot } : {}),
+    // And its files, on the same rule and separately from it: a host that has a
+    // copilot may still pass no files, and one that passes files is advertising
+    // a surface only its owner's own devices will ever be told about.
+    ...(deps.copilotFiles ? { copilotFiles: deps.copilotFiles } : {}),
     /*
      * And who it is shared with, which is a narrower question than whether it
      * exists.
