@@ -90,6 +90,7 @@ import dev.terminaldeck.android.ui.GitHubSheet
 import dev.terminaldeck.android.ui.PairingScreen
 import dev.terminaldeck.android.ui.ServerLoginScreen
 import dev.terminaldeck.android.ui.ServerLoginView
+import dev.terminaldeck.android.ui.FolderPickerScreen
 import dev.terminaldeck.android.ui.SessionListScreen
 import dev.terminaldeck.android.ui.TerminalScreen
 import androidx.compose.ui.platform.LocalConfiguration
@@ -780,6 +781,7 @@ fun TerminalDeckApp(
                 onNewSession = viewModel::newSession,
                 onSelectHost = viewModel::select,
                 onCloseSession = { session -> viewModel.endSession(session.id) },
+                onRename = { session, name -> viewModel.renameSession(session.id, name) },
                 listed = split.listed,
                 archived = split.archived,
                 isPinned = { session -> shelf.isPinned(hostId, session.id) },
@@ -1140,6 +1142,31 @@ fun TerminalDeckApp(
         }
     }
 
+    /*
+     * The folder picker, at the **top level** of the NavHost rather than inside one graph, so every
+     * lane reaches it by name — `navigate("folderpick")` — a session's New-session flow, the
+     * machines list, the copilot's setup. The screen is a pure function of the browse state; opening
+     * the first listing on the way in and clearing it on the way out is here, mirroring iOS's
+     * onAppear / onDisappear, so a late answer for a folder nobody is looking at is dropped.
+     */
+    composable("folderpick") {
+        val browse by viewModel.folderBrowse.state.collectAsStateWithLifecycle()
+        LaunchedEffect(Unit) { viewModel.folderBrowse.open() }
+        DisposableEffect(Unit) { onDispose { viewModel.folderBrowse.end() } }
+        FolderPickerScreen(
+            view = browse,
+            onBrowse = viewModel.folderBrowse::browse,
+            // The default action is `.start`: a session begins in the chosen folder, and the
+            // `created` observer above opens it. This only steps back off the picker so the terminal
+            // is what lands, not the picker with a session behind it.
+            onChoose = { folder ->
+                viewModel.newSession(folder)
+                navController.popBackStack()
+            },
+            onBack = { navController.popBackStack() },
+        )
+    }
+
     }
     }
 
@@ -1227,8 +1254,6 @@ fun TerminalDeckApp(
                 host = host,
                 startableFolders = state.startableFolders,
                 canStart = state.canStartSession,
-                gitLoginsOffered = state.canAnswerGitLogins,
-                gitHubLogin = state.gitHubAccount?.login,
                 // Offered only from the list. Raised from inside the session, a button leading to
                 // the screen underneath is furniture — so the terminal passes a sheet with no Open.
                 onOpen = if (onList) {
@@ -1244,10 +1269,6 @@ fun TerminalDeckApp(
                     viewModel.newSession(folder)
                 },
                 onCopy = viewModel::copyText,
-                onGitHub = {
-                    detailFor = null
-                    github = true
-                },
                 onDismiss = { detailFor = null },
             )
         }

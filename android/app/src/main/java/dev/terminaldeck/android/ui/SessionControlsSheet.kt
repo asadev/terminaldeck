@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -62,10 +63,14 @@ import dev.terminaldeck.android.protocol.SessionControls
  *
  * The view half of [dev.terminaldeck.android.SessionControlsController], and the same drawing iOS
  * keeps in `SessionControlsView.swift`. A chip shows a control's current value; tapping it opens the
- * rows underneath. A blocked chip **still opens** — onto the far end's own sentence, never onto a
- * dead menu, which is the rule stated most often about this surface. The ticked row is whatever the
- * far end re-read after the change settled, so a refused apply reverts by construction; a failure
- * keeps its sentence, a confirmation clears itself.
+ * rows underneath. A blocked chip **opens onto its rows too, with the reason above them** — the rule
+ * used to be the opposite (open onto the far end's sentence, never a dead menu) until Asad opened
+ * Model and got a paragraph where the models should have been: *"they are also not control they are
+ * just descriptions which i dont want always."* Prose instead of a menu is a second way of being a
+ * dead menu, so the rows are always drawn — unpressable when blocked, because the tick is worth
+ * seeing even in a moment it cannot change — and the reason is one short line above them. The ticked
+ * row is whatever the far end re-read after the change settled, so a refused apply reverts by
+ * construction; a failure keeps its sentence, a confirmation clears itself.
  *
  * Fast mode lives at the end of the model sheet — where the desktop keeps it — because the CLI
  * couples them: switching model turns fast mode off.
@@ -264,27 +269,27 @@ private fun ControlChip(
 
         if (isOpen) {
             HorizontalDivider(color = MaterialTheme.colorScheme.outline)
-            if (blocked != null) {
-                // Never a dead menu: a blocked chip opens onto the far end's reason.
-                Text(
-                    text = blocked,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+            // The reason above the rows, never in their place. iOS swapped this round after Asad
+            // opened Model and got a paragraph where the list of models should have been: *"they are
+            // also not control they are just descriptions which i dont want always."* Prose instead
+            // of a menu is not the cure for a dead menu, it is a second way of being one. So the rows
+            // are drawn whether or not the control is blocked — the ticked row is worth seeing even
+            // in a moment it cannot be changed — and the one short line rides above them.
+            if (blocked != null) ReasonLine(blocked)
+            for (option in ControlCatalog.rows(control)) {
+                option.group?.let { Caption(it) }
+                OptionRow(
+                    option = option,
+                    current = SessionControls.chosen(reading.reading(control), option),
+                    // Drawn but not pressable when blocked — a press would only be answered with a
+                    // refusal, and that is the dead click this app is repeatedly audited for.
+                    enabled = busy == null && blocked == null,
+                    usable = blocked == null,
+                    onClick = { onApply(control, option.id) },
                 )
-            } else {
-                for (option in ControlCatalog.rows(control)) {
-                    option.group?.let { Caption(it) }
-                    OptionRow(
-                        option = option,
-                        current = SessionControls.chosen(reading.reading(control), option),
-                        enabled = busy == null,
-                        onClick = { onApply(control, option.id) },
-                    )
-                }
-                if (control == ControlName.Model) {
-                    FastSection(reading = reading, busy = busy, onApply = onApply)
-                }
+            }
+            if (control == ControlName.Model) {
+                FastSection(reading = reading, busy = busy, alreadySaid = blocked, onApply = onApply)
             }
         }
     }
@@ -295,6 +300,9 @@ private fun OptionRow(
     option: ControlOption,
     current: Boolean,
     enabled: Boolean,
+    // Draws the row quiet and refuses the press when the control is blocked — the row is still worth
+    // reading, it is where the tick is, and a press that would only be refused is a dead click.
+    usable: Boolean = true,
     onClick: () -> Unit,
 ) {
     Row(
@@ -320,7 +328,7 @@ private fun OptionRow(
             Text(
                 text = option.label,
                 style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurface,
+                color = if (usable) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
             )
             option.hint?.let {
                 Text(
@@ -344,19 +352,22 @@ private fun OptionRow(
 private fun FastSection(
     reading: ControlsReadingWire,
     busy: ControlName?,
+    // The model chip's own reason, passed in for one case: the session's typing gate blocks all four
+    // controls at once, so without it a mid-turn model sheet would print the same sentence twice, a
+    // few rows apart, about the same session. An account refusal that belongs only to fast mode is
+    // never the same string, so it still gets its line.
+    alreadySaid: String?,
     onApply: (ControlName, String) -> Unit,
 ) {
     val fast = reading.fast
     val barred = SessionControls.blocked(ControlName.Fast, reading)
     Caption(ControlCatalog.name(ControlName.Fast))
+    // The reason above the control, not in its place — the same swap the chips above made. A block
+    // used to replace the whole switch with the far end's sentence; now the switch stays, showing
+    // what is in force, and does not accept a press. *"Fast mode requires usage credits"* is worth
+    // reading beside a switch that says Off; it is not worth reading instead of one.
+    if (barred != null && barred != alreadySaid) ReasonLine(barred)
     when {
-        barred != null -> Text(
-            text = barred,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
-        )
-
         fast.value == "on" || fast.value == "off" -> {
             val on = fast.value == "on"
             Row(
@@ -364,7 +375,7 @@ private fun FastSection(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = 48.dp)
-                    .clickable(enabled = busy == null || busy == ControlName.Fast) {
+                    .clickable(enabled = barred == null && (busy == null || busy == ControlName.Fast)) {
                         onApply(ControlName.Fast, SessionControls.fastFlip(fast))
                     }
                     .padding(horizontal = 14.dp, vertical = 8.dp),
@@ -389,11 +400,12 @@ private fun FastSection(
                     )
                 } else {
                     // A read-only picture the whole row flips — a real Switch beside a clickable row
-                    // would be two controls for one act.
+                    // would be two controls for one act. Quiet rather than green when barred, so it
+                    // reads as showing a state rather than offering a change.
                     Icon(
                         if (on) Icons.Filled.CheckCircle else Icons.Filled.RadioButtonUnchecked,
                         contentDescription = if (on) "Fast mode is on" else "Fast mode is off",
-                        tint = if (on) {
+                        tint = if (on && barred == null) {
                             MaterialTheme.colorScheme.primary
                         } else {
                             MaterialTheme.colorScheme.onSurfaceVariant
@@ -408,10 +420,39 @@ private fun FastSection(
             OptionRow(
                 option = option,
                 current = false,
-                enabled = busy == null,
+                enabled = busy == null && barred == null,
+                usable = barred == null,
                 onClick = { onApply(ControlName.Fast, option.id) },
             )
         }
+    }
+}
+
+/**
+ * The one short line a block gets, above the rows it does not replace.
+ *
+ * Quieter than the rows and deliberately not an error: nothing has failed, and every state that
+ * reaches here — a turn in flight, a dialog on screen, an account without the credits for fast mode
+ * — is a fact about right now rather than about this control.
+ */
+@Composable
+private fun ReasonLine(text: String) {
+    Row(
+        verticalAlignment = Alignment.Top,
+        modifier = Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 2.dp),
+    ) {
+        Icon(
+            Icons.Outlined.Info,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(14.dp),
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

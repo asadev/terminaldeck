@@ -14,7 +14,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -53,14 +52,15 @@ import dev.terminaldeck.android.ui.theme.Space
  * This is where somebody will look for the two things they cannot do, so it is worth writing down
  * why they are not here rather than leaving the gap to be rediscovered.
  *
- *  - **Renaming a session.** There is no verb for it. The protocol carries `list`, `attach`,
- *    `input`, `resize`, `create` and the capability extensions — nothing that changes a session's
- *    title, and the desktop's own titles come from naming a session after its folder. A field here
- *    would have nowhere to send what was typed in it.
+ *  - **Renaming a session.** Not on this sheet. There *is* a verb for it now — `rename`, which the
+ *    session list's row menu sends when the machine advertises it — but a name is about *this*
+ *    session while everything else here is a fact off the wire, so the rename lives on the row a
+ *    person is already acting on rather than behind a second sheet.
  *  - **Choosing which account a session runs as.** `create` carries `cwd`, `cols`, `rows` and
- *    `provider`; it does not carry an account. What this sheet can honestly say is the *other*
- *    account question — which login this phone would answer a git prompt with — and it says exactly
- *    that, in those words, rather than a line somebody could read as "this session runs as".
+ *    `provider`; it does not carry an account, and no frame reports which one a running session got.
+ *    The *other* account question — which login this phone answers a git prompt with — is not here
+ *    either: it is one account for the whole phone, so it is one row in Settings, not a line on
+ *    every session sheet. See the removal note where that card used to be.
  *
  * ## The folder is a control, not a caption
  *
@@ -76,14 +76,10 @@ fun SessionDetailSheet(
     /** The folders this machine is granting this device right now, not the session's own path. */
     startableFolders: List<String>,
     canStart: Boolean,
-    /** Whether this machine may ask this phone for a git login. Absent otherwise. */
-    gitLoginsOffered: Boolean,
-    gitHubLogin: String?,
     /** Offered only from the list, where opening it is somewhere to go. Null from inside the session. */
     onOpen: (() -> Unit)?,
     onNewSessionHere: (String) -> Unit,
     onCopy: (String) -> Unit,
-    onGitHub: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val colors = DeckTheme.colors
@@ -208,54 +204,19 @@ fun SessionDetailSheet(
             }
 
             /*
-             * The account question this phone can actually answer.
+             * There is no Git logins row here any more.
              *
-             * Deliberately not labelled as the session's account, because it is not one: the agent's
-             * login lives in a config directory on that machine and nothing on this wire reports it.
-             * What *is* true, and worth knowing on the screen where somebody is looking at a session
-             * that is about to push, is which GitHub this phone would hand over when git on that
-             * machine asks — which is the whole of the `credential` capability, running backwards.
+             * > *"there is one option called Git login… it is for settings, it's not for per session,
+             * > so let's not show the GitHub also in that page — inside the session details, in the
+             * > normal sessions too, in the copilot too, because it is the same everywhere anyway."*
              *
-             * Shown only when the machine advertised that it may ask. A machine that never will is
-             * one where this sentence would be a promise about nothing.
+             * The GitHub this phone would hand over when git asks is **one account for the whole
+             * phone**, not a property of a session. It was drawn per session because a session is
+             * where somebody stands when a push is about to happen — but that is about *timing*, not
+             * ownership, and a setting shown on twenty session sheets reads as twenty settings. It is
+             * one row on the Settings tab now, which is where it always really lived; see [GitHubSheet],
+             * opened from there. Matches iOS `SessionDetailView`, which removed the same card.
              */
-            if (gitLoginsOffered) {
-                SectionCaption("Git logins")
-                DeckGroup {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable(onClick = onGitHub)
-                            .padding(horizontal = Space.card, vertical = Space.x3),
-                    ) {
-                        Icon(
-                            Icons.Filled.Person,
-                            contentDescription = null,
-                            tint = colors.secondary,
-                            modifier = Modifier.size(18.dp),
-                        )
-                        Spacer(Modifier.width(Space.x3))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = gitHubLogin?.let { "@$it" } ?: "Not connected",
-                                style = DeckType.body,
-                                color = colors.primary,
-                            )
-                            Spacer(Modifier.height(Space.half))
-                            Text(
-                                text = if (gitHubLogin == null) {
-                                    "A push from ${host.label} will not be answered from this phone."
-                                } else {
-                                    "Used when git on ${host.label} asks for one."
-                                },
-                                style = DeckType.caption,
-                                color = colors.faint,
-                            )
-                        }
-                    }
-                }
-            }
 
             DeckFootnote(
                 "A session's folder and the login its agent runs as are set on the machine. This " +

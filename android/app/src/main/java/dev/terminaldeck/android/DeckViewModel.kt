@@ -335,6 +335,20 @@ class DeckViewModel(
         onChange = { publish() },
     )
 
+    /**
+     * Walking the machine's folders, for the folder picker to read.
+     *
+     * One instance for the whole app rather than one per machine, because the picker is only ever
+     * open for the machine on screen and sends every `folders.browse` to that one — [selected]. Its
+     * state is a flow of its own rather than a field on [DeckUiState]: this is a screen somebody
+     * opens, walks and closes, so it holds its own listing and clears it on the way out rather than
+     * riding along on every session frame. The `folders.entries` answer is handed to [receive] from
+     * [onFrame]; the screen is [dev.terminaldeck.android.ui.FolderPickerScreen].
+     */
+    val folderBrowse: FolderBrowseController = FolderBrowseController(
+        send = { selected?.transport?.send(it) ?: false },
+    )
+
     init {
         // Routed by machine **id** rather than through a captured link, because a machine can be
         // forgotten while its question is on screen — and answering through an object that has been
@@ -812,8 +826,17 @@ class DeckViewModel(
             }
 
             /*
-             * The wire foundation for the machine's files, git, panels, folder picker, own browser,
-             * copilot files and routines — decodable and routed here, but not yet consumed.
+             * The folder picker's answer — the first of the group below to grow a screen that reads
+             * it. Handed to [folderBrowse], which drops it when no picker is open, the same harmless
+             * outcome the group's comment describes for an answer nobody is holding.
+             */
+            is ServerMessage.FolderEntries -> {
+                folderBrowse.receive(message)
+            }
+
+            /*
+             * The wire foundation for the machine's files, git, panels, own browser, copilot files
+             * and routines — decodable and routed here, but not yet consumed.
              *
              * Each of these answers a verb a later screen will send, and each will be handed to the
              * controller that owns that screen the way the copilot family above is handed to
@@ -829,7 +852,6 @@ class DeckViewModel(
             is ServerMessage.GitStateFrame,
             is ServerMessage.GitPatch,
             is PanelData,
-            is ServerMessage.FolderEntries,
             is MachineBrowserState,
             is MachineShot,
             is ServerMessage.BrowserWindowPicked,
@@ -1451,6 +1473,25 @@ class DeckViewModel(
             return
         }
         if (!link.transport.send(ClientMessage.Close(sessionId))) notify("Not connected.")
+    }
+
+    /**
+     * Give a session a name of this person's choosing, on the machine on screen.
+     *
+     * *"for being able to rename sessions."* Only reachable when the machine advertised
+     * [Capability.RENAME] — the Rename row is absent otherwise, and this is the backstop for a
+     * capability withdrawn between the draw and the tap. The [title] is sent exactly as typed: an
+     * **empty** one is not a mistake and is not a cancel — it tells the machine to derive its own
+     * name from the folder again, the only way back from a rename. The row is not changed here; it
+     * changes when the machine's next `sessions` frame arrives, so every device sees one answer.
+     */
+    fun renameSession(sessionId: String, title: String) {
+        val link = selected ?: return
+        if (!_uiState.value.canRenameSessions) {
+            notify("This machine cannot rename sessions from the phone.")
+            return
+        }
+        if (!link.transport.send(ClientMessage.Rename(sessionId, title))) notify("Not connected.")
     }
 
     /* --------------------------------------------------- devices & server settings -- */

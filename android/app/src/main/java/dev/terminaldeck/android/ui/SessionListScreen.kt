@@ -38,6 +38,8 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -138,6 +140,15 @@ fun SessionListScreen(
     onArchivedList: () -> Unit = {},
     /** Everything the wire says about one session, as a sheet. Long-press, and the terminal's ⋯. */
     onDetails: (RemoteSessionView) -> Unit = {},
+    /**
+     * Give a session a name of this person's choosing — the Rename row's action.
+     *
+     * *"for being able to rename sessions."* An empty name is not a cancel and not a mistake: it
+     * tells the machine to derive its own from the folder again, the only way to undo a rename
+     * without knowing what the folder is called. Offered per row only when the machine advertised
+     * the verb — [DeckUiState.canRenameSessions] — the same absent-not-greyed rule the ✕ follows.
+     */
+    onRename: (RemoteSessionView, String) -> Unit = { _, _ -> },
     /** The line that says what changed while the app was gone, and the tap that dismisses it. */
     onDismissAwayReport: () -> Unit = {},
 ) {
@@ -146,6 +157,8 @@ fun SessionListScreen(
     var switcher by remember { mutableStateOf(false) }
     // Set to the row a person asked to close; the confirm dialog is drawn while it is non-null.
     var closing by remember { mutableStateOf<RemoteSessionView?>(null) }
+    // Set to the row a person asked to rename; the name dialog is drawn while it is non-null.
+    var renaming by remember { mutableStateOf<RemoteSessionView?>(null) }
     LaunchedEffect(state.notice) {
         state.notice?.let { snackbar.showSnackbar(it) }
     }
@@ -388,6 +401,8 @@ fun SessionListScreen(
                                 onClick = { onOpen(session) },
                                 // Absent, not disabled, when the machine never advertised `close`.
                                 onClose = if (state.canCloseSessions) ({ closing = session }) else null,
+                                // Absent, not disabled, when the machine never advertised `rename`.
+                                onRename = if (state.canRenameSessions) ({ renaming = session }) else null,
                                 onArchive = { onArchive(session) },
                                 onPin = { onPin(session, !isPinned(session)) },
                                 onDetails = { onDetails(session) },
@@ -416,6 +431,17 @@ fun SessionListScreen(
                 onCloseSession(session)
             },
             onCancel = { closing = null },
+        )
+    }
+
+    renaming?.let { session ->
+        RenameSessionDialog(
+            session = session,
+            onConfirm = { name ->
+                renaming = null
+                onRename(session, name)
+            },
+            onCancel = { renaming = null },
         )
     }
 
@@ -460,6 +486,76 @@ private fun CloseSessionDialog(
         dismissButton = {
             TextButton(onClick = onCancel) {
                 Text("Keep", style = DeckType.control, color = DeckTheme.colors.accent)
+            }
+        },
+    )
+}
+
+/**
+ * Giving a session a name, in the one shape a phone has for a short piece of typed text.
+ *
+ * *"for being able to rename sessions."* A `TextField` inside a dialog rather than a screen of its
+ * own: it is one line with one answer, and a screen for it would be a screen to get out of. Save is
+ * not destructive and is the default; the field starts on the session's current title.
+ *
+ * The empty field is allowed through on purpose — it is how the machine is told to derive its own
+ * name from the folder again, the only way to undo a rename without knowing what that folder is
+ * called. The line under the field says so, because an empty box that means something is a thing
+ * nobody guesses. The row is not changed here: it changes when the machine's next `sessions` frame
+ * arrives, so the name people see is the one the machine kept.
+ */
+@Composable
+private fun RenameSessionDialog(
+    session: RemoteSessionView,
+    onConfirm: (String) -> Unit,
+    onCancel: () -> Unit,
+) {
+    val colors = DeckTheme.colors
+    // Seeded from the current title and keyed to the session, so the machine re-reading this row
+    // every few seconds cannot throw the half-typed draft away underneath the person typing it.
+    var text by remember(session.id) { mutableStateOf(session.title) }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onCancel,
+        containerColor = colors.surface,
+        titleContentColor = colors.primary,
+        textContentColor = colors.secondary,
+        // The title names the session, so a list of eight `agent` rows cannot produce a rename of
+        // the wrong one.
+        title = { Text("Rename ${session.title}") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    singleLine = true,
+                    placeholder = { Text("Name", color = colors.faint) },
+                    // The one green in the box: the focus edge and the caret, so the field reads as
+                    // this app's rather than as the platform's default blue.
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = colors.accent,
+                        cursorColor = colors.accent,
+                        focusedTextColor = colors.primary,
+                        unfocusedTextColor = colors.primary,
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(Space.x2))
+                Text(
+                    text = "Every device signed in here sees the new name. Leave it empty to go " +
+                        "back to the folder's own name.",
+                    style = DeckType.footnote,
+                    color = colors.faint,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onConfirm(text) }) {
+                Text("Save", style = DeckType.control, color = colors.accent)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onCancel) {
+                Text("Cancel", style = DeckType.control, color = colors.secondary)
             }
         },
     )
@@ -625,6 +721,8 @@ private fun SessionCard(
     onClick: () -> Unit,
     /** Null when the machine does not advertise `close`; the ✕ is absent then, never disabled. */
     onClose: (() -> Unit)? = null,
+    /** Null when the machine does not advertise `rename`; the Rename row is absent then, never greyed. */
+    onRename: (() -> Unit)? = null,
     onArchive: () -> Unit = {},
     onPin: () -> Unit = {},
     onDetails: () -> Unit = {},
@@ -734,6 +832,16 @@ private fun SessionCard(
                     text = { Text("Details") },
                     onClick = { menu = false; onDetails() },
                 )
+                // Rename, above the shelf verbs: a name is about *this* session and goes to the
+                // machine, where Pin and Archive are this phone's own bookkeeping and never leave
+                // it. *"for being able to rename sessions."* Absent, not greyed, over a machine that
+                // never advertised the verb — the rule every row on this menu follows.
+                if (onRename != null) {
+                    DropdownMenuItem(
+                        text = { Text("Rename") },
+                        onClick = { menu = false; onRename() },
+                    )
+                }
                 DropdownMenuItem(
                     text = { Text(if (pinned) "Unpin" else "Pin to the top") },
                     onClick = { menu = false; onPin() },
@@ -742,6 +850,16 @@ private fun SessionCard(
                     text = { Text("Archive") },
                     onClick = { menu = false; onArchive() },
                 )
+                // The same confirm the ✕ raises, wired to the same door so the two ask with one
+                // amount of care — the defect a menu straight to close beside a swipe that asked
+                // first would be. *"instead of saying close just say delete… they know it will go
+                // away completely."* Absent, not greyed, when the machine never advertised `close`.
+                if (onClose != null) {
+                    DropdownMenuItem(
+                        text = { Text("Delete", color = colors.critical) },
+                        onClick = { menu = false; onClose() },
+                    )
+                }
             }
         }
     }
