@@ -641,6 +641,30 @@ final class HostLink: Identifiable {
         transport?.send(.machineWindowAct(id: id, action: act))
     }
 
+    /**
+     * Lay a window's page out in a rectangle of this size, in CSS pixels.
+     *
+     * > *"it opens a very big page then it compares to the normal size… it should
+     * > always open to the normal size."*
+     *
+     * The size is the **pane the picture is going to be drawn into**, in points,
+     * so one CSS pixel lands on one point and the page arrives at 100% instead of
+     * at whatever ratio `WatchMath.fit` happened to compute. See
+     * `WireProtocol.machineWindowSize` for why both numbers are needed and why
+     * this is not a per-frame negotiation.
+     *
+     * Nothing is remembered here. Which window has been told what, and therefore
+     * whether telling it again is worth a frame, is the **screen's** business —
+     * it is the thing that knows its own pane moved. A cache in this object would
+     * be a second opinion about a pane it cannot see, and the failure it produces
+     * is a page that stays the wrong size after a rotation because something in
+     * here decided the message was a duplicate.
+     */
+    func sizeMachineWindow(_ id: String, width: Int, height: Int) {
+        guard canDriveBrowser else { return }
+        transport?.send(.machineWindowSize(id: id, width: width, height: height))
+    }
+
     /// Bind a window to a session, or unbind it by passing nil.
     func bindMachineWindow(_ id: String, to session: String?) {
         guard canDriveBrowser else { return }

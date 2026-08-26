@@ -159,6 +159,7 @@ const CLIENT_TYPES: Record<ClientMessage['t'], true> = {
   'browser.window.open': true,
   'browser.window.go': true,
   'browser.window.act': true,
+  'browser.window.size': true,
   'browser.window.bind': true,
   'browser.window.shot': true,
   'browser.window.steps': true,

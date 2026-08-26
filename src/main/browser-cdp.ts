@@ -1,8 +1,12 @@
 import { isNavigationAllowed } from './browser-url'
 import {
+  MAX_PAGE_HEIGHT,
+  MAX_PAGE_WIDTH,
   MAX_TOUCH_POINTS,
   MAX_WATCH_QUALITY,
   MAX_WATCH_WIDTH,
+  MIN_PAGE_HEIGHT,
+  MIN_PAGE_WIDTH,
   MIN_WATCH_QUALITY,
   MIN_WATCH_WIDTH,
 } from './remote/protocol'
@@ -519,6 +523,44 @@ export const CDP_ALLOWED_METHODS: readonly string[] = [
    * context-wide `Storage.getCookies` stay on the deny-list below.
    */
   'Network.getCookies',
+  /*
+   * The viewport, and this is the one entry on this list whose desktop refusal is
+   * about a **person** rather than about a power.
+   *
+   * `DENIED_METHODS` refuses `Emulation.setDeviceMetricsOverride` for every
+   * caller on the Electron transport with one line — *"Changes the viewport under
+   * a person who may be reading the page"* — and that line is exactly right for
+   * the thing it is about. A `WebContentsView` on the desktop is a window on
+   * somebody's screen. They may be halfway down it, mid-form, mid-sentence.
+   * Reflowing it from a phone in another room is the app acting on its own, which
+   * is the whole class of behaviour this file exists to make impossible.
+   *
+   * **A headless host has no such person.** There is no screen, no window, no
+   * keyboard and nobody looking: the only thing that ever sees one of these pages
+   * is a phone, over a screencast, and the viewport is the size of the hole that
+   * phone is going to draw the picture into. Refusing here does not protect
+   * anybody — it guarantees the page is laid out at a width nobody chose, which
+   * is the defect:
+   *
+   * > *"it is too zoom, it's bigger than the normal view of the website whatever
+   * > website we are browsing so keep it on 100 percent like a normal view of any
+   * > website like proper normal dimensions."*
+   *
+   * So the entry moves for the headless transport **only**, and it stays on
+   * `DENIED_METHODS` above so the desktop is unchanged; the two tables are read
+   * by `transport` and `browser-cdp.test.ts` asserts each pair is disjoint. Like
+   * every other "yes" over here that carries a capability in its arguments, it is
+   * bought with an argument check rather than a shrug — {@link screenDeviceMetrics}
+   * pins it to a plain viewport of a sane size and refuses every other power the
+   * method carries: no mobile emulation, no fictional display, and no scale
+   * factor other than one.
+   *
+   * `Emulation.clearDeviceMetricsOverride` is deliberately **not** here. Nothing
+   * in this app calls it — a second `setDeviceMetricsOverride` replaces the first
+   * — and this file's own rule about `Fetch.getResponseBody` applies unchanged:
+   * *"A power that is not needed is a power that stays off."*
+   */
+  'Emulation.setDeviceMetricsOverride',
 ]
 
 /**
@@ -534,8 +576,13 @@ export const CDP_ALLOWED_METHODS: readonly string[] = [
  * HTTP auth are the larger powers the header refuses by construction. The
  * entries that LEFT this list relative to the desktop — navigate, evaluate,
  * capture, the target lifecycle, the host download behaviour, the single-URL
- * cookie read — each moved to {@link CDP_ALLOWED_METHODS} with an argument
- * check, never a bare allow.
+ * cookie read, the viewport override — each moved to {@link CDP_ALLOWED_METHODS}
+ * with an argument check, never a bare allow.
+ *
+ * The viewport override is the newest of those and the only one whose desktop
+ * refusal was never about a *power*: it is about a person at a screen, and a
+ * headless host has none. Its entry in the allow-list above carries the whole
+ * argument.
  */
 export const CDP_DENIED_METHODS: readonly string[] = [
   'Browser.close',
@@ -562,7 +609,6 @@ export const CDP_DENIED_METHODS: readonly string[] = [
   'Fetch.getResponseBody',
   'Network.setRequestInterception',
   'Network.setExtraHTTPHeaders',
-  'Emulation.setDeviceMetricsOverride',
   'Runtime.compileScript',
 ]
 
@@ -1045,6 +1091,94 @@ function screenTouch(params: Record<string, unknown>): Screening {
   return { ok: true }
 }
 
+/**
+ * `Emulation.setDeviceMetricsOverride`, which is four powers wearing one name.
+ *
+ * The feature needs exactly one of them: *lay this document out in a rectangle
+ * of this many CSS pixels*, so that a phone drawing the picture into a pane of
+ * that many points sees the page at 100% — *"like a normal view of any website
+ * like proper normal dimensions."* Everything else the method can do is refused
+ * here rather than left to a comment, on the rule the whole file follows: a
+ * method's name does not say what the call does, and the four powers below are
+ * each a different thing from the one that was asked for.
+ *
+ *  - **`mobile`** switches the target into mobile emulation: a meta-viewport is
+ *    honoured, `navigator.userAgentData.mobile` flips, and the page serves its
+ *    phone layout. That is a fake with a real cost — it answers *"how wide is
+ *    this page"* by showing a **different page** — and it is the exact
+ *    substitution `PageWidths` on the phone was written to avoid. Pinned false.
+ *  - **`deviceScaleFactor`** oversamples: the layout stays put and the surface
+ *    gets bigger, so it is not a size at all, it is a resolution. Pinned to 1, so
+ *    one image pixel is one CSS pixel and the arithmetic the viewer does with
+ *    `WatchMath.fit` stays honest. It is also the only value at which the
+ *    screencast's own `maxWidth` cap means what the phone thinks it means.
+ *  - **`screenOrientation`, `screenWidth`, `screenHeight`, `positionX/Y`** lie
+ *    to the page about the *display* rather than about the window. Nothing here
+ *    needs a fictional screen, and a page reading `screen.width` should read this
+ *    machine's truth.
+ *  - **A missing or zero width or height** is CDP's own spelling of *turn the
+ *    override off*, which is a different verb from *lay it out this wide* and has
+ *    no caller. Refused, so that "resize to nothing" can never arrive as a
+ *    silently-cleared viewport.
+ *
+ * The bounds are the wire's own — {@link MIN_PAGE_WIDTH}/{@link MAX_PAGE_WIDTH}
+ * and {@link MIN_PAGE_HEIGHT}/{@link MAX_PAGE_HEIGHT}, imported rather than
+ * respelled — so the parser that clamps a phone's request and the gate that
+ * screens the resulting protocol call cannot drift apart into a range one of
+ * them enforces and the other does not.
+ */
+function screenDeviceMetrics(params: Record<string, unknown>): Screening {
+  const width = params.width
+  if (
+    typeof width !== 'number' ||
+    !Number.isInteger(width) ||
+    width < MIN_PAGE_WIDTH ||
+    width > MAX_PAGE_WIDTH
+  ) {
+    return {
+      ok: false,
+      reason: `a page is laid out at a whole width between ${MIN_PAGE_WIDTH} and ${MAX_PAGE_WIDTH} CSS pixels`,
+    }
+  }
+  const height = params.height
+  if (
+    typeof height !== 'number' ||
+    !Number.isInteger(height) ||
+    height < MIN_PAGE_HEIGHT ||
+    height > MAX_PAGE_HEIGHT
+  ) {
+    return {
+      ok: false,
+      reason: `a page is laid out at a whole height between ${MIN_PAGE_HEIGHT} and ${MAX_PAGE_HEIGHT} CSS pixels`,
+    }
+  }
+  if (params.mobile !== false) {
+    return {
+      ok: false,
+      reason:
+        'a viewport is set here to lay a page out at a width, never to put it into mobile emulation — ' +
+        'that would answer "how wide is this page" by serving a different page',
+    }
+  }
+  if (params.deviceScaleFactor !== 1) {
+    return {
+      ok: false,
+      reason:
+        'a page is laid out at one image pixel per CSS pixel here; a scale factor is a resolution ' +
+        'rather than a size, and the viewer measures the picture assuming it is one',
+    }
+  }
+  for (const key of ['screenOrientation', 'screenWidth', 'screenHeight', 'positionX', 'positionY']) {
+    if (params[key] !== undefined) {
+      return {
+        ok: false,
+        reason: `a viewport may be sized here but not told a fictional display; ${key} is refused`,
+      }
+    }
+  }
+  return { ok: true }
+}
+
 /* ------------------------------------------------------------ the verdict -- */
 
 export type Screening =
@@ -1068,7 +1202,8 @@ export type Screening =
  *  4. **The arguments**, for the methods that carry a destination or a
  *     capability — the navigation URL, the fetch pattern, the fulfilled headers,
  *     and (server only) the evaluation world, the download path, the new
- *     target's URL, the history entry and the single-URL cookie read.
+ *     target's URL, the history entry, the single-URL cookie read and the
+ *     viewport override.
  *
  * `state` and `transport` are passed rather than read, so the module has no
  * ambient state and a test can drive every value on either transport without an
@@ -1186,6 +1321,9 @@ export function screenCommand(input: {
   }
   if (method === 'Page.navigateToHistoryEntry') {
     return screenHistoryEntryParams(params)
+  }
+  if (method === 'Emulation.setDeviceMetricsOverride') {
+    return screenDeviceMetrics(params)
   }
   if (method === 'Network.getCookies') {
     /*

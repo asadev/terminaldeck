@@ -2094,6 +2094,67 @@ export class BrowserDrive {
     await this.input(page, slot, 'Input.dispatchKeyEvent', { ...base, type: 'keyUp' })
   }
 
+  /* ------------------------------------------------------------- viewport -- */
+
+  /**
+   * Lay this page out in a rectangle of this many CSS pixels.
+   *
+   * ## Why this exists, in his words
+   *
+   * > *"in here if you can see we have this window to come up. First of all when
+   * > we open it, it opens a very big page then it compares to the normal size if
+   * > you can see. Okay, so it should always open to the normal size."*
+   *
+   * > *"it is too zoom, it's bigger than the normal view of the website whatever
+   * > website we are browsing so keep it on 100 percent like a normal view of any
+   * > website like proper normal dimensions."*
+   *
+   * A window on a headless host is whatever size Chromium made it — 800 × 600,
+   * because `browser-chromium-launch.ts` passes no `--window-size` — and the
+   * screencast's `maxWidth` only *caps* the picture, it never re-lays the page
+   * out. So a phone fitting that picture into its own pane drew the document at
+   * `pane points ÷ 800`, which is a ratio and not a size. This is the one call
+   * that makes it a size.
+   *
+   * ## It goes through the ordinary screen and is refused on the desktop
+   *
+   * {@link send}, like every other command this class issues, so `browser-cdp.ts`
+   * decides. On the **CDP** transport the method is allow-listed and
+   * argument-screened — a whole width and height in the wire's own range,
+   * `mobile: false`, `deviceScaleFactor: 1`, and no fictional screen. On the
+   * **Electron** transport it is not on the allow-list at all and is on
+   * `DENIED_METHODS` besides, so this method throws there rather than reflowing a
+   * window somebody may be reading. That refusal is the feature: see
+   * `MachineBrowserDeps.resize`, which a headless host supplies and a desktop
+   * deliberately does not.
+   *
+   * ## The ordinary hold, and nothing revealed
+   *
+   * `hold` without `reveal`, exactly as the reads do. Somebody is watching this
+   * page from a phone; a window that jumps to the front because a pane was
+   * rotated is a machine acting on its own. On a headless host there is nothing
+   * to bring forward anyway, and the day this is reached from anywhere else that
+   * has to still be true.
+   */
+  async setViewport(width: number, height: number, target?: DriveTarget | null): Promise<void> {
+    const { slot, page } = await this.hold(target)
+    await this.send(page, slot, 'Emulation.setDeviceMetricsOverride', {
+      width,
+      height,
+      /*
+       * Both pinned here as well as screened in `browser-cdp.ts`, and the
+       * duplication is the point rather than an oversight: the screen is the
+       * gate every caller passes, and these two lines are this caller declaring
+       * what it actually wants. One image pixel per CSS pixel, because the
+       * viewer's `WatchMath.fit` measures the picture as if that were true; and
+       * never mobile emulation, because that answers *"how wide is this page"*
+       * by serving a different page.
+       */
+      deviceScaleFactor: 1,
+      mobile: false,
+    })
+  }
+
   /* ---------------------------------------------------------- screenshots -- */
 
   /**

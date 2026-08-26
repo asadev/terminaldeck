@@ -90,6 +90,27 @@ import type {
  *    secret rules that were already there rather than a fourth opinion about
  *    what a stable selector is.
  *
+ * ## The thing added after the recorded review of 2026-08-26
+ *
+ * **`size` lays the page out in the rectangle the viewer will draw it into.**
+ *
+ * > *"in here if you can see we have this window to come up. First of all when we
+ * > open it, it opens a very big page then it compares to the normal size if you
+ * > can see. Okay, so it should always open to the normal size."*
+ *
+ * Nothing on this wire had ever told a machine how wide to lay a page out. The
+ * phone asked for a screencast *width* — in device pixels, which only caps the
+ * picture — and the machine went on laying the document out at whatever viewport
+ * it happened to have, which on a headless host is Chromium's own 800 × 600
+ * because it is launched with no `--window-size` at all. The viewer then fitted
+ * that picture into its pane, so the page was drawn at `pane points ÷ page CSS
+ * pixels`: a ratio that is 100% only by coincidence. This verb removes the
+ * coincidence.
+ *
+ * It is the one verb in the family whose availability is a **policy** rather
+ * than a capability — see {@link MachineBrowserDeps.resize}, which a headless
+ * host has and a desktop deliberately does not.
+ *
  * ## Isolated and shared mean what the desktop means by them
  *
  * `browser-isolation.ts`: an isolated window gets a partition named
@@ -376,6 +397,35 @@ export interface MachineBrowserDeps {
   history(id: string, move: 'back' | 'forward' | 'reload'): Promise<void>
   close(id: string): Promise<void>
   /**
+   * Lay a window's page out in a rectangle of this size, in **CSS pixels**.
+   *
+   * ## Optional, and which host has it is the whole point
+   *
+   * Every optional member here follows the same rule — a host that cannot do the
+   * thing simply does not have the member, and the phone is told in one sentence
+   * instead of being handed a control that answers nothing. This one is the rule
+   * carrying a *policy* rather than a *limit*, and the difference is worth
+   * stating because it is the one thing about this dep somebody will want to
+   * "fix":
+   *
+   *  - **A headless host has it.** There is no window, no screen and **nobody at
+   *    the keyboard**. The only thing looking at that page is a phone, over a
+   *    screencast, and the size of the viewport is that phone's business — it is
+   *    the size of the hole the picture is going to be drawn into.
+   *  - **The desktop does not, and must not.** `browser-cdp.ts` refuses
+   *    `Emulation.setDeviceMetricsOverride` for every caller on the Electron
+   *    transport with one sentence — *"Changes the viewport under a person who
+   *    may be reading the page"* — and on a desktop that sentence is literally
+   *    true: the window is on somebody's screen, they may be halfway down it, and
+   *    a phone in another room reflowing it under them is the app acting on its
+   *    own. So `machine-browser-desktop.ts` leaves this absent on purpose and
+   *    says so where it does it.
+   *
+   * A viewport is two numbers and both are required; see the `browser.window.size`
+   * frame in `protocol.ts` for why a width alone does not deliver 100%.
+   */
+  resize?(id: string, width: number, height: number): Promise<void>
+  /**
    * Re-partition an open window in place, and answer the view id the page is now
    * in — or null when the machine could not.
    *
@@ -432,6 +482,7 @@ export interface MachineBrowser {
   open(message: Frame<'browser.window.open'>): Promise<BrowserAnswer>
   go(message: Frame<'browser.window.go'>): Promise<BrowserAnswer>
   act(message: Frame<'browser.window.act'>): Promise<BrowserAnswer>
+  size(message: Frame<'browser.window.size'>): Promise<BrowserAnswer>
   bind(message: Frame<'browser.window.bind'>): Promise<BrowserAnswer>
   shot(message: Frame<'browser.window.shot'>): Promise<BrowserAnswer>
   steps(message: Frame<'browser.window.steps'>): Promise<BrowserAnswer>
@@ -1007,6 +1058,51 @@ export function machineBrowser(deps: MachineBrowserDeps): MachineBrowser {
         await deps.go(message.id, message.url)
       } catch (error) {
         return rows(`That address could not be opened: ${why(error)}.`)
+      }
+      return rows('')
+    },
+
+    /**
+     * Lay the window's page out in the rectangle the viewer is going to draw it
+     * into, so what arrives is the page at 100% rather than the page at whatever
+     * ratio two unrelated numbers happened to make.
+     *
+     * > *"it opens a very big page then it compares to the normal size… it should
+     * > always open to the normal size."*
+     *
+     * > *"keep it on 100 percent like a normal view of any website like proper
+     * > normal dimensions."*
+     *
+     * ## An empty notice on success, like `go`
+     *
+     * The family's rule is that a verb answers with the window list and the
+     * redraw is the confirmation, and this is the verb where that is most
+     * obviously right: **the page reflowing in front of you is the answer**. A
+     * line saying *"Laid Stripe out at 393 × 440."* would be the app narrating a
+     * thing the person is looking at, in the units they asked not to have to
+     * think about. Every way it can fail is a sentence, on the same rule.
+     *
+     * ## Why the absence of `deps.resize` is a sentence rather than a silence
+     *
+     * A machine whose browser is a person's own desktop cannot be asked to
+     * reflow a window somebody may be reading — see {@link MachineBrowserDeps.resize}
+     * — and the phone has to be able to tell that apart from *nothing happened*.
+     * Without a sentence the Size control on that screen would take a tap, redraw
+     * the same picture at the same width, and read as broken; *"it should be the
+     * same case, or all the options should be available at least"* is about
+     * controls being present, and a present control that lies is not the thing he
+     * asked for.
+     */
+    async size(message) {
+      if (!deps.resize) {
+        return rows("This machine's browser lays its own windows out, so this one cannot be resized from here.")
+      }
+      const window = await find(message.id)
+      if (!window) return rows('That window is not open any more.')
+      try {
+        await deps.resize(message.id, message.width, message.height)
+      } catch (error) {
+        return rows(`${nameOf(window)} could not be laid out at that size: ${why(error)}.`)
       }
       return rows('')
     },

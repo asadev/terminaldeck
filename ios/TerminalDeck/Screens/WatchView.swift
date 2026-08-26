@@ -227,6 +227,34 @@ enum WatchCommand {
      * folded, a screen being left, a page being handed back.
      */
     case endTyping
+
+    /**
+     * Magnify the picture, or put it back to life size.
+     *
+     * The pinch, as three instructions — because a bar cannot pinch. They arrived
+     * with the Size control on a machine window, whose menu is *"how wide is this
+     * page"* (a `browser.window.size` to the machine) and *"Actual size"* (this),
+     * and the two halves must not be confused with each other:
+     *
+     *  - **A device size re-lays the document out**, on the machine, at a width
+     *    in CSS pixels. That is the honest answer to *"how will it look on a
+     *    laptop"*.
+     *  - **These three change nothing about the layout.** They draw the picture
+     *    this canvas was sent larger or smaller, which is looking closer at
+     *    whatever is already there.
+     *
+     * `BrowserPageSize` keeps them as separate closures for exactly that reason,
+     * and `BrowserChrome.sizeIsLocal` still records the argument for what happens
+     * when somebody lets the second stand in for the first: *"it would answer
+     * 'how does this look on a laptop' with a phone layout in bigger letters."*
+     *
+     * `actualSize` is the one the menu draws, and it is the one a gesture cannot
+     * do: *"what pinch cannot do is land on exactly 100%, so the one row that
+     * survives is the one that is not a gesture — the reset."*
+     */
+    case zoomIn
+    case zoomOut
+    case actualSize
 }
 
 /**
@@ -356,6 +384,29 @@ struct WatchSurface: UIViewRepresentable {
     var onPageHeight: ((CGFloat) -> Void)?
 
     /**
+     * Told how wide the box this canvas draws into is, whenever that changes.
+     *
+     * The other direction from `onPageHeight`, and the one that makes a cast
+     * arrive at 100%:
+     *
+     * > *"it is too zoom, it's bigger than the normal view of the website
+     * > whatever website we are browsing so keep it on 100 percent like a normal
+     * > view of any website like proper normal dimensions."*
+     *
+     * A machine lays its window out at whatever viewport it has — 800 × 600 on a
+     * headless host, which is launched with no `--window-size` at all — and the
+     * screencast width this canvas negotiates only *caps the picture*. So the
+     * page was always drawn at `pane points ÷ page CSS pixels`, which is 100% by
+     * coincidence and by nothing else. A screen that takes this width and sends
+     * `browser.window.size` for it makes the coincidence a fact.
+     *
+     * In **points**, and the width only. See `announceCanvasWidth` for why a
+     * height reported from here would close a feedback loop through
+     * `onPageHeight`, and for the transient it would latch onto.
+     */
+    var onCanvasWidth: ((CGFloat) -> Void)?
+
+    /**
      * Whether the screen above this canvas is already showing the agent's
      * sentence, so the lock card must not say it a second time.
      *
@@ -404,6 +455,7 @@ struct WatchSurface: UIViewRepresentable {
     func makeUIView(context: Context) -> WatchSurfaceUIView {
         let view = WatchSurfaceUIView(watch: watch, target: window)
         view.onPageHeight = onPageHeight
+        view.onCanvasWidth = onCanvasWidth
         view.sentenceIsDrawnAbove = sentenceIsDrawnAbove
         return view
     }
@@ -413,6 +465,7 @@ struct WatchSurface: UIViewRepresentable {
     // `makeUIView` would go on writing into a binding nobody is reading.
     func updateUIView(_ uiView: WatchSurfaceUIView, context: Context) {
         uiView.onPageHeight = onPageHeight
+        uiView.onCanvasWidth = onCanvasWidth
         // Re-handed on every update, and the card is redrawn when it changes: a
         // handover that arrives while a curtain is already up (a password box was
         // on screen first) has to take the sentence off the card at that moment,
@@ -512,6 +565,14 @@ final class WatchSurfaceUIView: UIView, UIKeyInput, UIGestureRecognizerDelegate 
     /// The last height announced, so a page that is not changing size is not
     /// announced sixty times a second — every frame runs `layoutPage`.
     private var announcedHeight: CGFloat = -1
+
+    /// Told how wide the box this canvas draws into is. See
+    /// `WatchSurface.onCanvasWidth`.
+    var onCanvasWidth: ((CGFloat) -> Void)?
+    /// The last width announced, so a layout pass that did not move the box says
+    /// nothing. `layoutSubviews` runs for the keyboard, for a fold and for every
+    /// frame, and none of those change the width.
+    private var announcedCanvasWidth: CGFloat = -1
 
     // The traits `UIKeyInput` inherits. Every one of them is off on purpose: the
     // page is the thing being typed into and it has its own opinion about what
@@ -645,6 +706,71 @@ final class WatchSurfaceUIView: UIView, UIKeyInput, UIGestureRecognizerDelegate 
             startWatching()
         }
         hadRoom = room
+        announceCanvasWidth()
+    }
+
+    /**
+     * Say how wide the box this canvas draws into is, when that has changed.
+     *
+     * The sibling of `announce(_:)` and the opposite of it in what it is *for*.
+     * That one reports the **picture**, so a screen can size its pane to the
+     * page. This one reports the **pane**, so a screen can ask the machine to lay
+     * the page out at exactly that width — *"keep it on 100 percent like a normal
+     * view of any website"* — which is the one number nothing on this wire had
+     * ever carried.
+     *
+     * ## In points, and that is the whole arithmetic
+     *
+     * Not the device pixels `renderWidth()` computes. Those are the size of the
+     * **picture** the host encodes; asking for a layout that wide would lay a
+     * phone's page out at 1179 CSS pixels and then draw it a third of the size —
+     * the same defect with a bigger number in it. One CSS pixel drawn onto one
+     * point is 100%, and points is what a pane is measured in.
+     *
+     * ## The width and **not** the height, and this is the important half
+     *
+     * A canvas's height is not an independent fact about the pane: the screens
+     * above this size their canvas to whatever `onPageHeight` last reported, so
+     * the height here is downstream of the last frame's aspect ratio. Reporting
+     * it, and asking a machine to lay the page out at it, closes a loop —
+     * `layout → frame → picture height → canvas height → layout` — and a loop
+     * like that latches onto whatever transient started it. Measured on paper
+     * with real numbers: the first frames of a window are the host's own 800 ×
+     * 600, which fit a 393-point pane at 294 points tall, and a canvas that
+     * asked to be laid out 393 × 294 would settle there for ever — at a perfect
+     * 100%, in a pane a third shorter than the room it had.
+     *
+     * So the height a page is laid out at comes from the screen, which knows how
+     * much room it *intends* to give the page (`SessionPageRoom.splitCap`, a
+     * `GeometryReader`'s box) rather than how much it is using right now. The
+     * width has no such problem — nothing derives a canvas's width from a frame —
+     * which is exactly why this reports one number and not two.
+     *
+     * ## Guarded, because `layoutSubviews` runs for things that are not resizes
+     *
+     * The keyboard coming up changes the height, a fold changes it to nothing and
+     * back, and every frame lays out again. None of those move the width, and
+     * only a width that actually moved is worth a frame on the wire: this message
+     * reflows a document on another machine, and one per layout pass would be a
+     * host re-laying-out a page while somebody types. Half a point of tolerance
+     * for the reason `announce` uses one — a rectangle computed in floating point
+     * wobbles in the last digit without anything having moved.
+     *
+     * Nothing is said while the picture is magnified, exactly as `announce` says
+     * nothing then: at `zoom > 1` somebody is looking *closer at* a layout, not
+     * asking for a different one, and re-laying the page out under a pinch throws
+     * away the thing they were looking at.
+     *
+     * A runloop hop, because the receiver is `@State` on a SwiftUI view and
+     * writing it inside a layout pass is the *"Modifying state during view
+     * update"* warning followed by a frame of the old size.
+     */
+    private func announceCanvasWidth() {
+        guard let onCanvasWidth, zoom == 1 else { return }
+        let width = bounds.width
+        guard width > 0, abs(width - announcedCanvasWidth) > 0.5 else { return }
+        announcedCanvasWidth = width
+        DispatchQueue.main.async { onCanvasWidth(width) }
     }
 
     /// The pixel width to ask the host to render at, magnification included: a
@@ -1218,7 +1344,52 @@ final class WatchSurfaceUIView: UIView, UIKeyInput, UIGestureRecognizerDelegate 
             // does nothing, which is what lets a screen say *stop typing* on its
             // way out without first asking whether anybody was.
             _ = resignFirstResponder()
+        case .zoomIn:
+            setZoom(zoom * watchZoomStep)
+        case .zoomOut:
+            setZoom(zoom / watchZoomStep)
+        case .actualSize:
+            setZoom(1)
         }
+    }
+
+    /**
+     * Magnify the picture from a button rather than from two fingers.
+     *
+     * The same arithmetic `onPinch` does, with one difference that is the whole
+     * reason this is a separate function: a pinch has a point under the fingers
+     * to hold still and a button has none, so the anchor is the **centre of the
+     * box**. Holding the middle is what a menu row that says *Actual size* has to
+     * mean — the thing you were looking at is in the middle, because that is
+     * where you put it.
+     *
+     * Everything else is copied deliberately rather than shared, and it is short
+     * enough that copying is honest: the fraction of the drawn picture under the
+     * anchor is what must not move, the magnification is clamped into
+     * `1…maxWatchZoom`, and the render is renegotiated **once, at the end** —
+     * *"a host restarting its cast sixty times a second"* is what asking per step
+     * would be. Going back to 1 also re-arms the two announcements this canvas
+     * makes, both of which stay quiet while a picture is magnified.
+     *
+     * A no-op with nothing on screen, and with a curtain up: there is no
+     * rectangle to be a fraction of, and magnifying a *"the person is signing in"*
+     * card is not a thing anybody asked for.
+     */
+    private func setZoom(_ wanted: CGFloat) {
+        guard let frame = lastFrame, !frame.masked else { return }
+        let base = WatchMath.fit(frameW: frame.w, frameH: frame.h, in: bounds.size)
+        guard base.width > 0, drawn.width > 0, drawn.height > 0 else { return }
+        let next = min(maxWatchZoom, max(1, wanted))
+        guard abs(next - zoom) > 0.001 else { return }
+
+        let anchor = CGPoint(x: bounds.midX, y: bounds.midY)
+        let across = (anchor.x - drawn.minX) / drawn.width
+        let down = (anchor.y - drawn.minY) / drawn.height
+        zoom = next
+        pan = CGPoint(x: anchor.x - across * base.width * next - base.minX,
+                      y: anchor.y - down * base.height * next - base.minY)
+        layoutPage()
+        if renderWidth() != requestedWidth { startWatching() }
     }
 }
 
@@ -1226,3 +1397,11 @@ final class WatchSurfaceUIView: UIView, UIKeyInput, UIGestureRecognizerDelegate 
 /// 1600-pixel render — the host's own ceiling — stops having pixels left to
 /// give on a three-times phone screen.
 let maxWatchZoom: CGFloat = 5
+
+/// How much one press of Zoom in or Zoom out moves the magnification.
+///
+/// Half again, which is four presses from life size to the ceiling — few enough
+/// that getting there is not a chore, coarse enough that each press is visibly a
+/// step rather than a nudge. A pinch is still the fine control; these are for
+/// when there is no room for two fingers or no steadiness to spare.
+let watchZoomStep: CGFloat = 1.5

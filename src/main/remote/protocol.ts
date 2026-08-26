@@ -1483,6 +1483,57 @@ export const MAX_WATCH_QUALITY = 80
 export const MAX_TOUCH_POINTS = 10
 
 /**
+ * The clamp on the layout a `browser.window.size` may ask a window for, in **CSS
+ * pixels** — which is a different number from every other size on this wire.
+ *
+ * ## Why this is not {@link MIN_WATCH_WIDTH}/{@link MAX_WATCH_WIDTH}
+ *
+ * Those two bound the **picture**: how many image pixels a host encodes into a
+ * JPEG and puts on the relay. These two bound the **page**: how wide the browser
+ * engine lays the document out before anything is photographed. They are
+ * routinely different by the screen scale — a phone asking for a 393-point pane
+ * on a three-times display asks for a 1179-pixel *picture* of a 393-pixel-wide
+ * *page* — and one constant serving both would be the confusion this whole
+ * requirement is about, written into the wire.
+ *
+ * ## Why these numbers
+ *
+ * The floor is `PageDevice.smallPhone` (320 × 568) with room under it, because
+ * that is the narrowest thing the Size menu offers and a layout narrower than
+ * its own smallest breakpoint is a page nobody is checking. The ceiling is well
+ * past `PageDevice.desktop` (1440 × 900), so every row in that menu fits with
+ * room for a tablet stood on its side, and it is the same 4096 the CDP screen
+ * uses for a screencast height — a page laid out wider than a 4K display is a
+ * viewport nobody is looking at and a screenshot nothing will encode.
+ *
+ * **Clamped, never refused**, and that is load-bearing rather than lenient. The
+ * numbers come from a viewer measuring its own pane — the same argument
+ * `readWatch` makes about `maxWidth` — and `server.ts` answers a parse failure
+ * by **closing the socket**. A rotation that lands one pixel out of range must
+ * not drop the terminals, the cast and everything else riding that connection.
+ * What is still refused is a value that is not a finite number at all, because
+ * that is a broken client rather than a person turning their phone.
+ */
+export const MIN_PAGE_WIDTH = 240
+export const MAX_PAGE_WIDTH = 4096
+
+/**
+ * The same clamp for the height half of a `browser.window.size`.
+ *
+ * A viewport is two numbers and the height is not decoration: a page laid out
+ * 393 wide and 600 tall, drawn into a pane 393 wide and 440 tall, is fitted by
+ * the **height** and lands at 73% — which is the defect this verb exists to end,
+ * arrived at from the other axis. See the frame's own doc comment for the whole
+ * walk.
+ *
+ * The floor is lower than the width's because a pane can be genuinely short — a
+ * session page with the terminal taking most of the screen — and there is no
+ * breakpoint argument on this axis to hold it up.
+ */
+export const MIN_PAGE_HEIGHT = 160
+export const MAX_PAGE_HEIGHT = 4096
+
+/**
  * How many surfaces one `browser.surfaces.rows` may list.
  *
  * The tab strip of the watched browser. A person has a handful of tabs open; a
@@ -3058,6 +3109,61 @@ export type ClientMessage =
   | { t: 'browser.window.go'; id: string; url: string }
   /** Back, forward, reload, close, and start or stop recording the click flow. */
   | { t: 'browser.window.act'; id: string; action: string }
+  /**
+   * Lay that window's page out in a rectangle of this size, in **CSS pixels**.
+   *
+   * ## What was wrong, in his words
+   *
+   * > *"in here if you can see we have this window to come up. First of all when
+   * > we open it, it opens a very big page then it compares to the normal size if
+   * > you can see. Okay, so it should always open to the normal size."*
+   *
+   * > *"it is too zoom, it's bigger than the normal view of the website whatever
+   * > website we are browsing so keep it on 100 percent like a normal view of any
+   * > website like proper normal dimensions."*
+   *
+   * A window on a machine keeps whatever viewport that machine gave it, and a
+   * headless Chromium is launched with no `--window-size` at all, so its default
+   * is 800 × 600. The phone then asks for a screencast width in **device** pixels
+   * and CDP only *caps* the picture at it; the page is still laid out at 800. The
+   * viewer fits that picture into its pane (`WatchMath.fit`), so what a person
+   * ends up reading is the page drawn at `pane points ÷ page CSS pixels` — a
+   * number that is 100% only by accident, and was 49% on the phone he was
+   * holding. Every complaint above is that ratio, and no amount of tuning the
+   * *picture* can fix it, because the mistake is in the **layout**.
+   *
+   * So this is the missing instruction: the viewer names the rectangle it is
+   * going to draw into, and the machine lays the document out in exactly that
+   * rectangle. One image pixel per CSS pixel per point, which is what *"100
+   * percent like a normal view of any website"* means arithmetically.
+   *
+   * ## Why the height is required and not optional
+   *
+   * A width alone does not deliver it. `WatchMath.fit` scales by the *smaller* of
+   * the two ratios, so a page laid out 393 × 600 and drawn into a pane 393 × 440
+   * is fitted on the height and arrives at 73% — the same defect from the other
+   * axis, and the one an optional height would leave in. `Emulation.setDeviceMetricsOverride`
+   * needs both numbers too, and a host inventing the second one is exactly the
+   * guessing this frame exists to remove. A viewport is two numbers; the wire
+   * carries two numbers.
+   *
+   * ## No `rid`
+   *
+   * Answered by `browser.window.rows` like every other verb in this family —
+   * *"the screen redrawing is the confirmation, and there is no second state for
+   * a client to get wrong"* — and that frame carries no `rid` to echo one back
+   * in. A request id here would be a field nothing reads, which is worse than no
+   * field: it reads as a promise that answers are correlated when they are not.
+   * `controls.read` and its neighbours carry one because their answers are
+   * *payloads* that two open panes could both be waiting for. This one's answer
+   * is the window list, and the real confirmation is the page reflowing in front
+   * of you.
+   *
+   * Both numbers are **clamped** into {@link MIN_PAGE_WIDTH}/{@link MAX_PAGE_WIDTH}
+   * and {@link MIN_PAGE_HEIGHT}/{@link MAX_PAGE_HEIGHT} rather than refused; see
+   * those constants for why a refusal here would cost the whole connection.
+   */
+  | { t: 'browser.window.size'; id: string; width: number; height: number }
   /** Bind a window to a session, so the agent in it knows which window is its
    *  own. Sending no session unbinds. */
   | { t: 'browser.window.bind'; id: string; session?: string }
@@ -5944,6 +6050,45 @@ export function parseClientMessage(raw: unknown): ParseResult {
       }
       if (CONTROL_CHARS.test(rawId)) return bad('browser.window.act naming a window this build cannot address')
       return { ok: true, message: { t: 'browser.window.act', id: rawId, action: rawAction } }
+    }
+    case 'browser.window.size': {
+      const rawId = parsed.id
+      // The seventh verb that addresses a window, held to the same rule as the
+      // other six: an empty id is a broken client, not a person pressing
+      // something, and `server.ts` answers a parse failure by closing the socket.
+      if (typeof rawId !== 'string' || rawId === '' || overBytes(rawId, MAX_PANEL_WORD)) {
+        return bad('browser.window.size naming a window this build cannot address')
+      }
+      if (CONTROL_CHARS.test(rawId)) return bad('browser.window.size naming a window this build cannot address')
+      /*
+       * **Clamped, not refused — and this is the line that keeps the socket up.**
+       *
+       * Both numbers are a viewer measuring its own pane, which is exactly what
+       * `readWatch` says about `maxWidth` a few hundred lines above: *"the
+       * numbers come from a viewer sizing its own canvas and negotiating its own
+       * link, so the useful answer is the nearest width and quality this host
+       * will actually stream."* The same is true of a layout rectangle, and it
+       * matters more here, because this frame is sent on a **rotation** — the one
+       * moment a phone is most likely to report a size nobody planned for, and
+       * the one moment nobody would connect a dead terminal to.
+       *
+       * `finiteNumber` is still a refusal, and deliberately so: `NaN` is not a
+       * pane anybody measured, it is a client that divided by zero, and it would
+       * arrive at Chromium as a viewport override with no size in it.
+       */
+      const rawWidth = finiteNumber(parsed.width)
+      const rawHeight = finiteNumber(parsed.height)
+      if (rawWidth === null) return bad('browser.window.size without a width to lay the page out in')
+      if (rawHeight === null) return bad('browser.window.size without a height to lay the page out in')
+      return {
+        ok: true,
+        message: {
+          t: 'browser.window.size',
+          id: rawId,
+          width: Math.min(MAX_PAGE_WIDTH, Math.max(MIN_PAGE_WIDTH, Math.round(rawWidth))),
+          height: Math.min(MAX_PAGE_HEIGHT, Math.max(MIN_PAGE_HEIGHT, Math.round(rawHeight))),
+        },
+      }
     }
     case 'browser.window.bind': {
       const rawId = parsed.id

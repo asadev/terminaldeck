@@ -328,12 +328,32 @@ struct BrowserPageBar: View {
      * > in responsive views how it will look like in mobile how it will look
      * > like on Windows."*
      *
-     * Nil on every screen that draws a **picture** of a page rather than the page
-     * — see `BrowserChrome.sizeIsLocal` for why magnifying a screenshot is the
-     * one thing this control must never quietly become. Those screens draw the
-     * glyph dead in its slot with that sentence on the ⓘ, which is the rule the
-     * whole row follows: *"it should be the same case, or all the options should
-     * be available at least."*
+     * ## A picture of a page can carry this now, and that is new
+     *
+     * This used to be nil on every screen that draws a **picture** rather than a
+     * document, on an argument that was true when it was written: re-laying a page
+     * out at 1280 × 800 is a viewport instruction to the engine that owns the DOM,
+     * the engine over there is the machine's, and *"there is no verb in
+     * `MachineWindow.Act` that carries a size."* `BrowserChrome.sizeIsLocal` was
+     * that sentence and it ended by naming its own expiry: *"the day a host learns
+     * `browser.window.size` the screen passes a closure."*
+     *
+     * The host has learnt it. `MachineWindowView` passes one, and what `choose`
+     * does there is send the machine a rectangle in CSS pixels — the real thing,
+     * not a magnified picture of the old one. It is also what makes a cast arrive
+     * at 100% in the first place: *"keep it on 100 percent like a normal view of
+     * any website like proper normal dimensions."*
+     *
+     * Still nil where the screen has neither a document of its own nor a window
+     * id to address — the surface viewer reached from Settings, which holds a
+     * `WatchLink` and no model. A nil slot is not drawn at all rather than greyed;
+     * see `slot`.
+     *
+     * What must never happen is the other thing: magnifying the picture and
+     * calling it a size. That would answer *"how does this look on a laptop"* with
+     * a phone layout in bigger letters, which is why `BrowserPageSize` keeps
+     * `choose` and the three zoom closures apart rather than folding them into
+     * one control.
      */
     var size: BrowserPageSize? = nil
 
