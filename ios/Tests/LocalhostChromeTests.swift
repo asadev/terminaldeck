@@ -55,6 +55,35 @@
  * screen, the same way a machine window's does — *"all of them should have all
  * the options"* — rather than opening a menu with one item in it.
  *
+ * ## And then, on one screen, the address and the `…` swapped ends
+ *
+ * > *"this link should be on the top header instead of bottom just like the
+ * > normal browsers. I think on top you should have back button and link only,
+ * > and then in the bottom you should have the rest of the options and three dot
+ * > in the right side which will open the rest of the options, not upside here.
+ * > Three dot should be here where we have right now size, so it can bring the
+ * > options from up to down down to up."*
+ *
+ * On **a page this phone is holding open** the header is now the chevron and the
+ * address, and the `…` is the last slot of the row under the page, after Size.
+ * Nothing else changed: not the row's six verbs, not the identifiers, not the
+ * other three kinds of window — he was holding that page when he said it, and
+ * said of the terminal screen in the same breath *"same way here it is fine
+ * because it is terminal, it should be the way I said."*
+ *
+ * That is why the cases below stopped asserting *the `…` is a trailing item in
+ * the navigation bar* as a rule about all four screens and started asserting it
+ * per screen, against the place that screen actually chose. A rule that was true
+ * of four is now true of three, and a tripwire that cannot tell those apart is a
+ * tripwire that has to be deleted the first time one of them moves.
+ *
+ * **This is not the round before it being undone**, and the reason is written
+ * here as well as in `BrowserChrome` because a reader who finds only the code
+ * will read it as one. *"Not only the bottom"* is about a header carrying no
+ * control at all. This header carries the address — a control, and the one he
+ * named — and *"on top you should have back button and link only"* then says what
+ * else may be up there. Nothing.
+ *
  * ## And the round after that gave the page two things a picture cannot have
  *
  * > *"they can use the the mode currently we have this machine they can just
@@ -92,11 +121,11 @@
  * serving a port and a finger — that is `LocalhostUITests` and
  * `BrowserPageBarUITests`, which measure the real bar on a real page and are the
  * *proof*. This file is the **tripwire**: it runs on a laptop with nothing
- * listening, in the suite that always runs, so that putting
- * `.toolbar(.hidden, for: .navigationBar)` back — or growing a second bottom bar
- * of this screen's own, or shuffling the row, or putting the `…` back into it —
- * fails immediately rather than surviving until somebody next has a desktop to
- * test against.
+ * listening, in the suite that always runs, so that hiding the navigation bar
+ * again — or growing a second bottom bar of this screen's own, or shuffling the
+ * row, or putting a line to *read* back into the header, or letting one screen's
+ * arrangement quietly become all four screens' — fails immediately rather than
+ * surviving until somebody next has a desktop to test against.
  *
  * `#filePath` is the compile-time location of this file, which gives the
  * checkout; a Simulator process can read the Mac's filesystem, which is how
@@ -178,34 +207,67 @@ final class LocalhostChromeTests: XCTestCase {
     }
 
     /**
-     * **The header is the chevron and one line of title, and nothing else.**
+     * **The header is the chevron and the address, and nothing else at all.**
+     *
+     * > *"this link should be on the top header instead of bottom just like the
+     * > normal browsers. I think on top you should have back button and link
+     * > only."*
+     *
+     * ## What used to be up there, and why the assertion flipped
+     *
+     * This case used to say the exact opposite: *there is no principal view on
+     * this screen*. That was right at the time and the reason it was right is
+     * worth keeping, because it is what stops the header filling up again. What
+     * was in that slot was a **two-line block of information** — the page's name
+     * over a mono `http://127.0.0.1:52311/admin  ·  3 connections`:
      *
      * > *"even if we remove the top header of paperclip and all of this basic
      * > information might not be required from the outside. We can just see and
      * > enter."*
      *
-     * What was there was a principal view: the page's name over a mono
-     * `http://127.0.0.1:52311/admin  ·  3 connections`. Both halves of that
-     * second line are information rather than control — and the address, which is
-     * the half worth keeping, is a **field** in the bar now, which is the thing he
-     * could not have before.
+     * So the rule was never *nothing may take that space*. It was *nothing to
+     * **read** may take that space*. A field is not something you read; it is the
+     * one control he asked to be moved there by name, and it is the same field the
+     * bar draws on every other kind of window — `BrowserAddressField`, one view,
+     * one identifier, told which place it is standing in.
      *
-     * Asserted as the absence of the toolbar slot rather than by looking for the
-     * strings, because a principal view is how a screen takes that space and
-     * putting one back is the only way this regresses. The address ending up in
-     * the bar is asserted separately below.
+     * ## Three claims, and each is a different way this regresses
+     *
+     *  1. the principal slot holds the **address field** and nothing else, so a
+     *     screen that put a title block back would fail here;
+     *  2. the connection count has not come back with it — that word is the end of
+     *     the line he asked to have removed, and its absence is the whole of what
+     *     the old case was for;
+     *  3. there is **no trailing item** in this header. *"Back button and link
+     *     only"* is a sentence about what else may be up there, and the answer is
+     *     nothing: the `…` is at the end of the row now and
+     *     `testTheControlsAreOneRowInHisOrder` is where that is pinned.
      */
-    func testTheHeaderCarriesNoSecondLine() throws {
+    func testTheHeaderIsTheChevronAndTheAddress() throws {
         let source = try Self.browserSource()
 
-        XCTAssertFalse(source.contains("ToolbarItem(placement: .principal)"),
-                       "the page's header is the system chevron and one line of title on every "
-                       + "kind of browser window now — a principal view is this screen taking "
-                       + "that space back for a mono address and a connection count")
+        XCTAssertTrue(source.contains("ToolbarItem(placement: .principal) { addressField }"),
+                      "the address belongs in this screen's header now — \"this link should be "
+                      + "on the top header instead of bottom just like the normal browsers\"")
+        XCTAssertTrue(source.contains("BrowserAddressField(id: \"localhost\""),
+                      "and it should be the shared field rather than a second one written here: "
+                      + "two address bars in one app is two sets of keyboard rules, and one of "
+                      + "them would quietly stop matching")
+        XCTAssertTrue(source.contains("place: .header"),
+                      "the field has to be told where it is standing — it wears a different shape "
+                      + "between a chevron and the edge of the screen than it does inside a card")
+
         XCTAssertFalse(source.contains("connections\""),
                        "the connection count is not a line on the header; the header line ended "
                        + "in that word, and a copy of it left up there is the thing he asked to "
                        + "be removed from the outside of the page")
+        // The identifier as a literal, which is why the prose above says "trailing
+        // item" in words: a comment that spelled the placement would fail this
+        // case exactly as using it would.
+        XCTAssertFalse(source.contains("ToolbarItem(placement: .topBarTrailing)"),
+                       "something is back in the trailing corner of this page's header. \"On top "
+                       + "you should have back button and link only\" — the `…` is the last slot "
+                       + "of the row under the page")
     }
 
     /**
@@ -229,6 +291,26 @@ final class LocalhostChromeTests: XCTestCase {
         XCTAssertTrue(source.contains("id: \"localhost\""),
                       "the bar's prefix is what every control on it is named by, and the names "
                       + "have to survive the swap")
+        /*
+         * And the two ways this screen's bar differs from the other three, which
+         * are the two halves of one sentence:
+         *
+         * > *"this link should be on the top header instead of bottom just like
+         * > the normal browsers… and then in the bottom you should have the rest
+         * > of the options and three dot in the right side."*
+         *
+         * Both are **options on the shared bar with defaults**, not a fork of it.
+         * That is the claim worth pinning: a screen that answered this by writing
+         * its own bar again would pass every other case in this file, and writing
+         * its own bar is how this app came to have three chromes.
+         */
+        XCTAssertTrue(source.contains("addressIn: .header"),
+                      "this bar should be told its address is up in the navigation bar — a bar "
+                      + "that drew one too would put two address fields over one page")
+        XCTAssertTrue(source.contains("more: BrowserPageMore("),
+                      "and it should be handed the `…`, which is the other half: \"three dot in "
+                      + "the right side which will open the rest of the options, not upside "
+                      + "here\"")
         XCTAssertFalse(source.contains("ToolbarItemGroup(placement: .bottomBar)"),
                        "a second bottom bar written on this screen is how there came to be three "
                        + "different chromes under three kinds of window")
@@ -259,16 +341,33 @@ final class LocalhostChromeTests: XCTestCase {
      * `…`, the `…` itself leaving for the header, and Size arriving at the end —
      * and a test that only checked one end would let the rest be shuffled.
      *
-     * **Size is the sixth and the `…` is still not one of them**, which is the
-     * half of this case worth stating plainly, because the two look identical to a
-     * count. *"Not only the bottom"* was answered by moving the menu up, and it
-     * would be un-answered the moment somebody put a second copy of it back down
-     * here — which is also how one menu ends up with two doors. A verb that acts
-     * on the **page** is a different thing entirely, and how wide the page is laid
-     * out is pressed over and over while comparing one width against another:
+     * **Size is the sixth**, and it stays the sixth. How wide the page is laid out
+     * is pressed over and over while comparing one width against another, which is
+     * the test this row is drawn against:
      *
      * > *"they can see all the different dimensions in responsive views how it
      * > will look like in mobile how it will look like on Windows."*
+     *
+     * ## And the seventh slot, which is drawn only where a screen asked for it
+     *
+     * > *"in the bottom you should have the rest of the options and three dot in
+     * > the right side which will open the rest of the options, not upside here.
+     * > Three dot should be here where we have right now size, so it can bring the
+     * > options from up to down down to up."*
+     *
+     * So the `…` **is** in this row again, at the end of it, on the screen whose
+     * address went up into the header. That is the sentence, and the reading of it
+     * that matters is *position*: the right-hand end is the place Size was holding
+     * while Size was last in the row, and both are in the row now with Size one
+     * slot to its left. A row that answered it by dropping Size would be answering
+     * a different sentence — *"the rest of the options"* is every page verb.
+     *
+     * It is asserted as **after Size** rather than by its identifier, because
+     * `moreSlot` carries none: `BrowserWindowActions` builds `\(id).settings` from
+     * the bar's own prefix, which is the whole reason that control kept its name
+     * through two moves. What is asserted instead is that the bar reuses that one
+     * view rather than drawing a second `…` of its own — one door per window is
+     * older than this round and survives it.
      */
     func testTheControlsAreOneRowInHisOrder() throws {
         let source = try Self.barSource()
@@ -300,54 +399,105 @@ final class LocalhostChromeTests: XCTestCase {
 
         XCTAssertEqual(found, ["back", "forward", "reload", "find", "inspect", "size"],
                        "the bar's order changed. Back, Forward and Reload lead — the page's own "
-                       + "history first — then Find, then Inspect, then Size. The `…` is not one "
-                       + "of these: it belongs in the header")
+                       + "history first — then Find, then Inspect, then Size. These six are the "
+                       + "verbs that act on the page and the `…` is not one of them")
 
-        XCTAssertFalse(source.contains("id: \"\\(id).settings\""),
-                       "the `…` is back in the bottom row. It is a trailing item in the "
-                       + "navigation bar and there is exactly one of it")
+        // The seventh slot. `firstIndex` over the fenced lines rather than over
+        // the whole file, so a `moreSlot` written into some other helper below
+        // cannot answer for one that is missing from the row.
+        let row = lines[opens..<closes].map { $0.trimmingCharacters(in: .whitespaces) }
+        let size = try XCTUnwrap(row.firstIndex { $0.hasPrefix("sizeSlot(") },
+                                 "Size is not in the row this walk just read")
+        let more = try XCTUnwrap(row.firstIndex { $0.hasPrefix("moreSlot(") },
+                                 "the `…` is not in the row. \"Three dot should be here where we "
+                                 + "have right now size\" — it is the last slot, on the screen "
+                                 + "whose address moved up into the header")
+        XCTAssertGreaterThan(more, size,
+                             "the `…` is not at the right-hand end of the row. That is the place "
+                             + "he named, and it is the place Size was holding while Size was "
+                             + "last — both are in the row, one slot apart")
+
+        XCTAssertTrue(source.contains("BrowserWindowActions(id: id, place: .row"),
+                      "the bar should mount the one `…` this app has, told where it is standing. "
+                      + "A second one written here is two doors onto one menu, which is the "
+                      + "thing an earlier round exists to have removed")
     }
 
     /**
-     * **The `…` is in the header, it is written once, and it keeps its name.**
+     * **The `…` is written once, it keeps its name, and it now knows two places.**
      *
      * > *"Maybe we can give some better one header also, not only the bottom, so
      * > we can have most of the important controls for the flow."*
      *
-     * Three claims, and each of them is a different way the move could be undone:
+     * > *"I think on top you should have back button and link only, and then in
+     * > the bottom you should have the rest of the options and three dot in the
+     * > right side which will open the rest of the options, not upside here."*
+     *
+     * Two sentences, two places, **one control** — and that last part is the whole
+     * of what this case defends:
      *
      *  1. `BrowserWindowActions` exists in `BrowserChrome` and is the one place
-     *     the control is drawn, so the four screens cannot grow four `…` that
-     *     drift apart — which is the whole subject of this file;
-     *  2. it is named `\(id).settings`, unchanged from when it sat in the bar, so
-     *     the six suites that reach for `browser.machine.window.settings` and
-     *     `localhost.settings` did not have to move;
-     *  3. every screen with a live page places it as a **trailing item in the
-     *     navigation bar** — asserted per screen, because a header that carries
-     *     it on one kind of window and not another is the drift he counted.
+     *     the control is drawn, so the screens cannot grow four `…` that drift
+     *     apart — which is the whole subject of this file. A second one written
+     *     into the bar for the row would be exactly that, and it is asserted
+     *     against in `testTheControlsAreOneRowInHisOrder`;
+     *  2. it is named `\(id).settings`, unchanged through **both** of its moves —
+     *     into the header and back down to the end of the row — so the six suites
+     *     that reach for `browser.machine.window.settings` and `localhost.settings`
+     *     have never had to move;
+     *  3. the place is a named case with a default, `BrowserMorePlace`, rather
+     *     than each screen deciding in its own way.
      *
-     * The surface viewer reached from Settings is deliberately not in that list:
-     * it has no settings screen behind it, and the rule is that the control is
-     * drawn only where it opens something.
+     * ## And then the place, asserted per screen, against what that screen chose
+     *
+     * This used to be one loop over both screens asserting the same thing of each,
+     * because the answer was the same for all four kinds of window. It is not any
+     * more and the loop had to go — a case that cannot tell the two apart would
+     * have to be deleted the first time one of them moved, which is the opposite
+     * of what a tripwire is for.
+     *
+     *  - **a window on the machine** keeps the `…` as a trailing item in its
+     *    navigation bar, because its address is still on the bar under the page;
+     *  - **a page this phone is holding open** has given the header to the
+     *    address, so its `…` is handed to the bar and drawn at the end of the row.
+     *    That screen mounts no `…` of its own at all.
+     *
+     * The surface viewer reached from Settings is deliberately in neither list: it
+     * has no settings screen behind it, and the rule is that the control is drawn
+     * only where it opens something.
      */
-    func testTheMenuIsAHeaderControlWrittenOnce() throws {
+    func testTheMenuIsOneControlThatKnowsTwoPlaces() throws {
         let chrome = try Self.chromeSource()
 
         XCTAssertTrue(chrome.contains("struct BrowserWindowActions"),
-                      "the header's `…` should be one view in BrowserChrome — four screens each "
-                      + "drawing their own is how three chromes happened in the first place")
+                      "the `…` should be one view in BrowserChrome — four screens each drawing "
+                      + "their own is how three chromes happened in the first place")
         XCTAssertTrue(chrome.contains("\"\\(id).settings\""),
-                      "the `…` changed places and must not have changed name: six suites reach "
-                      + "for browser.machine.window.settings and localhost.settings")
+                      "the `…` changed places twice and must not have changed name: six suites "
+                      + "reach for browser.machine.window.settings and localhost.settings")
+        XCTAssertTrue(chrome.contains("enum BrowserMorePlace"),
+                      "where it stands should be a named place with a default, so the screens "
+                      + "that were not the subject of his sentence keep what they had without "
+                      + "being touched")
 
-        for (screen, source) in [("the page on this phone", try Self.browserSource()),
-                                 ("a window on the machine", try Self.machineWindowSource())] {
-            XCTAssertTrue(source.contains("BrowserWindowActions("),
-                          "\(screen) should mount the shared header control")
-            XCTAssertTrue(source.contains("ToolbarItem(placement: .topBarTrailing)"),
-                          "\(screen) should put it in the header, trailing side — \"not only the "
-                          + "bottom\" is a sentence about the top of the screen")
-        }
+        // A window on the machine: still a trailing item in its own header.
+        let machine = try Self.machineWindowSource()
+        XCTAssertTrue(machine.contains("BrowserWindowActions("),
+                      "a window on the machine should mount the shared control")
+        XCTAssertTrue(machine.contains("ToolbarItem(placement: .topBarTrailing)"),
+                      "and keep it in the header, trailing side — \"not only the bottom\" is a "
+                      + "sentence about the top of the screen, and nothing he said this round "
+                      + "was about this screen")
+
+        // The page on this phone: the bar draws it, at the end of the row.
+        let phone = try Self.browserSource()
+        XCTAssertFalse(phone.contains("BrowserWindowActions("),
+                       "the phone's page should not draw a `…` of its own any more — it hands "
+                       + "one to the bar, which builds it from the bar's own prefix so the name "
+                       + "is still spelled in one place")
+        XCTAssertTrue(phone.contains("more: BrowserPageMore("),
+                      "and that is how it hands it over: \"three dot in the right side which "
+                      + "will open the rest of the options, not upside here\"")
     }
 
     /**

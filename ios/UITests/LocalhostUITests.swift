@@ -381,10 +381,11 @@ final class LocalhostUITests: XCTestCase {
     }
 
     /**
-     * **The chrome on a page is the platform's: five page controls along the
-     * bottom, and the window's `…` in the header.**
+     * **The chrome on a page is the platform's: the link on top, the page verbs
+     * and the window's `…` along the bottom.**
      *
-     * ## What this case used to claim, and why the claim had to change — twice
+     * ## What this case used to claim, and why the claim had to change — three
+     * times
      *
      * It was called `testTheChromeIsThePlatformsAndDoneIsLast` and its third
      * assertion pinned **Done as the last control in the row** — *"last button I
@@ -398,11 +399,16 @@ final class LocalhostUITests: XCTestCase {
      * > we can have most of the important controls for the flow, for this kind of
      * > things and whatever we require to get the job done."*
      *
+     * And then it came back down, with the address going the other way — see
+     * *And then the address and the `…` swapped ends* below.
+     *
      * So the shape this measures is a **split**, and measuring it is the whole
-     * point of the case: the verbs that act on the page, below the middle of the
-     * screen where a thumb is; one control that acts on the window, in the header
-     * where he asked for it. A case that only counted buttons would pass with all
-     * six back in the row, which is the state his sentence rejects.
+     * point of the case: the verbs that act on the page and the door to the
+     * window along the bottom where a thumb is, and the one thing up top being
+     * the address. A case that only counted buttons would pass with the two of
+     * them the other way round, which is the state his sentence rejects — and it
+     * would have passed on the arrangement before this one too, which is why
+     * every one of those assertions is a frame.
      *
      * > *"So top, header and footer, tab bar should be same in all type of
      * > browsing windows, including on this phone, including isolated, including
@@ -417,9 +423,26 @@ final class LocalhostUITests: XCTestCase {
      *
      * Done did not disappear: tearing the tunnel down is a thing you do to the
      * *window* rather than to the page, so it is the `Close this window` card on
-     * this page's own settings screen, behind `localhost.settings` in the header
-     * — and `testClosingTheViewLeavesNoPageBehind` walks it there. The chevron
-     * top left does exactly the same thing in one tap and always did.
+     * this page's own settings screen, behind `localhost.settings` — and
+     * `testClosingTheViewLeavesNoPageBehind` walks it there. The chevron top left
+     * does exactly the same thing in one tap and always did.
+     *
+     * ## And then the address and the `…` swapped ends
+     *
+     * > *"this link should be on the top header instead of bottom just like the
+     * > normal browsers. I think on top you should have back button and link
+     * > only, and then in the bottom you should have the rest of the options and
+     * > three dot in the right side which will open the rest of the options, not
+     * > upside here. Three dot should be here where we have right now size, so it
+     * > can bring the options from up to down down to up."*
+     *
+     * On **this** screen only — he was holding it when he said it, and said of
+     * the terminal in the same breath *"same way here it is fine because it is
+     * terminal, it should be the way I said."* So the header is the chevron and
+     * the address, and the row is the six page verbs with the `…` after them.
+     * Both ends are measured below, because a name proves nothing about either:
+     * `localhost.address` and `localhost.settings` are the same two strings they
+     * were before the move.
      *
      * ## The three claims this case makes, none of which a unit test can
      *
@@ -433,10 +456,10 @@ final class LocalhostUITests: XCTestCase {
      * the bottom. So:
      *
      *  1. a system navigation bar is on this screen;
-     *  2. every control that acts on the **page** is at the *bottom* of it, and
-     *     the one that acts on the **window** is in the header — both measured
-     *     against the middle of the screen, not asserted by looking at the
-     *     source;
+     *  2. every control that acts on the **page** is at the *bottom* of it,
+     *     the `…` that acts on the **window** is at the end of that row, and the
+     *     **address** is up in the navigation bar — all three measured against
+     *     real frames, not asserted by looking at the source;
      *  3. the row reads left to right as the same controls, in the same order,
      *     that `BrowserPageBar` puts under every other kind of browser window.
      *
@@ -513,32 +536,62 @@ final class LocalhostUITests: XCTestCase {
         XCTAssertLessThan(bar.frame.maxY, middle, "the navigation bar should be above the page")
 
         /*
-         * And the sixth control, at the other end of the screen, which is the
+         * And the two movable things, at the two ends of the screen, which is the
          * point of this half of the case.
          *
-         * > *"Maybe we can give some better one header also, not only the bottom,
-         * > so we can have most of the important controls for the flow, for this
-         * > kind of things and whatever we require to get the job done."*
+         * > *"this link should be on the top header instead of bottom just like
+         * > the normal browsers. I think on top you should have back button and
+         * > link only, and then in the bottom you should have the rest of the
+         * > options and three dot in the right side which will open the rest of
+         * > the options, not upside here. Three dot should be here where we have
+         * > right now size, so it can bring the options from up to down down to
+         * > up."*
          *
-         * `localhost.settings` is the `…`. It kept its name when it moved, so
-         * nothing else in this repository had to move — and its **frame** is the
-         * whole assertion, because a `…` back in the bottom row would pass every
-         * existence check anybody would write and would be the state he rejected.
+         * They swapped. The **address** used to be the top row of the bar under
+         * the page and is now the principal item of the navigation bar; the `…`
+         * used to be that bar's trailing item and is now the last slot of the row.
+         *
+         * Their **frames** are the whole assertion, in both directions, because
+         * every other kind of check passes with them the wrong way round: an
+         * existence check on `localhost.address` passed before the move and passes
+         * after it, and so does one on `localhost.settings`. `localhost.settings`
+         * has kept its name through both of its moves, which is why nothing else
+         * in this repository had to change either time — and is exactly why a name
+         * proves nothing here.
+         *
          * Inside the navigation bar's own rectangle rather than merely above the
          * middle: that is the difference between *it is in the header* and *it
          * happens to be drawn high up*.
          */
-        let more = app.buttons["localhost.settings"]
+        let address = app.textFields["localhost.address"]
+        XCTAssertTrue(address.exists,
+                      "the address is missing — \"I cannot edit the link and make a change and "
+                      + "search it again\" is the sentence it answers, and it answers it wherever "
+                      + "it is drawn")
+        XCTAssertTrue(bar.frame.contains(CGPoint(x: address.frame.midX, y: address.frame.midY)),
+                      "the address is not in the navigation bar. \"This link should be on the top "
+                      + "header instead of bottom just like the normal browsers\" — and drawn "
+                      + "high on the page is not the same thing as being in the header")
+
+        // Across every element type rather than as a button: the `…` is a `Menu`
+        // on the one route with no settings screen behind it, and asking
+        // `buttons` for a SwiftUI menu is how an assertion comes to pass by
+        // never running.
+        let more = any("localhost.settings")
         XCTAssertTrue(more.exists,
-                      "the `…` is missing — the header is a chevron, one line of title and this, "
-                      + "and \"not only the bottom\" is the sentence it answers")
-        XCTAssertLessThan(more.frame.maxY, middle,
-                          "the `…` is in the bottom half of the screen; it belongs in the header")
-        XCTAssertTrue(bar.frame.contains(CGPoint(x: more.frame.midX, y: more.frame.midY)),
-                      "the `…` should be inside the navigation bar itself, on the trailing side — "
-                      + "drawn high on the page is not the same thing as being in the header")
-        XCTAssertGreaterThan(more.frame.midX, bar.frame.midX,
-                             "and on the trailing side of it, opposite the chevron")
+                      "the `…` is missing — it is the way to everything this window can be asked "
+                      + "for, closing it included")
+        XCTAssertGreaterThan(more.frame.minY, middle,
+                             "the `…` is in the top half of the screen. On this page the header "
+                             + "is the chevron and the link only — \"not upside here\"")
+        XCTAssertLessThan(abs(more.frame.midY
+                              - any("localhost.back").frame.midY), 8,
+                          "the `…` is at the bottom of the screen but not in the row. It is the "
+                          + "seventh slot beside the six verbs, not a button floating over the "
+                          + "page")
+        XCTAssertGreaterThan(more.frame.midX, any("localhost.size").frame.midX,
+                             "the `…` is not at the right-hand end of the row — \"three dot in "
+                             + "the right side… here where we have right now size\"")
 
         // And Done is gone from the row rather than merely unused. A Done left
         // standing in the row would make this bar one control longer than every
@@ -553,8 +606,9 @@ final class LocalhostUITests: XCTestCase {
          *    what a thumb sees without touching what the source says.
          *
          * *"Last button I think is on its correct place"* was said of a row that
-         * ended with Done. What ends the row now is Inspect, and the control that
-         * used to end it is up in the header — asserted above.
+         * ended with Done. What ends the row now is the `…`, asserted above as
+         * being to the right of Size; these six are the page verbs and their order
+         * among themselves is what this reads.
          */
         let byPosition = controls
             .map { (id: $0,
@@ -671,7 +725,7 @@ final class LocalhostUITests: XCTestCase {
                       "Size is one of the page verbs and belongs in the bottom row with them")
         XCTAssertGreaterThan(size.frame.minY, app.frame.midY,
                              "it is pressed over and over while comparing one device against "
-                             + "another, so it belongs under a thumb rather than in the header")
+                             + "another, so it belongs under a thumb rather than behind a menu")
         size.tap()
 
         // The set he asked for, in the order the menu draws it. Seven devices
@@ -885,8 +939,8 @@ final class LocalhostUITests: XCTestCase {
      * > difference in all of them."*
      *
      * So this walks the same two taps it always did, and the second one lands on
-     * a screen instead of in a menu: `localhost.settings` in the header, then
-     * `browser.phone.page.close`.
+     * a screen instead of in a menu: `localhost.settings` at the end of the row,
+     * then `browser.phone.page.close`.
      *
      * The pop afterwards is worth a word, because nothing on that settings screen
      * dismisses itself — deliberately, so that a screen is never yanked out from
@@ -917,10 +971,10 @@ final class LocalhostUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Served from the Mac"].waitForExistence(timeout: 30),
                       "the page never rendered — the tunnel did not carry the document")
 
-        let more = app.buttons["localhost.settings"]
+        let more = any("localhost.settings")
         XCTAssertTrue(more.waitForExistence(timeout: 10),
-                      "the `…` is in this page's header and it is the way to everything this "
-                      + "window can be asked for, closing it included")
+                      "the `…` is the last slot of this page's row and it is the way to "
+                      + "everything this window can be asked for, closing it included")
         more.tap()
         let close = app.buttons["browser.phone.page.close"]
         XCTAssertTrue(close.waitForExistence(timeout: 15),
@@ -960,7 +1014,7 @@ final class LocalhostUITests: XCTestCase {
      * Done any more: the row under a page on this phone is the same controls
      * as the row under any other browser window, and the verb that tore the
      * tunnel down is the `Close this window` card on this page's own settings
-     * screen, behind the `…` in the header. See `BrowserChrome`.
+     * screen, behind the `…` at the end of the row. See `BrowserChrome`.
      *
      * **Reload rather than the address**, and the difference matters at exactly
      * the moment this is called. The bar draws Reload in every phase of a tunnel
@@ -1012,16 +1066,19 @@ final class LocalhostUITests: XCTestCase {
     /**
      * Out by the chevron, which is what a thumb does.
      *
-     * **The `…` is in this header too now**, so *the first button in the
-     * navigation bar* stopped being a safe way to name the chevron: it is the
-     * leading item and it does come first, but that is an ordering nothing in
-     * this file controls, and a run that tapped the trailing item instead would
-     * push the settings screen and then fail somewhere else entirely with a
-     * message about a page that did not close.
+     * The `…` has been in this header and is not any more — it is the last slot
+     * of the row under the page now, and the address is up here in its place. The
+     * exclusion below is kept anyway, and deliberately: it costs nothing, it is
+     * still correct (a field is not a button, so the query returns the chevron
+     * either way), and it is the guard that stopped a run tapping the trailing
+     * item, pushing the settings screen, and then failing somewhere else entirely
+     * with a message about a page that did not close. The `…` has changed places
+     * twice; a probe that only works while it is down there would have to be
+     * rewritten the third time.
      *
-     * So it is named by what it is not. There is no identifier on a system back
-     * button to ask for, and excluding the one control up there that *does* have
-     * a name is the honest way to say *the other one*.
+     * So the chevron is named by what it is not. There is no identifier on a
+     * system back button to ask for, and excluding the one control up here that
+     * *could* have a name is the honest way to say *the other one*.
      */
     private func leaveTheBrowser() {
         let back = app.navigationBars.buttons
