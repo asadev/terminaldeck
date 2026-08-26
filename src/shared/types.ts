@@ -401,6 +401,13 @@ export interface DeckApi {
   resizeSession(id: string, cols: number, rows: number): void
   getScrollback(id: string): Promise<string>
   killSession(id: string): Promise<void>
+  /**
+   * Give a local session the name typed at this desk, carrying it to
+   * `PtyManager` and from there to every device watching this machine. A blank
+   * is never sent — the field turns an empty value into a cancel before this,
+   * and a blank on the wire would reset to the folder's own name.
+   */
+  renameSession(id: string, title: string): Promise<boolean>
   listSessions(): Promise<SessionMeta[]>
   /** Listeners all return an unsubscribe function. */
   onSessionData(cb: (id: string, data: string) => void): () => void
@@ -416,6 +423,12 @@ export interface DeckApi {
    * nothing in this process can answer for it.
    */
   onSessionRemoved(cb: (id: string) => void): () => void
+  /**
+   * A session renamed somewhere other than this window — a phone, the browser
+   * client, another of the owner's machines — with the name the machine settled
+   * on. Applied here so one session never shows two names on two of his screens.
+   */
+  onSessionRenamed(cb: (id: string, title: string) => void): () => void
   /**
    * A session this window did not start — today, one started from a phone.
    *

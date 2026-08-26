@@ -1325,7 +1325,14 @@ struct SessionPageView<Session: View>: View {
     /// Fill the field from the page, unless a thumb is in it. One writer, so a
     /// navigation cannot rewrite a half-typed address.
     private func seedAddress() {
-        guard !editing else { return }
+        // `addressFocused` and not `editing`: the strip that ships is a bare
+        // `TextField` bound to the focus state, and `editing` was only ever
+        // written by the bar that was removed. Without this a redirect, or the
+        // agent navigating the page, would land its url in the field on top of
+        // what he is half-way through typing — which on an agent-driven page is
+        // constant. The `.onChange(of: addressFocused)` below picks up a url that
+        // moved while he was typing, once, when he is done.
+        guard !editing, !addressFocused else { return }
         guard let url = window?.url ?? surface?.url, !url.isEmpty else { return }
         guard !addressSeeded || url != address else { return }
         address = url
@@ -1600,6 +1607,11 @@ struct SessionPageView<Session: View>: View {
                 .submitLabel(.go)
                 .onSubmit { sendAddress(address, from: window) }
                 .focused($addressFocused)
+                // When he finishes typing, catch up to a url that moved while he
+                // was — `seedAddress` refused to touch the field while it held
+                // focus, so this is where the machine's own address is restored
+                // if he left without going anywhere.
+                .onChange(of: addressFocused) { _, focused in if !focused { seedAddress() } }
                 .font(.system(size: 13, design: .monospaced))
                 .foregroundStyle(Theme.primary)
                 .lineLimit(1)
@@ -2121,6 +2133,7 @@ struct SessionPageView<Session: View>: View {
         // has arrived — see `hasPicture`.
         pageHeight = 0
         guard id != folded else { return }
+        openAtRest()
         withAnimation(.easeOut(duration: 0.2)) { pane = .split }
     }
 
@@ -2154,8 +2167,27 @@ struct SessionPageView<Session: View>: View {
      */
     private func show() {
         folded = nil
+        openAtRest()
         withAnimation(.easeOut(duration: 0.18)) { pane = .split }
         askForThePage()
+    }
+
+    /**
+     * **Bring the window back to the middle when it opens.**
+     *
+     * A folded window is a small button that rides an edge — `windowDrag` snaps
+     * its `x` to `leftEdge` (about −319 on a 393-point phone) or to 0. Open, the
+     * window is the full width and `allowed` pins its `x` at 0, but `allowed`
+     * only runs *inside* a drag. So a window folded against the left edge and
+     * then opened by the chevron — or by a handover arriving — would come up
+     * with the bar and the page still offset a third of a screen to the left,
+     * hanging off the edge until it was dragged. Opening is a place the window
+     * moves on its own, so the carriage is brought home here, animated so it
+     * slides in rather than jumping.
+     */
+    private func openAtRest() {
+        carriage.placed.width = 0
+        withAnimation(.easeOut(duration: 0.18)) { carriage.offset.width = 0 }
     }
 
     /**

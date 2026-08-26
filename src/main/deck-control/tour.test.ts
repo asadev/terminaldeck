@@ -249,63 +249,22 @@ describe('a stop the app cannot stand behind is dropped, and the drop is reporte
     expect(out.dropped[0].why).toBe('quote-not-found')
   })
 
-  /*
-   * A `message` stop needs a session with a *transcript*, which means a Claude
-   * session: `transcript-match.ts` refuses to hand a conversation to a shell,
-   * because a shell writes none and counting it as a candidate owner was how
-   * one folder's four sessions were each reported with a fourth's work.
-   */
-  const claude = () => sessionView({ provider: 'claude' })
-
-  it('drops a cited message that does not exist', async () => {
+  it('refuses a message stop, because chat mode is gone', async () => {
+    // Message stops pointed at a bubble in the chat view, and chat mode was
+    // removed from every ordinary session this round — *"it is better to
+    // completely remove this."* The only chat that still renders is the
+    // copilot's own conversation, which a tour never points at, so a message
+    // stop would resolve to an anchor nothing draws. It is refused at the parse
+    // rather than accepted into a stop that lights up nothing.
     const stop = {
       kind: 'message',
       sessionId: 's1',
-      messageId: 'agent:nope',
+      messageId: 'agent:m1',
       quote: 'all done',
       note: 'n',
       why: 'files-changed',
     }
-    const out = await check(plan([stop]), {
-      messages: [{ id: 'agent:m1', role: 'agent', at: 1, text: 'all done', truncated: false }],
-      changedPaths: ['a.ts'],
-    }, claude())
-    expect(out.dropped[0].why).toBe('quote-not-found')
-    expect(out.dropped[0].detail).toContain('agent:nope')
-  })
-
-  it('drops a message stop whose quote is not in the message it cites', async () => {
-    const stop = {
-      kind: 'message',
-      sessionId: 's1',
-      messageId: 'agent:m1',
-      quote: 'I deleted the database',
-      note: 'n',
-      why: 'files-changed',
-    }
-    const out = await check(plan([stop]), {
-      messages: [{ id: 'agent:m1', role: 'agent', at: 1, text: 'all done', truncated: false }],
-      changedPaths: ['a.ts'],
-    }, claude())
-    expect(out.dropped[0].detail).toContain('does not contain')
-  })
-
-  it('keeps a message stop whose quote is really in it', async () => {
-    const stop = {
-      kind: 'message',
-      sessionId: 's1',
-      messageId: 'agent:m1',
-      quote: 'the migration ran twice',
-      note: 'n',
-      why: 'files-changed',
-    }
-    const out = await check(plan([stop]), {
-      messages: [
-        { id: 'agent:m1', role: 'agent', at: 1, text: 'so the migration ran twice, sorry', truncated: false },
-      ],
-      changedPaths: ['a.ts'],
-    }, claude())
-    expect(out.plan.stops).toHaveLength(1)
+    expect(() => parseTourPlan(plan([stop]))).toThrow(/chat mode has been removed/i)
   })
 })
 

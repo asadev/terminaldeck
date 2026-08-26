@@ -58,6 +58,14 @@ export function useSessionRename(): SessionRename {
       // `fromUser` is what stops the auto-titler taking it away again on the
       // session's next pause in output — see `withSessionTitle`.
       setSessionTitle(sessionId, name, { fromUser: true })
+      // And across to the machine, so a name typed at the desk reaches the
+      // phone and the PWA rather than living only in this window's memory — the
+      // gap that let one session show two names on two of his own screens. The
+      // paint above stays for instant feedback; this carries it to `PtyManager`,
+      // which is the field every device reads. Never a blank: `userSessionTitle`
+      // already turned an empty field into `null` (a cancel) above, and a blank
+      // on the wire would mean "reset to the folder name".
+      void window.deck.renameSession?.(sessionId, name)
       return true
     },
     [setSessionTitle],

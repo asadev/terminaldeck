@@ -577,12 +577,25 @@ export function Sidebar({
   onStartResize,
 }: Props) {
   /**
-   * The session row that has turned into a field, and what has been typed.
+   * The session row that has turned into a field, what has been typed, and
+   * what the field opened with.
    *
    * Local, and one at a time: two rows in edit at once is two half-finished
    * names and no way to tell which the Return key belongs to.
+   *
+   * `opened` is kept so an untouched field can be told from a typed one. The
+   * label a row is opened with is the *display* label, and for a row that has
+   * no name of its own that is the synthesised "Session 2" — a number minted
+   * from this rail's list order, not a name anyone gave it. Saving it back
+   * unchanged would turn it into one: locally a sticky user title that stops
+   * renumbering with its neighbours, and on a paired machine a rename sent over
+   * the wire that the far machine stores and pushes to every device, including
+   * his phone, with no way back but a blank. Clicking away keeps the name, so
+   * the untouched case is the ordinary one, not the odd one.
    */
-  const [renaming, setRenaming] = useState<{ id: string; draft: string } | null>(null)
+  const [renaming, setRenaming] = useState<{ id: string; draft: string; opened: string } | null>(
+    null,
+  )
   /**
    * Whether the field is still live.
    *
@@ -712,14 +725,17 @@ export function Sidebar({
   const beginRename = (id: string, label: string): void => {
     editing.current = true
     userActed.current = false
-    setRenaming({ id, draft: label })
+    setRenaming({ id, draft: label, opened: label })
   }
 
   /** End the rename, keeping what was typed or throwing it away. */
   const endRename = (save: boolean): void => {
     if (!editing.current) return
     editing.current = false
-    if (save && renaming) {
+    // An untouched field is a dismissal, not a name — see `renaming.opened`.
+    // Nothing is written on either path: the row already reads what the field
+    // shows, and a write would only make the synthesised label permanent.
+    if (save && renaming && renaming.draft !== renaming.opened) {
       /*
        * Which of the two write paths this row's name goes down.
        *
@@ -1174,7 +1190,9 @@ export function Sidebar({
               maxLength={MAX_TITLE_LENGTH}
               autoFocus
               aria-label={`New name for ${label}`}
-              onChange={(event) => setRenaming({ id: tab.id, draft: event.target.value })}
+              onChange={(event) =>
+                setRenaming({ id: tab.id, draft: event.target.value, opened: renaming.opened })
+              }
               onKeyDown={(event) => {
                 if (event.key !== 'Escape') return
                 event.preventDefault()

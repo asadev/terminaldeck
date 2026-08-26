@@ -156,20 +156,21 @@ export function tourTool(stage: TourStage): ToolSpec {
             properties: {
               kind: {
                 type: 'string',
-                enum: ['message', 'screen', 'anchor'],
+                // No 'message' any more. It pointed at a bubble in the chat view,
+                // and chat mode was removed from every ordinary session this round
+                // — *"I don't think it can work smoothly, so it's better to
+                // completely remove this."* The only chat that still renders is
+                // the copilot's own conversation, which a tour never points at, so
+                // a 'message' stop would resolve to an anchor nothing draws and the
+                // person would be left on a lit-up nothing. 'screen' is the same
+                // content read off the terminal.
+                enum: ['screen', 'anchor'],
                 description:
-                  "'message' points at a bubble in the chat view and is the one to prefer wherever a " +
-                  "transcript exists — it is the same content you read. 'screen' points at a passage of " +
-                  "terminal output, found by its text. 'anchor' points at a changed file or a session's " +
-                  'usage reading, and carries no quote, because there is no source to check one against.',
+                  "'screen' points at a passage of terminal output, found by its text. 'anchor' points " +
+                  "at a changed file or a session's usage reading, and carries no quote, because there " +
+                  'is no source to check one against.',
               },
               sessionId: { type: 'string', description: 'The session this stop is about.' },
-              messageId: {
-                type: 'string',
-                description:
-                  'For a message stop: the `id` sessions.transcript gave that message. Not a line number ' +
-                  'and not a guess — an id you were shown.',
-              },
               quote: {
                 type: 'string',
                 maxLength: MAX_QUOTE_CHARS,

@@ -1,5 +1,5 @@
 /**
- * The three pushes that keep an open window honest about state changed from
+ * The pushes that keep an open window honest about state changed from
  * somewhere other than that window.
  *
  * Every one of them exists because this app grew a *second* way to change its
@@ -30,7 +30,7 @@
  * and so is an `ipcRenderer.on` for a channel nobody sends — the seam is
  * `unknown` by design, so there is nothing for the compiler to compare. That is
  * exactly how the browser's progress bar was dead for a week
- * (`browser-view.channels.test.ts` is the account of it). Naming the three in one
+ * (`browser-view.channels.test.ts` is the account of it). Naming them in one
  * module gives `live-push.channels.test.ts` something to hold the preload against.
  *
  * ## What is deliberately not pushed
@@ -59,3 +59,19 @@ export const SETTINGS_CHANGED_CHANNEL = 'settings:changed'
  * cannot do anything, which is the definition of a ghost.
  */
 export const SESSION_REMOVED_CHANNEL = 'session:removed'
+
+/**
+ * Main → renderer: a session this app holds was given a new name by a device.
+ *
+ * > *"I said before, for being able to rename sessions."*
+ *
+ * The window keeps its own copy of every row and read `session:list` exactly
+ * once, at boot, so a rename that arrived over the wire landed in
+ * `PtyManager` and nowhere the person at this desk could see: the phone showed
+ * the new name, the Mac in front of him showed the folder, and the changelog
+ * promised the opposite. Carries the *resolved* title — a blank from a device
+ * means "back to the folder name", and what the row must show is the folder
+ * name, not the blank. Not sent for a rename the window made itself: that path
+ * (`session:rename`) answers the renderer directly, same as the other two.
+ */
+export const SESSION_RENAMED_CHANNEL = 'session:renamed'

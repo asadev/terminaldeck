@@ -443,7 +443,9 @@ private fun CloseSessionDialog(
         containerColor = DeckTheme.colors.surface,
         titleContentColor = DeckTheme.colors.primary,
         textContentColor = DeckTheme.colors.secondary,
-        title = { Text("Close ${session.title}?") },
+        // *"instead of saying close just say delete… they know that click it will go
+        // away completely."* The verb ends a session on the machine; Delete says so.
+        title = { Text("Delete ${session.title}?") },
         text = {
             Text(
                 text = "The session stops on the $machineNoun and does not come back.",
@@ -452,7 +454,7 @@ private fun CloseSessionDialog(
         },
         confirmButton = {
             TextButton(onClick = onConfirm) {
-                Text("Close session", style = DeckType.control, color = DeckTheme.colors.critical)
+                Text("Delete session", style = DeckType.control, color = DeckTheme.colors.critical)
             }
         },
         dismissButton = {
@@ -713,7 +715,7 @@ private fun SessionCard(
                 IconButton(onClick = onClose, modifier = Modifier.size(36.dp)) {
                     Icon(
                         Icons.Filled.Close,
-                        contentDescription = "Close ${session.title}",
+                        contentDescription = "Delete ${session.title}",
                         tint = colors.faint,
                         modifier = Modifier.size(18.dp),
                     )

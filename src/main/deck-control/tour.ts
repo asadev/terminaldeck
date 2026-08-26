@@ -311,12 +311,15 @@ function parseStop(entry: unknown, index: number): TourStop {
 
   switch (raw.kind) {
     case 'message':
-      return {
-        ...base,
-        kind: 'message',
-        messageId: requireText(raw, 'messageId', 400, at),
-        quote: requireText(raw, 'quote', MAX_QUOTE_CHARS, at),
-      }
+      // Chat mode is gone from every ordinary session, so there is no bubble for
+      // a message stop to point at — see the tool schema, where the kind was
+      // removed. Refused with a steer rather than accepted into a stop nothing
+      // can draw, because an older tour record or a confused caller is better
+      // told than left to fail silently on the screen.
+      throw new TourRefused(
+        `${at} is a 'message' stop, which pointed at the chat view. Chat mode has been removed; ` +
+          "quote the same content from the terminal as a 'screen' stop instead.",
+      )
     case 'screen':
       return { ...base, kind: 'screen', quote: requireText(raw, 'quote', MAX_QUOTE_CHARS, at) }
     case 'anchor': {
@@ -334,8 +337,8 @@ function parseStop(entry: unknown, index: number): TourStop {
     }
     default:
       throw new TourRefused(
-        `${at} has kind=${JSON.stringify(raw.kind)}. A stop is 'message' (a bubble in the chat view), ` +
-          "'screen' (a passage of terminal output) or 'anchor' (a named place in the app's own chrome).",
+        `${at} has kind=${JSON.stringify(raw.kind)}. A stop is 'screen' (a passage of terminal ` +
+          "output) or 'anchor' (a named place in the app's own chrome).",
       )
   }
 }

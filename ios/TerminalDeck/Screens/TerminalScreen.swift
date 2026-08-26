@@ -1223,10 +1223,11 @@ struct TerminalScreen: View {
             return
         }
         show("Starting a fresh conversation…")
-        host.closeSession(sessionID)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-            host.createSession(in: folder)
-        }
+        // One call, sequenced inside `HostLink`: the fresh session starts only
+        // once the machine confirms this one is gone, so the copilot tab never
+        // has two agent sessions in the folder to choose between and never lands
+        // on the one that is ending. The old timer let exactly that happen.
+        host.restartSession(sessionID, in: folder)
     }
 
     /// Open a page this phone is holding on the machine, and hand that window to

@@ -1801,6 +1801,19 @@ function Workspace() {
     }
   }, [addProject, addSession])
 
+  // A session renamed somewhere else — a phone, the browser client, another of
+  // his machines — reaches the desk here, so a name given on one screen is the
+  // name on every screen rather than only where it was typed. `fromUser` for the
+  // reason a local rename uses it: the auto-titler must not take a person's name
+  // back on the session's next pause in output. The machine has already settled
+  // what the name is (the folder's own, if a device sent a blank); this only
+  // paints it. Absent on an older bridge, hence the guard.
+  useEffect(() => {
+    return window.deck.onSessionRenamed?.((id, title) => {
+      setSessionTitle(id, title, { fromUser: true })
+    })
+  }, [setSessionTitle])
+
   // Show the first-run screen only when no agent is usable. Someone with a
   // working setup should never be made to click through a welcome screen.
   useEffect(() => {

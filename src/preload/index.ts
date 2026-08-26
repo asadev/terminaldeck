@@ -111,6 +111,14 @@ const api = {
 
   killSession: (id: string): Promise<void> => ipcRenderer.invoke('session:kill', id),
 
+  // Give a LOCAL session the name somebody typed at this desk, so the name
+  // reaches `PtyManager` and from there every device watching this machine —
+  // the desk used to keep its rename to itself. A blank never travels: an empty
+  // field is a cancel here, and a blank on the wire means "back to the folder's
+  // name". See `session-rename.ts`.
+  renameSession: (id: string, title: string): Promise<boolean> =>
+    ipcRenderer.invoke('session:rename', id, title),
+
   listSessions: (): Promise<SessionMeta[]> => ipcRenderer.invoke('session:list'),
 
   /** Returns an unsubscribe function so React effects can clean up properly. */
@@ -124,6 +132,16 @@ const api = {
     const handler = (_e: IpcRendererEvent, id: string, code: number) => cb(id, code)
     ipcRenderer.on('session:exit', handler)
     return () => ipcRenderer.off('session:exit', handler)
+  },
+
+  // A session this window did not rename — renamed from a phone, the browser
+  // client, or another of the owner's machines — carrying the name the machine
+  // settled on (the folder's own, when a device sent a blank). The desk applies
+  // it so two of his screens never show one session under two names.
+  onSessionRenamed: (cb: (id: string, title: string) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, id: string, title: string) => cb(id, title)
+    ipcRenderer.on('session:renamed', handler)
+    return () => ipcRenderer.off('session:renamed', handler)
   },
 
   onSessionStatus: (cb: (id: string, status: string) => void): (() => void) => {

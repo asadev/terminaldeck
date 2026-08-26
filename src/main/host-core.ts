@@ -478,6 +478,14 @@ export interface HostCoreOptions {
    */
   onSessionCreated?(meta: SessionMeta): void
   /**
+   * A session was given a new name by something other than this shell's own
+   * window — today, a paired device. `title` is the name the row must now show,
+   * already resolved: a blank from the device means the folder name is back,
+   * and that is what arrives here. Fires only for the wire's rename; the desk's
+   * own rename answers the desk directly and would only be told what it said.
+   */
+  onSessionRenamed?(id: string, title: string): void
+  /**
    * **Every** session, the moment it exists — a window's, a phone's, a restored
    * one, a routine's.
    *
@@ -2251,16 +2259,21 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      * Its presence here is what makes this desktop advertise `rename` at all,
      * exactly as `close` above does for closing.
      *
-     * Said plainly about what this does **not** do: the window at this desk keeps
-     * its own copy of the row and is not pushed at from here, so a session
-     * renamed from a phone reads the new name on this machine at its next list
-     * rather than the same instant. Every *device* is told at once — `server.ts`
-     * resends each connection's list — which is the half a phone can see. The
-     * desk half is a push channel this verb does not have and is not worth
-     * inventing one for while the name it would carry is already correct in the
-     * only place both sides read it from.
+     * Every *device* is told by `server.ts`, which resends each connection's
+     * list. The window at this desk keeps its own copy of the row and read the
+     * list once, at boot, so it is told here through `onSessionRenamed` — the
+     * earlier version of this comment argued the desk half was not worth a push
+     * channel, and the result was his own Mac showing the folder name while his
+     * phone showed the name he had just typed. The title is re-read from the
+     * manager rather than forwarded, because a blank means "back to the folder
+     * name" and the row has to be told the folder name, not the blank.
      */
-    rename: (id, title) => ptys.rename(id, title),
+    rename: (id, title) => {
+      if (!ptys.rename(id, title)) return false
+      const renamed = ptys.list().find((session) => session.id === id)
+      if (renamed) options.onSessionRenamed?.(id, renamed.title)
+      return true
+    },
     /*
      * The copilot's own terminal is not the network's business.
      *

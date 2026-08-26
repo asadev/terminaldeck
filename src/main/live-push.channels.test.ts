@@ -4,11 +4,12 @@ import { describe, expect, it } from 'vitest'
 import {
   PREFS_CHANGED_CHANNEL,
   SESSION_REMOVED_CHANNEL,
+  SESSION_RENAMED_CHANNEL,
   SETTINGS_CHANGED_CHANNEL,
 } from './live-push'
 
 /**
- * The three pushes, held against the preload that has to be listening.
+ * The four pushes, held against the preload that has to be listening.
  *
  * Same test as `browser-view.channels.test.ts` and for the same reason, which
  * that file records in full: `webContents.send` to a channel with no listener is
@@ -56,6 +57,15 @@ describe('the pushes that tell a window about a change it did not make', () => {
     )
   })
 
+  it('the preload listens for a session a device renamed', () => {
+    // Added with the fourth push (2026-08-27) for the same reason as the other
+    // three: a phone renamed a session, the Mac's sidebar kept the folder name,
+    // and every file involved read correctly on its own.
+    expect(channels, `preload does not listen on ${SESSION_RENAMED_CHANNEL}`).toContain(
+      SESSION_RENAMED_CHANNEL,
+    )
+  })
+
   it('removal is its own channel, and is not confused with a process exiting', () => {
     /*
      * The distinction the whole fix rests on. A session that ends on its own
@@ -81,6 +91,7 @@ describe('the pushes that tell a window about a change it did not make', () => {
     // left `index.ts` pushing the old string would pass every case above.
     const main = readFileSync(join(__dirname, 'index.ts'), 'utf8')
     expect(main).toContain('SESSION_REMOVED_CHANNEL')
+    expect(main).toContain('SESSION_RENAMED_CHANNEL')
     const surface = readFileSync(join(__dirname, 'deck-control', 'live-surface.ts'), 'utf8')
     expect(surface).toContain('SETTINGS_CHANGED_CHANNEL')
     expect(surface).toContain('PREFS_CHANGED_CHANNEL')

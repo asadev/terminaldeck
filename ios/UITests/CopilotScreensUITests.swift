@@ -511,6 +511,63 @@ final class CopilotScreensUITests: XCTestCase {
         return answer
     }
 
+    /**
+     * **Its files and its routines, on the phone.**
+     *
+     * > *"the copilot has things in the macbook side and the windows side… its
+     * > memory folder, the folder's own instruction, what it was handed, its
+     * > instructions… 'check the work before it counts as done', 'what happened
+     * > overnight', all of these are like separate settings for co-pilot."*
+     *
+     * The two cards the Mac's Copilot pane has always had, drawn off the two
+     * wires the stand-in now serves. This walks into each: a file row into its
+     * editor, a routine's `…` into its menu and its read-only viewer. The
+     * photographs are the point — the panels were built without a rendered look,
+     * and this is the look.
+     */
+    func testTheFilesAndRoutinesPanels() throws {
+        try XCTSkipUnless(Self.mine.contains(grant), "this case is for --copilot mine")
+
+        XCTAssertTrue(app.openCopilotTab(), "his own device arrives with the copilot already there")
+        XCTAssertTrue(app.buttons["copilot.controls"].waitForExistence(timeout: 10))
+        app.buttons["copilot.controls"].tap()
+
+        let yours = app.buttons["copilot.files.yours"]
+        XCTAssertTrue(yours.waitForExistence(timeout: 20), "the files card should list its instructions")
+        // Scroll it into view: the card sits below the session and permission
+        // panels, which is where he put it — after what the copilot is, before
+        // what it may reach.
+        app.swipeUp()
+        capture("files-01-card")
+
+        yours.tap()
+        XCTAssertTrue(app.textViews["copilot.file.editor"].waitForExistence(timeout: 10),
+                      "its instructions open in an editor")
+        capture("files-02-editor-yours")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+
+        let contract = app.buttons["copilot.files.contract"]
+        XCTAssertTrue(contract.waitForExistence(timeout: 10))
+        contract.tap()
+        XCTAssertTrue(app.staticTexts["copilot.file.readonly"].waitForExistence(timeout: 10),
+                      "the app's half of the prompt says why it cannot be changed")
+        capture("files-03-contract-readonly")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+
+        let more = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'copilot.routine.more.'")).firstMatch
+        XCTAssertTrue(more.waitForExistence(timeout: 20), "the routines card should list the stand-in's six")
+        app.swipeUp()
+        capture("routines-01-card")
+        more.tap()
+        XCTAssertTrue(app.buttons["Read"].waitForExistence(timeout: 10), "the menu offers Read")
+        capture("routines-02-menu")
+        app.buttons["Read"].tap()
+        XCTAssertTrue(app.staticTexts["copilot.routine.file.readonly"].waitForExistence(timeout: 10)
+                      || app.otherElements["copilot.routine.file.readonly"].waitForExistence(timeout: 2),
+                      "the viewer says why the file is read-only here")
+        capture("routines-03-read")
+    }
+
     private func capture(_ name: String) {
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = name

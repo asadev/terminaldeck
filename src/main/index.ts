@@ -260,7 +260,7 @@ import { registerNotificationIpc } from './os-notifications'
 import { registerLidAwakeIpc } from './lid-awake'
 import { logger } from './app-log'
 import { registerLogIpc } from './app-log-ipc'
-import { SESSION_REMOVED_CHANNEL } from './live-push'
+import { SESSION_REMOVED_CHANNEL, SESSION_RENAMED_CHANNEL } from './live-push'
 import { traceIpc, TRACE_SETTING } from './ipc-trace'
 import { buildMenu, hidesMenuBar } from './menu'
 import { overlayFor, resolveAppearance, titleBarChrome, type Appearance } from './title-bar'
@@ -996,6 +996,11 @@ const core = createHostCore({
   // The window has to be told, or a session a phone started is running on this
   // Mac and only the phone knows about it.
   onSessionCreated: (meta) => announceSession(meta),
+  // Same shape for a name a phone gave: the row in this window is the window's
+  // own copy, and until this line it learned a rename only by reloading.
+  onSessionRenamed: (id, title) => {
+    send(SESSION_RENAMED_CHANNEL, id, title)
+  },
   /*
    * The account chip on a window on one of his other machines — and the same
    * two verbs the headless build now hands over.
@@ -4331,6 +4336,25 @@ function registerIpc(): void {
     return ptys.kill(id)
   })
   ipcMain.handle('session:list', () => ptys.list())
+  /*
+   * The desk's own rename, written where the phones read from.
+   *
+   * > *"I said before, for being able to rename sessions."*
+   *
+   * A double-click in the sidebar used to rename the row and nothing else: the
+   * renderer's store changed, `PtyManager` did not, and every device's list —
+   * built from `ptys.list()` — kept the folder name. The renderer still paints
+   * first, so this is not what makes the rename feel instant; it is what makes
+   * the name true on every screen that is not this one. The same two announces
+   * `onSessionStarted` makes, for the same reason: a device holds a socket and a
+   * paired machine holds an attach menu, and neither re-reads on its own.
+   */
+  ipcMain.handle('session:rename', (_e, id: string, title: string) => {
+    if (!ptys.rename(id, title)) return false
+    remoteLayer?.server.sessionsChanged()
+    machinesIpc?.announceSessions()
+    return true
+  })
 }
 
 

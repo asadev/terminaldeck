@@ -63,6 +63,15 @@ final class HostLink: Identifiable {
     let notice: ConnectionNotice
 
     private(set) var sessions: [RemoteSession] = []
+
+    /// A restart waiting on a close: the session being replaced, and the folder
+    /// its replacement starts in. Set by `restartSession`, spent when the
+    /// machine confirms the old one is gone — see the `.closed` handler. A
+    /// timer-based restart could let the new session appear while the old one is
+    /// still dying, and the copilot tab picks the first agent session in the
+    /// folder, so it could land on the corpse. Waiting for the close removes the
+    /// window entirely.
+    private var restartAfterClose: (id: String, folder: String)?
     /// Epoch-millisecond stamps, only for the sessions the host timestamped.
     private(set) var lastActivity: [String: Double] = [:]
     /// What is listening on this machine. Empty against a host that does not
@@ -1171,6 +1180,27 @@ final class HostLink: Identifiable {
     }
 
     /**
+     * End a session and start a fresh one in the same folder, in that order and
+     * with the second waiting on the first.
+     *
+     * This is the copilot's Restart. The create is **not** on a timer: it is
+     * held in `restartAfterClose` and fired when the machine's `closed` frame
+     * for this id lands, so there is never a moment when the old conversation
+     * and its replacement are both live agent sessions in the one folder — which
+     * is the moment the copilot tab could resolve onto the one that is ending.
+     * If the close is refused the create never fires, which is correct: nothing
+     * was ended, so there is nothing to replace.
+     */
+    func restartSession(_ id: String, in folder: String) {
+        guard canCloseSessions, canCreateSessions else {
+            lastError = "\(label) cannot restart sessions from the phone."
+            return
+        }
+        restartAfterClose = (id: id, folder: folder)
+        transport?.send(.close(id: id))
+    }
+
+    /**
      * Give a session a name.
      *
      * No optimistic rename, for the reason `closeSession` does not optimistically
@@ -2004,6 +2034,13 @@ final class HostLink: Identifiable {
             bridges.removeValue(forKey: id)
             lastError = nil
             onSessionsChanged?(sessions, .live)
+            // A restart that was waiting on exactly this close now has its folder
+            // to itself — see `restartSession`. Cleared before the create so a
+            // second `closed` cannot start a second session.
+            if let pending = restartAfterClose, pending.id == id {
+                restartAfterClose = nil
+                createSession(in: pending.folder)
+            }
 
         case .webOpened:
             /*
