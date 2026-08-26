@@ -1,6 +1,9 @@
 package dev.terminaldeck.android.store
 
 import android.content.Context
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * How big the terminal draws, remembered between launches.
@@ -39,6 +42,24 @@ object TerminalTextSize {
     private const val KEY = "terminal.textSizePx.v1"
 
     /**
+     * The size in use, as a stream every open terminal follows the moment it changes.
+     *
+     * iOS reaches the same end with a `terminalTextSizeChanged` notification and the same reasoning:
+     * *"one setting … for all of them"* is only true if a terminal already on screen catches up
+     * without being re-opened. Before this, a size changed in Settings — or by a pinch in one
+     * session — reached the *other* open terminals only when they were next opened, which is the
+     * exact shape of a setting that looks broken: you change it, you go back, and the terminal you
+     * were reading is the size it always was.
+     *
+     * Starts at `0`, meaning *nothing has announced a change this run* — a terminal keys off [load]
+     * for its first size and only follows this once it actually moves. `StateFlow` conflates equal
+     * values, so a redundant [save] of the size already in use does not repaint every session: the
+     * guard iOS spells out (`clamped != before`) is here the flow refusing to re-emit what it holds.
+     */
+    private val _live = MutableStateFlow(0)
+    val live: StateFlow<Int> = _live.asStateFlow()
+
+    /**
      * The size in use.
      *
      * [STANDARD] until somebody changes it, and clamped on the way out so a value stored by a build
@@ -51,11 +72,16 @@ object TerminalTextSize {
     }
 
     fun save(context: Context, size: Int) {
+        val clamped = clamp(size)
         context.applicationContext
             .getSharedPreferences(FILE, Context.MODE_PRIVATE)
             .edit()
-            .putInt(KEY, clamp(size))
+            .putInt(KEY, clamped)
             .apply()
+        // After the write, so a terminal that follows [live] and re-reads never sees a value the
+        // store has not committed yet. The flow conflates, so the session that *caused* this size —
+        // a pinch already applied to its own view — is not asked to apply it a second time.
+        _live.value = clamped
     }
 
     /**
