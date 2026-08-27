@@ -484,6 +484,13 @@ export function customEntry(agent: CustomAgent): AgentEntry {
     statusArgs: null,
     statusFormat: null,
     signInArgs: null,
+    // Null for the same reason `signInArgs` is: nothing here has measured a way
+    // to sign this added agent in or out, so neither command is claimed. With
+    // `logins: 'unmeasured'` it grows no account row at all, so the note is never
+    // read — but it is set rather than left to the accessor's generic fallback,
+    // in the same spirit as `loginsNote` above.
+    signOutArgs: null,
+    signOutNote: CUSTOM_LOGINS_NOTE,
     loginsNote: CUSTOM_LOGINS_NOTE,
     verified: `Added by you. \`${agent.command}\` resolved to ${agent.resolvedPath} on this machine when it was added; nothing about it has been measured since.`,
   }

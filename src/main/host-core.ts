@@ -599,6 +599,20 @@ export interface HostCoreOptions {
    * Accounts pane makes when it adds an account.
    */
   signInAccount?(accountId: string): Promise<{ ok: boolean; message: string; session: string | null }>
+  /**
+   * Sign one of this machine's logins out, for a settings pane on another machine.
+   *
+   * The counterpart to {@link signInAccount}, and unlike it this **is** a command
+   * this core can run and report on — the logout finishes on its own and clears
+   * the credential, so there is no terminal to hand back and `session` is always
+   * null. It is still handed in rather than composed here, so the one runner
+   * (`signOutAccount` in `profiles-signin.ts`) backs both the local Accounts pane
+   * and this seam, and a device cannot get a different answer from the desk.
+   *
+   * Present together with {@link signInAccount}: a host that can start a sign-in
+   * can run a sign-out, and `createLoginsServe` wants both to advertise `logins`.
+   */
+  signOutAccount?(accountId: string): Promise<{ ok: boolean; message: string; session: string | null }>
   platform?: Platform
 }
 
@@ -2530,7 +2544,21 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      */
     ...(options.signInAccount === undefined
       ? {}
-      : { logins: createLoginsServe({ signIn: options.signInAccount }) }),
+      : {
+          logins: createLoginsServe({
+            signIn: options.signInAccount,
+            // Wired together in practice; the fallback keeps `signOut` from ever
+            // being undefined if some future shell supplies only the sign-in, so
+            // the seam answers with a sentence rather than throwing on a press.
+            signOut:
+              options.signOutAccount ??
+              (async () => ({
+                ok: false,
+                message: 'This build cannot sign a login out from here.',
+                session: null,
+              })),
+          }),
+        }),
     /*
      * Ending a session from a device, which until tonight nothing could do.
      *

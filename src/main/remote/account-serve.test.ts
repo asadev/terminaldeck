@@ -260,6 +260,7 @@ describe('what a paired machine is told about this machine’s logins', () => {
     const serve = createLoginsServe({
       readSignIn: SILENT,
       signIn: () => Promise.resolve({ ok: false, message: '', session: null }),
+      signOut: () => Promise.resolve({ ok: true, message: '', session: null }),
     })
 
     const accounts = await serve.read()
@@ -275,6 +276,7 @@ describe('what a paired machine is told about this machine’s logins', () => {
     const serve = createLoginsServe({
       readSignIn: () => Promise.resolve(report()),
       signIn: () => Promise.resolve({ ok: false, message: '', session: null }),
+      signOut: () => Promise.resolve({ ok: true, message: '', session: null }),
     })
 
     const accounts = await serve.read()
@@ -306,6 +308,7 @@ describe('what a paired machine is told about this machine’s logins', () => {
           session: 'sess-new',
         })
       },
+      signOut: () => Promise.resolve({ ok: true, message: '', session: null }),
     })
 
     const answer = await serve.signIn('p-work')

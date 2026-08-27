@@ -714,6 +714,11 @@ const api = {
   readMachineLogins: (id: string): Promise<unknown> => ipcRenderer.invoke('machines:logins:read', id),
   signInMachineLogin: (id: string, accountId: string): Promise<unknown> =>
     ipcRenderer.invoke('machines:logins:signin', id, accountId),
+  // The mirror of the line above, and its answer's `session` is always null — a
+  // logout opens no terminal over there. Whether the login is gone is the next
+  // `readMachineLogins`, never assumed from the press.
+  signOutMachineLogin: (id: string, accountId: string): Promise<unknown> =>
+    ipcRenderer.invoke('machines:logins:signout', id, accountId),
   /*
    * The copilot on one of his other machines.
    *
@@ -1355,6 +1360,17 @@ const api = {
    */
   profileSignIn: (id: string, options?: { refresh?: boolean }): Promise<unknown> =>
     ipcRenderer.invoke('profiles:signin', id, options),
+  /**
+   * Sign one of this machine's logins out — run the agent's own logout command
+   * under that account's config directory, then re-read to prove it took.
+   *
+   * The counterpart `profileSignIn` never had. Its answer is a sentence either
+   * way, never a bare rejection, because a Sign-out button that produces nothing
+   * is one a person cannot tell from a control that does not work. Whether a
+   * login can be signed out at all is decided by `hasSignOut` before the button
+   * is drawn, so this is only ever called where a command exists to run.
+   */
+  profileSignOut: (id: string): Promise<unknown> => ipcRenderer.invoke('profiles:signout', id),
   /**
    * Which login one *session* is actually running under.
    *

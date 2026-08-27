@@ -136,7 +136,9 @@ import {
   AGENT_ENTRIES,
   hasAnyLogin,
   hasMultipleLogins,
+  hasSignOut as catalogHasSignOut,
   loginsNote,
+  signOutNote as catalogSignOutNote,
   type AgentLogins,
   type AgentStatusFormat,
 } from '../shared/agent-catalog'
@@ -209,6 +211,18 @@ export interface AccountStrategy {
    * fresh Claude account has always been signed in here.
    */
   signInArgs: readonly string[] | null
+  /**
+   * Args that sign this login out, or null where the agent has no such command.
+   *
+   * The counterpart `signInArgs` never had. Unlike sign-in — which is only ever
+   * turned into a sentence to print, because the flow is interactive — this is
+   * *run*: the command clears the credential and finishes. Null for Gemini and
+   * the shell, whose `signOutNote` says why. Read straight out of the catalogue,
+   * where the two agents that have one carry the measurement beside the value.
+   */
+  signOutArgs: readonly string[] | null
+  /** One sentence for the screen when `signOutArgs` is null. Never generic. */
+  signOutNote: string | null
   /** One sentence for the screen when `movesLogin` is false. Never generic. */
   reason: string | null
 }
@@ -239,6 +253,8 @@ function strategyFor(provider: ProviderId): AccountStrategy {
     statusArgs: entry.statusArgs,
     statusFormat: entry.statusFormat,
     signInArgs: entry.signInArgs,
+    signOutArgs: entry.signOutArgs,
+    signOutNote: entry.signOutNote,
     reason: entry.loginsNote,
   }
 }
@@ -359,6 +375,35 @@ export function accountEnv(
  */
 export function signInCommandLine(provider: ProviderId, bin: string): string | null {
   const args = ACCOUNT_STRATEGIES[provider]?.signInArgs
+  if (!args) return null
+  return [bin, ...args].join(' ')
+}
+
+/**
+ * Whether this agent can actually be signed out — the gate every Sign-out
+ * control sits behind. Re-exported from the catalogue so the main process reads
+ * the same answer the renderer draws its button from.
+ */
+export function hasSignOut(provider: ProviderId): boolean {
+  return catalogHasSignOut(provider)
+}
+
+/** Why this agent has no sign-out, in its own terms. See {@link hasSignOut}. */
+export function signOutNote(provider: ProviderId): string {
+  return catalogSignOutNote(provider)
+}
+
+/**
+ * The command that signs this login out, as one string — run, not printed.
+ *
+ * The sign-out counterpart to {@link signInCommandLine}, and the difference is
+ * the whole point: sign-in is interactive and this string is only ever shown,
+ * while sign-out finishes on its own and `signOutAccount` actually runs these
+ * args. Null where the agent has no logout command, which is where the row shows
+ * {@link signOutNote} instead of a button.
+ */
+export function signOutCommandLine(provider: ProviderId, bin: string): string | null {
+  const args = ACCOUNT_STRATEGIES[provider]?.signOutArgs
   if (!args) return null
   return [bin, ...args].join(' ')
 }

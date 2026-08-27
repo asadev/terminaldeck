@@ -139,6 +139,7 @@ const CLIENT_TYPES: Record<ClientMessage['t'], true> = {
   'account.switch': true,
   'logins.read': true,
   'logins.signin': true,
+  'logins.signout': true,
   'settings.read': true,
   'settings.apply': true,
   'devices.list': true,
@@ -241,6 +242,7 @@ const SERVER_TYPES: Record<ServerMessage['t'], true> = {
   'account.switched': true,
   'logins.state': true,
   'logins.signedin': true,
+  'logins.signedout': true,
   'settings.state': true,
   'settings.applied': true,
   'settings.changed': true,
@@ -432,6 +434,9 @@ const VALID_CLIENT: ClientMessage[] = [
   // signing one of those logins in over there.
   { t: 'logins.read', rid: 'lgn-1' },
   { t: 'logins.signin', rid: 'lgn-2', accountId: 'system:codex' },
+  // And signing one of those logins out again — a command that runs and finishes
+  // rather than a terminal to watch, so its answer carries no session.
+  { t: 'logins.signout', rid: 'lgn-3', accountId: 'system:codex' },
   // The two server-owned settings — read the whole set, and change one of them.
   { t: 'settings.read', rid: 'set-1' },
   { t: 'settings.apply', rid: 'set-2', key: 'agents.defaultProvider', value: 'codex' },
@@ -1117,6 +1122,15 @@ const VALID_SERVER: ServerMessage[] = [
     ok: true,
     message: 'A terminal is open on that machine; finish the login in it.',
     session: '9a2f77d7-c0a1-4b3e-8f1d-4f1c2ae08f1d',
+  },
+  // The outcome of a sign-out, whose `session` is always null — a logout opens
+  // no terminal — kept in the shape only so it reads like `logins.signedin`.
+  {
+    t: 'logins.signedout',
+    rid: 'lgn-3',
+    ok: true,
+    message: 'Claude Code is signed out on that machine.',
+    session: null,
   },
   // The machine's two server-owned settings, the chooser carrying its options.
   {

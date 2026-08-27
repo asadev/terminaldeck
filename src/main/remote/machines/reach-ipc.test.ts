@@ -201,6 +201,8 @@ function rig(options: { online: boolean }): Rig {
         readLogins: () => Promise.resolve(null),
         signInLogin: (_accountId: string) =>
           Promise.resolve({ ok: false, message: 'That machine does not manage its logins from here.', session: null }),
+        signOutLogin: (_accountId: string) =>
+          Promise.resolve({ ok: false, message: 'That machine does not manage its logins from here.', session: null }),
       }
     },
   })

@@ -138,7 +138,7 @@ import {
   type ArmedSwitch,
 } from './switch-later'
 import { adoptSharedHistory, registerSharedProjectsIpc } from './shared-projects'
-import { registerSignInIpc } from './profiles-signin'
+import { registerSignInIpc, signOutAccount } from './profiles-signin'
 import { copilotState, registerCopilotIpc } from './copilot-session'
 import { appendCopilotAction, copilotPaths } from './copilot-home'
 import { COPILOT_HOME_SETTING, registerCopilotFolderIpc } from './copilot-folder'
@@ -1033,6 +1033,11 @@ const core = createHostCore({
    * no longer exists. The answered `session` is the id the session has afterwards.
    */
   signInAccount: (accountId) => sessionSwitch.signInAccount(accountId),
+  // The one runner backs both the local Accounts pane's `profiles:signout` and
+  // this seam a device reaches, so a paired PC and the desk cannot get different
+  // answers about the same login. `session` comes back null — a logout opens no
+  // terminal — which is the shape's whole difference from `signInAccount`.
+  signOutAccount: (accountId) => signOutAccount(accountId),
   switchAccount: (sessionId, accountId) => sessionSwitch.switchAccount(sessionId, accountId),
 })
 

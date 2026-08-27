@@ -573,6 +573,146 @@ export async function readSignIn(
   return report
 }
 
+/* --------------------------------------------------------------- sign out -- */
+
+/** What a sign-out answers with. The shape the wire and both shells share. */
+export interface SignOutAnswer {
+  ok: boolean
+  message: string
+  /** Always null: a sign-out runs a command and opens no terminal to finish in. */
+  session: null
+}
+
+/** The seam the runner spawns through, injected in tests. Nothing else passes it. */
+export interface SignOutOptions {
+  platform?: Platform
+  path?: string
+  binary?: AgentBinary
+  exec?(
+    command: string,
+    args: string[],
+    options: { env: Record<string, string | undefined>; cwd: string; timeout: number },
+  ): Promise<ProbeInput>
+}
+
+/**
+ * Sign one of this machine's logins out — run the command, then prove it took.
+ *
+ * ## Why this is *run* where `readSignIn`'s command is only shown
+ *
+ * Because sign-out is not interactive and sign-in is. `signInArgs` becomes a
+ * sentence to print because the flow waits on a person in a browser; the logout
+ * command finishes on its own and clears the credential, so the honest act is to
+ * run it and say what happened — which is exactly what the servers pane does,
+ * and what his ask needed from *"one pane"*: sign in, sign out, and set access.
+ *
+ * ## Why the machine's own answer wins over the exit status
+ *
+ * Measured on a real box 2026-08-21: `codex logout` exits the same way whether
+ * it removed a login or found none. So the exit status is the weaker fact; what
+ * settles it is re-reading this machine's own probe, the same way
+ * `main/servers/setup.ts` settles a server sign-out. A logout that reported
+ * success and left a login in place cannot be reported as success.
+ *
+ * ## Why it never throws
+ *
+ * Every path answers with a sentence, because the two callers — the local
+ * Accounts IPC and a paired device over the `logins` seam — both turn a rejected
+ * promise into a bare "unavailable" that says nothing a person can act on.
+ */
+export async function signOutAccount(
+  accountId: string,
+  options: SignOutOptions = {},
+): Promise<SignOutAnswer> {
+  const profile = findProfile(getState(), accountId)
+  if (profile === null) {
+    // The pane listed this machine's logins a moment ago, so a miss is a login
+    // deleted in between — said as what it is rather than as a failed sign-out.
+    return { ok: false, message: 'There is no such login on this computer any more.', session: null }
+  }
+
+  const provider = profile.provider as ProviderId
+  const strategy = ACCOUNT_STRATEGIES[provider]
+  const args = strategy?.signOutArgs
+  if (!args) {
+    /*
+     * Gemini and the shell: no command to run. Every pane gates its Sign-out
+     * button on the same fact and so never reaches here, but a caller that got
+     * past it — a device on an older client, or a direct IPC — is answered with
+     * the agent's own reason rather than left hanging on a control that refused.
+     */
+    return {
+      ok: false,
+      message: strategy?.signOutNote ?? 'This agent has no command to sign it out from here.',
+      session: null,
+    }
+  }
+
+  const platform = options.platform ?? currentPlatform()
+  const bin = PROVIDERS[provider].bin
+
+  /*
+   * Prove the binary runs before asking it to do anything — the same guard
+   * `readSignIn` puts in front of every probe, for the same recorded reason: the
+   * npm launcher on PATH can be a broken shim that prints a Node stack trace
+   * instead of doing the thing. `options.exec` means the caller took over the
+   * spawn, so the machine is not asked about the binary either.
+   */
+  const binary: AgentBinary | undefined =
+    options.binary ?? (options.exec ? undefined : (await agentBinaries(platform))[provider])
+  if (binary && binary.runnable === null) {
+    return {
+      ok: false,
+      message:
+        binaryProblem(binary) ?? `${strategy.label} could not be started, so it was not signed out.`,
+      session: null,
+    }
+  }
+
+  const launch = launchSpec(binary?.runnable ?? bin, null, platform)
+  const PATH = options.path ?? (await loginPath(platform))
+  const env = {
+    ...withPath(process.env, PATH, platform),
+    // The same binary, pointed at this account's directory — empty for the
+    // machine's own install, which is what makes it the machine's own install.
+    ...sessionEnv(profile, provider),
+  }
+
+  const spawnArgs = [...args]
+  if (options.exec) {
+    await options.exec(launch.command, spawnArgs, { env, cwd: homedir(), timeout: SIGNIN_TIMEOUT_MS })
+  } else {
+    await spawnProbe(
+      launch.command,
+      spawnArgs,
+      { env, cwd: homedir(), timeout: SIGNIN_TIMEOUT_MS },
+      launch.shell,
+    )
+  }
+
+  // The machine's own answer, not the command's. Drop the memo first so the
+  // re-read is of the login as it stands now rather than as it stood before.
+  resetSignInCache()
+  const after = await readSignIn(profile, {
+    refresh: true,
+    provider,
+    ...(options.path === undefined ? {} : { path: options.path }),
+    ...(options.binary === undefined ? {} : { binary: options.binary }),
+    ...(options.exec === undefined ? {} : { exec: options.exec }),
+  })
+  if (after.state === 'signed-out') {
+    return { ok: true, message: `${strategy.label} is signed out on this computer.`, session: null }
+  }
+  return {
+    ok: false,
+    message:
+      after.state === 'signed-in'
+        ? `${strategy.label} is still signed in on this computer.`
+        : `${strategy.label} could not be confirmed signed out.${after.detail ? ` ${after.detail}` : ''}`,
+    session: null,
+  }
+}
+
 /* ------------------------------------------------------------------- ipc -- */
 
 /**
@@ -585,10 +725,15 @@ export async function readSignIn(
  * screen only a window draws.
  *
  * - `profiles:signin` (id, { refresh?, provider? }) → {@link SignInReport}
+ * - `profiles:signout` (id) → {@link SignOutAnswer}
  *
- * Rejects only when the id names no profile, which the renderer treats as a
- * list that has moved on under it. Every other failure — including "the CLI is
- * not installed" — comes back as a report saying so.
+ * `profiles:signin` rejects only when the id names no profile, which the
+ * renderer treats as a list that has moved on under it. Every other failure —
+ * including "the CLI is not installed" — comes back as a report saying so.
+ *
+ * `profiles:signout` never rejects: it answers with a sentence on every path,
+ * because a button that produces a bare rejection is one a person cannot tell
+ * from a control that does not work. See {@link signOutAccount}.
  */
 export function registerSignInIpc(ipcMain: IpcMain): void {
   ipcMain.handle('profiles:signin', async (_e: IpcMainInvokeEvent, id: unknown, options: unknown) => {
@@ -605,5 +750,15 @@ export function registerSignInIpc(ipcMain: IpcMain): void {
       // inside a probe whose whole contract is that it does not.
       ...(provider !== undefined && provider in PROVIDERS ? { provider } : {}),
     })
+  })
+
+  ipcMain.handle('profiles:signout', async (_e: IpcMainInvokeEvent, id: unknown): Promise<SignOutAnswer> => {
+    // Shape-checked here rather than trusted: an `ipcMain.handle` argument is
+    // whatever the renderer put in it, and past this line the value selects a
+    // configuration directory to run a logout against.
+    if (typeof id !== 'string' || id === '') {
+      return { ok: false, message: 'That is not an account.', session: null }
+    }
+    return signOutAccount(id)
   })
 }

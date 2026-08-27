@@ -230,6 +230,7 @@ async function serve(options: { grants?: AccountGrants; own?: (deviceId: string)
         signedIn.push(accountId)
         return Promise.resolve({ ok: true, message: 'A terminal is open.', session: 'sess-3' })
       },
+      signOut: () => Promise.resolve({ ok: true, message: 'Signed out.', session: null }),
     },
   }
 

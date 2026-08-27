@@ -289,6 +289,46 @@ describe('AccountsView', () => {
     )
   })
 
+  it('offers Sign out on a signed-in account whose agent has a logout command', () => {
+    // The counterpart the pane went without until the catalogue carried a logout
+    // command to run. The system account is Claude and signed in, and Claude has
+    // `claude auth logout` — so the row draws the button.
+    expect(render({ onSignOut: noop })).toContain('Sign out')
+  })
+
+  it('draws no Sign out when this window has no way to run one', () => {
+    // Null onSignOut — a pane with no accounts bridge — draws none rather than a
+    // button that would do nothing, the same rule Sign in follows above.
+    expect(render()).not.toContain('Sign out')
+  })
+
+  it('shows the reason instead of a button where the agent has no logout command', () => {
+    // Gemini has none, so a signed-in Gemini row says so in Gemini's own words
+    // rather than showing a control that could only refuse — §4.1.
+    const geminiOnly: AccountsSnapshot = {
+      ...ACCOUNTS,
+      accounts: [
+        {
+          id: 'system:gemini',
+          name: 'Default (Gemini CLI)',
+          provider: 'gemini',
+          configDir: '/Users/me/.gemini',
+          system: true,
+          color: '--status-waiting',
+          lastUsedAt: null,
+        },
+      ],
+    }
+    const html = render({
+      snapshot: geminiOnly,
+      signIn: { 'system:gemini': signedIn },
+      providerRows: ALL_RUNNABLE,
+      onSignOut: noop,
+    })
+    expect(html).toContain('no logout command')
+    expect(html).not.toContain('Sign out')
+  })
+
   it('offers exactly one way in, and the pane does not ask the questions itself', () => {
     /*
      * The change this pass is about, stated as a property of the pane rather

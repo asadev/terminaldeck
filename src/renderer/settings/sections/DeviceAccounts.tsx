@@ -2,9 +2,11 @@ import { useState } from 'react'
 import { profileLoginLabel } from '../../accounts'
 import { ProviderBadge } from '../../components/ProviderBadge'
 import { Button, Notice } from '../controls'
+import { hasSignOut, signOutNote } from '../../../shared/agent-catalog'
 import {
   signInMachineLogin,
   signInOf,
+  signOutMachineLogin,
   useMachineAccount,
   useMachineLogins,
   type MachineAccount,
@@ -47,15 +49,16 @@ import type { MachineWithLink } from '../../machines/useMachines'
  * which is what signing in *is* for every agent this app ships with, and what
  * this app's own Accounts pane does at this desk.
  *
- * ## What is still missing, said once rather than drawn as a dead button
+ * ## Sign out, which is here now
  *
- * **Sign out.** Nothing in this app signs an agent out on *any* machine,
- * including this one: `agent-catalog.ts` has `signInArgs` and no counterpart,
- * and the Accounts list at this desk offers no such control either. A **Sign
- * out** here could only apologise, which is the shape of defect this app keeps
- * being reviewed for, so there is none. It arrives when the local one does, and
- * both need the same missing thing first: each agent's own logout command,
- * measured rather than guessed.
+ * It arrived on 2026-08-26, in the same change as the local one and off the same
+ * missing piece: `agent-catalog.ts` gained `signOutArgs`, the measured logout
+ * command `signInArgs` never had a counterpart for. So a signed-in row of an
+ * agent that has one carries a **Sign out** beside its Sign in, and the press
+ * runs that machine's own logout over there and re-reads its probe — never a
+ * dead button, because `hasSignOut` decides whether it is drawn. The one agent
+ * with no logout command (Gemini) shows its reason on the row instead, which is
+ * §4.1: a control that cannot act is absent, not disabled hopefully.
  *
  * ## The session read is kept, and is now the fallback
  *
@@ -165,6 +168,23 @@ export function DeviceAccounts({ device }: { device: MachineWithLink }) {
       .finally(() => setBusy(null))
   }
 
+  const signOut = (account: MachineAccount): void => {
+    setBusy(account.id)
+    setNotice(null)
+    void signOutMachineLogin(device.machine.id, account.id)
+      .then((answer) => {
+        // The far machine's own sentence, exactly as sign-in above — never one
+        // this window wrote about a computer it is not on.
+        setNotice({ ok: answer.ok, text: answer.message })
+        // Re-read that machine's probe rather than believe the press: the far
+        // end already settled `ok` against its own probe, and this is what puts
+        // the row's state line in step with it.
+        if (answer.ok) machine.reload()
+      })
+      .catch(() => setNotice({ ok: false, text: `${device.machine.name} did not answer.` }))
+      .finally(() => setBusy(null))
+  }
+
   return (
     <>
       {notice !== null && <Notice tone={notice.ok ? 'info' : 'error'}>{notice.text}</Notice>}
@@ -194,6 +214,11 @@ export function DeviceAccounts({ device }: { device: MachineWithLink }) {
               session={session?.title ?? ''}
               busy={busy !== null}
               onSignIn={canSignIn ? () => signIn(account) : null}
+              /* Same capability as sign-in — a machine that cannot be asked to
+                 start a login cannot be asked to end one either — and `DeviceRow`
+                 draws it only on a row that is signed in and whose agent has a
+                 logout command. */
+              onSignOut={canSignIn ? () => signOut(account) : null}
             />
           ))}
         </ul>
@@ -222,6 +247,7 @@ export function DeviceRow({
   session,
   busy,
   onSignIn,
+  onSignOut = null,
 }: {
   account: MachineAccount
   running: boolean
@@ -229,8 +255,24 @@ export function DeviceRow({
   busy: boolean
   /** Null when that machine cannot be asked to start a login. Then nothing is drawn. */
   onSignIn: (() => void) | null
+  /**
+   * Null when that machine cannot be asked to end a login — the same capability
+   * as sign-in. Optional so the render tests that predate it need no change;
+   * absent draws no Sign out, which is the honest state where none can be run.
+   */
+  onSignOut?: (() => void) | null
 }) {
   const state = signInOf(account)
+  const provider = account.provider
+  /*
+   * Sign out is drawn only where it can act: the login is actually signed in,
+   * and that agent has a logout command. A signed-in login whose agent has none
+   * (Gemini) shows its reason below instead — §4.1, never a button that refuses.
+   */
+  const canSignOutHere =
+    onSignOut !== null && state.state === 'signed-in' && provider !== null && hasSignOut(provider)
+  const signedInNoSignOut =
+    state.state === 'signed-in' && provider !== null && !hasSignOut(provider)
   return (
     <li className="settings-profile">
       <span
@@ -254,6 +296,13 @@ export function DeviceRow({
           <span className="settings-account-mark" aria-hidden="true" />
           <span>{state.detail === '' ? state.state : state.detail}</span>
         </span>
+        {/* Why a signed-in row of this agent has no Sign out, in the agent's own
+            terms — only where the button would otherwise be the missing control.
+            The reason is the same one the local pane and the servers pane show,
+            read from the one catalogue. */}
+        {signedInNoSignOut && provider !== null && (
+          <span className="settings-account-blocked">{signOutNote(provider)}</span>
+        )}
       </span>
       {/* Offered on every row rather than only on the signed-out ones, and that
           is deliberate: signing in again is how a login that has expired is
@@ -262,6 +311,14 @@ export function DeviceRow({
       {onSignIn !== null && (
         <Button onClick={onSignIn} disabled={busy}>
           Sign in
+        </Button>
+      )}
+      {/* And out again, on a row that is signed in and whose agent has a logout
+          command. The far machine runs it and re-reads its own probe; this end
+          only asks. */}
+      {canSignOutHere && onSignOut !== null && (
+        <Button onClick={onSignOut} disabled={busy}>
+          Sign out
         </Button>
       )}
     </li>
