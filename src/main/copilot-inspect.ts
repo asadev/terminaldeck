@@ -50,7 +50,7 @@
 
 import { readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join, sep } from 'node:path'
-import { shell, type IpcMain, type IpcMainInvokeEvent } from 'electron'
+import type { IpcMain, IpcMainInvokeEvent } from 'electron'
 import {
   appendCopilotAction,
   copilotPaths,
@@ -701,6 +701,25 @@ export interface CopilotInspectDeps {
    * else, which is the kind of quiet disagreement this feature exists to remove.
    */
   home?(): string | null
+  /**
+   * Open a copilot file or folder in the machine's own file manager, injected.
+   *
+   * This is the one runtime Electron value this module used to hold: a
+   * `import { shell } from 'electron'` at the top, called by `copilot:reveal` to
+   * show a file in Finder or open a folder. A *value* import from `electron`
+   * throws at load under plain Node, and `copilot-files.ts` imports this
+   * module's readers — so that one line was the single edge keeping the whole
+   * copilot files surface out of the headless bundle (`src/headless/seam.test.ts`
+   * walks it and fails on exactly this shape). Injecting the action moves the
+   * Electron half to the desktop wiring in `src/main/index.ts`, where `shell` is
+   * a given, and leaves this module reachable from a server.
+   *
+   * Absent is the honest answer for a headless host: "reveal in Finder" has no
+   * meaning on a machine with no screen, so the handler says so rather than
+   * pretending to open something nobody can see. A phone reading the copilot's
+   * files on a server does not press this — it opens the file in-app.
+   */
+  revealInFileManager?(path: string, kind: 'file' | 'folder'): Promise<{ opened: boolean; message: string }>
 }
 
 function pathsOf(deps: CopilotInspectDeps): { paths: CopilotPaths; userData: string } {
@@ -792,19 +811,21 @@ export function registerCopilotInspectIpc(ipcMain: IpcMain, deps: CopilotInspect
           message: 'That has not been created yet, so there is nothing to open.',
         }
       }
+      // No file manager to open onto — a headless server has no screen. Said
+      // rather than faked: the desktop injects `revealInFileManager` (over
+      // `shell`), a server passes none, and a phone reading these files on a
+      // server never presses reveal — it opens the file in-app.
+      if (deps.revealInFileManager === undefined) {
+        return { opened: false, path, message: 'This host has no file manager to open — it is a server.' }
+      }
       // A file is revealed in its folder rather than opened, because opening a
       // Markdown file hands it to whatever the machine has registered for
       // Markdown, which on a developer's Mac is as likely to be an editor they
       // have not used in a year as the one they want. A folder is opened,
-      // because that is what opening a folder means.
-      if (PLACE_KIND[known] === 'file') {
-        shell.showItemInFolder(path)
-        return { opened: true, path, message: 'Shown in your file manager.' }
-      }
-      const problem = await shell.openPath(path)
-      return problem === ''
-        ? { opened: true, path, message: 'Opened.' }
-        : { opened: false, path, message: problem }
+      // because that is what opening a folder means. Which of the two this is
+      // travels to the injected action as its `kind`.
+      const revealed = await deps.revealInFileManager(path, PLACE_KIND[known])
+      return { opened: revealed.opened, path, message: revealed.message }
     },
   )
 }

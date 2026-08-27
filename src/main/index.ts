@@ -3689,6 +3689,29 @@ function registerIpc(): void {
   registerCopilotInspectIpc(ipcMain, {
     userData: () => app.getPath('userData'),
     home: () => storedValue(COPILOT_HOME_SETTING) as string | null,
+    /*
+     * The one Electron value the inspect module used to import itself.
+     *
+     * It held `import { shell } from 'electron'` for this handler alone, and a
+     * value import from `electron` throws at load under plain Node — so that
+     * line kept `copilot-files.ts`, which imports the inspect readers, out of
+     * the headless bundle. Injected here, where `shell` is a given, it leaves
+     * that module reachable from a server (`copilot-inspect.ts` and
+     * `src/headless/seam.test.ts`). A headless host passes none and the handler
+     * says a server has no file manager to open.
+     *
+     * A file is revealed in its folder rather than opened, because opening a
+     * Markdown file hands it to whatever the machine registered for Markdown; a
+     * folder is opened, because that is what opening a folder means.
+     */
+    revealInFileManager: async (path, kind) => {
+      if (kind === 'file') {
+        shell.showItemInFolder(path)
+        return { opened: true, message: 'Shown in your file manager.' }
+      }
+      const problem = await shell.openPath(path)
+      return problem === '' ? { opened: true, message: 'Opened.' } : { opened: false, message: problem }
+    },
   })
   registerRoutinesIpc(ipcMain, routines.api)
   registerDeckignoreIpc(ipcMain)
