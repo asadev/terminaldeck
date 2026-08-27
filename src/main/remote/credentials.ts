@@ -87,7 +87,7 @@
  */
 
 import { execFile } from 'node:child_process'
-import { createHash, randomBytes, randomUUID } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { join } from 'node:path'
 import { BRAND } from '../../shared/brand'
@@ -143,11 +143,23 @@ export type CredentialMessage =
 export interface DevicePost {
   /**
    * Put a question to every connection of this device that said it can answer.
-   * Returns how many heard it, which is zero for a device that is not there.
+   * Vestigial since 2026-08-27 — the proxy asks no device anything now — kept so
+   * `server.ts`'s desk, which serves other capabilities too, is one shape.
    */
   ask(deviceId: string, message: ServerMessage): number
-  /** Is there a live connection that claimed the `credential` capability? */
+  /** Vestigial, as {@link ask} is: no client claims `credential` any more. */
   reachable(deviceId: string): boolean
+  /**
+   * Is this device one of the owner's own, rather than a guest granted a folder?
+   *
+   * The one thing the desk is still asked for. Git on the machine is answered
+   * from the machine's own GitHub — but only for the owner's own sessions; a
+   * guest is refused, so a granted folder never pushes as the owner. Only
+   * `server.ts` knows which device a socket belongs to, so only it can answer.
+   * Optional so a test may leave it unwired, where the proxy treats the caller
+   * as the owner (there is no guest in a unit test's single-device world).
+   */
+  ownDevice?(deviceId: string): boolean
 }
 
 /**
@@ -236,28 +248,6 @@ export const DECIDE_TIMEOUT_MS = 60_000
  * keychain. Ten seconds is a slow phone on a bad link, not a person.
  */
 export const SILENT_TIMEOUT_MS = 10_000
-
-/**
- * How many questions one device may be holding at once, and how many in total.
- *
- * A person pushes one thing at a time; more than a handful at once is a script
- * in a loop, and the cost of that is somebody's phone buzzing forty times. The
- * refusal is immediate and says what it is, so a legitimate burst degrades into
- * "try again" rather than into silence.
- */
-const MAX_PENDING_PER_DEVICE = 4
-const MAX_PENDING = 16
-
-/**
- * How many repositories one device may have approved.
- *
- * In memory, so this is only a bound on a runaway rather than a policy anyone
- * will meet: sixty-four repositories in one run of the app is far past what a
- * person does, and the oldest is dropped rather than the newest refused, because
- * a cap that starts refusing approvals is a cap that reads as the feature being
- * broken.
- */
-const MAX_APPROVALS_PER_DEVICE = 64
 
 /** Largest credential request the helper may post. Git's are a few hundred bytes. */
 const MAX_REQUEST_BYTES = 16 * 1024
@@ -497,9 +487,22 @@ export interface CredentialProxyOptions {
   /** Root of the per-device guest git directories. */
   dir: string
   /**
-   * Reads a process's ancestry. Injected so tests never spawn `ps` — and so the
-   * classification can be pinned from a machine that is not the one being
-   * described.
+   * The machine's own GitHub login, as a git credential, or null when it has
+   * none. Injected rather than imported so this module never reaches into
+   * `github-auth.ts` — `host-core.ts` hands over `() => auth.gitCredential()`.
+   *
+   * This is what a helper request is answered from since 2026-08-27: the host
+   * owns GitHub, so git on the host uses the host's own account. Absent (a test,
+   * an assembly that predates the flip) means "no account connected", and every
+   * request is refused with the sentence that says so — never answered from a
+   * phone, because there is no longer a phone in this path.
+   */
+  hostCredential?: () => { username: string; password: string } | null
+  /**
+   * Reads a process's ancestry. Vestigial since the flip — the operation
+   * classification it fed decided whether to prompt a phone, and nothing prompts
+   * a phone now. Kept on the option bag so a caller that still passes it is not a
+   * type error; nothing here calls it.
    */
   ancestry?: (pid: number) => Promise<string[]>
   /** Fixed port, for tests. Zero, the default, takes whatever is free. */
@@ -515,43 +518,15 @@ interface Grant {
   sessionId: string | null
 }
 
-interface Pending {
-  id: string
-  deviceId: string
-  repoKey: string | null
-  operation: CredentialOperation
-  prompted: boolean
-  acked: boolean
-  timer: NodeJS.Timeout | null
-  settle(outcome: CredentialOutcome): void
-}
-
-/**
- * A device and a repository, as one string.
- *
- * The host is in the key as well as the repository: `github.com/o/r` and an
- * enterprise host's `git.acme.co/o/r` are two different repositories that a
- * `owner/name` alone cannot tell apart, and an approval for one must not answer
- * for the other.
- */
-function approvalKey(host: string, repo: string): string {
-  return `${host.toLowerCase()}/${repo}`
-}
-
 export function createCredentialProxy(options: CredentialProxyOptions): CredentialProxy {
-  const ancestry = options.ancestry ?? ((pid: number) => psAncestry(pid, options.platform))
+  const hostCredential = options.hostCredential ?? (() => null)
   const reachMs = options.reachTimeoutMs ?? REACH_TIMEOUT_MS
   const decideMs = options.decideTimeoutMs ?? DECIDE_TIMEOUT_MS
-  const silentMs = options.silentTimeoutMs ?? SILENT_TIMEOUT_MS
 
   /** Key → the device a session may ask on behalf of. */
   const grants = new Map<string, Grant>()
   /** Session id → key, so an exit can close the grant it was started with. */
   const bySession = new Map<string, string>()
-  /** Request id → what is waiting on it. */
-  const pending = new Map<string, Pending>()
-  /** Device → repositories a person has approved, this run, in memory. */
-  const approvals = new Map<string, Set<string>>()
 
   let post: DevicePost | null = null
   let endpoint: Server | null = null
@@ -560,117 +535,67 @@ export function createCredentialProxy(options: CredentialProxyOptions): Credenti
 
   /* ---------------------------------------------------------- the desk -- */
 
-  function settle(entry: Pending, outcome: CredentialOutcome): void {
-    if (!pending.delete(entry.id)) return
-    if (entry.timer) clearTimeout(entry.timer)
-    entry.timer = null
-    entry.settle(outcome)
-  }
-
-  function arm(entry: Pending, ms: number, message: string): void {
-    if (entry.timer) clearTimeout(entry.timer)
-    entry.timer = setTimeout(() => settle(entry, { ok: false, message }), ms)
-    entry.timer.unref?.()
-  }
-
-  /** The sentence a person reads in their terminal when nothing answered. */
-  function unreachable(operation: CredentialOperation): string {
-    return operation === 'write'
-      ? "Your device isn't reachable — open the app to approve this push."
-      : "Your device isn't reachable — open the app there and try again."
-  }
-
-  function approvedFor(deviceId: string, key: string | null): boolean {
-    if (key === null) return false
-    return approvals.get(deviceId)?.has(key) === true
-  }
-
-  function approve(deviceId: string, key: string | null): void {
-    if (key === null) return
-    let set = approvals.get(deviceId)
-    if (!set) {
-      set = new Set()
-      approvals.set(deviceId, set)
-    }
-    set.add(key)
-    // Oldest out rather than newest refused; a cap that starts saying no would
-    // read as the approval having failed to stick.
-    while (set.size > MAX_APPROVALS_PER_DEVICE) {
-      const oldest = set.values().next()
-      if (oldest.done) break
-      set.delete(oldest.value)
-    }
-  }
-
-  function countFor(deviceId: string): number {
-    let count = 0
-    for (const entry of pending.values()) if (entry.deviceId === deviceId) count += 1
-    return count
-  }
-
   /**
-   * Ask the device that owns this session, and wait.
+   * Answer one helper request from the machine's own GitHub login.
    *
-   * The order of the refusals is the design. Everything that can be answered
-   * without troubling anybody is answered first — an unknown key, a request with
-   * no host, a device that is not there — so the only requests that reach a
-   * person's phone are the ones a person can actually do something about.
+   * This is the whole of the 2026-08-27 flip, in one function. It used to put a
+   * question to the phone that granted the session and wait — a
+   * `credential.request`, an ack, a person tapping Approve — because the premise
+   * was that the login belonged to *them*. It does not any more: Asad, *"the HOST
+   * owns everything, everywhere."* So the answer is read here, in this process,
+   * from `github-auth.ts` through the injected `hostCredential`, and a push runs
+   * with no phone in the loop, awake or asleep.
+   *
+   * The order of the refusals is still the design — everything cheap first — but
+   * there is nobody to trouble now, so every branch resolves in-process:
+   *
+   *  - an unknown key is a session with no grant, which the real spawn path never
+   *    produces, refused rather than answered;
+   *  - a malformed request that names no host is refused before the token is read,
+   *    so a mangled helper line can never be answered with a live credential;
+   *  - a guest — a device that is **not** one of the owner's own — is refused
+   *    outright, because the one promise `CREDENTIAL-PROXY.md` makes that survives
+   *    this flip is that a granted folder never pushes as the machine's owner;
+   *  - a machine with no GitHub connected is told to connect one, which the host
+   *    itself can now do (`github.connect` over the wire, or the desktop panel).
    */
-  async function request(key: string, text: string, pid: number): Promise<CredentialOutcome> {
+  async function request(key: string, text: string): Promise<CredentialOutcome> {
     const grant = grants.get(key)
     if (!grant || stopped) {
-      return { ok: false, message: 'This session is not set up to use a GitHub account from your device.' }
+      return { ok: false, message: 'This session is not set up to use a GitHub account.' }
     }
 
+    // Parsed for validation, not for routing: a body that is not git's
+    // key=value credential protocol is refused before the token is read, rather
+    // than handing a live credential back to a request this end could not make
+    // sense of.
     const query = parseHelperRequest(text)
     if (query === null) {
       return { ok: false, message: 'That request did not say which host it needed a login for.' }
     }
 
-    const operation = classifyOperation(await ancestry(pid))
-    const repoKey = query.repo === null ? null : approvalKey(query.host, query.repo)
-    // A repository nobody can name cannot be remembered either, so it prompts
-    // every time. That is the honest behaviour of "approve always for this repo"
-    // when there is no repo: there is nothing to attach the always to.
-    const prompted = operation === 'write' && !approvedFor(grant.deviceId, repoKey)
-
-    if (!post || !post.reachable(grant.deviceId)) {
-      return { ok: false, message: unreachable(operation) }
-    }
-    if (pending.size >= MAX_PENDING || countFor(grant.deviceId) >= MAX_PENDING_PER_DEVICE) {
-      return { ok: false, message: 'Too many logins are being asked for at once. Try again in a moment.' }
-    }
-
-    const id = randomUUID()
-    return new Promise<CredentialOutcome>((resolve) => {
-      const entry: Pending = {
-        id,
-        deviceId: grant.deviceId,
-        repoKey,
-        operation,
-        prompted,
-        acked: false,
-        timer: null,
-        settle: resolve,
+    // The owner's own devices drive the owner's own machine; a guest granted a
+    // folder is not handed the owner's GitHub. `ownDevice` absent means allow —
+    // an older `serve()` or a test that never wired it — and production always
+    // wires it from `server.ts`, the only thing that knows which device a
+    // session belongs to.
+    const own = post?.ownDevice ? post.ownDevice(grant.deviceId) : true
+    if (!own) {
+      return {
+        ok: false,
+        message:
+          "This machine's GitHub account is not shared with other devices. Push with a token scoped to that one repository.",
       }
-      pending.set(id, entry)
+    }
 
-      const heard = post?.ask(grant.deviceId, {
-        t: 'credential.request',
-        id,
-        host: query.host,
-        repo: query.repo,
-        operation,
-        prompt: prompted,
-      })
-      if (!heard) {
-        settle(entry, { ok: false, message: unreachable(operation) })
-        return
+    const credential = hostCredential()
+    if (!credential) {
+      return {
+        ok: false,
+        message: 'No GitHub account is connected on this machine. Connect one on the host, then try again.',
       }
-      // The reachability deadline, not the human one. What happens if this fires
-      // is the sentence the whole feature is judged on — see REACH_TIMEOUT_MS.
-      arm(entry, reachMs, unreachable(operation))
-    })
+    }
+    return { ok: true, username: credential.username, password: credential.password }
   }
 
   /* -------------------------------------------------------- the endpoint -- */
@@ -694,7 +619,9 @@ export function createCredentialProxy(options: CredentialProxyOptions): Credenti
     if (!LOOPBACK_HOSTS.has(hostHeader)) return refuse(res, 403, 'not for you')
 
     const key = header(req, CREDENTIAL_HEADER)
-    const pid = Number(header(req, PID_HEADER))
+    // The pid header still arrives (the helper sends it), and is no longer read:
+    // it existed to classify a push from a fetch so the prompt could differ, and
+    // there is no prompt now — the machine answers its own git with its own login.
     // A plain lookup, and no constant-time comparison anywhere near it. That is
     // a decision rather than an omission: the key is 256 bits from
     // `randomBytes`, so what a timing difference on a hash lookup could tell an
@@ -712,7 +639,7 @@ export function createCredentialProxy(options: CredentialProxyOptions): Credenti
       return refuse(res, 413, 'that request was too large')
     }
 
-    const outcome = await request(key, body, Number.isInteger(pid) && pid > 0 ? pid : 0)
+    const outcome = await request(key, body)
     if (!outcome.ok) return answer(res, `!${outcome.message}`)
     const formatted = formatHelperAnswer(outcome.username, outcome.password)
     if (formatted === null) {
@@ -835,67 +762,25 @@ export function createCredentialProxy(options: CredentialProxyOptions): Credenti
       post = next
     },
 
-    handle(deviceId: string, message: CredentialMessage): void {
-      const entry = pending.get(message.id)
-      // An answer for a request that is not this device's is dropped in silence
-      // rather than refused. It is either a race — the request timed out a
-      // moment ago — or a device answering a question that was put to somebody
-      // else, and the second one must not be able to learn that it guessed an id
-      // that exists.
-      if (!entry || entry.deviceId !== deviceId) return
+    // Dormant since 2026-08-27. Nothing sends `credential.request` any more, so
+    // no client sends `credential.ack/answer/deny` — but a build older than this
+    // flip still might, and an ignored frame is a channel that stays open rather
+    // than one that closes on an unrecognised message. The machine's git is
+    // answered from its own login now (see `request`), never from a device, so
+    // there is nothing here to route an answer to. Kept in the interface, and
+    // called by `server.ts`, so a stale answer lands somewhere harmless.
+    handle(): void {},
 
-      if (message.t === 'credential.ack') {
-        if (entry.acked) return
-        entry.acked = true
-        // The device is there. Swap the reachability deadline for the one that
-        // allows for a human, or a short one when nobody is being asked.
-        arm(
-          entry,
-          entry.prompted ? decideMs : silentMs,
-          entry.prompted
-            ? 'Nobody answered on your device. Approve it there, then try again.'
-            : 'Your device did not answer in time. Try again.',
-        )
-        return
-      }
-
-      if (message.t === 'credential.deny') {
-        settle(entry, {
-          ok: false,
-          message:
-            message.reason === 'no-account'
-              ? 'No GitHub account is connected in the app on your device. Connect one there, then try again.'
-              : entry.operation === 'write'
-                ? 'That push was refused on your device.'
-                : 'That request was refused on your device.',
-        })
-        return
-      }
-
-      // "Approve always" is honoured only for a request somebody was actually
-      // asked about. A device that sets it on a silent fetch has not been given
-      // consent to anything, and recording one would turn a read nobody saw into
-      // a standing permission to push.
-      if (message.remember === true && entry.prompted) approve(deviceId, entry.repoKey)
-      settle(entry, { ok: true, username: message.username, password: message.password })
-    },
-
-    connectionClosed(deviceId: string): void {
-      // Only when the last way to reach it has gone. A phone with a second socket
-      // open, or one that reconnected before this ran, has not disappeared.
-      if (post?.reachable(deviceId)) return
-      for (const entry of [...pending.values()]) {
-        if (entry.deviceId !== deviceId) continue
-        settle(entry, { ok: false, message: unreachable(entry.operation) })
-      }
+    connectionClosed(): void {
+      // Nothing is in flight to abandon: a credential is answered in-process and
+      // returns at once, so a socket closing mid-request cannot strand a push
+      // waiting on a person the way the phone round-trip could.
     },
 
     forget(deviceId: string): void {
-      approvals.delete(deviceId)
-      for (const entry of [...pending.values()]) {
-        if (entry.deviceId !== deviceId) continue
-        settle(entry, { ok: false, message: 'That device is no longer allowed to answer here.' })
-      }
+      // A revoked device's sessions must stop being able to ask, so its grants
+      // go. There are no approvals or pending answers to clear any more — those
+      // belonged to the phone round-trip.
       for (const [key, grant] of [...grants]) {
         if (grant.deviceId !== deviceId) continue
         grants.delete(key)
@@ -947,12 +832,8 @@ export function createCredentialProxy(options: CredentialProxyOptions): Credenti
 
     async stop(): Promise<void> {
       stopped = true
-      for (const entry of [...pending.values()]) {
-        settle(entry, { ok: false, message: 'The app on this machine is shutting down.' })
-      }
       grants.clear()
       bySession.clear()
-      approvals.clear()
       // Awaited rather than read straight off `endpoint`: a stop that lands
       // while the listener is still binding would otherwise find nothing to
       // close and leave a socket open for the rest of the process's life.

@@ -416,12 +416,12 @@ class WebSocketDeckTransport(
                         protocol = Protocol.VERSION,
                         token = token,
                         device = DeviceDescriptor(name = deviceName, platform = PLATFORM),
-                        // What this phone will *answer*, not what it wants to ask for. Today that
-                        // is one name, `credential`, and it is load bearing: a desktop that does
-                        // not see it here never sends `credential.request`, so the approval prompt
-                        // simply never appears and a push from a folder this phone was granted
-                        // fails with "your device isn't reachable" about a phone that is right
-                        // here. See [Capability.CLAIMED].
+                        // What this phone will listen for the desktop to *push* — not what it wants
+                        // to ask for. It is load bearing: `server.ts` skips every connection that did
+                        // not claim a name before pushing its `*.changed` frame, so a host would not
+                        // send `github.changed` (nor `devices.changed`, `settings.changed`,
+                        // `browser.frame`) to a phone that never claimed it, and that state would go
+                        // stale the moment another device moved it. See [Capability.CLAIMED].
                         capabilities = Capability.CLAIMED,
                     )
                 )

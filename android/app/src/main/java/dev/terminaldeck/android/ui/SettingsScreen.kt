@@ -91,7 +91,6 @@ fun SettingsScreen(
     onMachines: () -> Unit,
     onDevices: () -> Unit,
     onWatch: () -> Unit,
-    onGitHub: () -> Unit,
     onAlerts: () -> Unit,
     onAppearance: () -> Unit,
     onApplyServerSetting: (ServerSettingKey, String) -> Unit,
@@ -161,15 +160,8 @@ fun SettingsScreen(
                         onClick = onWatch,
                     )
                 }
-                DeckDivider()
-                DeckRow(
-                    title = "GitHub",
-                    // "Not connected" is said plainly rather than left blank: a row with no second
-                    // line reads as a feature with nothing behind it.
-                    value = state.gitHubAccount?.let { "@${it.login}" } ?: "Not connected",
-                    icon = Icons.Filled.Person,
-                    onClick = onGitHub,
-                )
+                // GitHub is no longer a phone-wide row here: the login lives on the machine now, so
+                // "Connect GitHub" is a section on the machine's own page — see [ConnectGitHubSection].
             }
 
             SectionCaption("This phone")

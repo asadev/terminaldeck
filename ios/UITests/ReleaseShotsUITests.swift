@@ -151,7 +151,7 @@ final class ReleaseShotsUITests: XCTestCase {
         capture("02-settings-machines-pushed")
 
         app.navigationBars.buttons.element(boundBy: 0).tap()
-        XCTAssertTrue(app.buttons["settings.github"].waitForExistence(timeout: 10),
+        XCTAssertTrue(app.buttons["settings.alerts"].waitForExistence(timeout: 10),
                       "Back should return to Settings")
     }
 

@@ -308,7 +308,7 @@ final class AppearanceShotsUITests: XCTestCase {
         XCTAssertTrue(app.openMachinesTab(), "Machines should push from Settings")
         capture("\(scheme.rawValue)-02-machines")
         app.navigationBars.buttons.element(boundBy: 0).tap()
-        _ = app.buttons["settings.github"].waitForExistence(timeout: 10)
+        _ = app.buttons["settings.alerts"].waitForExistence(timeout: 10)
     }
 
     private func localhost(_ scheme: Scheme) throws {
@@ -507,10 +507,6 @@ final class AppearanceShotsUITests: XCTestCase {
         if app.openAlerts() {
             capture("\(scheme.rawValue)-12-alerts")
             app.buttons["alerts.done"].tap()
-        }
-        if app.openGitHubAccount() {
-            capture("\(scheme.rawValue)-13-github")
-            app.buttons["github.done"].tap()
         }
         // The pairing sheet, which is the same screen the app opens on when
         // nothing is paired — and the one screen `RootView` used to state a

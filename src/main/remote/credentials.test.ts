@@ -18,7 +18,6 @@ import {
   type DevicePost,
 } from './credentials'
 import { CREDENTIAL_KEY_VAR, CREDENTIAL_URL_VAR } from './git-guest'
-import type { ServerMessage } from './protocol'
 import { CAPABILITY } from './protocol'
 
 /**
@@ -49,11 +48,8 @@ const OTHER_REPO = 'protocol=https\nhost=github.com\npath=asadev/mookhayo.git\n\
 
 interface Harness {
   proxy: CredentialProxy
-  asked: Array<Extract<ServerMessage, { t: 'credential.request' }>>
-  /** Devices the fake sockets say are there. Mutated to make one disappear. */
-  present: Set<string>
-  /** What the process tree says next, so one test can fetch and then push. */
-  running(...lines: string[]): void
+  /** The ids treated as the owner's own. A guest is any id outside this set. */
+  own: Set<string>
   key(deviceId?: string): Promise<string>
   post(key: string, body?: string): Promise<string>
 }
@@ -64,44 +60,38 @@ afterEach(async () => {
   await Promise.all(made.splice(0).map((proxy) => proxy.stop()))
 })
 
+/** The machine's own GitHub login, as the proxy hands it to git. */
+const HOST_LOGIN = { username: 'asadev', password: 'ghp_host' }
+
 /**
- * A desk with fake sockets in front of it and a fake process tree behind it.
+ * A desk in front of a proxy that answers git from the machine's own login.
  *
- * `ancestry` is injected rather than read from `ps`, so a test can say "this was
- * a push" on any machine, including one where nothing is pushing. The deadlines
- * are milliseconds for the same reason a test never sleeps for a minute.
+ * Since 2026-08-27 there is no phone to fake: git on the machine is answered in
+ * this process from `hostCredential`. So the harness is a host login (or none,
+ * for the not-connected case) and a set of the owner's own devices — a guest is
+ * any id outside it, and is refused rather than handed the owner's account.
  */
-function harness(options: { ancestry?: string[]; reach?: number; decide?: number; silent?: number } = {}): Harness {
-  const asked: Array<Extract<ServerMessage, { t: 'credential.request' }>> = []
-  const present = new Set([DEVICE, OTHER_DEVICE])
-  let tree = options.ancestry ?? ['/usr/bin/git push origin main']
+function harness(
+  options: { hostCredential?: () => { username: string; password: string } | null; own?: string[] } = {},
+): Harness {
+  const own = new Set(options.own ?? [DEVICE, OTHER_DEVICE])
 
   const proxy = createCredentialProxy({
     dir: mkdtempSync(join(tmpdir(), 'td-credentials-')),
-    ancestry: async () => tree,
-    reachTimeoutMs: options.reach ?? 60,
-    decideTimeoutMs: options.decide ?? 250,
-    silentTimeoutMs: options.silent ?? 120,
+    hostCredential: options.hostCredential ?? (() => HOST_LOGIN),
   })
   made.push(proxy)
 
   const post: DevicePost = {
-    ask(deviceId, message) {
-      if (!present.has(deviceId)) return 0
-      if (message.t === 'credential.request') asked.push(message)
-      return 1
-    },
-    reachable: (deviceId) => present.has(deviceId),
+    ask: () => 0,
+    reachable: () => false,
+    ownDevice: (deviceId) => own.has(deviceId),
   }
   proxy.serve(post)
 
   return {
     proxy,
-    asked,
-    present,
-    running(...lines: string[]): void {
-      tree = lines
-    },
+    own,
     async key(deviceId = DEVICE): Promise<string> {
       const guest = await proxy.openGuestSession(deviceId)
       const value = guest.env.set[CREDENTIAL_KEY_VAR]
@@ -135,15 +125,6 @@ function postTo(url: string, key: string, body: string, pid = 4242): Promise<str
     req.on('error', reject)
     req.end(body)
   })
-}
-
-/** Wait for the desk to have put the question, without racing on a fixed sleep. */
-async function until(check: () => boolean, label: string): Promise<void> {
-  for (let i = 0; i < 200; i += 1) {
-    if (check()) return
-    await new Promise((done) => setTimeout(done, 5))
-  }
-  throw new Error(`timed out waiting for ${label}`)
 }
 
 /* ------------------------------------------------------------- git's format -- */
@@ -268,331 +249,80 @@ describe('reading the process table', () => {
 
 /* --------------------------------------------------------------- the desk -- */
 
-describe('a read', () => {
-  it('is answered without asking anybody', async () => {
-    const h = harness({ ancestry: ['/usr/bin/git fetch origin'] })
-    const key = await h.key()
-    const answer = h.post(key)
-    await until(() => h.asked.length === 1, 'the question')
-
-    expect(h.asked[0].operation).toBe('read')
-    // The field that decides whether a person is disturbed. A fetch never is.
-    expect(h.asked[0].prompt).toBe(false)
-
-    h.proxy.handle(DEVICE, { t: 'credential.ack', id: h.asked[0].id })
-    h.proxy.handle(DEVICE, {
-      t: 'credential.answer',
-      id: h.asked[0].id,
-      username: 'octocat',
-      password: 'ghp_theirs',
-    })
-    expect(await answer).toBe('200 username=octocat\npassword=ghp_theirs\n')
-  })
-})
-
-describe('a push', () => {
-  it('asks once, names the repository, and is answered', async () => {
-    const h = harness()
-    const key = await h.key()
-    const answer = h.post(key)
-    await until(() => h.asked.length === 1, 'the question')
-
-    expect(h.asked[0]).toMatchObject({
-      host: 'github.com',
-      repo: 'asadev/terminaldeck',
-      operation: 'write',
-      prompt: true,
-    })
-
-    h.proxy.handle(DEVICE, { t: 'credential.ack', id: h.asked[0].id })
-    h.proxy.handle(DEVICE, { t: 'credential.answer', id: h.asked[0].id, username: 'octocat', password: 'ghp_theirs' })
-    expect(await answer).toContain('password=ghp_theirs')
-  })
-
-  it('asks again next time when the approval was only for once', async () => {
+describe('answering git from the machine’s own login', () => {
+  it('answers from the host account, asking nobody, at once', async () => {
     const h = harness()
     const key = await h.key()
 
-    const first = h.post(key)
-    await until(() => h.asked.length === 1, 'the first question')
-    h.proxy.handle(DEVICE, { t: 'credential.ack', id: h.asked[0].id })
-    h.proxy.handle(DEVICE, { t: 'credential.answer', id: h.asked[0].id, username: 'octocat', password: 'a' })
-    await first
-
-    const second = h.post(key)
-    await until(() => h.asked.length === 2, 'the second question')
-    // Approve-once is once. Anything else and the two buttons on the prompt mean
-    // the same thing.
-    expect(h.asked[1].prompt).toBe(true)
-    h.proxy.handle(DEVICE, { t: 'credential.ack', id: h.asked[1].id })
-    h.proxy.handle(DEVICE, { t: 'credential.answer', id: h.asked[1].id, username: 'octocat', password: 'b' })
-    await second
+    const started = Date.now()
+    // No phone, no round-trip: the machine owns the login now, so git is answered
+    // in this process and returns at once — the whole of "it can push/deploy on
+    // its own even when the phone is closed."
+    expect(await h.post(key)).toBe('200 username=asadev\npassword=ghp_host\n')
+    expect(Date.now() - started).toBeLessThan(500)
   })
 
-  it('stops asking for a repository the device approved always', async () => {
+  it('answers every repository from the one account, with no per-repo gate', async () => {
+    // The old proxy asked once per repository because the token belonged to a
+    // person who got to see whose name went on the commit. The machine's own
+    // login has no such prompt: it is the machine's, for whatever git it runs.
     const h = harness()
     const key = await h.key()
-
-    const first = h.post(key)
-    await until(() => h.asked.length === 1, 'the first question')
-    h.proxy.handle(DEVICE, { t: 'credential.ack', id: h.asked[0].id })
-    h.proxy.handle(DEVICE, {
-      t: 'credential.answer',
-      id: h.asked[0].id,
-      username: 'octocat',
-      password: 'a',
-      remember: true,
-    })
-    await first
-
-    const second = h.post(key)
-    await until(() => h.asked.length === 2, 'the second question')
-    // Still asked — the token is on the device and this end never kept it. What
-    // changed is that nobody is disturbed.
-    expect(h.asked[1].prompt).toBe(false)
-    expect(h.asked[1].operation).toBe('write')
-    h.proxy.handle(DEVICE, { t: 'credential.ack', id: h.asked[1].id })
-    h.proxy.handle(DEVICE, { t: 'credential.answer', id: h.asked[1].id, username: 'octocat', password: 'b' })
-    expect(await second).toContain('password=b')
+    expect(await h.post(key, REQUEST)).toContain('password=ghp_host')
+    expect(await h.post(key, OTHER_REPO)).toContain('password=ghp_host')
   })
 
-  it('does not let an approval for one repository answer for another', async () => {
+  it('refuses a malformed request before the token is read', async () => {
     const h = harness()
     const key = await h.key()
-
-    const first = h.post(key)
-    await until(() => h.asked.length === 1, 'the first question')
-    h.proxy.handle(DEVICE, { t: 'credential.ack', id: h.asked[0].id })
-    h.proxy.handle(DEVICE, {
-      t: 'credential.answer',
-      id: h.asked[0].id,
-      username: 'octocat',
-      password: 'a',
-      remember: true,
-    })
-    await first
-
-    const other = h.post(key, OTHER_REPO)
-    await until(() => h.asked.length === 2, 'the second question')
-    // A grant to work in one folder is not consent to push to everything the
-    // account can reach. This is that sentence, as a test.
-    expect(h.asked[1].repo).toBe('asadev/mookhayo')
-    expect(h.asked[1].prompt).toBe(true)
-    h.proxy.handle(DEVICE, { t: 'credential.deny', id: h.asked[1].id })
-    expect(await other).toContain('refused on your device')
-  })
-
-  it('does not let one device’s approval answer for another device', async () => {
-    const h = harness()
-    const mine = await h.key(DEVICE)
-    const theirs = await h.key(OTHER_DEVICE)
-
-    const first = h.post(mine)
-    await until(() => h.asked.length === 1, 'the first question')
-    h.proxy.handle(DEVICE, { t: 'credential.ack', id: h.asked[0].id })
-    h.proxy.handle(DEVICE, {
-      t: 'credential.answer',
-      id: h.asked[0].id,
-      username: 'octocat',
-      password: 'a',
-      remember: true,
-    })
-    await first
-
-    const second = h.post(theirs)
-    await until(() => h.asked.length === 2, 'the second question')
-    expect(h.asked[1].prompt).toBe(true)
-    h.proxy.handle(OTHER_DEVICE, { t: 'credential.deny', id: h.asked[1].id })
-    await second
-  })
-
-  it('ignores “remember” on a request nobody was asked about', async () => {
-    const h = harness({ ancestry: ['/usr/bin/git fetch origin'] })
-    const key = await h.key()
-
-    const first = h.post(key)
-    await until(() => h.asked.length === 1, 'the fetch')
-    h.proxy.handle(DEVICE, { t: 'credential.ack', id: h.asked[0].id })
-    // Consent nobody was asked for is not consent. Recording this would turn a
-    // silent fetch into a standing permission to push.
-    h.proxy.handle(DEVICE, {
-      t: 'credential.answer',
-      id: h.asked[0].id,
-      username: 'octocat',
-      password: 'a',
-      remember: true,
-    })
-    await first
-
-    h.running('/usr/bin/git push origin main')
-    const push = postTo(urls.get(key) ?? '', key, REQUEST)
-    await until(() => h.asked.length === 2, 'the push')
-    expect(h.asked[1].prompt).toBe(true)
-    h.proxy.handle(DEVICE, { t: 'credential.deny', id: h.asked[1].id })
-    await push
+    // A body that is not git's credential protocol names no host, and a live
+    // credential must never be handed back to a request this end could not parse.
+    const answer = await h.post(key, 'this is not the git credential protocol\n\n')
+    expect(answer).toContain('did not say which host')
+    expect(answer).not.toContain('ghp_host')
   })
 })
 
 describe('the refusals', () => {
-  it('says the device is not reachable, in milliseconds, when it is not connected', async () => {
-    const h = harness()
+  it('tells the truth when the machine has no GitHub connected', async () => {
+    // Not a phone problem any more: the fix is to connect GitHub on the host,
+    // which is a thing the host itself can now do (`github.connect`, or its panel).
+    const h = harness({ hostCredential: () => null })
     const key = await h.key()
-    h.present.delete(DEVICE)
-
-    const started = Date.now()
-    const answer = await h.post(key)
-
-    expect(answer).toContain("Your device isn't reachable — open the app to approve this push.")
-    // The number this feature is judged on. A device that is simply not there is
-    // answered without waiting for any deadline at all.
-    expect(Date.now() - started).toBeLessThan(200)
-    expect(h.asked).toHaveLength(0)
+    expect(await h.post(key)).toContain('No GitHub account is connected on this machine')
   })
 
-  it('gives up in seconds when the app is open but nothing acknowledges', async () => {
-    const h = harness({ reach: 60, decide: 5_000 })
-    const key = await h.key()
-
-    const started = Date.now()
-    const answer = await h.post(key)
-
-    // A socket that is open to an app that is not running any more looks exactly
-    // like a person thinking. Without its own deadline this would have waited out
-    // the human one — the thirty-second stall.
-    expect(answer).toContain("isn't reachable")
-    expect(Date.now() - started).toBeLessThan(2_000)
+  it('does not hand the owner’s login to a guest', async () => {
+    // The one promise of the old proxy that survives the flip: a device granted a
+    // folder never pushes as the machine's owner. The owner drives their own
+    // machine; a guest gets their own token, not this one.
+    const h = harness({ own: [DEVICE] })
+    const guestKey = await h.key(OTHER_DEVICE)
+    const answer = await h.post(guestKey)
+    expect(answer).toContain('not shared with other devices')
+    expect(answer).not.toContain('ghp_host')
   })
 
-  it('waits for a person once their device has said it is there', async () => {
-    const h = harness({ reach: 60, decide: 150 })
-    const key = await h.key()
-    const answer = h.post(key)
-    await until(() => h.asked.length === 1, 'the question')
-
-    h.proxy.handle(DEVICE, { t: 'credential.ack', id: h.asked[0].id })
-    // Past the reachability deadline, which the acknowledgement replaced.
-    await new Promise((done) => setTimeout(done, 100))
-
-    h.proxy.handle(DEVICE, { t: 'credential.answer', id: h.asked[0].id, username: 'octocat', password: 'late' })
-    expect(await answer).toContain('password=late')
+  it('answers the owner’s own device from the host account', async () => {
+    const h = harness({ own: [DEVICE] })
+    const key = await h.key(DEVICE)
+    expect(await h.post(key)).toContain('password=ghp_host')
   })
 
-  it('says nobody answered when the prompt is left on screen', async () => {
-    const h = harness({ reach: 60, decide: 80 })
-    const key = await h.key()
-    const answer = h.post(key)
-    await until(() => h.asked.length === 1, 'the question')
-    h.proxy.handle(DEVICE, { t: 'credential.ack', id: h.asked[0].id })
-
-    // A different sentence from "not reachable", because it is a different fact
-    // and has a different fix.
-    expect(await answer).toContain('Nobody answered on your device')
-  })
-
-  it('says so when the device denies', async () => {
-    const h = harness()
-    const key = await h.key()
-    const answer = h.post(key)
-    await until(() => h.asked.length === 1, 'the question')
-    h.proxy.handle(DEVICE, { t: 'credential.ack', id: h.asked[0].id })
-    h.proxy.handle(DEVICE, { t: 'credential.deny', id: h.asked[0].id })
-
-    expect(await answer).toContain('That push was refused on your device.')
-  })
-
-  it('tells the truth when the device has no GitHub connected', async () => {
-    const h = harness()
-    const key = await h.key()
-    const answer = h.post(key)
-    await until(() => h.asked.length === 1, 'the question')
-    h.proxy.handle(DEVICE, { t: 'credential.deny', id: h.asked[0].id, reason: 'no-account' })
-
-    // Not a refusal, and telling somebody "denied" when the truth is "you have
-    // not signed in yet" sends them looking for a decision they never made.
-    await expect(answer).resolves.toContain('No GitHub account is connected')
-  })
-
-  it('answers immediately when the device disappears mid-operation', async () => {
-    const h = harness({ reach: 5_000, decide: 5_000 })
-    const key = await h.key()
-    const answer = h.post(key)
-    await until(() => h.asked.length === 1, 'the question')
-    h.proxy.handle(DEVICE, { t: 'credential.ack', id: h.asked[0].id })
-
-    const started = Date.now()
-    h.present.delete(DEVICE)
-    h.proxy.connectionClosed(DEVICE)
-
-    expect(await answer).toContain("isn't reachable")
-    expect(Date.now() - started).toBeLessThan(500)
-  })
-
-  it('keeps waiting when one of a device’s two sockets closes', async () => {
-    const h = harness({ reach: 5_000, decide: 5_000 })
-    const key = await h.key()
-    const answer = h.post(key)
-    await until(() => h.asked.length === 1, 'the question')
-    h.proxy.handle(DEVICE, { t: 'credential.ack', id: h.asked[0].id })
-
-    // A phone and a tablet, and the tablet went to sleep. The person is still
-    // holding the thing that is showing the prompt.
-    h.proxy.connectionClosed(DEVICE)
-    h.proxy.handle(DEVICE, { t: 'credential.answer', id: h.asked[0].id, username: 'octocat', password: 'still-here' })
-    expect(await answer).toContain('still-here')
-  })
-
-  it('ends everything in flight when the device is revoked', async () => {
-    const h = harness({ reach: 5_000, decide: 5_000 })
-    const key = await h.key()
-    const answer = h.post(key)
-    await until(() => h.asked.length === 1, 'the question')
-    h.proxy.handle(DEVICE, { t: 'credential.ack', id: h.asked[0].id })
-
-    h.proxy.forget(DEVICE)
-    expect(await answer).toContain('no longer allowed')
-  })
-
-  it('forgets a revoked device’s approvals, and its key', async () => {
-    const h = harness()
-    const key = await h.key()
-
-    const first = h.post(key)
-    await until(() => h.asked.length === 1, 'the question')
-    h.proxy.handle(DEVICE, { t: 'credential.ack', id: h.asked[0].id })
-    h.proxy.handle(DEVICE, {
-      t: 'credential.answer',
-      id: h.asked[0].id,
-      username: 'octocat',
-      password: 'a',
-      remember: true,
+  it('treats the caller as the owner when the desk names no device rule', async () => {
+    // A `serve()` with no `ownDevice` — an older wiring, or a test — is the
+    // single-device world, where there is no guest to refuse. Production always
+    // wires it; this is the fail-open direction, and it opens onto the owner.
+    const proxy = createCredentialProxy({
+      dir: mkdtempSync(join(tmpdir(), 'td-credentials-')),
+      hostCredential: () => HOST_LOGIN,
     })
-    await first
-
-    h.proxy.forget(DEVICE)
-    // Revocation is disconnection, and there is nothing to clean up afterwards
-    // because nothing was ever written down. The key stops working with it.
-    expect(await h.post(key)).toContain('403')
-  })
-
-  it('ignores an answer from a device that was not asked', async () => {
-    const h = harness({ reach: 200, decide: 5_000 })
-    const key = await h.key()
-    const answer = h.post(key)
-    await until(() => h.asked.length === 1, 'the question')
-
-    // Dropped in silence rather than refused: a device that guessed an id must
-    // not learn that it guessed one that exists.
-    h.proxy.handle(OTHER_DEVICE, { t: 'credential.ack', id: h.asked[0].id })
-    h.proxy.handle(OTHER_DEVICE, {
-      t: 'credential.answer',
-      id: h.asked[0].id,
-      username: 'someone-else',
-      password: 'not-theirs',
-    })
-
-    const result = await answer
-    expect(result).not.toContain('not-theirs')
-    expect(result).toContain("isn't reachable")
+    made.push(proxy)
+    proxy.serve({ ask: () => 0, reachable: () => false })
+    const guest = await proxy.openGuestSession(DEVICE)
+    const key = guest.env.set[CREDENTIAL_KEY_VAR]
+    guest.started('s1')
+    expect(await postTo(guest.env.set[CREDENTIAL_URL_VAR], key, REQUEST)).toContain('password=ghp_host')
   })
 
   it('stops answering for a session that has exited', async () => {
@@ -606,6 +336,17 @@ describe('the refusals', () => {
     // Every process on this machine runs as the same account, so a key that
     // outlived its session is not a theoretical caller.
     expect(await postTo(url, key, REQUEST)).toContain('403')
+  })
+
+  it('stops answering a revoked device’s key', async () => {
+    const h = harness()
+    const key = await h.key()
+    expect(await h.post(key)).toContain('password=ghp_host')
+
+    h.proxy.forget(DEVICE)
+    // Revocation is disconnection, and there is nothing to clean up afterwards
+    // because nothing was ever written down. The key stops working with it.
+    expect(await h.post(key)).toContain('403')
   })
 })
 
@@ -645,45 +386,40 @@ describe('the loopback endpoint', () => {
     expect(answer).toBe('403')
   })
 
-  it('survives the git on the other end being killed mid-question', async () => {
-    const h = harness({ reach: 5_000, decide: 5_000 })
+  it('survives the git on the other end being killed mid-request', async () => {
+    const h = harness()
     const key = await h.key()
     const url = new URL(urls.get(key) ?? '')
 
-    // A push can wait a minute on a person, and in that minute somebody can
-    // press Ctrl-C. Writing to that response throws, and a throw out of the
-    // settled half of a promise is an unhandled rejection in the process running
-    // every one of the user's terminals.
-    const req = httpRequest({
-      host: '127.0.0.1',
-      port: url.port,
-      path: url.pathname,
-      method: 'POST',
-      headers: { [CREDENTIAL_HEADER]: key, [PID_HEADER]: '4242' },
-    })
-    req.on('error', () => {})
-    req.end(REQUEST)
-
-    await until(() => h.asked.length === 1, 'the question')
-    req.destroy()
-    await new Promise((done) => setTimeout(done, 20))
-
+    // The answer is in-process and instant now, but a client can still hang up
+    // the moment it has posted — and writing to a response whose socket is gone
+    // throws, which out of the settled half of a promise is an unhandled
+    // rejection in the process running every one of the user's terminals.
     const rejections: unknown[] = []
-    process.on('unhandledRejection', (reason) => rejections.push(reason))
-    h.proxy.handle(DEVICE, { t: 'credential.ack', id: h.asked[0].id })
-    h.proxy.handle(DEVICE, { t: 'credential.answer', id: h.asked[0].id, username: 'octocat', password: 'a' })
-    await new Promise((done) => setTimeout(done, 50))
-    process.removeAllListeners('unhandledRejection')
+    const onReject = (reason: unknown): void => {
+      rejections.push(reason)
+    }
+    process.on('unhandledRejection', onReject)
+    for (let i = 0; i < 8; i += 1) {
+      const req = httpRequest({
+        host: '127.0.0.1',
+        port: url.port,
+        path: url.pathname,
+        method: 'POST',
+        headers: { [CREDENTIAL_HEADER]: key, [PID_HEADER]: '4242' },
+      })
+      req.on('error', () => {})
+      req.end(REQUEST)
+      req.destroy()
+    }
+    await new Promise((done) => setTimeout(done, 60))
+    process.removeListener('unhandledRejection', onReject)
 
     expect(rejections).toEqual([])
 
     // And the desk is still usable afterwards, which is the half a crash would
     // have taken with it.
-    const next = h.post(key)
-    await until(() => h.asked.length === 2, 'the next question')
-    h.proxy.handle(DEVICE, { t: 'credential.ack', id: h.asked[1].id })
-    h.proxy.handle(DEVICE, { t: 'credential.answer', id: h.asked[1].id, username: 'octocat', password: 'after' })
-    expect(await next).toContain('password=after')
+    expect(await h.post(key)).toContain('password=ghp_host')
   })
 
   it('refuses anything that is not a POST to its one path', async () => {
@@ -748,11 +484,15 @@ describe('what is left on this machine', () => {
   })
 })
 
-describe('the capability it is negotiated with', () => {
-  it('is the name the frames are prefixed with', () => {
-    // `upload` serves `upload.*`; this serves `credential.*`. A capability whose
-    // name does not match its verbs is one more thing for two ends to disagree
-    // about.
+describe('what it is negotiated with', () => {
+  it('is nothing on the wire any more — git is answered in-process', () => {
+    // `credential` was the capability a phone advertised to say it could answer a
+    // git login. Since 2026-08-27 the machine answers its own git, so nothing is
+    // negotiated for this over the wire; the name is kept only so a stale client's
+    // `credential.*` frame is recognised and ignored rather than closing the
+    // channel. The wire capability that replaced the whole idea — a phone
+    // *driving* the host's login instead of holding one — is `github`.
     expect(CAPABILITY.credential).toBe('credential')
+    expect(CAPABILITY.github).toBe('github')
   })
 })

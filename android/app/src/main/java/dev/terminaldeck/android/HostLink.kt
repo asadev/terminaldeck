@@ -144,6 +144,14 @@ class HostLink(
     var settings: ServerSettingsController? = null
 
     /**
+     * This machine's own GitHub login, driven from the phone. Created once per link; draws nothing
+     * until the machine advertises [dev.terminaldeck.android.protocol.Capability.GITHUB]. The flip of
+     * the old credential proxy: the login lives on the machine, and this phone only reads and starts
+     * it.
+     */
+    var github: dev.terminaldeck.android.github.ConnectGitHubController? = null
+
+    /**
      * The control cluster of whichever session this machine has on screen — model, effort, fast
      * mode, permission. Created once per link; follows a session rather than the machine, and draws
      * nothing until the machine advertises [dev.terminaldeck.android.protocol.Capability.CONTROLS].
@@ -264,6 +272,7 @@ class HostLink(
         // that will never answer. `appVersion` is deliberately *not* cleared — see its field.
         devices?.stop()
         settings?.stop()
+        github?.stop()
         // The controls cluster holds a settle timer as well as its request timers, and the watcher
         // holds a cast on the machine — a link being taken down must end that cast, or the far end
         // keeps rendering JPEGs for a phone that is no longer listening.

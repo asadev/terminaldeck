@@ -738,23 +738,8 @@ final class DeckModel {
         leftSessionAt[SessionAlert.thread(hostId: hostId, sessionId: id)] = now()
     }
 
-    /**
-     * The GitHub account this phone holds, and the thing that answers with it.
-     *
-     * App-wide rather than per machine, and that is the shape of the feature
-     * rather than a convenience: it is *one person's* GitHub, and the whole
-     * point is that it stays here while they work on several other people's
-     * computers. A per-machine account would be a token per machine, which is
-     * the thing this exists to avoid.
-     */
-    private let gitHubAccounts: GitHubAccountStore
-    let credentialResponder: CredentialResponder
-
-    /// Whether the GitHub account sheet is up. A flag rather than a route,
-    /// because it is raised from a menu that exists on every screen.
-    var showingGitHub = false
-
-    /// Whether the alerts sheet is up. Same shape and for the same reason.
+    /// Whether the alerts sheet is up. A flag rather than a route, because it is
+    /// raised from a menu that exists on every screen.
     var showingAlerts = false
 
     /// Whether the folder picker is up. Same shape and for the same reason: it
@@ -783,7 +768,6 @@ final class DeckModel {
     /// scripted transport rather than a socket.
     init(credentials: CredentialStore,
          device: DeviceDescriptor,
-         gitHubAccounts: GitHubAccountStore? = nil,
          alerts: AlertPresenting? = nil,
          lookup: (@MainActor (String) async -> MachineOffer?)? = nil,
          now: @escaping () -> Date = Date.init,
@@ -804,16 +788,7 @@ final class DeckModel {
         // recorder and never touch `UNUserNotificationCenter` — which in a
         // simulator would put a permission prompt in front of a test run.
         self.alerts = alerts ?? NotificationAlerts()
-        let accounts = gitHubAccounts ?? KeychainGitHubStore()
-        self.gitHubAccounts = accounts
-        self.credentialResponder = CredentialResponder(accounts: accounts)
         self.makeTransport = makeTransport
-        // Wired after the stored properties, in the same shape `HostLink`'s
-        // callbacks use: the two are mutually recursive and neither can name the
-        // other in its initialiser.
-        credentialResponder.route = { [weak self] hostId, answer in
-            self?.host(hostId)?.answer(answer)
-        }
         for record in credentials.all() { adopt(record) }
         currentHostId = restoredSelection ?? hosts.first?.id
     }
@@ -922,13 +897,6 @@ final class DeckModel {
             // all — connected, waiting, pending approval, refused. `.connecting`
             // is the one state that means it is still in flight.
             if state.phase != .connecting && state.phase != .offline { self?.isPairing = false }
-            // A machine that has gone cannot be answered, so its question comes
-            // off the screen rather than staying up as buttons that reach
-            // nothing. The desktop has already settled it for the same reason.
-            if !state.isLive { self?.credentialResponder.machineLost(record.hostId) }
-        }
-        link.onCredentialRequest = { [weak self] request in
-            self?.credentialResponder.receive(request)
         }
         link.onCreated = { [weak self] sessionId in
             self?.open(session: sessionId, on: record.hostId)
@@ -962,12 +930,6 @@ final class DeckModel {
         // tick instead of each machine keeping whatever phase it had.
         Heartbeat.shared.realign()
         for host in hosts { host.resume() }
-        // A sign-in in flight is almost certainly finished: the reason the app
-        // was in the background is that GitHub was in the foreground. Asking now
-        // rather than at the end of the interval is the difference between the
-        // screen catching up before he looks at it and five seconds of it saying
-        // "enter this code" after he already has.
-        signInFlow?.cameToTheFront()
     }
 
     func refresh() {
@@ -1167,58 +1129,8 @@ final class DeckModel {
         collectionError = nil
     }
 
-    // MARK: - GitHub, and the questions machines ask about it
-
-    /// The account the approval prompt names, or nil. Never the token — nothing
-    /// on screen holds that.
-    var gitHubAccount: GitHubAccount? { credentialResponder.account }
-
-    /// The question on screen, if a machine is waiting on an answer.
-    var credentialPrompt: CredentialRequest? { credentialResponder.asking }
-
-    func approveCredential(remember: Bool) { credentialResponder.approve(remember: remember) }
-    func denyCredential() { credentialResponder.deny() }
-
     /**
-     * Forget the GitHub account.
-     *
-     * The revocation that works from this end, and it is total by design: with
-     * no token here, nothing on this phone can answer a credential request from
-     * any machine. Approvals a machine is holding are a *scope* rather than a
-     * secret — every push still comes back here — so removing the secret removes
-     * what they were scoping.
-     */
-    func disconnectGitHub() {
-        gitHubAccounts.disconnect()
-    }
-
-    /**
-     * The GitHub sign-in, owned here rather than by the screen that shows it.
-     *
-     * It used to be `@State` on `GitHubAccountView`, built fresh from a
-     * `makeGitHubSignIn()` factory, and the ownership was the bug. A device flow
-     * takes as long as somebody takes to type a code into a browser in another
-     * app; a flow that belongs to a sheet is a flow that dies when the sheet
-     * does, and the sheet dies on the one button a person presses when they come
-     * back and the screen has not caught up yet — Done. He recorded exactly
-     * that: *"it's done, but on the application it's not. If I click on done,
-     * it's again there."*
-     *
-     * One per model, created on first use, so the screen can be closed and
-     * reopened and find the same flow still running — or find the account it
-     * finished with while nobody was looking at it.
-     */
-    var gitHubSignIn: GitHubSignIn {
-        if let signIn = signInFlow { return signIn }
-        let signIn = GitHubSignIn(accounts: gitHubAccounts)
-        signInFlow = signIn
-        return signIn
-    }
-
-    @ObservationIgnored private var signInFlow: GitHubSignIn?
-
-    /**
-     * The server sign-in, owned here for the reason the GitHub one is.
+     * The server sign-in, owned here rather than by the sheet that shows it.
      *
      * The exchange includes a real SSH login run on the far machine, behind a
      * two-probe gate — seconds, sometimes tens of them. A flow that belonged to

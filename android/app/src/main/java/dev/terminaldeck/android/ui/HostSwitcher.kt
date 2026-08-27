@@ -73,8 +73,8 @@ import dev.terminaldeck.android.transport.detail
  *
  * ## What used to be here, and where it went
  *
- * Pairing another machine, adding a server, GitHub, Devices, This-server and the rename/forget menu
- * were all on this sheet, which made it nine items deep and made the session list's title the door
+ * Pairing another machine, adding a server, Devices, This-server and the rename/forget menu
+ * were all on this sheet, which made it deep and made the session list's title the door
  * to every feature in the app. They are on the **Settings** tab now, and the three about a machine
  * are on **Machines** inside it — the arrangement iOS settled on, and for its reason: this sheet
  * answers *which machine am I typing into*, which is worth one tap from the session list; adding one

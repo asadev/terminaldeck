@@ -1,6 +1,5 @@
 package dev.terminaldeck.android
 
-import dev.terminaldeck.android.github.InMemoryGitHubStore
 import dev.terminaldeck.android.protocol.ClientMessage
 import dev.terminaldeck.android.protocol.EnrollMethod
 import dev.terminaldeck.android.protocol.Protocol
@@ -151,7 +150,6 @@ class AddServerTest {
     private fun build(): DeckViewModel = DeckViewModel(
         vault = vault,
         clipboard = FakeClipboard(),
-        accounts = InMemoryGitHubStore(),
         network = NetworkWatch.none,
         heartbeat = Heartbeat(scope = CoroutineScope(Dispatchers.Unconfined)),
         serverSignIn = { request ->

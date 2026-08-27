@@ -79,7 +79,7 @@ extension XCUIApplication {
      *
      * Settings has a navigation stack of its own now, so arriving at the tab is
      * not the same as arriving at the *screen*: the machines may still be pushed
-     * from earlier in the same case. `settings.github` is the proof, and the pop
+     * from earlier in the same case. `settings.alerts` is the proof, and the pop
      * is what makes it true.
      *
      * The first probe is short and the second is not, on purpose. When the root
@@ -99,15 +99,15 @@ extension XCUIApplication {
          * The pill says **Menu** since 2026-08-24 and the screen it opens is
          * still the settings screen with the six machine tools stacked above it,
          * so the helper keeps the name every caller here already uses rather
-         * than renaming twenty call sites to match a label. The `settings.github`
+         * than renaming twenty call sites to match a label. The `settings.alerts`
          * probe below is what actually proves arrival, and it is unchanged.
          */
         openTab("Menu")
-        if buttons["settings.github"].waitForExistence(timeout: 4) { return true }
+        if buttons["settings.alerts"].waitForExistence(timeout: 4) { return true }
         // Something is pushed over it. One Back is enough — Settings is one deep.
         let back = navigationBars.buttons.element(boundBy: 0)
         if back.exists { back.tap() }
-        return buttons["settings.github"].waitForExistence(timeout: 10)
+        return buttons["settings.alerts"].waitForExistence(timeout: 10)
     }
 
     /**
@@ -506,16 +506,6 @@ extension XCUIApplication {
         guard add.waitForExistence(timeout: 10) else { return false }
         add.tap()
         return textFields["serverLogin.address"].waitForExistence(timeout: 20)
-    }
-
-    /// The GitHub account screen, from Settings.
-    @discardableResult
-    func openGitHubAccount() -> Bool {
-        guard openSettingsTab() else { return false }
-        let row = buttons["settings.github"]
-        guard row.waitForExistence(timeout: 10) else { return false }
-        row.tap()
-        return buttons["github.done"].waitForExistence(timeout: 10)
     }
 
     /// The alerts screen, from Settings.

@@ -132,17 +132,12 @@ object ServerFrames {
     /**
      * The checks the serializer cannot express, applied after it has done the shape.
      *
-     * Two frames need one, for opposite reasons. [ServerMessage.Enrolled] is handled first and is
-     * covered where it is checked. [ServerMessage.CredentialRequest] needs one because it is the
-     * single frame in this protocol whose contents are **drawn on a screen somebody reads before
-     * approving a push**. Two strings on it are bounded on the wire, and an unbounded one here
-     * would be a prompt whose last line — the machine that asked — can be pushed off the bottom by
-     * a host name a kilometre long.
-     *
-     * A missing id or host is a refusal, because there is nothing to answer and nowhere to say it
-     * went. An over-long repository is **not**: it is folded onto null, which is the same answer
-     * this client already has to handle for a repository the desktop could not name, and which the
-     * prompt says out loud rather than papering over.
+     * [ServerMessage.Enrolled] is handled first — a minted device with no id or no credential is not
+     * one this phone can reconnect as, so a frame missing either is refused rather than stored
+     * half-formed, and the credential it carries is bounded so a hostile host cannot hand this phone
+     * a megabyte to keep. The rest are the list-bearing frames a newer or hostile host could make
+     * long: each is bounded to the cap the host holds itself to, and trimmed rather than refused,
+     * because a list one row too long is a machine with a lot of something, not an attack.
      */
     private fun narrow(message: ServerMessage): Result {
         // The other frame the serializer's shape check is not enough for, and the reason is
@@ -218,13 +213,7 @@ object ServerFrames {
             return Result.Ok(message.copy(profiles = message.profiles.take(MachineProfilesWire.MAX_PROFILES)))
         }
 
-        if (message !is ServerMessage.CredentialRequest) return Result.Ok(message)
-        if (message.id.isEmpty()) return Result.Bad("credential.request without an id")
-        if (message.host.isEmpty() || message.host.length > Protocol.MAX_CREDENTIAL_HOST_LENGTH) {
-            return Result.Bad("credential.request without a usable host")
-        }
-        val repo = message.repo?.takeIf { it.isNotEmpty() && it.length <= Protocol.MAX_CREDENTIAL_REPO_LENGTH }
-        return Result.Ok(if (repo == message.repo) message else message.copy(repo = repo))
+        return Result.Ok(message)
     }
 
     /**

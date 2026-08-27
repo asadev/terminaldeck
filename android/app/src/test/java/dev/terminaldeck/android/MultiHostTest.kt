@@ -1,6 +1,5 @@
 package dev.terminaldeck.android
 
-import dev.terminaldeck.android.github.InMemoryGitHubStore
 import dev.terminaldeck.android.protocol.ClientMessage
 import dev.terminaldeck.android.pairing.Rendezvous
 import dev.terminaldeck.android.protocol.HostPlatform
@@ -167,7 +166,6 @@ class MultiHostTest {
     private fun build(): DeckViewModel = DeckViewModel(
         vault = vault,
         clipboard = FakeClipboard(),
-        accounts = InMemoryGitHubStore(),
         network = NetworkWatch.none,
         // Its own, not the app-wide one: a test that joined the shared tick would leave a timer
         // running in whatever process ran it.

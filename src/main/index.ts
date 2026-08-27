@@ -98,7 +98,7 @@ import {
 import { dropUsageSession, registerUsageIpc } from './usage-ipc'
 import { dropSessionAccount, registerSessionAccountIpc } from './session-account'
 import { storedAccountLimits } from './account-limits'
-import { registerGitHubIpc } from './github'
+import { clearGitHubCache, readBranch, registerGitHubIpc, resolveRepo } from './github'
 import { registerReadinessIpc } from './readiness'
 import { registerDashboardIpc } from './dashboard-store'
 import { registerArtifactsIpc } from './artifacts'
@@ -813,6 +813,13 @@ const machineWindowAsks = createWindowAsks()
 const core = createHostCore({
   storageDir: remoteStorageDir(),
   userData: app.getPath('userData'),
+  // The GitHub authenticator host-core builds needs these to answer the panel's
+  // folder-shaped questions ("this folder is Y, on branch Z"); the wire never
+  // asks them. Signing in or out drops the overview cache, which is why pressing
+  // Connect repaints with real data rather than the "not signed in" it cached.
+  resolveGitHubRepo: resolveRepo,
+  resolveGitBranch: readBranch,
+  onGitHubAuthChanged: clearGitHubCache,
   /*
    * The browser verbs, on every session's own command line — *"driving other
    * browsers should be for all of the sessions."*
@@ -2699,6 +2706,10 @@ function registerIpc(): void {
     // same one the settings pane at this desk writes — see `prefs:set`, which
     // calls `noteChanged` so a change here reaches a connected phone too.
     serverSettings: core.serverSettings,
+    // The machine's own GitHub login, reachable from a phone. The same object the
+    // panel at this desk binds its auth IPC to (see `registerGitHubIpc` below),
+    // so the card on a phone and the panel three feet away read one login.
+    hostGitHub: core.hostGitHub,
     /*
      * The desk this machine's sessions ask a device through.
      *
@@ -3438,9 +3449,11 @@ function registerIpc(): void {
     routines.engine.wake()
   })
   // The GitHub sign-in stores a token of its own when the user connects from
-  // inside the app, so this registration is the one that needs to know where
-  // this build keeps its data. `registerGitHubIpc` wires the auth channels too.
-  registerGitHubIpc(ipcMain, { userDataDir: app.getPath('userData') })
+  // inside the app. Bound to `core.github` — the one authenticator host-core
+  // built — so the panel here, git on this machine and a phone over the wire all
+  // read one login rather than three that can disagree. `registerGitHubIpc` wires
+  // the auth channels to it. `userDataDir` is ignored when `auth` is passed.
+  registerGitHubIpc(ipcMain, { userDataDir: app.getPath('userData'), auth: core.github })
   registerReadinessIpc(ipcMain)
   registerDashboardIpc(ipcMain)
   registerSessionSearchIpc(ipcMain)

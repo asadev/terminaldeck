@@ -155,111 +155,56 @@ async function welcome(peer: Peer): Promise<Extract<ServerMessage, { t: 'welcome
 }
 
 describe('what a host says it can do', () => {
-  it('offers the capability only when there is a proxy behind it', async () => {
+  it('never offers the retired credential capability, proxy or not', async () => {
+    // The phone used to advertise `credential` to say it could answer a git
+    // login, and the host advertised it back to say it might ask. Retired
+    // 2026-08-27 — the machine answers its own git — so the host withholds it
+    // whether or not it has a proxy, and a build that still speaks the frame is
+    // simply never asked. The capability that replaced the idea, a phone
+    // *driving* the host's login, is `github`, and its own wiring is exercised in
+    // `host-github.test.ts`.
     expect((await welcome(connect(serve()))).capabilities).not.toContain(CAPABILITY.credential)
-    expect((await welcome(connect(serve(recordingProxy())))).capabilities).toContain(CAPABILITY.credential)
+    expect((await welcome(connect(serve(recordingProxy())))).capabilities).not.toContain(CAPABILITY.credential)
   })
 })
 
-describe('putting the question to a device', () => {
-  it('asks a client that said it can answer', async () => {
-    const proxy = recordingProxy()
-    const endpoint = serve(proxy)
-    const peer = connect(endpoint, [CAPABILITY.credential])
-    await welcome(peer)
-
-    expect(proxy.post?.reachable('device-1')).toBe(true)
-    const heard = proxy.post?.ask('device-1', {
-      t: 'credential.request',
-      id: 'req-1',
-      host: 'github.com',
-      repo: 'asadev/terminaldeck',
-      operation: 'write',
-      prompt: true,
-    })
-    expect(heard).toBe(1)
-    expect(peer.received.some((message) => message.t === 'credential.request')).toBe(true)
-  })
-
-  it('treats a client that never claimed it as not there', async () => {
-    // The failure this closes is the one the whole feature is judged on. A phone
-    // running an older build has an open socket and no code for the frame, so
-    // sending it one would produce a push that waits out a deadline instead of a
-    // refusal in milliseconds.
+describe('a stale client’s credential frames do not break the channel', () => {
+  it('routes them to the desk, which ignores them, and never disconnects', async () => {
+    // A build older than 2026-08-27 still sends `credential.ack/answer/deny`.
+    // Nothing asked it to, but closing the channel on an unrecognised frame would
+    // be worse than dropping one — so the server still routes them to the desk,
+    // whose `handle` is a dormant no-op. The socket stays up.
     const proxy = recordingProxy()
     const peer = connect(serve(proxy), [])
-    await welcome(peer)
-
-    expect(proxy.post?.reachable('device-1')).toBe(false)
-    expect(proxy.post?.ask('device-1', {
-      t: 'credential.request',
-      id: 'req-1',
-      host: 'github.com',
-      repo: null,
-      operation: 'write',
-      prompt: true,
-    })).toBe(0)
-  })
-
-  it('counts a client that sent no capability list at all as not there', async () => {
-    // Absent is what every build before the field sends, and it means the same
-    // thing as an empty list: nothing past version one.
-    const proxy = recordingProxy()
-    await welcome(connect(serve(proxy)))
-    expect(proxy.post?.reachable('device-1')).toBe(false)
-  })
-
-  it('asks both of a person’s devices, and counts them', async () => {
-    const proxy = recordingProxy()
-    const endpoint = serve(proxy)
-    await welcome(connect(endpoint, [CAPABILITY.credential], 'iPhone'))
-    await welcome(connect(endpoint, [CAPABILITY.credential], 'iPad'))
-
-    // One question, several places it can be seen — the same shape as the
-    // prompt. Whichever answers first wins and the desk drops the rest.
-    expect(
-      proxy.post?.ask('device-1', {
-        t: 'credential.request',
-        id: 'req-1',
-        host: 'github.com',
-        repo: 'asadev/terminaldeck',
-        operation: 'write',
-        prompt: true,
-      }),
-    ).toBe(2)
-  })
-})
-
-describe('routing an answer back', () => {
-  it('hands it to the desk with the device the socket proved it is', async () => {
-    const proxy = recordingProxy()
-    const peer = connect(serve(proxy), [CAPABILITY.credential])
     await welcome(peer)
 
     peer.send({ t: 'credential.ack', id: 'req-1' })
     peer.send({ t: 'credential.answer', id: 'req-1', username: 'octocat', password: 'ghp_x', remember: true })
     peer.send({ t: 'credential.deny', id: 'req-2', reason: 'no-account' })
 
-    expect(proxy.answered.map((entry) => entry.deviceId)).toEqual(['device-1', 'device-1', 'device-1'])
     expect(proxy.answered.map((entry) => entry.message.t)).toEqual([
       'credential.ack',
       'credential.answer',
       'credential.deny',
     ])
+    expect(proxy.answered.every((entry) => entry.deviceId === 'device-1')).toBe(true)
+    expect(peer.received.some((message) => message.t === 'error')).toBe(false)
   })
 
-  it('refuses an answer on a host that never asked anything', async () => {
-    const peer = connect(serve(), [CAPABILITY.credential])
+  it('refuses a credential answer on a host that has no proxy at all', async () => {
+    const peer = connect(serve(), [])
     await welcome(peer)
     peer.send({ t: 'credential.answer', id: 'req-1', username: 'octocat', password: 'ghp_x' })
 
     const error = peer.received.find((message) => message.t === 'error')
     expect(error).toMatchObject({ code: 'unauthorized', message: 'Nothing here asked this device for a login.' })
   })
+})
 
-  it('tells the desk when the last socket goes, so a push is not left waiting', async () => {
+describe('cleanup still reaches the desk', () => {
+  it('tells the desk when the last socket goes, so a grant is not left dangling', async () => {
     const proxy = recordingProxy()
-    const peer = connect(serve(proxy), [CAPABILITY.credential])
+    const peer = connect(serve(proxy), [])
     await welcome(peer)
     peer.hangUp()
     expect(proxy.closed).toEqual(['device-1'])
@@ -268,11 +213,10 @@ describe('routing an answer back', () => {
   it('tells the desk to forget a device that was revoked', async () => {
     const proxy = recordingProxy()
     const endpoint = serve(proxy)
-    await welcome(connect(endpoint, [CAPABILITY.credential]))
+    await welcome(connect(endpoint, []))
     endpoint.dropDevice('device-1')
-    // Before the sockets go, so anything in flight is answered with "no longer
-    // allowed" rather than with "not reachable" — two different facts, and the
-    // person at the terminal is owed the right one.
+    // Its grants go, so a revoked device's key stops answering — the same cascade
+    // a revoke has always run, minus the approvals the phone round-trip kept.
     expect(proxy.forgotten).toEqual(['device-1'])
   })
 })

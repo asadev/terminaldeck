@@ -62,11 +62,11 @@ final class ParityWireTests: XCTestCase {
     // MARK: - claimed capabilities
 
     func testTheClientClaimsTheFourPushAndDualCapabilities() {
-        // The same list `CLAIMED_CAPABILITIES` carries in the PWA: a question the
-        // desktop asks (credential), two pushes a client would otherwise miss
-        // (devices, settings), and the client half of a dual-listed name (watch).
+        // The same list `CLAIMED_CAPABILITIES` carries in the PWA: three pushes a
+        // client would otherwise miss (github, devices, settings — the `*.changed`
+        // frames), and the client half of a dual-listed name (watch).
         XCTAssertEqual(Set(WireCapability.claimed),
-                       [WireCapability.credential, WireCapability.devices,
+                       [WireCapability.github, WireCapability.devices,
                         WireCapability.settings, WireCapability.watch])
     }
 
@@ -338,13 +338,6 @@ final class ParityWireTests: XCTestCase {
         let reading = WireCodec.controlsReading(object)
         XCTAssertFalse(reading.canType, "a numeric 1 does not open the composer")
         XCTAssertTrue(reading.live, "the descriptive flag beside it is deliberately lenient")
-
-        // And the credential sheet, where the comment in the codec had promised
-        // this behaviour for longer than the code delivered it: `prompt` is an
-        // instruction to interrupt somebody and ask them for a secret.
-        let ask = decoded(#"{"t":"credential.request","id":"c1","host":"github.com","operation":"read","prompt":1}"#)
-        guard case let .credentialRequest(_, _, _, _, prompt) = ask else { return XCTFail() }
-        XCTAssertFalse(prompt, "a numeric 1 does not raise a credential prompt")
     }
 
     func testACorruptFrameBodyIsRefusedNotHalfDecoded() {
