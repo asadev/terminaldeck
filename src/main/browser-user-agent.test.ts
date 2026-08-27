@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cleanUserAgent, namesTheShell } from './browser-user-agent'
+import { cleanUserAgent, machineBrowserUserAgent, namesTheShell } from './browser-user-agent'
 
 /**
  * The string Electron 41.10.5 actually produced on this machine on 2026-08-18,
@@ -59,5 +59,47 @@ describe('the embedded browser does not announce its shell', () => {
   it('recognises the shell in a string that still has it', () => {
     expect(namesTheShell(MEASURED)).toBe(true)
     expect(namesTheShell(cleanUserAgent(MEASURED))).toBe(false)
+  })
+})
+
+/**
+ * The machine's *headless* Chromium is a separate browser from the desktop's
+ * Electron views, and it announced itself `HeadlessChrome` — the loudest tell
+ * there is for Google's *"this browser or app may not be secure"* refusal, and
+ * one nothing in `cleanUserAgent` above ever reached. This is what it presents
+ * instead: the same engine's true user agent, minus the one word that names how
+ * it was started rather than what it is.
+ *
+ * The exact strings are pinned because the whole point is what a remote server
+ * sees, and because modern Chrome's user agent is frozen — the OS token and the
+ * `.0.0.0` version are fixed values a real Chrome on each platform reports, so a
+ * drift here would be a drift from Chrome itself, not a harmless reformat.
+ */
+describe('the machine’s headless browser presents as an ordinary Chromium', () => {
+  it('drops the Headless word and reports the true engine for this Mac', () => {
+    const ua = machineBrowserUserAgent('darwin', '146.0.7680.165')
+    expect(ua).not.toContain('Headless')
+    expect(namesTheShell(ua)).toBe(false)
+    // Byte for byte what a real Chrome 146 on this Mac sends.
+    expect(ua).toBe(
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36',
+    )
+  })
+
+  it('uses each platform’s own frozen OS token', () => {
+    expect(machineBrowserUserAgent('win32', '146.0.7680.165')).toContain('Windows NT 10.0; Win64; x64')
+    expect(machineBrowserUserAgent('linux', '146.0.7680.165')).toContain('X11; Linux x86_64')
+  })
+
+  it('carries only the major version, because the reduced user agent carries only the major', () => {
+    expect(machineBrowserUserAgent('darwin', '147.0.1.2')).toContain('Chrome/147.0.0.0')
+  })
+
+  it('returns nothing for a version it cannot read, so a side-loaded binary keeps its own', () => {
+    // `installChromium` reports `'sideloaded'` for a `TERMINALDECK_CHROMIUM_PATH`
+    // override; guessing a major for it would be the disguise this file refuses,
+    // and the launch adds no `--user-agent` when this is empty.
+    expect(machineBrowserUserAgent('darwin', 'sideloaded')).toBe('')
+    expect(machineBrowserUserAgent('darwin', '')).toBe('')
   })
 })

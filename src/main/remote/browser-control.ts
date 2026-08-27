@@ -1,6 +1,7 @@
 import { attach, detach, ownerOf, slotName, windowClosed, windowMoved, windowsOf } from '../browser-binding'
 import { describeStep, type RecordedStep as DeskStep } from '../browser-steps'
 import { sanitizeLine } from '../selector'
+import { diagnoseSignIn } from '../browser-signin-diagnose'
 import { REPLAY_SUBMIT_GAP_MS, replayWrites } from '../switch-later'
 import type {
   ClientMessage,
@@ -646,10 +647,33 @@ export function machineBrowser(deps: MachineBrowserDeps): MachineBrowser {
       windows: windowsOf(session.id, machineId).length,
     }))
 
+    /*
+     * The one thing the phone cannot fix from where it is standing.
+     *
+     * When a window on this machine is sitting on Google's *"this browser or app
+     * may not be secure"* refusal, the desktop's answer — hand the sign-in to the
+     * system browser and bring the cookies back — is no use to somebody who is
+     * not at the machine. The cast still shows Google's own page, so it is not a
+     * blank dead end, but the phone gets said plainly here what is happening and
+     * the two things that do work: finish it in a real browser *on the machine*,
+     * or use an account already signed in. `diagnoseSignIn` reads it off the
+     * address exactly as the desktop band does; only the hard `refused` is
+     * surfaced, never the softer `restricted` warning, because the phone has no
+     * handover button to pair a warning with. Folded into the existing notice —
+     * no new frame on the wire — and it rides on `open`, so it is gone the moment
+     * the window leaves that page. A plain read of ordinary windows still has an
+     * empty notice, which the test pins.
+     */
+    const signin = open.some(
+      (entry) => typeof entry.url === 'string' && diagnoseSignIn(entry.url)?.kind === 'refused',
+    )
+      ? "Google will not sign in in this machine's browser. Finish it in a normal browser on the machine, or use an account already signed in here."
+      : ''
+
     const cut: string[] = []
     if (open.length > MAX_WINDOW_ROWS) cut.push(`${MAX_WINDOW_ROWS} of ${open.length} windows`)
     if (sessions.length > MAX_SESSION_ROWS) cut.push(`${MAX_SESSION_ROWS} of ${sessions.length} sessions`)
-    const line = [notice, trouble, cut.length > 0 ? `Listing ${cut.join(' and ')}.` : '']
+    const line = [notice, trouble, signin, cut.length > 0 ? `Listing ${cut.join(' and ')}.` : '']
       .filter((part) => part !== '')
       .join(' ')
 

@@ -12,9 +12,10 @@ import { currentPlatform, type Platform } from './platform/host'
  * ## The launch, decided
  *
  * `chrome --headless=new --remote-debugging-pipe --user-data-dir=<profile>
- * --no-first-run --no-default-browser-check --disable-gpu`, plus
- * `--load-extension=<dirs> --disable-extensions-except=<dirs>` when a profile
- * carries extensions.
+ * --no-first-run --no-default-browser-check --disable-gpu
+ * --disable-blink-features=AutomationControlled`, plus `--user-agent=<ua>` when
+ * the caller supplies one and `--load-extension=<dirs>
+ * --disable-extensions-except=<dirs>` when a profile carries extensions.
  *
  * Each of those flags is load-bearing:
  *
@@ -29,6 +30,14 @@ import { currentPlatform, type Platform } from './platform/host'
  *    no-socket invariant `DRIVABLE-BROWSER.md` §2.1 states in as many words:
  *    Chromium's DevTools endpoint has no authentication, so a listening port is
  *    a door this product may not open. A pipe is not a door.
+ *  - **`--disable-blink-features=AutomationControlled`** is the pair to the
+ *    de-headlessed `--user-agent` the host passes: `--headless=new` plus the
+ *    debugging pipe together make Google see an automated, headless browser and
+ *    refuse a new sign-in — *"this browser or app may not be secure"* — and this
+ *    flag turns off `navigator.webdriver`, which was measured reading `true`
+ *    here without it and `false` with it (2026-08-27). `--headless=new` itself
+ *    must stay — the architecture needs it — so the other tells are suppressed
+ *    instead. `--enable-automation` is never added; it would do the reverse.
  *  - **`--disable-extensions-except`** alongside `--load-extension` is what keeps
  *    a headless profile to exactly the extensions this app unpacked and verified
  *    — nothing carried over, nothing else loaded.
@@ -411,6 +420,19 @@ export interface FlagOptions {
   /** Unpacked extension directories to load, or none. */
   extensionDirs?: readonly string[]
   /**
+   * The user agent this browser presents, or none to keep Chromium's own.
+   *
+   * The one it keeps by default is the problem: `--headless=new` names itself
+   * `HeadlessChrome`, which is the loudest thing a browser can say to Google's
+   * *"this browser or app may not be secure"* check. The caller
+   * (`browser-headless-host.ts`) passes the same engine's honest, de-headlessed
+   * string from {@link machineBrowserUserAgent}; when it is empty — a side-loaded
+   * binary of unknown version — no `--user-agent` is added and the browser keeps
+   * whatever it presents. A pure option so the flag list stays a function of its
+   * input, the property the test below relies on.
+   */
+  userAgent?: string
+  /**
    * Leave Chromium's own sandbox on. Defaults to `true`.
    *
    * `false` appends `--no-sandbox`, and the only thing that should ever pass
@@ -440,7 +462,29 @@ export function chromiumFlags(options: FlagOptions): string[] {
     '--no-first-run',
     '--no-default-browser-check',
     '--disable-gpu',
+    /*
+     * Present as an ordinary Chromium, not an automated one.
+     *
+     * Measured on this machine on 2026-08-27, against this exact launch: with
+     * nothing here `navigator.webdriver` read `true`, and with this one flag it
+     * reads `false`. That property is the other half of Google's *"this browser
+     * or app may not be secure"* refusal — the half the de-headlessed user agent
+     * (`--user-agent`, below) does not touch. It is the `AutomationControlled`
+     * blink feature that `--remote-debugging-pipe` would otherwise leave on;
+     * disabling it is exactly what a person driving Chrome by hand has, and it
+     * carries no capability — it only stops the browser advertising that a
+     * debugger is attached. `--enable-automation`, which would turn the tell
+     * back on and raise an automation infobar besides, is deliberately never
+     * added anywhere in this file.
+     */
+    '--disable-blink-features=AutomationControlled',
   ]
+  // The honest, de-headlessed user agent, when the caller supplied one. Before
+  // the extension flags and `extraFlags` for the same reason the sandbox flag
+  // is: a caller's verbatim additions stay last. See {@link FlagOptions.userAgent}.
+  if (options.userAgent !== undefined && options.userAgent !== '') {
+    flags.push(`--user-agent=${options.userAgent}`)
+  }
   // Before the extension flags and before `extraFlags`, so a caller's verbatim
   // additions stay last — which the test pins, and which is what "verbatim"
   // has to mean if it is to be useful.

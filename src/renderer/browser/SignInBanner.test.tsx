@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { UiPlatform } from '../platform'
-import type { AccountsApi, SignInTrouble } from './accounts-bridge'
+import { readSignInTrouble, type AccountsApi, type SignInTrouble } from './accounts-bridge'
 import {
   SignInBanner,
   bringBackNote,
@@ -185,6 +185,46 @@ describe('the band as it is actually drawn', () => {
     const promise = html.indexOf('bring the signed-in session back here')
     const correction = html.indexOf('macOS only')
     expect(correction).toBeGreaterThan(promise)
+  })
+})
+
+describe('the refusal decodes across the process boundary with its copy intact', () => {
+  /*
+   * The exact object `diagnoseSignIn` emits for Google's *"this browser or app
+   * may not be secure"* page, kept in step with `browser-signin-diagnose.ts` the
+   * same way `TROUBLE` above is — the renderer cannot import from `src/main`, so
+   * the shape is copied and pinned rather than reached across the boundary.
+   */
+  const RAW_REFUSED = {
+    kind: 'refused',
+    headline: 'Google will not accept this sign-in from inside an app',
+    detail:
+      'Google blocks sign-ins from browsers embedded in other programs, and there is nothing this app can change to be allowed. Finish it in the browser you already use, then bring the signed-in session back here.',
+    domains: ['google.com', 'accounts.google.com', 'youtube.com'],
+  }
+
+  it('reads the refusal back as a refusal, copy and domains carried through', () => {
+    const trouble = readSignInTrouble(RAW_REFUSED)
+    expect(trouble?.kind).toBe('refused')
+    expect(trouble?.headline).toBe('Google will not accept this sign-in from inside an app')
+    expect(trouble?.detail).toContain('nothing this app can change to be allowed')
+    expect(trouble?.domains).toContain('accounts.google.com')
+  })
+
+  it('reads nothing as trouble unless it truly is one', () => {
+    expect(readSignInTrouble(null)).toBeNull()
+    expect(readSignInTrouble('signin/rejected')).toBeNull()
+    expect(readSignInTrouble({ kind: 'made-up' })).toBeNull()
+    // The right kind but no sentence to show is not a usable trouble.
+    expect(readSignInTrouble({ kind: 'refused' })).toBeNull()
+  })
+
+  it('draws the refusal’s own headline and detail, and the one control that gets past it', () => {
+    const html = markup('mac')
+    expect(html).toContain('Google will not accept this sign-in from inside an app')
+    expect(html).toContain('there is nothing this app can change to be allowed')
+    // `shell.openExternal`, the only way past Google's refusal on any platform.
+    expect(html).toContain('Open in your browser')
   })
 })
 
