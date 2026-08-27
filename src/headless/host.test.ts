@@ -690,8 +690,10 @@ describe('a session that ends on this host leaves every connected client’s lis
     // this shape is verified against the source and not only through a harness.
     const source = readFileSync(join(__dirname, 'host.ts'), 'utf8')
 
-    // Both hooks push through the one late-bound fan-out.
-    expect(source).toMatch(/onSessionStarted:\s*\(\)\s*=>\s*tellDevices\?\.\(\)/)
+    // Both hooks push through the one late-bound fan-out. `onSessionStarted` now
+    // also feeds the routine engine, so it is a block — the fan-out call is still
+    // in it, which is what this pins.
+    expect(source).toMatch(/onSessionStarted:\s*\(meta\)\s*=>\s*\{[\s\S]*?tellDevices\?\.\(\)/)
     expect(source).toMatch(/tellDevices\s*=\s*\(\)\s*=>\s*\{[\s\S]*?sessionsChanged\(\)/)
 
     // onSessionRemoved forwards every removal except the account-switch swap.

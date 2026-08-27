@@ -59,8 +59,11 @@ import { boundKey, BrowserDrive, OWN_TARGET } from '../main/browser-driver'
 import type { DriveStatus } from '../main/browser-drive'
 import { frontTab, screencastOver, type CastWindow } from '../main/screencast-host'
 import { createHeadlessBrowserControl } from '../main/browser-headless-control'
-import { stopDeckControlServer } from '../main/deck-control/server'
+import { currentEndpoint, stopDeckControlServer } from '../main/deck-control/server'
 import { createSessionTools, type SessionTools } from '../main/deck-control/session-tools'
+import { copilotPaths } from '../main/copilot-home'
+import { createRoutines, type RoutinesHandle } from '../main/routines'
+import { createCopilotRunner } from '../main/routines/runner'
 import { startHeadlessCopilot, type HeadlessCopilot } from './copilot'
 import { serveWindowCall } from '../main/remote/machines/window-serve'
 import { installHooksWhereConfigured } from '../main/hooks'
@@ -518,6 +521,16 @@ export async function createHeadlessHost(
    */
   const liveStatus = new Map<string, { status: SessionStatus; at: number }>()
 
+  /*
+   * The routines this server runs on its own — assembled after the core (its
+   * folder guard reads the core's sessions) but referenced from the core's
+   * lifecycle callbacks below, so a late-bound `let` the way the desktop's own
+   * `routines` is at module scope. A routine runs *through* the copilot: its
+   * runner is a `--print` Claude CLI carrying the unattended tool config
+   * `startHeadlessCopilot` writes, so routines and the copilot come up together.
+   */
+  let routinesHandle: RoutinesHandle | null = null
+
   const core = createHostCore({
     storageDir: remoteStorageDir,
     userData: stateDir,
@@ -536,10 +549,22 @@ export async function createHeadlessHost(
      * that started a session hears about it twice, which `tellSessions` calls
      * a harmless refresh.
      */
-    onSessionStarted: () => tellDevices?.(),
+    onSessionStarted: (meta) => {
+      tellDevices?.()
+      // A routine can trigger on a session appearing; the engine holds the rule
+      // for whether any does. The same feed the desktop makes.
+      routinesHandle?.engine.noteSessionStarted(meta)
+    },
     // The status the copilot's surface reads, kept in step with the fanout's.
-    // Same map, same source as the desktop — see `liveStatus` above.
-    onStatus: (id, status) => liveStatus.set(id, { status, at: Date.now() }),
+    // Same map, same source as the desktop — see `liveStatus` above. It is also
+    // the `session-idle` routine trigger, fed to the engine the same way.
+    onStatus: (id, status) => {
+      liveStatus.set(id, { status, at: Date.now() })
+      routinesHandle?.engine.noteSessionStatus(id, status)
+    },
+    // `session-finished` and `session-failed` are this one event, split by exit
+    // code inside the engine — the desktop feeds it from the same pty callback.
+    onExit: (id, exitCode) => routinesHandle?.engine.noteSessionExit(id, exitCode),
     /*
      * The other half of the same push, and the half that was missing: a session
      * *gone* from this host has to leave every attached device's list too, not
@@ -886,6 +911,47 @@ export async function createHeadlessHost(
   }
 
   /*
+   * The routines this server runs on its own — built only when the copilot is,
+   * because a routine runs *through* it. The default runner reads the unattended
+   * tool config `startHeadlessCopilot` just wrote and `currentEndpoint()`, both
+   * true now; the engine is fed `session-finished`/`-failed`/`-idle` from the
+   * core callbacks above.
+   *
+   * `allowFolder` is the sessions this host is actually running. A headless
+   * server has no project list to draw on, so a routine may watch a folder a
+   * session is in rather than "anywhere" — the same recursive-watch-the-disk
+   * refusal the desktop makes, narrowed to what a server can honestly answer.
+   */
+  if (headlessCopilot !== null) {
+    const copilot = headlessCopilot
+    routinesHandle = createRoutines({
+      // The default runner is keyed on `userDataDir()`; this host's copilot
+      // folder is keyed on its storage dir, which differs when it was launched
+      // with a custom one. So the runner is pointed at this copilot's own
+      // unattended config and folder — a routine runs against the same folder
+      // and endpoint the phone drives, not a second one nothing else here uses.
+      // `currentEndpoint()` is the same null-guard the default makes: no server,
+      // no tools, and the engine turns that into a readable "not running" row.
+      runner: createCopilotRunner({
+        mcpConfig: () => (currentEndpoint() === null ? null : copilot.unattendedConfigPath),
+        paths: () => copilotPaths(stateDir),
+      }),
+      allowFolder: (folder) => {
+        if (core.ptys.list().some((session) => session.cwd === folder)) return { ok: true }
+        return {
+          ok: false,
+          reason: `${folder} is not a folder this server is running a session in, so nothing is watching it.`,
+        }
+      },
+      // The three triggers the callbacks above feed. `alert` is a window watcher
+      // this build has none of, and file/git watches the engine marks unwired
+      // itself — so a routine on any of those reports itself honestly rather than
+      // looking armed and never firing.
+      wired: ['session-finished', 'session-failed', 'session-idle'],
+    })
+  }
+
+  /*
    * **The machine-browser screen, on a server.** [wave-4]
    *
    * Asad, twice in one day, looking at the Browser tab against his own box:
@@ -1097,11 +1163,15 @@ export async function createHeadlessHost(
      * copilot's real CLAUDE.md and memory rather than four *not there* rows.
      */
     copilotFiles: headlessCopilot?.copilotFiles,
-    // Routines run *through* the copilot, so they arrive out of this same wiring
-    // — the runner is a copilot run over `headlessCopilot`'s endpoint. Wired in
-    // the follow-up commit on this branch; until then the capability is not
-    // advertised and the phone draws no Routines screen rather than one whose
-    // every row is unarmed.
+    /*
+     * The routines this server runs on its own, as a phone may touch them.
+     * Absent is the switch, like the copilot's — null on the public box and if
+     * the copilot did not start, so no Routines screen is drawn there. The engine
+     * is fed session triggers above and its runner carries the unattended tool
+     * config, so a routine here fires on its own and runs through the copilot,
+     * which is the whole of what a routine is for on a machine with nobody at it.
+     */
+    routines: routinesHandle?.api,
     /*
      * The git credential proxy, on every host except the public one.
      *
@@ -1811,6 +1881,10 @@ export async function createHeadlessHost(
      * of a Chromium that is already closing, which is a refusal a caller reads as
      * a fault rather than as a shutdown.
      */
+    // The routines' watchers, schedulers and any in-flight run, before the tools
+    // they run through go away. `stop` is what the engine holds open — see
+    // `RoutinesHandle` — and the desktop calls it on quit for the same reason.
+    await routinesHandle?.stop().catch(() => undefined)
     // The copilot's runs and their grace timers, before the endpoint they were
     // dispatched through closes. The sessions themselves were killed by
     // `killAll` above; this clears the countdowns and the caller-table entries.

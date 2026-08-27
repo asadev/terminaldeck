@@ -56,6 +56,7 @@
  */
 
 import { mkdirSync } from 'node:fs'
+import { join } from 'node:path'
 import { ActionLog } from '../main/deck-control/action-log'
 import { browserTools } from '../main/deck-control/browser-tools'
 import { ConsentBroker } from '../main/deck-control/consent'
@@ -65,6 +66,8 @@ import {
   startDeckControlServer,
   type DeckControlEndpoint,
 } from '../main/deck-control/server'
+import { mcpConfigFor } from '../main/deck-control'
+import { writeSecretFile } from '../main/remote/secret-file'
 import { copilotFilesHere } from '../main/copilot-files'
 import { copilotPaths, scaffoldCopilotHome } from '../main/copilot-home'
 import { CopilotAccess } from '../main/remote/copilot-access'
@@ -143,6 +146,12 @@ export interface HeadlessCopilot {
   copilotFiles: CopilotFiles
   /** The action log the tool calls land in, for the phone's Activity view. */
   log: ActionLog
+  /**
+   * The tool config a routine run is launched with — the unattended token, in
+   * the copilot's own folder. `host.ts` points the routine runner at exactly
+   * this, so a routine and the phone's copilot share one folder and one endpoint.
+   */
+  unattendedConfigPath: string
   /** Stop the runs and their grace timers. The server is stopped by `host.ts`. */
   stop(): void
 }
@@ -283,6 +292,38 @@ export async function startHeadlessCopilot(deps: HeadlessCopilotDeps): Promise<H
   }
   deps.onReady?.(endpoint)
 
+  /*
+   * The *unattended* config, so a routine on this server has tools.
+   *
+   * A routine run is a Claude CLI in `--print` mode with no one watching, so it
+   * carries `unattendedToken` — every `alter`-tier call refused at the boundary
+   * rather than blocking on a confirmation nobody is awake to answer. Written
+   * through `writeSecretFile` — 0600 on POSIX, an owner-only ACL on Windows — and
+   * rewritten every start, so a copy left by a previous run holds a dead token.
+   *
+   * Inside the copilot's own folder (`paths.root`, made above) rather than at the
+   * global `unattendedMcpConfigPath()`, and the difference matters on a server:
+   * that helper is keyed on `userDataDir()`, which is *not* this host's storage
+   * dir when it was launched with a custom one — so the config would land in a
+   * folder nothing else here uses and the run would spawn against a different
+   * copilot folder than the phone's. Keyed on `deps.userData` it sits beside the
+   * per-device run configs and the memory the routine shares. The path is handed
+   * back so `host.ts` can point the routine runner at exactly this file.
+   *
+   * The *attended* config is deliberately not written: nothing on a server holds
+   * an attended token — no pinned desk copilot, and a phone's run mints its own
+   * per-device token — so writing one would leave a full-tool credential on disk
+   * that nothing uses.
+   */
+  const unattendedConfigPath = join(paths.root, 'deck-control-unattended.json')
+  try {
+    writeSecretFile(paths.root, unattendedConfigPath, mcpConfigFor(endpoint, 'unattended'))
+  } catch (error) {
+    // A routine will then report its tools are not running, which the engine
+    // turns into a readable row — worse auditing, never a crash.
+    console.error('[headless] could not write the unattended tool config; routines here will have no tools:', error)
+  }
+
   const access = new CopilotAccess({ isMine: deps.isMine })
 
   runs = new CopilotRuns({
@@ -349,6 +390,7 @@ export async function startHeadlessCopilot(deps: HeadlessCopilotDeps): Promise<H
     // list a folder that has moved.
     copilotFiles: copilotFilesHere(() => copilotPaths(deps.userData)),
     log,
+    unattendedConfigPath,
     stop: () => runs?.stopAll(),
   }
 }
