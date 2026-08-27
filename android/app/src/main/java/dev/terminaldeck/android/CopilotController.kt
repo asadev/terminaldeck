@@ -266,6 +266,23 @@ class CopilotController(
     }
 
     /**
+     * Turn driving mode's on-screen scan on or off — the machine's own
+     * `copilot.interactive` setting, the desktop's *"show me what it is looking
+     * at"* switch.
+     *
+     * The `alter` tier, guarded here as well as by the switch being drawn only
+     * under that grant: it writes a machine setting, and `alter` is the tier that
+     * means *a person deliberately decided this device may*. The machine echoes a
+     * fresh `copilot.state` after the write — the same as [start] and [stopRun] —
+     * so the switch follows the setting it changed rather than this end asserting
+     * a value nothing confirmed.
+     */
+    fun setInteractive(on: Boolean) {
+        if (link?.grant?.alter != true) return
+        if (!send(ClientMessage.CopilotSetInteractive(on))) say(false, NOT_CONNECTED)
+    }
+
+    /**
      * A sentence about this end, put on screen.
      *
      * The `onChange()` is the whole of what was missing, and it made every one of these silent:

@@ -90,6 +90,18 @@ data class CopilotStateReport(
     val grant: CopilotGrantWire = CopilotGrantWire(),
     val available: Boolean = false,
     val reason: String? = null,
+    /**
+     * Whether the copilot shows its scan on **that machine's** screen — driving
+     * mode. The wire half of the desktop's *"show me what it is looking at"*
+     * switch, so a paired device draws and flips the same setting the person at
+     * the desk does.
+     *
+     * Defaulted to `true`, which is the one rule this setting keeps everywhere it
+     * is read — *anything but an explicit off is on* — so an absent field, or a
+     * value `coerceInputValues` folds off a host this build cannot parse, reads
+     * *on* rather than inventing a different default from the machine's own.
+     */
+    val interactive: Boolean = true,
 ) {
     /** This device has a run of its own. What decides whether the composer is drawn. */
     val hasRun: Boolean get() = !run.isNullOrEmpty()

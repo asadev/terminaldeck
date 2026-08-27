@@ -2337,6 +2337,15 @@ export const COPILOT_FRAME_TIER: Readonly<Record<string, CopilotTier>> = {
    * that rule is about one particular question — see `deck-control/consent.ts`.
    */
   'copilot.answer': 'alter',
+  /**
+   * Setting driving mode's visibility is `alter`, for the reason `copilot.files`
+   * writes are: it changes a machine setting a paired device is reaching across
+   * the wire, and `alter` is the tier that means *a person deliberately decided
+   * this device may*. It is a strictly smaller reach than the file writes beside
+   * it — one boolean rather than the copilot's whole instruction file — so
+   * nothing about the property this tier defends turns on adding it.
+   */
+  'copilot.interactive': 'alter',
 }
 
 /**
@@ -2685,6 +2694,24 @@ export interface CopilotStateReport {
    */
   available: boolean
   reason: string | null
+  /**
+   * Whether the copilot puts its scan on this machine's screen — driving mode.
+   *
+   * The wire half of the desktop's *"show me what it is looking at"* switch
+   * (`CopilotSection.tsx`'s `ShowingGroup`), so a paired device can read and set
+   * it the same as the person at the desk. It is the machine's own
+   * `copilot.interactive` setting, and it follows that setting's one rule:
+   * **anything but an explicit off is on**, which is why this is a plain boolean
+   * the desktop resolves rather than a tristate — a device never has to guess a
+   * default the machine already decided.
+   *
+   * A fact about *that machine's screen*: with it on, the copilot moves the
+   * window to what it is reading during a scan, wherever the scan was asked for.
+   * A phone cannot watch that scan, so a phone draws this only where it can also
+   * change it — behind the `alter` grant, on a desktop, never over a headless
+   * server that has no screen to drive.
+   */
+  interactive: boolean
 }
 
 /** A session the copilot started, as a phone lists it. */
@@ -4462,6 +4489,18 @@ export type ClientMessage =
   | { t: 'copilot.cancel' }
   /** End this device's own run. */
   | { t: 'copilot.stop' }
+  /**
+   * Turn driving mode's on-screen scan on or off — the machine's own
+   * `copilot.interactive` setting, exactly what the desktop's *"show me what it
+   * is looking at"* switch writes.
+   *
+   * `alter`, and it names nothing: it carries one boolean and changes one
+   * machine setting, which is a strictly smaller reach than `copilot.file.write`
+   * — that verb, at the same tier and through the same gate, hands the copilot's
+   * whole instruction file across the wire. So the property this whole file
+   * defends is untouched: a device says on or off, it does not compose a call.
+   */
+  | { t: 'copilot.interactive'; on: boolean }
   /* ---- capability `copilot.files`. Same gate, separate advertisement. ----- */
   /**
    * ## The five frames behind *"its memory folder … the folder's own instruction … what it was handed"*
@@ -8006,6 +8045,19 @@ export function parseClientMessage(raw: unknown): ParseResult {
       }
       return { ok: true, message }
     }
+    case 'copilot.interactive': {
+      /*
+       * A required boolean, and only a literal one — the same rule
+       * `copilot.answer` keeps, and for a neighbouring reason: this writes a
+       * machine setting, and a client whose wiring sent `"true"`, `1` or
+       * `undefined` must not have it read as a decision. Refused rather than
+       * coerced, because a malformed toggle is a client bug and answering it as
+       * "off" would hide the bug behind a plausible outcome.
+       */
+      const on = parsed.on
+      if (typeof on !== 'boolean') return bad('copilot.interactive without a state')
+      return { ok: true, message: { t: 'copilot.interactive', on } }
+    }
 
     /* ---- capability `copilot.files` -------------------------------------- */
     /*
@@ -8672,6 +8724,12 @@ function copilotState(value: unknown): CopilotStateReport | null {
     // it sent any.
     available: value.available === true,
     reason: nonEmpty(value.reason),
+    // `available` folds an unreadable value onto false because false is the safe
+    // claim there; this one folds onto **true**, because the setting it mirrors
+    // reads *anything but an explicit off is on* (`toInteractiveDriving`), and a
+    // reader inventing a different default would put a switch on screen that
+    // disagrees with the machine it names. Only a literal `false` is off.
+    interactive: value.interactive !== false,
   }
 }
 

@@ -878,6 +878,13 @@ interface HarnessQuestion {
 }
 
 let copilotQuestions: HarnessQuestion[] = []
+/**
+ * Whether driving mode shows its scan on this machine — the stand-in's own
+ * `copilot.interactive`. Mutable, so the "While it works" switch a phone flips
+ * lands on the next `copilot.state` this fixture sends, the same as the real
+ * host echoes it. On by default, the value every reader of this setting folds to.
+ */
+let copilotInteractive = true
 /** The full request behind each answerable question. Never sent to a watcher. */
 const copilotAsks = new Map<string, CopilotConsentQuestion>()
 let copilotAskSeq = 0
@@ -1092,6 +1099,7 @@ function copilotState(deviceId: string): CopilotStateReport {
         grant: copilotGrantFor(deviceId),
         available: true,
         reason: null,
+        interactive: copilotInteractive,
     }
 }
 
@@ -1929,6 +1937,7 @@ class Channel {
             case 'copilot.start':
             case 'copilot.say':
             case 'copilot.cancel':
+            case 'copilot.interactive':
             case 'copilot.stop': {
                 const device = this.deviceId ?? ''
                 /*
@@ -2103,6 +2112,14 @@ class Channel {
                         return
                     case 'copilot.stop': {
                         copilotRuns.delete(device)
+                        return this.send({ t: 'copilot.state', state: copilotState(device) })
+                    }
+                    case 'copilot.interactive': {
+                        // The write, then the state — the same order the real
+                        // host uses, so the "While it works" switch follows the
+                        // fixture it just changed rather than snapping back.
+                        copilotInteractive = message.on
+                        log(`copilot scan ${message.on ? 'shown' : 'hidden'} from ${device.slice(0, 8)}`)
                         return this.send({ t: 'copilot.state', state: copilotState(device) })
                     }
                 }

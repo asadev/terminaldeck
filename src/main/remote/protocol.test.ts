@@ -121,6 +121,7 @@ const CLIENT_TYPES: Record<ClientMessage['t'], true> = {
   'copilot.say': true,
   'copilot.cancel': true,
   'copilot.stop': true,
+  'copilot.interactive': true,
   'copilot.files': true,
   'copilot.file.read': true,
   'copilot.file.write': true,
@@ -363,6 +364,11 @@ const VALID_CLIENT: ClientMessage[] = [
   { t: 'copilot.say', text: 'which of my sessions is stuck?' },
   { t: 'copilot.cancel' },
   { t: 'copilot.stop' },
+  // Both directions of the visibility toggle, because the parser refuses
+  // anything that is not a literal boolean and a round trip is the cheapest
+  // proof that a real `false` survives it rather than being read as "not set".
+  { t: 'copilot.interactive', on: true },
+  { t: 'copilot.interactive', on: false },
   /*
    * The copilot's own files. Every id here is a **word**, never a path, and that
    * is the property `copilotFileTarget` exists to hold — see the header on
@@ -816,6 +822,7 @@ const VALID_SERVER: ServerMessage[] = [
       grant: { read: true, act: false, alter: false },
       available: true,
       reason: null,
+      interactive: true,
     },
   },
   {

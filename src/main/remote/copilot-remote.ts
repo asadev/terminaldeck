@@ -188,6 +188,14 @@ export interface CopilotRemote {
   state(deviceId: string): CopilotStateReport
   /** The sessions the copilot started, each linked back to the turn that made it. */
   sessions(): CopilotSessionRow[]
+  /**
+   * Set whether driving mode shows its scan on this machine's screen —
+   * `copilot.interactive`, the setting behind the desktop's *"show me what it is
+   * looking at"* switch. `alter`, checked at the transport before this is
+   * reached. The read is a field on {@link CopilotStateReport}; this is the
+   * write.
+   */
+  setInteractive(on: boolean): void
   /** The tail of `actions.jsonl`, scrubbed, newest last. */
   log(options: { limit?: number; before?: string }): { rows: CopilotActionRow[]; more: boolean }
   /**

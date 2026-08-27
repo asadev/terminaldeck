@@ -690,13 +690,41 @@ final class CopilotOnServerTests: XCTestCase {
         let desktop = CopilotControl.panels(Self.desktopControls)
 
         XCTAssertEqual(server, [.whenYouOpen, .agent, .session, .devices, .about])
-        XCTAssertEqual(desktop, [.whenYouOpen, .permissions, .run, .history, .devices, .about])
+        XCTAssertEqual(desktop, [.whenYouOpen, .permissions, .run, .history, .whileItWorks, .devices, .about])
 
         XCTAssertFalse(server.contains(.permissions),
                        "a server has no copilot grant to show; it has no copilot")
+        XCTAssertFalse(server.contains(.whileItWorks),
+                       "a headless server has no screen to drive, so the scan switch changes "
+                       + "nothing anybody could see")
         XCTAssertFalse(desktop.contains(.agent),
                        "agents.defaultProvider decides what a session runs, not what the "
                        + "desktop's own copilot is")
+    }
+
+    /**
+     * **"While it works" is drawn only where it can act — a desktop this phone
+     * may alter.**
+     *
+     * The switch writes `copilot.interactive`, an `alter` frame, and it moves a
+     * *screen* — so a watching phone (no `alter`) and a headless server (no
+     * screen) both get no switch, for two different reasons that arrive at the
+     * same row not being there. A `read`/`act` phone that drew it could only ever
+     * be refused, which is the dead control this whole screen refuses.
+     */
+    func testTheScanSwitchIsDrawnOnlyWhereItCanAct() {
+        let full = CopilotControl.panels(Self.desktopControls)
+        XCTAssertTrue(full.contains(.whileItWorks), "a desktop this phone may alter gets the switch")
+
+        let watching = CopilotControl.panels(CopilotControl.Reading(
+            kind: .desktop, access: .watch, grant: CopilotGrant(read: true, act: false, alter: false)))
+        XCTAssertFalse(watching.contains(.whileItWorks),
+                       "a phone that may not alter cannot move it, so it is not drawn")
+
+        let acting = CopilotControl.panels(CopilotControl.Reading(
+            kind: .desktop, access: .direct, grant: CopilotGrant(read: true, act: true, alter: false)))
+        XCTAssertFalse(acting.contains(.whileItWorks),
+                       "act is not alter — writing a machine setting is the alter tier")
     }
 
     /**

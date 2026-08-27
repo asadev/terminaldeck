@@ -161,6 +161,14 @@ export interface CopilotDeskReport {
    */
   available: boolean
   reason: string | null
+  /**
+   * Whether driving mode shows its scan on this machine's screen —
+   * `copilot.interactive`, resolved to the boolean the desktop's own switch
+   * resolves it to (anything but an explicit off is on). Read here so one state
+   * frame answers *"is the scan visible on that machine"* for a paired device,
+   * the same as it answers whether the copilot is up.
+   */
+  interactive: boolean
 }
 
 /** A chat push from a run's transcript. Parsed messages, never terminal bytes. */
@@ -253,6 +261,16 @@ export interface CopilotRunDeps {
   desk(): CopilotDeskReport
   /** How many tools the copilot has and what they cost it every turn. */
   cost(): { tools: number; turnTokens: number }
+  /**
+   * Set whether driving mode shows its scan on this machine's screen —
+   * `copilot.interactive`, the machine setting behind the desktop's own switch.
+   *
+   * A write of its own rather than a return off `desk()`, because the two are
+   * opposite directions of one fact: the read is a state field every frame
+   * carries, the write is an `alter` frame a device sends deliberately, and
+   * folding them into one dep is how a read comes to have a side effect.
+   */
+  setInteractive(on: boolean): void
   /** The sessions the copilot started, each linked back to the turn that made it. */
   sessions(): CopilotSessionRow[]
   /** The tail of `actions.jsonl`, already scrubbed. */
@@ -430,11 +448,31 @@ export class CopilotRuns implements CopilotRemote {
       grant: this.granted(deviceId),
       available: desk.available && endpoint !== null,
       reason: desk.available && endpoint !== null ? null : (unavailable ?? null),
+      // Off the same `desk()` read, not a second call: the visibility of the
+      // scan is a fact about the machine, decided by the same module that owns
+      // the copilot's lifecycle, so this frame reports it rather than deriving
+      // it.
+      interactive: desk.interactive,
     }
   }
 
   sessions(): CopilotSessionRow[] {
     return this.deps.sessions()
+  }
+
+  /**
+   * Set whether driving mode shows its scan on this machine's screen.
+   *
+   * A pass-through to the dep, and deliberately no more than that: the tier is
+   * checked at the transport (`copilot.interactive` is `alter` in
+   * `COPILOT_FRAME_TIER`, read against this device's grant before this is
+   * reached), and the setting itself is owned by the store the dep writes. This
+   * method's only job is to be the one place a `copilot.interactive` frame turns
+   * into that write, so the run manager stays the single door every copilot verb
+   * a phone sends goes through.
+   */
+  setInteractive(on: boolean): void {
+    this.deps.setInteractive(on)
   }
 
   /**

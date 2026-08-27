@@ -56,6 +56,22 @@ class CopilotWireTest {
     }
 
     @Test
+    fun `the visibility toggle carries its decision either way`() {
+        // Only a literal boolean is read over there — a `false` that travelled as
+        // an absence would be a toggle one lenient reader away from meaning the
+        // opposite, so `encodeDefaults = false` dropping it would be a bug. `on`
+        // carries no default for exactly that reason.
+        assertEquals(
+            """{"t":"copilot.interactive","on":true}""",
+            ClientFrames.encode(ClientMessage.CopilotSetInteractive(true)),
+        )
+        assertEquals(
+            """{"t":"copilot.interactive","on":false}""",
+            ClientFrames.encode(ClientMessage.CopilotSetInteractive(false)),
+        )
+    }
+
+    @Test
     fun `the log pages backwards by row id rather than by index`() {
         assertEquals("""{"t":"copilot.log"}""", ClientFrames.encode(ClientMessage.CopilotLog()))
         assertEquals(

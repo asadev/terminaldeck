@@ -328,6 +328,7 @@ function fakeCopilot(kinds: DeviceKinds): FakeCopilot {
     grant: access.granted(deviceId),
     available: true,
     reason: null,
+    interactive: true,
   })
 
   return {
@@ -342,6 +343,7 @@ function fakeCopilot(kinds: DeviceKinds): FakeCopilot {
     },
     closed: () => {},
     state: report,
+    setInteractive: () => {},
     sessions: () => [],
     log: () => ({ rows: [], more: false }),
     pending: () => [],

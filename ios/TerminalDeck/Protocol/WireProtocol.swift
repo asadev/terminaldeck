@@ -1332,6 +1332,17 @@ enum ClientMessage: Equatable {
     /// runs are keyed by device, and a phone that could stop the run somebody is
     /// working in would be a phone holding a power its grant does not name.
     case copilotStop
+    /**
+     * Turn driving mode's on-screen scan on or off. **Tier: alter.**
+     *
+     * The machine's own `copilot.interactive` setting — the desktop's *"show me
+     * what it is looking at"* switch — set from a paired device. `alter`, and it
+     * carries one boolean and names nothing else: a strictly smaller reach than
+     * `copilotFileWrite` beside it, which hands the copilot's whole instruction
+     * file over the same gate. So the property this file's header defends is
+     * untouched — a device says on or off, it does not compose a call.
+     */
+    case copilotSetInteractive(on: Bool)
 
     /* ---- capability `copilot.files`. Its instructions, its memory, its
        contract — the desktop's "Its files" card, over the wire. ------------- */

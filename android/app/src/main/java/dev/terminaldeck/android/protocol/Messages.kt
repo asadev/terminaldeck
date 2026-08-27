@@ -839,6 +839,25 @@ sealed interface ClientMessage {
     data object CopilotStop : ClientMessage
 
     /**
+     * Turn driving mode's on-screen scan on or off — the machine's own
+     * `copilot.interactive` setting, exactly what the desktop's *"show me what it
+     * is looking at"* switch writes.
+     *
+     * The `alter` tier, and it names nothing: one boolean, changing one machine
+     * setting — a strictly smaller reach than [CopilotFileWrite] at the same tier
+     * and gate, which hands the copilot's whole instruction file across. So the
+     * property this file's header guards is untouched: a device says on or off,
+     * it does not compose a call.
+     *
+     * [on] carries no default, for the reason [CopilotAnswer]'s `approved` does:
+     * only a literal boolean is read over there, and a toggle that travelled as
+     * an absence would be one lenient reader away from meaning the opposite.
+     */
+    @Serializable
+    @SerialName("copilot.interactive")
+    data class CopilotSetInteractive(val on: Boolean) : ClientMessage
+
+    /**
      * Answer a confirmation.
      *
      * The `alter` tier, and refused unless this connection owns the run that raised the question.
