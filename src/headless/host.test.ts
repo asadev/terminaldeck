@@ -26,9 +26,11 @@ import {
   PROTOCOL_VERSION,
   serialize,
   type ClientMessage,
+  type GitHubHostWire,
   type RemoteSession,
   type ServerMessage,
 } from '../main/remote/protocol'
+import type { GitHubHostAccess } from '../main/remote/host-github'
 import { store } from '../main/store'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
@@ -874,6 +876,81 @@ describe('the machine’s own browser, and the panels a phone reaches on this ho
     const source = readFileSync(join(__dirname, 'host.ts'), 'utf8')
     expect(source).toMatch(/const machineBrowser = options\.publicHost\s*\n?\s*\? null/)
     expect(source).toMatch(/const toolStore = options\.publicHost \? null :/)
+  })
+
+  /**
+   * GitHub, on a headless server, reached from the phone's server page.
+   *
+   * The same switch as `browser.control` above, and it earns its own test for
+   * the same reason: `server.ts` decides whether to advertise `github` by asking
+   * whether a `hostGitHub` object was **passed** — and `capabilitiesFor` then
+   * narrows it to the owner's own devices. A headless server passes one now: the
+   * single `GitHubAuthenticator` `host-core` builds for every shell, folded to
+   * the wire by `createGitHubHostAccess`. Asad, 2026-08-27: *"for headless also
+   * we give the option to connect GitHub there."* Before this the owner's own
+   * phone was sent the guest shape — no `github` key, no connect card — and the
+   * server had no way to sign in at all. Unlike the copilot there is no assembly
+   * to build; the phone-facing object exists already, so handing it over is the
+   * whole of the wiring and these tests pin the switch and the owner-only gate.
+   */
+  const signedOutGitHub: GitHubHostWire = {
+    connected: false,
+    login: null,
+    name: null,
+    avatarUrl: null,
+    source: null,
+    appConfigured: true,
+    installUrl: null,
+    pending: null,
+    failure: null,
+    disconnect: null,
+  }
+
+  /** A `hostGitHub` whose only job in a welcome test is to exist and answer a read. */
+  function fakeHostGitHub(): GitHubHostAccess {
+    return {
+      read: async () => signedOutGitHub,
+      connect: async () => signedOutGitHub,
+      cancel: async () => signedOutGitHub,
+      disconnect: async () => signedOutGitHub,
+      // The endpoint subscribes on start to turn a background sign-in into a
+      // `github.changed` push; the unsubscribe is all this test needs back.
+      onChanged: () => () => {},
+      emitChanged: () => {},
+    }
+  }
+
+  it('offers github to the owner exactly when a host GitHub login was passed', async () => {
+    const nothing = await welcomeFrom({})
+    expect(nothing.t === 'welcome' && nothing.capabilities).not.toContain('github')
+
+    const wired = await welcomeFrom({ hostGitHub: fakeHostGitHub() })
+    expect(wired.t === 'welcome' && wired.capabilities).toContain('github')
+  })
+
+  it('never welcomes github to a guest, even when the host manages a login', async () => {
+    /*
+     * His rule, preserved: whose GitHub the machine signs into is the owner's to
+     * set, so `capabilitiesFor` strips the capability before the welcome is even
+     * sent — a guest who could press Connect could point the machine's git at
+     * their own account. `githubServe` refuses the verb as the second door; this
+     * is the first, the one that keeps the card off a guest's screen at all.
+     */
+    const guest = await welcomeFrom({ hostGitHub: fakeHostGitHub(), ownDevice: () => false })
+    expect(guest.t === 'welcome' && guest.capabilities).not.toContain('github')
+  })
+
+  it('hands the host’s own GitHub login to the wire, dropped only on the public box', () => {
+    /*
+     * Presence is the switch, so the spread is the feature — the same source
+     * check the browser and Store panels get, and for the same reason: this is a
+     * member of an options object, so a rename or a deletion compiles perfectly
+     * and takes the whole feature with it in silence, and `createHeadlessHost`
+     * does not hand its endpoint back for a harness to observe. Guarded by
+     * `options.publicHost`: a box strangers share signs into nobody's GitHub.
+     */
+    const source = readFileSync(join(__dirname, 'host.ts'), 'utf8')
+    expect(source).toMatch(/\.\.\.\(options\.publicHost \? \{\} : \{ hostGitHub: core\.hostGitHub \}\)/)
   })
 
   it('answers a panel over the wire with the catalogue this host can reach', async () => {

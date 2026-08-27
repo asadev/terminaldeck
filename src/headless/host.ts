@@ -1090,9 +1090,23 @@ export async function createHeadlessHost(
     serverSettings: core.serverSettings,
     // The machine's own GitHub login, served over the wire — which on a headless
     // server is the *only* way it gets connected, there being no panel here.
-    // Asad, 2026-08-27: "for headless also we give the option to connect GitHub
-    // there." Dropped on a public demo host below, the same as `credentials`: a
-    // box strangers share signs into nobody's GitHub.
+    //
+    // GitHub is the host's, reachable from the phone's server page — on a
+    // headless server too, because the server has no screen; the phone is where
+    // you connect it. Asad, 2026-08-27: "for headless also we give the option to
+    // connect GitHub there." This is the reversal of "a server has no GitHub":
+    // `host-core` already builds the whole phone-facing object (`hostGitHub`, the
+    // one `GitHubAuthenticator` a desktop and a server share), so unlike the
+    // copilot there is no assembly to write here — handing it to
+    // `registerRemoteIpc` is the switch. Presence advertises the `github`
+    // capability (`server.ts`), and `capabilitiesFor` narrows it to the owner's
+    // own devices, so a guest is never welcomed it and `githubServe` refuses
+    // every `github.*` verb from one. `ConnectGitHubView`/`ConnectGitHubSection`
+    // are wire-driven and already mounted on the server page, so nothing on the
+    // phone changes: advertise it and the card appears.
+    //
+    // Dropped on a public demo host below, the same as `credentials`: a box
+    // strangers share signs into nobody's GitHub.
     ...(options.publicHost ? {} : { hostGitHub: core.hostGitHub }),
     folders: core.grants,
     /*
