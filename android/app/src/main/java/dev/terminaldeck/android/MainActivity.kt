@@ -37,6 +37,9 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -572,6 +575,30 @@ fun TerminalDeckApp(
     // The front-door lock, read here so the overlay at the bottom of this Box can watch it. This is
     // the process-wide instance MainActivity primed and wired; a @Preview gets a coherent off default.
     val lock = appLock()
+
+    /*
+     * Whether the app is on screen, told to the alert gate.
+     *
+     * `ON_START`/`ON_STOP` is the bracket that means "visible to him", the same one iOS reads off
+     * `.active`/`.background` — not `ON_RESUME`/`ON_PAUSE`, which a passing dialog or the recents
+     * overview would flip and, mid-agent, turn every settle into a banner. This is the second of the
+     * three conditions for a notification: *"I am outside of the application."* Off screen it must
+     * stay quiet-proof — a session that needs him with the phone in a pocket is the whole point — so
+     * `ON_STOP` frees the gate to post.
+     */
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_START -> viewModel.enteredForeground()
+                Lifecycle.Event.ON_STOP -> viewModel.leftForeground()
+                else -> {}
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     /**
      * Whether the GitHub sheet is up.
      *
@@ -1764,7 +1791,14 @@ private fun TerminalRoute(
         val liveSession = known.id
         DisposableEffect(hostId, liveSession) {
             val claim = viewModel.followControls(hostId, liveSession)
-            onDispose { viewModel.releaseSession(hostId, claim) }
+            // The same lifetime tells the alert gate this session is the one on screen, so it does
+            // not buzz him about the terminal he is reading — and, on the way out, that he has just
+            // left it, which starts the grace that keeps the settle verdict from arriving as news.
+            viewModel.watchingSession(hostId, liveSession)
+            onDispose {
+                viewModel.releaseSession(hostId, claim)
+                viewModel.stoppedWatchingSession(hostId, liveSession)
+            }
         }
         var controlsOpen by remember(liveSession) { mutableStateOf(false) }
 

@@ -59,6 +59,7 @@ import dev.terminaldeck.android.transfer.UploadView
 import dev.terminaldeck.android.transfer.shellQuoted
 import dev.terminaldeck.android.transport.DeckTransport
 import dev.terminaldeck.android.transport.Heartbeat
+import dev.terminaldeck.android.alerts.AlertGate
 import dev.terminaldeck.android.alerts.AlertReason
 import dev.terminaldeck.android.alerts.AwayReport
 import dev.terminaldeck.android.alerts.SessionAlert
@@ -184,6 +185,17 @@ class DeckViewModel(
      */
     private val raiseAlert: (SessionAlert) -> Unit = {},
     /**
+     * Whether the person has left this *kind* of alert switched on.
+     *
+     * A seam for the same reason [raiseAlert] is one: the answer lives in `AlertSettings`, which
+     * reads a `SharedPreferences` off a `Context` this deliberately Android-free class does not
+     * hold. [factory] wires the real read; the default says yes to everything, which is what a test
+     * wants and is also the honest default the switches themselves carry. It is consulted here — not
+     * only at the point of posting — so the "while you were away" line counts only what a banner
+     * would actually have said, the way iOS filters it in the model.
+     */
+    private val wants: (SessionAlert.Kind) -> Boolean = { true },
+    /**
      * Everything that reaches a **bare server** over this phone's own SSH connection: the login,
      * the check, the install, the start, and what a connect would spend.
      *
@@ -222,6 +234,16 @@ class DeckViewModel(
      * list that arrived on the new connection and announce nothing.
      */
     private val alerts = SessionAlerts()
+
+    /**
+     * Where he is looking, and so whether an alert [SessionAlerts] raised is worth a banner *now*.
+     *
+     * The half this client was missing: [SessionAlerts] answered "is this worth telling him about"
+     * and nothing answered "is he already looking at it". Fed from the scene's foreground and from
+     * the terminal screen coming and going — see [enteredForeground], [watchingSession] — and read
+     * in [noteAlerts]. Its rule and its tests are in [dev.terminaldeck.android.alerts.AlertGate].
+     */
+    private val alertGate = AlertGate()
 
     /**
      * The one line the session list shows after the app has been away, or null.
@@ -534,20 +556,71 @@ class DeckViewModel(
      * Hand this machine's session list to the detector, and do whatever its answer deserves.
      *
      * A **live** change is raised on the phone: a session stopping and asking for an answer is the
-     * reason this app is on a phone at all. A **catch-up** is not, and that is the judgement rather
-     * than an optimisation — a reconnect that lands while somebody is looking at the list is them
-     * watching it refill, and interrupting that with four banners is worse than a line of text.
+     * reason this app is on a phone at all. A **catch-up** that lands while he is *looking* is a
+     * line of text instead — a reconnect he is watching refill, where four banners are worse than a
+     * sentence — but a catch-up while the app is *away* still posts, because then a banner is the
+     * only way he will hear. Both are also weighed against the two switches and against where he is
+     * looking; the body says how.
      *
      * Both paths cost nothing over a machine that changed nothing: the detector answers with an
      * empty list and the away line is left exactly as it was.
      */
     private fun noteAlerts(link: HostLink, reason: AlertReason) {
         val raised = alerts.observe(link.hostId, link.label, link.sessions)
-        if (raised.isEmpty()) return
-        when (reason) {
-            AlertReason.Live -> for (alert in raised) raiseAlert(alert)
-            AlertReason.CatchUp -> awayReport = AwayReport.sentence(raised)
+        /*
+         * Two filters before anything is said, and both are the fix for *"for every single move it
+         * is giving a notification"*. The switches decide what is worth saying at all; the gate
+         * drops whatever is about the session on screen — or the one he closed a second ago, whose
+         * settle verdict is only now catching up. One `filter`, so the away line below counts
+         * exactly what a banner would have.
+         */
+        val wanted = raised.filter { wants(it.kind) && !alertGate.isBeingWatched(it) }
+        if (wanted.isEmpty()) return
+
+        /*
+         * A catch-up while the app is *open* is a line of text, not four banners: the reconnect is
+         * him watching the list refill and interrupting that is worse than a sentence. A catch-up
+         * while the app is *away* still posts — then a banner is the only way he will hear, which is
+         * the whole point. A live change always posts. (iOS: `DeckModel.alertsChanged`.)
+         */
+        if (reason == AlertReason.CatchUp && alertGate.isForeground) {
+            awayReport = AwayReport.sentence(wanted)
+            return
         }
+        for (alert in wanted) raiseAlert(alert)
+    }
+
+    /**
+     * The app came to the foreground, or went away.
+     *
+     * Away is the situation the whole feature exists for — the phone in a pocket — so it never
+     * suppresses; foreground is what lets [AlertGate.isBeingWatched] quiet a banner over the screen
+     * he is on. Driven from the scene's `ON_START`/`ON_STOP`, the bracket iOS reads off
+     * `.active`/`.background`.
+     */
+    fun enteredForeground() {
+        alertGate.enteredForeground()
+    }
+
+    fun leftForeground() {
+        alertGate.leftForeground()
+    }
+
+    /**
+     * The terminal for a session came on screen, or went off it.
+     *
+     * Called from the same effect that follows and releases the session's control cluster, because
+     * that effect's lifetime *is* "this session's terminal is up" — the two moments the gate's
+     * answer changes. A session he is standing in must never buzz about itself; one he just left is
+     * given [AlertGate.WATCHED_GRACE_MS] before its changes count as news, because opening a session
+     * makes the desktop reclassify it a beat later. Mirrors iOS `DeckModel.watchingSession`.
+     */
+    fun watchingSession(hostId: String, sessionId: String) {
+        alertGate.watching(hostId, sessionId)
+    }
+
+    fun stoppedWatchingSession(hostId: String, sessionId: String) {
+        alertGate.stoppedWatching(hostId, sessionId)
     }
 
     /** The away line was read. It says what changed *while you were gone*, so it is said once. */
@@ -2256,6 +2329,10 @@ class DeckViewModel(
                         // `AlertCenter` on the permission and on the two switches, so a build whose
                         // permission was refused raises nothing and says nothing about it.
                         raiseAlert = { dev.terminaldeck.android.alerts.AlertCenter.post(application, it) },
+                        // The two switches, read the one place a `Context` is allowed. `post` also
+                        // checks them, so a banner never slips a disabled kind; this read is what
+                        // keeps the away line from counting one.
+                        wants = { dev.terminaldeck.android.alerts.AlertSettings.wants(application, it) },
                     ) { scope, hostId, store ->
                         WebSocketDeckTransport(scope = scope, hostId = hostId, vault = store)
                     }
