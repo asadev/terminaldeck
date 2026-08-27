@@ -10,6 +10,12 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+### The server page — a full control panel for a headless box
+
+- **Two lists: Remote machines and Servers.** A server opens straight to its own page — no more going through a machine's info page to reach it.
+- **Restart, Stop and Start the host, from the server page.** A headless box you cannot reach any other way, managed from your phone — restart it when it is overloaded with tabs or sessions, stop it, start it back up. If it is not running, Restart brings it up.
+- **The copilot and GitHub work on a headless server now, not only the desktop.** The copilot runs on the server with your phone as its screen — chat, its files, its routines, its settings. GitHub connects from the server page. Both were desktop-only before, which left a phone paired to a server with a dead-end; the server has no screen of its own, so the phone is the control surface.
+
 ### Changed
 
 - **GitHub belongs to the machine now, not the phone.** You connect GitHub once,
