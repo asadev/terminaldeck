@@ -5,22 +5,26 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.PointF
 import android.graphics.Rect
 import android.graphics.RectF
 import android.text.InputType
 import android.view.KeyEvent
 import android.view.MotionEvent
+import android.view.ScaleGestureDetector
 import android.view.View
 import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
 import dev.terminaldeck.android.WatchController
+import dev.terminaldeck.android.protocol.PickedRect
 import dev.terminaldeck.android.protocol.ServerMessage
 import dev.terminaldeck.android.protocol.TAP_SLOP_PX
 import dev.terminaldeck.android.protocol.WatchMath
 import java.util.concurrent.Executors
 import kotlin.math.abs
+import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
@@ -42,6 +46,23 @@ import kotlin.math.roundToInt
  *  4. **A masked frame is a curtain, never pixels.** `data` is empty on one, and this draws its own
  *     lock card; a curtain takes no taps.
  *
+ * ## Inspect mode and pinch — the two halves iOS's cast has that this one had not
+ *
+ * The same two the desktop's device toolbar and the phone's own inspector give, ported from
+ * `WatchSurfaceUIView` (`ios/TerminalDeck/Screens/WatchView.swift`) and `MachinePick`:
+ *
+ *  5. **Inspect.** While [inspecting] a tap **names** what is under it instead of pressing it — the
+ *     point becomes document coordinates and goes over the wire as `browser.window.pick`, and nothing
+ *     is clicked, exactly as `InspectScript` cancels the click on the page this phone holds. The
+ *     element the machine answers with is drawn back over the frame as an outline that follows the
+ *     page as it scrolls, because [PickedRect] is in the document's own coordinates.
+ *  6. **Pinch.** A [zoom] of the *picture*, never a page zoom — the page's zoom is ctrl-and-wheel and
+ *     there is no modifier on this wire to carry the ctrl. Magnified, a one-finger drag pans the
+ *     picture and what is left when it reaches an edge becomes the wheel, so a zoomed page is not a
+ *     dead end. On release the cast is renegotiated at `viewWidth × zoom`, so the larger drawing is
+ *     made of real pixels rather than enlarged ones — one `browser.watch` on release, never one per
+ *     frame of the pinch.
+ *
  * ## Where a tap lands when the aspect ratios differ
  *
  * The bitmap is drawn to fit, centred, so a frame whose shape does not match the view is letterboxed
@@ -55,6 +76,10 @@ class WatchSurfaceView(
     private val watch: WatchController,
     /** The surface being shown: `""` for the front tab, else a slot name. */
     private val target: String,
+    /** The colour the inspect outline is drawn in, as an ARGB int — the app's accent, handed down
+     *  from the composable because a plain [View] has no Compose theme to read it from. Zero when the
+     *  caller does not use inspect (the session overlay), in which case nothing is ever drawn with it. */
+    private val outlineColor: Int = 0,
 ) : View(context) {
 
     private val paint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
@@ -97,6 +122,99 @@ class WatchSurfaceView(
     private var startY = 0f
     private var lastX = 0f
     private var lastY = 0f
+
+    /* --------------------------------------------------------------- inspect (5) -- */
+
+    /**
+     * Whether a tap on this surface **names** what is under it instead of pressing it.
+     *
+     * Set from the screen above through the `AndroidView` update. False for the session overlay, which
+     * never turns it on, so that surface is unchanged. When it flips off the drawn outline is cleared
+     * with it — an outline left over would name something nobody is asking about any more.
+     */
+    var inspecting: Boolean = false
+        set(value) {
+            if (field == value) return
+            field = value
+            if (!value) pickedRect = null
+            invalidate()
+        }
+
+    /** Where an inspect tap goes: the point in the page's **own** document coordinates, ready for
+     *  `browser.window.pick`. Null when nobody is listening (the overlay). */
+    var onPick: ((Double, Double) -> Unit)? = null
+
+    /** The element the machine last described, to draw over the frame — document coordinates, so it
+     *  follows the page as it scrolls. Held via a setter so the composable can push a new answer in. */
+    private var pickedRect: PickedRect? = null
+
+    /** Push the element to outline, or null to clear it. Called from the screen's `AndroidView` update
+     *  as the machine answers `browser.window.pick`. */
+    fun setPicked(rect: PickedRect?) {
+        if (pickedRect == rect) return
+        pickedRect = rect
+        invalidate()
+    }
+
+    private val outlineStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 3f
+        color = outlineColor
+    }
+    private val outlineFill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        // The accent at a low alpha — the same tinted wash iOS fills a picked element with. The rgb is
+        // the accent handed in; only the alpha is set here.
+        color = (outlineColor and 0x00FFFFFF) or (0x24 shl 24)
+    }
+
+    /* ------------------------------------------------------------------ pinch (6) -- */
+
+    /** The viewer's magnification of the received picture — never a page zoom. 1 is life size. */
+    private var zoom = 1f
+
+    /** How far the magnified picture has been dragged from where a centred fit puts it, in view px.
+     *  Clamped in [fit] so the picture can never be dragged off the view. */
+    private var panX = 0f
+    private var panY = 0f
+
+    private val scaleDetector = ScaleGestureDetector(
+        context,
+        object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            override fun onScaleBegin(detector: ScaleGestureDetector): Boolean {
+                // A pinch is starting, so whatever one finger had begun is neither a tap nor a scroll.
+                gesture = Gesture.NONE
+                return true
+            }
+
+            override fun onScale(detector: ScaleGestureDetector): Boolean {
+                val image = bitmap ?: return false
+                val next = (zoom * detector.scaleFactor).coerceIn(1f, MAX_ZOOM)
+                if (next == zoom) return true
+                // Anchor the zoom under the fingers: the image point beneath the focus stays beneath
+                // it, so a pinch magnifies what is being looked at rather than the centre of the view.
+                val ratio = next / zoom
+                val newLeft = detector.focusX - (detector.focusX - drawn.left) * ratio
+                val newTop = detector.focusY - (detector.focusY - drawn.top) * ratio
+                val base = min(width.toFloat() / image.width, height.toFloat() / image.height)
+                val newW = image.width * base * next
+                val newH = image.height * base * next
+                // Store the pan as an offset from the centred position for the new zoom; [fit] clamps
+                // it on the next draw so an anchor near an edge cannot pull the picture off the view.
+                panX = newLeft - (width - newW) / 2f
+                panY = newTop - (height - newH) / 2f
+                zoom = next
+                invalidate()
+                return true
+            }
+
+            override fun onScaleEnd(detector: ScaleGestureDetector) {
+                // Ask for a sharper picture now the pinch has settled — one renegotiation on release,
+                // never one per frame of the gesture, because `browser.watch` restarts the screencast.
+                startWatching()
+            }
+        },
+    )
 
     init {
         setBackgroundColor(CURTAIN_PAPER)
@@ -228,10 +346,14 @@ class WatchSurfaceView(
 
     private fun startWatching() {
         if (width <= 0) return
-        val asked = WatchMath.watchWidth(width)
+        // Magnification included: a picture drawn at `zoom` wants that many more real pixels behind it,
+        // so the host is asked to render wider. `watchWidth` clamps into the host's range, and the
+        // clamped result is what is compared, so a pinch past the ceiling renegotiates only once.
+        val wanted = (width * zoom).roundToInt()
+        val asked = WatchMath.watchWidth(wanted)
         if (asked == requestedWidth) return
         requestedWidth = asked
-        watch.watch(target, width)
+        watch.watch(target, wanted)
     }
 
     /**
@@ -315,6 +437,7 @@ class WatchSurfaceView(
             fit(image.width, image.height)
             source.set(0, 0, image.width, image.height)
             canvas.drawBitmap(image, source, drawn, paint)
+            drawPicked(canvas, image)
         } else {
             curtainText?.let { prompt ->
                 // A lock card, drawn rather than composed, because the pixels of the page are not
@@ -341,18 +464,54 @@ class WatchSurfaceView(
         }
     }
 
-    /** The rectangle the image is drawn into: fit, centred, never stretched. */
+    /** The rectangle the image is drawn into: fit, centred, never stretched — then the pinch on top. */
     private fun fit(imageW: Int, imageH: Int) {
         if (imageW <= 0 || imageH <= 0 || width <= 0 || height <= 0) {
             drawn.set(0f, 0f, width.toFloat(), height.toFloat())
             return
         }
-        val scale = min(width.toFloat() / imageW, height.toFloat() / imageH)
-        val w = imageW * scale
-        val h = imageH * scale
-        val left = (width - w) / 2f
-        val top = (height - h) / 2f
+        val base = min(width.toFloat() / imageW, height.toFloat() / imageH)
+        val w = imageW * base * zoom
+        val h = imageH * base * zoom
+        // The pan is clamped so a magnified picture can be dragged only until an edge meets the view's,
+        // and a picture no larger than the view cannot be dragged at all. Written back, so the clamp a
+        // draw applies is the one the next gesture reads.
+        val maxX = max(0f, (w - width) / 2f)
+        val maxY = max(0f, (h - height) / 2f)
+        panX = panX.coerceIn(-maxX, maxX)
+        panY = panY.coerceIn(-maxY, maxY)
+        val left = (width - w) / 2f + panX
+        val top = (height - h) / 2f + panY
         drawn.set(left, top, left + w, top + h)
+    }
+
+    /**
+     * The picked element, outlined over the current frame.
+     *
+     * [PickedRect] is in the document's own coordinates, so it is converted through the frame on
+     * screen **now** — that frame's scale and its live scroll — rather than the frame the pick was
+     * taken against. That is the whole reason the outline stays on the thing it names while the page
+     * moves under it: the conversion is the exact inverse of the point an inspect tap sends.
+     */
+    private fun drawPicked(canvas: Canvas, image: Bitmap) {
+        if (!inspecting || outlineColor == 0) return
+        val rect = pickedRect ?: return
+        val frame = lastFrame ?: return
+        if (frame.masked) return
+        val s = (if (frame.scale > 0.0) frame.scale else 1.0) *
+            (if (frame.pageScale > 0.0) frame.pageScale else 1.0)
+        // Document coordinates -> image pixels: undo the frame's scroll, then its scale.
+        val imgX = (rect.x - frame.scrollX) * s
+        val imgY = (rect.y - frame.scrollY) * s
+        // Image pixels -> view: the rectangle the bitmap was drawn into already carries zoom and pan.
+        val kx = drawn.width().toDouble() / image.width
+        val ky = drawn.height().toDouble() / image.height
+        val left = (drawn.left + imgX * kx).toFloat()
+        val top = (drawn.top + imgY * ky).toFloat()
+        val right = (left + rect.w * s * kx).toFloat()
+        val bottom = (top + rect.h * s * ky).toFloat()
+        canvas.drawRoundRect(left, top, right, bottom, PICK_RADIUS, PICK_RADIUS, outlineFill)
+        canvas.drawRoundRect(left, top, right, bottom, PICK_RADIUS, PICK_RADIUS, outlineStroke)
     }
 
     private fun wrap(text: String, paint: Paint, maxWidth: Float): List<String> {
@@ -377,6 +536,13 @@ class WatchSurfaceView(
     override fun onTouchEvent(event: MotionEvent): Boolean {
         val frame = lastFrame
         if (frame == null || frame.masked) return false
+        // The pinch runs first, and while two fingers are settling it owns the touch — a single-finger
+        // reading of the same gesture would fight it.
+        scaleDetector.onTouchEvent(event)
+        if (scaleDetector.isInProgress) {
+            gesture = Gesture.NONE
+            return true
+        }
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 startX = event.x
@@ -389,20 +555,42 @@ class WatchSurfaceView(
                 return true
             }
 
+            MotionEvent.ACTION_POINTER_DOWN -> {
+                // A second finger arrived: the pinch is about to take over, so the tap this one had
+                // pending is cancelled. Nothing is sent — a two-finger touch was never a click.
+                gesture = Gesture.NONE
+                return true
+            }
+
+            MotionEvent.ACTION_POINTER_UP -> {
+                // A finger left a multi-touch. Re-seat the running point on whichever remains, or the
+                // next move would jump by the whole gap between the two fingers.
+                val rest = if (event.actionIndex == 0) 1 else 0
+                lastX = event.getX(rest)
+                lastY = event.getY(rest)
+                return true
+            }
+
             MotionEvent.ACTION_MOVE -> {
-                if (gesture == Gesture.NONE) return false
+                if (gesture == Gesture.NONE) return true
                 if (gesture == Gesture.PENDING &&
                     abs(event.x - startX) < TAP_SLOP_PX && abs(event.y - startY) < TAP_SLOP_PX
                 ) {
                     return true
                 }
                 gesture = Gesture.SCROLL
-                val at = locate(frame, event.x, event.y) ?: return true
-                val scaleX = frame.w.toDouble() / drawn.width().coerceAtLeast(1f)
-                val scaleY = frame.h.toDouble() / drawn.height().coerceAtLeast(1f)
-                val dx = ((event.x - lastX) * scaleX).roundToInt()
-                val dy = ((event.y - lastY) * scaleY).roundToInt()
-                if (dx != 0 || dy != 0) watch.scroll(target, frame.seq, at.first, at.second, dx, dy)
+                // Pan the magnified picture first; what is left when it reaches an edge becomes the
+                // wheel the page scrolls on. At 1× there is nothing to pan, so the whole movement is
+                // leftover and this is byte-for-byte the old scroll.
+                val leftover = panBy(event.x - lastX, event.y - lastY)
+                val at = locate(frame, event.x, event.y)
+                if (at != null) {
+                    val scaleX = frame.w.toDouble() / drawn.width().coerceAtLeast(1f)
+                    val scaleY = frame.h.toDouble() / drawn.height().coerceAtLeast(1f)
+                    val dx = (leftover.x * scaleX).roundToInt()
+                    val dy = (leftover.y * scaleY).roundToInt()
+                    if (dx != 0 || dy != 0) watch.scroll(target, frame.seq, at.first, at.second, dx, dy)
+                }
                 lastX = event.x
                 lastY = event.y
                 return true
@@ -413,14 +601,24 @@ class WatchSurfaceView(
                 gesture = Gesture.NONE
                 if (!wasPending) return true
                 val at = locate(frame, event.x, event.y) ?: return true
-                // A touch that never travelled: a tap, synthesised as a click so a page with no
-                // touch handlers still responds.
-                watch.tap(target, frame.seq, at.first, at.second)
-                // And the keyboard comes up — a tap on a field is how a person asks to type into it,
-                // exactly as it is in any browser. It rises whatever was tapped, because this side
-                // cannot know a field from a heading, and a keyboard raised over a heading is a swipe
-                // away; a field that could not raise one would be a field that cannot be filled.
-                showKeyboard()
+                if (inspecting) {
+                    // A touch that never travelled, in inspect mode: it *names* what is under it
+                    // instead of pressing it. The point becomes document coordinates and goes over as a
+                    // question; no click follows, and no keyboard — a tap that both described a link
+                    // and followed it would navigate away from the thing it had just described.
+                    val (docX, docY) = documentPoint(frame, at.first, at.second)
+                    onPick?.invoke(docX, docY)
+                } else {
+                    // A touch that never travelled: a tap, synthesised as a click so a page with no
+                    // touch handlers still responds.
+                    watch.tap(target, frame.seq, at.first, at.second)
+                    // And the keyboard comes up — a tap on a field is how a person asks to type into
+                    // it, exactly as it is in any browser. It rises whatever was tapped, because this
+                    // side cannot know a field from a heading, and a keyboard raised over a heading is
+                    // a swipe away; a field that could not raise one would be a field that cannot be
+                    // filled.
+                    showKeyboard()
+                }
                 performClick()
                 return true
             }
@@ -431,6 +629,49 @@ class WatchSurfaceView(
             }
         }
         return super.onTouchEvent(event)
+    }
+
+    /**
+     * Move the magnified picture, and return the part of the movement it could not take.
+     *
+     * At 1× there is nothing to pan — the picture is fitted to the view — so the whole delta comes
+     * back as leftover and becomes a wheel, which is exactly the old scroll. Magnified, the picture
+     * moves until an edge and only the overspill becomes the wheel, the way a scroll view inside a
+     * scroll view behaves.
+     */
+    private fun panBy(dx: Float, dy: Float): PointF {
+        val image = bitmap ?: return PointF(dx, dy)
+        val base = min(width.toFloat() / image.width, height.toFloat() / image.height)
+        val w = image.width * base * zoom
+        val h = image.height * base * zoom
+        val maxX = max(0f, (w - width) / 2f)
+        val maxY = max(0f, (h - height) / 2f)
+        val newX = (panX + dx).coerceIn(-maxX, maxX)
+        val newY = (panY + dy).coerceIn(-maxY, maxY)
+        val leftover = PointF(dx - (newX - panX), dy - (newY - panY))
+        if (newX != panX || newY != panY) {
+            panX = newX
+            panY = newY
+            invalidate()
+        }
+        return leftover
+    }
+
+    /**
+     * An image pixel of a frame -> a point on the page's own **document**.
+     *
+     * The twin of iOS's `MachinePick.documentPoint`: undo the frame's scale and page scale, then add
+     * its scroll — the step a click deliberately omits, because CDP mouse coordinates are viewport
+     * ones and a click never wants the scroll back, where a pick always does. Both divisors fall back
+     * to 1 on a nonsense frame, so a frame whose geometry could not be read puts the tap somewhere on
+     * the page rather than at infinity, which the host's parser refuses as a pick with no point.
+     */
+    private fun documentPoint(frame: ServerMessage.BrowserFrame, imageX: Int, imageY: Int): Pair<Double, Double> {
+        val scale = if (frame.scale > 0.0) frame.scale else 1.0
+        val pageScale = if (frame.pageScale > 0.0) frame.pageScale else 1.0
+        val cssX = (imageX.toDouble() / scale) / pageScale
+        val cssY = (imageY.toDouble() / scale) / pageScale
+        return Math.round(cssX + frame.scrollX).toDouble() to Math.round(cssY + frame.scrollY).toDouble()
     }
 
     override fun performClick(): Boolean {
@@ -455,5 +696,12 @@ class WatchSurfaceView(
         /** The PWA's curtain colours (`#e6e8ec` on `#101216`), written out rather than themed. */
         const val CURTAIN_INK = 0xFFE6E8EC.toInt()
         const val CURTAIN_PAPER = 0xFF101216.toInt()
+
+        /** How far a pinch may magnify the picture. Past this the JPEG is enlarged pixels whatever the
+         *  cast is renegotiated to, so there is nothing more to see. */
+        const val MAX_ZOOM = 5f
+
+        /** The corner radius of the inspect outline, in px. */
+        const val PICK_RADIUS = 4f
     }
 }

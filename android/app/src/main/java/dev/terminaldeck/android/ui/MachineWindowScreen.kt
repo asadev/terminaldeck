@@ -20,12 +20,18 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.FiberManualRecord
+import androidx.compose.material.icons.filled.HighlightAlt
+import androidx.compose.material.icons.filled.HourglassEmpty
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.StopCircle
+import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -47,6 +53,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -58,6 +68,7 @@ import dev.terminaldeck.android.MachineBrowserController
 import dev.terminaldeck.android.MachineBrowserView
 import dev.terminaldeck.android.WatchController
 import dev.terminaldeck.android.protocol.BrowserWindowAction
+import dev.terminaldeck.android.protocol.InspectedElement
 import dev.terminaldeck.android.protocol.MachineWindow
 import dev.terminaldeck.android.protocol.RecordedStep
 import dev.terminaldeck.android.protocol.WindowSession
@@ -115,6 +126,34 @@ fun MachineWindowScreen(
     var editing by remember { mutableStateOf(false) }
     var refused by remember { mutableStateOf<String?>(null) }
     var settings by remember { mutableStateOf(false) }
+
+    // Inspect mode: a tap on the picture names what is under it instead of pressing it, exactly as the
+    // page on this phone does — *"all of them should be identical."* The last point is kept so Wider
+    // and Narrower can re-ask about it with a different `up`; there is nothing in the answer to
+    // re-derive a fingertip's position from.
+    var inspecting by remember { mutableStateOf(false) }
+    var lastPick by remember(windowId) { mutableStateOf<Pair<Double, Double>?>(null) }
+    val picked = view.picked[windowId]
+    val asking = view.pickingWindow == windowId
+
+    // The device the machine lays this window's page out at, via `browser.window.size`. This phone's
+    // own size is the default and the way back; a real device is a rectangle in CSS pixels.
+    var device by remember(windowId) { mutableStateOf(PageDevice.ThisPhone) }
+    var sizeMenu by remember { mutableStateOf(false) }
+    val configuration = LocalConfiguration.current
+
+    fun chooseSize(chosen: PageDevice) {
+        device = chosen
+        val width = chosen.width
+        val height = chosen.height
+        if (width != null && height != null) {
+            controller.size(windowId, width, height)
+        } else {
+            // This phone: the window laid out at the phone's own size — the state it started in and the
+            // one *"it should always open to the normal size"* is about.
+            controller.size(windowId, configuration.screenWidthDp, configuration.screenHeightDp)
+        }
+    }
 
     // Seed the field from the page, and follow the page — but never while a thumb is in the field, or
     // a redirect would land its url on top of what is being typed.
@@ -195,6 +234,49 @@ fun MachineWindowScreen(
                     PageVerb(Icons.Filled.Refresh, "Reload", colors.secondary) {
                         controller.act(windowId, BrowserWindowAction.Reload)
                     }
+                    // Inspect — a tap names what is under it instead of pressing it. Accent while it is
+                    // on, so the mode is visible; turning it off forgets the last element.
+                    PageVerb(
+                        Icons.Filled.HighlightAlt,
+                        if (inspecting) "Stop inspecting" else "Inspect an element",
+                        if (inspecting) colors.accent else colors.secondary,
+                    ) {
+                        inspecting = !inspecting
+                        if (!inspecting) controller.clearPicked(windowId)
+                    }
+                    // Size — the device the machine lays the page out at. A menu of real ones, the same
+                    // set the phone's own browser offers, sent as `browser.window.size`.
+                    Box {
+                        PageVerb(Icons.Filled.AspectRatio, "Page size", colors.secondary) { sizeMenu = true }
+                        DropdownMenu(expanded = sizeMenu, onDismissRequest = { sizeMenu = false }) {
+                            PageDevice.entries.forEach { option ->
+                                DropdownMenuItem(
+                                    leadingIcon = {
+                                        Icon(
+                                            if (option == device) Icons.Filled.Check else Icons.Filled.AspectRatio,
+                                            contentDescription = null,
+                                            tint = if (option == device) colors.accent else colors.faint,
+                                            modifier = Modifier.size(18.dp),
+                                        )
+                                    },
+                                    text = {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                option.label,
+                                                style = DeckType.body,
+                                                color = if (option == device) colors.accent else colors.primary,
+                                            )
+                                            option.measure?.let {
+                                                Spacer(Modifier.width(Space.x2))
+                                                Text(it, style = DeckType.monoSmall, color = colors.faint)
+                                            }
+                                        }
+                                    },
+                                    onClick = { sizeMenu = false; chooseSize(option) },
+                                )
+                            }
+                        }
+                    }
                     // Red, and it closes everywhere: *"Direct close is better, which will also close it
                     // from server side too, not just here."*
                     PageVerb(Icons.Filled.Cancel, "Close window", colors.critical) {
@@ -218,14 +300,35 @@ fun MachineWindowScreen(
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
+            // What inspect mode is waiting for, said once, at the top of the page — the same row and
+            // the same place the page on this phone puts it. The verb differs by one word and it has
+            // to: on a machine window a tap is a question for the machine, and the answer can be *the
+            // page has moved since that picture*, so it says *ask about it* rather than promising one.
+            if (inspecting) {
+                InspectHint(asking)
+            }
             // The live picture — the same canvas the browser tab casts through. A tap drives the page
-            // and raises the keyboard; every keystroke is a `browser.input`.
+            // and raises the keyboard; every keystroke is a `browser.input`. Pinch magnifies it; while
+            // inspecting a tap names what is under it instead.
             Box(modifier = Modifier.fillMaxSize().background(colors.sunken)) {
                 if (live) {
                     var canvas by remember(windowId) { mutableStateOf<WatchSurfaceView?>(null) }
+                    val outline = colors.accent.toArgb()
                     AndroidView(
-                        factory = { ctx -> WatchSurfaceView(ctx, watch, windowId).also { canvas = it } },
+                        factory = { ctx ->
+                            WatchSurfaceView(ctx, watch, windowId, outline).also { canvas = it }
+                        },
                         modifier = Modifier.fillMaxSize(),
+                        update = { surface ->
+                            surface.inspecting = inspecting
+                            surface.onPick = { x, y ->
+                                lastPick = x to y
+                                controller.pick(windowId, x, y)
+                            }
+                            // The element to outline, or nothing when inspect is off — drawn over the
+                            // frame in the page's own coordinates, so it follows the page as it scrolls.
+                            surface.setPicked(if (inspecting) picked?.rect else null)
+                        },
                         onRelease = { it.tearDown() },
                     )
                     DisposableEffect(windowId) { onDispose { canvas?.tearDown() } }
@@ -252,6 +355,190 @@ fun MachineWindowScreen(
             onDismiss = { settings = false },
         )
     }
+
+    // The element the machine described — drawn in the same sheet the page on this phone would use.
+    // Presented off the value: Wider and Narrower change the element on every press, and the list of
+    // windows redrawing under it must not tear the sheet down. Dismissing it forgets the element,
+    // which is what closes it.
+    if (inspecting && picked != null) {
+        InspectedElementSheet(
+            element = picked,
+            asking = asking,
+            onWider = {
+                lastPick?.let { (x, y) ->
+                    // One more ancestor towards the document. Enabled only below the top, so `depth + 1`
+                    // is in range; the controller clamps to the host's ceiling regardless.
+                    if (picked.depth < picked.maxUp) controller.pick(windowId, x, y, picked.depth + 1)
+                }
+            },
+            onNarrower = {
+                lastPick?.let { (x, y) ->
+                    if (picked.depth > 0) controller.pick(windowId, x, y, picked.depth - 1)
+                }
+            },
+            onDismiss = { controller.clearPicked(windowId) },
+        )
+    }
+}
+
+/**
+ * What inspect mode is waiting for, said once above the page.
+ *
+ * The verb differs from the phone's own page by one word and it has to: there a tap is answered in the
+ * same runloop turn, here it is a frame over a wire to a machine and back. A row that went on saying
+ * *tap anything* through that would invite a second tap while the first was still in flight.
+ */
+@Composable
+private fun InspectHint(asking: Boolean) {
+    val colors = DeckTheme.colors
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(colors.surface)
+            .padding(horizontal = Space.x3, vertical = Space.x15),
+    ) {
+        Icon(
+            if (asking) Icons.Filled.HourglassEmpty else Icons.Filled.TouchApp,
+            contentDescription = null,
+            tint = colors.accent,
+            modifier = Modifier.size(16.dp),
+        )
+        Spacer(Modifier.width(Space.x2))
+        Text(
+            text = if (asking) {
+                "Asking the machine what that is…"
+            } else {
+                "Tap anything on the page to ask what it is."
+            },
+            style = DeckType.footnote,
+            color = colors.accent,
+        )
+    }
+}
+
+/**
+ * What was pointed at, and the two words that correct it.
+ *
+ * The same facts the phone's own inspector shows — tag, selector, label, address — because *"all of
+ * them should be identical"* is a sentence about the screen rather than the mechanism. Handing an
+ * element to an agent as one line is `InspectScript` plus the session-send plumbing on the phone's own
+ * page and is not reached from here yet; what this draws is the element itself, copyable, and the walk
+ * up its ancestors that a fingertip with no hover otherwise cannot make.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun InspectedElementSheet(
+    element: InspectedElement,
+    asking: Boolean,
+    onWider: () -> Unit,
+    onNarrower: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val colors = DeckTheme.colors
+    val clipboard = LocalClipboardManager.current
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = colors.background,
+        shape = Radius.sheetShape,
+        dragHandle = null,
+    ) {
+        DeckSheetChrome()
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = Space.screen)
+                .padding(top = Space.x5, bottom = Space.x8),
+        ) {
+            Text("Change this", style = DeckType.title, color = colors.primary)
+
+            // The tag.
+            Spacer(Modifier.padding(top = Space.x3))
+            Text(
+                text = if (element.tag.isEmpty()) "element" else "<${element.tag}>",
+                style = DeckType.monoSmall,
+                color = colors.accent,
+                modifier = Modifier
+                    .clip(Radius.small)
+                    .background(colors.accent.copy(alpha = 0.14f))
+                    .padding(horizontal = Space.x15, vertical = Space.half),
+            )
+
+            // The selector — copyable, because the most useful thing to do with one that is nearly
+            // right is to copy it and fix it by hand.
+            Spacer(Modifier.padding(top = Space.x3))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = element.selector,
+                    style = DeckType.mono,
+                    color = colors.primary,
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(Radius.fieldShape)
+                        .background(colors.surfaceHigh)
+                        .padding(Space.x3),
+                )
+                IconButton(onClick = { clipboard.setText(AnnotatedString(element.selector)) }) {
+                    Icon(Icons.Filled.ContentCopy, contentDescription = "Copy selector", tint = colors.secondary)
+                }
+            }
+
+            if (element.label.isNotEmpty()) {
+                Spacer(Modifier.padding(top = Space.x2))
+                Text(
+                    element.label,
+                    style = DeckType.body,
+                    color = colors.secondary,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+
+            if (element.url.isNotEmpty()) {
+                Spacer(Modifier.padding(top = Space.x1))
+                Text(
+                    element.url,
+                    style = DeckType.mono,
+                    color = colors.faint,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+
+            // The correction — a tap lands on the topmost element, which on a modern site is routinely
+            // a wrapper rather than the button somebody meant. Both ends are read off the element:
+            // `maxUp` is how many ancestors are left above this one, `depth` how far up it already is.
+            Spacer(Modifier.padding(top = Space.x4))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                InspectStep("Wider", enabled = element.depth < element.maxUp && !asking, onClick = onWider)
+                Spacer(Modifier.width(Space.x2))
+                InspectStep("Narrower", enabled = element.depth > 0 && !asking, onClick = onNarrower)
+                Spacer(Modifier.weight(1f))
+                if (asking) {
+                    Text("Asking the machine…", style = DeckType.caption, color = colors.faint)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun InspectStep(label: String, enabled: Boolean, onClick: () -> Unit) {
+    val colors = DeckTheme.colors
+    Text(
+        text = label,
+        style = DeckType.value,
+        color = if (enabled) colors.accent else colors.faint,
+        modifier = Modifier
+            .clip(Radius.fieldShape)
+            .background(colors.surfaceHigh)
+            .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(horizontal = Space.x3, vertical = Space.x2),
+    )
 }
 
 /** The name a window is drawn under: its own title, then its address, then a fallback that is never

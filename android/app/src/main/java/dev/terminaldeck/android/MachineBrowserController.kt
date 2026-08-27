@@ -214,6 +214,19 @@ class MachineBrowserController(
         onChange()
     }
 
+    /**
+     * Forget the last element pointed at in one window — the screen leaving inspect mode, or the sheet
+     * that describes the element being dismissed. The twin of iOS's `clearMachinePick`: an element
+     * left behind is a description of something nobody is asking about any more, and Wider on it would
+     * walk a chain measured against a page that has since scrolled.
+     */
+    fun clearPicked(id: String) {
+        val had = picked.remove(id) != null
+        val wasAsking = pickingWindow == id
+        if (wasAsking) pickingWindow = null
+        if (had || wasAsking) onChange()
+    }
+
     /* ----------------------------------------------------------- profile verbs -- */
 
     /** Switch the machine's browser to a profile — it decides which cookie jar the **next** page opens
