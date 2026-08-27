@@ -141,8 +141,9 @@ object ServerScripts {
      * launcher for the CLI **only**, so the daemon has to be named by its real path with the
      * private runtime on PATH.
      */
-    fun service(command: String): String = listOf(
-        "b=${quote(command)}",
+    fun service(command: String): String = (
+        listOf(
+            "b=${quote(command)}",
         "if grep -q $ID-launcher \"\$b\" 2>/dev/null; then",
         "  rt=\"\$HOME/.$ID/runtime\"",
         "  host=\"\$rt/bin/$ID-host\"",
@@ -183,27 +184,41 @@ object ServerScripts {
         "WantedBy=default.target",
         "UNIT",
         "systemctl --user daemon-reload || exit 1",
-        /*
-         * **`restart` and then a proof, not `enable --now` and a hope.**
-         *
-         * `enable --now` starts a stopped unit — but only if the daemon it runs can take the socket
-         * the instant it is asked, and after `"$b" stop` the process it just killed may still be
-         * releasing its pid lock and its relay slot. On a real WSL box on 2026-08-27 that race lost:
-         * the stop landed, the start did not, and the in-app Update finished having replaced the
-         * files and left the host **down** — while the card said *"is a machine of its own now"*.
-         * That is the bug Asad reported in his own words: *"after updating server app it keeps
-         * reconnecting… server is still connected but not the sessions"* — the host somebody had
-         * been reaching from a phone in another place simply stopped answering, with nothing on
-         * either end saying why.
-         *
-         * So the unit is enabled for next boot, then **restarted** — which from systemd's own view
-         * is stop-if-running-then-start and cannot be raced by a CLI stop that already happened —
-         * and then this waits for the daemon to actually take the socket and **checks that it did**.
-         * A daemon that lost the lock race gets a moment and one more restart; only then is failure
-         * real, and it is reported as failure rather than swallowed. `enable` is split off `--now`
-         * so a box where the symlink already exists does not turn a benign second enable into the
-         * thing that fails the whole step.
-         */
+        // Enable, restart, and prove it came up — the shared restart-and-prove, so the update path
+        // and the standalone Restart button cannot drift. See [enableRestartProve] for why it is
+        // restart-and-check rather than `enable --now` and a hope.
+        ) + enableRestartProve("the unit was written but did not come up") + listOf(
+            // Lingering needs root. Asked for without sudo, so it succeeds where policy allows it
+            // and fails harmlessly everywhere else — the caller reads the answer back rather than
+            // assuming either way.
+            "loginctl enable-linger \"\$(id -un)\" >/dev/null 2>&1 || true",
+            "printf \"linger %s\\n\" \"\$(loginctl show-user \"\$(id -u)\" -p Linger --value 2>/dev/null)\"",
+            "exit 0",
+        )
+    ).joinToString("\n")
+
+    /**
+     * **`restart` and then a proof, not `enable --now` and a hope** — the shared heart of both the
+     * update path ([service]) and the standalone Restart button ([restart]).
+     *
+     * `enable --now` starts a stopped unit — but only if the daemon it runs can take the socket the
+     * instant it is asked, and after a `"$b" stop` the process it just killed may still be releasing
+     * its pid lock and its relay slot. On a real WSL box on 2026-08-27 that race lost: the stop
+     * landed, the start did not, and the in-app Update finished having replaced the files and left
+     * the host **down** — while the card said *"is a machine of its own now"*. That is the bug Asad
+     * reported in his own words: *"after updating server app it keeps reconnecting… server is still
+     * connected but not the sessions"*.
+     *
+     * So the unit is enabled for next boot, then **restarted** — which from systemd's own view is
+     * stop-if-running-then-start and cannot be raced by a CLI stop that already happened — and then
+     * this waits for the daemon to take the socket and **checks that it did**. A daemon that lost
+     * the lock race gets a moment and one more restart; only then is failure real, and it is
+     * reported rather than swallowed. `enable` is split off `--now` so a benign second enable cannot
+     * fail the step — and, for the standalone Restart, it is also what *arms a disabled unit for
+     * boot*, which is half of "if it is not automatically activated we click restart and it
+     * activates it on the server".
+     */
+    private fun enableRestartProve(failure: String): List<String> = listOf(
         "systemctl --user enable $ID.service >/dev/null 2>&1 || true",
         "systemctl --user restart $ID.service || exit 1",
         "up=",
@@ -221,14 +236,40 @@ object ServerScripts {
         "    sleep 1",
         "  done",
         "fi",
-        "[ -n \"\$up\" ] || { echo \"the unit was written but did not come up\" >&2; exit 1; }",
-        // Lingering needs root. Asked for without sudo, so it succeeds where policy allows it and
-        // fails harmlessly everywhere else — the caller reads the answer back rather than assuming
-        // either way.
-        "loginctl enable-linger \"\$(id -un)\" >/dev/null 2>&1 || true",
-        "printf \"linger %s\\n\" \"\$(loginctl show-user \"\$(id -u)\" -p Linger --value 2>/dev/null)\"",
-        "exit 0",
-    ).joinToString("\n")
+        "[ -n \"\$up\" ] || { echo \"$failure\" >&2; exit 1; }",
+    )
+
+    /**
+     * **Restart the host on this server**, standalone — his own words for the button this is behind:
+     *
+     * > *"we should have one button to restart the terminal deck — if it is not automatically
+     * > activated we click restart and it activates it on the server; if we want to close it we can
+     * > close, if we want to open we can open. We cannot do it directly on a headless server, so we
+     * > need the control here in the server page to manage whenever it is needed (heavy CPU, many
+     * > browser tabs, many sessions)."*
+     *
+     * Three shapes, one per kind of server:
+     *
+     *  - **A user unit already exists** — reuse the update path's restart-and-prove exactly
+     *    ([enableRestartProve]): enable, restart, wait, and *check it came up*. This is
+     *    `systemctl --user restart terminaldeck.service` with the proof around it, independent of
+     *    the host's own protocol version, so it works against a server this app has never updated.
+     *  - **A user systemd but no unit of ours yet** — installed, but started by hand or by an old
+     *    build. [service] writes the unit and brings it up under it, the "it activates it" half.
+     *  - **No systemd at all** — a container. Stop it the way its own command knows how, then start
+     *    it again directly; the survey the caller runs afterwards is what reports the result.
+     */
+    fun restart(command: String, hasUnit: Boolean, systemdUser: Boolean): String = when {
+        systemdUser && hasUnit ->
+            (enableRestartProve("the unit was restarted but did not come up") + "exit 0")
+                .joinToString("\n")
+        systemdUser -> service(command)
+        else -> listOf(
+            "b=${quote(command)}",
+            "\"\$b\" stop >/dev/null 2>&1 || true",
+            startDirect(command),
+        ).joinToString("\n")
+    }
 
     /**
      * Start it without a unit — a container has no init by design, and a host running now is what

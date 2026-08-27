@@ -1238,6 +1238,19 @@ class DeckViewModel(
         viewModelScope.launch { serverConnector.stop(serverId) }
     }
 
+    /** Bring the host up without pairing this phone — the lifecycle row's standalone open. */
+    fun startServer(serverId: String) {
+        viewModelScope.launch { serverConnector.start(serverId) }
+    }
+
+    /**
+     * Restart the host over SSH against its systemd user unit — his "one button to restart", which
+     * also activates a stopped or unitless host. See [ServerConnector.restart].
+     */
+    fun restartServer(serverId: String) {
+        viewModelScope.launch { serverConnector.restart(serverId) }
+    }
+
     /**
      * Connect this phone to the host running on a server it is logged in to.
      *

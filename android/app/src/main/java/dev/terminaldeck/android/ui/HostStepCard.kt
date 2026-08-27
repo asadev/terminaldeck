@@ -95,6 +95,16 @@ fun HostStepCard(
     onStartAndConnect: () -> Unit,
     onConnect: () -> Unit,
     onStop: () -> Unit,
+    /**
+     * Bring the host up without pairing this phone — the standalone "open" of the lifecycle row, as
+     * distinct from [onStartAndConnect]'s start-and-pair. Only ever called from a server's own page.
+     */
+    onStart: () -> Unit = {},
+    /**
+     * Restart the host over SSH against its systemd user unit — his "one button to restart", which
+     * also *activates* a stopped or unitless host. Only ever called from a server's own page.
+     */
+    onRestart: () -> Unit = {},
     onDisconnect: () -> Unit,
     /**
      * Take the host off that server. The boolean is the second of the two answers the confirmation
@@ -248,7 +258,10 @@ fun HostStepCard(
                         onClick = onDisconnect,
                         modifier = Modifier.weight(1f),
                     )
-                    if (host.running == HostRunning.YES) {
+                    // Stop sits beside Disconnect only on the login step. On the server's own page
+                    // the lifecycle row below owns Stop/Start/Restart, so a Stop here too would be
+                    // the duplicate control §4.1 bans — two Stops a person cannot tell apart.
+                    if (host.running == HostRunning.YES && justLoggedIn) {
                         DeckQuietButton(
                             label = "Stop",
                             onClick = onStop,
@@ -260,18 +273,26 @@ fun HostStepCard(
 
                 host.running != HostRunning.YES -> {
                     /*
-                     * **Start and connect**, one button, because that is the sentence.
+                     * **Start and connect**, one button, because that is the sentence — and only on
+                     * the login step.
                      *
                      * *"If it exists, it brings it up and asks you to connect."* Two presses with a
                      * wait between them is what this was, and the wait has nothing in it for the
                      * person to decide — a host that is installed and stopped, on a screen where
                      * somebody just asked to use it, is going to be started.
+                     *
+                     * On the server's own page it is gone: bringing the host up there is the
+                     * lifecycle row's **Start** below, and **Connect** appears once it is running.
+                     * Offering both a combined start-and-connect and a standalone Start would be two
+                     * ways to start on one screen — the duplicate §4.1 rules out.
                      */
-                    DeckPrimaryButton(
-                        label = "Start it and connect",
-                        onClick = onStartAndConnect,
-                        enabled = !isWorking && !connecting,
-                    )
+                    if (justLoggedIn) {
+                        DeckPrimaryButton(
+                            label = "Start it and connect",
+                            onClick = onStartAndConnect,
+                            enabled = !isWorking && !connecting,
+                        )
+                    }
                 }
 
                 state.canConnect(server.id) -> {
@@ -290,8 +311,11 @@ fun HostStepCard(
                             color = colors.faint,
                         )
                     }
-                    Spacer(Modifier.height(Space.x3))
-                    DeckQuietButton(label = "Stop", onClick = onStop, enabled = !isWorking)
+                    // The server page's Stop is the lifecycle row below; only the login step's is here.
+                    if (justLoggedIn) {
+                        Spacer(Modifier.height(Space.x3))
+                        DeckQuietButton(label = "Stop", onClick = onStop, enabled = !isWorking)
+                    }
                 }
 
                 else -> {
@@ -338,15 +362,61 @@ fun HostStepCard(
                             enabled = !isWorking,
                             modifier = Modifier.weight(1f),
                         )
-                        DeckQuietButton(
-                            label = "Stop",
-                            onClick = onStop,
-                            enabled = !isWorking,
-                            modifier = Modifier.weight(1f),
-                        )
+                        // Stop is the lifecycle row's on the server page; a second here would be the
+                        // duplicate §4.1 bans. Look again stays — it is a re-survey, not lifecycle.
+                        if (justLoggedIn) {
+                            DeckQuietButton(
+                                label = "Stop",
+                                onClick = onStop,
+                                enabled = !isWorking,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
                     }
                 }
             }
+        }
+
+        /*
+         * **Manage the host on this server** — restart, stop, start — his own words pinned:
+         *
+         * > "we should have one button to restart the terminal deck — if it is not automatically
+         * > activated we click restart and it activates it on the server; if we want to close it we
+         * > can close, if we want to open we can open. We cannot do it directly on a headless
+         * > server, so we need the control here in the server page to manage whenever it is needed
+         * > (heavy CPU, many browser tabs, many sessions)."
+         *
+         * §4.1, honestly: Restart whenever it is installed (on a stopped host it is the "activates
+         * it" he described); Stop only when running; Start only when not. Each runs over SSH against
+         * the systemd user unit, independent of the host's protocol version, so it works against a
+         * server this app has never updated — and none silently no-ops: the header spinner turns
+         * while the work is in flight and a restart that does not come back up is reported by the
+         * survey after it. This is where Stop and Start live on the server's own page; the connect
+         * branches shed theirs so a person never meets two of the same verb on one screen. Not on
+         * the login step, which keeps its own and is not where he asked for these.
+         */
+        if (look != null && look.host.isInstalled && !justLoggedIn) {
+            Spacer(Modifier.height(Space.x3))
+            Text(
+                text = "Manage the host on this server",
+                style = DeckType.value,
+                color = colors.secondary,
+            )
+            Spacer(Modifier.height(Space.x2))
+            DeckPrimaryButton(label = "Restart it", onClick = onRestart, enabled = !isWorking)
+            Spacer(Modifier.height(Space.x2))
+            if (look.host.running == HostRunning.YES) {
+                DeckQuietButton(label = "Stop", onClick = onStop, enabled = !isWorking)
+            } else {
+                DeckQuietButton(label = "Start", onClick = onStart, enabled = !isWorking)
+            }
+            Spacer(Modifier.height(Space.x2))
+            Text(
+                text = "A server has no screen of its own, so restart, stop and start happen here " +
+                    "over the connection this phone already holds.",
+                style = DeckType.caption,
+                color = colors.faint,
+            )
         }
 
         /*

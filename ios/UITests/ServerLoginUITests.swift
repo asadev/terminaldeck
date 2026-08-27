@@ -369,13 +369,22 @@ final class ServerLoginUITests: XCTestCase {
          */
         if !app.buttons["server.disconnect"].exists {
             let connect = app.buttons["server.connect"]
-            let bringUp = app.buttons["server.startConnect"]
-            guard connect.waitForExistence(timeout: 30) || bringUp.waitForExistence(timeout: 5)
+            // On the server's own page a stopped host is opened with the
+            // lifecycle Start and then connected — "start it and connect" is the
+            // login step's one-tap shortcut and is deliberately not drawn here,
+            // where open/close/restart are their own controls.
+            let start = app.buttons["server.start"]
+            guard connect.waitForExistence(timeout: 30) || start.waitForExistence(timeout: 5)
             else {
                 XCTFail("there is no host to connect to on this server — " + whatIsOnScreen())
                 return
             }
-            if connect.exists { connect.tap() } else { bringUp.tap() }
+            if !connect.exists {
+                start.tap()
+                XCTAssertTrue(connect.waitForExistence(timeout: 180),
+                              "starting the host produced no connect — " + whatIsOnScreen())
+            }
+            connect.tap()
         }
 
         let disconnect = app.buttons["server.disconnect"]
@@ -384,17 +393,24 @@ final class ServerLoginUITests: XCTestCase {
         shoot("cycle-01-connected")
         disconnect.tap()
 
-        // Back to a server that is there, and not connected to.
+        // Back to a server that is there, and not connected to. Disconnect
+        // unpairs without stopping the host, so it is still running and Connect
+        // is here; a stopped one would be opened with the lifecycle Start first.
         let connect = app.buttons["server.connect"]
-        let bringUp = app.buttons["server.startConnect"]
-        let again = connect.waitForExistence(timeout: 60) || bringUp.waitForExistence(timeout: 10)
+        let start = app.buttons["server.start"]
+        let again = connect.waitForExistence(timeout: 60) || start.waitForExistence(timeout: 10)
         shoot("cycle-02-disconnected")
         XCTAssertTrue(again,
                       "after disconnecting there was nothing to connect with — " + whatIsOnScreen())
         XCTAssertFalse(app.buttons["server.install"].exists,
                        "disconnecting made the app forget the host is installed")
 
-        if connect.exists { connect.tap() } else { bringUp.tap() }
+        if !connect.exists {
+            start.tap()
+            XCTAssertTrue(connect.waitForExistence(timeout: 180),
+                          "starting the host produced no connect — " + whatIsOnScreen())
+        }
+        connect.tap()
         XCTAssertTrue(app.buttons["server.disconnect"].waitForExistence(timeout: 180),
                       "the second connect never landed — " + whatIsOnScreen())
         shoot("cycle-03-connected-again")

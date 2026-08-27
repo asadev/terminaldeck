@@ -1342,6 +1342,8 @@ fun TerminalDeckApp(
                 onStartAndConnect = { viewModel.startAndConnectServer(serverId) },
                 onConnect = { viewModel.connectToServer(serverId) },
                 onStop = { viewModel.stopServer(serverId) },
+                onStart = { viewModel.startServer(serverId) },
+                onRestart = { viewModel.restartServer(serverId) },
                 onDisconnect = { viewModel.disconnectServer(serverId) },
                 // Removal is the connector's own verb with no view-model wrapper; it is short and
                 // reports through the same install state the card already draws.

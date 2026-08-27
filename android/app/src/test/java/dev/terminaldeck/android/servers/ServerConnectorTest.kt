@@ -493,6 +493,48 @@ class ServerConnectorTest {
         assertEquals(before, script.runs.size)
     }
 
+    /* -------------------------------------------------------------- restart -- */
+
+    /**
+     * The standalone Restart — his "one button to restart the terminal deck". On a host with a
+     * user unit it is the update path's restart-and-prove, and like Start it then waits for the
+     * relay to re-dial before the survey reads the new state, because a restarted host is not
+     * reachable the instant systemd has forked it.
+     */
+    @Test
+    fun `restarting an installed host restarts its unit and then waits for the relay`() = runTest {
+        val (connector, id) = loggedIn(installed())
+
+        connector.restart(id)
+
+        assertTrue(
+            "it restarts the unit",
+            script.runs.any { it.contains("systemctl --user restart terminaldeck.service") },
+        )
+        assertTrue(
+            "and waits for the relay dial before the survey, exactly as start does",
+            script.runs.any { it.contains("address >/dev/null") },
+        )
+    }
+
+    /**
+     * A restart on a host with a user systemd but no unit of ours yet writes the unit and brings it
+     * up — "if it is not automatically activated we click restart and it activates it on the
+     * server." The tell is the unit file being written, which a plain restart never does.
+     */
+    @Test
+    fun `restarting a unitless host activates it by writing the unit`() = runTest {
+        val noUnit = installed().replace("unit\tactive\n", "")
+        val (connector, id) = loggedIn(noUnit)
+
+        connector.restart(id)
+
+        assertTrue(
+            "it creates the unit rather than assuming one",
+            script.runs.any { it.contains("\$HOME/.config/systemd/user/terminaldeck.service") },
+        )
+    }
+
     /* --------------------------------------------------------------- sessions -- */
 
     /**

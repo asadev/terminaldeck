@@ -90,6 +90,10 @@ fun ServerDetailScreen(
     onStartAndConnect: () -> Unit,
     onConnect: () -> Unit,
     onStop: () -> Unit,
+    /** The lifecycle row's standalone open — bring the host up without pairing this phone. */
+    onStart: () -> Unit,
+    /** His "one button to restart", which also activates a stopped or unitless host over SSH. */
+    onRestart: () -> Unit,
     onDisconnect: () -> Unit,
     onRemove: (alsoData: Boolean) -> Unit,
     onRename: (String) -> Unit,
@@ -210,6 +214,8 @@ fun ServerDetailScreen(
                 onStartAndConnect = onStartAndConnect,
                 onConnect = onConnect,
                 onStop = onStop,
+                onStart = onStart,
+                onRestart = onRestart,
                 onDisconnect = onDisconnect,
                 onRemove = onRemove,
             )

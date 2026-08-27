@@ -257,6 +257,55 @@ class ServerScriptsTest {
         assertTrue("and the same home guard applies to it", taken.contains("rm -rf \"\$dd\""))
     }
 
+    /* ------------------------------------------------------------- restart -- */
+
+    /**
+     * The standalone Restart button, on a server that already has a unit: the update path's
+     * restart-and-prove, standing on its own. It restarts the unit and **checks it came up** — a
+     * restart that cannot prove it is a control that lies — and re-arms a disabled unit for boot
+     * ("it activates it"), without rewriting the unit file a plain restart has no business touching.
+     */
+    @Test
+    fun `restart through systemd restarts the unit and proves it came up`() {
+        val script = ServerScripts.restart("/root/.local/bin/terminaldeck", hasUnit = true, systemdUser = true)
+
+        assertTrue(script.contains("systemctl --user restart terminaldeck.service"))
+        assertTrue("it proves the unit came up, not assumes it", script.contains("is-active --quiet"))
+        assertTrue("and fails loudly if it did not", script.contains("did not come up"))
+        assertTrue("restart also arms a disabled unit for boot", script.contains("systemctl --user enable terminaldeck.service"))
+        assertFalse("a plain restart does not re-write the unit file", script.contains("[Unit]"))
+    }
+
+    /**
+     * Restart on an installed host with a user systemd but no unit of ours yet — started by hand or
+     * by an old build. This is the "if it is not automatically activated we click restart and it
+     * activates it on the server" half: it writes the unit and brings it up, the same verb install
+     * runs, so the two cannot answer differently.
+     */
+    @Test
+    fun `restart with no unit yet creates the unit and activates it`() {
+        val script = ServerScripts.restart("/root/.local/bin/terminaldeck", hasUnit = false, systemdUser = true)
+
+        assertEquals(ServerScripts.service("/root/.local/bin/terminaldeck"), script)
+        assertTrue(script.contains("\$HOME/.config/systemd/user/terminaldeck.service"))
+    }
+
+    /**
+     * Restart where there is no systemd at all — a container. No unit to be active, so it stops the
+     * daemon the way its own command knows how and starts it again directly; the survey afterwards
+     * is what reports whether it is up.
+     */
+    @Test
+    fun `restart without systemd stops then starts directly`() {
+        val script = ServerScripts.restart("/root/.local/bin/terminaldeck", hasUnit = false, systemdUser = false)
+
+        assertFalse("a container has no init by design", script.contains("systemctl"))
+        val stop = script.indexOf("\"\$b\" stop")
+        val start = script.indexOf("nohup")
+        assertTrue("both are there", stop >= 0 && start >= 0)
+        assertTrue("stop before start, or it is a start beside a host still up", stop < start)
+    }
+
     /* ------------------------------------------------------------- quoting -- */
 
     @Test

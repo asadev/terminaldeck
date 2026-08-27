@@ -239,4 +239,66 @@ final class ServerScriptsTests: XCTestCase {
         XCTAssertFalse(script.contains("systemctl"))
         XCTAssertTrue(script.contains("\"$b\" stop"))
     }
+
+    // MARK: - Restart
+
+    /**
+     * The standalone Restart button, on a server that already has a unit: the
+     * update path's restart-and-prove, standing on its own.
+     *
+     * It restarts the unit and **checks it came up** — that is the whole reason
+     * this is not `systemctl --user restart` and a hope. A restart that loses the
+     * socket race gets one more try and is then reported, exactly as the update
+     * path proves it. And it does *not* re-write the unit: a plain restart of an
+     * installed, unitised host has no business rewriting the file.
+     */
+    func testRestartThroughSystemdRestartsTheUnitAndProvesItCameUp() {
+        let script = ServerScripts.restart(command: "/root/.local/bin/terminaldeck",
+                                           hasUnit: true, systemdUser: true)
+        XCTAssertTrue(script.contains("systemctl --user restart terminaldeck.service"))
+        XCTAssertTrue(script.contains("is-active --quiet"),
+                      "a restart that cannot prove it came up is a control that lies")
+        XCTAssertTrue(script.contains("did not come up"))
+        XCTAssertTrue(script.contains("systemctl --user enable terminaldeck.service"),
+                      "restart also arms a disabled unit for boot — \"it activates it\"")
+        XCTAssertFalse(script.contains("[Unit]"),
+                       "a plain restart does not re-write the unit file")
+        XCTAssertFalse(script.contains("sudo "))
+    }
+
+    /**
+     * Restart on an installed host with a user systemd but **no unit of ours
+     * yet** — started by hand, or by an old build. This is the "if it is not
+     * automatically activated we click restart and it activates it on the
+     * server" half: it writes the unit and brings it up, which is the very verb
+     * the install path runs, so the two cannot answer differently.
+     */
+    func testRestartWithNoUnitYetCreatesTheUnitAndActivatesIt() {
+        let script = ServerScripts.restart(command: "/root/.local/bin/terminaldeck",
+                                           hasUnit: false, systemdUser: true)
+        XCTAssertEqual(script, ServerScripts.service(command: "/root/.local/bin/terminaldeck"),
+                       "activating a host that has no unit is exactly what `service` does")
+        XCTAssertTrue(script.contains("$HOME/.config/systemd/user/terminaldeck.service"))
+    }
+
+    /**
+     * Restart where there is no systemd at all — a container. There is no unit
+     * to be active, so it stops the daemon the way its own command knows how and
+     * starts it again directly; the survey the connector runs afterwards is what
+     * reports whether it is up.
+     */
+    func testRestartWithoutSystemdStopsThenStartsDirectly() {
+        let script = ServerScripts.restart(command: "/root/.local/bin/terminaldeck",
+                                           hasUnit: false, systemdUser: false)
+        XCTAssertFalse(script.contains("systemctl"),
+                       "a container has no init by design")
+        XCTAssertTrue(script.contains("\"$b\" stop"))
+        XCTAssertTrue(script.contains("nohup"))
+        // Stop before start, or the restart is a start beside a host still up.
+        let stopAt = script.range(of: "\"$b\" stop")
+        let startAt = script.range(of: "nohup")
+        XCTAssertNotNil(stopAt)
+        XCTAssertNotNil(startAt)
+        XCTAssertTrue(stopAt!.lowerBound < startAt!.lowerBound)
+    }
 }

@@ -472,28 +472,51 @@ class ServerConnector(
 
     /* ------------------------------------------------------------ start & stop -- */
 
-    suspend fun start(id: String) = control(id, running = true)
+    /**
+     * The three lifecycle verbs a headless host can be sent from the phone, because a server with
+     * no screen is the one place they cannot be pressed. They share [control] — one open/run/survey
+     * shape, one set of honest failures — and differ only in the script and whether the host is
+     * coming *up* (start, restart) and so must be given its relay dial.
+     */
+    private enum class Lifecycle { START, STOP, RESTART }
 
-    suspend fun stop(id: String) = control(id, running = false)
+    suspend fun start(id: String) = control(id, Lifecycle.START)
 
-    private suspend fun control(id: String, running: Boolean) {
+    suspend fun stop(id: String) = control(id, Lifecycle.STOP)
+
+    /**
+     * **Restart it** — his own words: *"we should have one button to restart the terminal deck — if
+     * it is not automatically activated we click restart and it activates it on the server."* The
+     * same restart-and-prove the update path runs ([ServerScripts.restart]), over SSH against the
+     * host's systemd user unit, independent of the host's protocol version — so it works against a
+     * server this app has never updated. A restart that does not come back up is reported by the
+     * survey below, never assumed.
+     */
+    suspend fun restart(id: String) = control(id, Lifecycle.RESTART)
+
+    private suspend fun control(id: String, action: Lifecycle) {
         val server = store.load(id) ?: return
         val look = _state.value.views[id]?.host ?: return
         if (_state.value.working.contains(id)) return
         begin(id)
         try {
             val session = open(server)
-            val script = if (running) {
-                ServerScripts.start(
+            val script = when (action) {
+                Lifecycle.START -> ServerScripts.start(
                     command = look.host.command,
                     hasUnit = look.host.unit.isNotEmpty(),
                     systemdUser = look.room.systemdUser,
                 )
-            } else {
-                ServerScripts.stop(command = look.host.command, hasUnit = look.host.unit.isNotEmpty())
+                Lifecycle.STOP ->
+                    ServerScripts.stop(command = look.host.command, hasUnit = look.host.unit.isNotEmpty())
+                Lifecycle.RESTART -> ServerScripts.restart(
+                    command = look.host.command,
+                    hasUnit = look.host.unit.isNotEmpty(),
+                    systemdUser = look.room.systemdUser,
+                )
             }
             session.run(script)
-            if (running) {
+            if (action != Lifecycle.STOP) {
                 /*
                  * **Started is not reachable**, and the difference is the whole of the bug this
                  * closes.

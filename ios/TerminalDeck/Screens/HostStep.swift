@@ -104,17 +104,19 @@ struct HostStepCard: View {
             }
 
             /*
-             * The way back, and it is one row rather than a branch of the chain
-             * above, because "take it off this server" is true of an installed
-             * host in every one of those states — running, stopped, connected,
-             * or too old to dial.
+             * **Manage the host on this server**, and **the way back** — one
+             * gate, because both are true of an installed host in every state
+             * above (running, stopped, connected, or too old to dial), and both
+             * belong to the server's own page rather than the login step.
              *
              * Not on the login screen. `justLoggedIn` is somebody two seconds
-             * into arriving, who asked to *use* this server; a destructive
-             * control is not what that moment is for, and the server's own page
-             * is one tap away and is where the desktop keeps it too.
+             * into arriving, who asked to *use* this server; the lifecycle verbs
+             * and the destructive Remove are not what that moment is for, and the
+             * server's own page is one tap away and is where the desktop keeps
+             * Remove too.
              */
             if let look, look.host.isInstalled, !justLoggedIn {
+                lifecycleRow(host: look.host)
                 removeRow(host: look.host)
             }
 
@@ -222,7 +224,11 @@ struct HostStepCard: View {
                     model.unpair(hostId)
                     connector.markDisconnected(serverId)
                 }
-                if host.running == .yes {
+                // Stop lives beside Disconnect only on the login step. On the
+                // server's own page the lifecycle row below owns Stop/Start/
+                // Restart, so putting one here too would be the duplicate control
+                // §4.1 bans — two Stops a person cannot tell apart.
+                if host.running == .yes, justLoggedIn {
                     action("Stop", "stop.circle", identifier: "server.stop",
                            disabled: isWorking, compact: true) {
                         Task { await connector.stop(serverId) }
@@ -231,37 +237,46 @@ struct HostStepCard: View {
             }
         } else if host.running != .yes {
             /*
-             * **Start and connect**, one button, because that is the sentence.
+             * **Start and connect**, one button, because that is the sentence —
+             * and only on the login step.
              *
              * *"If it exists, it brings it up and asks you to connect."* Two
              * presses with a wait between them is what this was, and the wait
              * has nothing in it for the person to decide — a host that is
              * installed and stopped, on a screen where somebody just asked to
-             * use it, is going to be started. Stop is still its own control on
-             * the server's page for whoever wants only that.
+             * use it, is going to be started.
+             *
+             * On the server's own page it is gone, because that is the page he
+             * asked for the separate open/close/restart controls on: there,
+             * bringing the host up is the lifecycle row's **Start** below, and
+             * **Connect** appears once it is running. Collapsing start-and-
+             * connect into one button *and* offering a standalone Start would be
+             * two ways to start on one screen — the duplicate §4.1 rules out.
              */
-            action("Start it and connect", "play.circle",
-                   identifier: "server.startConnect", disabled: isWorking) {
-                Task {
-                    /*
-                     * These two lines only became a sentence when the wait was
-                     * put in between them, on the server.
-                     *
-                     * `bringUp` used to return the moment the daemon forked,
-                     * seconds before it reached the relay, so `connect()` found
-                     * an empty address, hit its own guard and returned — a
-                     * button that started something and then visibly did
-                     * nothing. `start` now asks the host for its address before
-                     * it re-surveys, and the host holds that answer until the
-                     * dial finishes or it knows it will not; see
-                     * `ServerScripts.address`.
-                     *
-                     * The refusal below is still reachable and still correct:
-                     * it is what a host too old to print an address, or one
-                     * whose relay is off, redraws into.
-                     */
-                    await connector.bringUp(serverId)
-                    await connect()
+            if justLoggedIn {
+                action("Start it and connect", "play.circle",
+                       identifier: "server.startConnect", disabled: isWorking) {
+                    Task {
+                        /*
+                         * These two lines only became a sentence when the wait
+                         * was put in between them, on the server.
+                         *
+                         * `bringUp` used to return the moment the daemon forked,
+                         * seconds before it reached the relay, so `connect()`
+                         * found an empty address, hit its own guard and returned
+                         * — a button that started something and then visibly did
+                         * nothing. `start` now asks the host for its address
+                         * before it re-surveys, and the host holds that answer
+                         * until the dial finishes or it knows it will not; see
+                         * `ServerScripts.address`.
+                         *
+                         * The refusal below is still reachable and still
+                         * correct: it is what a host too old to print an
+                         * address, or one whose relay is off, redraws into.
+                         */
+                        await connector.bringUp(serverId)
+                        await connect()
+                    }
                 }
             }
         } else if connector.canConnect(serverId) {
@@ -276,12 +291,15 @@ struct HostStepCard: View {
                     .foregroundStyle(Theme.faint)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            HStack(spacing: 10) {
-                action("Stop", "stop.circle", identifier: "server.stop",
-                       disabled: isWorking, compact: true) {
-                    Task { await connector.stop(serverId) }
+            // Login step only; the server page's Stop is the lifecycle row below.
+            if justLoggedIn {
+                HStack(spacing: 10) {
+                    action("Stop", "stop.circle", identifier: "server.stop",
+                           disabled: isWorking, compact: true) {
+                        Task { await connector.stop(serverId) }
+                    }
+                    Spacer(minLength: 0)
                 }
-                Spacer(minLength: 0)
             }
         } else if let refusal = HostProbe.connectRefusal(host) {
             /*
@@ -335,9 +353,13 @@ struct HostStepCard: View {
                        disabled: isWorking, compact: true) {
                     Task { await connector.look(serverId) }
                 }
-                action("Stop", "stop.circle", identifier: "server.stop",
-                       disabled: isWorking, compact: true) {
-                    Task { await connector.stop(serverId) }
+                // Stop is the lifecycle row's on the server page; here it would
+                // be the second Stop on one screen.
+                if justLoggedIn {
+                    action("Stop", "stop.circle", identifier: "server.stop",
+                           disabled: isWorking, compact: true) {
+                        Task { await connector.stop(serverId) }
+                    }
                 }
                 Spacer(minLength: 0)
             }
@@ -361,6 +383,67 @@ struct HostStepCard: View {
                                   username: ticket.username,
                                   secret: ticket.secret,
                                   method: ticket.method)
+    }
+
+    /**
+     * **Manage the host's lifecycle from the phone** — restart, stop, start —
+     * because a headless server has no screen and this is the only place they
+     * can be pressed. His words, pinned:
+     *
+     * > *"we should have one button to restart the terminal deck — if it is not
+     * > automatically activated we click restart and it activates it on the
+     * > server; if we want to close it we can close, if we want to open we can
+     * > open. We cannot do it directly on a headless server, so we need the
+     * > control here in the server page to manage whenever it is needed (heavy
+     * > CPU, many browser tabs, many sessions)."*
+     *
+     * State honestly, §4.1: **Restart** whenever it is installed — on a stopped
+     * host it is the "it activates it" he described; **Stop** only when it is
+     * running (there is nothing to close otherwise); **Start** only when it is
+     * not (there is nothing to open otherwise). Each runs over SSH against the
+     * host's systemd user unit, so it is independent of the host's protocol
+     * version and works against a server this app has never updated — see
+     * `ServerConnector.restart` / `.stop` / `.start` and `ServerScripts.restart`.
+     * None of them silently no-ops: the header spinner turns while the work is
+     * in flight, and a restart that does not come back up is reported by the
+     * survey afterwards rather than hidden.
+     *
+     * This is where Stop and Start live on the server's own page; the connect
+     * branches above shed theirs so a person never meets two of the same verb on
+     * one screen (the login step keeps its own, where this row is not drawn).
+     */
+    @ViewBuilder
+    private func lifecycleRow(host: HostOnServer) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Manage the host on this server")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(Theme.secondary)
+                .accessibilityIdentifier("server.lifecycleTitle")
+            action("Restart it", "arrow.clockwise.circle",
+                   identifier: "server.restart", disabled: isWorking) {
+                Task { await connector.restart(serverId) }
+            }
+            HStack(spacing: 10) {
+                if host.running == .yes {
+                    action("Stop", "stop.circle", identifier: "server.stop",
+                           disabled: isWorking, compact: true) {
+                        Task { await connector.stop(serverId) }
+                    }
+                } else {
+                    action("Start", "play.circle", identifier: "server.start",
+                           disabled: isWorking, compact: true) {
+                        Task { await connector.start(serverId) }
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            Text("A server has no screen of its own, so restart, stop and start "
+                 + "happen here over the connection this phone already holds.")
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.faint)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /**

@@ -567,17 +567,42 @@ final class ServerConnector {
         }
     }
 
-    /* --------------------------------------------------------- start & stop -- */
+    /* ------------------------------------------------ start, stop & restart -- */
+
+    /// The three lifecycle verbs a headless host can be sent from the phone,
+    /// because a server with no screen is the one place they cannot be pressed.
+    /// They share `control` — one open/run/survey shape, one set of honest
+    /// failures — and differ only in the script they send and whether the host
+    /// is coming *up* (start, restart) and so must be given its relay dial.
+    private enum Lifecycle { case start, stop, restart }
 
     func start(_ id: String) async {
-        await control(id, running: true)
+        await control(id, .start)
     }
 
     func stop(_ id: String) async {
-        await control(id, running: false)
+        await control(id, .stop)
     }
 
-    private func control(_ id: String, running: Bool) async {
+    /**
+     * **Restart it** — his own words for the button behind this:
+     *
+     * > *"we should have one button to restart the terminal deck — if it is not
+     * > automatically activated we click restart and it activates it on the
+     * > server; if we want to close it we can close, if we want to open we can
+     * > open."*
+     *
+     * The same restart-and-prove the update path runs, standing on its own
+     * (`ServerScripts.restart`): over SSH against the host's systemd user unit,
+     * independent of the host's protocol version, so it works against a server
+     * this app has never updated. A restart that does not come back up is
+     * reported by the survey below, never assumed.
+     */
+    func restart(_ id: String) async {
+        await control(id, .restart)
+    }
+
+    private func control(_ id: String, _ action: Lifecycle) async {
         guard let server = store.load(id), let look = views[id]?.host, !working.contains(id) else {
             return
         }
@@ -586,13 +611,22 @@ final class ServerConnector {
         defer { working.remove(id) }
         do {
             let session = try await open(server)
-            let script = running
-                ? ServerScripts.start(command: look.host.command,
-                                      hasUnit: !look.host.unit.isEmpty,
-                                      systemdUser: look.room.systemdUser)
-                : ServerScripts.stop(command: look.host.command, hasUnit: !look.host.unit.isEmpty)
+            let script: String
+            switch action {
+            case .start:
+                script = ServerScripts.start(command: look.host.command,
+                                             hasUnit: !look.host.unit.isEmpty,
+                                             systemdUser: look.room.systemdUser)
+            case .stop:
+                script = ServerScripts.stop(command: look.host.command,
+                                            hasUnit: !look.host.unit.isEmpty)
+            case .restart:
+                script = ServerScripts.restart(command: look.host.command,
+                                               hasUnit: !look.host.unit.isEmpty,
+                                               systemdUser: look.room.systemdUser)
+            }
             _ = try await session.run(script)
-            if running {
+            if action != .stop {
                 /*
                  * **Started is not reachable**, and the difference is the whole
                  * of the bug this closes.
