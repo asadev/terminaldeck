@@ -32,8 +32,20 @@ object TerminalTextSize {
     /** Above this a portrait phone cannot hold a shell prompt on one line. */
     const val MAXIMUM = 64
 
-    /** What this app has always drawn at, and what it still starts at. */
-    const val STANDARD = 28
+    /**
+     * The size a fresh install starts at, until somebody changes it.
+     *
+     * > *"By default in the mobile application the text size should be around 14pt as the standard
+     * > size of the text inside the terminal by default."*
+     *
+     * His "14pt" is a point size; this store is raw pixels — see the class note, where the pixel
+     * count is what fixes the column width and is deliberately never scaled to a physical point. So
+     * 14 cannot go here literally: 14 px is [MINIMUM], the smallest, unreadable end. The app's own
+     * anchor pairs iOS's 12 pt standard with 28 px here, so 14 pt lands at 28 * 14 / 12 = 32 — kept
+     * even to sit on the [STEP] grid. Was 28. This moves only the fresh-install default: [load]
+     * returns it solely when nothing has been saved, so a size the person already picked is untouched.
+     */
+    const val STANDARD = 32
 
     /** One press of the smaller/larger control, and one step of a pinch. */
     const val STEP = 2

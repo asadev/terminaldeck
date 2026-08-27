@@ -391,7 +391,13 @@ struct HostStepCard: View {
                 // Faint rather than gone while something else is in flight. A
                 // removal that started at the same moment as an install would
                 // be two scripts racing over one server.
-                .foregroundStyle(busy ? Theme.faint : Theme.warning)
+                //
+                // Red, not amber, and for the same reason its neighbour "Forget
+                // this server" is red now — > "it should be like red so it is
+                // clear." The two are a tap apart and the doc above says they
+                // must read as the same kind of act; this one takes the host off
+                // the server, which is the red kind.
+                .foregroundStyle(busy ? Theme.faint : Theme.critical)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 12)
                 .contentShape(Rectangle())

@@ -75,8 +75,15 @@ enum TextSize {
     static let minimum: CGFloat = 9
     /// Above this a portrait phone cannot hold a shell prompt on one line.
     static let maximum: CGFloat = 22
-    /// What the app has always drawn at, and what it still starts at.
-    static let standard: CGFloat = 12
+    /// The size a fresh install starts at, until somebody changes it.
+    ///
+    /// > *"By default in the mobile application the text size should be around
+    /// > 14pt as the standard size of the text inside the terminal by default."*
+    ///
+    /// Was 12 — what the app drew at from the first build. 14 is his call. It
+    /// moves only the fresh-install default: `stored` returns this solely when
+    /// nothing has been saved, so a size the person already picked is untouched.
+    static let standard: CGFloat = 14
     /// One press of the smaller/larger control.
     static let step: CGFloat = 1
 

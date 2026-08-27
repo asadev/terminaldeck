@@ -407,10 +407,14 @@ object HostProbe {
     /* ------------------------------------------------------- the way back -- */
 
     /**
-     * The button that takes it off again, named the way a person would say it. `REMOVE_HOST_LABEL`
-     * on the desktop, the same words on purpose.
+     * The button that takes it off again, named so it is unmistakable *what* comes off. > "when it
+     * says remove it from server it should be clear, like remove Terminal Deck from server — 'remove
+     * it from server' is confusing." So the product name stands where "it" used to. Android has no
+     * shared brand constant the way iOS has `Brand.name`, so this is the literal every other
+     * "Terminal Deck" on these screens already is. The desktop's `REMOVE_HOST_LABEL` is meant to
+     * match and should follow.
      */
-    const val removeLabel = "Remove it from this server"
+    const val removeLabel = "Remove Terminal Deck from this server"
 
     /**
      * What removing it leaves behind, said before the press rather than discovered after it.
