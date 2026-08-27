@@ -128,22 +128,27 @@ final class TerminalGesturesTests: XCTestCase {
         XCTAssertFalse(view.gestureRecognizerShouldBegin(foreign))
     }
 
-    /// …but yes when a full-screen program has both asked for the mouse and
-    /// taken the alternate screen. That is the same recogniser class doing a
-    /// completely different job — a finger driving vim or htop, where there is
-    /// no scrollback for a drag to move — and refusing it would break mouse
-    /// reporting to fix scrolling.
-    func testAForeignPanIsAllowedWhenAFullScreenProgramAskedForTheMouse() {
+    /// …and still not on the alternate screen with the mouse on, which is where
+    /// the exception used to live and where it kept failing him.
+    ///
+    /// *Claude Code's own TUI is exactly this — the alternate screen with mouse
+    /// reporting on* — so the old "allow it for a full-screen program" let his
+    /// one-finger drag through as a selection on the one screen he uses. There is
+    /// no way at `shouldBegin` to tell a drag-he-means-as-scroll from a drag a
+    /// program wants, so the rule is absolute now: the library's pan is always
+    /// refused, one finger always scrolls, and a long press selects. Taps still
+    /// reach a mouse-driven program as clicks; only the drag is the phone's.
+    func testAForeignPanIsRefusedEvenOnTheAlternateScreenWithTheMouseOn() {
         let view = terminal()
         let foreign = UIPanGestureRecognizer()
         view.addGestureRecognizer(foreign)
 
-        // DECSET 1049 switches to the alternate screen; 1000 asks for the mouse.
-        // Both, because either alone is not a program that owns the viewport.
+        // DECSET 1049 switches to the alternate screen; 1000 asks for the mouse —
+        // Claude Code's exact combination.
         view.feed(text: "\u{1b}[?1049h\u{1b}[?1000h")
         XCTAssertTrue(view.getTerminal().isCurrentBufferAlternate, "the terminal did not switch screens")
         XCTAssertNotEqual(view.getTerminal().mouseMode, .off, "the terminal did not take the mode")
-        XCTAssertTrue(view.gestureRecognizerShouldBegin(foreign))
+        XCTAssertFalse(view.gestureRecognizerShouldBegin(foreign), "one finger must scroll, never select")
     }
 
     /// SwiftTerm's long press only opened a menu offering *Select*. This app's

@@ -115,31 +115,29 @@ class DeckTerminalView: TerminalView {
         }
         if gestureRecognizer is UIPanGestureRecognizer {
             /*
-             * SwiftTerm's selection pan, or its mouse-reporting pan.
+             * SwiftTerm's selection pan, or its mouse-reporting pan — **always
+             * refused**, so one finger always scrolls and a plain drag never
+             * copies.
              *
-             * > *"scrolling with one finger in terminal is still not working
-             * > btw — it starts copying instead. It should copy on long press
-             * > only."*
+             * > *"scrolling with one finger in terminal is still not working btw
+             * > — it starts copying instead. It should copy on long press only."*
+             * > (said twice; the second time on a build that still copied.)
              *
-             * `mouseMode != .off` on its own was not the test it looked like.
-             * **Claude Code turns mouse reporting on** for its own composer, and
-             * so does anything else that wants a click — so on the one screen he
-             * uses this app for, the condition was true the whole time and
-             * SwiftTerm's pan took every one-finger drag. The scroll never got a
-             * chance and the drag came out as a selection.
-             *
-             * The buffer is the honest half of the question. On the **alternate**
-             * screen a full-screen program owns the viewport, there is no
-             * scrollback for a drag to move, and a program that asked for the
-             * mouse should get it. On the **normal** screen — a shell, an agent
-             * printing as it goes — there is scrollback, scrolling it is what a
-             * drag means on a phone, and a mouse drag is worth nothing. So the
-             * pan is allowed only where it is the better answer, and everywhere
-             * else one finger scrolls and a long press selects, which is what
-             * this whole file was written to do.
+             * The earlier attempt allowed this pan on the alternate screen when a
+             * program had mouse reporting on — the idea being a full-screen app
+             * should get the drag. But **Claude Code's TUI is exactly that: the
+             * alternate screen with mouse reporting on**, so the one thing he uses
+             * this app for fell straight through the exception and kept selecting.
+             * There is no test at `shouldBegin` time that separates "this drag is
+             * a mouse-report the program wants" from "this drag is him trying to
+             * scroll", so the honest thing is to obey the rule he gave, without an
+             * exception: one finger scrolls, a long press selects. A program that
+             * genuinely needs a drag still gets taps (clicks) through SwiftTerm's
+             * own tap; only the *drag* is the phone's to scroll with. If a
+             * mouse-drag-driven full-screen app ever matters, that is a separate,
+             * named ask — not a reason to keep breaking scroll.
              */
-            let terminal = getTerminal()
-            return terminal.mouseMode != .off && terminal.isCurrentBufferAlternate
+            return false
         }
         if gestureRecognizer is UILongPressGestureRecognizer {
             // SwiftTerm's, which only opens a menu. This app's long press is
