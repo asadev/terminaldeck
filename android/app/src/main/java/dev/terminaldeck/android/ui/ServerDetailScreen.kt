@@ -1,5 +1,6 @@
 package dev.terminaldeck.android.ui
 
+import dev.terminaldeck.android.github.ConnectGitHubView
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -93,6 +94,12 @@ fun ServerDetailScreen(
     onRemove: (alsoData: Boolean) -> Unit,
     onRename: (String) -> Unit,
     onForget: () -> Unit,
+    // Connect GitHub, on the server page — the host owns it, the phone drives it. Null (and drawing
+    // nothing) until the machine is connected and advertises `github`. See the block below.
+    github: ConnectGitHubView? = null,
+    onConnectGitHub: () -> Unit = {},
+    onCancelGitHub: () -> Unit = {},
+    onDisconnectGitHub: () -> Unit = {},
 ) {
     val colors = DeckTheme.colors
     val server = state.servers.firstOrNull { it.id == serverId }
@@ -206,6 +213,24 @@ fun ServerDetailScreen(
                 onDisconnect = onDisconnect,
                 onRemove = onRemove,
             )
+
+            /*
+             * **Connect GitHub, right here on the server.**
+             *
+             * > *"As soon as we connect the server and the app, for headless also we give the option
+             * > to connect GitHub there… the host owns it, not the mobile application."*
+             *
+             * The section draws itself and reads its own state; it is absent until the machine is
+             * connected and advertises `github`, so the `let` is the whole of the gate.
+             */
+            github?.let {
+                ConnectGitHubSection(
+                    view = it,
+                    onConnect = onConnectGitHub,
+                    onCancel = onCancelGitHub,
+                    onDisconnect = onDisconnectGitHub,
+                )
+            }
 
             /*
              * How this phone gets back in — the true statement the Face-ID switch used to sit on

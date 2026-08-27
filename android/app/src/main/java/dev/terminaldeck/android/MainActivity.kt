@@ -1330,6 +1330,7 @@ fun TerminalDeckApp(
             val serverId = entry.arguments?.getString(ARG_SERVER_ID).orEmpty()
             val servers by viewModel.serverConnector.state.collectAsStateWithLifecycle()
             val ops = rememberCoroutineScope()
+            LaunchedEffect(serverId) { viewModel.openGitHub() }
             ServerDetailScreen(
                 serverId = serverId,
                 state = servers,
@@ -1349,6 +1350,10 @@ fun TerminalDeckApp(
                     viewModel.serverConnector.forget(serverId)
                     navController.popBackStack()
                 },
+                github = state.github,
+                onConnectGitHub = viewModel::connectGitHub,
+                onCancelGitHub = viewModel::cancelGitHub,
+                onDisconnectGitHub = viewModel::disconnectGitHub,
             )
         }
 

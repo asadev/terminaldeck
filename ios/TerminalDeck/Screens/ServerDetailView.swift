@@ -72,6 +72,21 @@ struct ServerDetailView: View {
                          * after a login both render it.
                          */
                         HostStepCard(model: model, serverId: serverId)
+
+                        // **Connect GitHub, right here on the server.**
+                        //
+                        // > *"As soon as we connect the server and the application, for headless
+                        // > also we give the option to connect GitHub there — connect server, then
+                        // > app, then GitHub, so it's linked there. The host owns it, not the phone."*
+                        //
+                        // The card draws itself and reads its own state; it renders nothing until the
+                        // machine is connected and advertises `github`, so it is safe to place here.
+                        // `model.host` resolves the live link once the server has become a machine —
+                        // `linkedHostId` is set by `ServerConnector.markConnected`.
+                        if let hostId = server.linkedHostId, let link = model.host(hostId) {
+                            ConnectGitHubView(host: link)
+                        }
+
                         signInCard(server)
                         if let view {
                             machineCard(view.facts)
