@@ -37,7 +37,7 @@
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { BRAND } from '../shared/brand'
-import type { SessionMeta } from '../shared/types'
+import type { SessionMeta, SessionStatus } from '../shared/types'
 import { createHostCore, type HostCore } from '../main/host-core'
 import { IdleController, type IdleReport } from '../main/idle'
 import { logger } from '../main/app-log'
@@ -59,8 +59,12 @@ import { boundKey, BrowserDrive, OWN_TARGET } from '../main/browser-driver'
 import type { DriveStatus } from '../main/browser-drive'
 import { frontTab, screencastOver, type CastWindow } from '../main/screencast-host'
 import { createHeadlessBrowserControl } from '../main/browser-headless-control'
-import { startDeckControlServer, stopDeckControlServer } from '../main/deck-control/server'
+import { currentEndpoint, stopDeckControlServer } from '../main/deck-control/server'
 import { createSessionTools, type SessionTools } from '../main/deck-control/session-tools'
+import { copilotPaths } from '../main/copilot-home'
+import { createRoutines, type RoutinesHandle } from '../main/routines'
+import { createCopilotRunner } from '../main/routines/runner'
+import { startHeadlessCopilot, type HeadlessCopilot } from './copilot'
 import { serveWindowCall } from '../main/remote/machines/window-serve'
 import { installHooksWhereConfigured } from '../main/hooks'
 import { resetDevPortsCache } from '../main/dev-ports'
@@ -495,6 +499,38 @@ export async function createHeadlessHost(
    */
   let sessionTools: SessionTools | null = null
 
+  /*
+   * The copilot, once it is assembled — the tools, the run manager, the files.
+   *
+   * A `let` for the same reason `sessionTools` is one: it is built after the
+   * core and the browser are, a hundred lines below, and the `registerRemoteIpc`
+   * options and `serveWindows` read it through this binding. Null on the public
+   * demo box and null if the tool endpoint could not bind, which is exactly the
+   * absence a guest sees — no `copilot` advertised, no pill, no frame served.
+   */
+  let headlessCopilot: HeadlessCopilot | null = null
+
+  /*
+   * What activity last said about each session, the same map the desktop keeps.
+   *
+   * `createLiveSurface` — the copilot's window onto this host's sessions — wants
+   * `{ status, at }` per session so its alerts and the phone's coloured dots
+   * agree with the one the fanout draws. The core computes the status and hands
+   * it here through `onStatus`; without this map the copilot would read `idle`
+   * for a session that is thinking and describe a machine nobody is looking at.
+   */
+  const liveStatus = new Map<string, { status: SessionStatus; at: number }>()
+
+  /*
+   * The routines this server runs on its own — assembled after the core (its
+   * folder guard reads the core's sessions) but referenced from the core's
+   * lifecycle callbacks below, so a late-bound `let` the way the desktop's own
+   * `routines` is at module scope. A routine runs *through* the copilot: its
+   * runner is a `--print` Claude CLI carrying the unattended tool config
+   * `startHeadlessCopilot` writes, so routines and the copilot come up together.
+   */
+  let routinesHandle: RoutinesHandle | null = null
+
   const core = createHostCore({
     storageDir: remoteStorageDir,
     userData: stateDir,
@@ -513,7 +549,22 @@ export async function createHeadlessHost(
      * that started a session hears about it twice, which `tellSessions` calls
      * a harmless refresh.
      */
-    onSessionStarted: () => tellDevices?.(),
+    onSessionStarted: (meta) => {
+      tellDevices?.()
+      // A routine can trigger on a session appearing; the engine holds the rule
+      // for whether any does. The same feed the desktop makes.
+      routinesHandle?.engine.noteSessionStarted(meta)
+    },
+    // The status the copilot's surface reads, kept in step with the fanout's.
+    // Same map, same source as the desktop — see `liveStatus` above. It is also
+    // the `session-idle` routine trigger, fed to the engine the same way.
+    onStatus: (id, status) => {
+      liveStatus.set(id, { status, at: Date.now() })
+      routinesHandle?.engine.noteSessionStatus(id, status)
+    },
+    // `session-finished` and `session-failed` are this one event, split by exit
+    // code inside the engine — the desktop feeds it from the same pty callback.
+    onExit: (id, exitCode) => routinesHandle?.engine.noteSessionExit(id, exitCode),
     /*
      * The other half of the same push, and the half that was missing: a session
      * *gone* from this host has to leave every attached device's list too, not
@@ -552,6 +603,9 @@ export async function createHeadlessHost(
        */
       sessionRemoved(id)
       sessionTools?.release(id)
+      // Its last-known status goes with it, so the map does not grow a row per
+      // session for the life of the process.
+      liveStatus.delete(id)
       tellDevices?.()
     },
     /*
@@ -817,16 +871,84 @@ export async function createHeadlessHost(
    */
   if (options.publicHost === undefined) {
     try {
-      const controlEndpoint = await startDeckControlServer({ control: browserControl })
-      sessionTools = createSessionTools(controlEndpoint, {
-        dir: join(stateDir, 'session-tools'),
+      /*
+       * The copilot, and the one tool endpoint that serves it and every session
+       * on this host at once.
+       *
+       * This used to start a `deck-control` holding the browser verbs alone —
+       * enough for a session here to open a page, and nothing the owner's phone
+       * could drive. It now builds the *full* control over this host's own core
+       * (`src/headless/copilot.ts`), so the same loopback endpoint answers a
+       * host session's browser verbs (gated to the browser family by the
+       * `SESSION_TOOLS` token `createSessionTools` mints) and a phone's copilot
+       * run's whole catalogue (tier-gated by that device's grant). One
+       * dispatcher, one budget, one action log for both doors.
+       */
+      headlessCopilot = await startHeadlessCopilot({
+        userData: stateDir,
+        browserDrive,
+        ptys: core.ptys,
+        startSession: (input, guest, confine, fence, extraArgs) =>
+          core.startSession(input, guest, confine, fence, extraArgs),
+        sessionStatus: (id) => liveStatus.get(id),
+        noteServerSettingsChanged: () => core.serverSettings.noteChanged(),
+        isMine: (deviceId) => core.kinds.kindOf(deviceId) === 'mine',
+        announce: () => tellDevices?.(),
       })
-      logger.info('headless', 'the browser tools endpoint is up', { port: controlEndpoint.port })
+      if (headlessCopilot !== null) {
+        sessionTools = createSessionTools(headlessCopilot.endpoint, {
+          dir: join(stateDir, 'session-tools'),
+        })
+        logger.info('headless', 'the copilot and its tool endpoint are up', {
+          port: headlessCopilot.endpoint.port,
+        })
+      }
     } catch (error) {
-      logger.error('headless', 'the browser tools endpoint did not start; sessions here get no verbs', {
+      logger.error('headless', 'the copilot did not start; sessions here get no verbs and none is offered', {
         error: error instanceof Error ? error.message : String(error),
       })
     }
+  }
+
+  /*
+   * The routines this server runs on its own — built only when the copilot is,
+   * because a routine runs *through* it. The default runner reads the unattended
+   * tool config `startHeadlessCopilot` just wrote and `currentEndpoint()`, both
+   * true now; the engine is fed `session-finished`/`-failed`/`-idle` from the
+   * core callbacks above.
+   *
+   * `allowFolder` is the sessions this host is actually running. A headless
+   * server has no project list to draw on, so a routine may watch a folder a
+   * session is in rather than "anywhere" — the same recursive-watch-the-disk
+   * refusal the desktop makes, narrowed to what a server can honestly answer.
+   */
+  if (headlessCopilot !== null) {
+    const copilot = headlessCopilot
+    routinesHandle = createRoutines({
+      // The default runner is keyed on `userDataDir()`; this host's copilot
+      // folder is keyed on its storage dir, which differs when it was launched
+      // with a custom one. So the runner is pointed at this copilot's own
+      // unattended config and folder — a routine runs against the same folder
+      // and endpoint the phone drives, not a second one nothing else here uses.
+      // `currentEndpoint()` is the same null-guard the default makes: no server,
+      // no tools, and the engine turns that into a readable "not running" row.
+      runner: createCopilotRunner({
+        mcpConfig: () => (currentEndpoint() === null ? null : copilot.unattendedConfigPath),
+        paths: () => copilotPaths(stateDir),
+      }),
+      allowFolder: (folder) => {
+        if (core.ptys.list().some((session) => session.cwd === folder)) return { ok: true }
+        return {
+          ok: false,
+          reason: `${folder} is not a folder this server is running a session in, so nothing is watching it.`,
+        }
+      },
+      // The three triggers the callbacks above feed. `alert` is a window watcher
+      // this build has none of, and file/git watches the engine marks unwired
+      // itself — so a routine on any of those reports itself honestly rather than
+      // looking armed and never firing.
+      wired: ['session-finished', 'session-failed', 'session-idle'],
+    })
   }
 
   /*
@@ -996,97 +1118,60 @@ export async function createHeadlessHost(
     // Settings all reach.
     forgetDevice: (id) => core.forgetDevice(id),
     /*
-     * No `copilot`, and that is a limit this build states rather than an
-     * argument somebody forgot.
+     * The copilot, on a server, driven from the phone — his words:
      *
-     * It matters because the wire makes "this host has no copilot" and "you are
-     * a guest" the **same shape** — `copilotFrame` in `server.ts` argues that
-     * those are one fact from the device's point of view and it is entitled to
-     * neither more nor less. Between a desktop and a guest that is right. Here
-     * it is exactly wrong: the owner's own phone is told nothing, and what it
-     * sees is indistinguishable from having been approved as the wrong kind. So
-     * `NO_COPILOT_HERE` is said on the side that knows — at the moment a device
-     * is approved, and in `status` — and the absence is never met in silence.
+     *   > *"with the headless server the features and everything of the copilot
+     *   > will be there, but since it is headless they cannot be controlled from
+     *   > the headless server, so the mobile app has all the UI to control these
+     *   > features."*
      *
-     * ## Why it is not simply wired, measured rather than assumed
+     * This is the reversal of `NO_COPILOT_HERE`. That constant said, correctly
+     * for the build it was written in, that this host *"has no copilot"*: it ran
+     * a `deck-control` over the browser verbs alone, so the owner's own phone
+     * was sent the guest shape — no `copilot` key, no fourth pill, the dead-end
+     * **Copilot on the server** card — which is indistinguishable from having
+     * been approved as the wrong kind. The old comment here said the fix was
+     * *"an assembly, and it is a different lane's"*: a full `DeckControl` with no
+     * window, its confirmations routed to a connected device, and a
+     * `CopilotRuns` over this host's own core. `src/headless/copilot.ts` is that
+     * assembly, built above as `headlessCopilot`, and these three lines are how
+     * it reaches the wire.
      *
-     * `CopilotRuns` assembles outside Electron; `scripts/remote-host.ts` does
-     * it. What it cannot do here is have any tools. A run with no `deck-control`
-     * behind it is refused by design and in as many words — *"a Claude CLI in
-     * the copilot's folder with no deck-control is not a copilot"* — and
-     * `CopilotRuns.state` reports `available: false` with *"The copilot's tools
-     * are not running on this machine."* Passing the layer without its tool
-     * server would therefore draw a fourth pill on the phone whose every Start
-     * button refuses, which is worse than the absence, not better.
-     *
-     * ## What has changed, and what has not
-     *
-     * The reason this used to give was that `deck-control` could not be imported
-     * into this bundle at all: `deck-control/index.ts` imported `browserDrive`
-     * from `../browser-drive-ipc` — `BrowserWindow`, `WebContentsView`,
-     * `nativeImage` at module scope — and its `live-surface.ts` imported
-     * `settings-extra`, which loads `app`, `session` and `shell`.
-     *
-     * Both edges are cut. The drive's state moved to `browser-drive-current.ts`
-     * and the settings read to `settings-store.ts`, the same treatment
-     * `platform/paths.ts` gave `app.getPath`, and `seam.test.ts` walks
-     * `deck-control/index.ts` and fails on a single runtime `electron` import.
-     * This host already runs a `deck-control` MCP endpoint of its own, above —
-     * that is what gives a session here the browser verbs.
-     *
-     * What is still missing is not an import. `registerDeckControlIpc` wants an
-     * `ipcMain` and an `isApprover(WebContents)`, because the confirmation for an
-     * `alter`-tier call is a dialog in a window, and there is no window here. A
-     * copilot on a server therefore needs its questions routed to a connected
-     * device — the `ConsentRelay` seam exists for exactly that and nothing on
-     * this host is wired to it — and a live surface built over *this* core rather
-     * than the desktop's. That is an assembly, and it is a different lane's.
-     *
-     * ## And no `copilotFiles` either, which is the same limit stated once more
-     *
-     * The files surface is a separate seam from the run manager — a host can
-     * honestly have a disk and no tools — so it is worth saying why this host
-     * does not pass one anyway rather than leaving the absence to be read as an
-     * oversight.
-     *
-     * Two reasons, and the second is the one that settles it. The files would be
-     * *empty*: the copilot layer is composed by `writeCopilotLayer` when a
-     * copilot starts, no copilot starts here, so `instructions.md`, `tools.md`
-     * and `copilot.md` have never been written and `memory/` has never been
-     * made. A Files card listing four rows that all read *not there* is the
-     * fourth pill whose every button refuses, one surface along. And the frames
-     * could not be reached in any case: they ride the copilot's own connection
-     * ceremony — `copilotFor` refuses every one of them until this socket has
-     * sent `copilot.hello`, which a host with no `copilot` refuses outright — so
-     * passing files here would advertise a capability whose first frame is a
-     * refusal. `serves` in `server.ts` states that pairing explicitly.
+     * **Absent is still the switch, and a guest still never gets it.** On the
+     * public demo box no copilot is assembled, so `headlessCopilot` is null and
+     * `copilot`/`copilotFiles` are `undefined` — the same absence a guest sees,
+     * no `copilot` advertised, no frame served. And `copilotEligible` is the gate
+     * his sentence draws — *"The copilot is never shared"* — read per frame off
+     * the kind store, so one of his own devices reaches it and a guest is refused
+     * every `copilot.*` verb whatever a panel was told.
      */
+    copilot: headlessCopilot?.copilot,
+    // His sentence, as a gate: *"The copilot is never shared."* `CopilotAccess`
+    // reads the kind store per frame — one of his own reaches the copilot, a
+    // guest is sent no `copilot` key and refused every `copilot.*` verb — and
+    // `registerRemoteIpc` derives `copilotEligible` from it, so this one object
+    // is both the per-frame gate and the settings panel's "which devices have
+    // it" list. Absent on the public host, where no copilot is assembled.
+    copilotLinks: headlessCopilot?.access,
     /*
-     * **No `routines` either, and it is the copilot's absence wearing a second
-     * name rather than a separate decision.**
-     *
-     * The engine itself would assemble here — `createRoutines` reaches nothing
-     * this bundle cannot have, and it swallows a missing Electron store rather
-     * than throwing. What it would produce is a folder of routines that can list
-     * themselves and can never fire. A routine's whole job is to run a prompt
-     * *through the copilot*, `RoutineEngine.runNow` refuses outright when there
-     * is no runner behind it — *"the copilot is not running in this build yet,
-     * so there is nothing for a routine to run through"* — and every routine on
-     * such a host reports itself `unarmed` with that sentence attached.
-     *
-     * So passing the layer would draw a Routines screen on somebody's phone in
-     * which every row is unarmed and every Run now comes back refused. That is
-     * the failure `capabilitiesFor` names in `server.ts` — *"a tab that refuses
-     * on every press is a worse answer than a client that never knew"* — and it
-     * is the same trade the copilot's own absence above is argued on.
-     *
-     * What it would take is not a line here. It is the assembly that paragraph
-     * describes: a `deck-control` this host can confirm an alter-tier call
-     * through with no window, and a copilot run over *this* core. Routines
-     * arrive the same day the copilot does, out of the same wiring, and until
-     * then the capability is not advertised and the phone is told nothing
-     * exists rather than shown something that cannot work.
+     * The copilot's own files — its instructions, memory, tool list and folder —
+     * as a phone reads and edits them. A separate seam from the run manager
+     * (`copilot-files.ts` reaching `copilot-inspect.ts`), reachable from a server
+     * now that the one runtime `electron` value it held — `shell` for a reveal
+     * that a screenless server cannot do — was moved behind an injected dep. The
+     * folder is scaffolded when `headlessCopilot` comes up, so these read the
+     * copilot's real CLAUDE.md and memory rather than four *not there* rows.
      */
+    copilotFiles: headlessCopilot?.copilotFiles,
+    /*
+     * The routines this server runs on its own, as a phone may touch them.
+     * Absent is the switch, like the copilot's — null on the public box and if
+     * the copilot did not start, so no Routines screen is drawn there. The engine
+     * is fed session triggers above and its runner carries the unattended tool
+     * config, so a routine here fires on its own and runs through the copilot,
+     * which is the whole of what a routine is for on a machine with nobody at it.
+     */
+    routines: routinesHandle?.api,
     /*
      * The git credential proxy, on every host except the public one.
      *
@@ -1242,7 +1327,13 @@ export async function createHeadlessHost(
           allowed: (id) => core.windowGrants.drives(id),
           grantSwitch:
             'for this device in its remote settings, under the browser-windows permission',
-          control: () => browserControl,
+          // The full control when the copilot is up, so a forwarded `window.call`
+          // and a copilot run reach the *same* dispatcher — one tier check, one
+          // budget, one action log. `browserControl` remains for the public demo
+          // box, where no copilot is assembled and this is the only control there
+          // is; either way a forwarded call is gated to the browser family
+          // upstream in `window-serve.ts` before it arrives.
+          control: () => headlessCopilot?.control ?? browserControl,
           attended: () => false,
         },
         deviceId,
@@ -1653,11 +1744,12 @@ export async function createHeadlessHost(
         'file watchers (a window feature; this build has no project tree)',
         'transcript tailing (a window feature; the clients read their own)',
         'usage polling (a window feature; nothing here draws a chart)',
-        // The one entry in this list that changes what a *device* gets rather
-        // than what this process spends, which is why it is also said at the
-        // moment somebody approves one. This list is where a reader who counts
-        // goes looking; `pair` is where they are standing when it matters.
-        NO_COPILOT_HERE,
+        // The copilot used to be an unconditional entry here — it only ran in the
+        // desktop app. It runs on this server now, for the owner's own devices,
+        // out of `headlessCopilot` above. So this line appears only for the two
+        // hosts that still offer none: the public demo box, and a host whose tool
+        // endpoint failed to bind (`headlessCopilot` null either way).
+        ...(headlessCopilot === null ? [NO_COPILOT_HERE] : []),
       ],
       publicHost: publicHost?.sentence() ?? null,
     }
@@ -1789,6 +1881,14 @@ export async function createHeadlessHost(
      * of a Chromium that is already closing, which is a refusal a caller reads as
      * a fault rather than as a shutdown.
      */
+    // The routines' watchers, schedulers and any in-flight run, before the tools
+    // they run through go away. `stop` is what the engine holds open — see
+    // `RoutinesHandle` — and the desktop calls it on quit for the same reason.
+    await routinesHandle?.stop().catch(() => undefined)
+    // The copilot's runs and their grace timers, before the endpoint they were
+    // dispatched through closes. The sessions themselves were killed by
+    // `killAll` above; this clears the countdowns and the caller-table entries.
+    headlessCopilot?.stop()
     sessionTools?.stop()
     await stopDeckControlServer().catch(() => undefined)
     // The server's browser is this host's to end — the CDP pipe closing never

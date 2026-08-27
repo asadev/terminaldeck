@@ -385,8 +385,12 @@ describe('the server’s own sessions are offered its own browser', () => {
    */
   it('starts the tool endpoint and hands the core a seam to mint from', () => {
     const source = readSource('src/headless/host.ts')
-    expect(source).toContain('startDeckControlServer({ control: browserControl })')
-    expect(source).toContain('createSessionTools(controlEndpoint, {')
+    // The endpoint is now started inside `startHeadlessCopilot`, which builds the
+    // full control (surface + browser verbs) rather than the browser-only one —
+    // so a host session mints its `SESSION_TOOLS` token on the copilot's own
+    // endpoint, one dispatcher for both doors.
+    expect(source).toContain('headlessCopilot = await startHeadlessCopilot({')
+    expect(source).toContain('createSessionTools(headlessCopilot.endpoint, {')
     expect(source).toContain('prepare: (inside) => sessionTools?.prepare(inside) ?? null,')
     expect(source).toContain('hostHoldsWindows: () => true,')
   })
@@ -401,7 +405,7 @@ describe('the server’s own sessions are offered its own browser', () => {
      */
     const source = readSource('src/headless/host.ts')
     const guard = source.indexOf('if (options.publicHost === undefined) {')
-    const start = source.indexOf('startDeckControlServer({ control: browserControl })')
+    const start = source.indexOf('headlessCopilot = await startHeadlessCopilot({')
     expect(guard).toBeGreaterThan(-1)
     expect(start).toBeGreaterThan(guard)
   })

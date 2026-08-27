@@ -13,10 +13,11 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 /*
- * `copilot-inspect.ts` imports `shell` from electron for its one reveal
- * handler. Nothing below goes near it, but the import is evaluated when the
- * module loads, and there is no Electron in a vitest run — the same stub
- * `app-log.test.ts` uses, for the same reason.
+ * `copilot-inspect.ts` no longer imports any Electron *value* — its one reveal
+ * handler now takes `revealInFileManager` as an injected dep, so `shell` moved
+ * to the desktop wiring in `index.ts` and this module is reachable from the
+ * headless bundle. The stub is kept as a harmless guard in case a future import
+ * in this graph reaches for Electron at load; nothing below relies on it.
  */
 vi.mock('electron', () => ({
   shell: { openPath: async () => '', showItemInFolder: () => {} },

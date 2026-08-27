@@ -66,7 +66,6 @@ import {
 } from './control'
 import {
   KIND_PROMPT,
-  NO_COPILOT_HERE,
   addressAnswer,
   parseArgs,
   pickDevice,
@@ -617,7 +616,7 @@ async function pair(
     return 1
   }
 
-  process.stdout.write(renderApproved(device, chosen, NO_COPILOT_HERE))
+  process.stdout.write(renderApproved(device, chosen))
   return 0
 }
 
