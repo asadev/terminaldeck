@@ -10,6 +10,27 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.13.0] — 2026-08-27
+
+### Added
+
+- **Android caught up to iPhone.** The Android app gained the features it was
+  missing: renaming a session; the copilot's own settings, files and routines;
+  "look inside a machine" — its Files, Source control, Artifacts, Store, AI
+  readiness and MCP servers; driving the machine's own browser and the floating
+  browser window inside a session; the folder picker; app lock with the device
+  PIN or fingerprint; and the servers screen with the same install/update. The
+  update on a server now restarts and proves the host came back, the same fix as
+  everywhere else.
+
+### Fixed
+
+- **Updating a server from the phone no longer leaves it stopped.** The update
+  installed the new host correctly but did not always start it again, so the app
+  sat reconnecting to a machine that was down. It now restarts the host, waits
+  for it to come back, and says so plainly if it could not — instead of claiming
+  success over a stopped machine. On iOS and Android both.
+
 ## [0.12.0] — 2026-08-27
 
 ### Added
@@ -2132,7 +2153,8 @@ First cut. macOS 12+, Apple silicon, unsigned.
 - Preferences with live dark/light theming
 - Session resume (`⌘⇧T`)
 
-[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.13.0
 [0.12.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.12.0
 [0.11.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.11.0
 [0.10.2]: https://github.com/asadev/terminaldeck/releases/tag/v0.10.2
