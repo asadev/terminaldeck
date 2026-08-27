@@ -507,6 +507,8 @@ describe('personalSessions', () => {
 
 interface Spawned {
   input: CreateSessionInput
+  /** The device to re-confine for, or null for a tab opened at the keyboard. */
+  confineToDeviceId: string | null
 }
 
 interface Seeded {
@@ -548,10 +550,10 @@ function driver(
         saved: () => plan.map((decision) => decision.session),
         enabled: () => options.enabled !== false,
         plan: async () => plan,
-        spawn: async (input) => {
+        spawn: async (input, confineToDeviceId) => {
           if (options.fail?.(input)) throw new Error('node-pty said no')
           calls.push(`spawn ${input.cwd}`)
-          spawned.push({ input })
+          spawned.push({ input, confineToDeviceId })
           n += 1
           return {
             id: `session-${n}`,
@@ -685,6 +687,37 @@ describe('restoreOpenSessions', () => {
       resume: true,
       profileId: 'work',
     })
+  })
+
+  /*
+   * The restore half of *"2 of 6 survive, the rest come back clean"*. A session
+   * a device started is remembered with the id of the device it is held for, and
+   * that id has to reach the spawn, or the spawn cannot rebuild the boundary and
+   * the session comes back loose. It is passed *beside* the input, never on it:
+   * `CreateSessionInput` crosses the preload bridge and page code may not claim
+   * a device.
+   */
+  it('hands the spawn the device to re-confine for, when a device started the session', async () => {
+    const harness = driver([
+      {
+        session: saved({ cwd: '/home/asad/ClaudeImza', confineDeviceId: 'phone-7' }),
+        outcome: 'resume',
+        reason: 'r',
+      },
+    ])
+    await harness.run()
+    expect(harness.spawned[0].confineToDeviceId).toBe('phone-7')
+    // And never smuggled onto the input, which would put a device on the bridge.
+    expect(harness.spawned[0].input).not.toHaveProperty('confineDeviceId')
+    expect(harness.spawned[0].input).not.toHaveProperty('deviceId')
+  })
+
+  it('asks for no re-confinement for a tab opened at the keyboard', async () => {
+    // The two that already survived: desktop-started, unconfined. Nothing to
+    // rebuild, so the spawn is told exactly that rather than left to guess.
+    const harness = driver([{ session: saved(), outcome: 'resume', reason: 'r' }])
+    await harness.run()
+    expect(harness.spawned[0].confineToDeviceId).toBeNull()
   })
 
   it('keeps going when one session refuses to start, and says which', async () => {
@@ -883,21 +916,34 @@ describe('restoring is wired to launch', () => {
      */
     const retry = index.slice(index.indexOf("ipcMain.handle('session:held-retry'"))
     expect(
-      retry.slice(0, retry.indexOf('startSession(')),
+      retry.slice(0, retry.indexOf('restoreSpawn(')),
       `the retry handler does not call ${planName}, so a second attempt is planned by ` +
         'code the launch never runs',
     ).toContain(`${planName}(`)
-    // And through the one session-start path, exactly as the launch does.
-    expect(retry).toMatch(/await startSession\(\{/)
+    // And through the same `restoreSpawn` the launch restore uses, exactly as
+    // the launch does — so a held session a device started is re-confined on
+    // Try again rather than brought back loose, never the plain `startSession`.
+    expect(retry).toMatch(/await restoreSpawn\(\s*\{/)
+    expect(retry, 'Try again on a device session must not spawn it unconfined').not.toMatch(
+      /await startSession\(\{/,
+    )
   })
 
-  it('restores through the one session-start path', () => {
+  it('restores through the one session-start path, made to re-confine device sessions', () => {
     // A second spawn implementation for the restore path would be a session
     // that is subtly not the same kind of session — a different PATH, a
     // different profile — and only after a restart, which is the hardest kind
-    // of difference to notice.
+    // of difference to notice. `restoreSpawn` is not that: it is `startSession`
+    // for a tab opened here, and `startSession` with the folder boundary rebuilt
+    // first for a session a device started — the one starter, told which
+    // sessions to re-confine. The plain `startSession` here was itself a bug: it
+    // brought a device's session back *unconfined*, the boundary lapsing on the
+    // one event nobody watches for — a restart.
     const call = index.slice(index.indexOf('restoreOpenSessions({'))
-    expect(call).toMatch(/spawn: startSession,/)
+    expect(call).toMatch(/spawn: restoreSpawn,/)
+    expect(call, 'the plain starter here brings a device session back unconfined').not.toMatch(
+      /spawn: startSession,/,
+    )
   })
 
   it('keeps the sessions that did not come back, instead of forgetting them', () => {
@@ -991,7 +1037,12 @@ describe('restoring is wired to launch', () => {
     const main = readFileSync(join(ROOT, 'src/headless/daemon.ts'), 'utf8')
     expect(main).toMatch(/await host\.restore\(\)/)
     expect(headless).toMatch(/restoreOpenSessions\(/)
-    expect(headless).toMatch(/spawn: core\.startSession,/)
+    // Through `restoreSpawn`, which re-confines a session a device started
+    // rather than bringing it back loose — and on this host most sessions are a
+    // device's, so the plain starter here was the boundary lapsing on the
+    // ordinary case rather than a rare one.
+    expect(headless).toMatch(/spawn: core\.restoreSpawn,/)
+    expect(headless).not.toMatch(/spawn: core\.startSession,/)
   })
 
   it('never writes a restore banner into a session', () => {

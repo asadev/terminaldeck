@@ -74,6 +74,26 @@ describe('holding a session that did not start', () => {
     expect(Object.hasOwn(savedFrom(entry), 'tabKey')).toBe(false)
   })
 
+  it('holds the device a confined session was inside, so Try again re-confines it', () => {
+    // A session a device started that failed to restore is still confined work.
+    // The retry hands `confineDeviceId` to `restoreSpawn`, which rebuilds the
+    // boundary; dropping it here would make Try again reproduce the session
+    // *unconfined*, the one thing the boundary must never do. It also has to
+    // survive `savedFrom` into `openSessions`, so the next launch re-confines it
+    // too.
+    const held = new HeldSessions()
+    const entry = held.hold(session({ confineDeviceId: 'phone-7' }), 'the boundary could not be set')
+
+    expect(entry.confineDeviceId).toBe('phone-7')
+    expect(savedFrom(entry).confineDeviceId).toBe('phone-7')
+  })
+
+  it('writes no device for a tab opened at the keyboard, which has no boundary', () => {
+    const entry = new HeldSessions().hold(session(), 'it could not be started again')
+    expect(Object.hasOwn(entry, 'confineDeviceId')).toBe(false)
+    expect(Object.hasOwn(savedFrom(entry), 'confineDeviceId')).toBe(false)
+  })
+
   it('keeps two tabs on one agent in one folder as two entries', () => {
     /*
      * A key derived from the folder and the agent would collapse these, and
