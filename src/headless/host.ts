@@ -1724,10 +1724,14 @@ export async function createHeadlessHost(
          * reconnecting device would otherwise find a live conversation behind a
          * blank screen.
          */
-        // The same starter a phone's New Session goes through. A restore path
-        // with its own spawn would be a second kind of session that only appears
-        // after a restart, which is the hardest kind of difference to notice.
-        spawn: core.startSession,
+        // `restoreSpawn`: the same starter a phone's New Session goes through
+        // for a tab, and that starter with the folder boundary rebuilt first for
+        // a session a device started — which, on this host, is most of them. A
+        // plain `startSession` here would bring the phone's own sessions back
+        // *unconfined*, the boundary lapsing silently on every restart; and this
+        // host restarts on its own whenever WSL shuts the distribution down, so
+        // that is the ordinary case, not the rare one.
+        spawn: core.restoreSpawn,
         // Nobody to announce to. Attached devices learn about the session from
         // the fanout's own list the moment they ask for one.
         announce: () => undefined,

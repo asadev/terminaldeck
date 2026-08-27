@@ -99,6 +99,18 @@ export interface HeldSession {
    */
   tabKey?: string
   /**
+   * The device this session is held inside a folder for, carried so that Try
+   * again brings it back **as confined as it was** rather than loose.
+   *
+   * A session a device started that failed to restore is still confined work,
+   * and the retry re-applies its boundary exactly as the launch restore does —
+   * see {@link SavedSession.confineDeviceId}. Dropping it here would make the one
+   * button whose whole job is to reproduce a session reproduce it *unconfined*,
+   * which is the one thing the boundary must never do. Absent for a tab opened
+   * at the keyboard, which has no boundary.
+   */
+  confineDeviceId?: string
+  /**
    * Why it did not start, in a sentence written for the person.
    *
    * The same sentence the app log carries, on purpose: the log is what somebody
@@ -133,6 +145,9 @@ export function savedFrom(held: HeldSession): SavedSession {
     // as an absent key anyway — but only one of the two reads as absent to a
     // caller checking the property before it spawns.
     ...(held.tabKey !== undefined ? { tabKey: held.tabKey } : {}),
+    // And the device its boundary is rebuilt for, so a session written back to
+    // `openSessions` and restored next launch is still re-confined.
+    ...(held.confineDeviceId !== undefined ? { confineDeviceId: held.confineDeviceId } : {}),
   }
 }
 
@@ -178,6 +193,11 @@ export class HeldSessions {
       // The tab it was. `key` above names the *row*, which is minted here and
       // dies with the row; this names the tab, which outlives the app.
       ...(session.tabKey !== undefined ? { tabKey: session.tabKey } : {}),
+      // The device its boundary is rebuilt for, so Try again re-confines it
+      // rather than starting it loose.
+      ...(session.confineDeviceId !== undefined
+        ? { confineDeviceId: session.confineDeviceId }
+        : {}),
       reason,
       at: Date.now(),
     }

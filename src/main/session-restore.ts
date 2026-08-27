@@ -194,6 +194,36 @@ export interface SavedSession {
    * the same agent, in the same folder, with nothing in either of them.
    */
   lastSeenAt: number
+  /**
+   * The device this session is held inside a folder for, when a device started
+   * it — the one thing a restore needs to bring it back **as confined as it
+   * was**.
+   *
+   * ## Why it is here and why it is only an id
+   *
+   * A session a paired device starts is spawned inside a sandbox held to its
+   * granted folder. Everything that makes that sandbox — the folder, a home of
+   * its own, its own git identity — is a function of this id and the install's
+   * storage, so this id is the whole of what has to survive a restart:
+   * `host-core.ts`'s `confineForDevice` rebuilds the rest from it. Absent for a
+   * session started at the keyboard, which has no boundary and comes back as the
+   * ordinary tab it already is.
+   *
+   * ## Why remembering it was the fix
+   *
+   * Without it a `SavedSession` was a folder and a provider and no device, so a
+   * confined session could not be brought back held — and so it was not brought
+   * back at all. That is the whole of *"2 of 6 survive, the rest come back
+   * clean"*: the two that survived were started at the desktop, unconfined; the
+   * four from his phone were confined and were never written down. With it,
+   * `restoreOpenSessions` hands it to a spawn that re-applies the boundary, and
+   * a confined session comes back inside the same folder — or, if the boundary
+   * cannot be re-established on this machine, does not come back rather than come
+   * back loose. It is never put on `CreateSessionInput`: that type crosses the
+   * preload bridge, and which device a session belongs to is not something page
+   * code may claim.
+   */
+  confineDeviceId?: string
 }
 
 /**
@@ -641,8 +671,18 @@ export interface RestoreDeps {
   /** The Settings switch. Read at launch rather than captured. */
   enabled: () => boolean
   plan: (saved: readonly SavedSession[]) => Promise<RestoreDecision[]>
-  /** The one session-start path — `startSession` in `index.ts`, nothing else. */
-  spawn: (input: CreateSessionInput) => Promise<SessionMeta>
+  /**
+   * The one session-start path — `restoreSpawn` in `host-core.ts`, nothing
+   * else.
+   *
+   * `confineToDeviceId` is the second argument rather than a field on the input
+   * because the input is `CreateSessionInput`, which crosses the preload bridge,
+   * and which device a session belongs to is not something page code may claim.
+   * Non-null for a session a device started: the spawn re-applies its folder
+   * boundary, or refuses rather than start it unconfined. Null for a tab a
+   * person opened here, which starts exactly as before.
+   */
+  spawn: (input: CreateSessionInput, confineToDeviceId: string | null) => Promise<SessionMeta>
   /** Tell the window a session it did not ask for now exists. */
   announce: (meta: SessionMeta) => void
   /** Where a session that could not come back gets said out loud. */
@@ -700,26 +740,35 @@ export async function restoreOpenSessions(deps: RestoreDeps): Promise<RestoreRes
      * transcript to replay at all.
      */
     try {
-      const meta = await deps.spawn({
-        cwd: decision.session.cwd,
-        cols: decision.session.cols,
-        rows: decision.session.rows,
-        provider: decision.session.provider,
-        profileId: decision.session.profileId,
-        resume: decision.outcome === 'resume',
+      const meta = await deps.spawn(
+        {
+          cwd: decision.session.cwd,
+          cols: decision.session.cols,
+          rows: decision.session.rows,
+          provider: decision.session.provider,
+          profileId: decision.session.profileId,
+          resume: decision.outcome === 'resume',
+          /*
+           * And come back as the *same tab*, not as another one like it.
+           *
+           * The whole of what `SavedSession.tabKey` is for is this line: without
+           * it a restored session is a new tab that happens to hold the same
+           * conversation, and the window has nothing to match its saved
+           * arrangement against but the order these spawns happen to finish in.
+           * Spread rather than passed, because an absent key means "mint one" and
+           * `tabKey: undefined` would too — but only one of the two survives a
+           * reader who checks for the property.
+           */
+          ...(decision.session.tabKey !== undefined ? { tabKey: decision.session.tabKey } : {}),
+        },
         /*
-         * And come back as the *same tab*, not as another one like it.
-         *
-         * The whole of what `SavedSession.tabKey` is for is this line: without
-         * it a restored session is a new tab that happens to hold the same
-         * conversation, and the window has nothing to match its saved
-         * arrangement against but the order these spawns happen to finish in.
-         * Spread rather than passed, because an absent key means "mint one" and
-         * `tabKey: undefined` would too — but only one of the two survives a
-         * reader who checks for the property.
+         * And come back **as confined as it was**. For a session a device
+         * started this names the device its folder boundary is rebuilt from;
+         * the spawn re-applies it, or refuses rather than start it unconfined.
+         * Null for a tab opened at this keyboard — nothing to re-confine.
          */
-        ...(decision.session.tabKey !== undefined ? { tabKey: decision.session.tabKey } : {}),
-      })
+        decision.session.confineDeviceId ?? null,
+      )
       started.push(meta)
       deps.announce(meta)
       decisions.push(decision)

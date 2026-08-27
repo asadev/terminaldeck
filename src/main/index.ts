@@ -1069,7 +1069,8 @@ function announceSession(meta: SessionMeta): void {
  * `startSession` and the rest exactly as it did, so the move is a move and not
  * seven hundred lines of incidental churn.
  */
-const { ptys, wsl, sessions: remoteSessions, ledger, startSession, statablePath } = core
+const { ptys, wsl, sessions: remoteSessions, ledger, startSession, restoreSpawn, statablePath } =
+  core
 
 /**
  * Running a session as another login, and opening a sign-in terminal — the one
@@ -1616,12 +1617,15 @@ async function hydrateRenderer(): Promise<void> {
          * the same liability as the three secret files this app just spent an
          * afternoon locking down.
          */
-        // The same `startSession` the window's own button and a paired phone
-        // use. A restore path with its own spawn would be a second kind of
-        // session — different PATH, different profile handling — that only
-        // appears after a restart, which is the hardest kind of difference to
-        // ever notice.
-        spawn: startSession,
+        // `restoreSpawn`, which is `startSession` for a tab opened here — the
+        // same one the window's own button and a paired phone use — and, for a
+        // session a device started, `startSession` with its folder boundary
+        // rebuilt first. A restore path with its own *plain* spawn would bring a
+        // device's session back unconfined, the boundary lapsing on the one
+        // event nobody watches for; a restore path with a wholly separate spawn
+        // would be a second kind of session that only appears after a restart.
+        // This is neither: the one starter, told which sessions to re-confine.
+        spawn: restoreSpawn,
         announce: (meta) => send(SESSION_CREATED_CHANNEL, meta),
         report: (decisions) => {
           reportRestore(decisions)
@@ -4125,17 +4129,26 @@ function registerIpc(): void {
     }
 
     try {
-      const meta = await startSession({
-        cwd: held.cwd,
-        cols: held.cols,
-        rows: held.rows,
-        provider: held.provider,
-        profileId: held.profileId,
-        resume: decision.outcome === 'resume',
-        // As the same tab it was before it failed, not as a new one on the end
-        // of the bar. See `SavedSession.tabKey`.
-        ...(held.tabKey !== undefined ? { tabKey: held.tabKey } : {}),
-      })
+      // `restoreSpawn`, not the plain `startSession`: a held session a device
+      // started is confined work, and Try again has to bring it back inside its
+      // folder — never loose — exactly as the launch restore does. It re-applies
+      // the boundary, or refuses rather than start it unconfined, and the retry
+      // then reports that the same way as any other failure. A tab opened at the
+      // keyboard has no device and starts exactly as before.
+      const meta = await restoreSpawn(
+        {
+          cwd: held.cwd,
+          cols: held.cols,
+          rows: held.rows,
+          provider: held.provider,
+          profileId: held.profileId,
+          resume: decision.outcome === 'resume',
+          // As the same tab it was before it failed, not as a new one on the end
+          // of the bar. See `SavedSession.tabKey`.
+          ...(held.tabKey !== undefined ? { tabKey: held.tabKey } : {}),
+        },
+        held.confineDeviceId ?? null,
+      )
       ledger.held.release(held.key)
       send(SESSION_CREATED_CHANNEL, meta)
       logger.info('restore', 'came back on a retry', {

@@ -84,7 +84,9 @@ import {
   installWindowsTools,
   planFor,
   prepareDeviceHome,
+  unconfinedReason,
   windowsToolsFor,
+  type ConfinementKind,
   type DeviceConfinement,
 } from './confine'
 import { forgetBoundary, noteBoundary } from './session-boundary'
@@ -102,10 +104,15 @@ import { currentOpenShim, prependShim } from './open-shim'
 import { currentAppContext } from './app-context'
 import { installDeviceHomes, installHomeScopes } from './transcript'
 import { copilotHomeScope, isCopilotSession, type SpawnFence } from './copilot-session'
-import { createCredentialProxy, deviceKey, type CredentialProxy } from './remote/credentials'
+import {
+  createCredentialProxy,
+  deviceKey,
+  type CredentialProxy,
+  type GuestSession,
+} from './remote/credentials'
 import { GitHubAuthenticator, useAuthenticator } from './github-auth'
 import { createGitHubHostAccess, type GitHubHostAccess } from './remote/host-github'
-import type { BranchRef, GitHubFailure, RepoRef } from './github'
+import type { BranchRef, GitHubFailure, RepoRef } from './github' 
 import { FolderGrants } from './remote/folder-grants'
 import { SessionGrants } from './remote/session-grants'
 import { AccountGrants } from './remote/account-grants'
@@ -215,19 +222,32 @@ export class OpenSessionLedger {
   }
 
   /**
-   * What one live session would need to be started again, or null.
+   * What one live session would need to be started again *as an ordinary tab*,
+   * or null.
    *
-   * Null is a real answer and a load-bearing one rather than a miss: this map
-   * deliberately holds only the sessions that are somebody's *tab*, so a null
-   * here means "the copilot's own session, or one held inside a device's folder
-   * grant" — the two kinds that were left out because a `SavedSession` cannot
-   * carry what makes them what they are. `session-switch.ts` reads it as exactly
-   * that and refuses, rather than restarting one of them as an ordinary session
-   * in the same tab, which is precisely the substitution the comment beside
-   * `ledger.note` spends a page refusing to make.
+   * Null is a real answer and a load-bearing one rather than a miss: it means
+   * "the copilot's own session, or one held inside a device's folder grant" —
+   * the two kinds that must not be restarted from a `SavedSession` alone.
+   * `session-switch.ts` reads it as exactly that and refuses, rather than
+   * restarting one of them as an ordinary session in the same tab, which is
+   * precisely the substitution the comment beside `ledger.note` spends a page
+   * refusing to make.
+   *
+   * A confined session is now *held* in this map — it has to be, or the restore
+   * at launch cannot bring it back (that is the whole "2 of 6 survive, the rest
+   * come back clean" bug) — so the "left out" is no longer about what is stored.
+   * It is about what a caller may do with it. Restore rebuilds the boundary
+   * before it spawns; a switch and a replace do not, and restarting a confined
+   * session through them would drop the folder boundary it is held inside. So
+   * this answers null for a confined record exactly as when it was never written
+   * down, and the one place that reads it — the account switch — goes on
+   * refusing. Persisted for restore, invisible to the switch: two questions, and
+   * the record is the honest answer to only one of them.
    */
   get(id: string): SavedSession | null {
-    return this.records.get(id) ?? null
+    const record = this.records.get(id)
+    if (record === undefined) return null
+    return record.confineDeviceId === undefined ? record : null
   }
 
   /**
@@ -238,9 +258,20 @@ export class OpenSessionLedger {
    * conversation per store, and a tab about to be started must not be pointed at
    * a conversation another tab is already showing. Without the id there is no
    * way to leave yourself out of that comparison.
+   *
+   * A confined session is left out, for the same reason `get` answers null for
+   * one: this list is the ordinary tabs an account switch's occupancy check
+   * reasons about, and a confined session is not one. Its transcripts are under
+   * its own device home, never the store this check resolves for it, so
+   * including it could only ever be a *false* match — and a switch is never of a
+   * confined session anyway. The records still hold it for the restore; this is
+   * about what the live occupancy check may see, which is exactly what it saw
+   * before a confined session was remembered at all.
    */
   entries(): { id: string; saved: SavedSession }[] {
-    return [...this.records].map(([id, saved]) => ({ id, saved }))
+    return [...this.records]
+      .filter(([, saved]) => saved.confineDeviceId === undefined)
+      .map(([id, saved]) => ({ id, saved }))
   }
 
   /**
@@ -846,6 +877,148 @@ export interface HostCore {
    * restore down with it, and with it every other tab in the list.
    */
   canContinue(provider: ProviderId): boolean
+
+  /**
+   * The one session-start path the launch restore is handed, which re-applies a
+   * device's confinement instead of dropping it. See {@link restorableTab} and
+   * {@link spawnReconfined}; the restore hands it the folder to start and, for a
+   * session a device started, the id of the device to hold it for.
+   */
+  restoreSpawn(input: CreateSessionInput, confineToDeviceId: string | null): Promise<SessionMeta>
+}
+
+/* ----------------------------------------------------------- the tab gate -- */
+
+/**
+ * Which *tab* a session is, and which device its boundary must be rebuilt for
+ * when it comes back — decided together because they are one question asked
+ * once, and split apart is how the two used to drift.
+ *
+ * ## Why a confined session now gets a name
+ *
+ * It used to be lumped in with a launch the app composed for itself: both
+ * answered "not a tab", so neither was written into `openSessions`, so neither
+ * came back. For the copilot that is correct and stays so — see below. For a
+ * session a paired device started it was the whole of the bug Asad hit: *"2 of
+ * 6 survive, the rest come back clean"*. His Windows `state.json` held exactly
+ * the two sessions he started at the desktop, unconfined; the four he started
+ * from his phone were confined, and a confined session was never remembered, so
+ * there was nothing to restore. A device's session is a real person's session
+ * and is an ordinary tab in the window — it should come back, and it should
+ * come back *held inside the same folder*, which is what {@link confineDeviceId}
+ * carries and {@link spawnReconfined} re-applies.
+ *
+ * ## Why the copilot still does not
+ *
+ * `appComposed` is a launch this app composed for its own purposes — the
+ * copilot, spawned with a `fence` and a `--mcp-config`. Restoring one produces a
+ * bare Claude session in `<userData>/copilot` with no layer, no tools and no
+ * fence, hidden and billing. `host-core.copilot.test.ts` pins that it is not
+ * remembered; that does not change.
+ *
+ * ## Why a confined session with no device id is *also* left out
+ *
+ * The invariant is that a session a device started is never brought back
+ * unconfined. A remembered confined session carries the id its boundary is
+ * rebuilt from; one with no id could only come back unconfined, so it is not
+ * remembered at all — the same safe silence as before, rather than a boundary
+ * that lapses on the next launch. In practice every device session carries the
+ * id (`session-create.ts` sets it); this is the guard that keeps the invariant
+ * true even if one some day does not.
+ */
+export function restorableTab(input: {
+  confined: boolean
+  appComposed: boolean
+  /** The device this confinement was built for, when it was built for one. */
+  deviceId: string | undefined
+  /** A name the caller was handed to reuse — a restore putting a tab back. */
+  requested: string | undefined
+  /** The outgoing tab's name, when this launch replaces one (an account switch). */
+  inherited: string | undefined
+  mint: () => string
+}): { tabKey: string | null; confineDeviceId: string | null } {
+  if (input.appComposed) return { tabKey: null, confineDeviceId: null }
+  if (input.confined && (input.deviceId === undefined || input.deviceId === '')) {
+    return { tabKey: null, confineDeviceId: null }
+  }
+  const tabKey = input.requested ?? input.inherited ?? input.mint()
+  return { tabKey, confineDeviceId: input.confined ? (input.deviceId ?? null) : null }
+}
+
+/* ----------------------------------------------------- re-confined restore -- */
+
+/**
+ * What {@link spawnReconfined} needs, as seams, so the one rule it enforces —
+ * *a device's session is never brought back unconfined* — can be tested without
+ * a machine that can actually sandbox.
+ */
+export interface ReconfineDeps {
+  platform: Platform
+  confinementKind: (platform: Platform) => ConfinementKind
+  openGuestSession: (deviceId: string) => Promise<GuestSession>
+  confineForDevice: (deviceId: string) => DeviceConfinement
+  start: (
+    input: CreateSessionInput,
+    guest: GuestGitEnv,
+    confine: DeviceConfinement,
+  ) => Promise<SessionMeta>
+  noteOwner: (sessionId: string, deviceId: string) => void
+}
+
+/**
+ * Bring a session a device started back **held inside its folder**, or refuse.
+ *
+ * The restore at launch used to hand every remembered session to the plain
+ * starter, which is right for a tab a person opened here and wrong for one a
+ * device started: that one was spawned confined and the plain starter would
+ * spawn it unconfined, so a boundary the grant screen promised would quietly
+ * lapse the first time the app restarted. This is the path that keeps the
+ * promise, and it rebuilds the boundary exactly as a fresh device session does
+ * — the same guest git isolation and the same {@link confineForDevice} plan.
+ *
+ * It fails **safe**, in both shapes a confinement can be unavailable:
+ *
+ *  - **No mechanism right now.** On Windows before the one-time AppContainer
+ *    grant `confinementKind` answers `'none'`, and the plain starter would then
+ *    silently drop the `confine` and run the session unconfined — the sandbox is
+ *    only applied when there is one to apply. So this refuses *before* the spawn
+ *    rather than letting that happen. The session does not come back; the
+ *    restore report says why. That is the conservative half of the deal: a
+ *    device's session that cannot be held is not started, never started loose.
+ *  - **A mechanism that cannot be proven.** When there is a mechanism, `start`
+ *    runs `confineSpawn`, which measures a real escape attempt and **throws**
+ *    `ConfinementUnavailableError` if the boundary does not hold. That throw
+ *    propagates out of here, the guest session is closed, and the restore counts
+ *    it as a session that could not be started — again, not one started loose.
+ */
+export async function spawnReconfined(
+  input: CreateSessionInput,
+  deviceId: string,
+  deps: ReconfineDeps,
+): Promise<SessionMeta> {
+  if (deps.confinementKind(deps.platform) === 'none') {
+    throw new Error(
+      'it was started from a device and its folder boundary cannot be re-established on ' +
+        `this machine, so it was not started rather than started unconfined — ${unconfinedReason(
+          deps.platform,
+        )}`,
+    )
+  }
+  const guest = await deps.openGuestSession(deviceId)
+  const confine = deps.confineForDevice(deviceId)
+  let meta: SessionMeta
+  try {
+    // `start` is `startSession`, which applies the sandbox and throws if it
+    // cannot be proven. A throw here is the safe outcome — a session not
+    // started — so nothing catches it but the guest cleanup below.
+    meta = await deps.start(input, guest.env, confine)
+  } catch (error) {
+    guest.close()
+    throw error
+  }
+  guest.started(meta.id)
+  deps.noteOwner(meta.id, deviceId)
+  return meta
 }
 
 /* --------------------------------------------------------------- assembly -- */
@@ -1079,6 +1252,39 @@ export function createHostCore(options: HostCoreOptions): HostCore {
     dir: join(options.storageDir, 'guest-git'),
     hostCredential: () => github.gitCredential(),
   })
+
+  /**
+   * The confinement one device's session is held inside — the folder boundary,
+   * its own home, its own git identity — built from the pieces this file owns.
+   *
+   * It is a *function of the device id and this install's storage*, and nothing
+   * else: the home and the guest git directory are named from the id, and the
+   * two read-only files are regenerated from code at every start. That is what
+   * makes a restore possible at all — the launch after a restart no longer has
+   * the live request the device sent, only the id it wrote down, and from the id
+   * this rebuilds the identical boundary. Both callers go through here: the
+   * device that starts a fresh session, and {@link restoreSpawn} that brings one
+   * back, so the boundary a restored session gets cannot drift from the one it
+   * had. `remote/session-create.ts`'s spawn used to build this inline; the parts
+   * it explained in place are explained where each is granted below.
+   */
+  const confineForDevice = (deviceId: string): DeviceConfinement => {
+    const key = deviceKey(deviceId)
+    const guestRoot = join(options.storageDir, 'guest-git')
+    return {
+      home: prepareDeviceHome(deviceHomesRoot(options.storageDir), key),
+      // The device's guest git directory has to be writable or `git config
+      // --global` inside the session writes to a file it cannot open.
+      writable: [guestGitDir(guestRoot, key)],
+      // The credential helper and the app's own context documents, granted as
+      // *files* because their folder is inside `<userData>` — which also holds
+      // transcripts, pairing credentials and `state.json`, and which the plan
+      // keeps out of every read root. They are read-only and regenerated at
+      // every start.
+      files: [join(guestRoot, HELPER_FILE), ...(currentAppContext()?.files ?? [])],
+      deviceId,
+    }
+  }
 
   /*
    * Tell the transcript layer where confined sessions keep their homes.
@@ -1565,9 +1771,11 @@ export function createHostCore(options: HostCoreOptions): HostCore {
     const appComposed = fence !== undefined || (extraArgs !== undefined && extraArgs.length > 0)
 
     /*
-     * The name of the *tab* this session is, or null when it is not one.
+     * The name of the *tab* this session is (null when it is not one), and the
+     * device its boundary must be rebuilt for on restore (null when there is
+     * none). One decision, {@link restorableTab}, because they are one question.
      *
-     * ## Why it is minted here and not derived anywhere
+     * ## Why a name is minted here and not derived anywhere
      *
      * Because the thing it has to survive is the process, and everything
      * derivable about a tab is shared with its sibling. Two tabs on the same
@@ -1577,37 +1785,42 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      * other. A minted key is the only per-tab thing that can exist, so it is
      * minted once and then only ever carried.
      *
-     * ## Why null is the same question as `ledger.note`
+     * ## Why the tab name is the same question as `ledger.note`
      *
      * One condition, asked once, used twice — because a session that is *not*
      * written into `openSessions` has no tab to come back to, and a key on one
      * of those would put a name in somebody's saved arrangement that no launch
-     * could ever resolve. The two used to be able to drift; now the ledger write
-     * below is gated on this being non-null, so they cannot.
+     * could ever resolve. The two cannot drift: the ledger write below is gated
+     * on `tabKey` being non-null, and both come out of the one call.
+     *
+     * ## Why a confined session is now here rather than excluded
+     *
+     * It used to read `confined || appComposed ? null : …`, folding a device's
+     * confined session in with the copilot's own composed launch — and that was
+     * the bug: *"2 of 6 survive, the rest come back clean"*. A device's session
+     * is a real tab and should come back, held inside the same folder. So the
+     * two are split: `appComposed` is still not a tab, and a confined session
+     * *is* one, carrying the device id its boundary is rebuilt from. See
+     * `restorableTab`, which also refuses to remember a confined session with no
+     * id to rebuild from — so a remembered one can always come back confined.
      *
      * ## Why an account switch keeps the key
      *
      * `replaces` is set by exactly one caller — the switch that restarts a
-     * session under another login *in the same tab* — and that is the same tab
-     * by anybody's reading of the word. Inheriting it means the bar does not
-     * reshuffle when somebody changes account, which the old anchor did on every
-     * switch: the account was part of the identity, so changing it renamed the
-     * tab.
-     *
-     * A switch starts the replacement before it stops the outgoing process, so
-     * for that moment two live sessions carry one name. That is survivable and
-     * deliberately not guarded against: the strip keeps the first tab it sees
-     * under a name and leaves the second unarranged, the outgoing session is
-     * gone a moment later, and the arrangement is rewritten on the render after
-     * that. `replaceWindowInStrip` is what actually holds the position across a
-     * switch, by id, and it does not depend on this.
+     * session under another login *in the same tab*. Inheriting the name means
+     * the bar does not reshuffle when somebody changes account. `ledger.get`
+     * answers null for a confined record, so a switch never inherits one of
+     * those keys — but a switch of a confined session is refused upstream
+     * anyway, so `replaces` never names one here.
      */
-    const tabKey =
-      confined || appComposed
-        ? null
-        : (input.tabKey ??
-          (input.replaces !== undefined ? ledger.get(input.replaces)?.tabKey : undefined) ??
-          randomUUID())
+    const { tabKey, confineDeviceId } = restorableTab({
+      confined,
+      appComposed,
+      deviceId: confine?.deviceId,
+      requested: input.tabKey,
+      inherited: input.replaces !== undefined ? ledger.get(input.replaces)?.tabKey : undefined,
+      mint: randomUUID,
+    })
 
     /*
      * `HOME` and `TMPDIR` are part of the environment rather than an afterthought
@@ -2060,25 +2273,26 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      * this project's default profile is", and that is a question worth asking
      * again next launch rather than freezing today's answer.
      *
-     * ## Confined sessions are deliberately not remembered
+     * ## A confined session is remembered, carrying the device it belongs to
      *
-     * A `SavedSession` carries a folder and a provider and no device, so a
-     * restore has nothing to rebuild a boundary from — it would start the
-     * session again as an ordinary tab. That is not a smaller version of the
-     * feature, it is the boundary silently lapsing at the next launch, and a
-     * device can attach to a running session without naming a folder, so the
-     * lapsed session is reachable by the same device that started the confined
-     * one. A security property that survives until the app restarts is the kind
-     * of thing that is worse than not having it, because nobody is watching for
-     * the moment it stops being true.
+     * It used not to be, and the cost was Asad's bug: *"2 of 6 survive, the rest
+     * come back clean"*. A `SavedSession` carried a folder and a provider and no
+     * device, so a restore had nothing to rebuild a boundary from and would have
+     * started the session again as an ordinary tab — the boundary silently
+     * lapsing at the next launch. The answer was not to forget the session but
+     * to remember the one thing that was missing: `confineDeviceId`, the id
+     * {@link confineForDevice} rebuilds the whole boundary from. So a confined
+     * session is written down like any tab, plus that id, and `restoreSpawn`
+     * brings it back held inside the same folder — or, if the boundary cannot be
+     * re-established, does not bring it back at all. The security property is
+     * kept the honest way: not by refusing to remember, but by refusing to
+     * restart it unconfined.
      *
-     * So it is not written down, and the cost is stated rather than hidden: a
-     * session a device started does not come back after the app is restarted,
-     * and the device starts a new one. The honest fix is for the ledger to carry
-     * the device and for the restore path to rebuild the confinement — worth
-     * doing, and a change to the stored shape rather than to this line.
+     * `restorableTab` above still refuses a confined session with *no* device id
+     * — one that could only come back unconfined — so nothing that is remembered
+     * here can come back loose.
      *
-     * ## Nor is a session this app started for itself
+     * ## A session this app started for itself is still not remembered
      *
      * The same argument, one step further. A `SavedSession` is a folder, an
      * agent and an account — everything a person's tab is made of, and nothing
@@ -2101,10 +2315,10 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      * enforced at the one place that could otherwise arrange it behind
      * everybody's back.
      *
-     * Both of those questions are settled before the spawn, beside `confined`,
-     * because the answer is also what decides whether this session is a *tab* —
-     * see `tabKey` there. One condition, in one place, rather than two spellings
-     * of it that can drift.
+     * All of this is settled before the spawn, beside `confined`, because the
+     * answer is also what decides whether this session is a *tab* and which
+     * device to hold it for — see `restorableTab` there. One decision, in one
+     * place, rather than spellings of it that can drift.
      */
     if (tabKey !== null) {
       ledger.note(meta.id, {
@@ -2118,6 +2332,10 @@ export function createHostCore(options: HostCoreOptions): HostCore {
         // tab* comes back, and it is on this record rather than beside it
         // because it has to be written and read by the same `openSessions`.
         tabKey,
+        // And, for a session a device started, the id its folder boundary is
+        // rebuilt from on restore. Absent for a session started at this
+        // keyboard, which comes back as the ordinary tab it already is.
+        ...(confineDeviceId !== null ? { confineDeviceId } : {}),
       })
     }
 
@@ -2477,54 +2695,16 @@ export function createHostCore(options: HostCoreOptions): HostCore {
            * could type `cd ..`. Every sentence in the product said exactly that,
            * on purpose, and this is the change that lets one of them stop.
            *
-           * The three directories handed over are the ones this module knows
-           * about and `confine/` deliberately does not. The device's guest git
-           * directory has to be writable or `git config --global` inside the
-           * session writes to a file it cannot open. The helper is granted as a
-           * *file*: it sits one level above the per-device directories, so
-           * granting its folder would hand this device every other device's git
-           * identity.
+           * The directories and files it hands over are the ones this module
+           * knows about and `confine/` deliberately does not; `confineForDevice`
+           * builds them, and is built once so that the boundary a restore
+           * rebuilds cannot drift from this one. It carries the device id too —
+           * `startSession` decides the browser verbs from it, and it rides on
+           * the confinement rather than on `CreateSessionInput` because the
+           * input crosses the preload bridge and which device a session belongs
+           * to is not something page code may claim.
            */
-          const key = deviceKey(input.deviceId)
-          const guestRoot = join(options.storageDir, 'guest-git')
-          const confine: DeviceConfinement = {
-            home: prepareDeviceHome(deviceHomesRoot(options.storageDir), key),
-            writable: [guestGitDir(guestRoot, key)],
-            /*
-             * The credential helper, and the app's own context documents.
-             *
-             * The second entry is here because of where the first one taught us
-             * to put things. `confine/plan.ts` keeps `<userData>` out of every
-             * read root on purpose — it also holds transcripts, pairing
-             * credentials and `state.json` — and the context documents live
-             * inside it. Without this line the map handed to a remote session at
-             * boot would name a directory that session cannot open, which is
-             * precisely the session type Asad was filming when he asked for the
-             * map in the first place.
-             *
-             * Granted as *files* rather than as their folder, exactly like the
-             * helper above and for a weaker version of the same reason: the
-             * folder is inside `<userData>`, so opening it would be one small
-             * step towards opening the thing this boundary exists to keep shut.
-             * They are read-only, they are regenerated from code at every start,
-             * and they contain nothing this session was not already told.
-             */
-            files: [join(guestRoot, HELPER_FILE), ...(currentAppContext()?.files ?? [])],
-            /*
-             * And which device this is all for, carried to the one gate that
-             * needs it.
-             *
-             * `startSession` decides whether this launch gets the browser verbs,
-             * and that decision now depends on whether *this* device can serve
-             * one — a paired desktop can, a phone cannot. The device id is right
-             * here and nowhere downstream of this line, and it rides on the
-             * confinement rather than on `CreateSessionInput` for the reason
-             * `guest`, `confine` and `fence` are arguments rather than fields:
-             * the input crosses the preload bridge, and which device a session
-             * belongs to is not something page code may claim.
-             */
-            deviceId: input.deviceId,
-          }
+          const confine = confineForDevice(input.deviceId)
           let meta: SessionMeta
           try {
             meta = await startSession(
@@ -2691,6 +2871,31 @@ export function createHostCore(options: HostCoreOptions): HostCore {
     kinds.forget(deviceId)
   }
 
+  /**
+   * The starter the launch restore is handed. See {@link HostCore.restoreSpawn}.
+   *
+   * For a tab a person opened here — no device — it is the plain `startSession`,
+   * unchanged. For a session a device started, it goes through `spawnReconfined`
+   * so the folder boundary is rebuilt rather than dropped. Both shells wire this
+   * as their restore `spawn`, so the desktop and the headless host bring a
+   * device's session back the same way, and the headless host is the one that
+   * matters most: it is where the phone's sessions live.
+   */
+  const restoreSpawn = (
+    input: CreateSessionInput,
+    confineToDeviceId: string | null,
+  ): Promise<SessionMeta> =>
+    confineToDeviceId === null
+      ? startSession(input)
+      : spawnReconfined(input, confineToDeviceId, {
+          platform,
+          confinementKind,
+          openGuestSession: (id) => credentials.openGuestSession(id),
+          confineForDevice,
+          start: (i, guest, confine) => startSession(i, guest, confine),
+          noteOwner: noteWindowOwner,
+        })
+
   return {
     ptys,
     controlAccess,
@@ -2709,6 +2914,7 @@ export function createHostCore(options: HostCoreOptions): HostCore {
     hostGitHub,
     ledger,
     startSession,
+    restoreSpawn,
     statablePath,
     canContinue,
   }
