@@ -115,6 +115,10 @@ fun MachineBrowserScreen(
     /** Open the driven window for a window id — or a surface's own id, `""` for the front tab. */
     onOpenWindow: (String) -> Unit,
     onNewWindow: (url: String?, isolated: Boolean, session: String?) -> Unit,
+    /** Open a page **on this phone**, over a tunnel — the machine's port and the path to ask it for.
+     *  The new-window sheet's *This phone* destination; only the machine's own ports can be reached
+     *  this way, which is a fact about what a tunnel is. */
+    onOpenHere: (port: Int, path: String) -> Unit,
     onBind: (id: String, session: String?) -> Unit,
     onClose: (id: String) -> Unit,
     onProfiles: () -> Unit,
@@ -248,9 +252,14 @@ fun MachineBrowserScreen(
     if (showNew) {
         NewWindowSheet(
             ports = ports,
+            machineLabel = machineLabel,
             onDismiss = { showNew = false },
-            onOpen = { url, isolated ->
-                onNewWindow(url, isolated, null)
+            onOpenOnMachine = { url ->
+                onNewWindow(url, false, null)
+                showNew = false
+            },
+            onOpenHere = { port, path ->
+                onOpenHere(port, path)
                 showNew = false
             },
         )
@@ -525,42 +534,68 @@ private fun sessionRow(session: WindowSession): String {
 /* ----------------------------------------------------------------- new window -- */
 
 /**
- * Open a window on the machine — a blank one, a page, a port, or a search.
+ * Open a window — a blank one, a page, a port, or a search — on this phone or on the machine.
  *
  *   > *"I wanted it to be like ONE page where I can start a new window."*
  *
- * The address field is the whole of it: [LocalhostAddress.classify] decides what a line is, so
+ * ## The destination first, because it is the question the rest hangs on
+ *
+ * *Where does this open* has two answers, and they are a horizontal picker at the top — **This phone**
+ * first, the way iOS orders it:
+ *
+ *  - **This phone** — a tunnel, and the page loads in this phone's own web view on a real loopback
+ *    origin, so it gets cookies, a service worker and the WebSocket a dev server's hot reload runs on.
+ *    Only the machine's own ports can be reached this way, which is a fact about what a tunnel is
+ *    rather than a restriction chosen here — a web address typed against it is refused with a sentence.
+ *  - **Machine** — the machine's own browser, in its own profile, watchable and drivable from here.
+ *
+ * **Private is not a destination here.** It moved to the window's own settings, where the same two
+ * words — *Make private* / *Make shared* — already live: a window opens shared, and is converted there.
+ *
+ * The address field is the rest of it: [LocalhostAddress.classify] decides what a line is, so
  * `google.com`, `https://…`, `3000` and `what is my ip` all do the obvious thing, and the machine's
- * own listening ports sit under it as one-tap suggestions — *"A port is an address."* Private is a
- * choice made here, before the window exists, because a login typed into a window that turned out to
- * be shared is already in the machine's cookie jar by the time anybody thinks to convert it.
+ * own listening ports sit under it as one-tap suggestions — *"A port is an address."*
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun NewWindowSheet(
     ports: List<LocalPort>,
+    machineLabel: String,
     onDismiss: () -> Unit,
-    onOpen: (url: String?, isolated: Boolean) -> Unit,
+    onOpenOnMachine: (url: String?) -> Unit,
+    onOpenHere: (port: Int, path: String) -> Unit,
 ) {
     val colors = DeckTheme.colors
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var address by remember { mutableStateOf("") }
-    var isolated by remember { mutableStateOf(false) }
+    // Where the window opens. This phone first — see the header — then the machine. Private is gone
+    // from here; a machine window opens shared and is made private in its own settings.
+    var onPhone by remember { mutableStateOf(true) }
     var refused by remember { mutableStateOf<String?>(null) }
 
     fun go() {
         val typed = address.trim()
+        if (onPhone) {
+            // This phone can only reach the machine's own ports. A blank line or a web address is
+            // refused with a sentence, the sheet staying up so what was typed is not thrown away.
+            when (val classified = LocalhostAddress.classify(typed)) {
+                is LocalhostAddress.Typed.Tunnel -> onOpenHere(classified.port, classified.path)
+                else -> refused =
+                    "This phone opens $machineLabel's own ports. Type a port, or switch to Machine."
+            }
+            return
+        }
         if (typed.isEmpty()) {
-            // A blank window opens on the machine, honouring the Private choice.
-            onOpen(null, isolated)
+            // A blank window opens on the machine, shared.
+            onOpenOnMachine(null)
             return
         }
         when (val classified = LocalhostAddress.classify(typed)) {
-            // A port on the machine opens on the machine's own loopback — this whole screen drives the
-            // machine's browser, so even a port is a page over there rather than a tunnel on the phone.
-            is LocalhostAddress.Typed.Tunnel -> onOpen("http://localhost:${classified.port}${classified.path}", isolated)
-            is LocalhostAddress.Typed.Page -> onOpen(classified.url, isolated)
-            is LocalhostAddress.Typed.Search -> onOpen(classified.url, isolated)
+            // A port on the machine opens on the machine's own loopback — the Machine destination drives
+            // the machine's browser, so even a port is a page over there rather than a tunnel on the phone.
+            is LocalhostAddress.Typed.Tunnel -> onOpenOnMachine("http://localhost:${classified.port}${classified.path}")
+            is LocalhostAddress.Typed.Page -> onOpenOnMachine(classified.url)
+            is LocalhostAddress.Typed.Search -> onOpenOnMachine(classified.url)
             is LocalhostAddress.Typed.Refused -> refused = classified.why
         }
     }
@@ -583,9 +618,9 @@ private fun NewWindowSheet(
 
             FieldLabel("Open in")
             DeckSegmented(
-                options = listOf("Shared", "Private"),
-                selectedIndex = if (isolated) 1 else 0,
-                onSelect = { isolated = it == 1 },
+                options = listOf("This phone", "Machine"),
+                selectedIndex = if (onPhone) 0 else 1,
+                onSelect = { onPhone = it == 0; refused = null },
             )
 
             Spacer(Modifier.padding(top = Space.x4))

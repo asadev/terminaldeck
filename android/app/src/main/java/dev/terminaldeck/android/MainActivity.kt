@@ -1409,6 +1409,13 @@ fun TerminalDeckApp(
                     navController.navigate("watch/" + Uri.encode(id.ifEmpty { WATCH_FRONT_TAB }))
                 },
                 onNewWindow = { url, isolated, session -> viewModel.openMachineWindow(url, isolated, session) },
+                // The new-window sheet's *This phone* destination: serve the machine's port on this
+                // phone's own loopback and open the page in this phone's web view, the same act the
+                // ports list's *Open here* runs.
+                onOpenHere = { port, _ ->
+                    viewModel.servePort(port)
+                    navController.navigate(ROUTE_LOCALHOST_PAGE)
+                },
                 onBind = { id, session -> viewModel.bindMachineWindow(id, session) },
                 onClose = { id -> viewModel.closeMachineWindow(id) },
                 onProfiles = { navController.navigate(ROUTE_MACHINE_PROFILES) },
