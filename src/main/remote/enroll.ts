@@ -86,7 +86,7 @@ export interface EnrollAccess {
   >
 }
 
-/** OpenSSH's default. Overridable per host through the environment, not a setting. */
+/** OpenSSH's default: the fallback only when nothing else names the port. See {@link sshdPort}. */
 const DEFAULT_SSHD_PORT = 22
 
 /**
@@ -167,19 +167,55 @@ export const SIGN_IN_NOT_SAVED =
   'That login was accepted, but this machine could not save the new device. Check that its state folder is writable, then try again.'
 
 /**
- * Which port sshd is on, from the environment or the standard 22.
+ * Which port sshd is on: the override if set, then the port this process was
+ * reached on, then the standard 22.
  *
- * An environment variable rather than a setting, matching `RELAY_URL_ENV`: the
- * one host that needs a non-standard port is a box someone set up by hand, and a
+ * `TERMINALDECK_SSHD_PORT` is still read first and still wins, and it is still an
+ * environment variable rather than a setting, matching `RELAY_URL_ENV`: the one
+ * host that needs a non-standard port is a box someone set up by hand, and a
  * setting for it would be a control almost nobody should touch sitting in front
- * of everybody. A value that is not a whole port number is ignored rather than
- * trusted — a typo must not point the probe somewhere odd.
+ * of everybody.
+ *
+ * What changed is that it is no longer *required*. A host set up the way the one
+ * this was written for is — reached over SSH, on his WSL box, whose sshd listens
+ * on 2222 — is running inside the very session that authenticated on that port,
+ * and sshd hands the process that port in `SSH_CONNECTION`:
+ * `"<client-ip> <client-port> <server-ip> <server-port>"`, of which the last
+ * field is the port to probe. So the machine already knows the answer it used to
+ * make its owner type, and reads it. That closes the trap the header's whole
+ * apology is about — an evening lost to the probe dialling 22 while sshd answered
+ * on 2222 — at its source rather than only explaining it afterwards, and
+ * `TERMINALDECK_SSHD_PORT` steps back to being the override it reads like.
+ *
+ * Anything that is not a whole in-range port is ignored at every step rather than
+ * trusted: a typo in the override, or an `SSH_CONNECTION` some wrapper rewrote,
+ * must not point the probe somewhere odd, so each unreadable source falls through
+ * to the next. A process not reached over SSH at all — a systemd unit, or the
+ * desktop app answering for its own Remote Login — has no `SSH_CONNECTION`, and
+ * 22 is right there, with the override still on hand for the one case that has
+ * neither: sshd on a non-standard port under systemd, with no session to read.
  */
 function sshdPort(env: NodeJS.ProcessEnv): number {
-  const raw = env.TERMINALDECK_SSHD_PORT
-  if (typeof raw !== 'string' || raw.trim() === '') return DEFAULT_SSHD_PORT
+  const override = parsePort(env.TERMINALDECK_SSHD_PORT)
+  if (override !== null) return override
+  // The server port is the last of the four fields sshd writes into
+  // `SSH_CONNECTION` for the session it opened — the port it just authenticated
+  // this process over, which is the port its own loopback probe has to dial.
+  const authenticatedOn = parsePort(env.SSH_CONNECTION?.trim().split(/\s+/)[3])
+  if (authenticatedOn !== null) return authenticatedOn
+  return DEFAULT_SSHD_PORT
+}
+
+/**
+ * A whole, in-range TCP port from a string, or null for anything that is not one
+ * — unset, blank, a float, a name, a number outside 1–65535. Null means "say
+ * nothing", so a caller falls through to its next source rather than trusting a
+ * value it could not read.
+ */
+function parsePort(raw: string | undefined): number | null {
+  if (typeof raw !== 'string' || raw.trim() === '') return null
   const port = Number(raw)
-  return Number.isInteger(port) && port > 0 && port <= 65535 ? port : DEFAULT_SSHD_PORT
+  return Number.isInteger(port) && port > 0 && port <= 65535 ? port : null
 }
 
 /**

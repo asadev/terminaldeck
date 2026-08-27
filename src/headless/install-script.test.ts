@@ -280,6 +280,46 @@ describe('the shape of the script itself', () => {
     expect(script).not.toMatch(/^\s*sudo /m)
   })
 
+  it('leaves the host’s state and the agent’s login untouched by an update', () => {
+    /*
+     * The data-loss symptom this whole lane exists for, guarded on the headless
+     * side. Asad reported that a Windows *or headless* update logs the account
+     * out and loses history, and asked that the two be aligned. The headless
+     * host already preserves all of it across `install.sh` — the relay identity,
+     * the device roster and the account — for one plain reason: that state lives
+     * in the host's own directory (`~/.local/share/terminaldeck`) and the
+     * agent's `~/.claude`, and this script installs a package and a private Node
+     * runtime and never so much as names either place.
+     *
+     * So the guard is two-sided, and it is here to make a future edit that
+     * *would* reach into those directories fail before it ships. Every
+     * destructive command the script runs is scoped to the private runtime it is
+     * replacing (`$RUNTIME`) and the staging directory beside it (`$tmp`); the
+     * one `rm` that names the runtime directly is printed for a person to run by
+     * hand, not executed. And the state directory is a string the script does
+     * not contain at all.
+     */
+    const executed = script
+      .split('\n')
+      .map((line) => line.replace(/#.*$/, ''))
+      .filter((line) => /\brm\s+-rf\b|\bmv\s/.test(line))
+      // A line that only *prints* a command (the uninstall hint) removes nothing.
+      .filter((line) => !/^\s*(say|die|printf|echo|cat|warn)\b/.test(line))
+
+    expect(executed.length).toBeGreaterThan(0)
+    for (const line of executed) {
+      expect(line, `an update may only remove the runtime or its staging dir, not: ${line.trim()}`).toMatch(
+        /\$tmp\b|\$RUNTIME\b|\$NODE_DIR\b/,
+      )
+    }
+
+    // Never named, so an update cannot reset, relocate or clear the host's state
+    // directory or the agent's login — the two places all of it actually lives.
+    expect(script).not.toMatch(/\.local\/share/)
+    expect(script).not.toMatch(/XDG_DATA_HOME/)
+    expect(script).not.toMatch(/\.claude\b/)
+  })
+
   it('keeps the user-prefix fallback rather than telling anyone to re-run under sudo', () => {
     // Installing a user's own tool as root leaves every future update needing
     // root too. This has been the behaviour since the first version and the

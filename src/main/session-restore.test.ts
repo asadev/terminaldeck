@@ -646,6 +646,47 @@ describe('restoreOpenSessions', () => {
     })
   })
 
+  /*
+   * The two Windows symptoms Asad reported, in one session and one test.
+   *
+   * A session that ran inside WSL came back on Windows having lost its
+   * conversation history *and* logged out of its account. Both are the one
+   * restore, and both are on Windows because the folder is a Linux path: the
+   * transcript is a file inside the distribution, which Windows cannot read but
+   * `claude --continue` re-reads for itself — so the plan has to *resume* it
+   * rather than start it clean — and the login that wrote it is this session's
+   * profile, which has to come back with it or the agent inside the distro
+   * starts signed out. Driven for `win32` because a green macOS run proves
+   * nothing here: on the Mac the folder is a host path and neither symptom can
+   * fire, which is exactly why the feature looked fine on one platform.
+   */
+  it('brings a WSL session back on its own account, continuing its conversation', async () => {
+    const wslSession = saved({ cwd: '/home/asad/ClaudeImza', profileId: 'work' })
+
+    // The plan, made the way index.ts makes it: a per-profile config directory
+    // (a real Windows path, meaningless inside the distro), and
+    // `conversationOnDisk` answering as it does on a Windows host.
+    const plan = await planRestore(
+      [wslSession],
+      probes({
+        configDir: (session) =>
+          `C:\\Users\\Imza\\AppData\\Roaming\\terminaldeck\\profiles\\${session.profileId}`,
+        conversation: (session, configDir) => conversationOnDisk(session, configDir, 'win32'),
+      }),
+    )
+    expect(outcomes(plan)).toEqual(['resume'])
+
+    // And the spawn that plan drives: continuing (the history) and on `work`
+    // (the account). Losing either of these is the bug.
+    const harness = driver(plan)
+    await harness.run()
+    expect(harness.spawned[0].input).toMatchObject({
+      cwd: '/home/asad/ClaudeImza',
+      resume: true,
+      profileId: 'work',
+    })
+  })
+
   it('keeps going when one session refuses to start, and says which', async () => {
     const harness = driver(
       [

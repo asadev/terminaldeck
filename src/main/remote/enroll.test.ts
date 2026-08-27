@@ -96,14 +96,42 @@ describe('a good sign-in', () => {
     expect(auth.deviceHoldsKey(result.deviceId, KEY())).toBe(false)
   })
 
-  it('passes the sshd port from the environment, and defaults to 22', async () => {
-    const one = fakeVerifier([{ ok: true }])
-    await signIn(build(one.verify, { TERMINALDECK_SSHD_PORT: '2200' }).access)
-    expect(one.calls[0]?.port).toBe(2200)
+  it('dials the sshd port: the override, then the SSH session’s own port, then 22', async () => {
+    // Set by hand: it wins, exactly as before.
+    const override = fakeVerifier([{ ok: true }])
+    await signIn(build(override.verify, { TERMINALDECK_SSHD_PORT: '2200' }).access)
+    expect(override.calls[0]?.port).toBe(2200)
 
-    const two = fakeVerifier([{ ok: true }])
-    await signIn(build(two.verify, {}).access)
-    expect(two.calls[0]?.port).toBe(22)
+    // Not set, but this host is running inside the SSH session that just
+    // authenticated on 2222 — his WSL box. `SSH_CONNECTION` is
+    // "<client-ip> <client-port> <server-ip> <server-port>", so the last field is
+    // the port sshd answered on, and no variable has to be set for it to be
+    // found. This is the case the module header's whole apology was written for.
+    const detected = fakeVerifier([{ ok: true }])
+    await signIn(build(detected.verify, { SSH_CONNECTION: '100.64.0.9 51875 100.86.107.119 2222' }).access)
+    expect(detected.calls[0]?.port).toBe(2222)
+
+    // Both present: the explicit override still wins, so a box that needs a value
+    // it cannot detect can always force one.
+    const both = fakeVerifier([{ ok: true }])
+    await signIn(
+      build(both.verify, {
+        TERMINALDECK_SSHD_PORT: '2200',
+        SSH_CONNECTION: '100.64.0.9 51875 100.86.107.119 2222',
+      }).access,
+    )
+    expect(both.calls[0]?.port).toBe(2200)
+
+    // Neither: OpenSSH's default.
+    const bare = fakeVerifier([{ ok: true }])
+    await signIn(build(bare.verify, {}).access)
+    expect(bare.calls[0]?.port).toBe(22)
+
+    // A malformed SSH_CONNECTION is ignored rather than trusted — a probe pointed
+    // somewhere odd is worse than one pointed at 22.
+    const junk = fakeVerifier([{ ok: true }])
+    await signIn(build(junk.verify, { SSH_CONNECTION: 'not-a-connection-string' }).access)
+    expect(junk.calls[0]?.port).toBe(22)
   })
 })
 
