@@ -372,7 +372,12 @@ struct ServerDetailView: View {
         } label: {
             Text("Forget this server")
                 .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(Theme.warning)
+                // Red, not amber. > "This forget-server, like a yellow button,
+                // it should be like red so it is clear." It takes the server off
+                // this phone, so it is the red kind — the same call the machine
+                // Forget already makes, and what the app's own rule reserves red
+                // for: the thing that takes something away.
+                .foregroundStyle(Theme.critical)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 12)
                 .contentShape(Rectangle())

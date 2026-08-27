@@ -483,6 +483,29 @@ struct MachinesView: View {
     }
 
     /**
+     * The servers to list in the Servers section — the ones not already standing
+     * above as a machine.
+     *
+     * > *"it is separately showing the machine which is inside the server, and
+     * > the server as well as a machine separately — so if it is connected we
+     * > see two."*
+     *
+     * A connected server *is* the machine above it: the host installed on it
+     * became one of `model.hosts`, joined back by `linkedHostId`. Drawing a
+     * server row for it too is the doubling he saw — one box, two rows. So while
+     * it is connected it drops out of this section and the machine row stands for
+     * the box; its server page (install, start, stop, remove, Forget) is still
+     * one tap away on that machine's detail, under *As a server*. A server not
+     * connected as a machine has no row above and stays here — this section is
+     * then the only door to signing it in.
+     */
+    private var unlinkedServers: [StoredServer] {
+        model.serverConnector.servers.filter { server in
+            server.linkedHostId.flatMap { model.host($0) } == nil
+        }
+    }
+
+    /**
      * The rows, and it is a `List` now rather than a `ScrollView` of a
      * `LazyVStack`.
      *
@@ -585,16 +608,18 @@ struct MachinesView: View {
                  */
                 /*
                  * The servers, on the same list as the machines and clearly
-                 * not the same thing.
+                 * not the same thing — but each box only once.
                  *
-                 * A server that has been *connected* is in both places at
-                 * once — as a machine above, because the host on it became
-                 * one, and as a server here, because the SSH login that
-                 * manages it is still what installs, starts and stops it.
-                 * That is not a duplicate: the two rows do different jobs
-                 * and lead to different screens.
+                 * A server that has connected became a machine above, because
+                 * the host on it did, so drawing a server row for it too is the
+                 * doubling he saw: > "if it is connected we see two."
+                 * `unlinkedServers` drops the ones already standing as a machine,
+                 * so this section holds only the servers not yet connected as one
+                 * — where the SSH login that installs, starts and stops a host is
+                 * still the only door in. A connected server's own page is reached
+                 * from its machine's detail, under "As a server".
                  */
-                if !model.serverConnector.servers.isEmpty {
+                if !unlinkedServers.isEmpty {
                     Text("Servers")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(Theme.faint)
@@ -607,7 +632,7 @@ struct MachinesView: View {
                         .listRowInsets(EdgeInsets(top: 14, leading: 20, bottom: 2, trailing: 20))
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
-                    ForEach(model.serverConnector.servers) { server in
+                    ForEach(unlinkedServers) { server in
                         /*
                          * A button rather than a `NavigationLink`, and it was
                          * one until this screen became a `List`.

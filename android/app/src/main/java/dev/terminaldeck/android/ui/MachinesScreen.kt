@@ -95,6 +95,25 @@ fun MachinesScreen(
     var renaming by remember { mutableStateOf<HostSummary?>(null) }
     var forgetting by remember { mutableStateOf<HostSummary?>(null) }
 
+    // One physical box, one row. A server that has connected became one of the machines above — the
+    // host installed on it is now a paired machine, joined back by linkedHostId — so it is the same
+    // box shown twice, which is the doubling he named:
+    //
+    //   > "it is separately showing the machine which is inside the server, and the server as well
+    //   > as a machine separately — so if it is connected we see two."
+    //
+    // So a connected server is shown once, as its machine, and drops out of the Servers section
+    // below; its server page (install, update, start, stop, remove, forget) stays reachable from that
+    // machine's ⋯ menu — see [MachineRow]. A server not yet connected as a machine has no row above
+    // and stays in the section, which is then the only door to signing it in.
+    val serverByHost: Map<String, StoredServer> =
+        servers.mapNotNull { server ->
+            server.linkedHostId?.takeIf { it in pairedHostIds }?.let { hostId -> hostId to server }
+        }.toMap()
+    val standaloneServers = servers.filter { server ->
+        server.linkedHostId?.let { it in pairedHostIds } != true
+    }
+
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
@@ -127,33 +146,37 @@ fun MachinesScreen(
             for (host in hosts) {
                 MachineRow(
                     host = host,
+                    // Non-null when this machine is a server that connected: its ⋯ menu then carries
+                    // the door to the server page, since that box no longer has its own server row.
+                    linkedServer = serverByHost[host.hostId],
                     onSelect = { onSelect(host.hostId) },
                     onRename = { renaming = host },
                     onForget = { forgetting = host },
+                    onOpenServer = onOpenServer,
                 )
             }
 
             /*
-             * Servers, their own section under the machines.
+             * Servers, their own section under the machines — the ones NOT already standing above
+             * as a machine.
              *
-             * A server that has been *connected* is in both places at once — as a machine above,
-             * because the host on it became one, and as a server here, because the SSH login that
-             * manages it is still what installs, starts, updates and stops it. That is not a
-             * duplicate: the two rows do different jobs and lead to different screens. Its own page
-             * is where install, update, start, stop and remove live, so a row is a door to that page
-             * rather than a menu of its own.
+             * A server that has connected is the same box as one of the machines above (its host
+             * became one), so listing it here as well is the doubling he saw. While connected it is
+             * shown once, as that machine, and its server page is reached from that machine's ⋯ menu.
+             * What is left here is servers not connected as a machine, so this section is a door to
+             * signing them in — and a server in it is, by construction, not connected.
              */
-            if (servers.isNotEmpty()) {
+            if (standaloneServers.isNotEmpty()) {
                 Text(
                     text = "SERVERS",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(start = 4.dp, top = 10.dp, bottom = 2.dp),
                 )
-                for (server in servers) {
+                for (server in standaloneServers) {
                     ServerListRow(
                         server = server,
-                        connected = server.linkedHostId?.let { it in pairedHostIds } == true,
+                        connected = false,
                         onOpen = { onOpenServer(server.id) },
                     )
                 }
@@ -218,9 +241,12 @@ fun MachinesScreen(
 @Composable
 private fun MachineRow(
     host: HostSummary,
+    /** Set when this machine is a server that connected — the ⋯ menu then offers its server page. */
+    linkedServer: StoredServer?,
     onSelect: () -> Unit,
     onRename: () -> Unit,
     onForget: () -> Unit,
+    onOpenServer: (String) -> Unit,
 ) {
     var menu by remember { mutableStateOf(false) }
     Row(
@@ -287,6 +313,18 @@ private fun MachineRow(
                 )
             }
             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                // When this machine is a connected server, its server page no longer has its own row
+                // in the list below (one box, one row), so the way to install/update/start/stop/
+                // remove/forget it lives here instead.
+                linkedServer?.let { server ->
+                    DropdownMenuItem(
+                        text = { Text("Server settings") },
+                        onClick = {
+                            menu = false
+                            onOpenServer(server.id)
+                        },
+                    )
+                }
                 DropdownMenuItem(
                     text = { Text("Rename") },
                     onClick = {
