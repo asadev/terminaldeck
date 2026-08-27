@@ -429,7 +429,7 @@ private object SessionPaneMemory {
 
     private val bySession = mutableMapOf<String, Pane>()
 
-    private fun key(host: String, session: String) = "$host $session"
+    private fun key(host: String, session: String) = "$host/$session"
 
     fun remembered(host: String, session: String): Pane? = bySession[key(host, session)]
 
