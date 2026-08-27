@@ -113,7 +113,31 @@ describe('composing the launch flags', () => {
       '--no-first-run',
       '--no-default-browser-check',
       '--disable-gpu',
+      '--disable-blink-features=AutomationControlled',
     ])
+  })
+
+  it('always suppresses the automation tell and never turns automation on', () => {
+    // The half of the Google-sign-in fix that lives in the flags: measured
+    // 2026-08-27, `navigator.webdriver` read `true` without this flag and
+    // `false` with it, on this exact `--headless=new --remote-debugging-pipe`
+    // launch. `--enable-automation` would put the tell back and raise an
+    // infobar, so its absence is asserted, not merely assumed.
+    const flags = chromiumFlags({ userDataDir: '/p' })
+    expect(flags).toContain('--disable-blink-features=AutomationControlled')
+    expect(flags.some((flag) => flag.includes('--enable-automation'))).toBe(false)
+  })
+
+  it('adds --user-agent only when the caller supplies one, never on an empty string', () => {
+    const has = (flags: string[]): boolean => flags.some((flag) => flag.startsWith('--user-agent='))
+    // The side-loaded case returns '' from `machineBrowserUserAgent`, and an
+    // empty `--user-agent` would send no User-Agent header at all — worse than
+    // the headless one. So an empty string adds nothing.
+    expect(has(chromiumFlags({ userDataDir: '/p' }))).toBe(false)
+    expect(has(chromiumFlags({ userDataDir: '/p', userAgent: '' }))).toBe(false)
+    const ua =
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36'
+    expect(chromiumFlags({ userDataDir: '/p', userAgent: ua })).toContain(`--user-agent=${ua}`)
   })
 
   it('adds --load-extension and --disable-extensions-except when a profile carries extensions', () => {

@@ -59,6 +59,8 @@ import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { userDataDir } from './platform/paths'
+import { currentPlatform } from './platform/host'
+import { machineBrowserUserAgent } from './browser-user-agent'
 import { logger } from './app-log'
 import { screenHistoryEntry } from './browser-cdp'
 import { isNavigationAllowed } from './browser-url'
@@ -174,10 +176,21 @@ const defaultLaunch: LaunchBrowser = async ({ userDataDir: dir, extensionDirs })
    * layer down so that *no* caller can hold an unconfirmed browser, not just
    * this one.
    */
+  /*
+   * The user agent this browser will present, computed from the build it turned
+   * out to be. `--headless=new` names itself `HeadlessChrome`, which is what
+   * made Google refuse a new sign-in on the cast browser — *"a new one is
+   * refused"* — so the same engine's honest, de-headlessed string is passed
+   * down to become `--user-agent`. Empty for a side-loaded binary of unknown
+   * version, in which case no `--user-agent` is added; see
+   * `machineBrowserUserAgent`.
+   */
+  const userAgent = machineBrowserUserAgent(currentPlatform(), install.version)
   const launched = await launchChromium({
     executablePath: install.path,
     userDataDir: dir,
     extensionDirs,
+    userAgent,
   })
   if (!launched.ok) return { ok: false, why: launched.why }
   if (!launched.sandbox.sandbox) {

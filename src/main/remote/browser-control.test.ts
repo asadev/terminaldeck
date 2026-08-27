@@ -259,6 +259,35 @@ describe('what the machine has open', () => {
     expect(answer.sessions).toEqual([{ id: 's1', title: 'terminaldeck · Session 1', windows: 0 }])
   })
 
+  it('warns the phone plainly when a window sits on Google’s sign-in refusal', async () => {
+    const rig = machine()
+    // The *"this browser or app may not be secure"* page. The desktop's answer —
+    // hand it to the system browser and bring the cookies back — is no use to
+    // somebody who is not at the machine, so the phone is told what does work.
+    rig.windows.push({
+      id: 'w1',
+      title: 'Sign in - Google Accounts',
+      url: 'https://accounts.google.com/v3/signin/rejected?dsh=1',
+    })
+    const listed = rowsOf(await machineBrowser(rig.deps).windows())
+    expect(listed.notice).toContain("Google will not sign in in this machine's browser")
+    expect(listed.notice).toContain('already signed in')
+  })
+
+  it('stays silent for an ordinary window and for the softer restricted warning', async () => {
+    const rig = machine()
+    rig.windows.push({ id: 'w1', title: 'Example', url: 'https://example.com/' })
+    // `restricted` "usually still works" and has no phone handover to pair a
+    // warning with, so only the hard refusal reaches the notice — a plain list
+    // of these two keeps the empty notice the test above pins.
+    rig.windows.push({
+      id: 'w2',
+      title: 'Sign in',
+      url: 'https://accounts.google.com/v3/signin/identifier?flowName=GeneralOAuthLite',
+    })
+    expect(rowsOf(await machineBrowser(rig.deps).windows()).notice).toBe('')
+  })
+
   it('carries the slot, the session and the session’s own name on a bound window', async () => {
     const rig = machine()
     rig.windows.push({ id: 'w1', title: 'Stripe', url: 'https://stripe.com/' })

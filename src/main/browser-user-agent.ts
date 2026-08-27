@@ -1,3 +1,5 @@
+import type { Platform } from './platform/host'
+
 /**
  * What the embedded browser says it is.
  *
@@ -83,4 +85,58 @@ export function cleanUserAgent(raw: string): string {
  */
 export function namesTheShell(candidate: string): boolean {
   return /\b(?:Electron|terminaldeck|Terminal ?Deck)\//i.test(candidate)
+}
+
+/**
+ * The user agent the *machine's headless Chromium* must present.
+ *
+ * ## Why the cleaner above is not enough here
+ *
+ * Everything above is about the Electron guest views on the desktop, whose only
+ * tell was the `Electron` token. The browser a phone casts is a different
+ * process entirely: the standalone chrome-for-testing build
+ * `browser-chromium-launch.ts` spawns with `--headless=new`. Measured on this
+ * machine on 2026-08-27, against that exact launch (Chrome 146,
+ * `--remote-debugging-pipe`), it announced itself:
+ *
+ *     Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36
+ *     (KHTML, like Gecko) HeadlessChrome/146.0.0.0 Safari/537.36
+ *
+ * `HeadlessChrome` is the single loudest thing a browser can say to Google's
+ * *"this browser or app may not be secure"* check, and no amount of stripping
+ * the Electron token reaches it — it is a wholly separate browser that the
+ * desktop's `cleanUserAgent` path never touches. He hit it as *"Google sign-in
+ * refuses… a new one is refused"* on the cast browser, on Windows and Mac alike.
+ *
+ * ## Why constructing the string is honest, not a spoof
+ *
+ * Modern Chrome froze its user agent: the OS token and the version are reduced
+ * to fixed values, so a real Chrome 146 on this Mac reports
+ * `…Chrome/146.0.0.0…` with exactly the OS token below — the same string this
+ * returns once `Headless` is gone. On Windows it is `Windows NT 10.0; Win64;
+ * x64` and on Linux `X11; Linux x86_64`, again the frozen values Chrome itself
+ * emits regardless of the machine's real edition or architecture. So this is
+ * not a disguise: it is the true user agent of the very Chromium that is
+ * running, minus the one word — `Headless` — that describes how it was started
+ * rather than what it is. The engine, the platform and the major version are
+ * all left true, the same discipline {@link cleanUserAgent} keeps for the shell.
+ *
+ * `version` is the installed build (`installChromium` reports it); only its
+ * major is used, because that is all the reduced user agent carries. A build
+ * whose version is not a plain number — the side-loaded `TERMINALDECK_CHROMIUM_
+ * PATH` case, reported as `'sideloaded'` — returns `''`: the operator supplied
+ * that binary and owns whatever user agent it presents, and inventing a major
+ * for it would be the guess this file otherwise refuses to make. The launch
+ * only adds `--user-agent` when this is non-empty.
+ */
+export function machineBrowserUserAgent(platform: Platform, version: string): string {
+  const major = /^(\d+)\b/.exec(version.trim())?.[1]
+  if (major === undefined) return ''
+  const os =
+    platform === 'win32'
+      ? 'Windows NT 10.0; Win64; x64'
+      : platform === 'darwin'
+        ? 'Macintosh; Intel Mac OS X 10_15_7'
+        : 'X11; Linux x86_64'
+  return `Mozilla/5.0 (${os}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36`
 }

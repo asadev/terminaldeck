@@ -76,6 +76,27 @@ describe('what Google is doing to a sign-in, read off the address', () => {
     ).toBe('refused')
   })
 
+  it('catches the refusal when the error rides in the fragment rather than the query', () => {
+    // The strengthening: the signal travels in different parts of the address
+    // depending on how the flow reached the refusal. A check pinned to the
+    // top-level query alone missed a fragment-borne one and left the band
+    // silent on exactly the page he was looking at.
+    expect(
+      diagnoseSignIn('https://accounts.google.com/signin/oauth?client_id=x#error=disallowed_useragent')
+        ?.kind,
+    ).toBe('refused')
+  })
+
+  it('reads a versioned rejection path the same as the bare one', () => {
+    // `/v3/signin/rejected` is the same *"this browser or app may not be secure"*
+    // page as `/signin/rejected`; the path match catches the prefix.
+    expect(diagnoseSignIn('https://accounts.google.com/v3/signin/rejected?dsh=1')?.kind).toBe('refused')
+  })
+
+  it('knows the YouTube accounts host refuses the same way', () => {
+    expect(diagnoseSignIn('https://accounts.youtube.com/signin/rejected')?.kind).toBe('refused')
+  })
+
   it('warns while there is still time, on the restricted flow', () => {
     /*
      * Measured on 2026-08-18: with Electron's token in the user agent, Google
