@@ -483,26 +483,27 @@ struct MachinesView: View {
     }
 
     /**
-     * The servers to list in the Servers section — the ones not already standing
-     * above as a machine.
+     * Every server this phone has signed in to — the whole list, connected as a
+     * machine or not. This is the **Servers** section, and it stands beside the
+     * machines under its own heading rather than being folded in among them.
      *
-     * > *"it is separately showing the machine which is inside the server, and
-     * > the server as well as a machine separately — so if it is connected we
-     * > see two."*
+     * > *"you should have 2 separate lists of remote machines and servers so we
+     * > wont have to click this icon to go inside the page and then go inside
+     * > server page just directly inside server page no need that informative
+     * > page for server."*
      *
-     * A connected server *is* the machine above it: the host installed on it
-     * became one of `model.hosts`, joined back by `linkedHostId`. Drawing a
-     * server row for it too is the doubling he saw — one box, two rows. So while
-     * it is connected it drops out of this section and the machine row stands for
-     * the box; its server page (install, start, stop, remove, Forget) is still
-     * one tap away on that machine's detail, under *As a server*. A server not
-     * connected as a machine has no row above and stays here — this section is
-     * then the only door to signing it in.
+     * It used to hide any server already connected as a machine, to answer an
+     * earlier complaint — *"if it is connected we see two."* But that doubling
+     * was two *undifferentiated* machine rows in one flat list. Two clearly
+     * labelled lists answer it instead: a connected box is a **machine** under
+     * "Remote machines" (its sessions) and a **server** under "Servers" (login,
+     * install, start, stop, remove, update) — two different things somebody does
+     * to the same box, said in two different places. So nothing is filtered out:
+     * every server has a row, and that row opens its server page **directly**,
+     * with no machine-detail page in between.
      */
-    private var unlinkedServers: [StoredServer] {
-        model.serverConnector.servers.filter { server in
-            server.linkedHostId.flatMap { model.host($0) } == nil
-        }
+    private var servers: [StoredServer] {
+        model.serverConnector.servers
     }
 
     /**
@@ -532,6 +533,24 @@ struct MachinesView: View {
         ZStack {
             Theme.background.ignoresSafeArea()
             List {
+                /*
+                 * **Two lists, each with its own heading** — the machines this
+                 * phone is paired with, and the servers it can sign in to and
+                 * manage.
+                 *
+                 * > *"you should have 2 separate lists of remote machines and
+                 * > servers so we wont have to click this icon to go inside the
+                 * > page and then go inside server page just directly inside
+                 * > server page no need that informative page for server."*
+                 *
+                 * The heading is the whole fix for *"if it is connected we see
+                 * two"*: a box that is both a machine and a server is now a row
+                 * under each label — one for its sessions, one for managing it —
+                 * instead of two look-alike rows in one undivided list. See
+                 * `servers` for why nothing is hidden any more.
+                 */
+                listCaption("Remote machines", top: 4)
+
                 ForEach(model.hosts) { host in
                     MachineRow(host: host,
                                // From the model, not the host: two machines
@@ -607,55 +626,54 @@ struct MachinesView: View {
                  * only way in for the machines this product is named after.
                  */
                 /*
-                 * The servers, on the same list as the machines and clearly
-                 * not the same thing — but each box only once.
+                 * The servers, under their own heading now — a separate list,
+                 * not folded in among the machines.
                  *
-                 * A server that has connected became a machine above, because
-                 * the host on it did, so drawing a server row for it too is the
-                 * doubling he saw: > "if it is connected we see two."
-                 * `unlinkedServers` drops the ones already standing as a machine,
-                 * so this section holds only the servers not yet connected as one
-                 * — where the SSH login that installs, starts and stops a host is
-                 * still the only door in. A connected server's own page is reached
-                 * from its machine's detail, under "As a server".
+                 * A server that has connected is also a machine above, and it
+                 * used to be dropped from here so it showed only once: > "if it
+                 * is connected we see two." But it is not one thing wearing two
+                 * look-alike rows any more — under "Remote machines" it is a
+                 * machine (its sessions), under "Servers" it is a server (its
+                 * login, install, start, stop, remove, update). Two labels, two
+                 * jobs, so both rows stay and `servers` filters nothing.
+                 *
+                 * The heading is drawn even before the first login: it labels
+                 * the "Log in to a server" door below, the way "Remote machines"
+                 * labels "Pair another machine". An empty list under a named
+                 * door reads as a place to add to; an unlabelled door reads as a
+                 * stray button.
                  */
-                if !unlinkedServers.isEmpty {
-                    Text("Servers")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(Theme.faint)
-                        .textCase(.uppercase)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        // Twenty rather than sixteen, which is the four points
-                        // this caption had as its own horizontal padding inside
-                        // the stack's gutter. The same figure the localhost
-                        // list's section headers sit on.
-                        .listRowInsets(EdgeInsets(top: 14, leading: 20, bottom: 2, trailing: 20))
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
-                    ForEach(unlinkedServers) { server in
-                        /*
-                         * A button rather than a `NavigationLink`, and it was
-                         * one until this screen became a `List`.
-                         *
-                         * Inside a list a `NavigationLink` draws the system's
-                         * own disclosure chevron beside whatever it is given,
-                         * and `ServerRow` already draws one — so the row would
-                         * come out with two, which is exactly what happened to
-                         * the session rows when that screen was converted.
-                         * Appending the same route does the same navigation
-                         * without the decoration.
-                         */
-                        Button {
-                            model.settingsRoute.append(.server(server.id))
-                        } label: {
-                            ServerRow(server: server,
-                                      isConnected: server.linkedHostId
-                                          .flatMap { model.host($0) } != nil)
-                        }
-                        .buttonStyle(RowButtonStyle())
-                        .accessibilityIdentifier("machines.server")
-                        .plainRow()
+                listCaption("Servers")
+
+                ForEach(servers) { server in
+                    /*
+                     * A button rather than a `NavigationLink`, and it was
+                     * one until this screen became a `List`.
+                     *
+                     * Inside a list a `NavigationLink` draws the system's
+                     * own disclosure chevron beside whatever it is given,
+                     * and `ServerRow` already draws one — so the row would
+                     * come out with two, which is exactly what happened to
+                     * the session rows when that screen was converted.
+                     * Appending the same route does the same navigation
+                     * without the decoration.
+                     *
+                     * The route is `.server`, which lands on `ServerDetailView`
+                     * **directly** — the whole of *"just directly inside server
+                     * page no need that informative page for server."* The
+                     * machine-detail page (`.machine`, behind the ⓘ on a machine
+                     * row) is for machines; a server never routes through it.
+                     */
+                    Button {
+                        model.settingsRoute.append(.server(server.id))
+                    } label: {
+                        ServerRow(server: server,
+                                  isConnected: server.linkedHostId
+                                      .flatMap { model.host($0) } != nil)
                     }
+                    .buttonStyle(RowButtonStyle())
+                    .accessibilityIdentifier("machines.server")
+                    .plainRow()
                 }
 
                 Button {
@@ -803,6 +821,32 @@ struct MachinesView: View {
         .navigationTitle("Machines")
         .navigationBarTitleDisplayMode(.inline)
 
+    }
+
+    // MARK: - The two headings
+
+    /**
+     * A section header inside the list — "Remote machines" over the machines,
+     * "Servers" over the servers. One shape, drawn twice, so the two lists cannot
+     * drift into two different-looking captions.
+     *
+     * The 12-point uppercase caption and the twenty-point leading inset are the
+     * figures the localhost list's section headers already sit on — a `List` row
+     * rather than a `.padding`, because these are rows in this list. `top`
+     * defaults to the fourteen that separates "Servers" from the "Pair another
+     * machine" button above it; the first heading passes a smaller four, since
+     * the `.contentMargins(.top, 7)` on the scroll content is already the air
+     * above it and it has nothing above to be pushed away from.
+     */
+    private func listCaption(_ text: String, top: CGFloat = 14) -> some View {
+        Text(text)
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(Theme.faint)
+            .textCase(.uppercase)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .listRowInsets(EdgeInsets(top: top, leading: 20, bottom: 2, trailing: 20))
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
     }
 
     // MARK: - The three verbs, said once each

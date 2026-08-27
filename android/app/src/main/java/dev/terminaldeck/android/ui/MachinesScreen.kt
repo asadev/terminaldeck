@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -68,13 +67,15 @@ import dev.terminaldeck.android.ui.theme.DeckTheme
  * left over from the last connection under a green dot would be the one thing this screen exists to
  * show, being wrong.
  *
- * ## Both doors are here, side by side
+ * ## Two labeled lists, a door under each
  *
- * A code is read off a machine somebody is standing at. A server is a machine nobody is standing at
- * — that is what makes it a server — so it has no screen to show a code on and nobody to press
- * Approve. Both ceremonies end in a row on this list, so both belong at the bottom of this list;
- * putting the server one behind an overflow menu would be hiding the only way in for the machines
- * this product is named after.
+ * Remote machines and servers are shown as two separate lists under their own headings, exactly as
+ * on iOS — *"you should have 2 separate lists of remote machines and servers… just directly inside
+ * server page no need that informative page for server."* A code is read off a machine somebody is
+ * standing at; a server is a machine nobody is standing at — that is what makes it a server — so it
+ * has no screen to show a code on and nobody to press Approve. Each list ends in its own door: "Pair
+ * another machine" under the machines, "Add a server" under the servers. Neither hides behind an
+ * overflow menu — that would be hiding the only way in for the machines this product is named after.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -95,24 +96,26 @@ fun MachinesScreen(
     var renaming by remember { mutableStateOf<HostSummary?>(null) }
     var forgetting by remember { mutableStateOf<HostSummary?>(null) }
 
-    // One physical box, one row. A server that has connected became one of the machines above — the
-    // host installed on it is now a paired machine, joined back by linkedHostId — so it is the same
-    // box shown twice, which is the doubling he named:
+    // Two labeled lists, not one. His words:
     //
-    //   > "it is separately showing the machine which is inside the server, and the server as well
-    //   > as a machine separately — so if it is connected we see two."
+    //   > "you should have 2 separate lists of remote machines and servers so we wont have to click
+    //   > this icon to go inside the page and then go inside server page just directly inside server
+    //   > page no need that informative page for server."
     //
-    // So a connected server is shown once, as its machine, and drops out of the Servers section
-    // below; its server page (install, update, start, stop, remove, forget) stays reachable from that
-    // machine's ⋯ menu — see [MachineRow]. A server not yet connected as a machine has no row above
-    // and stays in the section, which is then the only door to signing it in.
+    // A box that has connected is both: one of the machines above (its host is a paired machine,
+    // joined back by linkedHostId) AND a server below. It used to be shown only once — dropped from
+    // the Servers section to answer an earlier complaint, > "if it is connected we see two." But that
+    // doubling was two look-alike machine rows in one undivided list. Under two headings it is not a
+    // duplicate: a machine under "Remote machines" (its sessions) and a server under "Servers" (its
+    // login, install, start, stop, remove, update) — two different jobs on the same box. So nothing
+    // is filtered out; every server gets a row, and that row opens its server page directly.
+    //
+    // serverByHost still maps a connected server to its machine, but only to offer the same page as a
+    // shortcut on that machine's ⋯ menu — it no longer decides whether the server gets a row.
     val serverByHost: Map<String, StoredServer> =
         servers.mapNotNull { server ->
             server.linkedHostId?.takeIf { it in pairedHostIds }?.let { hostId -> hostId to server }
         }.toMap()
-    val standaloneServers = servers.filter { server ->
-        server.linkedHostId?.let { it in pairedHostIds } != true
-    }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -143,11 +146,15 @@ fun MachinesScreen(
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp),
         ) {
+            // REMOTE MACHINES — the paired machines, and the door to pair another.
+            SectionLabel("REMOTE MACHINES", top = 0.dp)
+
             for (host in hosts) {
                 MachineRow(
                     host = host,
-                    // Non-null when this machine is a server that connected: its ⋯ menu then carries
-                    // the door to the server page, since that box no longer has its own server row.
+                    // Non-null when this machine is also a connected server: its ⋯ menu then offers
+                    // the same server page as a shortcut. That server also has its own row under
+                    // "Servers" below — two doors to one page, on purpose.
                     linkedServer = serverByHost[host.hostId],
                     onSelect = { onSelect(host.hostId) },
                     onRename = { renaming = host },
@@ -155,34 +162,6 @@ fun MachinesScreen(
                     onOpenServer = onOpenServer,
                 )
             }
-
-            /*
-             * Servers, their own section under the machines — the ones NOT already standing above
-             * as a machine.
-             *
-             * A server that has connected is the same box as one of the machines above (its host
-             * became one), so listing it here as well is the doubling he saw. While connected it is
-             * shown once, as that machine, and its server page is reached from that machine's ⋯ menu.
-             * What is left here is servers not connected as a machine, so this section is a door to
-             * signing them in — and a server in it is, by construction, not connected.
-             */
-            if (standaloneServers.isNotEmpty()) {
-                Text(
-                    text = "SERVERS",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(start = 4.dp, top = 10.dp, bottom = 2.dp),
-                )
-                for (server in standaloneServers) {
-                    ServerListRow(
-                        server = server,
-                        connected = false,
-                        onOpen = { onOpenServer(server.id) },
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(6.dp))
 
             AddRow(
                 icon = Icons.Filled.Add,
@@ -194,6 +173,24 @@ fun MachinesScreen(
                 },
                 onClick = onAddHost,
             )
+
+            /*
+             * SERVERS — every server this phone can sign in to, connected or not, each opening its
+             * own page directly. The heading is always drawn: it labels the "Add a server" door
+             * below, the way "Remote machines" labels "Pair another machine". A connected server
+             * appears here as well as above — under two headings the two rows are two jobs on one
+             * box, not the duplicate he objected to. See the note above serverByHost.
+             */
+            SectionLabel("SERVERS", top = 10.dp)
+
+            for (server in servers) {
+                ServerListRow(
+                    server = server,
+                    connected = server.linkedHostId?.let { it in pairedHostIds } == true,
+                    onOpen = { onOpenServer(server.id) },
+                )
+            }
+
             AddRow(
                 icon = Icons.Filled.Dns,
                 title = "Add a server",
@@ -434,6 +431,22 @@ private fun summary(host: HostSummary): String {
     val working = host.sessions.count { it.status == "working" }
     val sessions = if (running == 1) "1 session" else "$running sessions"
     return if (working > 0) "$sessions, $working working" else sessions
+}
+
+/**
+ * A section heading inside the list — "REMOTE MACHINES" over the machines, "SERVERS" over the
+ * servers. One shape drawn twice, so the two lists cannot drift into two different-looking captions.
+ * `top` is the air above it: none for the first heading, ten to part "Servers" from the "Pair another
+ * machine" door above it (on top of the column's own ten-point spacing).
+ */
+@Composable
+private fun SectionLabel(text: String, top: androidx.compose.ui.unit.Dp) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(start = 4.dp, top = top, bottom = 2.dp),
+    )
 }
 
 @Composable
