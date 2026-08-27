@@ -3,7 +3,7 @@
 A phone-sized window onto sessions already running on your Mac. It lists them and renders one; it
 does not run a shell on the phone and has no ambition to.
 
-Application id `dev.terminaldeck.android`. Kotlin + Jetpack Compose for the chrome, Termux's
+Application id `dev.terminaldeck.apk` (the Play package; the code namespace stays `dev.terminaldeck.android`). Kotlin + Jetpack Compose for the chrome, Termux's
 `TerminalView` for the terminal itself, a Kotlin port of `src/shared/sealed.ts` for the wire.
 
 ## Build and run
@@ -27,7 +27,7 @@ On an emulator:
 ~/Library/Android/sdk/emulator/emulator -avd <avd> -no-window -no-snapshot -gpu swiftshader_indirect &
 adb wait-for-device
 adb install -r app/build/outputs/apk/debug/app-debug.apk
-adb shell am start -n dev.terminaldeck.android.debug/dev.terminaldeck.android.MainActivity
+adb shell am start -n dev.terminaldeck.apk.debug/dev.terminaldeck.android.MainActivity
 adb exec-out screencap -p > shot.png
 ```
 

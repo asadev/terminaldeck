@@ -76,7 +76,7 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "dev.terminaldeck.android"
+        applicationId = "dev.terminaldeck.apk"
 
         // API 26 (Android 8.0), and the reasons are all in this module rather than taste:
         //
