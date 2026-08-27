@@ -65,6 +65,8 @@ interface Harness {
   stopped: string[]
   said: Array<{ id: string; text: string }>
   interrupted: string[]
+  /** Every `setInteractive` write the run manager passed to the machine. */
+  interactiveWrites: boolean[]
   /** Sessions the harness considers alive. Take one out to kill it. */
   alive: Set<string>
   /** Push a chat update into whatever run is subscribed to a session. */
@@ -84,6 +86,7 @@ function harness(over: Partial<CopilotRunDeps> = {}): Harness {
   const stopped: string[] = []
   const said: Array<{ id: string; text: string }> = []
   const interrupted: string[] = []
+  const interactiveWrites: boolean[] = []
   const alive = new Set<string>()
   const chatters = new Map<string, (update: { messages: Array<{ id: string; role: 'you' | 'agent'; text: string; at: number }>; reset: boolean }) => void>()
   const clock = { at: 1_000 }
@@ -142,8 +145,9 @@ function harness(over: Partial<CopilotRunDeps> = {}): Harness {
     },
     say: (id, text) => said.push({ id, text }),
     interrupt: (id) => interrupted.push(id),
-    desk: () => ({ status: 'running', profile: 'Personal', signedIn: true, available: true, reason: null }),
+    desk: () => ({ status: 'running', profile: 'Personal', signedIn: true, available: true, reason: null, interactive: true }),
     cost: () => ({ tools: 11, turnTokens: 900 }),
+    setInteractive: (on) => interactiveWrites.push(on),
     sessions: () => [],
     log: () => ({ rows: [], more: false }),
     chat: (sessionId, onUpdate) => {
@@ -173,6 +177,7 @@ function harness(over: Partial<CopilotRunDeps> = {}): Harness {
     stopped,
     said,
     interrupted,
+    interactiveWrites,
     alive,
     emitChat: (sessionId, text, reset = false) => {
       chatters.get(sessionId)?.({ messages: [{ id: 'm1', role: 'agent', text, at: 5 }], reset })
@@ -682,6 +687,35 @@ describe('the state frame and the caps', () => {
     const state = h.runs.state('phone-1')
     expect(state.available).toBe(false)
     expect(state.reason).not.toBeNull()
+  })
+
+  it('carries whether the scan is shown, and turning it off is one write', () => {
+    // On by the machine's own reading, so the frame carries the switch position
+    // a paired device draws — the same `desk()` read every other field rides.
+    const on = harness()
+    on.own('phone-1')
+    expect(on.runs.state('phone-1').interactive).toBe(true)
+
+    // And an explicit off is off, not folded onto the default: this is the one
+    // field where a `false` from the machine is a claim to preserve.
+    const off = harness({
+      desk: () => ({
+        status: 'running',
+        profile: 'Personal',
+        signedIn: true,
+        available: true,
+        reason: null,
+        interactive: false,
+      }),
+    })
+    off.own('phone-2')
+    expect(off.runs.state('phone-2').interactive).toBe(false)
+
+    // The write is a pass-through to the machine and nothing more — the tier that
+    // gates it is checked at the transport, and the setting is the store's.
+    on.runs.setInteractive(false)
+    on.runs.setInteractive(true)
+    expect(on.interactiveWrites).toEqual([false, true])
   })
 
   it('refuses to start when there is no tool surface to hand it', async () => {

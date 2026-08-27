@@ -1534,6 +1534,31 @@ final class CopilotLink {
         return true
     }
 
+    /**
+     * Turn driving mode's on-screen scan on or off — the machine's own
+     * `copilot.interactive` setting, which is the desktop's *"show me what it is
+     * looking at"* switch.
+     *
+     * `alter`, guarded here as well as by the switch being drawn only under that
+     * grant: it writes a machine setting, and the tier that means *a person
+     * deliberately decided this device may* is the one it belongs behind. The
+     * machine echoes a fresh `copilot.state` after the write — the same as
+     * `start` and `stop` do — so the switch follows the setting it just changed
+     * rather than this end asserting a value nothing confirmed.
+     */
+    @discardableResult
+    func setInteractive(_ on: Bool) -> Bool {
+        guard grant.canAnswer else {
+            onError?("\(Self.machineRefusal) change what its copilot shows.")
+            return false
+        }
+        guard wire.send(.copilotSetInteractive(on: on)) else {
+            onError?("Not connected — that setting was not changed on the machine.")
+            return false
+        }
+        return true
+    }
+
     /// The sentence for a control that was drawn under a grant the machine has
     /// since narrowed.
     private func refuse() {

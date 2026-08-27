@@ -36,6 +36,10 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -116,6 +120,7 @@ fun CopilotControlScreen(
     onStart: () -> Unit,
     onCancel: () -> Unit,
     onStopRun: () -> Unit,
+    onSetInteractive: (Boolean) -> Unit,
     onApplyProvider: (String) -> Unit,
     onEnsureServerSettings: () -> Unit,
     onEnsureDevices: () -> Unit,
@@ -212,6 +217,12 @@ fun CopilotControlScreen(
                         onStart = onStart,
                         onCancel = onCancel,
                         onStopRun = onStopRun,
+                    )
+
+                    CopilotControl.Panel.WhileItWorks -> WhileItWorksPanel(
+                        interactive = view.state?.interactive ?: true,
+                        noun = noun,
+                        onSet = onSetInteractive,
                     )
 
                     CopilotControl.Panel.Files -> NavRowPanel(
@@ -544,6 +555,72 @@ private fun RunPanel(view: CopilotView, noun: String, onStart: () -> Unit, onCan
     }
 }
 
+/**
+ * "While it works" — the desktop's driving-mode switch, over the wire: Asad's
+ * *"show me what it is looking at"*, on the phone.
+ *
+ * The one desktop copilot setting a phone reads and writes — the state carries
+ * [interactive], the tap sends `copilot.interactive` (alter). It is that
+ * machine's screen this changes, not the phone's (a phone cannot watch the
+ * scan), so the caption and the row's second line both say *that machine's
+ * screen* rather than pretend otherwise.
+ *
+ * Optimistic, because the frame is a network round trip and a switch that only
+ * moved on the machine's echo would read as one that did not take. The tap flips
+ * a local value at once; when the machine's [interactive] catches up, the
+ * override is dropped and the wire is the single truth again. A refusal never
+ * changes the machine's value, so the next state frame falls the switch back —
+ * the honest outcome, no error path invented here.
+ *
+ * The check-circle rather than a `Switch`, because [StartOnOpenRow] is the toggle
+ * idiom this screen already uses and one screen should not hold two shapes for
+ * "on".
+ */
+@Composable
+private fun WhileItWorksPanel(interactive: Boolean, noun: String, onSet: (Boolean) -> Unit) {
+    val colors = DeckTheme.colors
+    var optimistic by remember { mutableStateOf<Boolean?>(null) }
+    // Drop the optimism once the machine agrees — keyed on the wire value, so it
+    // runs exactly when a fresh state frame changes it. Left alone when they
+    // differ: that is a write in flight, or one the machine refused.
+    LaunchedEffect(interactive) { if (optimistic == interactive) optimistic = null }
+    val on = optimistic ?: interactive
+
+    CopilotCaption(
+        "While it works",
+        about = "the copilot's scan",
+        says = "Whether the copilot takes that $noun along when it looks through your sessions, or " +
+            "works quietly. With it on, that $noun moves its window to what it is reading and boxes " +
+            "the words, at machine speed — to watch, not to read. The answer reaches you here either " +
+            "way. It is that $noun's own setting, changed from here.",
+    )
+    DeckGroup {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable {
+                    val next = !on
+                    optimistic = next
+                    onSet(next)
+                }
+                .padding(horizontal = Space.card, vertical = Space.x3),
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Show me what it is looking at", style = DeckType.body, color = colors.primary)
+                Text("On that $noun's screen, as it scans", style = DeckType.caption, color = colors.faint)
+            }
+            Spacer(Modifier.width(Space.x2))
+            Icon(
+                imageVector = if (on) Icons.Filled.CheckCircle else Icons.Filled.RadioButtonUnchecked,
+                contentDescription = if (on) "On" else "Off",
+                tint = if (on) colors.accent else colors.faint,
+                modifier = Modifier.size(22.dp),
+            )
+        }
+    }
+}
+
 /** A chip naming its subject before its state, so the desk and this phone's run cannot read as a
  *  contradiction. */
 @Composable
@@ -638,7 +715,7 @@ private fun ValueRow(title: String, value: String, mono: Boolean, chevron: Boole
  */
 object CopilotControl {
 
-    enum class Panel { WhenYouOpen, Agent, Session, Permissions, Run, Files, Routines, Devices, About }
+    enum class Panel { WhenYouOpen, Agent, Session, Permissions, Run, WhileItWorks, Files, Routines, Devices, About }
 
     /** Everything the sections are chosen from — a pure value, not a link, so every decision can be
      *  walked without a socket, a paired machine and a running agent. */
@@ -672,6 +749,12 @@ object CopilotControl {
         if (!r.onAServer && (r.access == CopilotAccess.Watch || r.access == CopilotAccess.Direct)) {
             out += Panel.Run
         }
+        // "While it works" — the desktop's driving-mode switch, drawn only where
+        // it can act. `!onAServer`, because it moves a screen a headless server
+        // does not have; `grant.alter`, because writing it is the alter frame
+        // `copilot.interactive`, and a switch a read/act phone could flip only to
+        // be refused is the dead control this screen refuses to draw.
+        if (!r.onAServer && r.grant.alter) out += Panel.WhileItWorks
         // Neither card asks about the machine's kind: a headless server that grows a copilot layer
         // serves `copilot.files` on the same terms a Mac does, and `routines` is a capability of its
         // own precisely because a machine can run routines without serving a conversation.

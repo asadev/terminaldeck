@@ -229,6 +229,28 @@ class CopilotControllerTest {
     }
 
     @Test
+    fun `the visibility toggle reaches the wire under alter and is refused without it`() {
+        // `opened` grants all three tiers, so the switch a phone flips reaches the
+        // machine — both directions, in the order they were pressed.
+        val alter = Wire()
+        val withAlter = opened(alter, run = "r1")
+        withAlter.setInteractive(false)
+        withAlter.setInteractive(true)
+        assertEquals(listOf(false, true), alter.only<ClientMessage.CopilotSetInteractive>().map { it.on })
+
+        // A watching phone reads the switch on its state frame but may not move it:
+        // the frame is `alter`, and a control that could only be refused is one the
+        // screen does not draw — the guard here is the second lock on that door.
+        val watch = Wire()
+        val watching = controller(watch)
+        watching.open()
+        watching.receive(grant(read = true, act = false, alter = false))
+        watch.clear()
+        watching.setInteractive(false)
+        assertEquals(0, watch.only<ClientMessage.CopilotSetInteractive>().size)
+    }
+
+    @Test
     fun `a message with a control character is refused here rather than sent`() {
         val wire = Wire()
         val c = opened(wire, run = "r1")

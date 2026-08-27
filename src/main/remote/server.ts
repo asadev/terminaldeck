@@ -4503,6 +4503,21 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
         send(connection, { t: 'copilot.state', state: copilot.state(deviceId) })
         return
       }
+      case 'copilot.interactive': {
+        /*
+         * The whole handler, because the gate is elsewhere and the write is one
+         * line. `copilotFor` already read `alter` against this device's grant
+         * (`COPILOT_FRAME_TIER`) before this ran, and the setting is owned by the
+         * store `setInteractive` writes — so there is nothing to validate here
+         * that has not already been decided. The state is re-sent immediately
+         * after, with the same argument `copilot.start`/`stop` re-send it: the
+         * switch on the device should follow the machine it just changed rather
+         * than wait for the next frame that happens along.
+         */
+        copilot.setInteractive(message.on)
+        send(connection, { t: 'copilot.state', state: copilot.state(deviceId) })
+        return
+      }
     }
   }
 
@@ -7300,7 +7315,8 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
       case 'copilot.start':
       case 'copilot.say':
       case 'copilot.cancel':
-      case 'copilot.stop': {
+      case 'copilot.stop':
+      case 'copilot.interactive': {
         /*
          * Listed one by one rather than caught by a prefix test, so that adding
          * a verb to this capability without deciding which tier it needs stops

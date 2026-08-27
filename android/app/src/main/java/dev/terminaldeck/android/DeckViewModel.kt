@@ -1647,6 +1647,11 @@ class DeckViewModel(
         selected?.copilot?.stopRun()
     }
 
+    /** Show or hide the copilot's scan on that machine's screen — driving mode. */
+    fun setCopilotInteractive(on: Boolean) {
+        selected?.copilot?.setInteractive(on)
+    }
+
     /** Returns whether the composer may clear its draft. False keeps it in the box. */
     fun sayToCopilot(text: String): Boolean = selected?.copilot?.say(text) ?: false
 

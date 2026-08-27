@@ -98,6 +98,13 @@ const ALLOWED_FIELDS: Readonly<Record<string, readonly string[]>> = {
   'copilot.cancel': [],
   'copilot.stop': [],
   /*
+   * Driving mode's visibility: one boolean, and it names nothing. `on` is a
+   * decision about a machine setting, like `copilot.answer`'s `approved` is a
+   * decision about a question — neither is a tool, a session or a path, so the
+   * property this file defends is untouched.
+   */
+  'copilot.interactive': ['on'],
+  /*
    * The copilot's own files, and the reason they do not weaken the property.
    *
    * `id` is the field to look at. It is not a path and it cannot become one: it
@@ -141,6 +148,8 @@ const FRAMES: ClientMessage[] = [
   { t: 'copilot.say', text: 'which of my sessions is stuck?' },
   { t: 'copilot.cancel' },
   { t: 'copilot.stop' },
+  { t: 'copilot.interactive', on: true },
+  { t: 'copilot.interactive', on: false },
   { t: 'copilot.files' },
   { t: 'copilot.file.read', id: 'yours' },
   { t: 'copilot.file.read', id: 'memory:reference_servers.md' },

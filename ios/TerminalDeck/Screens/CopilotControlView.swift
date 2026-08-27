@@ -295,6 +295,7 @@ struct CopilotControlView: View {
         case .session: session
         case .permissions: permissions
         case .run: run
+        case .whileItWorks: whileItWorks
         case .history: history
         case .files: files
         case .routines: routines
@@ -817,6 +818,46 @@ struct CopilotControlView: View {
             }
         }
     }
+
+    // MARK: - While it works
+
+    /**
+     * **The desktop's driving-mode switch, over the wire** — Asad's *"show me
+     * what it is looking at"*, on the phone.
+     *
+     * The one desktop copilot setting a phone both reads and writes: the state
+     * frame carries `interactive`, and this flips it with a `copilot.interactive`
+     * (`alter`) frame. It is the machine's own screen this changes, not the
+     * phone's — a phone cannot watch the scan — so the caption and the row's own
+     * second line both say *that machine's screen* rather than pretend the phone
+     * shows anything. Drawn only under `alter`, so the switch always moves; see
+     * `panels`.
+     */
+    private var whileItWorks: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            caption("While it works", about: "the copilot's scan", says: Self.aboutWhileItWorks)
+            card {
+                WhileItWorksToggle(
+                    interactive: link?.state?.interactive ?? true,
+                    // The graced reading, not the live one — the same pair `row`
+                    // reads, so the switch does not grey the instant a socket
+                    // blinks and does not stay lit five seconds into a real
+                    // outage.
+                    disabled: host?.notice.isShowing == true && host?.connection.isLive != true,
+                    noun: machineNoun,
+                    set: { on in
+                        link?.setInteractive(on)
+                        notice = nil
+                    })
+            }
+        }
+    }
+
+    private static let aboutWhileItWorks =
+        "Whether the copilot takes that machine along when it looks through your sessions, or works "
+        + "quietly. With it on, that machine moves its window to what it is reading and boxes the "
+        + "words, at machine speed — to watch, not to read. The answer reaches you here either way. "
+        + "It is that machine's own setting, changed from here."
 
     // MARK: - What it did
 
@@ -1369,6 +1410,7 @@ enum CopilotControl {
         case session
         case permissions
         case run
+        case whileItWorks
         case history
         case files
         case routines
@@ -1471,6 +1513,17 @@ enum CopilotControl {
             panels.append(.history)
         }
         /*
+         * "While it works" — the desktop's driving-mode switch, and it is drawn
+         * exactly where it can act. `!onAServer`, because it moves a *screen*: a
+         * headless server has none, so the setting there would change nothing a
+         * person could ever see. `grant.alter`, because writing it is the alter
+         * frame `copilot.interactive`, and a switch a `read`/`act` phone could
+         * flip only to be refused is the dead control this whole screen refuses
+         * to draw. The state's `interactive` field is `read`, but there is no
+         * point showing a value that cannot move.
+         */
+        if !onAServer, r.grant.alter { panels.append(.whileItWorks) }
+        /*
          * The two cards the machine answers for, after everything about this
          * phone's own relationship with the copilot and before everybody else's.
          *
@@ -1537,6 +1590,74 @@ enum CopilotControl {
     static func sessionsLabel(_ count: Int) -> String {
         if count == 0 { return "Sessions it started" }
         return count == 1 ? "1 session it started" : "\(count) sessions it started"
+    }
+}
+
+/**
+ * The "While it works" switch, with the one thing its row needs that a computed
+ * property on the screen cannot hold: an optimistic position.
+ *
+ * A `copilot.interactive` frame is a network round trip, and a switch that only
+ * moved once the machine's echo came back would read as one that did not take —
+ * the *"consistent connection"* complaint, applied to a toggle. So the tap flips
+ * a local `optimistic` at once and sends the frame; the machine answers with a
+ * fresh `copilot.state`, and when its `interactive` catches up to what was
+ * asked, the optimism is dropped and the wire is the single truth again. On a
+ * refusal the machine's value never changes, so the next frame falls the switch
+ * back to it — the honest outcome, and no error path invented here that the
+ * frame does not carry.
+ *
+ * The checkmark-circle rather than a `Toggle`, because that is the toggle idiom
+ * this screen already uses — `startOnOpenRow`, three cards up — and one screen
+ * holding two shapes for "on" is the kind of seam a review catches.
+ */
+private struct WhileItWorksToggle: View {
+    let interactive: Bool
+    let disabled: Bool
+    let noun: String
+    let set: (Bool) -> Void
+    @State private var optimistic: Bool?
+
+    var body: some View {
+        let on = optimistic ?? interactive
+        return Button {
+            let next = !on
+            optimistic = next
+            set(next)
+        } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Show me what it is looking at")
+                        .font(.system(size: 16))
+                        .foregroundStyle(Theme.primary)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("On that \(noun)’s screen, as it scans")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.faint)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: on ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 22))
+                    .foregroundStyle(on ? Theme.accent : Theme.faint)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .opacity(disabled ? 0.4 : 1)
+        .disabled(disabled)
+        // The machine caught up: once its value equals what was asked, drop the
+        // optimism so the wire is the single truth again. Left alone when they
+        // differ — that is a write still in flight, or one the machine refused
+        // and never applied.
+        .onChange(of: interactive) { _, latest in
+            if optimistic == latest { optimistic = nil }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("copilot.controls.interactive")
+        .accessibilityValue(on ? "On" : "Off")
     }
 }
 

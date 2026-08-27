@@ -1028,6 +1028,7 @@ fun TerminalDeckApp(
                 onStart = viewModel::startCopilot,
                 onCancel = viewModel::cancelCopilotTurn,
                 onStopRun = viewModel::stopCopilotRun,
+                onSetInteractive = viewModel::setCopilotInteractive,
                 onApplyProvider = { viewModel.applyServerSetting(ServerSettingKey.DefaultProvider, it) },
                 onEnsureServerSettings = viewModel::openServerSettings,
                 onEnsureDevices = viewModel::openDevices,

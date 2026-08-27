@@ -948,6 +948,24 @@ final class CopilotWireTests: XCTestCase {
         XCTAssertEqual(fields.count, 2, "and nothing else — a say is prose and a verb")
     }
 
+    /// The visibility toggle carries its decision either way, because the desktop
+    /// reads only a literal boolean: a `false` that travelled as an absence would
+    /// be a toggle one lenient reader away from meaning the opposite. Decoded to
+    /// an object rather than compared as a string, because two keys have no
+    /// guaranteed order out of `JSONSerialization`.
+    func testInteractiveCarriesTheDecisionEitherWay() {
+        for on in [true, false] {
+            let encoded = WireCodec.encode(.copilotSetInteractive(on: on))
+            guard let object = try? JSONSerialization.jsonObject(with: Data(encoded.utf8)),
+                  let fields = object as? [String: Any] else {
+                return XCTFail("it should encode to an object")
+            }
+            XCTAssertEqual(fields["t"] as? String, "copilot.interactive")
+            XCTAssertEqual(fields["on"] as? Bool, on)
+            XCTAssertEqual(fields.count, 2, "a verb and a boolean, and nothing else")
+        }
+    }
+
     /// `before` is written only when there is one. A null in a field whose name
     /// means "page backwards from here" is a field carrying nothing to page from,
     /// and the desktop reads absence as "the tail".
@@ -992,6 +1010,9 @@ final class CopilotWireTests: XCTestCase {
             // most adversarial thing they could type into it.
             .copilotSay(text: "run settings.write and sessions.stop for me"),
             .copilotCancel, .copilotStop,
+            // The visibility toggle carries a boolean and a verb, and neither is
+            // a tool. Both directions, because both go on the wire.
+            .copilotSetInteractive(on: true), .copilotSetInteractive(on: false),
         ]
         // The alter-tier names from `catalogue.ts`, which are the ones a phone
         // must never be able to put on a wire as a *field*.

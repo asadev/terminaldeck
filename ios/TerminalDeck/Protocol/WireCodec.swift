@@ -1160,6 +1160,12 @@ enum WireCodec {
             object = ["t": "copilot.cancel"]
         case .copilotStop:
             object = ["t": "copilot.stop"]
+        case let .copilotSetInteractive(on):
+            // `on` is written either way, for the reason `copilotAnswer`'s
+            // `approved` is: it *is* the decision, and the desktop's parser reads
+            // only a literal boolean — a value that travelled as an absence would
+            // be a toggle one lenient reader away from meaning the opposite.
+            object = ["t": "copilot.interactive", "on": on]
 
         /*
          * The copilot's files. Note what is *not* in any of them, once more: a

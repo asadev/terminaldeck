@@ -588,6 +588,20 @@ struct CopilotState: Equatable {
     /// a phone sends somebody to fix the wrong thing.
     let reason: String?
 
+    /**
+     * Whether the copilot shows its scan on **that machine's** screen — driving
+     * mode. The wire half of the desktop's *"show me what it is looking at"*
+     * switch, so a paired device draws and flips the same setting the person at
+     * the desk does.
+     *
+     * A fact about the machine's screen, not this phone's: a phone cannot watch
+     * the scan, so this is drawn only where it can also be changed — behind the
+     * `alter` grant, on a desktop. **Anything but an explicit off is on**, the
+     * one rule this setting keeps, so this is a plain `Bool` the desktop resolved
+     * rather than a tristate a phone would have to default.
+     */
+    let interactive: Bool
+
     var deskIsRunning: Bool { desk == "running" }
     var deskIsStarting: Bool { desk == "starting" }
     /// True only when the desktop actually said `stopped`. An unrecognised word
@@ -1127,7 +1141,15 @@ extension WireCodec {
                             // a host that never said one could start is the
                             // failure `available` exists to prevent.
                             available: literalTrue(object["available"]),
-                            reason: displayLine(object["reason"]))
+                            reason: displayLine(object["reason"]),
+                            // The exact mirror of the desktop's `interactive !==
+                            // false`: on unless the machine said a literal off.
+                            // `literalFalse` and not `as? Bool != false`, so a
+                            // `0` or a `"false"` from a host this build does not
+                            // understand reads *on* — the same direction the
+                            // desktop folds them, and the default this setting
+                            // keeps everywhere it is read.
+                            interactive: !literalFalse(object["interactive"]))
     }
 
     /**

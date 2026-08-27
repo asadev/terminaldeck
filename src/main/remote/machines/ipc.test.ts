@@ -825,6 +825,7 @@ describe('the rest of the list', () => {
       grant: { read: true, act: true, alter: true },
       available: true,
       reason: null,
+      interactive: true,
     }
     app.links[0].options.onCopilotState?.(state)
     expect(app.broadcasts).toContainEqual({

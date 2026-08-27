@@ -145,6 +145,7 @@ import { COPILOT_HOME_SETTING, registerCopilotFolderIpc } from './copilot-folder
 import { copilotFilesHere } from './copilot-files'
 import { registerCopilotInspectIpc } from './copilot-inspect'
 import { registerDeckControlIpc, type DeckControlHandle } from './deck-control'
+import { INTERACTIVE_KEY } from './deck-control/tour-tool'
 import { createSessionTools, type SessionTools } from './deck-control/session-tools'
 import { registerDeckignoreIpc } from './deckignore'
 import { defaultContext, registerHooksIpc, syncInstalledHooks } from './hooks'
@@ -2649,6 +2650,11 @@ function registerIpc(): void {
         // the last attempt failed and is the honest sentence to forward.
         available: state.problem === null,
         reason: state.problem,
+        // Whether driving mode shows its scan on this machine's screen, resolved
+        // exactly as the desktop's own switch and the tour tool resolve it —
+        // anything but an explicit off is on. `REMOTE_ENABLED_KEY` above is read
+        // the same way, for the same reason: the default lives in the reader.
+        interactive: storedValue(INTERACTIVE_KEY) !== false,
       }
     },
     cost: () => {
@@ -2664,6 +2670,18 @@ function registerIpc(): void {
        * beside it.
        */
       return { tools: catalogue?.tools ?? 0, turnTokens: catalogue?.tokens ?? 0 }
+    },
+    /*
+     * Write the machine's `copilot.interactive` setting on a paired device's
+     * behalf, the same store and the same key the desktop's own switch writes —
+     * so the two cannot disagree about whether the scan is shown. The tier that
+     * decides whether *this* device may is `alter`, checked at the transport
+     * before `CopilotRuns.setInteractive` is reached; this is only the write.
+     * `REMOTE_ENABLED_KEY` above is set through `patchStoredSettings` the same
+     * way, which is the settled path for a single stored flag.
+     */
+    setInteractive: (on) => {
+      patchStoredSettings({ [INTERACTIVE_KEY]: on })
     },
     sessions: () => toCopilotSessions(ptys.list(), (id) => liveStatus.get(id)?.status ?? 'unknown'),
     log: (options) => tailForPhone(deckControl?.log.tail(2000) ?? [], options),

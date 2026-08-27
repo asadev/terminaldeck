@@ -153,7 +153,7 @@ final class CopilotLinkTests: XCTestCase {
     private func state(desk: String = "running", run: String? = nil,
                        available: Bool = true, pending: Int = 0) -> CopilotState {
         CopilotState(desk: desk, run: run, profile: nil, signedIn: nil, tools: 0, turnTokens: 0,
-                     pending: pending, grant: nil, available: available, reason: nil)
+                     pending: pending, grant: nil, available: available, reason: nil, interactive: true)
     }
 
     // MARK: - What may be drawn
