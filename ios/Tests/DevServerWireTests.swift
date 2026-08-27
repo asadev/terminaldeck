@@ -226,18 +226,17 @@ final class DevServerWireTests: XCTestCase {
 
     /// The capability name is not claimed in `hello`. It is a verb this phone
     /// *sends*, gated by what the desktop advertised, so claiming it would say
-    /// nothing — unlike `credential`, which is a frame the desktop only sends
-    /// once somebody has said they are listening.
+    /// nothing — unlike `github`, whose `github.changed` push a client would
+    /// otherwise miss.
     func testDevServerIsNotClaimedInHello() {
         // `devserver` is a thing this phone *asks for*, gated by what the desktop
         // advertised, so claiming it would say nothing. The claimed set is only
-        // the names that run desktop→phone: a question the desktop asks
-        // (credential), the pushes a client would otherwise miss (devices,
-        // settings), and the client half of a dual-listed name (watch) — the
-        // same list `CLAIMED_CAPABILITIES` carries in the PWA as of 0.10.0.
+        // the names that run desktop→phone: the pushes a client would otherwise
+        // miss (github, devices, settings), and the client half of a dual-listed
+        // name (watch) — the same list `CLAIMED_CAPABILITIES` carries in the PWA.
         XCTAssertFalse(WireCapability.claimed.contains(WireCapability.devserver))
         XCTAssertEqual(Set(WireCapability.claimed),
-                       [WireCapability.credential, WireCapability.devices,
+                       [WireCapability.github, WireCapability.devices,
                         WireCapability.settings, WireCapability.watch])
     }
 

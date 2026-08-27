@@ -166,18 +166,6 @@ final class HostLink: Identifiable {
      */
     var onSessionsChanged: (([RemoteSession], AlertReason) -> Void)?
 
-    /**
-     * Git on this machine wants a GitHub login, and this phone is the thing
-     * holding one.
-     *
-     * Handed straight up rather than answered here, because the answer is not a
-     * per-machine decision: there is one account on this phone, one question on
-     * screen at a time, and a person looking at two machines must not be asked
-     * two things at once by two objects that do not know about each other. See
-     * `CredentialResponder`.
-     */
-    var onCredentialRequest: ((CredentialRequest) -> Void)?
-
     private let credentials: CredentialStore
     private let device: DeviceDescriptor
     private var transport: Transport?
@@ -263,6 +251,10 @@ final class HostLink: Identifiable {
     })
     @ObservationIgnored
     private(set) lazy var watch: WatchLink = WatchLink(wire: WireProxy { [weak self] message in
+        self?.transport?.send(message) ?? false
+    })
+    @ObservationIgnored
+    private(set) lazy var github: GitHubLink = GitHubLink(wire: WireProxy { [weak self] message in
         self?.transport?.send(message) ?? false
     })
 
@@ -351,19 +343,6 @@ final class HostLink: Identifiable {
 
     var canSendFiles: Bool {
         connection.isLive && (transport?.capabilities.contains(WireCapability.upload) ?? false)
-    }
-
-    /**
-     * Whether git on this machine may ask **this phone** for a login.
-     *
-     * The one capability that runs backwards, so this is not a button being
-     * gated — it is whether a sentence on the session sheet is true. A machine
-     * that never advertised `credential` will never ask, and telling somebody
-     * their GitHub account answers pushes from a machine that cannot ask would
-     * be a promise nothing here can keep.
-     */
-    var canAskForGitLogins: Bool {
-        connection.isLive && (transport?.capabilities.contains(WireCapability.credential) ?? false)
     }
 
     /**
@@ -1628,27 +1607,6 @@ final class HostLink: Identifiable {
         for line in lines { sendInput(id, line) }
     }
 
-    // MARK: - Credentials
-
-    /**
-     * Answer a credential question this machine asked.
-     *
-     * A narrow door on purpose. Everything else in this app reaches the socket
-     * through a method that names what it is doing, and the one thing that must
-     * not appear is a general "send this frame" seam that a view could reach —
-     * the prompt *is* a view. `CredentialAnswer` has three cases and every one
-     * of them carries an id the desktop minted, so nothing can be said through
-     * here that was not asked for.
-     *
-     * The reply is dropped when the socket is down rather than queued. There is
-     * nothing to queue for: the desktop settles a request the moment its own
-     * connection to this device goes, and a reply arriving on a later socket
-     * would be answering a question that no longer exists.
-     */
-    func answer(_ answer: CredentialAnswer) {
-        transport?.send(answer.message)
-    }
-
     // MARK: - Outbound
 
     private func sendInput(_ id: String, _ text: String) {
@@ -1880,6 +1838,7 @@ final class HostLink: Identifiable {
             serverSettings.welcomed(capabilities: capabilities)
             devices.welcomed(capabilities: capabilities)
             watch.welcomed(capabilities: capabilities)
+            github.welcomed(capabilities: capabilities)
             // After `granted` is set, because the folders this asks about are
             // read from it — and on every welcome, because the desktop's
             // subscription belongs to the connection this welcome arrived on.
@@ -2156,19 +2115,11 @@ final class HostLink: Identifiable {
              */
             devServers[report.folder] = report
 
-        case let .credentialRequest(id, origin, repo, operation, prompt):
-            // The machine's *name* travels with the question, not just its id.
-            // The prompt's third line is which machine asked, and by the time it
-            // is drawn this link may not be the one on screen — a phone paired
-            // with three machines can be looking at any of them when a fourth
-            // thing happens on a fourth.
-            onCredentialRequest?(CredentialRequest(id: id,
-                                                   machineId: self.id,
-                                                   machineName: label,
-                                                   origin: origin,
-                                                   repo: repo,
-                                                   operation: operation,
-                                                   prompt: prompt))
+        case .githubState, .githubChanged:
+            // The host's GitHub login, read and driven by `GitHubLink`. It checks
+            // the rid on a state and takes a changed push as-is, so an answer to a
+            // question it did not ask is dropped and an unsolicited change lands.
+            github.receive(message)
 
         case .tunnelOpened, .tunnelClosed, .netData, .netAck, .netClose:
             break

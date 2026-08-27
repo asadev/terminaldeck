@@ -214,9 +214,6 @@ struct RootView: View {
                 model.settingsRoute = [.machines, .server(added.id)]
             }
         }
-        .sheet(isPresented: $model.showingGitHub) {
-            GitHubAccountView(model: model) { model.showingGitHub = false }
-        }
         .sheet(isPresented: $model.showingAlerts) {
             AlertsView(model: model) { model.showingAlerts = false }
         }
@@ -237,19 +234,6 @@ struct RootView: View {
                 model.createSession(in: folder)
             }
         }
-        /*
-         * A machine asking this phone for a GitHub login. One copy, here.
-         *
-         * It used to be two, armed one at a time through a `covered` flag,
-         * because the localhost browser was a `fullScreenCover` and a sheet
-         * asked for by an ancestor of a cover has nothing to present from. That
-         * screen is a **push** now — see `LocalhostListView` — and a pushed
-         * screen is inside this hierarchy rather than over it, so this one
-         * presents perfectly well while somebody is looking at a tunnelled page.
-         * The flag, the second modifier and the rule about which was live are
-         * all gone with the cover.
-         */
-        .credentialPrompt(model)
         /*
          * Naming a machine, presented from here rather than from the list.
          *

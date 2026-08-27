@@ -189,6 +189,7 @@ import {
 // session spawn path closes over it — so constructing one here would give the
 // sockets a different object from the one sessions are keyed against.
 import type { CredentialMessage, CredentialProxy } from './credentials'
+import type { GitHubHostAccess } from './host-github'
 // Type-only for the same reason again, plus one of its own: `dev-server.ts`
 // reads `package.json` files off the disk, and a socket server whose module
 // graph reaches `node:fs` is a socket server that has to be tested with a
@@ -1185,6 +1186,16 @@ export interface RemoteEndpointOptions {
    * `core.serverSettings`; the demo box's `offer` ceiling drops it anyway.
    */
   serverSettings?: ServerSettingsAccess
+  /**
+   * The machine's own GitHub login, as a phone reads and drives it.
+   *
+   * **Optional, and absent is the switch**, the same negotiation `serverSettings`
+   * gets: a host built without it never advertises `github`, so a phone draws no
+   * connect card. Both shells supply `core.hostGitHub` — the desktop so its panel
+   * and a phone read one login, the headless server because the wire is the only
+   * way its GitHub gets connected at all.
+   */
+  hostGitHub?: GitHubHostAccess
   /**
    * Is this device one of the owner's own, rather than a guest?
    *
@@ -2318,10 +2329,20 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     // thing that decides whether it is offered. A host with nowhere to put a file
     // must not draw a Send File button on somebody's phone.
     if (name === CAPABILITY.upload) return typeof options.uploadsDir === 'string' && options.uploadsDir !== ''
-    // Same rule again. A host with no proxy would otherwise tell a phone it may
-    // be asked for a GitHub login and then never ask, which is a screen in
-    // somebody's app for a thing that cannot happen.
-    if (name === CAPABILITY.credential) return options.credentials !== undefined
+    // Retired 2026-08-27, and never advertised again. It told a phone "I might
+    // ask you for a GitHub login", and the machine holds its own login now, so it
+    // never asks — the proxy answers git in-process from `github-auth.ts`. Left
+    // as an explicit `false` rather than deleted so the reason it is off is here,
+    // one line above the thing that replaced it, and so `CAPABILITIES` need not
+    // change shape. See {@link CAPABILITY.github}.
+    if (name === CAPABILITY.credential) return false
+    // Its replacement: the machine's own GitHub login, driven from a phone. The
+    // authenticator is the thing that makes the feature possible — the desktop
+    // has one and so does a headless server — so a host without one does not
+    // advertise `github` and a phone draws no connect card. `capabilitiesFor`
+    // narrows it further to the owner's own devices; this is only whether the
+    // host speaks it at all.
+    if (name === CAPABILITY.github) return options.hostGitHub !== undefined
     // Same rule once more: the roster is the thing that makes the feature
     // possible, so a host with none does not advertise `devices` and a phone
     // never draws a device screen or sends a frame this endpoint would refuse.
@@ -2660,6 +2681,12 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     // no push frame that could correct a welcome later, so a guest must never be
     // told the capability exists.
     if (!ownDevice(deviceId)) withheld.push(CAPABILITY.settings)
+    // And `github` with it, on the same question: whose GitHub this machine signs
+    // into is the owner's to set, not something a granted folder carries. A guest
+    // who could press Connect could point the machine's git at their own account;
+    // stripped here so the capability never even welcomes them, the same as
+    // `settings`.
+    if (!ownDevice(deviceId)) withheld.push(CAPABILITY.github)
     // And `watch` with them, and for the same reason (wave-3): watching a window
     // is seeing the owner's signed-in browser — his mail, his bank — which is as
     // much an owner act as clicking in it, and no push frame could correct a
@@ -2768,6 +2795,31 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
         if (!connection.capabilities.includes(CAPABILITY.settings)) continue
         send(connection, { t: 'settings.changed', settings: settings.read() })
       }
+    }) ?? null
+
+  /**
+   * The same shape one feature along: the machine's GitHub login changed here —
+   * a device-flow sign-in a phone started finally completed in the background
+   * poll, or somebody disconnected — so it is pushed to every eligible
+   * connection. This is how a phone that pressed Connect learns the sign-in took
+   * without polling `github.read`: `github-auth.ts` fires its change hook, the
+   * host access object rings this, and it reads the new login once and fans it
+   * out. Gated per connection at send time — the owner's own devices that named
+   * `github` — the same rule `settings.changed` follows, so a demoted device
+   * stops hearing it the instant it is demoted.
+   */
+  const stopGitHubWatch =
+    options.hostGitHub?.onChanged(() => {
+      const hostGitHub = options.hostGitHub
+      if (!hostGitHub) return
+      void hostGitHub.read().then((github) => {
+        for (const connection of live.values()) {
+          if (!connection.deviceId) continue
+          if (!ownDevice(connection.deviceId)) continue
+          if (!connection.capabilities.includes(CAPABILITY.github)) continue
+          send(connection, { t: 'github.changed', github })
+        }
+      })
     }) ?? null
 
   /**
@@ -5819,6 +5871,68 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
   }
 
   /**
+   * Serve one `github.read`, `github.connect`, `github.cancel` or
+   * `github.disconnect` — the machine's own GitHub login, driven from a phone.
+   *
+   * The same two doors `settingsServe` opens, and the machine's own on both: the
+   * capability decides whether this host speaks the frame at all, and `ownDevice`
+   * decides whether this device may. Whose GitHub the machine signs into is the
+   * owner's to set, so a guest is refused `unauthorized` — the same choice
+   * `settings` makes, and for the same reason: that a machine can sign into
+   * GitHub is not a secret about somebody's computer, so naming the refusal
+   * leaks nothing.
+   *
+   * Every verb comes back as one `github.state` matched by `rid`. `connect`'s
+   * carries the code to type (in `github.pending`) or the reason it could not
+   * start (in `failure`); whether the machine *ends up* signed in is the later
+   * `github.changed` the background poll fires, pushed from `stopGitHubWatch`.
+   * The reads and writes are not awaited by the dispatcher — a store and a
+   * network round-trip on this machine, and a socket that stopped reading would
+   * freeze every session on the connection while one ran.
+   */
+  async function githubServe(
+    connection: LiveConnection,
+    deviceId: string,
+    message: Extract<
+      ClientMessage,
+      { t: 'github.read' | 'github.connect' | 'github.cancel' | 'github.disconnect' }
+    >,
+  ): Promise<void> {
+    const hostGitHub = options.hostGitHub
+    if (!hostGitHub || !advertised.includes(CAPABILITY.github)) {
+      // Named `unavailable`, not `unauthorized`: the device may ask, this build
+      // has no authenticator to answer, and the two have different remedies.
+      send(connection, {
+        t: 'error',
+        code: 'unavailable',
+        message: `This ${machineNoun(currentPlatform())} does not manage its GitHub sign-in from here.`,
+      })
+      return
+    }
+    if (!ownDevice(deviceId)) {
+      send(connection, {
+        t: 'error',
+        code: 'unauthorized',
+        message: 'Only this machine’s own devices manage its GitHub sign-in.',
+      })
+      return
+    }
+
+    const github =
+      message.t === 'github.connect'
+        ? await hostGitHub.connect()
+        : message.t === 'github.cancel'
+          ? await hostGitHub.cancel()
+          : message.t === 'github.disconnect'
+            ? await hostGitHub.disconnect()
+            : await hostGitHub.read()
+    // Only if the socket is still here: `connect` and `read` cross a network
+    // round-trip, and a phone can vanish across it.
+    if (!live.has(connection.id)) return
+    send(connection, { t: 'github.state', rid: message.rid, github })
+  }
+
+  /**
    * Serve one `usage.read`.
    *
    * ## The same two doors, and the second one is still the one that matters
@@ -6672,6 +6786,23 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
           })
         })
         return
+      case 'github.read':
+      case 'github.connect':
+      case 'github.cancel':
+      case 'github.disconnect':
+        // Not awaited, for the reason the settings frames above are not: this
+        // reads or writes this machine's own GitHub, and a socket that stopped
+        // reading would freeze every session on the connection while it did.
+        void githubServe(connection, connection.deviceId, message).catch((error) => {
+          console.error('[remote] a github request failed:', error)
+          if (!live.has(connection.id)) return
+          send(connection, {
+            t: 'error',
+            code: 'unavailable',
+            message: 'This machine’s GitHub sign-in could not be reached.',
+          })
+        })
+        return
       case 'devices.list':
       case 'devices.revoke':
         // Synchronous, not awaited: unlike the readings above, listing the
@@ -7478,6 +7609,14 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
       }
       return false
     },
+    // The one thing the proxy still asks the desk for. Git on this machine is
+    // answered from this machine's own GitHub — but only for the owner's own
+    // sessions; a guest granted a folder is refused, so a granted folder never
+    // pushes as the owner. `ownDevice` is the same fact `settings` and `logins`
+    // gate on, and only the server knows it.
+    ownDevice(deviceId: string): boolean {
+      return ownDevice(deviceId)
+    },
   })
 
   return {
@@ -7550,6 +7689,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
       // to send on a wire that is going away.
       stopDevWatch?.()
       stopSettingsWatch?.()
+      stopGitHubWatch?.()
       for (const connection of [...live.values()]) connection.wire.close(CLOSE.goingAway, 'server stopping')
     },
   }
@@ -8322,6 +8462,8 @@ export interface RemoteIpcDeps {
    * which is the one store a window and a phone both write through.
    */
   serverSettings?: ServerSettingsAccess
+  /** The machine's own GitHub login, driven from a phone. Absent is the switch. */
+  hostGitHub?: GitHubHostAccess
   /**
    * Which of this machine's logins each device may use — the third axis.
    *
@@ -9038,6 +9180,7 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
      * "This server" section rather than one that is refused after the tap.
      */
     ...(deps.serverSettings ? { serverSettings: deps.serverSettings } : {}),
+    ...(deps.hostGitHub ? { hostGitHub: deps.hostGitHub } : {}),
     /*
      * And whether a device is one of his own, which decides whether it may
      * manage this machine's logins at all.

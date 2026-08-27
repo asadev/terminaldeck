@@ -478,7 +478,37 @@ export const CAPABILITY = {
    */
   rename: 'rename',
   upload: 'upload',
+  /**
+   * The phone answering git's login on the machine's behalf. **Retired
+   * 2026-08-27** and never advertised any more — kept as a name only so a stale
+   * client's `credential.*` frame is still recognised and ignored rather than
+   * closing the channel. See {@link CAPABILITY.github} for what replaced it.
+   *
+   * Asad flipped the direction: *"Every device that is actually running the app
+   * is the one that owns the GitHub settings — not the mobile application,
+   * because the mobile application is just driving it. So the HOST owns
+   * everything, everywhere."* The machine holds its own login now, so git on the
+   * machine is answered in the machine's own process (`credentials.ts` reads
+   * `github-auth.ts`), not by a round-trip to a phone. Nothing sends
+   * `credential.request` any longer.
+   */
   credential: 'credential',
+  /**
+   * The machine's own GitHub login, driven from a phone.
+   *
+   * The other half of retiring `credential`: the phone no longer *holds* a
+   * GitHub account, it *triggers* the one the host holds. `github.connect` starts
+   * the device-flow sign-in over there — the host shows a code, the person
+   * authorises in a browser, the host stores the token — and `github.read` /
+   * `github.disconnect` view and revoke it. The host pushes `github.changed`
+   * when the login changes, including when the flow a phone started finally
+   * completes.
+   *
+   * Owner-only, withheld from a guest in `capabilitiesFor` on the same question
+   * as `settings` and `logins`: whose GitHub the machine signs into is the
+   * owner's to set, not something a granted folder carries.
+   */
+  github: 'github',
   devserver: 'devserver',
   copilot: 'copilot',
   /**
@@ -995,7 +1025,15 @@ export const CAPABILITIES: string[] = [
   CAPABILITY.close,
   CAPABILITY.rename,
   CAPABILITY.upload,
+  /*
+   * `credential` stays in this list, though no host advertises it any more
+   * (`serves()` returns false for it since 2026-08-27): the list is what
+   * `advertised` filters against, and a name absent from it is one a host could
+   * not advertise even to a client that still understands it. Keeping the name
+   * here and turning it off in one place keeps the retirement a single decision.
+   */
   CAPABILITY.credential,
+  CAPABILITY.github,
   CAPABILITY.devserver,
   CAPABILITY.copilot,
   /*
@@ -3535,6 +3573,68 @@ export const MAX_ACCOUNT_ID_LENGTH = 200
 export const MAX_SIGNIN_DETAIL_LENGTH = 400
 
 /**
+ * A device-flow sign-in the host has in flight, as a phone needs to draw it.
+ *
+ * The three fields are the whole of what a person acts on: the code they type,
+ * the page they type it into, and when it stops working. There is no client id
+ * and no scope list — a phone starts nothing itself and holds nothing, it only
+ * shows what the host is waiting on. Mirrors `DeviceFlowPrompt` in
+ * `github-auth.ts` minus `installUrl`, which rides on {@link GitHubHostWire}
+ * itself because it is a property of the account, not of one attempt.
+ */
+export interface GitHubHostPromptWire {
+  /** Typed into GitHub by hand. */
+  userCode: string
+  /** Where to type it. */
+  verificationUri: string
+  /** Epoch ms after which the code stops working. */
+  expiresAt: number
+}
+
+/**
+ * The machine's own GitHub login, as a phone driving it needs to see it.
+ *
+ * A deliberately smaller thing than `github-auth.ts`'s `GitHubAuthState`: that
+ * carries a folder's repository, its branch and the account's whole repository
+ * list, all of which answer questions the desktop panel asks about an open
+ * project. A phone here asks one question — *is this machine signed in, as
+ * whom, and if not what do I press* — so it gets the account and the pending
+ * sign-in and nothing folder-shaped.
+ *
+ * `source` is the same set `AuthSource` names — `environment`, `device-flow`,
+ * `gh-cli` — left as a bare string for the reason `AccountWire.provider` is: a
+ * client older than a source it has never heard of should show the account, not
+ * drop it. `failure` also carries the one sentence a build with no GitHub App
+ * registration shows in place of a Connect button, so a client reads
+ * `appConfigured` to decide whether to draw the button and `failure` for what
+ * to say when it does not.
+ */
+export interface GitHubHostWire {
+  connected: boolean
+  /** The GitHub login when connected, e.g. `asadev`. Null when signed out. */
+  login: string | null
+  /** The account's display name, when it has one. */
+  name: string | null
+  avatarUrl: string | null
+  /** Where the credential came from. See `AuthSource`. Null when signed out. */
+  source: string | null
+  /**
+   * True when this build has a GitHub App registration, so a sign-in can start.
+   * False in a fork that has not registered its own — then there is no Connect
+   * button, only the sentence in {@link failure}.
+   */
+  appConfigured: boolean
+  /** Where the person chooses which repositories the App may see, when known. */
+  installUrl: string | null
+  /** A device-flow sign-in waiting on the person right now, or null. */
+  pending: GitHubHostPromptWire | null
+  /** One sentence for why there is no usable credential, or null when connected. */
+  failure: string | null
+  /** One sentence describing what Disconnect will do, or null when nothing to revoke. */
+  disconnect: string | null
+}
+
+/**
  * One login on the far machine, as its own account list holds it.
  *
  * `color` is a custom property **name** and never a colour value, exactly as
@@ -4701,6 +4801,40 @@ export type ClientMessage =
    * asked to hear about it gets a `settings.changed` push.
    */
   | { t: 'settings.apply'; rid: string; key: ServerSettingKey; value: string }
+  /* ---- capability `github`. Refused when it is not advertised. ----------- */
+  /**
+   * Read this machine's own GitHub login.
+   *
+   * Answered as `github.state`. `rid` names the ask, the same reason
+   * `settings.read`'s does — a phone can have the connect card and a session's
+   * chip open at once, and an answer with no `rid` would land in whichever was
+   * listening.
+   */
+  | { t: 'github.read'; rid: string }
+  /**
+   * Start the device-flow sign-in **on that machine**.
+   *
+   * The host asks GitHub for a code, shows it back as `github.state` with
+   * `github.pending` set, and polls in the background while the person types it
+   * into a browser. It is not a claim the machine ends up signed in — that
+   * arrives later as `github.changed`, when the poll on the host actually
+   * completes, or never if the person walks away. Starting a second one while a
+   * first is in flight is answered with the same pending prompt rather than a
+   * new code, so two phones driving one machine see one sign-in.
+   */
+  | { t: 'github.connect'; rid: string }
+  /** Stop waiting on a sign-in in flight. The code on GitHub's side expires unused. */
+  | { t: 'github.cancel'; rid: string }
+  /**
+   * Sign that machine's GitHub out.
+   *
+   * A device-flow token is dropped from the machine's disk; a `gh auth login`
+   * reused from its CLI is logged out over there. What this cannot do is revoke
+   * the grant on GitHub's side — the device flow has no client secret to do it
+   * with — so the sentence in `github.disconnect` is deliberately about the
+   * machine, and the state comes back as `github.state`.
+   */
+  | { t: 'github.disconnect'; rid: string }
   /* ---- capability `send`. Refused when it is not advertised. ------------- */
   /**
    * Put text into that session **without subscribing to it**.
@@ -5605,6 +5739,33 @@ export type ServerMessage =
    * it does not know.
    */
   | { t: 'settings.changed'; settings: ServerSettingWire[] }
+  /* ---- capability `github` ----------------------------------------------- */
+  /**
+   * The answer to one `github.read`, `github.connect`, `github.cancel` or
+   * `github.disconnect`, and only ever to one.
+   *
+   * `rid` matches it to the frame that caused it. `connect` comes back here too
+   * — with `github.pending` set to the code and the URL — because the code is
+   * something to show *now*, before the poll it starts has settled; whether it
+   * ends up connected is a later `github.changed`. A refusal (no GitHub App
+   * registration, GitHub would not start a code) is this frame with a `failure`
+   * sentence and no `pending`, the same way `settings.applied` carries its own
+   * reason rather than a separate `github.failed`.
+   */
+  | { t: 'github.state'; rid: string; github: GitHubHostWire }
+  /**
+   * The machine's GitHub login changed here — pushed, unsolicited, to every
+   * device that may hear it.
+   *
+   * This is how a phone that pressed Connect learns the sign-in finally took:
+   * the host's background poll stores the token, `github-auth.ts` fires its
+   * change hook, and this goes out. It also carries a disconnect, and a sign-in
+   * one of the owner's other devices completed — the same one-writer, many-
+   * readers shape `settings.changed` has, and gated the same way, to a
+   * connection whose device is one of the owner's own and whose hello named
+   * `github`. A build that never asked for the capability never sees the frame.
+   */
+  | { t: 'github.changed'; github: GitHubHostWire }
   /* ---- capability `send` ------------------------------------------------- */
   /**
    * What happened to one `session.send`, and only ever to one.
@@ -7652,6 +7813,25 @@ export function parseClientMessage(raw: unknown): ParseResult {
       // stripping turns a hostile value into a different legal-looking one.
       if (!/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(rawValue)) return bad('settings.apply with an unusable value')
       return { ok: true, message: { t: 'settings.apply', rid: requestId, key, value: rawValue } }
+    }
+
+    /* ---- capability `github` -------------------------------------------- */
+    // Shape only, and the shape is a request id and nothing else: every one of
+    // these four verbs acts on the machine's single GitHub login, so there is no
+    // account to name and nothing a phone supplies but the intent. Whether this
+    // host has an authenticator, and whether this device is one of the owner's
+    // own, are the server's questions — the same split `settings.read` makes.
+    case 'github.read':
+    case 'github.connect':
+    case 'github.cancel':
+    case 'github.disconnect': {
+      // The label matched is the verb; named in a local because a `switch` over
+      // an `unknown` `parsed.t` does not narrow it to the literal a union member
+      // needs, and the four share one body.
+      const t = parsed.t as 'github.read' | 'github.connect' | 'github.cancel' | 'github.disconnect'
+      const requestId = id(parsed.rid)
+      if (!requestId) return bad(`${t} without a request id`)
+      return { ok: true, message: { t, rid: requestId } }
     }
 
     /* ---- capability `devices` ------------------------------------------- */

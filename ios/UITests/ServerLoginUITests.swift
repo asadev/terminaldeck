@@ -652,7 +652,7 @@ final class ServerLoginUITests: XCTestCase {
      * run. That helper pops **once** — *"one Back is enough; this stack is one
      * deep by construction"* — and by this point in the case it is two deep: the
      * connect pushed Settings → Machines → the server's own page. One Back lands
-     * on Machines, `settings.github` is not there, and the helper reports it
+     * on Machines, `settings.alerts` is not there, and the helper reports it
      * could not reach Settings while standing one screen away from it. So this
      * pops until it arrives, and says which screen it gave up on.
      */

@@ -1,6 +1,5 @@
 package dev.terminaldeck.android
 
-import dev.terminaldeck.android.github.InMemoryGitHubStore
 import dev.terminaldeck.android.pairing.Rendezvous
 import dev.terminaldeck.android.protocol.ClientMessage
 import dev.terminaldeck.android.protocol.RemoteSession
@@ -144,7 +143,6 @@ class FolderGrantTest {
         deck = DeckViewModel(
             vault = vault,
             clipboard = FakeClipboard(),
-            accounts = InMemoryGitHubStore(),
             network = NetworkWatch.none,
             heartbeat = Heartbeat(scope = CoroutineScope(Dispatchers.Unconfined)),
             lookup = { typed, _ -> rendezvous[typed] },

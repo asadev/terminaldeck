@@ -36,35 +36,13 @@ object Protocol {
     const val MAX_TOKEN_LENGTH = 200
 
     /**
-     * Longest `host` and `repo` on an inbound `credential.request`.
-     *
-     * Transcribed from `MAX_CREDENTIAL_HOST_LENGTH` / `MAX_CREDENTIAL_REPO_LENGTH`. 253 is the
-     * longest a DNS name can be; 256 is generous for `owner/name` and both are bounds on text that
-     * ends up **on a screen somebody reads before approving a push**. A prompt that can be made
-     * arbitrarily long is a prompt whose last line — the machine that asked — can be pushed off it.
-     */
-    const val MAX_CREDENTIAL_HOST_LENGTH = 253
-    const val MAX_CREDENTIAL_REPO_LENGTH = 256
-
-    /**
-     * Longest username and secret this phone may answer a credential request with.
-     *
-     * The desktop's `parseClientMessage` refuses a longer one and answers a refused frame by
-     * closing the socket — so a token past this costs the connection rather than one push. It is
-     * therefore checked where a person can still do something about it, when the account is
-     * connected, and again on the way out.
-     */
-    const val MAX_CREDENTIAL_USERNAME_LENGTH = 128
-    const val MAX_CREDENTIAL_SECRET_LENGTH = 4096
-
-    /**
      * The bounds on an `enroll` frame's login fields, and on the credential that comes back.
      *
      * Transcribed from `MAX_ENROLL_USERNAME_LENGTH` / `MAX_ENROLL_SECRET_BYTES` /
-     * `MAX_ENROLL_CREDENTIAL_LENGTH` in `src/main/remote/protocol.ts`, and checked on this side for
-     * the same reason the credential caps are: the desktop answers an over-long field by closing
-     * the socket, so a phone that sends one spends the connection instead of getting a sentence
-     * back. Checked here, the person is still looking at the field they can fix.
+     * `MAX_ENROLL_CREDENTIAL_LENGTH` in `src/main/remote/protocol.ts`, and checked on this side
+     * because the desktop answers an over-long field by closing the socket, so a phone that sends
+     * one spends the connection instead of getting a sentence back. Checked here, the person is
+     * still looking at the field they can fix.
      *
      * The username is a genuine SSH login and is capped tight. The secret is capped in **bytes**
      * rather than code units because a `key` sign-in carries a private-key PEM — kilobytes of
@@ -361,17 +339,18 @@ object Capability {
     const val UPLOAD = "upload"
 
     /**
-     * Git on the desktop may ask **this phone** for a GitHub login.
+     * The **host** owns a GitHub login, and this phone drives it — read its status, start a
+     * device-flow sign-in on the machine, cancel one in flight, or sign it out — over the `github.*`
+     * frames.
      *
-     * The only capability that runs backwards, and that changes what the string means on each side.
-     * Every other name here is a verb this phone sends and the desktop serves; this one is a
-     * question the desktop asks and this phone answers. So it is advertised in *both* directions —
-     * the desktop puts it in `welcome.capabilities` to say "I may ask you", and this client puts it
-     * in [CLAIMED] to say "I can answer" — and both halves are load bearing. A desktop that asked a
-     * phone which had never heard of the frame would sit there until a timer gave up, which is
-     * exactly the thirty-second stall on a `git push` the feature exists to not have.
+     * This is the whole feature the other way round from the old credential proxy: the machine that
+     * holds the repository holds the login now, and the phone only triggers and views it. The host
+     * advertises this in `welcome.capabilities` to say "I own a GitHub you can connect", and this
+     * client claims it back in [CLAIMED] because the host pushes an unsolicited `github.changed`
+     * when its login moves — a device that never claimed the name would never be sent one, so the
+     * "Connected as @…" line would only ever refresh on the next manual read.
      */
-    const val CREDENTIAL = "credential"
+    const val GITHUB = "github"
 
     /**
      * The roster of every device signed in here, and the one verb that takes one away.
@@ -564,19 +543,20 @@ object Capability {
      *
      * Only names that run desktop→phone belong here. [CREATE], [LOCALHOST] and [UPLOAD] are things
      * this phone *asks for* and are gated on what the desktop advertised, so claiming them would
-     * say nothing at all; [CREDENTIAL] is a frame the desktop sends only once it has been told
-     * somebody is listening for it.
+     * say nothing at all.
      *
-     * [DEVICES], [SETTINGS] and [WATCH] are here for the same reason [CREDENTIAL] is, and the
-     * list is word for word `CLAIMED_CAPABILITIES` in `pwa/src/protocol-client.ts` and
-     * `WireCapability.claimed` on iOS. Each of the three has a frame the desktop *pushes* rather
-     * than answers — `devices.changed`, `settings.changed`, `browser.frame` — and `server.ts` skips
-     * every connection that did not claim the name before pushing one. Claiming only [CREDENTIAL],
-     * which is what this build did until now, is why an Android roster went stale the moment
-     * another device moved it. [CONTROLS] is deliberately *not* here: it is a pair of verbs this
-     * phone sends, gated on what the desktop advertised, so claiming it would say nothing at all.
+     * [GITHUB], [DEVICES], [SETTINGS] and [WATCH] each carry a frame the desktop *pushes* rather
+     * than answers — `github.changed`, `devices.changed`, `settings.changed`, `browser.frame` — and
+     * `server.ts` skips every connection that did not claim the name before pushing one. A build
+     * that did not claim one would watch that state go stale the moment another device moved it: it
+     * is why an Android roster went stale until `devices` was claimed, and it is why the host's
+     * GitHub login is claimed here rather than only read on demand. This list mirrors
+     * `CLAIMED_CAPABILITIES` in `pwa/src/protocol-client.ts` and `WireCapability.claimed` on iOS,
+     * which flip credential→github alongside this one. [CONTROLS] is deliberately *not* here: it is
+     * a pair of verbs this phone sends, gated on what the desktop advertised, so claiming it would
+     * say nothing at all.
      */
-    val CLAIMED: List<String> = listOf(CREDENTIAL, DEVICES, SETTINGS, WATCH)
+    val CLAIMED: List<String> = listOf(GITHUB, DEVICES, SETTINGS, WATCH)
 }
 
 /** A session as the phone sees it. Enough to draw a list and pick one. */

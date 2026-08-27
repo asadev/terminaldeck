@@ -210,12 +210,12 @@ fun SessionDetailSheet(
              * > so let's not show the GitHub also in that page — inside the session details, in the
              * > normal sessions too, in the copilot too, because it is the same everywhere anyway."*
              *
-             * The GitHub this phone would hand over when git asks is **one account for the whole
-             * phone**, not a property of a session. It was drawn per session because a session is
+             * GitHub is not a property of a session. It was drawn per session because a session is
              * where somebody stands when a push is about to happen — but that is about *timing*, not
-             * ownership, and a setting shown on twenty session sheets reads as twenty settings. It is
-             * one row on the Settings tab now, which is where it always really lived; see [GitHubSheet],
-             * opened from there. Matches iOS `SessionDetailView`, which removed the same card.
+             * ownership, and a setting shown on twenty session sheets reads as twenty settings. The
+             * login lives on the **machine** now, so "Connect GitHub" is a section on the machine's
+             * own page — see [ConnectGitHubSection]. Matches iOS `SessionDetailView`, which removed
+             * the same card.
              */
 
             DeckFootnote(

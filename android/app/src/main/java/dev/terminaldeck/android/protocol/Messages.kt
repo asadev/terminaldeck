@@ -139,6 +139,65 @@ data class ServerSettingWire(
 }
 
 /**
+ * The host's GitHub, as this phone reads it — the whole payload of `github.state` and
+ * `github.changed`.
+ *
+ * Every field is display-only: a name to draw, a URL to open, a short code to type. None is a
+ * secret — the token that grants a push lives on the machine and never travels this wire, which is
+ * the whole point of the flip. `explicitNulls = false` keeps absent fields off the frame, and every
+ * field carries a default so a host that omits one — an older build, a status with no sign-in in
+ * flight — decodes rather than failing the frame under the additive rule this file teaches.
+ */
+@Serializable
+data class GitHubHostWire(
+    /** Whether the machine currently holds a GitHub login. */
+    val connected: Boolean = false,
+    /** The login GitHub reported, e.g. `octocat`. Null until connected. */
+    val login: String? = null,
+    /** The display name on the account, if the host read one. */
+    val name: String? = null,
+    /** An avatar URL, if the host read one. Drawn only when present; never required. */
+    val avatarUrl: String? = null,
+    /**
+     * How the machine got the login — a device-flow sign-in, a personal access token, the `gh` CLI.
+     *
+     * A free string rather than an enum: the vocabulary belongs to the host, and a closed set here
+     * would turn the host adding a source into a phone that cannot read the status at all.
+     */
+    val source: String? = null,
+    /**
+     * Whether the machine has a GitHub OAuth app configured to sign in with.
+     *
+     * When false there is nothing to connect *to*, so the section shows [failure] and draws no
+     * Connect button — a control that could only ever fail is worse than none.
+     */
+    val appConfigured: Boolean = true,
+    /** Where to configure or install the GitHub app, shown when [appConfigured] is false. */
+    val installUrl: String? = null,
+    /** A device-flow sign-in in flight: the code to type and where to type it. Null when none is. */
+    val pending: GitHubPendingWire? = null,
+    /** A host-side failure to show, in the machine's own words. Null when nothing is wrong. */
+    val failure: String? = null,
+    /** A note about a disconnect the host performed, if it has one to say. */
+    val disconnect: String? = null,
+)
+
+/**
+ * A device-flow sign-in the **host** has in flight: the short code a person types and the page they
+ * type it into.
+ *
+ * [verificationUri] is the plain URL — never `verification_uri_complete`, which fills the code in and
+ * so becomes a link that grants access if it is forwarded. [expiresAt] is epoch milliseconds, so the
+ * section can gray the code out once it is past rather than leaving a dead code on screen.
+ */
+@Serializable
+data class GitHubPendingWire(
+    val userCode: String = "",
+    val verificationUri: String = "",
+    val expiresAt: Long = 0,
+)
+
+/**
  * One row of the device roster, on the wire.
  *
  * Transcribed from `DeviceRosterRow`. [kind] and [status] are left as free strings rather than
@@ -193,8 +252,8 @@ sealed interface ClientMessage {
          *
          * No default, for the same reason `protocol` has none: `encodeDefaults = false` means a
          * field carrying its default is a field that never reaches the wire, and a desktop that
-         * does not see `credential` here will not send `credential.request` — so the approval
-         * prompt would simply never appear, on a build whose every round-trip test passed.
+         * does not see `github` here will not push `github.changed` — so the host's GitHub login
+         * would appear to go stale, on a build whose every round-trip test passed.
          *
          * The list is [Capability.CLAIMED] and nothing else. It is *not* the desktop's own
          * capability list echoed back: everything in that one is something this phone asks for and
@@ -358,70 +417,47 @@ sealed interface ClientMessage {
     @SerialName("upload.cancel")
     data class UploadCancel(val id: String) : ClientMessage
 
-    /* ---- capability `credential`. The one exchange that starts over there. ---------------- */
+    /* ---- capability `github`. Driving the machine's own GitHub login from here. ----------- */
 
     /**
-     * "I heard you, and I am dealing with it."
+     * Read the host's GitHub status.
      *
-     * The one frame here that exists purely for a failure mode, and it is the failure mode the
-     * whole feature is judged on. Without it a desktop cannot tell a phone that is asleep from a
-     * person who is thinking — both are silence — so it would have to wait out the *human*
-     * deadline before it could say "your device isn't reachable": a thirty-second stall on a push
-     * with nothing on screen, which is how people stop trusting a feature.
-     *
-     * With it there are two deadlines over there. A few seconds for this, which a live app answers
-     * instantly; then, and only then, as long as a person needs to read a prompt and decide.
-     *
-     * Sent for silent requests too, where it costs nothing — the answer follows it in the same
-     * breath — because a client that only acked when it was about to prompt would be one more
-     * thing that has to be right.
+     * Sent only when `welcome.capabilities` named [Capability.GITHUB]. [rid] names this read and is
+     * echoed on the `github.state` that answers it; the `github.changed` push then keeps the status
+     * fresh without a poll. This is the flip of the old credential proxy — the login lives on the
+     * machine now, and this phone reads it rather than holding one.
      */
     @Serializable
-    @SerialName("credential.ack")
-    data class CredentialAck(val id: String) : ClientMessage
+    @SerialName("github.read")
+    data class GithubRead(val rid: String) : ClientMessage
 
     /**
-     * The login, for this one operation.
+     * Start a device-flow sign-in **on the machine**.
      *
-     * It is used once, in memory, on the machine that asked, and is never written to that
-     * machine's disk. There is no cache to expire and nothing to clean up when this phone
-     * disconnects.
-     *
-     * [remember] is the "Always for this repo" button, and it is a **scope, not a stored secret**:
-     * it tells that machine it may stop asking about that repository from this device. Every push
-     * still comes back here for the credential itself, because the desktop has never held one.
-     *
-     * It defaults to false so that `encodeDefaults = false` leaves it off the wire entirely unless
-     * somebody pressed that button — the desktop reads `remember === true` and nothing else, and a
-     * literal `false` on the wire would be a field that says nothing while carrying somebody's
-     * consent as its name.
+     * The host runs the OAuth device flow against GitHub itself — this phone holds no token and never
+     * does — and answers with a `github.state` whose `github.pending` carries the short code and the
+     * URL for this phone to show. When the person authorizes it in a browser, the host pushes
+     * `github.changed` with `connected:true`. [rid] pairs this request with the state that answers it.
      */
     @Serializable
-    @SerialName("credential.answer")
-    data class CredentialAnswer(
-        val id: String,
-        val username: String,
-        val password: String,
-        val remember: Boolean = false,
-    ) : ClientMessage
+    @SerialName("github.connect")
+    data class GithubConnect(val rid: String) : ClientMessage
+
+    /** Cancel a sign-in the host has in flight. Answered with a `github.state` whose pending is null. */
+    @Serializable
+    @SerialName("github.cancel")
+    data class GithubCancel(val rid: String) : ClientMessage
 
     /**
-     * No.
+     * Sign the host out of GitHub.
      *
-     * Carries a code rather than a sentence, and the direction is the point: this string is written
-     * *here* and read on somebody else's **desktop**, where it is printed into a terminal. The
-     * desktop owns the words that appear in its own terminal — it is the side that knows whether
-     * the reader is looking at a push or a fetch, and it is the side that must not pipe text chosen
-     * by a phone into a PTY. So this end says which of two things happened and the desktop writes
-     * the sentence.
-     *
-     * No default on [reason]: the desktop treats an absent one as `denied`, and defaulting here
-     * would mean `encodeDefaults = false` silently turning [CredentialDenial.NoAccount] — which is
-     * not a refusal at all — into one.
+     * The revocation that works from here: the machine forgets the login it held. It does not revoke
+     * the token at GitHub — that is a page on github.com, and claiming otherwise would be a promise
+     * this app cannot keep. Answered with a `github.state` reporting the machine disconnected.
      */
     @Serializable
-    @SerialName("credential.deny")
-    data class CredentialDeny(val id: String, val reason: CredentialDenial) : ClientMessage
+    @SerialName("github.disconnect")
+    data class GithubDisconnect(val rid: String) : ClientMessage
 
     /* ---- capability `devices`. The roster, and the one verb that removes a row. ---------- */
 
@@ -1423,51 +1459,36 @@ sealed interface ServerMessage {
         val message: String = "That file did not arrive.",
     ) : ServerMessage
 
-    /* ---- capability `credential` ------------------------------------------------------------ */
+    /* ---- capability `github` --------------------------------------------------------------- */
 
     /**
-     * Git on that machine needs a login for a repository, and this phone holds it.
+     * The answer to any one of `github.read`, `github.connect`, `github.cancel` or
+     * `github.disconnect`.
      *
-     * The only frame in this protocol the desktop sends unprompted as a *question*. Everything else
-     * it sends is an answer or an event; this one is waiting on a reply, and the two ways to reply
-     * are [ClientMessage.CredentialAnswer] and [ClientMessage.CredentialDeny] — with a
-     * [ClientMessage.CredentialAck] first, always, so a live phone can be told from an absent one.
-     *
-     * [repo] is `owner/name`, or **null** when git gave the desktop no path to derive one from.
-     * Null is not a detail to paper over: a prompt that cannot name the repository is a prompt
-     * asking somebody to approve "a push, somewhere", and this client says exactly that rather than
-     * inventing a name. It happens when the remote is not a two-segment path — a gist, a wiki, a
-     * self-hosted layout.
-     *
-     * [prompt] is the instruction and [operation] is the fact, and they are two fields because they
-     * answer two different questions. [operation] says what git is doing, always. [prompt] says
-     * whether a person should be asked — false for every read, and false for a write against a
-     * repository this device has already approved *on that machine*. **Whether to ask is the
-     * desktop's answer, not this one's**: it is the side that knows what this device has approved
-     * there, and a phone that second-guessed it would be a second source of truth with no way to
-     * reconcile the two.
-     *
-     * [operation] defaults to [CredentialOperation.Write] rather than being required, and the
-     * direction of that default is chosen rather than accidental. `coerceInputValues` folds a
-     * missing or unrecognised value onto it, and the desktop's own classifier does the same thing
-     * for the same reason: prompting for a fetch costs somebody one tap they did not need, and
-     * *not* prompting for a push is the entire feature not working.
+     * [rid] echoes the request it answers, so a controller can match it against the one it sent and
+     * drop a reply that raced a screen it has left. [github] is the whole host-side status —
+     * connected account, a sign-in in flight, or a failure — see [GitHubHostWire].
      */
     @Serializable
-    @SerialName("credential.request")
-    data class CredentialRequest(
-        val id: String,
-        /**
-         * The git host — `github.com`, or an enterprise one.
-         *
-         * Called `host` on the wire and read as `origin` everywhere above this layer, because on
-         * this side of the connection "host" already means *the machine this phone is paired with*
-         * — and the two are on the same screen at the same time.
-         */
-        val host: String,
-        val repo: String? = null,
-        val operation: CredentialOperation = CredentialOperation.Write,
-        val prompt: Boolean = false,
+    @SerialName("github.state")
+    data class GithubState(
+        val rid: String,
+        val github: GitHubHostWire = GitHubHostWire(),
+    ) : ServerMessage
+
+    /**
+     * The host's GitHub login moved — connected, signed out, or a device-flow sign-in completed —
+     * pushed without being asked.
+     *
+     * Sent only to a connection that named [Capability.GITHUB], so a build that never claimed it
+     * never sees the frame. It carries no `rid` because nothing asked for it: it is the event that
+     * turns "Open github.com/login/device and enter ABCD-1234" into "Connected as @you" the moment
+     * the browser authorization lands, with nobody having pressed anything on the phone.
+     */
+    @Serializable
+    @SerialName("github.changed")
+    data class GithubChanged(
+        val github: GitHubHostWire = GitHubHostWire(),
     ) : ServerMessage
 
     /* ---- capability `devices` ------------------------------------------------------------- */
@@ -2021,46 +2042,6 @@ sealed interface ServerMessage {
         val routines: kotlin.collections.List<RoutineRow> = emptyList(),
         val notice: String? = null,
     ) : ServerMessage
-}
-
-/**
- * What git was doing when it asked for a login.
- *
- * Transcribed from `CREDENTIAL_OPERATIONS`. Two values because there are exactly two answers a
- * person cares about, and the difference between them is the whole of the prompting policy: a fetch
- * or a clone is a **read**, is reversible, and asking about one buys nothing but fatigue; a push is
- * a **write**, is not reversible, and is the moment somebody should get to see whose name goes on
- * the commit.
- *
- * It arrives as a fact, not as an instruction. What this client is asked to *do* is the separate
- * `prompt` flag on the same frame.
- */
-@Serializable
-enum class CredentialOperation {
-    @SerialName("read")
-    Read,
-
-    @SerialName("write")
-    Write,
-}
-
-/**
- * Why this phone would not answer, as a code rather than a sentence.
- *
- * Transcribed from `CREDENTIAL_DENIALS`. See [ClientMessage.CredentialDeny] for why this direction
- * carries a code where `tunnel.closed` carries prose.
- *
- * [NoAccount] is **not a refusal**. It means no GitHub is connected in this app yet, which is a
- * different thing to be told and has a different fix — and the desktop's wording for it points at
- * this phone rather than at the person who pushed.
- */
-@Serializable
-enum class CredentialDenial {
-    @SerialName("denied")
-    Denied,
-
-    @SerialName("no-account")
-    NoAccount,
 }
 
 @Serializable

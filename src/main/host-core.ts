@@ -103,6 +103,9 @@ import { currentAppContext } from './app-context'
 import { installDeviceHomes, installHomeScopes } from './transcript'
 import { copilotHomeScope, isCopilotSession, type SpawnFence } from './copilot-session'
 import { createCredentialProxy, deviceKey, type CredentialProxy } from './remote/credentials'
+import { GitHubAuthenticator, useAuthenticator } from './github-auth'
+import { createGitHubHostAccess, type GitHubHostAccess } from './remote/host-github'
+import type { BranchRef, GitHubFailure, RepoRef } from './github'
 import { FolderGrants } from './remote/folder-grants'
 import { SessionGrants } from './remote/session-grants'
 import { AccountGrants } from './remote/account-grants'
@@ -451,6 +454,27 @@ export interface HostCoreOptions {
    */
   userData: string
   /**
+   * Resolve a folder to its GitHub repository, and to its checked-out branch —
+   * the two folder-shaped things the desktop's GitHub panel puts beside the
+   * account ("connected as X, this folder is Y, on branch Z").
+   *
+   * Optional, and their absence is the headless answer: a server has no open
+   * folder and its only GitHub caller is the wire, which asks about the account
+   * and never about a repository — so it passes neither and the built-in
+   * resolvers below answer "not a repository", which the wire never reads. The
+   * Electron shell passes the real ones from `github.ts`, because its panel does
+   * ask, and there must be exactly one authenticator answering both.
+   */
+  resolveGitHubRepo?(cwd: string): Promise<RepoRef | GitHubFailure>
+  resolveGitBranch?(cwd: string): Promise<BranchRef | null>
+  /**
+   * Called when the machine's GitHub login changes. The desktop drops its
+   * overview cache on it (a sign-in changes what every list may see); the
+   * headless build has no cache and passes nothing. The wire push happens
+   * regardless — see where the authenticator is built.
+   */
+  onGitHubAuthChanged?(): void
+  /**
    * Where the chosen WSL distribution is remembered.
    *
    * Optional, and absent is correct for any host that is not Windows: `WslLink`
@@ -762,6 +786,19 @@ export interface HostCore {
    */
   serverSettings: ServerSettingsAccess
   credentials: CredentialProxy
+  /**
+   * The machine's own GitHub login — the device flow, the token, the status.
+   *
+   * On the core rather than owned by a shell for the reason `serverSettings` is:
+   * the desktop panel, git on the machine and a phone over the wire are three
+   * callers of one login, and a second instance would be a second answer to
+   * "who is this machine signed in as". The Electron shell binds its auth IPC to
+   * *this* object; the headless daemon exposes it over the wire and nowhere
+   * else.
+   */
+  github: GitHubAuthenticator
+  /** The same login, mapped for the wire and with the change hook a phone rides. */
+  hostGitHub: GitHubHostAccess
   ledger: OpenSessionLedger
   /**
    * Start a session. The one place that does, for a window and for a phone.
@@ -981,15 +1018,67 @@ export function createHostCore(options: HostCoreOptions): HostCore {
   const serverSettings = createServerSettingsAccess()
 
   /**
-   * The GitHub credential proxy: their account, from their device, never held
-   * here.
+   * The machine's own GitHub login — the thing this whole 2026-08-27 change
+   * turns on. Asad: *"Every device that is actually running the app is the one
+   * that owns the GitHub settings … So the HOST owns everything, everywhere."*
    *
-   * Built **here, at assembly**, rather than by whatever asks for it first, and
-   * that is deliberate: everything else about remote access is on unless the
-   * user turned it off, and a proxy that only came into being when the first
-   * phone pushed would be a feature whose first use is the one that fails.
+   * Built **here, at assembly**, so it is the same object on a desktop and on a
+   * headless server. Until now it existed only in the windowed build, made
+   * inside `registerGitHubAuthIpc` — so a server ran `gh` with no token and had
+   * no way to sign in at all. One instance answers three callers: the desktop
+   * panel (`github.ts` binds its IPC to this), git on the machine (the proxy
+   * below reads its `gitCredential()`), and a phone (the wire, through
+   * {@link GitHubHostAccess}). `useAuthenticator` points the process-wide token
+   * and secret readers at it.
+   *
+   * `notifyChange` is a mutable indirection because the authenticator's change
+   * hook is set at construction and the access object it must ring does not
+   * exist yet — a one-line knot rather than a lazy getter that would read as if
+   * the order mattered more than it does.
    */
-  const credentials = createCredentialProxy({ dir: join(options.storageDir, 'guest-git') })
+  let notifyChange: () => void = () => undefined
+  const notARepo: GitHubFailure = {
+    ok: false,
+    kind: 'not-a-repo',
+    message: 'This host has no open folder.',
+    action: null,
+    detail: '',
+  }
+  const github = new GitHubAuthenticator({
+    storageDir: options.userData,
+    resolveRepo: options.resolveGitHubRepo ?? (async () => notARepo),
+    resolveBranch: options.resolveGitBranch ?? (async () => null),
+    onAuthChanged: () => {
+      // Two independent readers of one event: the desktop's cache-clear (passed
+      // in) and the wire push (through the access object). Order does not matter
+      // and one throwing must not cost the other — `emitChanged` isolates its
+      // listeners, and this call is the desktop's.
+      options.onGitHubAuthChanged?.()
+      notifyChange()
+    },
+  })
+  useAuthenticator(github)
+  const hostGitHub = createGitHubHostAccess(github)
+  notifyChange = () => hostGitHub.emitChanged()
+
+  /**
+   * Git on this machine, answered from the machine's own login.
+   *
+   * The proxy still exists and still hands every remote-started session its own
+   * isolated git configuration (`git-guest.ts`, the four doors) — that half was
+   * always right and is unchanged. What changed is *who answers* when git in one
+   * of those sessions needs a credential: it used to be a round-trip to the
+   * phone (`credential.request`), and it is now the host's own account, read
+   * here in this process. So a push runs with no phone connected — which is the
+   * whole of *"so it can push/deploy on its own even when the phone is closed."*
+   *
+   * `hostCredential` is the seam that carries it, injected rather than imported
+   * so `credentials.ts` never reaches into `github-auth.ts`.
+   */
+  const credentials = createCredentialProxy({
+    dir: join(options.storageDir, 'guest-git'),
+    hostCredential: () => github.gitCredential(),
+  })
 
   /*
    * Tell the transcript layer where confined sessions keep their homes.
@@ -2616,6 +2705,8 @@ export function createHostCore(options: HostCoreOptions): HostCore {
     agents,
     serverSettings,
     credentials,
+    github,
+    hostGitHub,
     ledger,
     startSession,
     statablePath,

@@ -97,9 +97,7 @@ import dev.terminaldeck.android.ui.ArchivedSessionsSheet
 import dev.terminaldeck.android.ui.LocalhostBrowser
 import dev.terminaldeck.android.ui.LocalhostScreen
 import dev.terminaldeck.android.ui.SessionDetailSheet
-import dev.terminaldeck.android.ui.CredentialPromptSheet
 import dev.terminaldeck.android.ui.DevicesScreen
-import dev.terminaldeck.android.ui.GitHubSheet
 import dev.terminaldeck.android.ui.PairingScreen
 import dev.terminaldeck.android.ui.ServerLoginScreen
 import dev.terminaldeck.android.ui.ServerLoginView
@@ -572,14 +570,6 @@ fun TerminalDeckApp(
     // The front-door lock, read here so the overlay at the bottom of this Box can watch it. This is
     // the process-wide instance MainActivity primed and wired; a @Preview gets a coherent off default.
     val lock = appLock()
-    /**
-     * Whether the GitHub sheet is up.
-     *
-     * A flag here rather than a route, for the same reason the credential prompt is not one: it is
-     * about the phone rather than about the machine on screen, and it has to be openable from the
-     * switcher, which is itself drawn above whatever route is current.
-     */
-    var github by remember { mutableStateOf(false) }
 
     /**
      * This phone's own names for the machine's ports, and which groups it has folded.
@@ -672,14 +662,8 @@ fun TerminalDeckApp(
     val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia(), send)
     val documentPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument(), send)
     /*
-     * The credential prompt and the GitHub sheet sit *above* everything else, including the pair
-     * screen.
-     *
-     * Not a navigation destination and not a child of one route, because neither is about the
-     * screen underneath. A machine can ask this phone for a login at any moment — while a terminal
-     * is open, while the session list is up, or while somebody is on the pair screen adding a
-     * second machine — and a `git push` is waiting on the answer. A prompt that could only appear
-     * on one route would be a prompt that silently fails to appear on the others.
+     * The app's sheets and the lock overlay are stacked in this Box, above whatever route is
+     * current, so a sheet is drawn over the screen underneath rather than as a child of one route.
      */
     Box(modifier = Modifier.fillMaxSize()) {
 
@@ -1257,7 +1241,6 @@ fun TerminalDeckApp(
                 onMachines = { navController.navigate(ROUTE_MACHINES) },
                 onDevices = { navController.navigate(ROUTE_DEVICES) },
                 onWatch = { navController.navigate(ROUTE_WATCH) },
-                onGitHub = { github = true },
                 onAlerts = { navController.navigate(ROUTE_ALERTS) },
                 onAppearance = { navController.navigate(ROUTE_APPEARANCE) },
                 onApplyServerSetting = viewModel::applyServerSetting,
@@ -1605,30 +1588,10 @@ fun TerminalDeckApp(
         )
     }
 
-    state.credentialPrompt?.let { question ->
-        CredentialPromptSheet(
-            question = question,
-            account = state.gitHubAccount,
-            queued = state.credentialsQueued,
-            onApprove = viewModel::approveCredential,
-            onDeny = viewModel::denyCredential,
-        )
-    }
-
-    if (github) {
-        GitHubSheet(
-            account = state.gitHubAccount,
-            phase = state.signInPhase,
-            signIn = viewModel.signIn,
-            onDisconnect = viewModel::disconnectGitHub,
-            onDismiss = { github = false },
-        )
-    }
-
     /*
-     * The lock, above everything under it — the pair screen, the tabs, the credential prompt and the
-     * GitHub sheet. iOS puts its lock in a UIWindow over the alert level to clear the sheets; here the
-     * sheets are drawn in this same Box, so the last child of it is already above every one of them.
+     * The lock, above everything under it — the pair screen, the tabs, every sheet. iOS puts its
+     * lock in a UIWindow over the alert level to clear the sheets; here the sheets are drawn in this
+     * same Box, so the last child of it is already above every one of them.
      */
     if (lock.isCovered) {
         AppLockOverlay(lock)

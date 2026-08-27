@@ -106,6 +106,10 @@ const CLIENT_TYPES: Record<ClientMessage['t'], true> = {
   'credential.ack': true,
   'credential.answer': true,
   'credential.deny': true,
+  'github.read': true,
+  'github.connect': true,
+  'github.cancel': true,
+  'github.disconnect': true,
   'dev.status': true,
   'dev.start': true,
   'copilot.hello': true,
@@ -239,6 +243,8 @@ const SERVER_TYPES: Record<ServerMessage['t'], true> = {
   'settings.state': true,
   'settings.applied': true,
   'settings.changed': true,
+  'github.state': true,
+  'github.changed': true,
   'session.sent': true,
   'devices.rows': true,
   'devices.revoked': true,
@@ -424,6 +430,12 @@ const VALID_CLIENT: ClientMessage[] = [
   { t: 'settings.read', rid: 'set-1' },
   { t: 'settings.apply', rid: 'set-2', key: 'agents.defaultProvider', value: 'codex' },
   { t: 'settings.apply', rid: 'set-3', key: 'general.restoreSessions', value: 'false' },
+  // The machine's own GitHub login, driven from a phone: read it, sign in, stop
+  // waiting, sign out. Each is a request id and nothing else.
+  { t: 'github.read', rid: 'gh-1' },
+  { t: 'github.connect', rid: 'gh-2' },
+  { t: 'github.cancel', rid: 'gh-3' },
+  { t: 'github.disconnect', rid: 'gh-4' },
   { t: 'devices.list', rid: 'dev-1' },
   { t: 'devices.revoke', rid: 'dev-2', device: DEVICE_ID },
   { t: 'window.result', id: 'win-1', ok: true, body: '{"url":"https://example.com"}' },
@@ -1123,6 +1135,44 @@ const VALID_SERVER: ServerMessage[] = [
       { key: 'agents.defaultProvider', value: 'codex', options: ['claude', 'codex', 'gemini', 'shell'] },
       { key: 'general.restoreSessions', value: 'true' },
     ],
+  },
+  // The machine's own GitHub login, in both shapes it has: a sign-in waiting on
+  // the person (the code in `pending`), and a completed one (connected, an
+  // account, nothing pending).
+  {
+    t: 'github.state',
+    rid: 'gh-2',
+    github: {
+      connected: false,
+      login: null,
+      name: null,
+      avatarUrl: null,
+      source: null,
+      appConfigured: true,
+      installUrl: 'https://github.com/apps/terminaldeck/installations/new',
+      pending: {
+        userCode: 'WDJB-MJHT',
+        verificationUri: 'https://github.com/login/device',
+        expiresAt: 1_900_000_000_000,
+      },
+      failure: null,
+      disconnect: null,
+    },
+  },
+  {
+    t: 'github.changed',
+    github: {
+      connected: true,
+      login: 'asadev',
+      name: 'Asad Iqbal',
+      avatarUrl: 'https://avatars.githubusercontent.com/u/1?v=4',
+      source: 'device-flow',
+      appConfigured: true,
+      installUrl: 'https://github.com/apps/terminaldeck/installations/new',
+      pending: null,
+      failure: null,
+      disconnect: 'Signs this machine out of GitHub locally.',
+    },
   },
 
   /*

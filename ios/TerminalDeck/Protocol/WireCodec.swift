@@ -421,46 +421,25 @@ enum WireCodec {
             return .ok(.uploadFailed(id: id, message: string(object["message"]) ?? "That file did not arrive."),
                        activity: [:])
 
-        /* ---- capability `credential` --------------------------------------- */
+        /* ---- capability `github` ------------------------------------------- */
 
-        case "credential.request":
-            guard let id = string(object["id"]), !id.isEmpty,
-                  let host = string(object["host"]), !host.isEmpty,
-                  host.count <= Wire.maxCredentialHostLength,
-                  let raw = string(object["operation"]),
-                  let operation = CredentialOperation(rawValue: raw) else {
-                return .failed(reason: "incomplete credential.request")
+        case "github.state":
+            guard let rid = string(object["rid"]) else {
+                return .failed(reason: "github.state without a request")
             }
-            /*
-             * A missing `repo` and an unusable one are the same answer, and it
-             * is nil rather than a failure.
-             *
-             * The desktop sends JSON null when git gave it no path to derive a
-             * name from, which is a legitimate outcome it passes along rather
-             * than papering over — so refusing the frame here would turn "this
-             * machine does not know what the repository is called" into "that
-             * push is not answerable at all". What the prompt does with nil is
-             * say so; see `CredentialPromptView`.
-             */
-            let repo = string(object["repo"]).flatMap { name in
-                name.isEmpty || name.count > Wire.maxCredentialRepoLength ? nil : name
+            guard let github = gitHubHost(object["github"]) else {
+                return .failed(reason: "github.state without a github object")
             }
-            /*
-             * `prompt` is an instruction to interrupt a person and ask them for
-             * a secret, so it is acted on only when the desktop said it in so
-             * many words. Anything else — absent, a string, a number — reads as
-             * false, which answers silently.
-             *
-             * That sentence was already here and the code underneath it did not
-             * keep it. `as? Bool` **succeeds** for `NSNumber(1)` through the ObjC
-             * bridge, so `{"prompt":1}` raised the credential sheet: a number
-             * read as the desktop saying it in so many words. `literalTrue` is
-             * what the comment always described.
-             */
-            let prompt = literalTrue(object["prompt"])
-            return .ok(.credentialRequest(id: id, host: host, repo: repo,
-                                          operation: operation, prompt: prompt),
-                       activity: [:])
+            return .ok(.githubState(rid: rid, github: github), activity: [:])
+
+        case "github.changed":
+            // Unsolicited: no rid to match. A malformed body is refused rather
+            // than drawn as a phantom state — the same strictness `github.state`
+            // keeps, minus the request id.
+            guard let github = gitHubHost(object["github"]) else {
+                return .failed(reason: "github.changed without a github object")
+            }
+            return .ok(.githubChanged(github: github), activity: [:])
 
         /* ---- capability `copilot` ------------------------------------------ */
 
@@ -1123,19 +1102,14 @@ enum WireCodec {
             object = ["t": "upload.end", "id": id, "sha256": digest]
         case let .uploadCancel(id):
             object = ["t": "upload.cancel", "id": id]
-        case let .credentialAck(id):
-            object = ["t": "credential.ack", "id": id]
-        case let .credentialAnswer(id, username, password, remember):
-            var answer: [String: Any] = ["t": "credential.answer", "id": id,
-                                         "username": username, "password": password]
-            // Written only when true. `parseClientMessage` reads it as
-            // `remember === true`, so a `false` on the wire would be a field
-            // that says nothing while carrying somebody's consent as its name —
-            // and this is the one frame worth being literal on.
-            if remember { answer["remember"] = true }
-            object = answer
-        case let .credentialDeny(id, reason):
-            object = ["t": "credential.deny", "id": id, "reason": reason.rawValue]
+        case let .githubRead(rid):
+            object = ["t": "github.read", "rid": rid]
+        case let .githubConnect(rid):
+            object = ["t": "github.connect", "rid": rid]
+        case let .githubCancel(rid):
+            object = ["t": "github.cancel", "rid": rid]
+        case let .githubDisconnect(rid):
+            object = ["t": "github.disconnect", "rid": rid]
 
         /*
          * The copilot verbs. Note what is *not* in any of them: a tool id, an

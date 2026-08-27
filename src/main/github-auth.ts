@@ -859,6 +859,38 @@ export class GitHubAuthenticator {
     return this.readStored()?.token ?? null
   }
 
+  /**
+   * The host's own GitHub login, as a git credential — or null when the host
+   * has none.
+   *
+   * This is the whole of the 2026-08-27 flip. Asad, verbatim: *"Every device
+   * that is actually running the app is the one that owns the GitHub settings —
+   * not the mobile application, because the mobile application is just driving
+   * it. So the HOST owns everything, everywhere."* Until now git on the machine
+   * asked a phone (`credentials.ts` → `credential.request`); now it is answered
+   * here, in this process, from the login the machine itself connected — so a
+   * push runs with no phone in the loop, awake or asleep.
+   *
+   * `username` follows the convention the phone clients used before the flip
+   * (username = the GitHub login, password = the token): git over HTTPS
+   * validates the *password* as the token and ignores the username for token
+   * auth, so `x-access-token` stands in when the login is not known — which is
+   * the case for a bare `GH_TOKEN` in the environment that was never signed in
+   * through this app.
+   *
+   * Environment first, for the same reason `toolToken()` steps aside for it:
+   * that is `gh`'s own precedence, and a machine launched with a `GH_TOKEN` is a
+   * machine whose owner chose that token to be the one git uses. A stored
+   * device-flow token answers only when the environment carries none.
+   */
+  gitCredential(): { username: string; password: string } | null {
+    const fromEnv = this.envToken()
+    if (fromEnv) return { username: this.readStored()?.login ?? 'x-access-token', password: fromEnv }
+    const stored = this.readStored()
+    if (stored?.token) return { username: stored.login || 'x-access-token', password: stored.token }
+    return null
+  }
+
   /* ------------------------------------------------------------- probing -- */
 
   /** Whether `gh` can be run at all. Cached: the answer needs one spawn. */
@@ -1645,6 +1677,22 @@ export class GitHubAuthenticator {
  */
 let active: GitHubAuthenticator | null = null
 
+/**
+ * Name the process-wide authenticator, so `githubToolToken` and
+ * `scrubGitHubSecrets` have something to read.
+ *
+ * It used to be set only inside `registerGitHubAuthIpc`, which meant it existed
+ * only in the windowed build: a headless host registers no Electron IPC, so its
+ * `gh` child processes ran with no token and `githubToolToken()` was null on the
+ * one build that most needs its own login. Since the host owns GitHub now
+ * (2026-08-27), `host-core.ts` builds one authenticator at assembly — the same
+ * on a desktop and a server — and calls this, and the desktop's IPC binds to
+ * that same instance rather than making a second one.
+ */
+export function useAuthenticator(auth: GitHubAuthenticator): void {
+  active = auth
+}
+
 /** The token `gh` child processes should be given, or null. */
 export function githubToolToken(): string | null {
   return active?.toolToken() ?? null
@@ -1686,9 +1734,20 @@ export function scrubGitHubSecrets(text: string): string {
  */
 export function registerGitHubAuthIpc(
   ipcMain: IpcMain,
-  options: GitHubAuthOptions,
+  optionsOrAuth: GitHubAuthOptions | GitHubAuthenticator,
 ): GitHubAuthenticator {
-  const auth = new GitHubAuthenticator(options)
+  /*
+   * Bind to the authenticator the host already built, or make one.
+   *
+   * The desktop now hands in the shared instance from `host-core.ts` — the same
+   * object the credential proxy answers git from and the wire exposes to a phone
+   * — so the panel, `gh`, git and the phone all read one login rather than four
+   * that can disagree. The construct-your-own branch is kept for the tests that
+   * predate the shared instance and drive this function with plain options; a
+   * caller passing options still gets a working, registered authenticator.
+   */
+  const auth =
+    optionsOrAuth instanceof GitHubAuthenticator ? optionsOrAuth : new GitHubAuthenticator(optionsOrAuth)
   active = auth
 
   /** IPC arguments are untrusted; a folder that is not one is simply absent. */

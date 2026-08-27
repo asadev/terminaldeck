@@ -966,6 +966,12 @@ export async function createHeadlessHost(
     // restore-sessions choice from a phone the same way a desktop does — one
     // store, the same one a session start reads.
     serverSettings: core.serverSettings,
+    // The machine's own GitHub login, served over the wire — which on a headless
+    // server is the *only* way it gets connected, there being no panel here.
+    // Asad, 2026-08-27: "for headless also we give the option to connect GitHub
+    // there." Dropped on a public demo host below, the same as `credentials`: a
+    // box strangers share signs into nobody's GitHub.
+    ...(options.publicHost ? {} : { hostGitHub: core.hostGitHub }),
     folders: core.grants,
     /*
      * And the same login-choice store the endpoint's account filter closes over.

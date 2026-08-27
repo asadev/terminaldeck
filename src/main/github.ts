@@ -1237,8 +1237,21 @@ export interface GitHubIpcOptions {
    * `app.getPath('userData')`. Passed in rather than read here so this module
    * keeps its property of importing nothing from Electron but a type — which
    * is what lets the whole of it be tested without a window.
+   *
+   * Ignored when {@link auth} is supplied: the shared authenticator already knows
+   * where its credential lives, and a second storage dir here would be a value
+   * that could disagree with it.
    */
   userDataDir: string
+  /**
+   * The one authenticator `host-core.ts` built, shared across the panel, git and
+   * a phone (2026-08-27). When present, the auth IPC binds to it rather than
+   * making a second instance — which is what stops the panel reading a different
+   * login than the credential proxy answers git from. Absent keeps the old
+   * self-contained behaviour, for the tests that drive this with a plain
+   * `userDataDir`.
+   */
+  auth?: GitHubAuthenticator
 }
 
 /**
@@ -1294,6 +1307,12 @@ export function registerGitHubIpc(
     clearGitHubCache()
   })
 
+  // The shared authenticator when the shell handed one in — the desktop does,
+  // from `core.github`, so the panel binds to the same login git and a phone use.
+  // Its resolvers and its cache-drop are wired at construction in `host-core.ts`,
+  // so nothing more is passed here. Absent, this builds a self-contained one the
+  // old way, which is what the tests that call this with a bare `userDataDir` do.
+  if (options.auth) return registerGitHubAuthIpc(ipcMain, options.auth)
   return registerGitHubAuthIpc(ipcMain, {
     storageDir: options.userDataDir,
     resolveRepo: (cwd) => resolveRepo(cwd),

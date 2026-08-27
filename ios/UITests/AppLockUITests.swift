@@ -170,10 +170,10 @@ final class AppLockUITests: XCTestCase {
                 break
             }
         }
-        if app.buttons["settings.github"].firstMatch.waitForExistence(timeout: 8) { return true }
+        if app.buttons["settings.alerts"].firstMatch.waitForExistence(timeout: 8) { return true }
         let back = app.navigationBars.buttons.element(boundBy: 0)
         if back.exists, back.isHittable { back.tap() }
-        if app.buttons["settings.github"].firstMatch.waitForExistence(timeout: 10) { return true }
+        if app.buttons["settings.alerts"].firstMatch.waitForExistence(timeout: 10) { return true }
         shoot("zz-could-not-reach-settings")
         return false
     }

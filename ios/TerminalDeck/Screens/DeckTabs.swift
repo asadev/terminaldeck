@@ -1314,15 +1314,6 @@ struct DeckSettingsView: View {
                             SettingsDivider()
                         }
 
-                        SettingsRow(title: "GitHub",
-                                    value: model.gitHubAccount.map { "@\($0.login)" } ?? "Not connected",
-                                    icon: "person.crop.circle") {
-                            DispatchQueue.main.async { model.showingGitHub = true }
-                        }
-                        .accessibilityIdentifier("settings.github")
-
-                        SettingsDivider()
-
                         SettingsRow(title: "Alerts",
                                     value: alertsValue,
                                     icon: "bell") {

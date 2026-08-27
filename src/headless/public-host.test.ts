@@ -359,6 +359,16 @@ describe('what a public host offers', () => {
       CAPABILITY.rename,
       CAPABILITY.upload,
       CAPABILITY.credential,
+      /*
+       * `github` is withheld for the same reason `settings` and `logins` are: it
+       * signs the *machine* into a GitHub account, and the demo box is a shared
+       * machine handed to a stranger for the App Store review. A visitor who
+       * could press Connect would point the box's git at their own account, or
+       * read whose it is already on. The public assembly also passes no
+       * `hostGitHub`, so it could not advertise it even if this list let it —
+       * withheld twice, the belt-and-braces `copilot` gets.
+       */
+      CAPABILITY.github,
       // `devserver` joined this list the day it was built, and it is exactly the
       // kind of capability this test exists to catch. It reads a `package.json`
       // and then *runs a command out of it* — on a box that is handed to

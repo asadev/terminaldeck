@@ -183,7 +183,7 @@ fun SessionListScreen(
                      *
                      * With one machine paired there is nothing to pick, and everything that used to
                      * justify opening this sheet anyway (rename, forget, pair another, add a server,
-                     * GitHub, Devices, This server) is on the Settings tab now. So a single machine
+                     * Devices, This server) is on the Settings tab now. So a single machine
                      * gets the product's name and no chevron, exactly as on iOS, rather than a
                      * control that opens a list of one.
                      *
