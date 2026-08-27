@@ -50,19 +50,23 @@ class AlertGateTest {
     }
 
     @Test
-    fun `a different session still interrupts while one is on screen`() {
-        // Open on machine A's session while B is the one that stopped and is asking — that is a
-        // banner he wants, and the reason foreground alone can never be the whole rule.
+    fun `a different session is also silent while the app is open`() {
+        // He overruled the old behaviour here: open on machine A's session while B stops and asks,
+        // and B used to banner. He does not want that — *"only when I am outside of the application"*
+        // — so while the app is foreground, every session is silent, and B's news is on the in-app
+        // Alerts list and its row dot, not a banner over what he is reading.
         val gate = AlertGate()
         gate.watching(host, "a")
 
-        assertFalse(gate.isBeingWatched(alert("b")))
+        assertTrue(gate.isBeingWatched(alert("b")))
     }
 
     @Test
-    fun `a session nobody has looked at is not watched, so it posts`() {
+    fun `a session nobody has looked at is still silent while the app is open`() {
+        // Foreground with nothing open — the Sessions list, or Settings. A session that changes is
+        // still not a banner while he is inside the app; it is a row that lights up on the list.
         val gate = AlertGate()
-        assertFalse(gate.isBeingWatched(alert("a")))
+        assertTrue(gate.isBeingWatched(alert("a")))
     }
 
     // ---- away: the phone in a pocket, which is the whole point -----------------------------------
@@ -104,16 +108,19 @@ class AlertGateTest {
     }
 
     @Test
-    fun `the same session is news again once the grace has passed`() {
-        // A grace, not a mute: a minute later the same change really is something that happened
-        // while he was not looking.
+    fun `the same session is news only once the app is in the background`() {
+        // With the rule now "silent while foreground", the grace no longer decides anything while he
+        // is inside the app — a beat later, or a minute later, it stays silent. It becomes news the
+        // moment he leaves: that is the one time he asked to hear.
         val clock = Clock()
         val gate = AlertGate { clock.nowMs }
         gate.watching(host, "a")
         gate.stoppedWatching(host, "a")
 
         clock.advance(AlertGate.WATCHED_GRACE_MS + 1_000)
-        assertFalse(gate.isBeingWatched(alert("a")))
+        assertTrue("still inside the app, so still silent", gate.isBeingWatched(alert("a")))
+        gate.leftForeground()
+        assertFalse("away now, so it may buzz", gate.isBeingWatched(alert("a")))
     }
 
     @Test

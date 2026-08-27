@@ -234,17 +234,25 @@ final class NotificationDelegate: NSObject, UIApplicationDelegate, UNUserNotific
         return true
     }
 
-    /// A notification that arrives while the app is on screen still shows.
+    /// **A notification that arrives while the app is on screen does NOT show.**
     ///
-    /// The alternative — silence in the foreground, which is the SwiftUI default
-    /// — would be wrong here: this app is very often open on *one* machine's
-    /// session while a *different* machine's session is the one that needs
-    /// somebody. `.sound` is in the list so that the content decides whether to
-    /// make one, which is where that decision belongs.
+    /// > *"They should be only when the AI is working, I am outside of the
+    /// > application, and now there is something to answer. Even when I am inside
+    /// > the application, on the same page, it is throwing the notifications — it
+    /// > is too much."*
+    ///
+    /// `willPresent` is called by the system *only* while the app is foreground,
+    /// so reaching this method is itself the proof that he is inside the app — and
+    /// his rule is: inside the app, no banner, whatever screen he is on. The
+    /// in-app Alerts list and the row status dots carry the same news without
+    /// interrupting. This is the SwiftUI default (silence in the foreground); the
+    /// app used to override it to banner a *different* machine's session, and he
+    /// asked for that to stop. Backgrounded, `willPresent` is never called and the
+    /// system shows the banner as before — which is the only time he wanted one.
     func userNotificationCenter(_ center: UNUserNotificationCenter,
                                 willPresent notification: UNNotification) async
         -> UNNotificationPresentationOptions {
-        [.banner, .list, .sound]
+        []
     }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter,

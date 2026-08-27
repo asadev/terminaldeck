@@ -108,10 +108,21 @@ class AlertGate(private val now: () -> Long = { System.currentTimeMillis() }) {
      * whole check short-circuits on [isForeground].
      */
     fun isBeingWatched(alert: SessionAlert): Boolean {
-        if (!isForeground) return false
-        if (open == alert.thread) return true
-        val left = leftAt[alert.thread] ?: return false
-        return now() - left < WATCHED_GRACE_MS
+        // The app being open at all is the whole answer — no push while he is inside it, whatever
+        // screen he is on:
+        //
+        // > *"They should be only when the AI is working, I am outside of the application, and now
+        // > there is something to answer. Even when I am inside the application, on the same page,
+        // > it is throwing the notifications — it is too much."*
+        //
+        // Android, unlike iOS, has no OS-level foreground suppression — a posted notification always
+        // shows — so this gate is where "inside the app = silent" has to live. The old check only
+        // covered the one session on screen ([open]) and let a *different* session banner while he
+        // was still in the app; that is the noise he is describing. The in-app Alerts list and the
+        // row status dots carry the same news without interrupting. [open] and the just-left grace
+        // stay below only to keep the (now unreachable while-foreground) reasoning honest for a
+        // future where a per-screen exception is wanted; today, foreground alone suppresses.
+        return isForeground
     }
 
     companion object {
