@@ -10,6 +10,55 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+### Changed
+
+- **GitHub belongs to the machine now, not the phone.** You connect GitHub once,
+  on a server's page, right after the server connects — and every app that talks
+  to that machine uses it. It is off the phone's own settings, because the phone
+  was never the thing that pushes.
+- **The copilot's settings on the phone match the desktop.** The cards that were
+  only on the Mac are on the phone too.
+- **A connected server shows once, not twice.** When a server is also running as
+  a machine, you saw two rows for the one box; now the machine row stands for it,
+  and its server controls — install, start, stop, remove, Forget — are one tap
+  away on that machine, under *As a server*.
+- **"Forget this server" is red.** It takes the server off this phone, so it is
+  the red kind, like the other buttons that really remove something.
+- **"Remove Terminal Deck from this server"** — the button that used to read
+  "remove it from server," which was not clear about what it removed.
+- **The terminal's text starts at 14pt** on the phone, a touch larger than
+  before, and you still change it for every terminal from the Appearance page.
+- **Sign out of an account** — from the machine's own account list and from each
+  signed-in device. It was only ever possible to sign in.
+
+### Fixed
+
+- **The big one: updating a Windows or headless machine no longer forgets your
+  work.** Sessions you had started from your phone were not being written down,
+  so a restart brought back only the few you had started at the keyboard and
+  quietly dropped the rest — and because each of those sessions carries its own
+  sign-in, losing one also logged it out. They are remembered now and come back
+  exactly as they were, still signed in; a Mac was never affected. If one cannot
+  be brought back the safe way it is held rather than reopened wrongly.
+- **Notifications only when there is something to answer.** A push now arrives
+  only when an agent that was working has stopped and is waiting on you, and only
+  while you are out of the app — not for every step it takes, and not while you
+  are inside the app on any screen. This was wrong on the iPhone as much as on
+  Android.
+- **Google sign-in works in a machine's browser.** It was refusing with "this
+  browser may not be secure"; the browser now presents as ordinary Chrome.
+- **One finger scrolls the terminal.** It was starting a text selection instead,
+  under a full-screen program's mouse mode; long-press still selects.
+
+### Android
+
+- **Browser parity with the iPhone.** Tap to inspect an element on a cast page
+  and make it wider or narrower; the seven device sizes and pinch-to-zoom;
+  recording a click-flow on the phone's own browser; and choosing whether a new
+  window opens on this phone or on the machine.
+- The terminal text-size control moved to the Appearance page, beside the colours.
+
+
 ## [0.13.0] — 2026-08-27
 
 ### Added
