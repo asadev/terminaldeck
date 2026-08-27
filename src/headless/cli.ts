@@ -39,22 +39,24 @@ import type { DeviceFolderGrant } from '../main/remote/folder-grants'
 import type { HostStatus } from './host'
 
 /**
- * What a device paired to a server does not get, in one sentence.
+ * A host that is genuinely offering no copilot, in one sentence — the exception
+ * now, not the rule.
  *
- * Here rather than beside the omission it describes — which is the
- * `registerRemoteIpc` call in `host.ts`, where the reasoning also is — for the
- * reason at the top of this file: everything printed is a function in here, and
- * `host.ts` importing one string is nothing, where this file importing the host
- * module would put the whole daemon into the CLI's bundle.
+ * The rule reversed: a headless host offers the copilot to one of the owner's
+ * own devices, driven from the app, because a server has no screen of its own —
+ * see `src/headless/copilot.ts` and the `registerRemoteIpc` call in `host.ts`.
+ * This sentence is what is left for the two hosts that still offer none: the
+ * public demo box, which has no owner to give it to, and a host whose tool
+ * endpoint failed to bind. `status` prints it only when this build assembled no
+ * copilot, so the two states are distinguishable rather than lumped.
  *
- * Said in the second person about the *device*, because that is who loses
- * something, and said at all because the wire cannot say it: on the far side,
- * "no copilot on this host" and "you were approved as a guest" arrive as the
- * same absence.
+ * Here rather than beside the decision it reports for the reason at the top of
+ * this file: `host.ts` importing one string is nothing, where this file
+ * importing the host module would put the whole daemon into the CLI's bundle.
  */
 export const NO_COPILOT_HERE =
-  'This host has no copilot: the copilot’s tools only run in the desktop app, so no Copilot ' +
-  'appears on a device paired to a server, of either kind.'
+  'no copilot offered here (a public demo box has no owner to give it to, or the copilot’s ' +
+  'tools did not start)'
 
 /* ---------------------------------------------------------------- parsing -- */
 
@@ -663,10 +665,15 @@ export const KIND_PROMPT = '  mine or guest? '
  * guest starts with nothing at all and cannot open a session until somebody runs
  * `folders add`. Telling them otherwise sends them to the phone to watch it fail.
  *
- * `noCopilot` is passed in rather than written here because the reason it is
- * true belongs to the host that decided it — see `NO_COPILOT_HERE`.
+ * The copilot line is written here rather than passed in, and that is the
+ * change: it used to be `NO_COPILOT_HERE`, handed down because the *absence* was
+ * the host's decision. The presence is not a decision — one of the owner's own
+ * devices gets the copilot on any headless host, driven from the app because a
+ * server has no screen — so it is a fixed fact of the approval, stated in the
+ * one branch it is true for. (A host whose tools failed to bind still reports
+ * the shortfall, in `status`, where it belongs.)
  */
-export function renderApproved(device: Device, kind: DeviceKind, noCopilot: string): string {
+export function renderApproved(device: Device, kind: DeviceKind): string {
   const lines = ['']
   if (kind === 'mine') {
     lines.push(
@@ -676,10 +683,8 @@ export function renderApproved(device: Device, kind: DeviceKind, noCopilot: stri
       '  It sees whatever projects this host has open, and the ports on this machine.',
       `  "${BRAND.id} folders add <path>" narrows it to exactly what you choose.`,
       '',
-      // Wrapped here rather than written pre-broken, because the sentence lives
-      // in `host.ts` beside the omission it describes and must not have this
-      // file's column width baked into it.
-      ...wrap(noCopilot, 74).map((line) => `  ${line}`),
+      '  It gets the copilot too — its chat, files, routines and settings — driven from',
+      '  the app, because this server has no screen of its own to run it on.',
     )
   } else {
     lines.push(

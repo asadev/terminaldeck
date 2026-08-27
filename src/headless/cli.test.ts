@@ -7,7 +7,6 @@ import { serverAddressOf } from '../main/servers/host'
 import { formatServerAddress, parseServerAddress } from '../shared/server-address'
 import {
   duration,
-  NO_COPILOT_HERE,
   PASTE_IT,
   addressAnswer,
   parseArgs,
@@ -373,16 +372,22 @@ describe('what `pair` prints once the host has answered', () => {
      * list on purpose, so that sentence sent somebody to their phone to watch a
      * session refuse to start.
      */
-    const text = renderApproved(device(), 'guest', NO_COPILOT_HERE)
+    const text = renderApproved(device(), 'guest')
     expect(text).toContain('cannot start a session anywhere')
     expect(text).toContain(`${BRAND.id} folders add`)
     expect(text).not.toContain('sees whatever projects')
+    // The copilot is never shared, and the guest line says so.
+    expect(text).toContain('never offered the copilot')
   })
 
-  it('tells one of your own what it does get, and what this host has not got', () => {
-    const text = renderApproved(device(), 'mine', NO_COPILOT_HERE)
+  it('tells one of your own what it does get, including the copilot', () => {
+    const text = renderApproved(device(), 'mine')
     expect(text).toContain('sees whatever projects this host has open')
-    expect(text).toContain('has no copilot')
+    // The reversal: an owner's device gets the copilot on a headless host,
+    // driven from the app. It used to be told the opposite.
+    expect(text).toContain('gets the copilot too')
+    expect(text).toContain('driven from')
+    expect(text).not.toContain('has no copilot')
   })
 
   it('names the recorded kind when a second approval was refused', () => {
