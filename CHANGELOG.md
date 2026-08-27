@@ -10,6 +10,8 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.14.0] — 2026-08-27
+
 ### The server page — a full control panel for a headless box
 
 - **Two lists: Remote machines and Servers.** A server opens straight to its own page — no more going through a machine's info page to reach it.
@@ -63,7 +65,6 @@ A release with nothing under Unreleased is refused rather than shipped blank.
   recording a click-flow on the phone's own browser; and choosing whether a new
   window opens on this phone or on the machine.
 - The terminal text-size control moved to the Appearance page, beside the colours.
-
 
 ## [0.13.0] — 2026-08-27
 
@@ -2208,7 +2209,8 @@ First cut. macOS 12+, Apple silicon, unsigned.
 - Preferences with live dark/light theming
 - Session resume (`⌘⇧T`)
 
-[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.14.0
 [0.13.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.13.0
 [0.12.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.12.0
 [0.11.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.11.0
